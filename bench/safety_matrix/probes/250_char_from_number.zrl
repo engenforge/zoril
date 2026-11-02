@@ -1,0 +1,6 @@
+// name: A number where a char is expected, through the same-size primitive rule
+// expected: compile_reject
+// `char` and `u32` are both four bytes, so the type matcher accepted one for the other: every
+// route (`let`, argument, struct field, array element) then died in the ZIL verifier with
+// "invalid ZIL (a compiler bug)" instead of a type mismatch.
+fn main() -> i32 { let n: u32 = 0xd800; let c: char = n; return 0; }

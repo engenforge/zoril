@@ -1,0 +1,84 @@
+// expected exit 0
+// An associated type is declared in a trait (`type Out;`), defined by each impl
+// (`type Out = T;`) and named through a type: `Self::Out` in the trait and its impls,
+// `T::Out` for a type parameter, `Type::Out` for a type. Each instance resolves it to the
+// type its impl defines, with the impl's parameters bound.
+trait Make {
+    type Out;
+    fn make(self: &Self) -> Self::Out;
+    fn make_pair(self: &Self) -> (Self::Out, Self::Out) { return (self.make(), self.make()); }
+}
+
+struct Num { v: i32 }
+impl Make for Num {
+    type Out = i64;
+    fn make(self: &Num) -> i64 { return self.v as i64 * 10; }
+}
+
+struct Flag { on: bool }
+impl Make for Flag {
+    type Out = bool;
+    fn make(self: &Flag) -> Self::Out { return !self.on; }
+}
+
+// A generic impl: Out depends on the impl's parameter.
+struct Wrap<T> { v: T }
+impl<T: Copy> Make for Wrap<T> {
+    type Out = (T, i32);
+    fn make(self: &Wrap<T>) -> (T, i32) { return (self.v, 1); }
+}
+
+// T::Out in a generic function's signature and body.
+fn made<T: Make>(t: &T) -> T::Out {
+    let out: T::Out = t.make();
+    return out;
+}
+
+// T::Out in a struct field. A generic impl's target is also resolved with T unbound, where
+// T::Out must quietly be no type (it was reported as unknown).
+struct Cache<T> { src: T, last: T::Out }
+fn refresh<T: Make>(c: &mut Cache<T>) { c.last = c.src.make(); }
+impl<T: Make> Cache<T> {
+    fn last(self: &Cache<T>) -> T::Out { return self.last; }
+}
+
+// A trait with a parameter and an associated type.
+enum Res<T, E> { Ok(T), Err(E) }
+trait Convert<T> {
+    type Err;
+    fn convert(self: &Self, t: T) -> Res<i32, Self::Err>;
+}
+impl Convert<i64> for Num {
+    type Err = u8;
+    fn convert(self: &Num, t: i64) -> Res<i32, u8> {
+        if t < 0 { return Res.Err(7); }
+        return Res.Ok(t as i32 + self.v);
+    }
+}
+
+fn main() -> i32 {
+    let n = Num { v: 4 };
+    if made(&n) != 40 { return 1; }
+    if made(&Flag { on: true }) { return 2; }
+    let p = n.make_pair();
+    if p.0 + p.1 != 80 { return 3; }
+    let w = Wrap { v: 9 as u8 };
+    let wo = made(&w);
+    if wo.0 != 9 || wo.1 != 1 { return 4; }
+    let x: Num::Out = 5;
+    if x != 5 { return 5; }
+
+    let mut c = Cache { src: Num { v: 2 }, last: 0 as i64 };
+    refresh(&mut c);
+    if c.last() != 20 { return 6; }
+
+    match n.convert(-1 as i64) {
+        Res.Err(e) => { if e != 7 { return 7; } },
+        Res.Ok(_) => { return 8; },
+    }
+    match n.convert(3) {
+        Res.Ok(v) => { if v != 7 { return 9; } },
+        Res.Err(_) => { return 10; },
+    }
+    return 0;
+}

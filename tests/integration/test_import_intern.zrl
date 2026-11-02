@@ -1,0 +1,2 @@
+import "intern.zrl";
+fn main() -> i32 { return 0; }

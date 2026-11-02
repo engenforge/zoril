@@ -1,0 +1,215 @@
+// The parser: types.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "intern.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "ast.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "module_path.zrl";
+import "base.zrl";
+use ast::{FnType, PrimitiveType, Span, Type, TypeId};
+use base::Parser;
+use token::{NO_SUFFIX, Token, TokenKind};
+use vec::Vec;
+
+impl Parser {
+    // A type. A token that cannot start one gives 0, with no error: speculative parses
+    // (`try_generic_struct_literal` on `a < 5`) rely on that, and callers report it.
+    pub fn parse_type(self: &mut Parser) -> TypeId {
+        let span = self.cur.span;
+        return match self.cur.token.kind() {
+            TokenKind.Amp => {
+                self.next_token();
+                self.parse_type_after_ref(span)
+            },
+            TokenKind.AmpAmp => {
+                // `&&T` lexes as one `&&` token: a reference to a reference.
+                self.next_token();
+                let inner = self.parse_type_after_ref(span);
+                self.ast.alloc_type(Type.Ref(inner), span)
+            },
+            TokenKind.Star => {
+                self.next_token();
+                let is_mut = self.eat_mut();
+                let inner = self.parse_type();
+                self.ast.alloc_type(if is_mut { Type.PtrMut(inner) } else { Type.Ptr(inner) }, span)
+            },
+            TokenKind.LBracket => self.parse_slice_or_array_type(span),
+            TokenKind.LParen => {
+                // `(A, B)` is a tuple; `(A, B) -> R` a function type.
+                let types = self.parse_type_list();
+                if !self.is_kind(TokenKind.Arrow) {
+                    self.ast.alloc_type(Type.Tuple(types), span)
+                } else {
+                    self.next_token();
+                    let ret_ty = self.parse_type();
+                    self.ast.alloc_type(
+                        Type.Fn(FnType {
+                            params: types,
+                            ret_ty: ret_ty,
+                            is_variadic: false,
+                            is_c: false
+                        }),
+                        span
+                    )
+                }
+            },
+            TokenKind.KExtern => {
+                // `extern "C" fn(A, B) -> R`: a code pointer C can call.
+                self.next_token();
+                let has_abi = self.parse_extern_abi();
+                if !has_abi {
+                    self.report_error(
+                        "an extern function type is written extern \"C\" fn(..)",
+                        self.cur.span
+                    );
+                }
+                self.expect(Token.KFn);
+                let types = self.parse_type_list();
+                let mut ret_ty = 0 as TypeId;
+                if self.is_kind(TokenKind.Arrow) {
+                    self.next_token();
+                    ret_ty = self.parse_type();
+                }
+                self.ast.alloc_type(
+                    Type.Fn(FnType {
+                        params: types,
+                        ret_ty: ret_ty,
+                        is_variadic: false,
+                        is_c: true
+                    }),
+                    span
+                )
+            },
+            TokenKind.KFn => {
+                // `fn(A, B) -> R`, the return type unit when left out.
+                self.next_token();
+                let types = self.parse_type_list();
+                let mut ret_ty = 0 as TypeId;
+                if self.is_kind(TokenKind.Arrow) {
+                    self.next_token();
+                    ret_ty = self.parse_type();
+                }
+                self.ast.alloc_type(
+                    Type.Fn(FnType {
+                        params: types,
+                        ret_ty: ret_ty,
+                        is_variadic: false,
+                        is_c: false
+                    }),
+                    span
+                )
+            },
+            TokenKind.Ident => self.parse_named_type(span),
+            _ => 0 as TypeId,
+        };
+    }
+
+    // `T` or `mut T` after a `&`.
+    fn parse_type_after_ref(self: &mut Parser, span: Span) -> TypeId {
+        let is_mut = self.eat_mut();
+        let target = self.parse_type();
+        return self.ast.alloc_type(
+            if is_mut { Type.RefMut(target) } else { Type.Ref(target) },
+            span
+        );
+    }
+
+    pub fn eat_mut(self: &mut Parser) -> bool {
+        if !self.is_kind(TokenKind.KMut) { return false; }
+        self.next_token();
+        return true;
+    }
+
+    // `[T]`, `[mut T]` or `[T; N]`.
+    fn parse_slice_or_array_type(self: &mut Parser, span: Span) -> TypeId {
+        self.next_token();
+        if self.eat_mut() {
+            let elem = self.parse_type();
+            self.expect(Token.RBracket);
+            return self.ast.alloc_type(Type.SliceMut(elem), span);
+        }
+        let elem = self.parse_type();
+        if !self.is_kind(TokenKind.Semi) {
+            self.expect(Token.RBracket);
+            return self.ast.alloc_type(Type.Slice(elem), span);
+        }
+        self.next_token();
+        let len_span = self.cur.span;
+        let len = self.cur.token.get_int_val();
+        self.expect(Token.Int((0 as u64, NO_SUFFIX)));
+        self.expect(Token.RBracket);
+        // ILArray.size is a u32: a longer length used to narrow into it, so `[u8; 4294967298]`
+        // was an array of 2 - a miscompile, not an overrun.
+        if len > 0xffffffff as u64 {
+            self.report_error("array length does not fit: at most 4294967295 elements", len_span);
+        }
+        return self.ast.alloc_type(Type.Array((elem, len as usize)), span);
+    }
+
+    // `(A, B, ..)`, the `(` being the current token.
+    // The list is built in the parser's arena, so a caller may keep it across its own calls.
+    #[borrows()]
+    fn parse_type_list(self: &mut Parser) -> [TypeId] {
+        self.expect(Token.LParen);
+        let mut types = unsafe { Vec::<TypeId>.new_in_raw(self.arena) };
+        while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+            types.push(self.parse_type());
+            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+        }
+        self.expect(Token.RParen);
+        return types.as_slice();
+    }
+
+    // A primitive (`u32`) or a named type with optional arguments (`Vec<T>`).
+    fn parse_named_type(self: &mut Parser, span: Span) -> TypeId {
+        let id = self.cur.token.get_ident_id();
+        self.next_token();
+        if let Option.Some(prim) = primitive_named(self.intern_table.lookup(id)) {
+            return self.ast.alloc_type(Type.Primitive(prim), span);
+        }
+        let id = self.parse_path_rest(id);
+        let mut type_args = unsafe { Vec::<TypeId>.new_in_raw(self.arena) };
+        if self.is_kind(TokenKind.Less) {
+            self.next_token();
+            while !self.is_kind(TokenKind.Greater)
+                && !self.is_kind(TokenKind.GreaterGreater)
+                && !self.is_kind(TokenKind.Eof) {
+                type_args.push(self.parse_type());
+                if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+            }
+            if self.is_kind(TokenKind.GreaterGreater) {
+                // `Box<List<T>>`: this list ends at the first `>` of the `>>`, so the token
+                // becomes the second one, which ends the enclosing list.
+                self.cur.token = Token.Greater;
+            } else {
+                self.expect(Token.Greater);
+            }
+        }
+        return self.ast.alloc_type(Type.Path((id, type_args.as_slice())), span);
+    }
+}
+
+fn primitive_named(name: [u8]) -> Option<PrimitiveType> {
+    if name == "i8" { return Option.Some(PrimitiveType.I8); }
+    if name == "i16" { return Option.Some(PrimitiveType.I16); }
+    if name == "i32" { return Option.Some(PrimitiveType.I32); }
+    if name == "i64" { return Option.Some(PrimitiveType.I64); }
+    if name == "isize" { return Option.Some(PrimitiveType.ISize); }
+    if name == "u8" { return Option.Some(PrimitiveType.U8); }
+    if name == "u16" { return Option.Some(PrimitiveType.U16); }
+    if name == "u32" { return Option.Some(PrimitiveType.U32); }
+    if name == "u64" { return Option.Some(PrimitiveType.U64); }
+    if name == "usize" { return Option.Some(PrimitiveType.USize); }
+    if name == "f32" { return Option.Some(PrimitiveType.F32); }
+    if name == "f64" { return Option.Some(PrimitiveType.F64); }
+    if name == "bool" { return Option.Some(PrimitiveType.Bool); }
+    if name == "char" { return Option.Some(PrimitiveType.Char); }
+    if name == "unit" { return Option.Some(PrimitiveType.Unit); }
+    if name == "never" { return Option.Some(PrimitiveType.Never); }
+    return Option.None;
+}

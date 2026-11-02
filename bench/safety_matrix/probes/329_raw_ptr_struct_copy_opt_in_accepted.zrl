@@ -1,0 +1,21 @@
+// name: A struct directly containing a raw pointer is Copy when Copy is declared
+// expected: accept
+// Under Copy option A+, `impl Copy for Buf {}` opts back into Copy for a non-owning raw-pointer struct.
+struct Buf {
+    data: *mut u8,
+    len: usize,
+}
+
+impl Copy for Buf {}
+
+fn consume(b: Buf) -> usize {
+    return b.len;
+}
+
+fn main() -> i32 {
+    let b1 = Buf { data: 0 as *mut u8, len: 10 };
+    let b2 = b1;
+    if consume(b1) != 10 { return 1; }
+    if consume(b2) != 10 { return 2; }
+    return 0;
+}

@@ -1,0 +1,4 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_extern_box_param.zrl:3:24: error: an extern function cannot take or return a Box (Zoril's allocator owns it; pass a raw pointer): takes_box
+extern fn takes_box(b: Box<i32>) -> i32;
+fn main() -> i32 { return 0; }

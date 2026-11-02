@@ -1,0 +1,65 @@
+// 29: Systems-level bit manipulation using hex/binary literals and bitwise ops.
+// expected exit code: 1
+// Demonstrates: hex, binary, bitwise operators, compound assignment, masks and flags.
+
+const FLAG_READ: u32    = 0b0000_0001;
+const FLAG_WRITE: u32   = 0b0000_0010;
+const FLAG_EXECUTE: u32 = 0b0000_0100;
+const FLAG_ALL: u32     = 0b0000_0111;
+
+fn has_flag(flags: u32, flag: u32) -> bool {
+    return (flags & flag) != 0;
+}
+
+fn set_flag(flags: u32, flag: u32) -> u32 {
+    return flags | flag;
+}
+
+fn clear_flag(flags: u32, flag: u32) -> u32 {
+    return flags & (flag ^ 0xFFFF_FFFF);
+}
+
+fn toggle_flag(flags: u32, flag: u32) -> u32 {
+    return flags ^ flag;
+}
+
+fn count_bits(mut n: u32) -> i32 {
+    let mut count = 0;
+    while n != 0 {
+        count += (n & 1) as i32;
+        n >>= 1;
+    }
+    return count;
+}
+
+fn pack_rgb(r: u8, g: u8, b: u8) -> u32 {
+    let red = (r as u32) << 16;
+    let green = (g as u32) << 8;
+    let blue = b as u32;
+    return red | green | blue;
+}
+
+fn unpack_red(color: u32) -> u8 {
+    return ((color >> 16) & 0xFF) as u8;
+}
+
+fn main() -> i32 {
+    // Permission flags
+    let mut perms: u32 = 0;
+    perms = set_flag(perms, FLAG_READ);
+    perms = set_flag(perms, FLAG_WRITE);
+
+    let can_read = has_flag(perms, FLAG_READ);       // true
+    let can_exec = has_flag(perms, FLAG_EXECUTE);     // false
+
+    perms = toggle_flag(perms, FLAG_EXECUTE);         // add execute
+    perms = clear_flag(perms, FLAG_WRITE);            // remove write
+
+    let bits = count_bits(perms);
+
+    // Color packing
+    let coral = pack_rgb(0xFF, 0x7F, 0x50);
+    let r = unpack_red(coral);
+
+    return bits + r as i32;
+}

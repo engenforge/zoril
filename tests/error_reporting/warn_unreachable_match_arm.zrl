@@ -1,0 +1,19 @@
+// EXPECT: tests/error_reporting/warn_unreachable_match_arm.zrl:11:46: warning: unreachable match arm: the arms before it match every value it does
+// EXPECT: tests/error_reporting/warn_unreachable_match_arm.zrl:12:31: warning: unreachable match arm: the arms before it match every value it does
+// EXPECT: tests/error_reporting/warn_unreachable_match_arm.zrl:13:68: warning: unreachable match arm: the arms before it match every value it does
+// EXPECT: tests/error_reporting/warn_unreachable_match_arm.zrl:14:52: warning: unreachable match arm: the arms before it match every value it does
+// An arm the arms before it already cover can never run; it compiled without a word (two such
+// arms had sat in zil_print, one printing a different spelling). A guarded arm covers nothing,
+// and a range is not compared, so neither causes a warning.
+import "core.zrl";
+enum E { A, B(i32), C }
+fn f(e: E, o: Option<bool>, n: i32) -> i32 {
+    let a = match e { E.A => 1, E.B(_) => 2, E.A => 3, _ => 4 };
+    let b = match e { _ => 1, E.C => 2 };
+    let c = match o { Option.Some(true) => 1, Option.Some(_) => 2, Option.Some(false) => 3, Option.None => 4 };
+    let i = match e { E.A | E.C => 1, E.B(x) => x, E.C => 5 };
+    let g = match n { 1 if n > 0 => 1, 1 => 2, _ => 3 };
+    let j = match n { 0..10 => 1, 5 => 2, _ => 3 };
+    return a + b + c + i + g + j;
+}
+fn main() -> i32 { return 0; }

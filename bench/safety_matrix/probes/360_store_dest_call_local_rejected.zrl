@@ -1,0 +1,33 @@
+// name: Storing a frame-owned view through a local holding a helper-returned &mut is rejected
+// expected: compile_reject
+// Storing a frame-owned arena buffer view through a local variable holding a &mut returned from a parameter-derived helper is rejected.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct H {
+    s: [i32],
+}
+
+fn slot(h: &mut H) -> &mut [i32] {
+    return &mut h.s;
+}
+
+fn f(h: &mut H) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; },
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(7);
+    let r = slot(h);
+    *r = v.as_slice();
+}
+
+fn main() -> i32 {
+    let e: [i32] = @slice(0 as *i32, 0);
+    let mut h = H { s: e };
+    f(&mut h);
+    return 0;
+}

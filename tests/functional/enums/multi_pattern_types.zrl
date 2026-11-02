@@ -1,0 +1,13 @@
+enum Foo { A(u32), B(u64) }
+fn test(f: Foo) -> bool {
+    match f {
+        Foo.A(_) | Foo.B(_) => { return true; }
+    }
+}
+fn main() -> i32 {
+    // Was `return 0;` -- the test could not fail. Now asserts the or-pattern
+    // matches through BOTH variants, which is the thing it is named for.
+    if !test(Foo.A(1 as u32)) { return 1 as i32; }
+    if !test(Foo.B(2 as u64)) { return 2 as i32; }
+    return 0 as i32;
+}

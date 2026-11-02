@@ -1,0 +1,22 @@
+// expected exit 0
+// The reference-holding walk's *precision*, pinned where it is observable: a function's result is tied
+// to a parameter only if the result's type can hold a reference (`compute_ret_ties` asks the walk,
+// `ILModule.type_holds_reference`). `L5` here is five struct levels deep and holds nothing but `i32`,
+// so `d` must not keep `x` borrowed - assigning to `x` afterwards is fine, and the answer has to be
+// exact rather than conservative for that to compile.
+// Mutation M85 lowers the walk's depth limit from 8 to 2, which makes every type nested deeper than
+// that answer "it might hold a reference": the mutant then ties `d` to `x` and refuses the assignment.
+struct L1 { v: i32 }
+struct L2 { a: L1 }
+struct L3 { a: L2 }
+struct L4 { a: L3 }
+struct L5 { a: L4 }
+
+fn mk(r: &i32) -> L5 { return L5 { a: L4 { a: L3 { a: L2 { a: L1 { v: *r } } } } }; }
+
+fn main() -> i32 {
+    let mut x: i32 = 1;
+    let d = mk(&x);
+    x = 2;
+    return d.a.a.a.a.v - 1;
+}

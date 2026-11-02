@@ -1,0 +1,20 @@
+// name: A view of a vector a raw constructor built in a caller arena, returned from the frame
+// expected: accept
+// `new_in_raw` is the `unsafe` escape hatch: the buffer is the caller's, so the view may escape.
+// This is the shape of the stdlib's `*_raw` helpers, which must stay accepted.
+import "mem.zrl";
+import "bytevec.zrl";
+use mem::{Arena, arena_raw};
+use bytevec::ByteVec;
+
+fn fill(a: &Arena) -> [u8] {
+    let mut out = unsafe { ByteVec.new_raw(arena_raw(a)) };
+    out.push(9);
+    return out.as_slice();
+}
+
+fn main() -> i32 {
+    let a = Arena.new(65536).unwrap();
+    let s = fill(&a);
+    return s[0] as i32 - 9;
+}

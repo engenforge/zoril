@@ -1,0 +1,238 @@
+// Test for process spawning in stdlib/proc.zrl
+// [PASS] stdlib process spawn, exit status, signals, and no fd leak
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "proc.zrl";
+import "io.zrl";
+use mem_raw::{ArenaHeader, arena_init};
+import "os/linux.zrl" as os_linux;
+use proc::{Command, run_simple_raw};
+use os_linux::{sys_fork, sys_pipe2, sys_wait4};
+
+fn count_open_fds() -> i32 {
+    let mut count = 0 as i32;
+    let mut fd = 0 as u64;
+    while fd < 1024 {
+        // Syscall 72 is fcntl; cmd 1 is F_GETFD
+        let ret = unsafe { @syscall(72, fd, 1 as u64) } as i64;
+        if ret >= 0 {
+            count = count + 1;
+        }
+        fd = fd + 1;
+    }
+    return count;
+}
+
+fn test_true_false(arena: *mut ArenaHeader) -> bool {
+    // 1. Spawn /bin/true
+    let cmd_true = unsafe { Command.new_raw("/bin/true", arena) };
+    let st_true_res = cmd_true.status();
+    if st_true_res.is_err() {
+        return false;
+    }
+    let st_true = st_true_res.ok().unwrap();
+    if !st_true.is_success() {
+        return false;
+    }
+    if st_true.code().is_none() || st_true.code().unwrap() != 0 {
+        return false;
+    }
+    if st_true.unix_signal().is_some() {
+        return false;
+    }
+
+    // 2. Spawn /bin/false
+    let cmd_false = unsafe { Command.new_raw("/bin/false", arena) };
+    let st_false_res = cmd_false.status();
+    if st_false_res.is_err() {
+        return false;
+    }
+    let st_false = st_false_res.ok().unwrap();
+    if st_false.is_success() {
+        return false;
+    }
+    if st_false.code().is_none() || st_false.code().unwrap() != 1 {
+        return false;
+    }
+    if st_false.unix_signal().is_some() {
+        return false;
+    }
+
+    return true;
+}
+
+// The portable kill() ends the child; on the Unixes that is SIGKILL.
+fn test_portable_kill(arena: *mut ArenaHeader) -> bool {
+    let mut cmd_sleep = unsafe { Command.new_raw("/bin/sleep", arena) };
+    cmd_sleep.arg("10");
+    let ch_res = cmd_sleep.spawn();
+    if ch_res.is_err() {
+        return false;
+    }
+    let mut ch = ch_res.ok().unwrap();
+    if ch.kill().is_err() {
+        return false;
+    }
+    let st_res = ch.wait();
+    if st_res.is_err() {
+        return false;
+    }
+    let st = st_res.ok().unwrap();
+    return !st.is_success() && st.unix_signal().is_some() && st.unix_signal().unwrap() == 9;
+}
+
+fn test_signal_reported(arena: *mut ArenaHeader) -> bool {
+    // Spawn sleep 10 and kill it with SIGKILL (9)
+    let mut cmd_sleep = unsafe { Command.new_raw("/bin/sleep", arena) };
+    cmd_sleep.arg("10");
+    let ch_res = cmd_sleep.spawn();
+    if ch_res.is_err() {
+        return false;
+    }
+    let mut ch = ch_res.ok().unwrap();
+    let kill_res = ch.unix_kill(9);
+    if kill_res.is_err() {
+        return false;
+    }
+    let st_res = ch.wait();
+    if st_res.is_err() {
+        return false;
+    }
+    let st = st_res.ok().unwrap();
+    if st.is_success() {
+        return false; // must NOT report exit 0!
+    }
+    if st.code().is_some() {
+        return false; // must not report normal exit
+    }
+    if st.unix_signal().is_none() || st.unix_signal().unwrap() != 9 {
+        return false;
+    }
+    return true;
+}
+
+fn test_nonexistent_binary(arena: *mut ArenaHeader) -> bool {
+    let cmd = unsafe { Command.new_raw("/path/to/definitely/nonexistent_binary_xyz_12345", arena) };
+    let res = cmd.status();
+    if !res.is_err() {
+        return false; // non-existent binary must produce an error, not success or hang
+    }
+    let err = res.err().unwrap();
+    return err.linux_errno() == 2; // ENOENT
+}
+
+fn test_no_fd_leak(arena: *mut ArenaHeader) -> bool {
+    let initial_fds = count_open_fds();
+    let mut i = 0 as usize;
+    while i < 100 {
+        let c = unsafe { Command.new_raw("/bin/true", arena) };
+        let s = c.status();
+        if s.is_err() {
+            return false;
+        }
+        i = i + 1;
+    }
+    let final_fds = count_open_fds();
+    return initial_fds == final_fds;
+}
+
+fn test_run_convenience(arena: *mut ArenaHeader) -> bool {
+    let res = unsafe { run_simple_raw("/bin/true", arena) };
+    if res.is_err() || !res.ok().unwrap().is_success() {
+        return false;
+    }
+    let res_false = unsafe { run_simple_raw("/bin/false", arena) };
+    if res_false.is_err() || res_false.ok().unwrap().is_success() {
+        return false;
+    }
+    return true;
+}
+
+fn test_low_level_wrappers() -> bool {
+    let p_fds = unsafe { @alloca<[i32; 2]>(1) };
+    let p_res = unsafe { sys_pipe2(&mut *p_fds as *mut [i32; 2], 524288) }; // O_CLOEXEC
+    if p_res.is_err() {
+        return false;
+    }
+    let rfd = p_fds[0 as usize];
+    let wfd = p_fds[1 as usize];
+    if rfd < 0 || wfd < 0 {
+        return false;
+    }
+    let _ = unsafe { @syscall(3, rfd as u64) };
+    let _ = unsafe { @syscall(3, wfd as u64) };
+
+    let fork_res = sys_fork();
+    if fork_res.is_err() {
+        return false;
+    }
+    let pid = fork_res.ok().unwrap();
+    if pid == 0 {
+        unsafe { @syscall(60, 42 as u64) }; // exit(42)
+    }
+
+    let wstatus = unsafe { @alloca<i32>(1) };
+    let wait_res = unsafe { sys_wait4(pid, &mut *wstatus as *mut i32, 0) };
+    if wait_res.is_err() || wait_res.ok().unwrap() != pid {
+        return false;
+    }
+    let st = *wstatus;
+    let code = (st >> 8) & 0xff;
+    return code == 42;
+}
+
+// Install `handler` (1 = SIG_IGN, 0 = SIG_DFL) for SIGCHLD via rt_sigaction.
+fn set_sigchld(handler: u64) {
+    let act = unsafe { @alloca<[u64; 4]>(1) };
+    act[0 as usize] = handler;
+    act[1 as usize] = 0;
+    act[2 as usize] = 0;
+    act[3 as usize] = 0;
+    let _ = unsafe { @syscall(13, 17 as u64, act as u64, 0 as u64, 8 as u64) };
+}
+
+// With SIGCHLD ignored the kernel reaps children itself and wait4 fails with ECHILD. That is an
+// unobserved child, and it must surface as an error rather than a zero-initialized Exited(0).
+fn test_wait_failure_is_error(arena: *mut ArenaHeader) -> bool {
+    set_sigchld(1);
+    let cmd = unsafe { Command.new_raw("/bin/false", arena) };
+    let res = cmd.status();
+    set_sigchld(0);
+    if res.is_ok() {
+        return false; // /bin/false can never be a success; Ok here means the failure was swallowed
+    }
+    return res.err().unwrap().linux_errno() == 10; // ECHILD
+}
+
+fn main() -> i32 {
+    let arena_box = unsafe { arena_init(4194304) };
+    let arena = arena_box as *mut ArenaHeader;
+
+    if !test_true_false(arena) {
+        return 1;
+    }
+    if !test_signal_reported(arena) {
+        return 2;
+    }
+    if !test_portable_kill(arena) {
+        return 20;
+    }
+    if !test_nonexistent_binary(arena) {
+        return 3;
+    }
+    if !test_no_fd_leak(arena) {
+        return 4;
+    }
+    if !test_run_convenience(arena) {
+        return 5;
+    }
+    if !test_low_level_wrappers() {
+        return 6;
+    }
+    if !test_wait_failure_is_error(arena) {
+        return 7;
+    }
+
+    return 0;
+}

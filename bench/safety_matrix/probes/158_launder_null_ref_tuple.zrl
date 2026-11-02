@@ -1,0 +1,10 @@
+// name: Null reference synthesized through a tuple projection
+// expected: compile_reject
+// closed by Phase D's distinct `*T` / `&T` IL types: a tuple projection carries the raw type, so a null raw pointer cannot become a reference without unsafe
+fn main() -> i32 {
+    let p = 0 as *mut i32;
+    let t = (p, 1);
+    let r: &i32 = t.0;
+    if r as *i32 as usize == 0 { return 0; }
+    return 1;
+}

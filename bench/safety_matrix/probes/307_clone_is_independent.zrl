@@ -1,0 +1,18 @@
+// name: A cloned collection has its own buffer, so both values stay usable
+// expected: accept
+// The accepted twin of probes 303-306: `clone()` allocates a new buffer, so the two values are
+// independent owners.
+import "vec.zrl";
+import "clone.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v1 = Vec::<u8>.new();
+    v1.push(1);
+    let mut v2 = v1.clone();
+    v1.push(2);
+    v2.push(3);
+    if v1.len() != 2 { return 1; }
+    if v2.len() != 2 { return 2; }
+    return (*v1.get(1).unwrap() + *v2.get(1).unwrap()) as i32 - 5;
+}

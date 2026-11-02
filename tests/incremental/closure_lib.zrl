@@ -1,0 +1,4 @@
+// Library module defining higher-order function
+pub fn helper_apply(f: fn(i32) -> i32, x: i32) -> i32 {
+    return f(x);
+}

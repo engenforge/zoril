@@ -1,0 +1,3635 @@
+// Zoril ZIR to ZIL Translation (ZIR -> ZIL Lowering)
+
+import "index_facts.zrl";
+import "zir.zrl";
+import "ast.zrl";
+import "il_instr.zrl";
+import "il_type.zrl";
+import "il_layout.zrl";
+import "builder.zrl";
+import "resolve.zrl";
+import "mono.zrl";
+import "bytevec.zrl";
+import "il_cfg.zrl";
+import "intern.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "fmt.zrl";
+use ast::{BINARY_ADD, BINARY_ADDWRAP, BINARY_AND, BINARY_DIV, BINARY_EQ, BINARY_GE, BINARY_GT, BINARY_LE, BINARY_LT, BINARY_MOD, BINARY_MUL, BINARY_MULWRAP, BINARY_NE, BINARY_OR, BINARY_SHL, BINARY_SHL_MASKED, BINARY_SHR, BINARY_SHR_MASKED, BINARY_SUB, BINARY_SUBWRAP, BINARY_XOR};
+use builder::ILBuilder;
+use bytevec::ByteVec;
+use il_cfg::{ILFunction, ILModule, ILParam, fn_type_of, takes_env_ptr};
+use il_instr::{AllocInstr, BranchInstr, CALL_BY_NAME, CallInstr, CallPtrInstr, FieldAddrInstr, ILBinaryOp, ILInstr, NO_SSA, SSAId, StoreInstr, SyscallInstr, VariantMatchInstr};
+use il_layout::{type_align, type_size};
+use il_type::{ILArray, ILPRIM_BOOL, ILPRIM_F32, ILPRIM_F64, ILPRIM_I16, ILPRIM_I32, ILPRIM_I64, ILPRIM_I8, ILPRIM_ISIZE, ILPRIM_U16, ILPRIM_U32, ILPRIM_U64, ILPRIM_U8, ILPRIM_UNIT, ILPRIM_USIZE, ILTYPE_ARRAY, ILTYPE_BOXED, ILTYPE_BOXEDMUT, ILTYPE_FN, ILTYPE_PRIMITIVE, ILTYPE_PTR, ILTYPE_PTRMUT, ILTYPE_RAWPTR, ILTYPE_RAWPTRMUT, ILTYPE_SLICE, ILTYPE_TUPLE, ILTYPE_USER, ILType, ILTypeDecl, ILTypeDef, IL_TYPEDEF_ENUM, IL_TYPEDEF_STRUCT, Region, is_any_pointer_tag, is_mut_pointer_tag, is_shared_pointer_tag};
+use intern::InternTable;
+use io::{eprint, stderr};
+use fmt::write_u64_hex;
+use mem_raw::{ArenaHeader, memcpy, memset, zoril_allocator_alloc};
+use mono::Monomorphizer;
+use resolve::Resolver;
+use index_facts::IndexFacts;
+use zir::{LOCAL_KIND_ARG, LOCAL_KIND_TMP, Local, Place, Projection, ZirFunction, ZirModule, ZirRvalue, ZirStmt, ZirTerminator};
+
+pub struct ZirToZilLowerer {
+    pub scratch_arena: *mut ArenaHeader,
+    pub persistent_arena: *mut ArenaHeader,
+    pub resolver: &mut Resolver,
+    pub mono: &mut Monomorphizer,
+    pub intern_table: &mut InternTable,
+    pub zir_module: &mut ZirModule,
+    pub zil_module: &mut ILModule,
+    pub builder: &mut ILBuilder,
+    pub current_func: *mut ZirFunction,
+    pub sret_ssa: u32,
+    pub arg_start_idx: u32,
+    pub had_error: bool,
+    // `zoril --checked`: emit the instrumentation that makes dead storage unusable - the poison
+    // after a local's last use and around a drop, and the trap on a second drop. Off in every
+    // other build, where the emitted code is exactly what it was before this flag existed.
+    pub checked: bool,
+    // Per local id: whether the local's slot in `local_slots` is storage the local owns (1), or
+    // another place's storage the local merely names (0). A temporary is often just a name for a
+    // place (`let _t = p.field`, a `match` scrutinee, a closure's `GetEnv`), and lowering records
+    // the place's address as the temporary's slot. A `--checked` build may poison an owned
+    // temporary where its borrow ends; poisoning an alias would write over storage that is still
+    // live (the post-EndBorrow investigation's finding, 2026-10-18).
+    local_owns: *mut u8,
+    // What makes an array's bounds check redundant where it is lowered (index_facts.zrl).
+    facts: IndexFacts,
+    // A `let`'s slot offered to the aggregate its initializer constructs, of type DEST_TY
+    // (construct_slot): built there, it needs no copy. NO_SSA when none is offered.
+    dest_slot: u32,
+    dest_ty: u32,
+}
+
+impl ZirToZilLowerer {
+    pub fn new(
+        scratch_arena: *mut ArenaHeader,
+        persistent_arena: *mut ArenaHeader,
+        resolver: &mut Resolver,
+        mono: &mut Monomorphizer,
+        intern_table: &mut InternTable,
+        zir_module: &mut ZirModule,
+        zil_module: &mut ILModule,
+        builder: &mut ILBuilder,
+        sret_ssa: u32,
+        arg_start_idx: u32
+    ) -> ZirToZilLowerer {
+        return ZirToZilLowerer {
+            scratch_arena: scratch_arena,
+            persistent_arena: persistent_arena,
+            resolver: resolver,
+            mono: mono,
+            intern_table: intern_table,
+            zir_module: zir_module,
+            zil_module: zil_module,
+            builder: builder,
+            current_func: 0 as *mut ZirFunction,
+            sret_ssa: sret_ssa,
+            arg_start_idx: arg_start_idx,
+            had_error: false,
+            checked: false,
+            local_owns: 0 as *mut u8,
+            facts: IndexFacts.empty(scratch_arena),
+            dest_slot: NO_SSA as u32,
+            dest_ty: 0 as u32,
+        };
+    }
+
+    // `current_func` is set for the whole of `lower_function` and is only read
+    // from code reached through it, so this is the single marked forge; callers
+    // that can run before it is set check it against null themselves.
+    // The result points into the ZIR module's arena, not into this lowerer, so a caller may hold
+    // it across the `&mut self` calls that lower the body. This is sound only while nothing pushes
+    // to `zir_module.funcs` during a body's lowering (which would reallocate the vector's backing
+    // buffer and invalidate `self.current_func`).
+    #[borrows()]
+    fn cur_func(self: &ZirToZilLowerer) -> &ZirFunction {
+        return unsafe { &*self.current_func };
+    }
+
+    pub fn lower(self: &mut ZirToZilLowerer) -> u32 {
+        self.current_func = (&self.zir_module.funcs[0]) as usize as *mut ZirFunction;
+        let func = self.cur_func();
+        (*self.builder).set_span(func.span);
+        if func.blocks.len == 0 as usize { return NO_SSA as u32; }
+        let zil_start_block = (*self.builder).current_block_idx;
+        let zil_blocks = self.create_blocks(func, zil_start_block);
+
+        // Per local (by id): its stack slot and its type.
+        let n = func.locals.len + 1 as usize;
+        let local_slots = unsafe { zoril_allocator_alloc(self.scratch_arena, n * 4) } as *mut u32;
+        let local_types = unsafe { zoril_allocator_alloc(self.scratch_arena, n * 4) } as *mut u32;
+        let local_owns = unsafe { zoril_allocator_alloc(self.scratch_arena, n) } as *mut u8;
+        unsafe {
+            memset(local_slots as *mut u8, 0xff, n * 4);
+            memset(local_types as *mut u8, 0, n * 4);
+            memset(local_owns, 1, n);
+        }
+        self.local_owns = local_owns;
+        self.alloc_local_slots(func, zil_start_block, local_slots, local_types);
+        self.facts = IndexFacts.new(self.scratch_arena, func, self.zil_module);
+
+        for bi in 0 as usize..func.blocks.len {
+            let b = &func.blocks[bi];
+            (*self.builder).switch_to_block(zil_blocks[bi]);
+            self.facts.enter_block(bi);
+            for si in 0 as usize..b.statements.len {
+                self.lower_stmt(
+                    &b.statements[si],
+                    b.literal_comments[si],
+                    local_slots,
+                    local_types
+                );
+                self.facts.after_stmt(&b.statements[si]);
+            }
+            self.lower_terminator(&b.terminator, &zil_blocks, local_slots, local_types);
+        }
+        return NO_SSA as u32;
+    }
+
+    // A ZIL block for each ZIR block, the first being START (the current one).
+    // The result is a fresh scratch-arena array, not a view of this lowerer.
+    #[borrows()]
+    fn create_blocks(self: &mut ZirToZilLowerer, func: &ZirFunction, start: u32) -> [mut u32] {
+        let blocks = unsafe {
+            @slice(
+                zoril_allocator_alloc(self.scratch_arena, func.blocks.len * 4) as *mut u32,
+                func.blocks.len
+            )
+        };
+        for bi in 0 as usize..func.blocks.len {
+            let id = if bi == 0 as usize { start } else { (*self.builder).new_block() };
+            blocks[bi] = id;
+            if func.blocks[bi].name_hint != 0 as u32 {
+                (*self.builder).set_block_name(id, func.blocks[bi].name_hint);
+            }
+        }
+        return blocks;
+    }
+
+    // A stack slot for each local, allocated in the function's alloc block; a parameter's
+    // value is stored into its slot at the start of START.
+    fn alloc_local_slots(
+        self: &mut ZirToZilLowerer,
+        func: &ZirFunction,
+        start: u32,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) {
+        (*self.builder).switch_to_block((*self.builder).entry_block_idx);
+        let mut arg_idx = self.arg_start_idx;
+        for li in 0 as usize..func.locals.len {
+            let loc = &func.locals[li];
+            let loc_ty = if loc.ty == 0 as u32 {
+                self.get_primitive_type(ILPRIM_U64)
+            } else {
+                loc.ty
+            };
+            let ptr_ty = (*self.builder).get_ptr_type(loc_ty);
+            let slot = (*self.builder).emit_with_type(
+                ILInstr.Alloc(AllocInstr {
+                    region: Region.Local,
+                    ty: loc_ty,
+                    allocator: NO_SSA as u32
+                }),
+                ptr_ty
+            );
+            unsafe {
+                *((local_types as usize + loc.id as usize * 4) as *mut u32) = loc_ty;
+                *((local_slots as usize + loc.id as usize * 4) as *mut u32) = slot;
+            }
+            if loc.name_id != 0 as u32 { (*self.builder).set_ssa_name(slot, loc.name_id); }
+            if loc.kind == LOCAL_KIND_ARG {
+                let saved = (*self.builder).current_block_idx;
+                (*self.builder).switch_to_block(start);
+                self.store_param(arg_idx, slot, loc_ty);
+                (*self.builder).switch_to_block(saved);
+                arg_idx = arg_idx + 1 as u32;
+            }
+        }
+        (*self.builder).switch_to_block(start);
+    }
+
+    // Parameter ARG_IDX into its SLOT: an aggregate is passed by pointer and copied. The
+    // parameter's SSA value is recorded in the ILFunction for the backend. A function value is
+    // passed by value (its ILParam type is the value's, see il_params), but the backend also
+    // presents that as the address of a copy, which the SSA is typed as: an aggregate-typed
+    // SSA would be given a stack slot of its own in its place.
+    fn store_param(self: &mut ZirToZilLowerer, arg_idx: u32, slot: u32, ty: u32) {
+        let is_agg = self.is_aggregate(ty);
+        let param_ty = if is_agg { (*self.builder).get_ptr_type(ty) } else { ty };
+        let param_val = (*self.builder).emit_with_type(ILInstr.Param(arg_idx), param_ty);
+        let zil_f = self.zil_module.get_function_mut((*self.builder).current_func_idx as usize);
+        if (arg_idx as usize) < zil_f.params_len {
+            unsafe {
+                let p_param = (zil_f.params as usize
+                    + arg_idx as usize * sizeof(ILParam)) as *mut ILParam;
+                (*p_param).ssa = param_val;
+            }
+        }
+        if is_agg {
+            self.emit_memcpy(slot, param_val, self.get_type_size(ty));
+        } else if self.get_type_size(ty) > 0 as u64 {
+            (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: slot, val: param_val }));
+        }
+    }
+
+    // The address a reference to PLACE takes. A non-aggregate temporary has no memory of its
+    // own (it is an SSA value), so `&(a + b)` or `&(&x)` first stores it in a fresh slot;
+    // resolve_place_addr would hand back the value itself.
+    fn ref_place_addr(
+        self: &mut ZirToZilLowerer,
+        place: &Place,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        if place.base != 0 as u32 && place.projections.len == 0 as usize {
+            let ty = unsafe { local_types[place.base as usize] };
+            let kind = self.cur_func().locals[place.base as usize - 1 as usize].kind;
+            if kind == 1 as u32 && !self.is_aggregate(ty) {
+                let ptr_ty = (*self.builder).get_ptr_type(ty);
+                let saved = (*self.builder).current_block_idx;
+                (*self.builder).switch_to_block((*self.builder).entry_block_idx);
+                let slot = (*self.builder).emit_with_type(
+                    ILInstr.Alloc(AllocInstr {
+                        region: Region.Local,
+                        ty: ty,
+                        allocator: NO_SSA as u32
+                    }),
+                    ptr_ty
+                );
+                (*self.builder).switch_to_block(saved);
+                let val = unsafe { local_slots[place.base as usize] };
+                (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: slot, val: val }));
+                return slot;
+            }
+        }
+        return self.resolve_place_addr(place, local_slots, local_types);
+    }
+
+    fn resolve_place_addr(
+        self: &mut ZirToZilLowerer,
+        place: &Place,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        if place.base == 0 as u32 { return 0xffffffff as u32; }
+        let mut ptr = unsafe { local_slots[place.base as usize] };
+        let mut ty = unsafe { local_types[place.base as usize] };
+        // A non-aggregate temporary is an SSA value, not a slot: a pointer temporary is
+        // already the address it points at, with no load.
+        let kind = self.cur_func().locals[place.base as usize - 1 as usize].kind;
+        let mut is_value = kind == LOCAL_KIND_TMP && !self.is_aggregate(ty);
+        for proj in place.projections {
+            match *proj {
+                Projection.Field(field_name) => {
+                    let (base, base_ty) = self.auto_deref(ptr, ty, is_value);
+                    let field_idx = self.get_field_index(base_ty, field_name);
+                    ty = self.get_field_type(base_ty, field_idx);
+                    ptr = (*self.builder).emit_with_type(
+                        ILInstr.FieldAddr(FieldAddrInstr { val: base, field_idx: field_idx }),
+                        (*self.builder).get_ptr_type(ty)
+                    );
+                },
+                Projection.TupleIndex(idx) => {
+                    let (base, base_ty) = self.auto_deref(ptr, ty, is_value);
+                    ty = self.get_tuple_elem_type(base_ty, idx);
+                    ptr = (*self.builder).emit_with_type(
+                        ILInstr.FieldAddr(FieldAddrInstr { val: base, field_idx: idx }),
+                        (*self.builder).get_ptr_type(ty)
+                    );
+                },
+                Projection.Deref => {
+                    if !is_value { ptr = (*self.builder).emit_with_type(ILInstr.Load(ptr), ty); }
+                    ty = self.get_ptr_inner_type(ty);
+                },
+                Projection.Index(idx_local) => {
+                    let idx_val = self.load_place(
+                        &Place {
+                            base: idx_local,
+                            projections: @slice(0 as *mut Projection, 0 as usize)
+                        },
+                        local_slots,
+                        local_types
+                    );
+                    let through_mut_ptr = ty != 0 as u32
+                        && is_mut_pointer_tag(self.builder.get_type_decl(ty).def.get_tag());
+                    let (base, base_ty) = self.auto_deref(ptr, ty, is_value);
+                    let (elem_ptr, elem_ty) = self.index_addr(
+                        base,
+                        base_ty,
+                        through_mut_ptr,
+                        idx_val,
+                        idx_local
+                    );
+                    ptr = elem_ptr;
+                    ty = elem_ty;
+                },
+            }
+            is_value = false;
+        }
+        return ptr;
+    }
+
+    // The address of the aggregate a projection applies to, and its type: through every pointer
+    // and box layer (loaded, unless IS_VALUE says PTR is the pointer itself), else PTR. A field
+    // access on `&Box<S>` reaches `S` through both, as `get_field_index` and `get_field_type` do.
+    fn auto_deref(self: &mut ZirToZilLowerer, ptr: u32, ty: u32, is_value: bool) -> (u32, u32) {
+        let mut cur = ptr;
+        let mut cur_ty = ty;
+        let mut as_value = is_value;
+        let mut depth = 0 as usize;
+        while cur_ty != 0 as u32 && depth < 16 as usize {
+            let tag = self.builder.get_type_decl(cur_ty).def.get_tag();
+            if !is_any_pointer_tag(tag) && tag != ILTYPE_BOXED && tag != ILTYPE_BOXEDMUT {
+                break;
+            }
+            let base = if as_value {
+                cur
+            } else {
+                (*self.builder).emit_with_type(ILInstr.Load(cur), cur_ty)
+            };
+            let inner = self.get_ptr_inner_type(cur_ty);
+            if inner == 0 as u32 { return (base, cur_ty); }
+            cur = base;
+            cur_ty = inner;
+            as_value = false;
+            depth = depth + 1 as usize;
+        }
+        return (cur, cur_ty);
+    }
+
+    // The address of element IDX_VAL of the slice, array, Vec or pointed-to memory at BASE (of
+    // type EFFECTIVE_TY), bounds-checked when the length is known; and the element type.
+    // THROUGH_MUT_PTR: BASE was reached through a `*mut`.
+    // IDX_LOCAL: the local the index was read from (0 if none), for the bounds-check facts.
+    fn index_addr(
+        self: &mut ZirToZilLowerer,
+        base: u32,
+        effective_ty: u32,
+        through_mut_ptr: bool,
+        idx_val: u32,
+        idx_local: u32
+    ) -> (u32, u32) {
+        let mut base_ptr = base;
+        // Element type / stride for the index offset:
+        //   - `*mut Vec<T>`: a mutable raw pointer to a Vec strides by
+        //     sizeof(Vec<T>) (it is an array of Vecs), NOT sizeof(T);
+        //     get_slice_element_type(Vec<T>) wrongly returns T here. This is
+        //     the array-of-Vecs case (e.g. `preds: *mut Vec<u32>`).
+        //   - Every other base (slice/array/&Vec/&[T]/*mut [T]/*mut scalar/
+        //     struct): get_slice_element_type gives the inner element type.
+        let elem_ty = if through_mut_ptr && self.is_vec_type(effective_ty) {
+            effective_ty
+        } else {
+            self.get_slice_element_type(effective_ty)
+        };
+        let elem_size = self.get_type_size(elem_ty);
+        let usize_ty = self.get_primitive_type(ILPRIM_USIZE);
+        let ptr_elem_ty = (*self.builder).get_ptr_type(elem_ty);
+
+        let idx_usize = (*self.builder).emit_cast(idx_val, usize_ty);
+        let elem_size_ssa = (*self.builder).emit_const_u64(elem_size, usize_ty);
+        let offset = (*self.builder).emit_with_type(
+            ILInstr.Mul(ILBinaryOp { lhs: idx_usize, rhs: elem_size_ssa }),
+            usize_ty
+        );
+
+        let p_eff_ty = self.builder.get_type_decl(effective_ty);
+        let is_slice = p_eff_ty.def.get_tag() == ILTYPE_SLICE;
+        let is_array = p_eff_ty.def.get_tag() == ILTYPE_ARRAY;
+        let is_vec = !through_mut_ptr && self.is_vec_type(effective_ty);
+        if is_slice || is_array || is_vec {
+            let bool_ty = self.get_primitive_type(ILPRIM_BOOL);
+            let u64_ty = self.get_primitive_type(ILPRIM_U64);
+            let i64_ty = self.get_primitive_type(ILPRIM_I64);
+            if is_slice || is_vec {
+                (*self.builder).emit_slice_bounds_check(
+                    base_ptr,
+                    idx_usize,
+                    usize_ty,
+                    bool_ty,
+                    u64_ty,
+                    i64_ty
+                );
+            } else {
+                let arr_len = p_eff_ty.def.get_Array().size;
+                // Redundant where the index is known below the length (index_facts.zrl).
+                if !self.facts.below(idx_local, arr_len as u64) {
+                    (*self.builder).emit_array_bounds_check(
+                        idx_usize,
+                        arr_len as u64,
+                        usize_ty,
+                        bool_ty,
+                        u64_ty,
+                        i64_ty
+                    );
+                    self.facts.note_checked(idx_local, arr_len as u64);
+                }
+            }
+        }
+        if is_slice || is_vec {
+            let ptr_field_ptr_ty = (*self.builder).get_ptr_type(ptr_elem_ty);
+            let ptr_field_addr = (*self.builder).emit_with_type(
+                ILInstr.FieldAddr(FieldAddrInstr { val: base_ptr, field_idx: 0 as u32 }),
+                ptr_field_ptr_ty
+            );
+            base_ptr = (*self.builder).emit_with_type(ILInstr.Load(ptr_field_addr), ptr_elem_ty);
+        }
+        let elem_ptr = (*self.builder).emit_with_type(
+            ILInstr.Add(ILBinaryOp { lhs: base_ptr, rhs: offset }),
+            ptr_elem_ty
+        );
+        return (elem_ptr, elem_ty);
+    }
+
+    fn load_place(
+        self: &mut ZirToZilLowerer,
+        place: &Place,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        if place.base == 0 as u32 { return NO_SSA as u32; }
+        if place.base as usize > self.cur_func().locals.len { return NO_SSA as u32; }
+        let kind = self.cur_func().locals[place.base as usize - 1 as usize].kind;
+        if place.projections.len == 0 as usize && kind == 1 as u32 { // TMP
+            let slot_val = unsafe { local_slots[place.base as usize] };
+            let slot_ty = (*self.builder).get_ssa_type(slot_val);
+            if slot_ty != 0 as u32 {
+                let slot_tag = self.builder.get_type_decl(slot_ty).def.get_tag();
+                if is_shared_pointer_tag(slot_tag) {
+                    let place_ty = unsafe { local_types[place.base as usize] };
+                    let inner_ty = self.get_ptr_inner_type(slot_ty);
+                    if inner_ty == place_ty {
+                        if self.is_aggregate(place_ty) {
+                            return (*self.builder).emit_with_type(ILInstr.Move(slot_val), slot_ty);
+                        }
+                        return (*self.builder).emit_with_type(ILInstr.Load(slot_val), place_ty);
+                    }
+                } else if self.is_aggregate(slot_ty) {
+                    // TMP holds an aggregate value (e.g. from ArrayConstruct) but the
+                    // local's declared type is Ptr(aggregate). The aggregate SSA is actually
+                    // an alloc pointer; reinterpret it as the declared pointer type so that
+                    // downstream stores emit storel instead of memcpy.
+                    let place_ty = unsafe { local_types[place.base as usize] };
+                    if place_ty != 0 as u32 {
+                        let place_tag = self.builder.get_type_decl(place_ty).def.get_tag();
+                        if is_any_pointer_tag(place_tag) {
+                            let inner_ty = self.get_ptr_inner_type(place_ty);
+                            if inner_ty == slot_ty {
+                                return (*self.builder).emit_with_type(
+                                    ILInstr.Move(slot_val),
+                                    place_ty
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            return slot_val;
+        }
+
+        let addr = self.resolve_place_addr(place, local_slots, local_types);
+        let place_ty = self.get_place_type(place, local_types);
+        if self.is_aggregate(place_ty) {
+            return (*self.builder).emit_with_type(
+                ILInstr.Move(addr),
+                (*self.builder).get_ptr_type(place_ty)
+            );
+        }
+        return (*self.builder).emit_with_type(ILInstr.Load(addr), place_ty);
+    }
+
+    fn get_place_type(self: &mut ZirToZilLowerer, place: &Place, local_types: *mut u32) -> u32 {
+        let mut curr_ty = unsafe { local_types[place.base as usize] };
+
+        for proj in place.projections {
+            curr_ty = match *proj {
+                Projection.Field(name) => self.get_field_type(
+                    curr_ty,
+                    self.get_field_index(curr_ty, name)
+                ),
+                Projection.TupleIndex(idx) => self.get_tuple_elem_type(curr_ty, idx),
+                Projection.Deref => self.get_ptr_inner_type(curr_ty),
+                Projection.Index(_) => self.get_slice_element_type(curr_ty),
+            };
+        }
+        return curr_ty;
+    }
+
+    fn is_aggregate(self: &mut ZirToZilLowerer, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = self.builder.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_USER { return true; }
+        return tag == ILTYPE_TUPLE
+            || tag == ILTYPE_ARRAY
+            || tag == ILTYPE_SLICE
+            || tag == ILTYPE_FN;
+    }
+
+    // A place whose declared type is a pointer holds a pointer value, never an implicit
+    // stack-slot address for an aggregate.
+    fn is_pointer_valued(self: &mut ZirToZilLowerer, place_ty: u32) -> bool {
+        if place_ty == 0 as u32 { return false; }
+        let tag = self.builder.get_type_decl(place_ty).def.get_tag();
+        return is_any_pointer_tag(tag) || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT;
+    }
+
+    fn is_implicit_aggregate_ptr(self: &mut ZirToZilLowerer, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = self.builder.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        // PtrMut<T> is always an explicit user pointer value (*mut T / &mut T),
+        // never an implicit stack-slot address. Only Ptr<T> can be a stack slot - and only the
+        // reference pair can: a `*T` is explicit at the surface, which its own tag now says.
+        if tag != ILTYPE_PTR {
+            return false;
+        }
+        if p_ty.name != 0 as u32 { return false; }
+        let inner = self.get_ptr_inner_type(ty_id);
+        return self.is_aggregate(inner);
+    }
+
+    fn is_enum_type(self: &mut ZirToZilLowerer, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = self.builder.get_type_decl(ty_id);
+        if p_ty.def.get_tag() != ILTYPE_USER { return false; }
+        let uid = p_ty.def.get_User().id;
+        if uid < (*self.resolver.ast).decls.len() as u32 {
+            self.mono.lower_typedef(uid);
+        }
+        let p_def = self.zil_module.get_typedef_mut(uid as usize);
+        return p_def.get_tag() == IL_TYPEDEF_ENUM;
+    }
+
+    fn is_ptr_to_enum(self: &mut ZirToZilLowerer, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = self.builder.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        if !is_any_pointer_tag(tag) { return false; }
+        let inner = self.get_ptr_inner_type(ty_id);
+        if inner == 0 as u32 { return false; }
+        if !self.is_aggregate(inner) { return false; }
+        let p_inner = self.builder.get_type_decl(inner);
+        if p_inner.def.get_tag() != ILTYPE_USER { return false; }
+        let uid = p_inner.def.get_User().id;
+        // Ensure the typedef is populated before checking its tag.
+        if uid < (*self.resolver.ast).decls.len() as u32 {
+            self.mono.lower_typedef(uid);
+        }
+        let p_def = self.zil_module.get_typedef_mut(uid as usize);
+        return p_def.get_tag() == IL_TYPEDEF_ENUM;
+    }
+
+    fn get_field_index(self: &mut ZirToZilLowerer, ty_id: u32, field_name: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+
+        let mut curr_ty = ty_id;
+        let mut p_ty = self.builder.get_type_decl(curr_ty);
+        let mut tag = p_ty.def.get_tag();
+
+        while is_any_pointer_tag(tag) || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT {
+            curr_ty = self.get_ptr_inner_type(curr_ty);
+            if curr_ty == 0 as u32 { break; }
+            p_ty = self.builder.get_type_decl(curr_ty);
+            tag = p_ty.def.get_tag();
+        }
+
+        if tag == ILTYPE_SLICE {
+            let ptr_id = self.intern_table.intern("ptr");
+            let data_id = self.intern_table.intern("data");
+            let len_id = self.intern_table.intern("len");
+            if field_name == ptr_id || field_name == data_id { return 0 as u32; }
+            if field_name == len_id { return 1 as u32; }
+            return 0xffffffff as u32;
+        }
+
+        let mut user_id = 0xffffffff as u32;
+        if tag == ILTYPE_USER {
+            user_id = p_ty.def.get_User().id;
+        }
+
+        if user_id != 0xffffffff as u32 {
+            if user_id < (*self.resolver.ast).decls.len() as u32 {
+                self.mono.lower_typedef(user_id);
+            }
+            let p_def: ILTypeDef = self.zil_module.typedefs[user_id as usize];
+            if p_def.get_tag() == IL_TYPEDEF_STRUCT {
+                let s = p_def.get_Struct();
+                let mut i = 0 as usize;
+                while i < s.fields.len {
+                    if s.fields[i].name == field_name {
+                        return i as u32;
+                    }
+                    i = i + 1 as usize;
+                }
+                eprint("\nFailed to find field: ");
+                eprint(InternTable.lookup((*self).intern_table, field_name));
+                eprint(" among fields: ");
+                let mut j = 0 as usize;
+                while j < s.fields.len {
+                    eprint(InternTable.lookup((*self).intern_table, s.fields[j].name));
+                    eprint(", ");
+                    j = j + 1 as usize;
+                }
+                eprint("\n");
+            }
+        }
+        eprint(" tag: ");
+        let mut err = stderr();
+        let _ = write_u64_hex(&mut err, tag as u64);
+        eprint(" name: ");
+        eprint(InternTable.lookup((*self).intern_table, field_name));
+        eprint("\n");
+        ICE(
+            "ZirToZilLowerer.get_field_index: field not found - the front end did not report it; see ZirLowerer.field_exists"
+        );
+        return 0xffffffff as u32;
+    }
+
+    fn get_field_type(self: &mut ZirToZilLowerer, ty_id: u32, field_idx: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+
+        let mut curr_ty = ty_id;
+        let mut p_ty = self.builder.get_type_decl(curr_ty);
+        let mut tag = p_ty.def.get_tag();
+
+        while is_any_pointer_tag(tag) || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT {
+            curr_ty = self.get_ptr_inner_type(curr_ty);
+            if curr_ty == 0 as u32 { break; }
+            p_ty = self.builder.get_type_decl(curr_ty);
+            tag = p_ty.def.get_tag();
+        }
+
+        if tag == ILTYPE_SLICE {
+            if field_idx == 0 as u32 {
+                let elem_ty = p_ty.def.get_Slice().element;
+                if p_ty.def.get_Slice().mutable {
+                    return (*self.builder).get_raw_ptr_mut_type(elem_ty);
+                }
+                return (*self.builder).get_raw_ptr_type(elem_ty);
+            }
+            if field_idx == 1 as u32 {
+                return self.get_primitive_type(3 as u32); // U64
+            }
+            return 0 as u32;
+        }
+
+        let mut user_id = 0xffffffff as u32;
+        if tag == ILTYPE_USER {
+            user_id = p_ty.def.get_User().id;
+        }
+
+        if user_id != 0xffffffff as u32 {
+            if user_id < (*self.resolver.ast).decls.len() as u32 {
+                self.mono.lower_typedef(user_id);
+            }
+            let p_def: ILTypeDef = self.zil_module.typedefs[user_id as usize];
+            if p_def.get_tag() == IL_TYPEDEF_STRUCT {
+                let s = p_def.get_Struct();
+                if (field_idx as usize) < s.fields.len {
+                    return s.fields[field_idx as usize].ty;
+                }
+            }
+        }
+        ICE("ZirToZilLowerer.get_field_type: field type not found");
+        return 0 as u32;
+    }
+
+    fn get_primitive_type(self: &ZirToZilLowerer, tag: u32) -> u32 {
+        return self.resolver.primitive_type(tag);
+    }
+
+    fn get_variant_payload_type(self: &mut ZirToZilLowerer, ty_id: u32, variant_idx: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = self.builder.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        let mut user_id = 0xffffffff as u32;
+        if tag == ILTYPE_USER {
+            user_id = p_ty.def.get_User().id;
+        } else if is_any_pointer_tag(tag) {
+            let inner_ty = self.get_ptr_inner_type(ty_id);
+            let p_inner = self.builder.get_type_decl(inner_ty);
+            if p_inner.def.get_tag() == ILTYPE_USER {
+                user_id = p_inner.def.get_User().id;
+            }
+        }
+
+        if user_id != 0xffffffff as u32 {
+            let p_def = self.zil_module.get_typedef_mut(user_id as usize);
+            match *p_def {
+                ILTypeDef.Enum(e) => {
+                    if variant_idx as usize < e.variants.len {
+                        return e.variants[variant_idx as usize].payload;
+                    }
+                },
+                ILTypeDef.Struct(_) | ILTypeDef.Fn(_) => {}
+            }
+        }
+        return 0 as u32;
+    }
+
+    fn get_tuple_elem_type(self: &ZirToZilLowerer, ty_id: u32, idx: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let mut curr_ty = ty_id;
+        let mut base_ty = self.builder.get_type_decl(curr_ty);
+        let mut depth = 0 as usize;
+        while depth < 16 as usize {
+            let tag = base_ty.def.get_tag();
+            if !is_any_pointer_tag(tag) && tag != ILTYPE_BOXED && tag != ILTYPE_BOXEDMUT { break; }
+            curr_ty = self.get_ptr_inner_type(curr_ty);
+            if curr_ty == 0 as u32 { return 0 as u32; }
+            base_ty = self.builder.get_type_decl(curr_ty);
+            depth = depth + 1 as usize;
+        }
+
+        let base_tag = (*base_ty).def.get_tag();
+        if base_tag == ILTYPE_TUPLE {
+            let elements = (*base_ty).def.get_Tuple();
+            if (idx as usize) < elements.len {
+                return elements[idx as usize];
+            }
+        }
+        ICE(
+            "ZirToZilLowerer.get_tuple_elem_type: not a tuple or out of bounds - the front end did not report it; see ZirLowerer.get_tuple_elem_type"
+        );
+        return 0 as u32;
+    }
+    fn get_ptr_inner_type(self: &ZirToZilLowerer, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = self.builder.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        if is_any_pointer_tag(tag) || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT {
+            return p_ty.def.get_Ptr();
+        }
+        return 0 as u32;
+    }
+
+    fn get_fn_type(self: &mut ZirToZilLowerer, f: &ILFunction) -> u32 {
+        return fn_type_of(self.zil_module, self.intern_table, f);
+    }
+
+    fn is_vec_type(self: &ZirToZilLowerer, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = self.builder.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_USER {
+            let user = p_ty.def.get_User();
+            let name_str = (*self.intern_table).lookup(user.name);
+            let is_vec = (name_str.len == 3 as usize
+                && name_str[0] == 'V' as u8
+                && name_str[1] == 'e' as u8
+                && name_str[2] == 'c' as u8)
+                || (name_str.len > 3 as usize
+                    && name_str[0] == 'V' as u8
+                    && name_str[1] == 'e' as u8
+                    && name_str[2] == 'c' as u8
+                    && name_str[3] == '_' as u8);
+            return is_vec && user.type_args.len > 0 as usize;
+        }
+        return false;
+    }
+
+    fn get_slice_element_type(self: &ZirToZilLowerer, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = self.builder.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_SLICE {
+            return p_ty.def.get_Slice().element;
+        } else if tag == ILTYPE_ARRAY {
+            return p_ty.def.get_Array().element;
+        } else if tag == ILTYPE_USER {
+            let user = p_ty.def.get_User();
+            let name_str = (*self.intern_table).lookup(user.name);
+            let is_vec = (name_str.len == 3 as usize
+                && name_str[0] == 'V' as u8
+                && name_str[1] == 'e' as u8
+                && name_str[2] == 'c' as u8)
+                || (name_str.len > 3 as usize
+                    && name_str[0] == 'V' as u8
+                    && name_str[1] == 'e' as u8
+                    && name_str[2] == 'c' as u8
+                    && name_str[3] == '_' as u8);
+            if is_vec && user.type_args.len > 0 as usize {
+                return user.type_args[0];
+            }
+        } else if is_shared_pointer_tag(tag) {
+            let inner = self.get_ptr_inner_type(ty_id);
+            if inner != 0 as u32 {
+                let p_inner = self.builder.get_type_decl(inner);
+                let inner_tag = p_inner.def.get_tag();
+                if inner_tag == ILTYPE_SLICE
+                    || inner_tag == ILTYPE_ARRAY
+                    || inner_tag == ILTYPE_USER {
+                    let elem = self.get_slice_element_type(inner);
+                    if elem != inner {
+                        return elem;
+                    }
+                }
+                return inner;
+            }
+        } else if is_mut_pointer_tag(tag) {
+            let inner = self.get_ptr_inner_type(ty_id);
+            if inner != 0 as u32 {
+                let p_inner = self.builder.get_type_decl(inner);
+                let inner_tag = p_inner.def.get_tag();
+                if inner_tag == ILTYPE_SLICE || inner_tag == ILTYPE_ARRAY {
+                    let elem = self.get_slice_element_type(inner);
+                    if elem != inner {
+                        return elem;
+                    }
+                }
+                return inner;
+            }
+        }
+        return ty_id;
+    }
+
+    fn get_type_size(self: &mut ZirToZilLowerer, ty_id: u32) -> u64 {
+        return type_size(self.zil_module, ty_id);
+    }
+
+    fn get_type_align(self: &mut ZirToZilLowerer, ty_id: u32) -> u64 {
+        return type_align(self.zil_module, ty_id);
+    }
+
+    // Calls `fn_idx` (a type's drop function) on the value at `addr_ssa`. A drop function never
+    // calls itself: dropping `self` inside `T::drop` is skipped.
+    fn emit_drop_call(self: &mut ZirToZilLowerer, fn_idx: u32, addr_ssa: u32) {
+        let p_f: ILFunction = self.zil_module.functions[fn_idx as usize];
+        if self.current_func != 0 as *mut ZirFunction {
+            if self.cur_func().name == p_f.name { return; }
+        }
+        let needs_env = self.needs_env_ptr(p_f.has_c_symbol(), p_f.name);
+        let unit_ptr_ty = (*self.builder).get_ptr_type(self.get_primitive_type(ILPRIM_UNIT));
+        let arg_count = if needs_env { 2 as usize } else { 1 as usize };
+        let arg_ptr = unsafe {
+            zoril_allocator_alloc(self.persistent_arena, arg_count * sizeof(SSAId))
+        } as *mut SSAId;
+        let mut args = unsafe { @slice(arg_ptr, arg_count) };
+        args[0] = addr_ssa;
+        if needs_env { args[1] = (*self.builder).emit_const_u64(0 as u64, unit_ptr_ty); }
+        let unit_ty = self.get_primitive_type(ILPRIM_UNIT);
+        (*self.builder).emit_with_type(
+            ILInstr.Call(CallInstr {
+                args: args,
+                name_id: p_f.name,
+                is_extern: p_f.has_c_symbol(),
+                func_idx: fn_idx
+            }),
+            unit_ty
+        );
+    }
+
+    // Mirrors ZirLowerer.type_needs_drop: own drop function, or an owned (by-value) field, enum
+    // payload, tuple element or array element that needs dropping.
+    //
+    // No depth limit, for the same reason as the ZIR-side predicate: the walk follows by-value
+    // fields only and a type that contains itself by value is rejected, so it terminates; `depth`
+    // stays as the mutation harness's anchor. Answering `false` past ten levels is what left the
+    // deepest field's own `drop` uncalled, so a deep value was never freed
+    // (doc/SAFETY.md §4.4). The `u.id` guard below is the one case that is not
+    // structural: a type the lowering could not resolve contributes nothing.
+    fn zil_type_needs_drop(self: &mut ZirToZilLowerer, ty_id: u32, depth: usize) -> bool {
+        // Named, like every guard the mutation harness targets: this line alone is where the old
+        // `|| depth > 10` answer goes back.
+        let absent_type = ty_id == 0 as u32;
+        if absent_type { return false; }
+        let tag = self.builder.get_type_decl(ty_id).def.get_tag();
+        if is_any_pointer_tag(tag) || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT {
+            return false;
+        }
+        if tag == ILTYPE_ARRAY {
+            let elem = self.builder.get_type_decl(ty_id).def.get_Array().element;
+            return self.zil_type_needs_drop(elem, depth + 1 as usize);
+        }
+        if tag == ILTYPE_TUPLE {
+            let ty_def: ILType = self.zil_module.types[ty_id as usize - 1 as usize].def;
+            let elements = ty_def.get_Tuple();
+            let mut i = 0 as usize;
+            while i < elements.len {
+                if self.zil_type_needs_drop(elements[i], depth + 1 as usize) { return true; }
+                i = i + 1 as usize;
+            }
+            return false;
+        }
+        if tag != ILTYPE_USER { return false; }
+        if self.find_drop_fn(ty_id) != 999999 as u32 { return true; }
+        let ty_def: ILType = self.zil_module.types[ty_id as usize - 1 as usize].def;
+        let u = ty_def.get_User();
+        if (*u).id == 0 as u32 || (*u).id as usize >= self.zil_module.typedefs.len() {
+            return false;
+        }
+        let p_def: ILTypeDef = self.zil_module.typedefs[(*u).id as usize];
+        if p_def.get_tag() == IL_TYPEDEF_STRUCT {
+            let st = p_def.get_Struct();
+            let mut i = 0 as usize;
+            while i < (*st).fields.len {
+                if self.zil_type_needs_drop((*st).fields[i].ty, depth + 1 as usize) { return true; }
+                i = i + 1 as usize;
+            }
+        } else if p_def.get_tag() == IL_TYPEDEF_ENUM {
+            let en = p_def.get_Enum();
+            let mut i = 0 as usize;
+            while i < en.variants.len {
+                let payload = en.variants[i].payload;
+                if payload != 0 as u32 && self.zil_type_needs_drop(payload, depth + 1 as usize) {
+                    return true;
+                }
+                i = i + 1 as usize;
+            }
+        }
+        return false;
+    }
+
+    // Drop glue for the value at `addr` of type `ty`: its own drop function first (it may still use
+    // its fields), then every owned field, enum payload (for the active variant), tuple element and
+    // array element that needs dropping, recursively.
+    // No depth limit here either, and for the same reason (`zil_type_needs_drop` bounds every field
+    // step and the walk follows by-value fields only, so the recursion is bounded by the type tree).
+    // Stopping past ten levels meant the deepest field's own `drop` was never called, which is the
+    // leak §2.5 records.
+    fn emit_drop_glue(self: &mut ZirToZilLowerer, addr: u32, ty: u32, depth: usize) {
+        if self.checked {
+            // Before anything reads the value: a value that is already the poison pattern was
+            // dropped once already, which is the double drop this build exists to catch.
+            self.emit_double_drop_check(addr, ty);
+        }
+        self.emit_drop_glue_unguarded(addr, ty, depth);
+        if self.checked {
+            // After the drop: a read of the dead value now finds 0xA5.. (and a second drop of it
+            // trips the check above).
+            self.emit_checked_poison(addr, self.get_type_size(ty));
+        }
+    }
+
+    fn emit_drop_glue_unguarded(self: &mut ZirToZilLowerer, addr: u32, ty: u32, depth: usize) {
+        let own = self.find_drop_fn(ty);
+        if own != 999999 as u32 { self.emit_drop_call(own, addr); }
+        let tag = self.builder.get_type_decl(ty).def.get_tag();
+        if tag == ILTYPE_TUPLE {
+            let ty_def: ILType = self.zil_module.types[ty as usize - 1 as usize].def;
+            let elements = ty_def.get_Tuple();
+            let mut i = 0 as usize;
+            while i < elements.len {
+                let et = elements[i];
+                if self.zil_type_needs_drop(et, depth + 1 as usize) {
+                    let et_ptr = (*self.builder).get_ptr_type(et);
+                    let ea = (*self.builder).emit_with_type(
+                        ILInstr.FieldAddr(FieldAddrInstr { val: addr, field_idx: i as u32 }),
+                        et_ptr
+                    );
+                    self.emit_drop_glue(ea, et, depth + 1 as usize);
+                }
+                i = i + 1 as usize;
+            }
+            return;
+        }
+        if tag == ILTYPE_ARRAY {
+            let ty_def: ILType = self.zil_module.types[ty as usize - 1 as usize].def;
+            let arr = ty_def.get_Array();
+            if self.zil_type_needs_drop(arr.element, depth + 1 as usize) {
+                self.emit_array_drop_loop(addr, arr.element, arr.size as u64, depth);
+            }
+            return;
+        }
+        if tag != ILTYPE_USER { return; }
+        let ty_def: ILType = self.zil_module.types[ty as usize - 1 as usize].def;
+        let u = ty_def.get_User();
+        let p_def: ILTypeDef = self.zil_module.typedefs[(*u).id as usize];
+        if p_def.get_tag() == IL_TYPEDEF_STRUCT {
+            let st = p_def.get_Struct();
+            let mut i = 0 as usize;
+            while i < (*st).fields.len {
+                let ft = (*st).fields[i].ty;
+                if self.zil_type_needs_drop(ft, depth + 1 as usize) {
+                    let ft_ptr = (*self.builder).get_ptr_type(ft);
+                    let fa = (*self.builder).emit_with_type(
+                        ILInstr.FieldAddr(FieldAddrInstr { val: addr, field_idx: i as u32 }),
+                        ft_ptr
+                    );
+                    self.emit_drop_glue(fa, ft, depth + 1 as usize);
+                }
+                i = i + 1 as usize;
+            }
+        } else if p_def.get_tag() == IL_TYPEDEF_ENUM {
+            let en = p_def.get_Enum();
+            let n = en.variants.len;
+            let mut v = 0 as usize;
+            while v < n {
+                let payload = en.variants[v].payload;
+                if payload != 0 as u32 && self.zil_type_needs_drop(payload, depth + 1 as usize) {
+                    let bool_ty = self.get_primitive_type(ILPRIM_BOOL);
+                    let is_v = (*self.builder).emit_with_type(
+                        ILInstr.VariantMatch(VariantMatchInstr {
+                            val: addr,
+                            type_id: ty,
+                            variant_idx: v as u32
+                        }),
+                        bool_ty
+                    );
+                    let then_b = (*self.builder).new_block();
+                    let join_b = (*self.builder).new_block();
+                    (*self.builder).emit(
+                        ILInstr.Branch(BranchInstr {
+                            cond: is_v,
+                            then_block: then_b,
+                            else_block: join_b
+                        })
+                    );
+                    (*self.builder).switch_to_block(then_b);
+                    let pay_ptr = (*self.builder).get_ptr_type(payload);
+                    let pa = (*self.builder).emit_with_type(ILInstr.Unwrap(addr), pay_ptr);
+                    self.emit_drop_glue(pa, payload, depth + 1 as usize);
+                    (*self.builder).emit(ILInstr.Jmp(join_b));
+                    (*self.builder).switch_to_block(join_b);
+                }
+                v = v + 1 as usize;
+            }
+        }
+    }
+
+    // The address of the enum PLACE holds, or points at when it is a reference. A reference
+    // is read with load_place, which knows a temporary's value is the pointer itself; taking
+    // its address and loading through it read the enum's bytes as a pointer (`match &o`).
+    fn enum_address(
+        self: &mut ZirToZilLowerer,
+        place: &Place,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let place_ty = self.get_place_type(place, local_types);
+        if place_ty != 0 as u32 {
+            let tag = self.builder.get_type_decl(place_ty).def.get_tag();
+            if is_any_pointer_tag(tag) || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT {
+                return self.load_place(place, local_slots, local_types);
+            }
+        }
+        return self.resolve_place_addr(place, local_slots, local_types);
+    }
+
+    // for i in 0..len { arr[i] = val }: VAL is the element, or for an aggregate element a
+    // pointer to it.
+    fn emit_array_fill_loop(self: &mut ZirToZilLowerer, addr: u32, elem: u32, val: u32, len: u64) {
+        let usize_ty = self.get_primitive_type(ILPRIM_USIZE);
+        let bool_ty = self.get_primitive_type(ILPRIM_BOOL);
+        let idx_ptr_ty = (*self.builder).get_ptr_type(usize_ty);
+        let elem_size = self.get_type_size(elem);
+        let elem_is_agg = self.is_aggregate(elem);
+        let saved = (*self.builder).current_block_idx;
+        (*self.builder).switch_to_block((*self.builder).entry_block_idx);
+        let idx_slot = (*self.builder).emit_with_type(
+            ILInstr.Alloc(AllocInstr {
+                region: Region.Local,
+                ty: usize_ty,
+                allocator: NO_SSA as u32
+            }),
+            idx_ptr_ty
+        );
+        (*self.builder).switch_to_block(saved);
+        let zero = (*self.builder).emit_const_u64(0 as u64, usize_ty);
+        (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: idx_slot, val: zero }));
+        let cond_b = (*self.builder).new_block();
+        let body_b = (*self.builder).new_block();
+        let exit_b = (*self.builder).new_block();
+        (*self.builder).emit(ILInstr.Jmp(cond_b));
+        (*self.builder).switch_to_block(cond_b);
+        let i_val = (*self.builder).emit_with_type(ILInstr.Load(idx_slot), usize_ty);
+        let len_ssa = (*self.builder).emit_const_u64(len, usize_ty);
+        let more = (*self.builder).emit_with_type(
+            ILInstr.CmpLt(ILBinaryOp { lhs: i_val, rhs: len_ssa }),
+            bool_ty
+        );
+        (*self.builder).emit(
+            ILInstr.Branch(BranchInstr { cond: more, then_block: body_b, else_block: exit_b })
+        );
+        (*self.builder).switch_to_block(body_b);
+        let size_ssa = (*self.builder).emit_const_u64(elem_size as u64, usize_ty);
+        let off = (*self.builder).emit_with_type(
+            ILInstr.Mul(ILBinaryOp { lhs: i_val, rhs: size_ssa }),
+            usize_ty
+        );
+        let elem_ptr_ty = (*self.builder).get_ptr_type(elem);
+        let ea = (*self.builder).emit_with_type(
+            ILInstr.Add(ILBinaryOp { lhs: addr, rhs: off }),
+            elem_ptr_ty
+        );
+        if elem_size > 0 as usize {
+            if elem_is_agg {
+                self.emit_memcpy(ea, val, elem_size as u64);
+            } else {
+                (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: ea, val: val }));
+            }
+        }
+        let one = (*self.builder).emit_const_u64(1 as u64, usize_ty);
+        let next = (*self.builder).emit_with_type(
+            ILInstr.Add(ILBinaryOp { lhs: i_val, rhs: one }),
+            usize_ty
+        );
+        (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: idx_slot, val: next }));
+        (*self.builder).emit(ILInstr.Jmp(cond_b));
+        (*self.builder).switch_to_block(exit_b);
+    }
+
+    // for i in 0..len { glue(&arr[i]) }
+    fn emit_array_drop_loop(
+        self: &mut ZirToZilLowerer,
+        addr: u32,
+        elem: u32,
+        len: u64,
+        depth: usize
+    ) {
+        let usize_ty = self.get_primitive_type(ILPRIM_USIZE);
+        let bool_ty = self.get_primitive_type(ILPRIM_BOOL);
+        let idx_ptr_ty = (*self.builder).get_ptr_type(usize_ty);
+        let saved = (*self.builder).current_block_idx;
+        (*self.builder).switch_to_block((*self.builder).entry_block_idx);
+        let idx_slot = (*self.builder).emit_with_type(
+            ILInstr.Alloc(AllocInstr {
+                region: Region.Local,
+                ty: usize_ty,
+                allocator: NO_SSA as u32
+            }),
+            idx_ptr_ty
+        );
+        (*self.builder).switch_to_block(saved);
+        let zero = (*self.builder).emit_const_u64(0 as u64, usize_ty);
+        (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: idx_slot, val: zero }));
+        let cond_b = (*self.builder).new_block();
+        let body_b = (*self.builder).new_block();
+        let exit_b = (*self.builder).new_block();
+        (*self.builder).emit(ILInstr.Jmp(cond_b));
+        (*self.builder).switch_to_block(cond_b);
+        let i_val = (*self.builder).emit_with_type(ILInstr.Load(idx_slot), usize_ty);
+        let len_ssa = (*self.builder).emit_const_u64(len, usize_ty);
+        let more = (*self.builder).emit_with_type(
+            ILInstr.CmpLt(ILBinaryOp { lhs: i_val, rhs: len_ssa }),
+            bool_ty
+        );
+        (*self.builder).emit(
+            ILInstr.Branch(BranchInstr { cond: more, then_block: body_b, else_block: exit_b })
+        );
+        (*self.builder).switch_to_block(body_b);
+        let size_ssa = (*self.builder).emit_const_u64(self.get_type_size(elem), usize_ty);
+        let off = (*self.builder).emit_with_type(
+            ILInstr.Mul(ILBinaryOp { lhs: i_val, rhs: size_ssa }),
+            usize_ty
+        );
+        let elem_ptr_ty = (*self.builder).get_ptr_type(elem);
+        let ea = (*self.builder).emit_with_type(
+            ILInstr.Add(ILBinaryOp { lhs: addr, rhs: off }),
+            elem_ptr_ty
+        );
+        self.emit_drop_glue(ea, elem, depth + 1 as usize);
+        let one = (*self.builder).emit_const_u64(1 as u64, usize_ty);
+        let next = (*self.builder).emit_with_type(
+            ILInstr.Add(ILBinaryOp { lhs: i_val, rhs: one }),
+            usize_ty
+        );
+        (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: idx_slot, val: next }));
+        (*self.builder).emit(ILInstr.Jmp(cond_b));
+        (*self.builder).switch_to_block(exit_b);
+    }
+
+    fn find_drop_fn(self: &mut ZirToZilLowerer, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 { return 999999 as u32; }
+        let p_ty = self.builder.get_type_decl(ty_id);
+        let mut base_ty = ty_id;
+        let vt_tag = p_ty.def.get_tag();
+        if is_any_pointer_tag(vt_tag) || vt_tag == ILTYPE_BOXED || vt_tag == ILTYPE_BOXEDMUT {
+            base_ty = p_ty.def.get_Ptr();
+        }
+        if base_ty == 0 as u32 { return 999999 as u32; }
+        let p_base = self.builder.get_type_decl(base_ty);
+        let type_name_id = (*p_base).name;
+
+        if type_name_id == 0 as u32 {
+            return 999999 as u32;
+        }
+
+        let type_str = self.intern_table.lookup(type_name_id);
+
+        let name_len = type_str.len + 6 as usize;
+        let name_buf_ptr = unsafe {
+            zoril_allocator_alloc(self.scratch_arena, name_len)
+        } as *mut u8;
+        let mut name_buf = unsafe { @slice(name_buf_ptr, name_len) };
+        unsafe { memcpy(name_buf_ptr, type_str.ptr, type_str.len as u64); }
+        name_buf[type_str.len] = ':' as u8;
+        name_buf[type_str.len + 1 as usize] = ':' as u8;
+        name_buf[type_str.len + 2 as usize] = 'd' as u8;
+        name_buf[type_str.len + 3 as usize] = 'r' as u8;
+        name_buf[type_str.len + 4 as usize] = 'o' as u8;
+        name_buf[type_str.len + 5 as usize] = 'p' as u8;
+
+        let mangled = self.intern_table.intern(name_buf);
+
+        let mut fi = 0 as usize;
+        while fi < self.zil_module.functions.len() {
+            let p_func = self.zil_module.get_function_mut(fi);
+            if p_func.name == mangled {
+                return fi as u32;
+            }
+            fi = fi + 1 as usize;
+        }
+        return 999999 as u32;
+    }
+    fn emit_narrow_wrap_mask(self: &mut ZirToZilLowerer, val: u32, ty: u32) -> u32 {
+        if ty == 0 as u32 { return val; }
+        let p_ty = self.builder.get_type_decl(ty);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_PRIMITIVE {
+            let prim = p_ty.def.get_Primitive().get_tag();
+            let u32_ty = self.get_primitive_type(ILPRIM_U32);
+            let i32_ty = self.get_primitive_type(ILPRIM_I32);
+            if prim == ILPRIM_U8 {
+                let mask = (*self.builder).emit_const_u64(255 as u64, ty);
+                return (*self.builder).emit_with_type(
+                    ILInstr.And(ILBinaryOp { lhs: val, rhs: mask }),
+                    ty
+                );
+            } else if prim == ILPRIM_I8 {
+                let mask = (*self.builder).emit_const_u64(255 as u64, u32_ty);
+                let wide = (*self.builder).emit_cast(val, u32_ty);
+                let masked = (*self.builder).emit_with_type(
+                    ILInstr.And(ILBinaryOp { lhs: wide, rhs: mask }),
+                    u32_ty
+                );
+                let shift = (*self.builder).emit_const_u64(24 as u64, u32_ty);
+                let shl = (*self.builder).emit_with_type(
+                    ILInstr.Shl(ILBinaryOp { lhs: masked, rhs: shift }),
+                    u32_ty
+                );
+                let sar = (*self.builder).emit_with_type(
+                    ILInstr.Shr(ILBinaryOp { lhs: shl, rhs: shift }),
+                    i32_ty
+                );
+                return (*self.builder).emit_cast(sar, ty);
+            } else if prim == ILPRIM_U16 {
+                let mask = (*self.builder).emit_const_u64(65535 as u64, ty);
+                return (*self.builder).emit_with_type(
+                    ILInstr.And(ILBinaryOp { lhs: val, rhs: mask }),
+                    ty
+                );
+            } else if prim == ILPRIM_I16 {
+                let mask = (*self.builder).emit_const_u64(65535 as u64, u32_ty);
+                let wide = (*self.builder).emit_cast(val, u32_ty);
+                let masked = (*self.builder).emit_with_type(
+                    ILInstr.And(ILBinaryOp { lhs: wide, rhs: mask }),
+                    u32_ty
+                );
+                let shift = (*self.builder).emit_const_u64(16 as u64, u32_ty);
+                let shl = (*self.builder).emit_with_type(
+                    ILInstr.Shl(ILBinaryOp { lhs: masked, rhs: shift }),
+                    u32_ty
+                );
+                let sar = (*self.builder).emit_with_type(
+                    ILInstr.Shr(ILBinaryOp { lhs: shl, rhs: shift }),
+                    i32_ty
+                );
+                return (*self.builder).emit_cast(sar, ty);
+            }
+        }
+        return val;
+    }
+
+    // `==` / `!=` on slices: equal lengths and equal contents, via the runtime's
+    // zoril_slice_eq. check_equality_operands admits only slices whose elements compare
+    // correctly byte by byte (integers, bool, char, pointers), so a byte compare is exact.
+    fn emit_slice_eq(
+        self: &mut ZirToZilLowerer,
+        op: u32,
+        lhs: &Place,
+        rhs: &Place,
+        slice_ty: u32,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let usize_ty = self.get_primitive_type(ILPRIM_USIZE);
+        let bool_ty = self.get_primitive_type(ILPRIM_BOOL);
+        let elem_size = self.get_type_size(self.get_slice_element_type(slice_ty));
+
+        let lhs_addr = self.resolve_place_addr(lhs, local_slots, local_types);
+        let rhs_addr = self.resolve_place_addr(rhs, local_slots, local_types);
+        let lhs_ptr = self.load_slice_data_ptr(lhs_addr);
+        let rhs_ptr = self.load_slice_data_ptr(rhs_addr);
+        let lhs_len = self.load_slice_len(lhs_addr, usize_ty);
+        let rhs_len = self.load_slice_len(rhs_addr, usize_ty);
+        let size_ssa = (*self.builder).emit_const_u64(elem_size, usize_ty);
+        let nbytes = (*self.builder).emit_with_type(
+            ILInstr.Mul(ILBinaryOp { lhs: lhs_len, rhs: size_ssa }),
+            usize_ty
+        );
+
+        let args_ptr = unsafe { zoril_allocator_alloc(self.persistent_arena, 5 * 4) } as *mut u32;
+        let mut args = unsafe { @slice(args_ptr, 5 as usize) };
+        args[0] = lhs_ptr;
+        args[1] = rhs_ptr;
+        args[2] = lhs_len;
+        args[3] = rhs_len;
+        args[4] = nbytes;
+        let name_id = self.intern_table.intern("zoril_slice_eq");
+        let equal = (*self.builder).emit_with_type(
+            ILInstr.Call(CallInstr {
+                args: args,
+                name_id: name_id,
+                is_extern: true,
+                func_idx: CALL_BY_NAME
+            }),
+            bool_ty
+        );
+        if op == 8 as u32 { return equal; }
+        let false_ssa = (*self.builder).emit_const_u64(0 as u64, bool_ty);
+        return self.emit_binary_op(8 as u32, equal, false_ssa, bool_ty);
+    }
+
+    // A slice is addressed as a pointer to its {ptr, len} pair: ptr at offset 0, len at 8.
+    fn load_slice_data_ptr(self: &mut ZirToZilLowerer, slice_addr: u32) -> u32 {
+        let u8_ptr_ty = (*self.builder).get_ptr_type(self.get_primitive_type(ILPRIM_U8));
+        let field_ptr = (*self.builder).emit_cast(
+            slice_addr,
+            (*self.builder).get_ptr_type(u8_ptr_ty)
+        );
+        return (*self.builder).emit_with_type(ILInstr.Load(field_ptr), u8_ptr_ty);
+    }
+
+    fn load_slice_len(self: &mut ZirToZilLowerer, slice_addr: u32, usize_ty: u32) -> u32 {
+        let len_off = (*self.builder).emit_const_u64(8 as u64, usize_ty);
+        let len_ptr = (*self.builder).emit_with_type(
+            ILInstr.Add(ILBinaryOp { lhs: slice_addr, rhs: len_off }),
+            (*self.builder).get_ptr_type(usize_ty)
+        );
+        return (*self.builder).emit_with_type(ILInstr.Load(len_ptr), usize_ty);
+    }
+
+    // Is this local a temporary defined by a constant (or a cast or negation of one)?
+    fn is_const_temp(self: &mut ZirToZilLowerer, local_id: u32, depth: usize) -> bool {
+        if local_id == 0 as u32 || depth > 8 as usize || self.current_func as usize == 0 as usize {
+            return false;
+        }
+        let blocks = unsafe { (*self.current_func).blocks };
+        let mut bi = 0 as usize;
+        while bi < blocks.len {
+            let stmts = blocks[bi].statements;
+            let mut si = 0 as usize;
+            while si < stmts.len {
+                if let ZirStmt.Let(id, rv, _) = stmts[si] {
+                    if id == local_id {
+                        return match rv {
+                            ZirRvalue.Const(_, _) => true,
+                            ZirRvalue.Cast(pl, _) => pl.projections.len == 0 as usize
+                                && self.is_const_temp(pl.base, depth + 1 as usize),
+                            ZirRvalue.UnaryOp(op, pl) => op == 0 as u32
+                                && pl.projections.len == 0 as usize
+                                && self.is_const_temp(pl.base, depth + 1 as usize),                                                                             // Neg
+                            _ => false,
+                        };
+                    }
+                }
+                si = si + 1 as usize;
+            }
+            bi = bi + 1 as usize;
+        }
+        return false;
+    }
+
+    fn shift_width(self: &mut ZirToZilLowerer, ty: u32) -> u64 {
+        if ty == 0 as u32 || self.builder.get_type_decl(ty).def.get_tag() != ILTYPE_PRIMITIVE {
+            return 0 as u64;
+        }
+        return self.get_type_size(ty) * 8 as u64;
+    }
+
+    // Trap (exit 134, like a failed bounds check) unless 0 <= count < width. The count
+    // is compared unsigned, so a negative count lands above the width and traps too.
+    fn emit_shift_count_check(self: &mut ZirToZilLowerer, count: u32, ty: u32) {
+        let width = self.shift_width(ty);
+        if width == 0 as u64 { return; }
+        let usize_ty = self.get_primitive_type(ILPRIM_USIZE);
+        let width_ssa = (*self.builder).emit_const_u64(width, usize_ty);
+        (*self.builder).emit_bounds_check_against(
+            count,
+            width_ssa,
+            usize_ty,
+            self.get_primitive_type(ILPRIM_BOOL),
+            self.get_primitive_type(ILPRIM_U64),
+            self.get_primitive_type(ILPRIM_I64)
+        );
+    }
+
+    fn mask_shift_count(self: &mut ZirToZilLowerer, count: u32, ty: u32) -> u32 {
+        let width = self.shift_width(ty);
+        if width == 0 as u64 { return count; }
+        let mask = (*self.builder).emit_const_u64(width - 1 as u64, ty);
+        return (*self.builder).emit_with_type(
+            ILInstr.And(ILBinaryOp { lhs: count, rhs: mask }),
+            ty
+        );
+    }
+
+    fn emit_binary_op(self: &mut ZirToZilLowerer, op: u32, lhs: u32, rhs: u32, res_ty: u32) -> u32 {
+        let lhs_ty = (*self.builder).get_ssa_type(lhs);
+        let rhs_ty = (*self.builder).get_ssa_type(rhs);
+        let lhs_tag = if lhs_ty != 0 as u32 {
+            self.builder.get_type_decl(lhs_ty).def.get_tag()
+        } else {
+            0xffffffff as u32
+        };
+        let rhs_tag = if rhs_ty != 0 as u32 {
+            self.builder.get_type_decl(rhs_ty).def.get_tag()
+        } else {
+            0xffffffff as u32
+        };
+        let is_lhs_ptr = is_any_pointer_tag(lhs_tag)
+            || lhs_tag == ILTYPE_BOXED
+            || lhs_tag == ILTYPE_BOXEDMUT;
+        let is_rhs_ptr = is_any_pointer_tag(rhs_tag)
+            || rhs_tag == ILTYPE_BOXED
+            || rhs_tag == ILTYPE_BOXEDMUT;
+
+        let b = ILBinaryOp { lhs: lhs, rhs: rhs };
+
+        match op {
+            BINARY_ADD => {
+                if is_lhs_ptr {
+                    let inner = self.get_ptr_inner_type(lhs_ty);
+                    let sz = self.get_type_size(inner);
+                    let usize_ty = self.get_primitive_type(ILPRIM_USIZE);
+                    let sz_val = (*self.builder).emit_const_u64(sz, usize_ty);
+                    let index = (*self.builder).emit_cast(rhs, usize_ty);
+                    let scaled_rhs = (*self.builder).emit_with_type(
+                        ILInstr.Mul(ILBinaryOp { lhs: index, rhs: sz_val }),
+                        usize_ty
+                    );
+                    return (*self.builder).emit_with_type(
+                        ILInstr.Add(ILBinaryOp { lhs: lhs, rhs: scaled_rhs }),
+                        res_ty
+                    );
+                } else if is_rhs_ptr {
+                    let inner = self.get_ptr_inner_type(rhs_ty);
+                    let sz = self.get_type_size(inner);
+                    let usize_ty = self.get_primitive_type(ILPRIM_USIZE);
+                    let sz_val = (*self.builder).emit_const_u64(sz, usize_ty);
+                    let index = (*self.builder).emit_cast(lhs, usize_ty);
+                    let scaled_lhs = (*self.builder).emit_with_type(
+                        ILInstr.Mul(ILBinaryOp { lhs: index, rhs: sz_val }),
+                        usize_ty
+                    );
+                    return (*self.builder).emit_with_type(
+                        ILInstr.Add(ILBinaryOp { lhs: scaled_lhs, rhs: rhs }),
+                        rhs_ty
+                    );
+                }
+                return self.emit_narrow_wrap_mask(
+                    (*self.builder).emit_with_type(ILInstr.Add(b), res_ty),
+                    res_ty
+                );
+            },
+            BINARY_SUB => {
+                if is_lhs_ptr && is_rhs_ptr {
+                    let inner = self.get_ptr_inner_type(lhs_ty);
+                    let sz = self.get_type_size(inner);
+                    let isize_ty = self.get_primitive_type(ILPRIM_ISIZE);
+                    let diff = (*self.builder).emit_with_type(ILInstr.Sub(b), isize_ty);
+                    let sz_val = (*self.builder).emit_const_u64(sz, isize_ty);
+                    return (*self.builder).emit_with_type(
+                        ILInstr.Div(ILBinaryOp { lhs: diff, rhs: sz_val }),
+                        isize_ty
+                    );
+                } else if is_lhs_ptr {
+                    let inner = self.get_ptr_inner_type(lhs_ty);
+                    let sz = self.get_type_size(inner);
+                    let usize_ty = self.get_primitive_type(ILPRIM_USIZE);
+                    let sz_val = (*self.builder).emit_const_u64(sz, usize_ty);
+                    let index = (*self.builder).emit_cast(rhs, usize_ty);
+                    let scaled_rhs = (*self.builder).emit_with_type(
+                        ILInstr.Mul(ILBinaryOp { lhs: index, rhs: sz_val }),
+                        usize_ty
+                    );
+                    return (*self.builder).emit_with_type(
+                        ILInstr.Sub(ILBinaryOp { lhs: lhs, rhs: scaled_rhs }),
+                        res_ty
+                    );
+                }
+                return self.emit_narrow_wrap_mask(
+                    (*self.builder).emit_with_type(ILInstr.Sub(b), res_ty),
+                    res_ty
+                );
+            },
+            // u8/u16 arithmetic happens in a 32-bit register, so a result that
+            // overflows the declared width is masked back down, or `200u8 + 100u8`
+            // would be 300 as a temporary and 44 once stored. `emit_narrow_wrap_mask`
+            // is a no-op above 16 bits. Signed division needs it too: `-128i8 / -1i8`
+            // is 128, which is not an i8.
+            BINARY_MUL => {
+                return self.emit_narrow_wrap_mask(
+                    (*self.builder).emit_with_type(ILInstr.Mul(b), res_ty),
+                    res_ty
+                );
+            },
+            BINARY_DIV => {
+                return self.emit_narrow_wrap_mask(
+                    (*self.builder).emit_with_type(ILInstr.Div(b), res_ty),
+                    res_ty
+                );
+            },
+            BINARY_MOD => { return (*self.builder).emit_with_type(ILInstr.Rem(b), res_ty); },
+            BINARY_ADDWRAP => {
+                let r = (*self.builder).emit_with_type(ILInstr.WrappingAdd(b), res_ty);
+                return self.emit_narrow_wrap_mask(r, res_ty);
+            },
+            BINARY_SUBWRAP => {
+                let r = (*self.builder).emit_with_type(ILInstr.Sub(b), res_ty);
+                return self.emit_narrow_wrap_mask(r, res_ty);
+            },
+            BINARY_MULWRAP => {
+                let r = (*self.builder).emit_with_type(ILInstr.Mul(b), res_ty);
+                return self.emit_narrow_wrap_mask(r, res_ty);
+            },
+            BINARY_EQ => { return (*self.builder).emit_with_type(ILInstr.CmpEq(b), res_ty); },
+            BINARY_NE => { return (*self.builder).emit_with_type(ILInstr.CmpNe(b), res_ty); },
+            BINARY_LT => { return (*self.builder).emit_with_type(ILInstr.CmpLt(b), res_ty); },
+            BINARY_LE => { return (*self.builder).emit_with_type(ILInstr.CmpLe(b), res_ty); },
+            BINARY_GT => { return (*self.builder).emit_with_type(ILInstr.CmpGt(b), res_ty); },
+            BINARY_GE => { return (*self.builder).emit_with_type(ILInstr.CmpGe(b), res_ty); },
+            BINARY_AND => { return (*self.builder).emit_with_type(ILInstr.And(b), res_ty); },
+            BINARY_OR => { return (*self.builder).emit_with_type(ILInstr.Or(b), res_ty); },
+            BINARY_XOR => { return (*self.builder).emit_with_type(ILInstr.Xor(b), res_ty); },
+            BINARY_SHL => {
+                return self.emit_narrow_wrap_mask(
+                    (*self.builder).emit_with_type(ILInstr.Shl(b), res_ty),
+                    res_ty
+                );
+            },
+            BINARY_SHR => { return (*self.builder).emit_with_type(ILInstr.Shr(b), res_ty); },
+            BINARY_SHL_MASKED => {
+                let masked = self.mask_shift_count(rhs, res_ty);
+                return self.emit_narrow_wrap_mask(
+                    (*self.builder).emit_with_type(
+                        ILInstr.Shl(ILBinaryOp { lhs: lhs, rhs: masked }),
+                        res_ty
+                    ),
+                    res_ty
+                );
+            },
+            BINARY_SHR_MASKED => {
+                let masked = self.mask_shift_count(rhs, res_ty);
+                return (*self.builder).emit_with_type(
+                    ILInstr.Shr(ILBinaryOp { lhs: lhs, rhs: masked }),
+                    res_ty
+                );
+            },
+            _ => { ICE("ZirToZilLowerer.emit_binary_op: unknown binary op"); },
+        }
+    }
+    fn needs_env_ptr(self: &mut ZirToZilLowerer, is_extern: bool, name: u32) -> bool {
+        return takes_env_ptr(is_extern, self.intern_table.lookup(name));
+    }
+
+    fn lower_rvalue(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        match *rv {
+            ZirRvalue.Use(_) => { // Use(Place)
+                let place = rv.get_Use();
+                return self.load_place(place, local_slots, local_types);
+            },
+            ZirRvalue.Ref(_, _) => { // Ref(Place, u32)
+                let place = rv.get_Ref();
+                return self.ref_place_addr(place, local_slots, local_types);
+            },
+            ZirRvalue.RefMut(_, _) => { // RefMut(Place, u32)
+                let place = rv.get_RefMut();
+                return self.ref_place_addr(place, local_slots, local_types);
+            },
+            ZirRvalue.Const(_, _) => { return self.lower_rv_const(rv, local_slots, local_types); },
+            ZirRvalue.BinaryOp(_, _, _) => {
+                return self.lower_rv_binary_op(rv, local_slots, local_types);
+            },
+            ZirRvalue.UnaryOp(_, _) => {
+                return self.lower_rv_unary_op(rv, local_slots, local_types);
+            },
+            ZirRvalue.Call(_, _) => {
+                return self.lower_rv_call(rv, local_slots, local_types);
+            },
+            ZirRvalue.CallPtr(_, _) => {
+                return self.lower_rv_call_ptr(rv, local_slots, local_types);
+            },
+            ZirRvalue.StructLiteral(_, _) => {
+                return self.lower_rv_struct_literal(rv, local_slots, local_types);
+            },
+            ZirRvalue.EnumVariant(_, _, _) => {
+                return self.lower_rv_enum_variant(rv, local_slots, local_types);
+            },
+            ZirRvalue.Cast(_, _) => {
+                return self.lower_rv_cast(rv, local_slots, local_types);
+            },
+            ZirRvalue.Sizeof(_) => { return self.lower_rv_sizeof(rv, local_slots, local_types); },
+            ZirRvalue.Syscall(_) => { return self.lower_rv_syscall(rv, local_slots, local_types); },
+            ZirRvalue.PtrFromInt(_, _) => {
+                return self.lower_rv_ptr_from_int(rv, local_slots, local_types);
+            },
+            ZirRvalue.Intrinsic(_, _) => {
+                return self.lower_rv_intrinsic(rv, local_slots, local_types);
+            },
+            ZirRvalue.StringConst(_) => {
+                return self.lower_rv_string_const(rv, local_slots, local_types);
+            },
+            ZirRvalue.VariantCheck(_, _, _) => {
+                return self.lower_rv_variant_check(rv, local_slots, local_types);
+            },
+            ZirRvalue.EnumPayload(_, _, _) => {
+                return self.lower_rv_enum_payload(rv, local_slots, local_types);
+            },
+            ZirRvalue.GlobalAddr(_) => { // GlobalAddr(id)
+                let id = rv.get_GlobalAddr_id();
+                let p_g = self.zil_module.get_global_mut(id as usize);
+                let ptr_ty = (*self.builder).get_ptr_type(p_g.ty);
+                return (*self.builder).emit_with_type(ILInstr.GlobalAddr(id), ptr_ty);
+            },
+            ZirRvalue.FuncAddr(_, _) => {
+                return self.lower_rv_func_addr(rv, local_slots, local_types);
+            },
+            ZirRvalue.Tuple(_) => {
+                return self.lower_rv_tuple(rv, local_slots, local_types);
+            },
+            ZirRvalue.Array(_, _) => {
+                return self.lower_rv_array(rv, local_slots, local_types);
+            },
+            ZirRvalue.ArrayRepeat(_, _, _) => {
+                return self.lower_rv_array_repeat(rv, local_slots, local_types);
+            },
+            ZirRvalue.Boxed(_) => { return self.lower_rv_boxed(rv, local_slots, local_types); },
+            ZirRvalue.GetEnv => { // GetEnv
+                // The closure's last parameter, as its prologue received it (lower_fn_body),
+                // seen as its environment tuple's pointer.
+                let env_ty = self.mono.pending_cap_env_ty;
+                let f = self.zil_module.get_function_mut((*self.builder).current_func_idx as usize);
+                let env_ssa = f.param(f.params_len - 1 as usize).ssa;
+                return (*self.builder).emit_with_type(ILInstr.Move(env_ssa), env_ty);
+            },
+        }
+        return NO_SSA as u32;
+    }
+
+    // Const(u64, u32)
+    fn lower_rv_const(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let u64_ty = self.get_primitive_type(ILPRIM_U64);
+        let val = rv.get_Const_val();
+        let mut ty = rv.get_Const_ty();
+        if ty == 0 as u32 {
+            ty = u64_ty;
+        }
+        let p_ty = self.builder.get_type_decl(ty);
+        if p_ty.def.get_tag() == ILTYPE_PRIMITIVE {
+            let prim = p_ty.def.get_Primitive().get_tag();
+            if prim == ILPRIM_F64 || prim == ILPRIM_F32 {
+                return (*self.builder).emit_const_f64(val, ty);
+            }
+        }
+        return (*self.builder).emit_const_u64(val, ty);
+    }
+
+    // UnaryOp(u32, Place)
+    fn lower_rv_unary_op(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let u64_ty = self.get_primitive_type(ILPRIM_U64);
+        let op = rv.get_UnaryOp_op();
+        let operand = rv.get_UnaryOp_arg();
+        let val = self.load_place(operand, local_slots, local_types);
+        let mut res_ty = self.get_place_type(operand, local_types);
+        if res_ty == 0 as u32 {
+            res_ty = u64_ty;
+        }
+
+        // Same width rule as `emit_binary_op`: a u8/i8/u16/i16 result is
+        // evaluated in a 32-bit register, so it has to be masked back down to
+        // its declared width or the temporary and the stored value disagree
+        // (`!0u8` is 0xffffffff unmasked, 255 once stored). `-(-128i8)` is the
+        // signed case. `emit_narrow_wrap_mask` is a no-op above 16 bits and for
+        // `bool`, so `!flag` and all wider negations are untouched.
+        if op == 0 as u32 { // UNARY_NEG
+            return self.emit_narrow_wrap_mask(
+                (*self.builder).emit_with_type(ILInstr.Neg(val), res_ty),
+                res_ty
+            );
+        } else { // UNARY_NOT
+            return self.emit_narrow_wrap_mask(
+                (*self.builder).emit_with_type(ILInstr.Not(val), res_ty),
+                res_ty
+            );
+        }
+    }
+
+    // Sizeof(ty)
+    fn lower_rv_sizeof(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let u64_ty = self.get_primitive_type(ILPRIM_U64);
+        let mut ty = rv.get_Sizeof_ty();
+        if ty == 0 as u32 {
+            ty = u64_ty;
+        }
+        let sz = self.get_type_size(ty);
+        let usize_ty = self.get_primitive_type(ILPRIM_USIZE);
+        return (*self.builder).emit_const_u64(sz, usize_ty);
+    }
+
+    // Syscall([Place]); args[0]=num, args[1..]=args
+    fn lower_rv_syscall(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let args_places = rv.get_Syscall_args();
+
+        let u64_ty = self.get_primitive_type(ILPRIM_U64);
+        let num_val = self.load_place(&args_places[0], local_slots, local_types);
+        let num_ssa = (*self.builder).emit_cast(num_val, u64_ty);
+
+        let nargs = args_places.len - 1 as usize;
+        let zil_args_ptr = unsafe {
+            zoril_allocator_alloc(self.persistent_arena, nargs * 4)
+        } as *mut u32;
+        let mut zil_args = unsafe { @slice(zil_args_ptr, nargs) };
+        let mut ai = 0 as usize;
+        while ai < nargs {
+            let arg_val = self.load_place(&args_places[ai + 1 as usize], local_slots, local_types);
+            let casted = (*self.builder).emit_cast(arg_val, u64_ty);
+            zil_args[ai] = casted;
+            ai = ai + 1 as usize;
+        }
+        let res_ty = self.get_primitive_type(ILPRIM_I64);
+        return (*self.builder).emit_with_type(
+            ILInstr.Syscall(SyscallInstr { num: num_ssa, args: zil_args }),
+            res_ty
+        );
+    }
+
+    // PtrFromInt(place, target_ty) - @ptr_from_int<T>
+    fn lower_rv_ptr_from_int(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let u64_ty = self.get_primitive_type(ILPRIM_U64);
+        // A cast; the unsafe-boundary check already happened in ZIR lowering.
+        let pfi_place = rv.get_PtrFromInt_pl();
+        let mut pfi_target_ty = rv.get_PtrFromInt_ty();
+        if pfi_target_ty == 0 as u32 {
+            pfi_target_ty = u64_ty;
+        }
+        let pfi_val = self.load_place(pfi_place, local_slots, local_types);
+        return (*self.builder).emit_cast(pfi_val, pfi_target_ty);
+    }
+
+    // Intrinsic(u32, [Place])
+    fn lower_rv_intrinsic(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let name_id = rv.get_Intrinsic_id();
+        let args_places = rv.get_Intrinsic_args();
+        let name_str = self.intern_table.lookup(name_id);
+        if name_str == "saturating_add" {
+            let lhs = self.load_place(&args_places[0], local_slots, local_types);
+            let rhs = self.load_place(&args_places[1], local_slots, local_types);
+            let res_ty = self.get_place_type(&args_places[0], local_types);
+            return (*self.builder).emit_with_type(
+                ILInstr.SaturatingAdd(ILBinaryOp { lhs: lhs, rhs: rhs }),
+                res_ty
+            );
+        }
+        return NO_SSA as u32;
+    }
+
+    // VariantCheck(place, enum_ty, variant_idx)
+    fn lower_rv_variant_check(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let place = rv.get_VariantCheck_pl();
+        let enum_ty = rv.get_VariantCheck_ty();
+        let variant_idx = rv.get_VariantCheck_idx();
+        let enum_ptr = self.enum_address(place, local_slots, local_types);
+        return (*self.builder).emit_with_type(
+            ILInstr.VariantMatch(VariantMatchInstr {
+                val: enum_ptr,
+                type_id: enum_ty,
+                variant_idx: variant_idx
+            }),
+            self.get_primitive_type(ILPRIM_BOOL)
+        );
+    }
+
+    // EnumPayload(place, enum_ty, variant_idx)
+    fn lower_rv_enum_payload(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let place = rv.get_EnumPayload_pl();
+        let enum_ty = rv.get_EnumPayload_ty();
+        let variant_idx = rv.get_EnumPayload_idx();
+        let enum_ptr = self.enum_address(place, local_slots, local_types);
+        let payload_ty = self.get_variant_payload_type(enum_ty, variant_idx);
+        let ptr_ty = (*self.builder).get_ptr_type(payload_ty);
+        return (*self.builder).emit_with_type(ILInstr.Unwrap(enum_ptr), ptr_ty);
+    }
+
+    // ArrayRepeat(value, elem_ty, count): fill by a loop
+    fn lower_rv_array_repeat(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let elem_ty = rv.get_ArrayRepeat_ty();
+        let count = rv.get_ArrayRepeat_count();
+        let array_ty = self.zil_module.alloc_type(ILTypeDecl {
+            id: 0,
+            name: 0,
+            def: ILType.Array(ILArray { element: elem_ty, size: count }),
+            source_file: 0 as u32
+        });
+        let ptr_ty = (*self.builder).get_ptr_type(array_ty);
+        let temp_slot = self.construct_slot(array_ty, ptr_ty);
+        let val = self.load_place(rv.get_ArrayRepeat_val(), local_slots, local_types);
+        self.emit_array_fill_loop(temp_slot, elem_ty, val, count as u64);
+        return temp_slot;
+    }
+
+    // Boxed(Place)
+    fn lower_rv_boxed(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let val_place = rv.get_Boxed_val();
+        let val = self.load_place(val_place, local_slots, local_types);
+        let mut ty = (*self.builder).get_ssa_type(val);
+        let is_agg = self.is_implicit_aggregate_ptr(ty)
+            && is_shared_pointer_tag(self.builder.get_type_decl(ty).def.get_tag());
+        if is_agg { ty = self.get_ptr_inner_type(ty); }
+        let target_ty = self.zil_module.alloc_type(ILTypeDecl {
+            id: 0,
+            name: 0,
+            def: ILType.BoxedMut(ty),
+            source_file: 0 as u32
+        });
+        // The global heap: `alloc 'heap` with no allocator operand, which the backend turns
+        // into the runtime allocator call. `box(allocator)` never reaches here - the lowering
+        // rejects it - so there is no arena operand and no frame-local region to choose.
+        let ptr = (*self.builder).emit_with_type(
+            ILInstr.Alloc(AllocInstr { region: Region.Heap, ty: ty, allocator: NO_SSA as u32 }),
+            target_ty
+        );
+        if self.is_aggregate(ty) {
+            let agg_size = self.get_type_size(ty);
+            self.emit_memcpy(ptr, val, agg_size);
+        } else {
+            (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: ptr, val: val }));
+        }
+        return ptr;
+    }
+
+    // BinaryOp(u32, Place, Place)
+    fn lower_rv_binary_op(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let u64_ty = self.get_primitive_type(ILPRIM_U64);
+        let op = rv.get_BinaryOp_op();
+        let lhs = rv.get_BinaryOp_lhs();
+        let rhs = rv.get_BinaryOp_rhs();
+        let mut lhs_val = self.load_place(lhs, local_slots, local_types);
+        let mut rhs_val = self.load_place(rhs, local_slots, local_types);
+
+        let mut res_ty = self.get_place_type(lhs, local_types);
+        if res_ty == 0 as u32 {
+            res_ty = u64_ty;
+        }
+        let lhs_place_ty = self.get_place_type(lhs, local_types);
+        let rhs_place_ty = self.get_place_type(rhs, local_types);
+        // `1 + p` has the pointer's type, not the integer's.
+        if (op == BINARY_ADD || op == BINARY_SUB)
+            && self.is_pointer_valued(rhs_place_ty)
+            && !self.is_pointer_valued(lhs_place_ty) {
+            res_ty = rhs_place_ty;
+        }
+
+        if op == 8 as u32 || op == 9 as u32 {
+            let lhs_slice_ty = self.get_place_type(lhs, local_types);
+            if lhs_slice_ty != 0 as u32
+                && self.builder.get_type_decl(lhs_slice_ty).def.get_tag() == ILTYPE_SLICE {
+                return self.emit_slice_eq(op, lhs, rhs, lhs_slice_ty, local_slots, local_types);
+            }
+        }
+
+        // For equality/ordering comparisons on enums, compare discriminants.
+        // Use declared place types (from local_types) for detection because SSA types
+        // for aggregate values (e.g. SumConstruct results) may not be reliable.
+        if op >= 8 as u32 && op <= 13 as u32 {
+            let u32_ty = self.get_primitive_type(ILPRIM_U32);
+            let lhs_place_ty = self.get_place_type(lhs, local_types);
+            if lhs_place_ty != 0 as u32
+                && (self.is_ptr_to_enum(lhs_place_ty) || self.is_enum_type(lhs_place_ty)) {
+                lhs_val = (*self.builder).emit_with_type(ILInstr.Load(lhs_val), u32_ty);
+                res_ty = u32_ty;
+            } else {
+                let lhs_raw_ty = (*self.builder).get_ssa_type(lhs_val);
+                if lhs_raw_ty != 0 as u32
+                    && (self.is_ptr_to_enum(lhs_raw_ty) || self.is_enum_type(lhs_raw_ty)) {
+                    lhs_val = (*self.builder).emit_with_type(ILInstr.Load(lhs_val), u32_ty);
+                    res_ty = u32_ty;
+                }
+            }
+            let rhs_place_ty = self.get_place_type(rhs, local_types);
+            if rhs_place_ty != 0 as u32
+                && (self.is_ptr_to_enum(rhs_place_ty) || self.is_enum_type(rhs_place_ty)) {
+                rhs_val = (*self.builder).emit_with_type(ILInstr.Load(rhs_val), u32_ty);
+                res_ty = u32_ty;
+            } else {
+                let rhs_raw_ty = (*self.builder).get_ssa_type(rhs_val);
+                if rhs_raw_ty != 0 as u32
+                    && (self.is_ptr_to_enum(rhs_raw_ty) || self.is_enum_type(rhs_raw_ty)) {
+                    rhs_val = (*self.builder).emit_with_type(ILInstr.Load(rhs_val), u32_ty);
+                    res_ty = u32_ty;
+                }
+            }
+            // load_place for aggregate locals returns Ptr<T>; we need T for the comparison.
+            // But a place whose own type is a pointer (`p: *Counter`) holds a pointer
+            // VALUE: compare the addresses. Loading through it dereferenced `0 as *T`.
+            if self.is_implicit_aggregate_ptr((*self.builder).get_ssa_type(lhs_val))
+                && !self.is_pointer_valued(self.get_place_type(lhs, local_types)) {
+                let inner = self.get_ptr_inner_type((*self.builder).get_ssa_type(lhs_val));
+                lhs_val = (*self.builder).emit_with_type(ILInstr.Load(lhs_val), inner);
+            }
+            if self.is_implicit_aggregate_ptr((*self.builder).get_ssa_type(rhs_val))
+                && !self.is_pointer_valued(self.get_place_type(rhs, local_types)) {
+                let inner = self.get_ptr_inner_type((*self.builder).get_ssa_type(rhs_val));
+                rhs_val = (*self.builder).emit_with_type(ILInstr.Load(rhs_val), inner);
+            }
+            let final_lhs = (*self.builder).emit_cast(lhs_val, res_ty);
+            let final_rhs = (*self.builder).emit_cast(rhs_val, res_ty);
+            return self.emit_binary_op(
+                op,
+                final_lhs,
+                final_rhs,
+                self.get_primitive_type(ILPRIM_BOOL)
+            );
+        }
+
+        // load_place for aggregate locals returns Ptr<T>; we need T for the operation
+        // (not for a place whose own type is a pointer: see the comparison case above).
+        if self.is_implicit_aggregate_ptr((*self.builder).get_ssa_type(lhs_val))
+            && !self.is_pointer_valued(self.get_place_type(lhs, local_types)) {
+            let inner = self.get_ptr_inner_type((*self.builder).get_ssa_type(lhs_val));
+            lhs_val = (*self.builder).emit_with_type(ILInstr.Load(lhs_val), inner);
+        }
+        if self.is_implicit_aggregate_ptr((*self.builder).get_ssa_type(rhs_val))
+            && !self.is_pointer_valued(self.get_place_type(rhs, local_types)) {
+            let inner = self.get_ptr_inner_type((*self.builder).get_ssa_type(rhs_val));
+            rhs_val = (*self.builder).emit_with_type(ILInstr.Load(rhs_val), inner);
+        }
+        // Pointer arithmetic keeps its integer operand an integer: casting it to the pointer
+        // type first made `p - 1` a pointer difference (`(p - q) / size`) instead of an offset.
+        let is_ptr_arith = (op == BINARY_ADD || op == BINARY_SUB)
+            && (self.is_pointer_valued(lhs_place_ty) || self.is_pointer_valued(rhs_place_ty));
+        let final_lhs = if is_ptr_arith {
+            lhs_val
+        } else {
+            (*self.builder).emit_cast(lhs_val, res_ty)
+        };
+        let final_rhs = if is_ptr_arith {
+            rhs_val
+        } else {
+            (*self.builder).emit_cast(rhs_val, res_ty)
+        };
+        if (op == BINARY_SHL || op == BINARY_SHR) && !self.is_const_temp(rhs.base, 0 as usize) {
+            self.emit_shift_count_check(final_rhs, res_ty);
+        }
+        return self.emit_binary_op(op, final_lhs, final_rhs, res_ty);
+        return NO_SSA as u32;
+    }
+
+    // Call(u32, [Place])
+    fn lower_rv_call(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let fn_idx = rv.get_Call_id();
+        let args_places = rv.get_Call_args();
+
+        let p_f: ILFunction = self.zil_module.functions[fn_idx as usize];
+        let ret_ty = p_f.ret_ty;
+        let needs_sret = self.is_aggregate(ret_ty);
+        let needs_env = self.needs_env_ptr(p_f.has_c_symbol(), p_f.name);
+        // The two standard library arena functions a checked build instruments, by provenance.
+        let callee_arena_reset = p_f.arena_reset;
+        let callee_arena_init = p_f.arena_init_result;
+        let callee_allocator_free = p_f.allocator_free;
+
+        let mut zil_args_len = args_places.len;
+        if needs_sret { zil_args_len = zil_args_len + 1 as usize; }
+        if needs_env { zil_args_len = zil_args_len + 1 as usize; }
+
+        let zil_args_ptr = unsafe {
+            zoril_allocator_alloc(self.persistent_arena, zil_args_len * 4)
+        } as *mut u32;
+        let mut zil_args = unsafe { @slice(zil_args_ptr, zil_args_len) };
+
+        let mut sret_temp_slot = NO_SSA as u32;
+        let mut dst_idx = 0 as usize;
+        if needs_sret {
+            let ptr_ty = (*self.builder).get_ptr_type(ret_ty);
+            let saved = (*self.builder).current_block_idx;
+            (*self.builder).switch_to_block((*self.builder).entry_block_idx);
+            sret_temp_slot = (*self.builder).emit_with_type(
+                ILInstr.Alloc(AllocInstr {
+                    region: Region.Local,
+                    ty: ret_ty,
+                    allocator: NO_SSA as u32
+                }),
+                ptr_ty
+            );
+            (*self.builder).switch_to_block(saved);
+
+            zil_args[0] = sret_temp_slot;
+            dst_idx = 1 as usize;
+        }
+
+        let mut ai = 0 as usize;
+        while ai < args_places.len {
+            let arg_place = &args_places[ai];
+            let arg_val = self.load_arg(arg_place, local_slots, local_types);
+            zil_args[dst_idx] = arg_val;
+            dst_idx = dst_idx + 1 as usize;
+            ai = ai + 1 as usize;
+        }
+        // A closure called by name (no captures to pass) takes its environment last.
+        if needs_env {
+            let unit_ptr_ty = (*self.builder).get_ptr_type(self.get_primitive_type(ILPRIM_UNIT));
+            zil_args[dst_idx] = (*self.builder).emit_const_u64(0 as u64, unit_ptr_ty);
+        }
+
+        // The first argument as the callee sees it (past the hidden result pointer).
+        let first_arg_idx = if needs_sret { 1 as usize } else { 0 as usize };
+
+        // `--checked`: `mem_raw::zoril_allocator_free(arena, ptr, size)` is the choke point every
+        // heap block is released through, and the release is emitted in its place rather than
+        // called - the instrumented version has to keep the block mapped and mark it, which a call
+        // to the real one cannot do (see `emit_checked_heap_release`).
+        if self.checked && callee_allocator_free && zil_args_len >= first_arg_idx + 3 as usize {
+            self.emit_checked_heap_release(
+                zil_args[first_arg_idx],
+                zil_args[first_arg_idx + 1 as usize],
+                zil_args[first_arg_idx + 2 as usize]
+            );
+            return NO_SSA as u32;
+        }
+
+        // `--checked`: `arena_init_result(capacity)` maps twice the capacity, since a checked build
+        // abandons the space a reset releases instead of handing it out again. The header records
+        // the size the mapping has, because the argument is the only source of both.
+        if self.checked && callee_arena_init && zil_args_len > first_arg_idx {
+            let cap_ty = (*self.builder).get_ssa_type(zil_args[first_arg_idx]);
+            let two = (*self.builder).emit_const_u64(2 as u64, cap_ty);
+            zil_args[first_arg_idx] = (*self.builder).emit_with_type(
+                ILInstr.Mul(ILBinaryOp { lhs: zil_args[first_arg_idx], rhs: two }),
+                cap_ty
+            );
+        }
+
+        // `--checked`: `arena_reset(arena, offset)` poisons the range it releases and then rewinds
+        // the bump pointer, so the very next allocation would reuse the poison. Save the offset
+        // across the call and put it back: the released range stays poisoned for the rest of the
+        // arena's life, which is what makes a dangling read fault instead of reading a live value.
+        let mut saved_offset = NO_SSA as u32;
+        let mut offset_field_addr = NO_SSA as u32;
+        if self.checked && callee_arena_reset && zil_args_len > first_arg_idx {
+            let arena_ptr = zil_args[first_arg_idx];
+            let arena_ty = (*self.builder).get_ssa_type(arena_ptr);
+            let header_ty = self.get_ptr_inner_type(arena_ty);
+            if header_ty != 0 as u32 {
+                let u64_ty = self.get_primitive_type(ILPRIM_U64);
+                let offset_name = self.intern_table.intern("offset");
+                let field_idx = self.get_field_index(header_ty, offset_name);
+                let field_ptr_ty = (*self.builder).get_ptr_type(u64_ty);
+                offset_field_addr = (*self.builder).emit_with_type(
+                    ILInstr.FieldAddr(FieldAddrInstr { val: arena_ptr, field_idx: field_idx }),
+                    field_ptr_ty
+                );
+                saved_offset = (*self.builder).emit_with_type(
+                    ILInstr.Load(offset_field_addr),
+                    u64_ty
+                );
+            }
+        }
+
+        let call_res_ty = if needs_sret { self.get_primitive_type(ILPRIM_UNIT) } else { ret_ty };
+        let call_ssa = (*self.builder).emit_with_type(
+            ILInstr.Call(CallInstr {
+                args: zil_args,
+                name_id: p_f.name,
+                is_extern: p_f.has_c_symbol(),
+                func_idx: fn_idx
+            }),
+            call_res_ty
+        );
+
+        if saved_offset != NO_SSA as u32 {
+            (*self.builder).emit(
+                ILInstr.Store(StoreInstr { ptr: offset_field_addr, val: saved_offset })
+            );
+        }
+
+        if needs_sret {
+            return sret_temp_slot;
+        }
+        return call_ssa;
+        return NO_SSA as u32;
+    }
+
+    // A call through a C function pointer (CODE is the pointer): the arguments only. Its signature
+    // holds only what C can take, so there is no aggregate result.
+    fn lower_c_call_ptr(
+        self: &mut ZirToZilLowerer,
+        code: u32,
+        fn_ty: u32,
+        args_places: [Place],
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let ret_ty = self.builder.get_type_decl(fn_ty).def.get_Fn().ret_ty;
+        let zil_args_ptr = unsafe {
+            zoril_allocator_alloc(self.persistent_arena, (args_places.len + 1 as usize) * 4)
+        } as *mut u32;
+        let mut zil_args = unsafe { @slice(zil_args_ptr, args_places.len) };
+        let mut ai = 0 as usize;
+        while ai < args_places.len {
+            let arg_place = &args_places[ai];
+            zil_args[ai] = self.load_arg(arg_place, local_slots, local_types);
+            ai = ai + 1 as usize;
+        }
+        return (*self.builder).emit_with_type(
+            ILInstr.CallPtr(CallPtrInstr { args: zil_args, func_ptr: code }),
+            ret_ty
+        );
+    }
+
+    // CallPtr(Place, [Place])
+    fn lower_rv_call_ptr(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let fn_place = rv.get_CallPtr_pl();
+        let args_places = rv.get_CallPtr_args();
+
+        // The callee is a function value (or a reference to one): its two words are loaded,
+        // the code called and the environment passed as `__env`.
+        let fn_val = self.load_place(fn_place, local_slots, local_types);
+        let place_ty = self.get_place_type(fn_place, local_types);
+        let mut inner_ty = place_ty;
+        if place_ty != 0 as u32 && self.builder.get_type_decl(place_ty).def.get_tag() != ILTYPE_FN {
+            inner_ty = self.get_ptr_inner_type(place_ty);
+        }
+        if inner_ty == 0 as u32 || self.builder.get_type_decl(inner_ty).def.get_tag() != ILTYPE_FN {
+            return NO_SSA as u32;
+        }
+        // A C function pointer is the code address itself: no loads, and no environment argument.
+        if self.builder.get_type_decl(inner_ty).def.get_Fn().c_abi {
+            return self.lower_c_call_ptr(fn_val, inner_ty, args_places, local_slots, local_types);
+        }
+        let word_ty = self.unit_ptr_type();
+        let code = (*self.builder).emit_with_type(
+            ILInstr.Load(self.fn_value_word(fn_val, 0 as u32)),
+            word_ty
+        );
+        let env_word = (*self.builder).emit_with_type(
+            ILInstr.Load(self.fn_value_word(fn_val, 1 as u32)),
+            word_ty
+        );
+        let p_fn_type = self.builder.get_type_decl(inner_ty);
+        let fn_def = (*p_fn_type).def.get_Fn();
+        let ret_ty = fn_def.ret_ty;
+        let needs_sret = self.is_aggregate(ret_ty);
+
+        let mut zil_args_len = args_places.len;
+        if needs_sret { zil_args_len = zil_args_len + 1 as usize; }
+        zil_args_len = zil_args_len + 1 as usize; // the environment, last
+
+        let zil_args_ptr = unsafe {
+            zoril_allocator_alloc(self.persistent_arena, zil_args_len * 4)
+        } as *mut u32;
+        let mut zil_args = unsafe { @slice(zil_args_ptr, zil_args_len) };
+
+        let mut sret_temp_slot = NO_SSA as u32;
+        let mut dst_idx = 0 as usize;
+        if needs_sret {
+            let ptr_ty = (*self.builder).get_ptr_type(ret_ty);
+            let saved = (*self.builder).current_block_idx;
+            (*self.builder).switch_to_block((*self.builder).entry_block_idx);
+            sret_temp_slot = (*self.builder).emit_with_type(
+                ILInstr.Alloc(AllocInstr {
+                    region: Region.Local,
+                    ty: ret_ty,
+                    allocator: NO_SSA as u32
+                }),
+                ptr_ty
+            );
+            (*self.builder).switch_to_block(saved);
+
+            zil_args[0] = sret_temp_slot;
+            dst_idx = 1 as usize;
+        }
+
+        let mut ai = 0 as usize;
+        while ai < args_places.len {
+            let arg_place = &args_places[ai];
+            let arg_val = self.load_arg(arg_place, local_slots, local_types);
+            zil_args[dst_idx] = arg_val;
+            dst_idx = dst_idx + 1 as usize;
+            ai = ai + 1 as usize;
+        }
+        // The value's environment, last: a closure's last parameter, which a plain function
+        // does not have and never reads.
+        zil_args[dst_idx] = env_word;
+
+        let call_res_ty = if needs_sret { self.get_primitive_type(ILPRIM_UNIT) } else { ret_ty };
+        let call_ssa = (*self.builder).emit_with_type(
+            ILInstr.CallPtr(CallPtrInstr { args: zil_args, func_ptr: code }),
+            call_res_ty
+        );
+
+        if needs_sret {
+            return sret_temp_slot;
+        }
+        return call_ssa;
+        return NO_SSA as u32;
+    }
+
+    // StructLiteral(u32, [Place])
+    fn lower_rv_struct_literal(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let struct_ty = rv.get_StructLiteral_ty();
+        let vals = rv.get_StructLiteral_args();
+
+        let ptr_ty = (*self.builder).get_ptr_type(struct_ty);
+        let temp_slot = self.construct_slot(struct_ty, ptr_ty);
+
+        let mut vi = 0 as usize;
+        while vi < vals.len {
+            let f_val = self.load_place(&vals[vi], local_slots, local_types);
+            let f_ty = self.get_field_type(struct_ty, vi as u32);
+            let f_ptr_ty = (*self.builder).get_ptr_type(f_ty);
+            let f_addr = (*self.builder).emit_with_type(
+                ILInstr.FieldAddr(FieldAddrInstr { val: temp_slot, field_idx: vi as u32 }),
+                f_ptr_ty
+            );
+            let f_size = self.get_type_size(f_ty);
+            if f_size > 0 as u64 {
+                if self.is_aggregate(f_ty) {
+                    // f_val is a pointer to the aggregate; use memcpy to copy bytes
+                    self.emit_memcpy(f_addr, f_val, f_size);
+                } else {
+                    (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: f_addr, val: f_val }));
+                }
+            }
+            vi = vi + 1 as usize;
+        }
+        return temp_slot;
+        return NO_SSA as u32;
+    }
+
+    // EnumVariant(enum_ty, variant_idx, payload_place)
+    fn lower_rv_enum_variant(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let enum_ty = rv.get_EnumVariant_ty();
+        let variant_idx = rv.get_EnumVariant_idx();
+        let payload_place = rv.get_EnumVariant_payload();
+
+        let mut payload_ssa = NO_SSA as u32;
+        if (*payload_place).base != 0 as u32 {
+            payload_ssa = self.load_place(payload_place, local_slots, local_types);
+        }
+
+        let ptr_ty = (*self.builder).get_ptr_type(enum_ty);
+        let temp_slot = self.construct_slot(enum_ty, ptr_ty);
+
+        let disc = self.get_variant_discriminant(enum_ty, variant_idx);
+        let disc_val = (*self.builder).emit_const_u64(
+            disc as u64,
+            self.get_primitive_type(ILPRIM_U32)
+        );
+        (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: temp_slot, val: disc_val }));
+
+        if payload_ssa != NO_SSA as u32 {
+            let val_ty = self.get_variant_payload_type(enum_ty, variant_idx);
+            let payload_ptr_ty = (*self.builder).get_ptr_type(val_ty);
+            let payload_addr = (*self.builder).emit_with_type(
+                ILInstr.FieldAddr(FieldAddrInstr { val: temp_slot, field_idx: 1 as u32 }),
+                payload_ptr_ty
+            );
+
+            let payload_size = self.get_type_size(val_ty);
+            if payload_size > 0 as u64 {
+                if self.is_aggregate(val_ty) {
+                    // payload_ssa is a pointer to the aggregate; copy bytes
+                    self.emit_memcpy(payload_addr, payload_ssa, payload_size);
+                } else {
+                    (*self.builder).emit(
+                        ILInstr.Store(StoreInstr { ptr: payload_addr, val: payload_ssa })
+                    );
+                }
+            }
+        }
+
+        return temp_slot;
+        return NO_SSA as u32;
+    }
+
+    // Cast(place, target_ty)
+    fn lower_rv_cast(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let u64_ty = self.get_primitive_type(ILPRIM_U64);
+        let place = rv.get_Cast_pl();
+        let mut target_ty = rv.get_Cast_ty();
+        if target_ty == 0 as u32 {
+            target_ty = u64_ty;
+        }
+
+        let mut val = self.load_place(place, local_slots, local_types);
+        // For enum-to-integer casts: load_place returns the aggregate address (implicit
+        // ptr-to-enum), so the discriminant word must be loaded for the cast to see a scalar.
+        //
+        // Two SSA-identical cases must be told apart: `e as u32` where `e: SomeEnum` (the alloc
+        // pointer holding the enum, so the discriminant MUST be loaded) and `p as usize` where
+        // `p: *mut SomeEnum` (a genuine pointer, so it MUST NOT be dereferenced). Disambiguate by
+        // the *declared* place type from local_types: a ptr-to-enum field shows up as
+        // `*mut SomeEnum`, an enum value as `SomeEnum`.
+        let place_ty = self.get_place_type(place, local_types);
+        let mut is_enum_by_value = false;
+        let mut is_slice = false;
+        if place_ty != 0 as u32 {
+            let p_place_ty = self.builder.get_type_decl(place_ty);
+            let place_tag = (*p_place_ty).def.get_tag();
+            if place_tag == ILTYPE_USER {
+                let user_id = (*p_place_ty).def.get_User().id;
+                if user_id < (*self.resolver.ast).decls.len() as u32 {
+                    self.mono.lower_typedef(user_id);
+                }
+                let p_def = self.zil_module.get_typedef_mut(user_id as usize);
+                if p_def.get_tag() == IL_TYPEDEF_ENUM {
+                    is_enum_by_value = true;
+                }
+            } else if place_tag == ILTYPE_SLICE {
+                is_slice = true;
+            }
+        }
+        if is_enum_by_value {
+            let val_ty = (*self.builder).get_ssa_type(val);
+            if val_ty != 0 as u32 && self.is_implicit_aggregate_ptr(val_ty) {
+                let u32_ty = self.get_primitive_type(ILPRIM_U32);
+                val = (*self.builder).emit_with_type(ILInstr.Load(val), u32_ty);
+            }
+        } else if is_slice {
+            let p_target_ty = self.builder.get_type_decl(target_ty);
+            let target_tag = (*p_target_ty).def.get_tag();
+            let mut is_target_ptr_like = false;
+            if is_any_pointer_tag(target_tag) {
+                is_target_ptr_like = true;
+            } else if target_tag == ILTYPE_PRIMITIVE {
+                let prim = (*p_target_ty).def.get_Primitive();
+                let prim_tag = prim.get_tag();
+                if prim_tag == ILPRIM_U64
+                    || prim_tag == ILPRIM_USIZE
+                    || prim_tag == ILPRIM_I64
+                    || prim_tag == ILPRIM_ISIZE {
+                    is_target_ptr_like = true;
+                }
+            }
+            if is_target_ptr_like {
+                let elem_ty = self.get_slice_element_type(place_ty);
+                let ptr_ty = (*self.builder).get_ptr_type(elem_ty);
+                val = (*self.builder).emit_with_type(ILInstr.Load(val), ptr_ty);
+            }
+        }
+        // A cast whose source is a pointer to exactly the target aggregate type (e.g.
+        // `@ptr_cast<[u8]>(p)` where `p: *[u8]`) means "treat this pointer as addressing the
+        // aggregate value". Aggregates are represented throughout this lowering by their address
+        // (see load_place above), so this is a passthrough Move that keeps the pointer type, not a
+        // Load of the aggregate value: a raw Cast here would squeeze an 8-byte pointer into a
+        // larger aggregate-typed SSA slot, which downstream codegen has no defined behaviour for.
+        if self.is_aggregate(target_ty) {
+            let val_ty = (*self.builder).get_ssa_type(val);
+            if val_ty != 0 as u32 && self.get_ptr_inner_type(val_ty) == target_ty {
+                return (*self.builder).emit_with_type(ILInstr.Move(val), val_ty);
+            }
+        }
+        return (*self.builder).emit_cast(val, target_ty);
+        return NO_SSA as u32;
+    }
+
+    // StringConst(id)
+    fn lower_rv_string_const(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let id = rv.get_StringConst_id();
+        let str_slice = self.intern_table.lookup(id);
+        let u8_ty = self.get_primitive_type(ILPRIM_U8);
+        let slice_ty = (*self.builder).get_slice_type(u8_ty);
+        let ptr_ty = (*self.builder).get_ptr_type(slice_ty);
+        let usize_ty = self.get_primitive_type(ILPRIM_USIZE);
+
+        // Allocate a {ptr, len} slice struct on the stack (in the entry block)
+        let saved_blk = (*self.builder).current_block_idx;
+        (*self.builder).switch_to_block((*self.builder).entry_block_idx);
+        let slice_slot = (*self.builder).emit_with_type(
+            ILInstr.Alloc(AllocInstr {
+                region: Region.Local,
+                ty: slice_ty,
+                allocator: NO_SSA as u32
+            }),
+            ptr_ty
+        );
+        (*self.builder).switch_to_block(saved_blk);
+
+        // Store ptr field (offset 0): the intern table address of the string data.
+        // The field-address pointers below are cast to point at their actual field
+        // type (not the whole slice_ty aggregate), so each store is a plain field
+        // store rather than a 16-byte aggregate copy.
+        let str_ptr_ssa = (*self.builder).emit_with_type(
+            ILInstr.StringConst(str_slice),
+            (*self.builder).get_ptr_type(u8_ty)
+        );
+        let ptr_field_ptr_ty = (*self.builder).get_ptr_type((*self.builder).get_ptr_type(u8_ty));
+        let ptr_field_ptr = (*self.builder).emit_cast(slice_slot, ptr_field_ptr_ty);
+        (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: ptr_field_ptr, val: str_ptr_ssa }));
+
+        // Store len field (offset 8)
+        let len_off = (*self.builder).emit_const_u64(8 as u64, usize_ty);
+        let usize_ptr_ty = (*self.builder).get_ptr_type(usize_ty);
+        let len_ptr = (*self.builder).emit_with_type(
+            ILInstr.Add(ILBinaryOp { lhs: slice_slot, rhs: len_off }),
+            usize_ptr_ty
+        );
+        let len_val = (*self.builder).emit_const_u64(str_slice.len as u64, usize_ty);
+        (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: len_ptr, val: len_val }));
+
+        // Return pointer to the slice struct (type *[u8], passed as 'l' in calls)
+        return slice_slot;
+        return NO_SSA as u32;
+    }
+
+    // FuncAddr(id)
+    fn lower_rv_func_addr(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let id = rv.get_FuncAddr_id();
+        let p_f: ILFunction = self.zil_module.functions[id as usize];
+        let fn_ty = self.get_fn_type(p_f);
+        let word_ty = self.unit_ptr_type();
+        let code = (*self.builder).emit_with_type(ILInstr.FuncAddr(p_f.id), word_ty);
+        // An `extern "C"` function is a thin code pointer: its address is the whole value.
+        if p_f.is_export {
+            return code;
+        }
+        // A closure defined in this function carries its environment; any other function none.
+        let mut env = NO_SSA as u32;
+        let mut env_local_id = rv.get_FuncAddr_env();
+        if env_local_id == 0 as u32 {
+            env_local_id = self.mono.lookup_zir_closure_env(id);
+        }
+        if env_local_id != 0 as u32 && env_local_id as usize <= self.cur_func().locals.len {
+            env = unsafe { local_slots[env_local_id as usize] };
+        }
+        env = if env == NO_SSA as u32 || env == 0xffffffff as u32 {
+            (*self.builder).emit_const_u64(0 as u64, word_ty)
+        } else {
+            (*self.builder).emit_cast(env, word_ty)
+        };
+
+        let ptr_ty = (*self.builder).get_ptr_type(fn_ty);
+        let saved = (*self.builder).current_block_idx;
+        (*self.builder).switch_to_block((*self.builder).entry_block_idx);
+        let slot = (*self.builder).emit_with_type(
+            ILInstr.Alloc(AllocInstr { region: Region.Local, ty: fn_ty, allocator: NO_SSA as u32 }),
+            ptr_ty
+        );
+        (*self.builder).switch_to_block(saved);
+        (*self.builder).emit(
+            ILInstr.Store(StoreInstr { ptr: self.fn_value_word(slot, 0 as u32), val: code })
+        );
+        (*self.builder).emit(
+            ILInstr.Store(StoreInstr { ptr: self.fn_value_word(slot, 1 as u32), val: env })
+        );
+        return slot;
+    }
+
+    // A call argument: PLACE's value, a function value typed as itself so that the backend
+    // passes it by value (see il_params).
+    fn load_arg(
+        self: &mut ZirToZilLowerer,
+        place: &Place,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let val = self.load_place(place, local_slots, local_types);
+        let ty = self.get_place_type(place, local_types);
+        if val == NO_SSA as u32 || !self.is_fn_value(ty) { return val; }
+        return (*self.builder).emit_with_type(ILInstr.Move(val), ty);
+    }
+
+    fn is_fn_value(self: &mut ZirToZilLowerer, ty: u32) -> bool {
+        return ty != 0 as u32 && self.builder.get_type_decl(ty).def.get_tag() == ILTYPE_FN;
+    }
+
+    // The memory an aggregate of type TY is constructed in: the slot a `let` offered for one
+    // of that type (taken, so no nested construction reuses it), else a fresh stack slot.
+    fn construct_slot(self: &mut ZirToZilLowerer, ty: u32, ptr_ty: u32) -> u32 {
+        if self.dest_slot != NO_SSA as u32 && self.dest_ty == ty {
+            let slot = self.dest_slot;
+            self.dest_slot = NO_SSA as u32;
+            return slot;
+        }
+        self.dest_slot = NO_SSA as u32;
+        let saved = (*self.builder).current_block_idx;
+        (*self.builder).switch_to_block((*self.builder).entry_block_idx);
+        let temp_slot = (*self.builder).emit_with_type(
+            ILInstr.Alloc(AllocInstr { region: Region.Local, ty: ty, allocator: NO_SSA as u32 }),
+            ptr_ty
+        );
+        (*self.builder).switch_to_block(saved);
+        return temp_slot;
+    }
+
+    // `Ptr<unit>`: the type of each word of a function value (doc/spec/abi.md), its code and
+    // its environment.
+    fn unit_ptr_type(self: &mut ZirToZilLowerer) -> u32 {
+        return (*self.builder).get_ptr_type(self.get_primitive_type(ILPRIM_UNIT));
+    }
+
+    // The address of word INDEX (0: code, 1: environment) of the function value FN_PTR points
+    // at, seen as the tuple `(Ptr<unit>, Ptr<unit>)` it is laid out as.
+    fn fn_value_word(self: &mut ZirToZilLowerer, fn_ptr: u32, index: u32) -> u32 {
+        let word_ty = self.unit_ptr_type();
+        let words = alloc_two(self.persistent_arena, word_ty);
+        let words_ty = self.zil_module.alloc_type(ILTypeDecl {
+            id: 0,
+            name: 0,
+            def: ILType.Tuple(words),
+            source_file: 0 as u32
+        });
+        let as_words = (*self.builder).emit_cast(fn_ptr, (*self.builder).get_ptr_type(words_ty));
+        return (*self.builder).emit_with_type(
+            ILInstr.FieldAddr(FieldAddrInstr { val: as_words, field_idx: index }),
+            (*self.builder).get_ptr_type(word_ty)
+        );
+    }
+
+    // Tuple([Place])
+    fn lower_rv_tuple(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let args_places = rv.get_Tuple_elements();
+        let mut ai = 0 as usize;
+        let elem_types_ptr = unsafe {
+            zoril_allocator_alloc(self.persistent_arena, args_places.len * 4)
+        } as *mut u32;
+        let mut elem_types = unsafe { @slice(elem_types_ptr, args_places.len) };
+        while ai < args_places.len {
+            elem_types[ai] = self.get_place_type(&args_places[ai], local_types);
+            ai = ai + 1 as usize;
+        }
+        let tuple_ty = self.zil_module.alloc_type(ILTypeDecl {
+            id: 0,
+            name: 0,
+            def: ILType.Tuple(elem_types),
+            source_file: 0 as u32
+        });
+
+        let ptr_ty = (*self.builder).get_ptr_type(tuple_ty);
+        let temp_slot = self.construct_slot(tuple_ty, ptr_ty);
+
+        ai = 0 as usize;
+        while ai < args_places.len {
+            let arg_val = self.load_place(&args_places[ai], local_slots, local_types);
+            let f_ty = elem_types[ai];
+            let f_ptr_ty = (*self.builder).get_ptr_type(f_ty);
+            let f_addr = (*self.builder).emit_with_type(
+                ILInstr.FieldAddr(FieldAddrInstr { val: temp_slot, field_idx: ai as u32 }),
+                f_ptr_ty
+            );
+            let f_size = self.get_type_size(f_ty);
+            if f_size > 0 as u64 {
+                if self.is_aggregate(f_ty) {
+                    self.emit_memcpy(f_addr, arg_val, f_size);
+                } else {
+                    (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: f_addr, val: arg_val }));
+                }
+            }
+            ai = ai + 1 as usize;
+        }
+        return temp_slot;
+        return NO_SSA as u32;
+    }
+
+    // Array(u32, [Place])
+    fn lower_rv_array(
+        self: &mut ZirToZilLowerer,
+        rv: &ZirRvalue,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) -> u32 {
+        let elem_ty = rv.get_Array_ty();
+        let args_places = rv.get_Array_elements();
+
+        let array_ty = self.zil_module.alloc_type(ILTypeDecl {
+            id: 0,
+            name: 0,
+            def: ILType.Array(ILArray { element: elem_ty, size: args_places.len as u32 }),
+            source_file: 0 as u32
+        });
+        let ptr_ty = (*self.builder).get_ptr_type(array_ty);
+        let temp_slot = self.construct_slot(array_ty, ptr_ty);
+
+        let mut ai = 0 as usize;
+        let elem_size = self.get_type_size(elem_ty);
+        let elem_is_agg = self.is_aggregate(elem_ty);
+        while ai < args_places.len {
+            let arg_val = self.load_place(&args_places[ai], local_slots, local_types);
+            let f_ptr_ty = (*self.builder).get_ptr_type(elem_ty);
+
+            // Manual address arithmetic for array elements
+            let off = (*self.builder).emit_const_u64(
+                (ai * elem_size) as u64,
+                self.get_primitive_type(ILPRIM_USIZE)
+            );
+            let f_addr = (*self.builder).emit_with_type(
+                ILInstr.Add(ILBinaryOp { lhs: temp_slot, rhs: off }),
+                f_ptr_ty
+            );
+
+            if elem_size > 0 as usize {
+                if elem_is_agg {
+                    // arg_val is a pointer to the aggregate; copy its bytes
+                    self.emit_memcpy(f_addr, arg_val, elem_size as u64);
+                } else {
+                    (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: f_addr, val: arg_val }));
+                }
+            }
+            ai = ai + 1 as usize;
+        }
+        return temp_slot;
+        return NO_SSA as u32;
+    }
+
+    fn is_const_zero(self: &mut ZirToZilLowerer, ssa: u32) -> bool {
+        if ssa == 0 as u32 || ssa == 0xffffffff as u32 {
+            return true;
+        }
+        if (*self.builder).current_func_idx == 0xffffffff as u32 {
+            return false;
+        }
+        let p_func: ILFunction = self.zil_module.functions[(*self.builder).current_func_idx as usize];
+        let mut b_idx = 0 as usize;
+        while b_idx < p_func.blocks_len {
+            let func_blocks = unsafe { @slice(p_func.blocks, p_func.blocks_len) };
+            let block_id = func_blocks[b_idx];
+            let p_block = self.zil_module.get_block_mut(block_id as usize);
+            let mut i_idx = 0 as usize;
+            while i_idx < p_block.instructions_len {
+                let ssa_results = unsafe { @slice(p_block.ssa_results, p_block.instructions_len) };
+                let res_ssa = ssa_results[i_idx];
+                if res_ssa == ssa {
+                    let instrs = unsafe { @slice(p_block.instructions, p_block.instructions_len) };
+                    let instr_idx = instrs[i_idx];
+                    let p_instr = self.zil_module.get_instr_mut(instr_idx as usize);
+                    match *p_instr {
+                        ILInstr.Const(c) => {
+                            match c.val {
+                                ConstValue.U64(v) => { if v == 0 as u64 { return true; } },
+                                ConstValue.Bool(v) => { if v == 0 as u64 { return true; } },
+                                ConstValue.F64(_) => {}
+                            }
+                        },
+                        // Cast(zero, T) — e.g. @ptr_cast<[u8]>(0) for zero-init of aggregate
+                        // locals — is semantically a zero value; treat it the same so that
+                        // emit_memcpy uses memset(0) rather than memcpy(null_ptr).
+                        ILInstr.Cast(c) => { if self.is_const_zero(c.val) { return true; } },
+                        _ => {}
+                    }
+                    return false;
+                }
+                i_idx = i_idx + 1 as usize;
+            }
+            b_idx = b_idx + 1 as usize;
+        }
+        return false;
+    }
+
+    fn emit_memset(self: &mut ZirToZilLowerer, dest: u32, val: u32, size: u64) {
+        let u64_ty = self.get_primitive_type(ILPRIM_U64);
+        let size_ssa = (*self.builder).emit_const_u64(size, u64_ty);
+        self.emit_memset_value(dest, val, size_ssa);
+    }
+
+    // The same call with a length the program computes instead of one the compiler knows: the
+    // checked build's heap release is handed the block's size at run time.
+    fn emit_memset_value(self: &mut ZirToZilLowerer, dest: u32, val: u32, size_ssa: u32) {
+        let i32_ty = self.get_primitive_type(ILPRIM_I32);
+        let val_ssa = (*self.builder).emit_const_u64(val as u64, i32_ty);
+        let mut args_ptr = unsafe {
+            zoril_allocator_alloc(self.persistent_arena, 3 * 4)
+        } as *mut u32;
+        let mut args = unsafe { @slice(args_ptr, 3 as usize) };
+        args[0] = dest;
+        args[1] = val_ssa;
+        args[2] = size_ssa;
+        let name_id = self.intern_table.intern("memset");
+        let mut instr = CallInstr {
+            args: args,
+            name_id: name_id,
+            func_idx: CALL_BY_NAME,
+            is_extern: true,
+        };
+        (*self.builder).emit_with_type(ILInstr.Call(instr), 0 as u32);
+    }
+
+    // `--checked`: a heap release, emitted in place of the call to
+    // `mem_raw::zoril_allocator_free` that the source wrote (its one choke point: `heap_free` and
+    // `Vec::free` both end up here).
+    //
+    // The hole it closes is a release of one block by two live owners, which a byte-copy of an
+    // owning value leaves behind. A release build calls `munmap` twice, and a second `munmap` of a
+    // range nobody maps succeeds silently and unmaps whoever lives there now. So, under `--checked`
+    // the release becomes: the block is poisoned with 0xA5 and its *last* word carries a mark (the
+    // tail, so a dangling read of the first elements still finds the poison the probes and the
+    // fuzzer's canaries look for, exit 165); a release whose block already carries the mark traps
+    // (exit 134, as a failed bounds check and the double-drop check do); and the block is never
+    // unmapped, which is what makes the mark trustworthy - the kernel cannot hand out a page it
+    // still has mapped, so a block carrying it was released by this run. A block whose last word
+    // happens to equal the mark is the one false positive, shared with the poison checks.
+    //
+    // `arena != 0` releases nothing in a release build either (an arena owns its whole mapping), so
+    // neither does this; a block of fewer than 8 bytes cannot hold the mark, so only its poison is
+    // observable. The price is that released heap space is not reused, the price a checked build's
+    // arenas already pay.
+    fn emit_checked_heap_release(
+        self: &mut ZirToZilLowerer,
+        arena_arg: u32,
+        ptr_arg: u32,
+        size_arg: u32
+    ) {
+        let usize_ty = self.get_primitive_type(ILPRIM_USIZE);
+        let u64_ty = self.get_primitive_type(ILPRIM_U64);
+        let i64_ty = self.get_primitive_type(ILPRIM_I64);
+        let bool_ty = self.get_primitive_type(ILPRIM_BOOL);
+        let ptr_u = (*self.builder).emit_cast(ptr_arg, usize_ty);
+        let size_u = (*self.builder).emit_cast(size_arg, usize_ty);
+        let zero = (*self.builder).emit_const_u64(0 as u64, usize_ty);
+        let arena_u = (*self.builder).emit_cast(arena_arg, usize_ty);
+
+        // Every block a release introduces, created up front and in the order they end: the
+        // continuation (`done_block`) last, so a block that falls off its end can never run into
+        // the code of one of the checks, and the checks never run into each other.
+        let mark_block = (*self.builder).new_block();
+        let small_block = (*self.builder).new_block();
+        let trap_block = (*self.builder).new_block();
+        let heap_block = (*self.builder).new_block();
+        let ptr_block = (*self.builder).new_block();
+        let poison_block = (*self.builder).new_block();
+        let done_block = (*self.builder).new_block();
+
+        // An arena block: released with the arena, as in a release build.
+        let is_heap = (*self.builder).emit_with_type(
+            ILInstr.CmpEq(ILBinaryOp { lhs: arena_u, rhs: zero }),
+            bool_ty
+        );
+        (*self.builder).emit(
+            ILInstr.Branch(BranchInstr {
+                cond: is_heap,
+                then_block: heap_block,
+                else_block: done_block
+            })
+        );
+        (*self.builder).switch_to_block(heap_block);
+        let has_ptr = (*self.builder).emit_with_type(
+            ILInstr.CmpNe(ILBinaryOp { lhs: ptr_u, rhs: zero }),
+            bool_ty
+        );
+        (*self.builder).emit(
+            ILInstr.Branch(BranchInstr {
+                cond: has_ptr,
+                then_block: ptr_block,
+                else_block: done_block
+            })
+        );
+        (*self.builder).switch_to_block(ptr_block);
+        let eight = (*self.builder).emit_const_u64(8 as u64, usize_ty);
+        let markable = (*self.builder).emit_with_type(
+            ILInstr.CmpGe(ILBinaryOp { lhs: size_u, rhs: eight }),
+            bool_ty
+        );
+        (*self.builder).emit(
+            ILInstr.Branch(BranchInstr {
+                cond: markable,
+                then_block: mark_block,
+                else_block: small_block
+            })
+        );
+
+        // The mark: the block's last word, where only a check for it looks.
+        (*self.builder).switch_to_block(mark_block);
+        let tail_u = (*self.builder).emit_with_type(
+            ILInstr.Sub(ILBinaryOp {
+                lhs: (*self.builder).emit_with_type(
+                    ILInstr.Add(ILBinaryOp { lhs: ptr_u, rhs: size_u }),
+                    usize_ty
+                ),
+                rhs: eight
+            }),
+            usize_ty
+        );
+        let u64_ptr_ty = (*self.builder).get_ptr_type(u64_ty);
+        let tail = (*self.builder).emit_cast(tail_u, u64_ptr_ty);
+        let loaded = (*self.builder).emit_with_type(ILInstr.Load(tail), u64_ty);
+        let mark = (*self.builder).emit_const_u64(0xdeadbeef0badf00d as u64, u64_ty);
+        let marked = (*self.builder).emit_with_type(
+            ILInstr.CmpEq(ILBinaryOp { lhs: loaded, rhs: mark }),
+            bool_ty
+        );
+        (*self.builder).emit(
+            ILInstr.Branch(BranchInstr {
+                cond: marked,
+                then_block: trap_block,
+                else_block: poison_block
+            })
+        );
+        (*self.builder).switch_to_block(trap_block);
+        // Same exit as a failed bounds check: status 134, and no way back.
+        let num_ssa = (*self.builder).emit_const_u64(60 as u64, u64_ty);
+        let code_ssa = (*self.builder).emit_const_u64(134 as u64, u64_ty);
+        let arg_ptr = unsafe {
+            zoril_allocator_alloc(self.persistent_arena, sizeof(SSAId))
+        } as *mut SSAId;
+        let mut arg_buf = unsafe { @slice(arg_ptr, 1 as usize) };
+        arg_buf[0] = code_ssa;
+        (*self.builder).emit_with_type(
+            ILInstr.Syscall(SyscallInstr { num: num_ssa, args: arg_buf }),
+            i64_ty
+        );
+        (*self.builder).emit(ILInstr.Unreachable);
+
+        (*self.builder).switch_to_block(poison_block);
+        self.emit_memset_value(ptr_arg, self.checked_poison_byte(), size_arg);
+        let mark_ssa = (*self.builder).emit_const_u64(0xdeadbeef0badf00d as u64, u64_ty);
+        (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: tail, val: mark_ssa }));
+        (*self.builder).emit(ILInstr.Jmp(done_block));
+
+        // Too small to carry a mark: the poison is all there is to observe.
+        (*self.builder).switch_to_block(small_block);
+        self.emit_memset_value(ptr_arg, self.checked_poison_byte(), size_arg);
+        (*self.builder).emit(ILInstr.Jmp(done_block));
+
+        (*self.builder).switch_to_block(done_block);
+    }
+
+    // The byte a checked build writes over dead storage (0xA5, the same pattern `ARENA_POISON`
+    // gives a released arena range).
+    fn checked_poison_byte(self: &ZirToZilLowerer) -> u32 {
+        return 0xa5 as u32;
+    }
+
+    // Write the poison pattern over SIZE bytes at ADDR. A `--checked` build does this to a
+    // local's slot when its scope ends and to a value right after it is dropped, so anything that
+    // still holds a pointer into that storage reads 0xA5.. rather than a live value - and
+    // 0xA5A5A5A5A5A5A5A5 is a non-canonical address, so following a poisoned pointer faults.
+    fn emit_checked_poison(self: &mut ZirToZilLowerer, addr: u32, size: u64) {
+        if size == 0 as u64 || addr == NO_SSA as u32 { return; }
+        let poison = self.checked_poison_byte();
+        self.emit_memset(addr, poison, size);
+    }
+
+    // Trap (exit 134, like a failed bounds check) when the value at ADDR still holds the poison
+    // pattern, which in a checked build means it was already dropped. The comparison is at the
+    // value's own width when it is narrower than a word, so a one-byte value is 0xA5.
+    fn emit_double_drop_check(self: &mut ZirToZilLowerer, addr: u32, ty: u32) {
+        let size = self.get_type_size(ty);
+        if size == 0 as u64 || addr == NO_SSA as u32 { return; }
+        let poison = 0xa5 as u64;
+        let mut word = self.get_primitive_type(ILPRIM_U8);
+        let mut pattern = poison;
+        if size >= 8 as u64 {
+            word = self.get_primitive_type(ILPRIM_U64);
+            pattern = poison * 0x0101010101010101 as u64;
+        } else if size >= 4 as u64 {
+            word = self.get_primitive_type(ILPRIM_U32);
+            pattern = poison * 0x01010101 as u64;
+        } else if size >= 2 as u64 {
+            word = self.get_primitive_type(ILPRIM_U16);
+            pattern = poison * 0x0101 as u64;
+        }
+        let loaded = (*self.builder).emit_with_type(ILInstr.Load(addr), word);
+        let pattern_ssa = (*self.builder).emit_const_u64(pattern, word);
+        let bool_ty = self.get_primitive_type(ILPRIM_BOOL);
+        let is_poison = (*self.builder).emit_with_type(
+            ILInstr.CmpEq(ILBinaryOp { lhs: loaded, rhs: pattern_ssa }),
+            bool_ty
+        );
+        let ok_block = (*self.builder).new_block();
+        let trap_block = (*self.builder).new_block();
+        (*self.builder).emit(
+            ILInstr.Branch(BranchInstr {
+                cond: is_poison,
+                then_block: trap_block,
+                else_block: ok_block
+            })
+        );
+        (*self.builder).switch_to_block(trap_block);
+        // Same exit as a failed bounds check: status 134, and no way back.
+        let u64_ty = self.get_primitive_type(ILPRIM_U64);
+        let i64_ty = self.get_primitive_type(ILPRIM_I64);
+        let num_ssa = (*self.builder).emit_const_u64(60 as u64, u64_ty);
+        let code_ssa = (*self.builder).emit_const_u64(134 as u64, u64_ty);
+        let arg_ptr = unsafe {
+            zoril_allocator_alloc(self.persistent_arena, sizeof(SSAId))
+        } as *mut SSAId;
+        let mut arg_buf = unsafe { @slice(arg_ptr, 1 as usize) };
+        arg_buf[0] = code_ssa;
+        (*self.builder).emit_with_type(
+            ILInstr.Syscall(SyscallInstr { num: num_ssa, args: arg_buf }),
+            i64_ty
+        );
+        (*self.builder).emit(ILInstr.Unreachable);
+        (*self.builder).switch_to_block(ok_block);
+    }
+
+    fn emit_memcpy(self: &mut ZirToZilLowerer, dest: u32, src: u32, size: u64) {
+        if self.is_const_zero(src) {
+            self.emit_memset(dest, 0 as u32, size);
+            return;
+        }
+        let u64_ty = self.get_primitive_type(ILPRIM_U64);
+        let size_ssa = (*self.builder).emit_const_u64(size, u64_ty);
+        let mut args_ptr = unsafe {
+            zoril_allocator_alloc(self.persistent_arena, 3 * 4)
+        } as *mut u32;
+        let mut args = unsafe { @slice(args_ptr, 3 as usize) };
+        args[0] = dest;
+        args[1] = src;
+        args[2] = size_ssa;
+        let name_id = self.intern_table.intern("memcpy");
+        let mut instr = CallInstr {
+            args: args,
+            name_id: name_id,
+            func_idx: CALL_BY_NAME,
+            is_extern: true,
+        };
+        (*self.builder).emit_with_type(ILInstr.Call(instr), 0 as u32);
+    }
+
+    fn comment_push_decimal(self: &mut ZirToZilLowerer, out: &mut ByteVec, val: u64) {
+        if val == 0 as u64 {
+            out.push('0' as u8);
+            return;
+        }
+        let buf_ptr = unsafe { zoril_allocator_alloc(self.scratch_arena, 20 as usize) } as *mut u8;
+        let mut buf = unsafe { @slice(buf_ptr, 20 as usize) };
+        let mut n = 0 as usize;
+        let mut v = val;
+        while v > 0 as u64 {
+            buf[n] = (v % 10 as u64) as u8 + '0' as u8;
+            v = v / 10 as u64;
+            n = n + 1 as usize;
+        }
+        let mut i = n;
+        while i > 0 as usize {
+            i = i - 1 as usize;
+            out.push(buf[i]);
+        }
+    }
+
+    fn format_local_name(self: &mut ZirToZilLowerer, out: &mut ByteVec, local_id: u32) {
+        if local_id == 0 as u32 {
+            out.push_slice("()");
+            return;
+        }
+        let loc = &self.cur_func().locals[local_id as usize - 1 as usize];
+        if loc.name_id != 0 as u32 {
+            out.push_slice(self.intern_table.lookup(loc.name_id));
+        } else {
+            out.push_slice("_t");
+            self.comment_push_decimal(out, local_id as u64);
+        }
+    }
+
+    fn format_args(self: &mut ZirToZilLowerer, out: &mut ByteVec, args: [Place]) {
+        out.push('(' as u8);
+        let mut i = 0 as usize;
+        while i < args.len {
+            if i > 0 as usize { out.push_slice(", "); }
+            self.format_place(out, &args[i]);
+            i = i + 1 as usize;
+        }
+        out.push(')' as u8);
+    }
+
+    fn binop_str(self: &ZirToZilLowerer, op: u32) -> [u8] {
+        if op == 0 as u32 { return "+"; }
+        if op == 1 as u32 { return "-"; }
+        if op == 2 as u32 { return "*"; }
+        if op == 3 as u32 { return "/"; }
+        if op == 4 as u32 { return "%"; }
+        if op == 5 as u32 { return "+%"; }
+        if op == 6 as u32 { return "-%"; }
+        if op == 7 as u32 { return "*%"; }
+        if op == 8 as u32 { return "=="; }
+        if op == 9 as u32 { return "!="; }
+        if op == 10 as u32 { return "<"; }
+        if op == 11 as u32 { return "<="; }
+        if op == 12 as u32 { return ">"; }
+        if op == 13 as u32 { return ">="; }
+        if op == 14 as u32 { return "&"; }
+        if op == 15 as u32 { return "|"; }
+        if op == 16 as u32 { return "^"; }
+        if op == 17 as u32 { return "<<"; }
+        if op == 18 as u32 { return ">>"; }
+        if op == 33 as u32 { return "&&"; }
+        if op == 34 as u32 { return "||"; }
+        if op == BINARY_SHL_MASKED { return "<<%"; }
+        if op == BINARY_SHR_MASKED { return ">>%"; }
+        return "<binop>";
+    }
+
+    fn unop_prefix_str(self: &ZirToZilLowerer, op: u32) -> [u8] {
+        if op == 0 as u32 { return "-"; }
+        if op == 1 as u32 { return "!"; }
+        if op == 2 as u32 { return "*"; }
+        if op == 3 as u32 { return "&"; }
+        if op == 4 as u32 { return "&mut "; }
+        return "<unop>";
+    }
+
+    fn format_place(self: &mut ZirToZilLowerer, out: &mut ByteVec, place: &Place) {
+        let name_bv = unsafe { ByteVec.new_raw(self.scratch_arena) };
+        self.format_local_name(name_bv, place.base);
+        let mut current = name_bv.as_slice();
+        let mut has_op = false;
+        let mut prefixed = false;
+
+        let mut i = 0 as usize;
+        while i < place.projections.len {
+            let proj = &place.projections[i];
+            let is_deref = match *proj {
+                Projection.Deref => true,
+                Projection.Field(_) | Projection.TupleIndex(_) | Projection.Index(_) => false
+            };
+            if is_deref {
+                let new_bv = unsafe { ByteVec.new_raw(self.scratch_arena) };
+                if has_op {
+                    new_bv.push_slice("(*");
+                    new_bv.push_slice(current);
+                    new_bv.push_slice(")");
+                    prefixed = false;
+                } else {
+                    new_bv.push('*' as u8);
+                    new_bv.push_slice(current);
+                    prefixed = true;
+                }
+                // Copied into a fresh arena buffer, so `current` does not borrow this iteration's
+                // ByteVec: the next iteration writes that local again.
+                let cur = new_bv.as_slice();
+                let dst = unsafe {
+                    zoril_allocator_alloc(self.scratch_arena, cur.len + 1 as usize)
+                } as *mut u8;
+                unsafe { memcpy(dst, cur.ptr as *u8, cur.len); }
+                current = unsafe { @slice(dst, cur.len) };
+                has_op = true;
+            } else {
+                let new_bv = unsafe { ByteVec.new_raw(self.scratch_arena) };
+                if prefixed {
+                    new_bv.push('(' as u8);
+                    new_bv.push_slice(current);
+                    new_bv.push(')' as u8);
+                } else {
+                    new_bv.push_slice(current);
+                }
+                match *proj {
+                    Projection.Field(name) => {
+                        new_bv.push('.' as u8);
+                        new_bv.push_slice(self.intern_table.lookup(name));
+                    },
+                    Projection.TupleIndex(idx) => {
+                        new_bv.push('.' as u8);
+                        self.comment_push_decimal(new_bv, idx as u64);
+                    },
+                    Projection.Index(local) => {
+                        new_bv.push('[' as u8);
+                        self.format_local_name(new_bv, local);
+                        new_bv.push(']' as u8);
+                    },
+                    Projection.Deref => {},
+                }
+                let cur = new_bv.as_slice();
+                let dst = unsafe {
+                    zoril_allocator_alloc(self.scratch_arena, cur.len + 1 as usize)
+                } as *mut u8;
+                unsafe { memcpy(dst, cur.ptr as *u8, cur.len); }
+                current = unsafe { @slice(dst, cur.len) };
+                prefixed = false;
+                has_op = true;
+            }
+            i = i + 1 as usize;
+        }
+
+        out.push_slice(current);
+    }
+
+    fn format_rvalue(self: &mut ZirToZilLowerer, out: &mut ByteVec, rv: &ZirRvalue) {
+        match *rv {
+            ZirRvalue.Use(_) => { // Use
+                self.format_place(out, rv.get_Use());
+            },
+            ZirRvalue.Ref(_, _) => { // Ref
+                out.push('&' as u8);
+                self.format_place(out, rv.get_Ref());
+            },
+            ZirRvalue.RefMut(_, _) => { // RefMut
+                out.push_slice("&mut ");
+                self.format_place(out, rv.get_RefMut());
+            },
+            ZirRvalue.Const(_, _) => { // Const
+                self.comment_push_decimal(out, rv.get_Const_val());
+            },
+            ZirRvalue.BinaryOp(_, _, _) => { // BinaryOp
+                self.format_place(out, rv.get_BinaryOp_lhs());
+                out.push(' ' as u8);
+                out.push_slice(self.binop_str(rv.get_BinaryOp_op()));
+                out.push(' ' as u8);
+                self.format_place(out, rv.get_BinaryOp_rhs());
+            },
+            ZirRvalue.UnaryOp(_, _) => { // UnaryOp
+                out.push_slice(self.unop_prefix_str(rv.get_UnaryOp_op()));
+                self.format_place(out, rv.get_UnaryOp_arg());
+            },
+            ZirRvalue.Call(_, _) => { // Call
+                let p_f = self.zil_module.get_function_mut(rv.get_Call_id() as usize);
+                out.push_slice(self.intern_table.lookup(p_f.name));
+                self.format_args(out, rv.get_Call_args());
+            },
+            ZirRvalue.CallPtr(_, _) => { // CallPtr
+                self.format_place(out, rv.get_CallPtr_pl());
+                self.format_args(out, rv.get_CallPtr_args());
+            },
+            ZirRvalue.Cast(_, _) => { // Cast
+                self.format_place(out, rv.get_Cast_pl());
+                out.push_slice(" as <ty>");
+            },
+            ZirRvalue.ArrayRepeat(_, _, _) => {
+                out.push('[' as u8);
+                self.format_place(out, rv.get_ArrayRepeat_val());
+                out.push_slice("; ");
+                self.comment_push_decimal(out, rv.get_ArrayRepeat_count() as u64);
+                out.push(']' as u8);
+            },
+            ZirRvalue.PtrFromInt(_, _) => { // PtrFromInt
+                out.push_slice("@ptr_from_int<ty>(");
+                self.format_place(out, rv.get_PtrFromInt_pl());
+                out.push(')' as u8);
+            },
+            ZirRvalue.StringConst(_) => { // StringConst
+                out.push_slice("\"...\"");
+            },
+            ZirRvalue.GlobalAddr(_) => { // GlobalAddr
+                out.push_slice("&<global>");
+            },
+            ZirRvalue.FuncAddr(_, _) => { // FuncAddr
+                let p_f = self.zil_module.get_function_mut(rv.get_FuncAddr_id() as usize);
+                out.push('&' as u8);
+                out.push_slice(self.intern_table.lookup(p_f.name));
+            },
+            ZirRvalue.GetEnv => { // GetEnv
+                out.push_slice("<env>");
+            },
+            ZirRvalue.StructLiteral(_, _)
+                | ZirRvalue.EnumVariant(_, _, _)
+                | ZirRvalue.Sizeof(_)
+                | ZirRvalue.Syscall(_)
+                | ZirRvalue.Intrinsic(_, _)
+                | ZirRvalue.VariantCheck(_, _, _)
+                | ZirRvalue.EnumPayload(_, _, _)
+                | ZirRvalue.Tuple(_)
+                | ZirRvalue.Array(_, _)
+                | ZirRvalue.Boxed(_) => {
+                out.push_slice("<expr>");
+            },
+        }
+    }
+
+    fn build_stmt_comment(self: &mut ZirToZilLowerer, stmt: &ZirStmt) -> u32 {
+        let bv = unsafe { ByteVec.new_raw(self.scratch_arena) };
+
+        match *stmt {
+            ZirStmt.Let(_, _, _) => { // Let
+                bv.push_slice("let ");
+                self.format_local_name(bv, stmt.get_Let_id());
+                bv.push_slice(" = ");
+                self.format_rvalue(bv, stmt.get_Let_rv());
+            },
+            ZirStmt.Assign(_, _, _) => { // Assign
+                self.format_place(bv, stmt.get_Assign_pl());
+                bv.push_slice(" = ");
+                self.format_rvalue(bv, stmt.get_Assign_rv());
+            },
+            ZirStmt.Drop(_, _) | ZirStmt.DropIfLive(_, _) => { // Drop, DropIfLive
+                bv.push_slice("drop ");
+                self.format_place(bv, stmt.get_Drop_pl());
+            },
+            ZirStmt.Intrinsic(_, _, _) => { // Intrinsic
+                bv.push('@' as u8);
+                bv.push_slice(self.intern_table.lookup(stmt.get_Intrinsic_id()));
+                self.format_args(bv, stmt.get_Intrinsic_args());
+            },
+            ZirStmt.EndBorrow(_, _) => { // EndBorrow
+                bv.push_slice("end borrow ");
+                self.format_local_name(bv, stmt.get_EndBorrow_id());
+            },
+        }
+
+        return self.intern_table.intern(bv.as_slice());
+    }
+
+    // Combines the literal source comment (verbatim text the user wrote
+    // immediately before this statement, 0 if none) with the synthesized
+    // statement description, literal first, separated by a newline -
+    // ZilPrinter/FlatPrinter's existing comment emission already splits
+    // on embedded newlines into separate "// <line>: ..." lines, so no
+    // printer changes are needed to show both.
+    fn combine_comments(self: &mut ZirToZilLowerer, literal: u32, synthesized: u32) -> u32 {
+        if literal == 0 as u32 { return synthesized; }
+        if synthesized == 0 as u32 { return literal; }
+        let bv = unsafe { ByteVec.new_raw(self.scratch_arena) };
+        bv.push_slice(self.intern_table.lookup(literal));
+        bv.push('\n' as u8);
+        bv.push_slice(self.intern_table.lookup(synthesized));
+        return self.intern_table.intern(bv.as_slice());
+    }
+
+    fn lower_stmt(
+        self: &mut ZirToZilLowerer,
+        stmt: &ZirStmt,
+        literal_comment: u32,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) {
+        let addr = stmt as usize;
+        let span = stmt.get_span();
+        (*self.builder).set_span(span);
+        (*self.builder).set_comment(
+            self.combine_comments(literal_comment, self.build_stmt_comment(stmt))
+        );
+
+        match *stmt {
+            ZirStmt.Let(_, _, _) => { // Let(local_id, rvalue, span)
+                let local_id = stmt.get_Let_id();
+                let rvalue = unsafe { &*((addr + 16) as *ZirRvalue) };
+                // A new local's aggregate initializer is built in the local's own slot: the
+                // initializer cannot name the local it defines, so nothing reads the slot while
+                // it is filled, and no copy follows.
+                let let_loc: Local = unsafe {
+                    (*self.current_func).locals[local_id as usize - 1 as usize]
+                };
+                if let_loc.kind != 1 as u32
+                    && self.is_aggregate(let_loc.ty)
+                    && is_constructor(rvalue) {
+                    self.dest_slot = unsafe { local_slots[local_id as usize] };
+                    self.dest_ty = let_loc.ty;
+                }
+                let val_ssa = self.lower_rvalue(rvalue, local_slots, local_types);
+                self.dest_slot = NO_SSA as u32;
+
+                let loc: Local = unsafe {
+                    (*self.current_func).locals[local_id as usize - 1 as usize]
+                };
+                if loc.kind == 1 as u32 { // TMP
+                    unsafe { local_slots[local_id as usize] = val_ssa; }
+                    // The slot is now another place's address, not storage of this temporary's
+                    // own: `Use` of an aggregate returns its place's address, `EnumPayload` a
+                    // payload's, `GetEnv` the caller's environment. `--checked` must not poison
+                    // that storage when this temporary's borrow ends, because it is still live
+                    // (the post-EndBorrow investigation's finding, 2026-10-18).
+                    let mut aliases = false;
+                    match *rvalue {
+                        ZirRvalue.Use(_) | ZirRvalue.EnumPayload(_, _, _) | ZirRvalue.GetEnv => {
+                            aliases = true;
+                        },
+                        _ => {},
+                    }
+                    if aliases {
+                        unsafe {
+                            *((self.local_owns as usize + local_id as usize) as *mut u8) = 0 as u8;
+                        }
+                    }
+                } else {
+                    let slot = unsafe { local_slots[local_id as usize] };
+                    if val_ssa != NO_SSA as u32 && val_ssa != slot {
+                        if self.is_aggregate(loc.ty) {
+                            let let_size = self.get_type_size(loc.ty);
+                            self.emit_memcpy(slot, val_ssa, let_size);
+                        } else {
+                            let ty = (*self.builder).get_ssa_type(val_ssa);
+                            if self.get_type_size(ty) > 0 as u64 {
+                                (*self.builder).emit(
+                                    ILInstr.Store(StoreInstr { ptr: slot, val: val_ssa })
+                                );
+                            }
+                        }
+                    }
+                }
+            },
+            ZirStmt.Assign(_, _, _) => { // Assign(place, rvalue, span)
+                let place = stmt.get_Assign_pl();
+                let rvalue = unsafe { &*((addr + 32) as *ZirRvalue) };
+                let val_ssa = self.lower_rvalue(rvalue, local_slots, local_types);
+
+                let dest_ptr = self.resolve_place_addr(place, local_slots, local_types);
+                let dest_ty = self.get_place_type(place, local_types);
+                if val_ssa != NO_SSA as u32 {
+                    if self.is_aggregate(dest_ty) {
+                        let assign_size = self.get_type_size(dest_ty);
+                        self.emit_memcpy(dest_ptr, val_ssa, assign_size);
+                    } else {
+                        let ty = (*self.builder).get_ssa_type(val_ssa);
+                        if self.get_type_size(ty) > 0 as u64 {
+                            (*self.builder).emit(
+                                ILInstr.Store(StoreInstr { ptr: dest_ptr, val: val_ssa })
+                            );
+                        }
+                    }
+                }
+            },
+            ZirStmt.Drop(_, _) | ZirStmt.DropIfLive(_, _) => { // Drop / DropIfLive(place, span)
+                let place = stmt.get_Drop_pl();
+                let place_ty = self.get_place_type(place, local_types);
+                let mut is_ptr = false;
+                if place_ty != 0 as u32 {
+                    let pt = self.builder.get_type_decl(place_ty).def.get_tag();
+                    is_ptr = is_any_pointer_tag(pt) || pt == ILTYPE_BOXED || pt == ILTYPE_BOXEDMUT;
+                }
+                if is_ptr {
+                    // A pointer-typed place keeps the historical behaviour: only the pointee type's own
+                    // drop function, called with the place's address. Glue never follows pointers.
+                    let opt_drop_fn = self.find_drop_fn(place_ty);
+                    if opt_drop_fn != 999999 as u32 {
+                        let addr_ssa = self.resolve_place_addr(place, local_slots, local_types);
+                        self.emit_drop_call(opt_drop_fn, addr_ssa);
+                    }
+                } else if self.zil_type_needs_drop(place_ty, 0 as usize) {
+                    let addr_ssa = self.resolve_place_addr(place, local_slots, local_types);
+                    self.emit_drop_glue(addr_ssa, place_ty, 0 as usize);
+                }
+            },
+            ZirStmt.EndBorrow(_, _) => { // EndBorrow(local_id, span)
+                if self.checked {
+                    self.emit_end_borrow_poison(stmt.get_EndBorrow_id(), local_slots, local_types);
+                }
+            },
+            ZirStmt.Intrinsic(_, _, _) => {},
+        }
+    }
+
+    // A `--checked` build poisons LOCAL_ID's slot where its scope ends: nothing valid may point at
+    // the storage of a local past that point (`EndBorrow` is the statement that says so), so a
+    // dangling reference to it finds the poison pattern instead of a live value. Which locals have
+    // storage at all is `is_poisonable_temp`'s question for a temporary, and the answer is its ZIL
+    // representation rather than its kind.
+    fn emit_end_borrow_poison(
+        self: &mut ZirToZilLowerer,
+        local_id: u32,
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) {
+        if local_id == 0 as u32 { return; }
+        let loc_kind = self.cur_func().locals[local_id as usize - 1 as usize].kind;
+        // A drop flag is the compiler's own "is there something to drop here?" bool. Poisoning it
+        // would make scope exit read 0xA5 as "yes" and drop a value that was already moved out.
+        if self.cur_func().locals[local_id as usize - 1 as usize].is_drop_flag {
+            return;
+        }
+        let ty = unsafe { local_types[local_id as usize] };
+        // Storage, not kind: a scalar temporary has none - its `slot` entry is the SSA value that
+        // produced it - but an aggregate temporary does, because its SSA id is the address of the
+        // storage the lowering gave it. That is what a closure's environment is (`build_closure_env`
+        // makes it a `LOCAL_KIND_TMP` tuple that lives in memory because the closure holds its
+        // address, src/lower_zir/expr.zrl). Skipping every TMP left that environment unpoisoned, so
+        // a closure that escaped a loop read the previous iteration's capture values and returned
+        // 99 instead of the poison (probe 214,
+        // bench/safety_matrix/probes/214_loop_closure_env_escape.zrl).
+        if loc_kind == LOCAL_KIND_TMP && !self.is_poisonable_temp(ty) {
+            return;
+        }
+        // A temporary whose slot names another place's storage has no storage of its own to
+        // poison: doing so would write over the place it names while that place is still live.
+        // `lower_stmt` records that in `local_owns` for the rvalues that return a place address
+        // (`Use`, `EnumPayload`, `GetEnv`); an aggregate that owns its storage - a constructed
+        // tuple, struct, enum, array or function value, including a closure's environment - owns
+        // it and is poisoned here.
+        if loc_kind == LOCAL_KIND_TMP
+            && unsafe { *((self.local_owns as usize + local_id as usize) as *mut u8) } == 0 as u8 {
+            return;
+        }
+        let slot = unsafe { local_slots[local_id as usize] };
+        if slot == NO_SSA as u32 || ty == 0 as u32 { return; }
+        // A value that needs dropping is poisoned by its own drop glue when it is dropped, and its
+        // `EndBorrow` comes just before that (flag-guarded, so the two are not always even in the
+        // same block). Poisoning here first would make the drop find its own poison and trap.
+        if self.zil_type_needs_drop(ty, 0 as usize) {
+            return;
+        }
+        let size = self.get_type_size(ty);
+        self.emit_checked_poison(slot, size);
+    }
+
+    // Whether a temporary of type TY has storage a `--checked` build may poison where its borrow
+    // ends. An aggregate temporary generally does: a constructed tuple, struct, enum, array or
+    // function value lives in a slot the lowering allocated for it, and a closure's environment
+    // (`build_closure_env` makes it a `LOCAL_KIND_TMP` tuple in memory, src/lower_zir/expr.zrl) is
+    // one - which poison is what makes a closure escaping a loop read 0xA5 instead of the previous
+    // iteration's capture (probe 214). A scalar temporary has none: its `slot` entry is the SSA
+    // value that produced it.
+    //
+    // An aggregate temporary does not always *own* its storage: one bound to another place
+    // (`let _t = p.def`, which `lower_match` creates for a computed `Copy` scrutinee, an
+    // `EnumPayload`, or a closure's `GetEnv`) records that place's address as its slot. Whether
+    // this one does is `emit_end_borrow_poison`'s `local_owns` check, not a question about TY.
+    // The earlier "tuples and nothing else" rule came from poisoning a scrutinee that aliased a
+    // live `ILTypeDecl` in the module's own type table; the ownership check closes that, so every
+    // aggregate shape is poisoned now.
+    fn is_poisonable_temp(self: &mut ZirToZilLowerer, ty: u32) -> bool {
+        if ty == 0 as u32 || !self.is_aggregate(ty) { return false; }
+        return true;
+    }
+
+    fn get_variant_discriminant(self: &mut ZirToZilLowerer, ty_id: u32, variant_idx: u32) -> u32 {
+        let p_ty = self.builder.get_type_decl(ty_id);
+        let user = p_ty.def.get_User();
+        let def = self.zil_module.get_typedef_mut(user.id as usize);
+        let e = def.get_Enum();
+        return e.variants[variant_idx as usize].discriminant;
+    }
+
+    // `zil_blocks` is the ZIR-block -> ZIL-block map, indexed by block id. It
+    // arrives as a slice so every lookup here is bounds-checked; `&[u32]` rather
+    // than `[u32]` because the caller passes it from inside a loop.
+    fn lower_terminator(
+        self: &mut ZirToZilLowerer,
+        term: &ZirTerminator,
+        zil_blocks: &[u32],
+        local_slots: *mut u32,
+        local_types: *mut u32
+    ) {
+        (*self.builder).set_comment(0 as u32);
+
+        match *term {
+            ZirTerminator.Jmp(_) => { // Jmp(dst_id)
+                let dst_id = term.get_Jmp();
+                let zil_dst = zil_blocks[dst_id as usize];
+                (*self.builder).emit(ILInstr.Jmp(zil_dst));
+            },
+            ZirTerminator.Branch(_, _, _) => { // Branch(cond_place, true_id, false_id)
+                let cond_place = term.get_Branch_cond();
+                let true_id = term.get_Branch_then();
+                let false_id = term.get_Branch_else();
+                let cond_val = self.load_place(cond_place, local_slots, local_types);
+                let zil_true = zil_blocks[true_id as usize];
+                let zil_false = zil_blocks[false_id as usize];
+
+                (*self.builder).emit(
+                    ILInstr.Branch(BranchInstr {
+                        cond: cond_val,
+                        then_block: zil_true,
+                        else_block: zil_false
+                    })
+                );
+            },
+            ZirTerminator.Ret(_) => { // Ret(Place)
+                let place = term.get_Ret();
+                let ret_span = self.cur_func().span;
+                (*self.builder).set_span(ret_span);
+                let mut ret_val = NO_SSA as u32;
+                if place.base != 0 as u32 {
+                    ret_val = self.load_place(place, local_slots, local_types);
+                }
+
+                if self.sret_ssa != NO_SSA as u32 && ret_val != NO_SSA as u32 {
+                    let ty = (*self.builder).get_ssa_type(ret_val);
+                    let inner_ty = self.get_ptr_inner_type(ty);
+                    if inner_ty != 0 as u32 && self.is_aggregate(inner_ty) {
+                        // ret_val is a *AggregateType pointer from load_place.
+                        // Copy the aggregate bytes from ret_val into the sret slot.
+                        let ret_size = self.get_type_size(inner_ty);
+                        self.emit_memcpy(self.sret_ssa, ret_val, ret_size);
+                        (*self.builder).emit(ILInstr.Ret(NO_SSA as u32));
+                    } else if self.is_aggregate(ty) {
+                        // ret_val is an aggregate value directly (unusual); store it
+                        (*self.builder).emit(
+                            ILInstr.Store(StoreInstr { ptr: self.sret_ssa, val: ret_val })
+                        );
+                        (*self.builder).emit(ILInstr.Ret(NO_SSA as u32));
+                    } else {
+                        (*self.builder).emit(ILInstr.Ret(ret_val));
+                    }
+                } else {
+                    (*self.builder).emit(ILInstr.Ret(ret_val));
+                }
+            },
+            ZirTerminator.Unreachable => { // Unreachable
+                let abort_name = self.intern_table.intern("zoril_abort");
+                (*self.builder).emit(
+                    ILInstr.Call(CallInstr {
+                        args: @slice(0 as *mut u32, 0 as usize),
+                        name_id: abort_name,
+                        is_extern: true,
+                        func_idx: CALL_BY_NAME
+                    })
+                );
+                (*self.builder).emit(ILInstr.Unreachable);
+            },
+        }
+    }
+}
+
+// A two-element slice of TY, TY: the word types of a function value.
+fn alloc_two(arena: *mut ArenaHeader, ty: u32) -> [u32] {
+    let words = unsafe { @slice(zoril_allocator_alloc(arena, 8 as usize) as *mut u32, 2 as usize) };
+    words[0] = ty;
+    words[1] = ty;
+    return words;
+}
+
+// Whether RV builds an aggregate in memory of its own (construct_slot).
+fn is_constructor(rv: *ZirRvalue) -> bool {
+    return match unsafe { *rv } {
+        ZirRvalue.Array(_, _)
+            | ZirRvalue.ArrayRepeat(_, _, _)
+            | ZirRvalue.Tuple(_)
+            | ZirRvalue.StructLiteral(_, _)
+            | ZirRvalue.EnumVariant(_, _, _) => true,
+        _ => false,
+    };
+}

@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: error: type mismatch
+// Struct-literal field values were not type-checked either, so a two-word slice
+// could initialise a one-word `*mut u8` field.
+import "core.zrl";
+import "mem_raw.zrl";
+use mem_raw::{arena_init, zoril_allocator_alloc};
+
+struct Holder { pub p: *mut u8, pub n: usize }
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(1024 as u64 * 1024) };
+    let raw = unsafe { zoril_allocator_alloc(arena, 16 as u64) } as *mut u8;
+    let s = unsafe { @slice(raw, 16 as usize) };
+    let h = Holder { p: s, n: 0 as usize };
+    return h.n as i32;
+}

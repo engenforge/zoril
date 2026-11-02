@@ -1,0 +1,67 @@
+// Formatter test: the layout rules. `scripts/check_fmt.sh` formats this file and compares it
+// with layout.expected.zrl.
+import "core.zrl";
+import "vec.zrl" as v;
+use v::{Vec};
+
+#[must_use]
+pub struct Point { pub x: i32, pub y: i32 }
+
+pub struct Wide {
+    pub first_field_with_a_long_name: i32,   // aligned
+    pub second: i32,                          // comments
+}
+
+pub enum Shape { Dot(Point), Pair((i32, i32)), Empty }
+
+pub enum Kind {
+    A = 1, B = 2,
+    C = 3,
+}
+
+fn takes_many_arguments(first_argument: i32, second_argument: i32, third_argument: i32) -> i32 {
+    return first_argument + second_argument + third_argument;
+}
+
+fn layout(xs: &v::Vec<v::Vec<i32>>, s: Shape) -> i32 {
+    let total = takes_many_arguments(1000000, 2000000, 3000000) + takes_many_arguments(4, 5, 6);
+    let p = Point { x: 1, y: 2 };
+    let q = Point {
+        x: 3,
+        y: 4,
+    };
+    if p.x == 1 { return 1; }
+    let small = if total > 0 { 1 } else { 2 };
+    let w = if total > 10000000 {
+        takes_many_arguments(total, total, total)
+    } else {
+        takes_many_arguments(1, 2, 3)
+    };
+    let n = match s { Shape.Dot(pt) => pt.x, Shape.Pair((a, b)) => a + b, Shape.Empty => 0 };
+    match s {
+        Shape.Dot(_) | Shape.Empty => {},
+        Shape.Pair(_) => { return (n + 1) * 2; },
+    }
+    for i in 0..3 { if i == 2 { break; } }
+    while false {}
+    let k = (w + small) * (q.y - p.y);
+
+    // Two blank lines above become one.
+    return k
+        + xs.len as i32      // the result
+    ;
+}
+
+// Associated types and default methods: a trait's and an impl's items, one per line.
+trait Source {
+    type Item;
+    fn next(self: &mut Self) -> Option<Self::Item>;
+    fn skip(self: &mut Self) -> bool { return self.next().is_some(); }
+}
+impl Source for Counter {
+    type Item = i64;
+    fn next(self: &mut Counter) -> Option<i64> { return Option.None; }
+}
+
+// A `>>` closing two type-parameter lists takes no space before it.
+fn first<T, I: Source<T>>(i: I) -> T { return i; }

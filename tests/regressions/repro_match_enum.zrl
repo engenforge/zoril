@@ -1,0 +1,8 @@
+enum E { A, B }
+fn main() -> i32 {
+    let e = E.A;
+    match e {
+        E.A => { return 0; },
+        E.B => { return 1; },
+    }
+}

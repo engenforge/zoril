@@ -1,0 +1,33 @@
+// name: Call store summary misses mutual recursion
+// expected: known_gap
+// gap: compute_ret_storage_zir lacks interprocedural fixpoint over mutually recursive calls
+// observed: exit 77
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn stash_a(out: &mut [i32], s: [i32]) {
+    if false { stash_b(out, s); }
+    *out = s;
+}
+
+fn stash_b(out: &mut [i32], s: [i32]) {
+    stash_a(out, s);
+}
+
+fn f(out: &mut [i32]) {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    stash_b(out, v.as_slice());
+}
+
+fn main() -> i32 {
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    f(&mut s);
+    let a2 = match Arena.new(65536) { Result.Ok(a2) => a2, Result.Err(_) => { return 1; } };
+    let mut v2 = Vec::<i32>.new_in(&a2);
+    v2.push(77);
+    return s[0];
+}

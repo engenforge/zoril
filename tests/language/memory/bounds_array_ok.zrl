@@ -1,0 +1,7 @@
+// expected exit 7
+// In-bounds fixed-array indexing must still return the element.
+fn main() -> i32 {
+    let mut data = [1 as u8, 2, 7];
+    let i = 2 as usize;
+    return data[i] as i32;
+}

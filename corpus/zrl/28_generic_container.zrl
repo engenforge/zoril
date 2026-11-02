@@ -1,0 +1,79 @@
+// 28: A generic stack (LIFO container) using arrays and generics.
+// Demonstrates: generic struct with methods, mutable self, array storage, Option returns.
+// expected exit code: 62
+
+const MAX_SIZE: i32 = 16;
+
+enum Option<T> {
+    None,
+    Some(T),
+}
+
+struct Stack<T> {
+    data: [T; 16],
+    len: i32,
+}
+
+impl Stack<i32> {
+    fn new() -> Stack<i32> {
+        return Stack {
+            data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            len: 0,
+        };
+    }
+
+    fn push(self: &mut Stack<T>, value: T) -> bool {
+        if self.len >= MAX_SIZE {
+            return false;
+        }
+        self.data[self.len] = value;
+        self.len += 1;
+        return true;
+    }
+
+
+    fn pop(self: &mut Stack<i32>) -> Option<i32> {
+        if self.len == 0 {
+            return Option.None;
+        }
+        self.len -= 1;
+        return Option.Some(self.data[self.len]);
+    }
+
+    fn peek(self: &Stack<i32>) -> Option<i32> {
+        if self.len == 0 {
+            return Option.None;
+        }
+        return Option.Some(self.data[self.len - 1]);
+    }
+
+    fn is_empty(self: &Stack<i32>) -> bool {
+        return self.len == 0;
+    }
+
+    fn size(self: &Stack<i32>) -> i32 {
+        return self.len;
+    }
+}
+
+fn main() -> i32 {
+    let mut s: Stack<i32> = Stack.new();
+
+    s.push(10);
+    s.push(20);
+    s.push(30);
+
+    let top = match s.peek() {
+        Some(v) => v,
+        None => 0,
+    };
+
+    let popped = match s.pop() {
+        Some(v) => v,
+        None => 0,
+    };
+
+    let size = s.size();
+
+    return top + popped + size; // 30 + 30 + 2 = 62
+}

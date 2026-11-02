@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: error: @alloca requires unsafe block: the memory is not initialized
+fn main() -> i32 {
+    let p = @alloca<i32>(1);
+    *p = 5;
+    return *p - 5;
+}

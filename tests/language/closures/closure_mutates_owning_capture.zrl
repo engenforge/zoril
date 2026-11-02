@@ -1,0 +1,40 @@
+// An owning capture is moved into the closure (doc/spec/surface_syntax.md §5.2),
+// so the closure owns it and may mutate it (stateful closure).
+
+import "string.zrl";
+import "vec.zrl";
+
+use string::String;
+use vec::Vec;
+
+struct S {
+    n: i32,
+    name: String,
+}
+
+fn test_vec_capture() -> i32 {
+    let mut v = Vec::<i32>.new();
+    let mut add = |x: i32| {
+        v.push(x);
+    };
+    add(1);
+    add(2);
+    return 0;
+}
+
+fn test_struct_with_string_capture() -> i32 {
+    let mut s = S { n: 1, name: String::new() };
+    let f = || {
+        s.n = s.n + 1;
+    };
+    f();
+    return 0;
+}
+
+fn main() -> i32 {
+    let r1 = test_vec_capture();
+    if r1 != 0 { return 1; }
+    let r2 = test_struct_with_string_capture();
+    if r2 != 0 { return 2; }
+    return 0;
+}

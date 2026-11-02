@@ -1,0 +1,5 @@
+enum MyRes<T, E> { Ok(T), Err(E) }
+fn main() -> i32 {
+    let e: MyRes<[u64; 2], u32> = MyRes.Err(99);
+    return 0;
+}

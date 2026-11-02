@@ -1,0 +1,26 @@
+// name: A view of a closure's owned HashMap entry stored through a captured &mut is rejected
+// expected: compile_reject
+// Storing an entry view from a closure's owned HashMap through a captured &mut reference is rejected.
+import "hashmap.zrl";
+import "hash_impls.zrl";
+import "mem.zrl";
+use hashmap::HashMap;
+use mem::Arena;
+
+fn main() -> i32 {
+    let arena = Arena.new(4096 * 4).unwrap();
+    let mut map = HashMap::<u32, i32>.new(&arena);
+    map.insert(10, 42);
+    let mut dummy = 0;
+    let mut out: &i32 = &dummy;
+    let out_ref = &mut out;
+    let k10: u32 = 10;
+    let mut f = || {
+        match map.get(&k10) {
+            Some(v) => { *out_ref = v; },
+            None => {},
+        }
+    };
+    f();
+    return 0;
+}

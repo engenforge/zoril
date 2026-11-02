@@ -1,0 +1,30 @@
+// expected exit 0
+// The accepted twin of tests/error_reporting/err_uncalled_method_checks.zrl and
+// err_uncalled_method_borrow.zrl: a method nothing calls is checked like one that is (its body is
+// lowered, so a field, name, privacy or borrow error in it is reported there), and the bodies
+// nothing calls are dropped again before the ZIL is written, so what this program emits and runs
+// is what its *called* code lowers to. scripts/test_uncalled_method_emit.sh checks the second half
+// from outside: the ZIL must not name the method below.
+pub struct Counter { pub n: i32, pub step: i32 }
+
+impl Counter {
+    pub fn bump(self: &Counter) -> i32 { return self.n + self.step; }
+
+    // Nothing calls this one. It is checked (it would have to fail here if it were wrong), and it
+    // is not emitted.
+    fn never_called(self: &Counter, times: i32) -> i32 {
+        let mut total = 0;
+        let mut i = 0;
+        while i < times {
+            total = total + self.bump();
+            i = i + 1;
+        }
+        return total;
+    }
+}
+
+fn main() -> i32 {
+    let c = Counter { n: 1, step: 2 };
+    // 3 from bump(), and `never_called` is not run: 0.
+    return c.bump() - 3;
+}

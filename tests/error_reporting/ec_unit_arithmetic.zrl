@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: error: arithmetic operator not supported on unit operands
+// Unit is not a number: `()` in an arithmetic expression used to lower to an operation whose
+// result was then written through as if it were an address.
+fn main() -> i32 {
+    let u: () = ();
+    let x: u64 = 1;
+    let y = u * x;
+    return 0;
+}

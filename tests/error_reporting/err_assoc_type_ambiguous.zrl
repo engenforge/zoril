@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_assoc_type_ambiguous.zrl:9:37: error: associated type `Out` of `Num` is defined by more than one impl
+// Two traits whose impls for one type both define Out leave `T::Out` ambiguous.
+trait A { type Out; }
+trait B { type Out; }
+struct Num { v: i32 }
+impl A for Num { type Out = i32; }
+impl B for Num { type Out = i64; }
+fn get<T: A>(t: &T) -> i32 { let x: T::Out = 0; return 0; }
+fn main() -> i32 { return get(&Num { v: 1 }); }

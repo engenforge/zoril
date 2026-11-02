@@ -1,0 +1,12 @@
+// name: Reference compared with an integer is rejected
+// expected: compile_reject
+// Equality on references compares addresses, so both sides must be references of one type. A
+// reference against an integer is refused instead of comparing the address with 3.
+fn main() -> i32 {
+    let x: u64 = 3;
+    let r: &u64 = &x;
+    if r == 3 {
+        return 1;
+    }
+    return 2;
+}

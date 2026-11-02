@@ -1,0 +1,6 @@
+// name: A `fn(&mut i32)` used as a `fn(&i32)`
+// expected: compile_reject
+// Parameters are contravariant: a function that writes through its argument cannot stand for one the
+// caller will hand a shared reference, or `f(&imm)` changes an immutable binding.
+fn mutate(p: &mut i32) { *p = 9; }
+fn main() -> i32 { let imm = 1; let f: fn(&i32) = mutate; f(&imm); return imm; }

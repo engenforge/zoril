@@ -1,0 +1,9 @@
+// expected exit 7
+// A capturing closure is a function value carrying its environment, so it works anywhere a
+// `fn` value does (let fn type). Until 2026-10-05 this was rejected: the environment was
+// bound to the variable statically.
+fn main() -> i32 {
+    let k = 5;
+    let f: fn(i32) -> i32 = |x: i32| -> i32 { x + k };
+    return f(2);
+}

@@ -1,0 +1,1384 @@
+// The formatter's printer: a file's syntax tree, written back with the default style.
+//
+// The tree gives the structure (what is a statement, an argument list, an operand) and so where
+// lines may break and how deep they indent; the tokens themselves, and the comments attached
+// to them (trivia.zrl), come from the source, through a cursor the walk advances token by
+// token. So every token is written exactly once, as spelled, in order: the walk only decides
+// the space between them. Where the tree and the tokens disagree the printer stops (`failed`)
+// and the file is left as it is.
+//
+// The style: four-space indentation; a block, a match and a declaration's body one item per
+// line, keeping the source's blank lines (at most one); a block or struct literal written on
+// one line stays on one line when it fits; argument and parameter lists, operator chains
+// and array literals break, one item per line, when they do not fit in 100 columns.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "vec.zrl";
+import "ast.zrl";
+import "token.zrl";
+import "intern.zrl";
+import "bytevec.zrl";
+import "doc.zrl";
+import "trivia.zrl";
+use ast::{AST, BinaryExpr, BinaryOp, BlockExpr, Decl, EnumDecl, Expr, ExprId, FieldValue, FnDecl, ImplDecl, MatchExpr, PAREN_EXPR, PAREN_PATTERN, Param, Pattern, PatternId, Stmt, StmtId, StructDecl, TraitDecl, Type, TypeId, UnaryOp};
+use bytevec::ByteVec;
+use doc::Doc;
+use intern::InternTable;
+use mem_raw::ArenaHeader;
+use token::TokenKind;
+use trivia::{FComment, FTok};
+use vec::Vec;
+
+pub struct Printer {
+    ast: &AST,
+    src: [u8],
+    toks: [FTok],
+    cmts: [FComment],
+    table: &InternTable,
+    arena: *mut ArenaHeader,
+    pos: usize,
+    pub doc: Doc,
+    closes: Vec<u32>,       // for an opening bracket token, the index of its closing one
+    gt_pending: u32,        // `>`s of a `>>` already written, owed to enclosing type lists
+    skip_lead_blank: bool,  // the blank line before the next comment was written already
+    pub failed: bool,
+    pub fail_offset: u32,   // where the tree and the tokens first disagreed
+}
+
+impl Printer {
+    pub fn new(
+        ast: &AST,
+        src: [u8],
+        toks: [FTok],
+        cmts: [FComment],
+        table: &InternTable,
+        arena: *mut ArenaHeader
+    ) -> Printer {
+        let mut p = Printer {
+            ast: ast, src: src, toks: toks, cmts: cmts, table: table, arena: arena, pos: 0 as usize,
+            doc: Doc.new(arena), closes: unsafe {
+                Vec::<u32>.new_in_raw(arena)
+            }, gt_pending: 0 as u32,
+            skip_lead_blank: false, failed: false, fail_offset: 0 as u32,
+        };
+        p.match_brackets();
+        return p;
+    }
+
+    fn match_brackets(self: &mut Printer) {
+        self.closes.resize(self.toks.len);
+        let mut stack = unsafe { Vec::<usize>.new_in_raw(self.arena) };
+        for i in 0 as usize..self.toks.len {
+            let k = self.toks[i].kind;
+            if k == TokenKind.LParen || k == TokenKind.LBracket || k == TokenKind.LBrace {
+                stack.push(i);
+            } else if k == TokenKind.RParen || k == TokenKind.RBracket || k == TokenKind.RBrace {
+                if let Option.Some(o) = stack.pop() { self.closes.set(o, i as u32); }
+            }
+        }
+    }
+
+    // ── The token cursor ───────────────────────────────────────────────────
+
+    fn kind(self: &Printer) -> TokenKind { return self.toks[self.pos].kind; }
+
+    fn peek_kind(self: &Printer, n: usize) -> TokenKind {
+        let i = self.pos + n;
+        return if i < self.toks.len { self.toks[i].kind } else { TokenKind.Eof };
+    }
+
+    fn at(self: &Printer, k: TokenKind) -> bool { return !self.failed && self.kind() == k; }
+
+    fn fail(self: &mut Printer) {
+        if !self.failed { self.failed = true; self.fail_offset = self.toks[self.pos].start; }
+    }
+
+    // Writes the current token with its comments, and moves on.
+    fn tok(self: &mut Printer) {
+        if self.failed || self.kind() == TokenKind.Eof { self.fail(); return; }
+        let t = self.toks[self.pos];
+        self.leading(t, false);
+        self.doc.text(subslice(self.src, t.start as usize, (t.end - t.start) as usize));
+        self.trailing(t);
+        self.pos = self.pos + 1 as usize;
+    }
+
+    fn expect(self: &mut Printer, k: TokenKind) {
+        if self.failed { return; }
+        if self.kind() != k { self.fail(); return; }
+        self.tok();
+    }
+
+    // The current token if it is K.
+    fn opt(self: &mut Printer, k: TokenKind) -> bool {
+        if !self.at(k) { return false; }
+        self.tok();
+        return true;
+    }
+
+    // A closing bracket: the comments before it indented as the items before it were.
+    fn close(self: &mut Printer, k: TokenKind) {
+        if self.failed { return; }
+        if self.kind() != k { self.fail(); return; }
+        let t = self.toks[self.pos];
+        if t.lead_count > 0 as u32 {
+            self.doc.indent();
+            self.leading(t, true);
+            self.doc.dedent();
+            self.doc.fresh();
+        }
+        self.doc.text(subslice(self.src, t.start as usize, (t.end - t.start) as usize));
+        self.trailing(t);
+        self.pos = self.pos + 1 as usize;
+    }
+
+    fn comment_text(self: &Printer, c: FComment) -> [u8] {
+        let mut end = c.end as usize;
+        while end > c.start as usize
+            && (self.src[end - 1 as usize] == ' ' as u8
+                || self.src[end - 1 as usize] == '\t' as u8
+                || self.src[end - 1 as usize] == '\r' as u8) {
+            end = end - 1 as usize;
+        }
+        return subslice(self.src, c.start as usize, end - c.start as usize);
+    }
+
+    // The column (from 0) OFFSET is at in the source.
+    fn source_column(self: &Printer, offset: u32) -> usize {
+        let mut i = offset as usize;
+        let mut col = 0 as usize;
+        while i > 0 as usize && self.src[i - 1 as usize] != '\n' as u8 {
+            i = i - 1 as usize;
+            if (self.src[i] & 0xc0 as u8) != 0x80 as u8 { col = col + 1 as usize; }
+        }
+        return col;
+    }
+
+    fn is_line_comment(self: &Printer, c: FComment) -> bool {
+        return self.src[c.start as usize + 1 as usize] == '/' as u8;
+    }
+
+    // T's leading comments: each on a line of its own (a blank line before it kept), or, for
+    // a `/* */` within a line, in place. With ALL_OWN_LINE, every one on its own line.
+    fn leading(self: &mut Printer, t: FTok, all_own_line: bool) {
+        for k in t.lead as usize..(t.lead + t.lead_count) as usize {
+            let c = self.cmts[k];
+            if c.own_line || all_own_line || self.is_line_comment(c) {
+                if c.blank_before && !(k == t.lead as usize && self.skip_lead_blank) {
+                    self.doc.blank();
+                } else {
+                    self.doc.fresh();
+                }
+                self.doc.text(self.comment_text(c));
+                self.doc.fresh();
+            } else {
+                self.doc.text(self.comment_text(c));
+                self.doc.text(" ");
+            }
+        }
+        if t.lead_count > 0 as u32 && t.blank_before { self.doc.blank(); }
+        self.skip_lead_blank = false;
+    }
+
+    // T's trailing comment, after a space, ending the line.
+    fn trailing(self: &mut Printer, t: FTok) {
+        if t.trail == 0 as u32 { return; }
+        let c = self.cmts[(t.trail - 1 as u32) as usize];
+        if self.is_line_comment(c) {
+            self.doc.trail(self.comment_text(c), self.source_column(c.start));
+            self.doc.fresh();
+        } else {
+            self.doc.text(" ");
+            self.doc.text(self.comment_text(c));
+        }
+    }
+
+    // Before an item of a list laid out one per line (a statement, an arm, a field, a
+    // declaration): a blank line if the source had one there and the item is not FIRST, else
+    // a line break.
+    fn item_break(self: &mut Printer, first: bool) {
+        if self.failed { return; }
+        let t = self.toks[self.pos];
+        let blank = if t.lead_count > 0 as u32 {
+            self.cmts[t.lead as usize].blank_before
+        } else {
+            t.blank_before
+        };
+        if blank && !first {
+            self.doc.blank();
+            self.skip_lead_blank = true;
+        } else {
+            self.doc.hard();
+        }
+    }
+
+    // Whether the bracket at the cursor and its closing one are on one source line.
+    fn one_line_in_source(self: &Printer) -> bool {
+        let close = self.closes.as_slice()[self.pos] as usize;
+        if close <= self.pos { return false; }
+        for i in self.pos + 1 as usize..close + 1 as usize {
+            if self.toks[i].line_before || self.toks[i].lead_count > 0 as u32 { return false; }
+        }
+        return true;
+    }
+
+    // ── A run of tokens: imports, `use`, attributes, type parameters ───────
+
+    // Tokens up to and including the first END at bracket depth 0 (END a closer: its
+    // opener's depth), spaced by the run rule.
+    fn run_until(self: &mut Printer, end: TokenKind) {
+        let mut depth = 0 as i32;
+        let mut prev = TokenKind.Eof;
+        while !self.failed && self.kind() != TokenKind.Eof {
+            let k = self.kind();
+            if prev != TokenKind.Eof && run_space(prev, k) { self.doc.text(" "); }
+            if k == TokenKind.LParen
+                || k == TokenKind.LBracket
+                || k == TokenKind.LBrace
+                || k == TokenKind.Less {
+                depth = depth + 1;
+            }
+            if k == TokenKind.RParen
+                || k == TokenKind.RBracket
+                || k == TokenKind.RBrace
+                || k == TokenKind.Greater {
+                depth = depth - 1;
+            }
+            if k == TokenKind.GreaterGreater { depth = depth - 2; }
+            self.tok();
+            prev = k;
+            if (k == end || (end == TokenKind.Greater && k == TokenKind.GreaterGreater))
+                && depth <= 0 {
+                return;
+            }
+        }
+    }
+
+    // `<T, U: Bound + Other>` if there is one.
+    fn type_params(self: &mut Printer) {
+        if self.at(TokenKind.Less) { self.run_until(TokenKind.Greater); }
+    }
+
+    // `#[..]` attributes, each on its own line.
+    fn attributes(self: &mut Printer) {
+        while self.at(TokenKind.Hash) {
+            self.run_until(TokenKind.RBracket);
+            self.doc.hard();
+        }
+    }
+
+    // ── Names, types ───────────────────────────────────────────────────────
+
+    // A name that may be a path `a::b::c`, interned as one.
+    fn path(self: &mut Printer, name: u32) {
+        // Copied out of the intern table: the expects below are `&mut self` calls.
+        let mut text_buf = unsafe { ByteVec.new_raw(self.arena) };
+        text_buf.push_slice(self.table.lookup(name));
+        let text = text_buf.as_slice();
+        self.expect(TokenKind.Ident);
+        let mut i = 0 as usize;
+        while i + 1 as usize < text.len {
+            if text[i] == ':' as u8 && text[i + 1 as usize] == ':' as u8 {
+                self.expect(TokenKind.DoubleColon);
+                self.expect(TokenKind.Ident);
+                i = i + 1 as usize;
+            }
+            i = i + 1 as usize;
+        }
+    }
+
+    fn type_(self: &mut Printer, ty: TypeId) {
+        if ty == 0 as TypeId || self.failed { return; }
+        match self.ast.types[ty as usize] {
+            Type.Primitive(_) => { self.expect(TokenKind.Ident); },
+            Type.Ptr(inner) => { self.expect(TokenKind.Star); self.type_(inner); },
+            Type.PtrMut(inner) => {
+                self.expect(TokenKind.Star);
+                self.expect(TokenKind.KMut);
+                self.doc.text(" ");
+                self.type_(inner);
+            },
+            Type.Ref(inner) | Type.RefMut(inner) => {
+                if self.at(TokenKind.AmpAmp) {
+                    // `&&T`: one token for this reference and the one it holds.
+                    self.tok();
+                    match self.ast.types[inner as usize] {
+                        Type.Ref(t2) => { self.type_(t2); },
+                        Type.RefMut(t2) => {
+                            self.expect(TokenKind.KMut);
+                            self.doc.text(" ");
+                            self.type_(t2);
+                        },
+                        _ => { self.fail(); },
+                    }
+                    return;
+                }
+                self.expect(TokenKind.Amp);
+                if self.opt(TokenKind.KMut) { self.doc.text(" "); }
+                self.type_(inner);
+            },
+            Type.Slice(inner) => {
+                self.expect(TokenKind.LBracket);
+                self.type_(inner);
+                self.close(TokenKind.RBracket);
+            },
+            Type.SliceMut(inner) => {
+                self.expect(TokenKind.LBracket);
+                self.expect(TokenKind.KMut);
+                self.doc.text(" ");
+                self.type_(inner);
+                self.close(TokenKind.RBracket);
+            },
+            Type.Array(a) => {
+                self.expect(TokenKind.LBracket);
+                self.type_(a.0);
+                self.expect(TokenKind.Semi);
+                self.doc.text(" ");
+                self.expect(TokenKind.Int);
+                self.close(TokenKind.RBracket);
+            },
+            Type.Tuple(types) => { self.type_list(types); },
+            Type.Fn(f) => {
+                if self.opt(TokenKind.KExtern) {
+                    self.doc.text(" ");
+                    if self.opt(TokenKind.String) { self.doc.text(" "); }
+                }
+                self.opt(TokenKind.KFn);
+                self.type_list(f.params);
+                if self.at(TokenKind.Arrow) {
+                    self.doc.text(" ");
+                    self.tok();
+                    self.doc.text(" ");
+                    self.type_(f.ret_ty);
+                }
+            },
+            Type.Path(p) => {
+                self.path(p.0);
+                if p.1.len > 0 as usize { self.type_args(p.1); }
+            },
+        }
+    }
+
+    // `(A, B)`.
+    fn type_list(self: &mut Printer, types: [TypeId]) {
+        self.expect(TokenKind.LParen);
+        for i in 0 as usize..types.len {
+            if i > 0 as usize { self.expect(TokenKind.Comma); self.doc.text(" "); }
+            self.type_(types[i]);
+        }
+        if self.opt(TokenKind.Comma) {}
+        self.close(TokenKind.RParen);
+    }
+
+    // `<A, B>`, the `<` at the cursor.
+    fn type_args(self: &mut Printer, types: [TypeId]) {
+        self.expect(TokenKind.Less);
+        for i in 0 as usize..types.len {
+            if i > 0 as usize { self.expect(TokenKind.Comma); self.doc.text(" "); }
+            self.type_(types[i]);
+        }
+        self.close_angle();
+    }
+
+    // A `>` ending a type list: the token, or the second half of a `>>` already written.
+    fn close_angle(self: &mut Printer) {
+        if self.gt_pending > 0 as u32 { self.gt_pending = self.gt_pending - 1 as u32; return; }
+        if self.at(TokenKind.GreaterGreater) {
+            self.tok();
+            self.gt_pending = self.gt_pending + 1 as u32;
+            return;
+        }
+        self.expect(TokenKind.Greater);
+    }
+
+    // ── Patterns ───────────────────────────────────────────────────────────
+
+    fn pattern(self: &mut Printer, p: PatternId) {
+        if p == 0 as PatternId || self.failed { return; }
+        let parens = self.ast.paren_count(PAREN_PATTERN, p);
+        for _i in 0 as u32..parens { self.expect(TokenKind.LParen); }
+        self.pattern_inner(p);
+        for _i in 0 as u32..parens { self.close(TokenKind.RParen); }
+    }
+
+    fn pattern_inner(self: &mut Printer, p: PatternId) {
+        match self.ast.patterns[p as usize] {
+            Pattern.Literal(_) => { self.opt(TokenKind.Minus); self.tok(); },
+            Pattern.Range(_) => {
+                self.opt(TokenKind.Minus);
+                self.tok();
+                self.expect(TokenKind.DotDot);
+                self.opt(TokenKind.Equal);
+                self.opt(TokenKind.Minus);
+                self.tok();
+            },
+            Pattern.Ident(_) | Pattern.Wildcard => { self.tok(); },
+            Pattern.MutIdent(_) => {
+                self.expect(TokenKind.KMut);
+                self.doc.text(" ");
+                self.expect(TokenKind.Ident);
+            },
+            Pattern.EnumVariant(vp) => {
+                if vp.type_name != 0 as u32 {
+                    self.path(vp.type_name);
+                    self.expect(TokenKind.Dot);
+                    self.expect(TokenKind.Ident);
+                } else {
+                    self.path(vp.variant_name);
+                }
+                if self.at(TokenKind.LParen) { self.pattern_list(vp.payload); }
+            },
+            Pattern.Or(alts) => {
+                self.doc.group();
+                self.pattern(alts[0]);
+                self.doc.indent();
+                for i in 1 as usize..alts.len {
+                    self.doc.line();
+                    self.expect(TokenKind.Pipe);
+                    self.doc.text(" ");
+                    self.pattern(alts[i]);
+                }
+                self.doc.dedent();
+                self.doc.end();
+            },
+            Pattern.Tuple(elems) => { self.pattern_list(elems); },
+            Pattern.Struct(sp) => {
+                self.path(sp.type_name);
+                self.doc.text(" ");
+                self.expect(TokenKind.LBrace);
+                if sp.fields.len == 0 as usize && !sp.has_rest {
+                    self.close(TokenKind.RBrace);
+                    return;
+                }
+                self.doc.text(" ");
+                for i in 0 as usize..sp.fields.len {
+                    if i > 0 as usize { self.expect(TokenKind.Comma); self.doc.text(" "); }
+                    if self.opt(TokenKind.KMut) { self.doc.text(" "); }
+                    self.expect(TokenKind.Ident);
+                    if self.opt(TokenKind.Colon) {
+                        self.doc.text(" ");
+                        self.pattern(sp.fields[i].pattern);
+                    }
+                }
+                if sp.fields.len > 0 as usize && self.at(TokenKind.Comma) {
+                    self.tok();
+                    if sp.has_rest { self.doc.text(" "); }
+                }
+                if sp.has_rest { self.expect(TokenKind.DotDot); }
+                self.doc.text(" ");
+                self.close(TokenKind.RBrace);
+            },
+        }
+    }
+
+    // `(p, q)`, the `(` at the cursor; a trailing comma kept.
+    fn pattern_list(self: &mut Printer, pats: [PatternId]) {
+        self.expect(TokenKind.LParen);
+        for i in 0 as usize..pats.len {
+            if i > 0 as usize { self.expect(TokenKind.Comma); self.doc.text(" "); }
+            self.pattern(pats[i]);
+        }
+        self.opt(TokenKind.Comma);
+        self.close(TokenKind.RParen);
+    }
+
+    // ── Expressions ────────────────────────────────────────────────────────
+
+    fn expr(self: &mut Printer, e: ExprId) {
+        if e == 0 as ExprId || self.failed { return; }
+        let parens = self.ast.paren_count(PAREN_EXPR, e);
+        for _i in 0 as u32..parens { self.expect(TokenKind.LParen); }
+        self.expr_inner(e);
+        for _i in 0 as u32..parens { self.close(TokenKind.RParen); }
+    }
+
+    fn expr_inner(self: &mut Printer, e: ExprId) {
+        match self.ast.exprs[e as usize] {
+            Expr.Literal(_) => { self.tok(); },
+            Expr.Ident(name) => { self.path(name); },
+            Expr.Unary(u) => {
+                match u.op {
+                    UnaryOp.Ref | UnaryOp.RefMut => {
+                        if self.at(TokenKind.AmpAmp) {
+                            // `&&x`: one token for this reference and the one it takes.
+                            self.tok();
+                            match self.ast.exprs[u.expr as usize] {
+                                Expr.Unary(u2) => {
+                                    if let UnaryOp.RefMut = u2.op {
+                                        self.expect(TokenKind.KMut);
+                                        self.doc.text(" ");
+                                    }
+                                    self.expr(u2.expr);
+                                },
+                                _ => { self.fail(); },
+                            }
+                            return;
+                        }
+                        self.expect(TokenKind.Amp);
+                        if self.opt(TokenKind.KMut) { self.doc.text(" "); }
+                    },
+                    UnaryOp.Neg | UnaryOp.Not | UnaryOp.Deref => { self.tok(); },
+                }
+                self.expr(u.expr);
+            },
+            Expr.Binary(b) => { self.binary(e, b); },
+            Expr.Call(c) => {
+                self.expr(c.callee);
+                if c.type_args.len > 0 as usize {
+                    self.opt(TokenKind.DoubleColon);
+                    self.type_args(c.type_args);
+                }
+                self.args(c.args);
+            },
+            Expr.Generic(g) => {
+                self.expr(g.expr);
+                self.expect(TokenKind.DoubleColon);
+                self.type_args(g.type_args);
+            },
+            Expr.Intrinsic(i) => {
+                self.expect(TokenKind.At);
+                self.expect(TokenKind.Ident);
+                if i.type_args.len > 0 as usize { self.type_args(i.type_args); }
+                self.args(i.args);
+            },
+            Expr.Block(b) => { self.block(b, false); },
+            Expr.If(_) => { self.doc.group(); self.if_chain(e); self.doc.end(); },
+            Expr.Match(m) => {
+                if m.desugared {
+                    self.doc.group();
+                    self.if_chain(e);
+                    self.doc.end();
+                } else {
+                    self.match_(&m);
+                }
+            },
+            Expr.StructLiteral(s) => {
+                self.path(s.struct_name);
+                if s.type_args.len > 0 as usize {
+                    self.opt(TokenKind.DoubleColon);
+                    self.type_args(s.type_args);
+                }
+                self.doc.text(" ");
+                self.braced_fields(s.fields);
+            },
+            Expr.MemberAccess(m) => {
+                self.expr(m.expr);
+                self.expect(TokenKind.Dot);
+                self.expect(TokenKind.Ident);
+            },
+            Expr.TupleAccess(t) => {
+                self.expr(t.expr);
+                self.expect(TokenKind.Dot);
+                self.expect(TokenKind.Int);
+            },
+            Expr.Index(ix) => {
+                self.expr(ix.expr);
+                self.expect(TokenKind.LBracket);
+                self.expr(ix.index);
+                self.close(TokenKind.RBracket);
+            },
+            Expr.Boxed(bx) => {
+                self.expect(TokenKind.KBox);
+                if bx.allocator != 0 as ExprId {
+                    self.expect(TokenKind.LParen);
+                    self.expr(bx.allocator);
+                    self.close(TokenKind.RParen);
+                }
+                self.doc.text(" ");
+                self.expr(bx.expr);
+            },
+            Expr.Cast(c) => {
+                self.expr(c.expr);
+                self.doc.text(" ");
+                self.expect(TokenKind.KAs);
+                self.doc.text(" ");
+                self.type_(c.target_ty);
+            },
+            Expr.ArrayLiteral(a) => {
+                self.list(TokenKind.LBracket, a.elements, TokenKind.RBracket);
+            },
+            Expr.ArrayRepeat(a) => {
+                self.expect(TokenKind.LBracket);
+                self.expr(a.value);
+                self.expect(TokenKind.Semi);
+                self.doc.text(" ");
+                self.expr(a.len);
+                self.close(TokenKind.RBracket);
+            },
+            Expr.TupleLiteral(t) => { self.list(TokenKind.LParen, t.elements, TokenKind.RParen); },
+            Expr.Closure(c) => {
+                if !self.opt(TokenKind.PipePipe) {
+                    self.expect(TokenKind.Pipe);
+                    self.params(c.params, false);
+                    self.expect(TokenKind.Pipe);
+                }
+                if self.at(TokenKind.Arrow) {
+                    self.doc.text(" ");
+                    self.tok();
+                    self.doc.text(" ");
+                    self.type_(c.ret_ty);
+                }
+                self.doc.text(" ");
+                // `|x| x + 1`: a body written as one expression is held as a block around it.
+                let mut body = c.body;
+                if !self.at(TokenKind.LBrace) {
+                    if let Expr.Block(b) = self.ast.exprs[c.body as usize] { body = b.tail_expr; }
+                }
+                self.expr(body);
+            },
+            Expr.Try(inner) => {
+                if self.opt(TokenKind.KTry) {
+                    self.doc.text(" ");
+                    self.expr(inner);
+                } else {
+                    self.expr(inner);
+                    self.expect(TokenKind.Question);
+                }
+            },
+            Expr.Return(inner) => {
+                self.expect(TokenKind.KReturn);
+                if inner != 0 as ExprId { self.doc.text(" "); self.expr(inner); }
+            },
+            Expr.Break | Expr.Continue => { self.tok(); },
+            Expr.Sizeof(ty) | Expr.Alignof(ty) => {
+                self.tok();
+                self.expect(TokenKind.LParen);
+                self.type_(ty);
+                self.close(TokenKind.RParen);
+            },
+        }
+    }
+
+    // A chain of operators of one precedence, `a + b - c`, breaking before each operator
+    // when it does not fit; an assignment, `a = b`, never breaks.
+    fn binary(self: &mut Printer, e: ExprId, b: BinaryExpr) {
+        let prec = binary_prec(b.op);
+        if prec == 1 as u32 {
+            self.expr(b.lhs);
+            self.doc.text(" ");
+            self.tok();
+            self.doc.text(" ");
+            self.expr(b.rhs);
+            return;
+        }
+        // The left spine of the chain: e = ((first op r1) op r2) ...
+        let mut spine = unsafe { Vec::<ExprId>.new_in_raw(self.arena) };
+        let mut cur = e;
+        loop {
+            spine.push(cur);
+            let lhs = self.ast.exprs[cur as usize].get_Binary().lhs;
+            match self.ast.exprs[lhs as usize] {
+                Expr.Binary(lb) => {
+                    if binary_prec(lb.op) != prec
+                        || self.ast.paren_count(PAREN_EXPR, lhs) > 0 as u32 {
+                        break;
+                    }
+                    cur = lhs;
+                },
+                _ => { break; },
+            }
+        }
+        self.doc.group();
+        let innermost = spine.as_slice()[spine.len() - 1 as usize];
+        let lhs = self.ast.exprs[innermost as usize].get_Binary().lhs;
+        self.expr(lhs);
+        self.doc.indent();
+        let mut k = spine.len();
+        while k > 0 as usize {
+            k = k - 1 as usize;
+            let node = spine.as_slice()[k];
+            self.doc.line();
+            self.tok();
+            self.doc.text(" ");
+            let rhs = self.ast.exprs[node as usize].get_Binary().rhs;
+            self.expr(rhs);
+        }
+        self.doc.dedent();
+        self.doc.end();
+    }
+
+    // `(a, b)` of a call: on one line, or one argument per line.
+    fn args(self: &mut Printer, args: [ExprId]) {
+        self.list(TokenKind.LParen, args, TokenKind.RParen);
+    }
+
+    fn list(self: &mut Printer, open: TokenKind, items: [ExprId], close: TokenKind) {
+        self.expect(open);
+        if items.len == 0 as usize { self.close(close); return; }
+        if items.len == 1 as usize && self.huggable(items[0]) && !self.at_comment_inside() {
+            // `f(S { .. })`, `f(|x| { .. })`: the one argument breaks, not the list.
+            self.expr(items[0]);
+            self.opt(TokenKind.Comma);
+            self.close(close);
+            return;
+        }
+        self.doc.group();
+        self.doc.indent();
+        self.doc.soft();
+        for i in 0 as usize..items.len {
+            if i > 0 as usize { self.expect(TokenKind.Comma); self.doc.line(); }
+            self.expr(items[i]);
+        }
+        self.opt(TokenKind.Comma);
+        self.doc.dedent();
+        self.doc.soft();
+        self.close(close);
+        self.doc.end();
+    }
+
+    // An expression that can break inside its own brackets: as the only argument it stays
+    // right after the `(`.
+    fn huggable(self: &Printer, e: ExprId) -> bool {
+        if self.ast.paren_count(PAREN_EXPR, e) > 0 as u32 { return false; }
+        return match self.ast.exprs[e as usize] {
+            Expr.StructLiteral(_)
+                | Expr.Closure(_)
+                | Expr.Block(_)
+                | Expr.ArrayLiteral(_)
+                | Expr.Match(_) => true,
+            _ => false,
+        };
+    }
+
+    // Whether the token at the cursor carries a comment (which would need a line of its own).
+    fn at_comment_inside(self: &Printer) -> bool {
+        return self.toks[self.pos].lead_count > 0 as u32;
+    }
+
+    // `{ f: v, g }` of a struct literal, the `{` at the cursor.
+    fn braced_fields(self: &mut Printer, fields: [FieldValue]) {
+        let one_line = self.one_line_in_source();
+        self.expect(TokenKind.LBrace);
+        let n = fields.len;
+        if n == 0 as usize { self.close(TokenKind.RBrace); return; }
+        if one_line {
+            self.doc.group();
+            self.doc.indent();
+            for i in 0 as usize..n {
+                self.doc.line();
+                self.field_value(fields[i].value);
+                if i + 1 as usize < n || self.at(TokenKind.Comma) { self.expect(TokenKind.Comma); }
+            }
+            self.doc.dedent();
+            self.doc.line();
+            self.close(TokenKind.RBrace);
+            self.doc.end();
+            return;
+        }
+        self.doc.indent();
+        for i in 0 as usize..n {
+            self.source_break(i == 0 as usize);
+            self.field_value(fields[i].value);
+            if i + 1 as usize < n || self.at(TokenKind.Comma) { self.expect(TokenKind.Comma); }
+        }
+        self.doc.dedent();
+        self.doc.hard();
+        self.close(TokenKind.RBrace);
+    }
+
+    // `name: value` or `name` (shorthand).
+    fn field_value(self: &mut Printer, value: ExprId) {
+        self.expect(TokenKind.Ident);
+        if self.opt(TokenKind.Colon) { self.doc.text(" "); self.expr(value); }
+    }
+
+    // Before an item of a list whose items keep the source's lines: a line break where the
+    // source had one (a blank line kept), else a space.
+    fn source_break(self: &mut Printer, first: bool) {
+        if self.failed { return; }
+        let t = self.toks[self.pos];
+        if first || t.line_before || t.lead_count > 0 as u32 {
+            self.item_break(first);
+        } else {
+            self.doc.text(" ");
+        }
+    }
+
+    // `if C { .. } else if D { .. } else { .. }` (an `if let` read as a two-arm match), in
+    // the group the caller opened: its blocks break together.
+    fn if_chain(self: &mut Printer, e: ExprId) {
+        let mut else_block = 0 as ExprId;
+        match self.ast.exprs[e as usize] {
+            Expr.If(i) => {
+                self.expect(TokenKind.KIf);
+                self.doc.text(" ");
+                self.expr(i.cond);
+                self.doc.text(" ");
+                self.block_of(i.then_block, true);
+                else_block = i.else_block;
+            },
+            Expr.Match(m) => {
+                self.expect(TokenKind.KIf);
+                self.doc.text(" ");
+                self.expect(TokenKind.KLet);
+                self.doc.text(" ");
+                self.pattern(m.arms[0].pattern);
+                self.doc.text(" ");
+                self.expect(TokenKind.Equal);
+                self.doc.text(" ");
+                self.expr(m.expr);
+                self.doc.text(" ");
+                self.block_of(m.arms[0].body, true);
+                if m.arms.len > 1 as usize { else_block = m.arms[1].body; }
+            },
+            _ => { self.fail(); return; },
+        }
+        if !self.at(TokenKind.KElse) { return; }
+        self.doc.text(" ");
+        self.tok();
+        self.doc.text(" ");
+        if self.at(TokenKind.KIf) {
+            self.if_chain(else_block);
+        } else {
+            self.block_of(else_block, true);
+        }
+    }
+
+    // The block expression E; IN_GROUP as in block().
+    fn block_of(self: &mut Printer, e: ExprId, in_group: bool) {
+        if self.ast.paren_count(PAREN_EXPR, e) > 0 as u32 { self.expr(e); return; }
+        match self.ast.exprs[e as usize] {
+            Expr.Block(b) => { self.block(b, in_group); },
+            _ => { self.expr(e); },
+        }
+    }
+
+    fn match_(self: &mut Printer, m: &MatchExpr) {
+        self.expect(TokenKind.KMatch);
+        self.doc.text(" ");
+        self.expr(m.expr);
+        self.doc.text(" ");
+        let one_line = self.one_line_in_source();
+        self.expect(TokenKind.LBrace);
+        if one_line { self.doc.group(); }
+        self.doc.indent();
+        for i in 0 as usize..m.arms.len {
+            if one_line { self.doc.line(); } else { self.item_break(i == 0 as usize); }
+            let arm = m.arms[i];
+            self.pattern(arm.pattern);
+            if arm.guard != 0 as ExprId {
+                self.doc.text(" ");
+                self.expect(TokenKind.KIf);
+                self.doc.text(" ");
+                self.expr(arm.guard);
+            }
+            self.doc.text(" ");
+            self.expect(TokenKind.FatArrow);
+            self.doc.text(" ");
+            self.expr(arm.body);
+            self.opt(TokenKind.Comma);
+        }
+        self.doc.dedent();
+        if one_line { self.doc.line(); } else { self.doc.hard(); }
+        self.close(TokenKind.RBrace);
+        if one_line { self.doc.end(); }
+    }
+
+    // ── Blocks and statements ──────────────────────────────────────────────
+
+    // A block: one statement per line; or, if the source has it on one line, on one line
+    // when it fits, in a group of its own or, IN_GROUP, in the caller's (an `if` and its
+    // blocks, a loop and its body, break together).
+    fn block(self: &mut Printer, b: BlockExpr, in_group: bool) {
+        if self.failed { return; }
+        if self.opt(TokenKind.KUnsafe) { self.doc.text(" "); }
+        if !self.at(TokenKind.LBrace) {
+            // A loop in expression position: the block holding it is the parser's.
+            for s in b.stmts {
+                self.stmt(*s);
+            }
+            return;
+        }
+        let one_line = self.one_line_in_source();
+        self.expect(TokenKind.LBrace);
+        let n = b.stmts.len + (if b.tail_expr != 0 as ExprId { 1 as usize } else { 0 as usize });
+        if n == 0 as usize { self.close(TokenKind.RBrace); return; }
+        let own = one_line && !in_group;
+        if own { self.doc.group(); }
+        self.doc.indent();
+        for i in 0 as usize..n {
+            if one_line { self.doc.line(); } else { self.item_break(i == 0 as usize); }
+            if i < b.stmts.len { self.stmt(b.stmts[i]); } else { self.expr(b.tail_expr); }
+        }
+        self.doc.dedent();
+        if one_line { self.doc.line(); } else { self.doc.hard(); }
+        self.close(TokenKind.RBrace);
+        if own { self.doc.end(); }
+    }
+
+    fn stmt(self: &mut Printer, s: StmtId) {
+        if self.failed { return; }
+        match self.ast.stmts[s as usize] {
+            Stmt.Let(l) => {
+                self.expect(TokenKind.KLet);
+                self.doc.text(" ");
+                if l.pattern != 0 as PatternId {
+                    self.pattern(l.pattern);
+                } else {
+                    if self.opt(TokenKind.KMut) { self.doc.text(" "); }
+                    self.tok(); // the name, or `_`
+                }
+                if self.opt(TokenKind.Colon) { self.doc.text(" "); self.type_(l.ty); }
+                self.doc.text(" ");
+                self.expect(TokenKind.Equal);
+                self.doc.text(" ");
+                self.expr(l.init);
+                self.expect(TokenKind.Semi);
+            },
+            Stmt.Expr(e) => { self.expr(e); self.opt(TokenKind.Semi); },
+            Stmt.While(w) => {
+                self.doc.group();
+                if self.opt(TokenKind.KLoop) {
+                    self.doc.text(" ");
+                    self.block_of(w.body, true);
+                } else if self.at(TokenKind.KWhile)
+                    && self.peek_kind(1 as usize) == TokenKind.KLet {
+                    // `while let`: the body is the parser's block around a two-arm match.
+                    self.tok();
+                    self.doc.text(" ");
+                    self.tok();
+                    self.doc.text(" ");
+                    let inner = self.ast.exprs[w.body as usize].get_Block().stmts[0];
+                    let m = match self.ast.stmts[inner as usize] {
+                        Stmt.Expr(me) => match self.ast.exprs[me as usize] {
+                            Expr.Match(mm) => mm,
+                            _ => { self.fail(); return; }
+                        },
+                        _ => { self.fail(); return; },
+                    };
+                    self.pattern(m.arms[0].pattern);
+                    self.doc.text(" ");
+                    self.expect(TokenKind.Equal);
+                    self.doc.text(" ");
+                    self.expr(m.expr);
+                    self.doc.text(" ");
+                    self.block_of(m.arms[0].body, true);
+                } else {
+                    self.expect(TokenKind.KWhile);
+                    self.doc.text(" ");
+                    self.expr(w.cond);
+                    self.doc.text(" ");
+                    self.block_of(w.body, true);
+                }
+                self.doc.end();
+                self.opt(TokenKind.Semi);
+            },
+            Stmt.For(f) => {
+                self.doc.group();
+                self.expect(TokenKind.KFor);
+                self.doc.text(" ");
+                if f.end != 0 as ExprId {
+                    self.expect(TokenKind.Ident);
+                } else {
+                    self.pattern(f.pattern);
+                }
+                self.doc.text(" ");
+                self.expect(TokenKind.KIn);
+                self.doc.text(" ");
+                self.expr(f.start);
+                if f.end != 0 as ExprId {
+                    self.expect(TokenKind.DotDot);
+                    self.expr(f.end);
+                }
+                self.doc.text(" ");
+                self.block_of(f.body, true);
+                self.doc.end();
+                self.opt(TokenKind.Semi);
+            },
+            Stmt.Defer(e) => {
+                self.expect(TokenKind.KDefer);
+                self.doc.text(" ");
+                self.expr(e);
+                self.opt(TokenKind.Semi);
+            },
+            Stmt.Return(e) => {
+                self.expect(TokenKind.KReturn);
+                if e != 0 as ExprId { self.doc.text(" "); self.expr(e); }
+                self.expect(TokenKind.Semi);
+            },
+            Stmt.Break | Stmt.Continue => { self.tok(); self.expect(TokenKind.Semi); },
+        }
+    }
+
+    // ── Declarations ───────────────────────────────────────────────────────
+
+    // The file: its declarations, imports and `use`s in order, one blank line kept between
+    // groups where the source has one.
+    pub fn file(self: &mut Printer) {
+        let mut di = 1 as usize; // decls[0] is the AST's placeholder
+        let mut first = true;
+        while !self.failed && self.kind() != TokenKind.Eof {
+            self.item_break(first);
+            first = false;
+            if self.at(TokenKind.KImport)
+                || self.at(TokenKind.KUse)
+                || (self.at(TokenKind.KPub) && self.peek_kind(1 as usize) == TokenKind.KUse) {
+                self.run_until(TokenKind.Semi);
+                continue;
+            }
+            if di >= self.ast.decls.len() { self.fail(); return; }
+            let d = self.ast.decls[di];
+            self.decl(&d);
+            di = di + 1 as usize;
+        }
+        // Comments after the last declaration.
+        let t = self.toks[self.pos];
+        if t.lead_count > 0 as u32 && !self.failed {
+            self.leading(t, true);
+        }
+    }
+
+    fn decl(self: &mut Printer, d: &Decl) {
+        self.attributes();
+        if self.opt(TokenKind.KPub) { self.doc.text(" "); }
+        match *d {
+            Decl.Fn(f) => { self.fn_decl(&f); },
+            Decl.Struct(s) => { self.struct_decl(&s); },
+            Decl.Enum(e) => { self.enum_decl(&e); },
+            Decl.Trait(t) => { self.trait_decl(&t); },
+            Decl.Impl(i) => { self.impl_decl(&i); },
+            Decl.TypeAlias(ta) => {
+                self.expect(TokenKind.KType);
+                self.doc.text(" ");
+                self.expect(TokenKind.Ident);
+                self.type_params();
+                self.doc.text(" ");
+                self.expect(TokenKind.Equal);
+                self.doc.text(" ");
+                self.type_(ta.target);
+                self.expect(TokenKind.Semi);
+            },
+            Decl.Const(c) => { self.const_decl(c.ty, c.value); },
+            Decl.Static(st) => {
+                self.expect(TokenKind.KStatic);
+                self.doc.text(" ");
+                if self.opt(TokenKind.KMut) { self.doc.text(" "); }
+                self.expect(TokenKind.Ident);
+                self.expect(TokenKind.Colon);
+                self.doc.text(" ");
+                self.type_(st.ty);
+                self.doc.text(" ");
+                self.expect(TokenKind.Equal);
+                self.doc.text(" ");
+                self.expr(st.value);
+                self.expect(TokenKind.Semi);
+            },
+            Decl.Import(_) | Decl.None => { self.fail(); },
+        }
+    }
+
+    fn const_decl(self: &mut Printer, ty: TypeId, value: ExprId) {
+        self.expect(TokenKind.KConst);
+        self.doc.text(" ");
+        self.expect(TokenKind.Ident);
+        self.expect(TokenKind.Colon);
+        self.doc.text(" ");
+        self.type_(ty);
+        self.doc.text(" ");
+        self.expect(TokenKind.Equal);
+        self.doc.text(" ");
+        self.expr(value);
+        self.expect(TokenKind.Semi);
+    }
+
+    fn fn_decl(self: &mut Printer, f: &FnDecl) {
+        if self.opt(TokenKind.KUnsafe) {
+            self.doc.text(" ");
+        }
+        if self.opt(TokenKind.KExtern) {
+            self.doc.text(" ");
+            if self.opt(TokenKind.String) { self.doc.text(" "); }
+        }
+        if self.opt(TokenKind.KUnsafe) {
+            self.doc.text(" ");
+        }
+        self.expect(TokenKind.KFn);
+        self.doc.text(" ");
+        self.path(f.name);
+        self.type_params();
+        self.doc.group();
+        self.expect(TokenKind.LParen);
+        if f.params.len > 0 as usize || self.at(TokenKind.DotDotDot) {
+            self.doc.indent();
+            self.doc.soft();
+            self.params(f.params, true);
+            self.doc.dedent();
+            self.doc.soft();
+        }
+        self.close(TokenKind.RParen);
+        if self.at(TokenKind.Arrow) {
+            self.doc.text(" ");
+            self.tok();
+            self.doc.text(" ");
+            self.type_(f.ret_ty);
+        }
+        self.doc.end();
+        if self.at(TokenKind.LBrace) {
+            self.doc.text(" ");
+            self.expr(f.body);
+        } else {
+            self.expect(TokenKind.Semi);
+        }
+    }
+
+    // `a: A, mut b: B, self` and, for a function (BREAKING), a final `...`; a parameter list
+    // breaks one per line.
+    fn params(self: &mut Printer, params: [Param], breaking: bool) {
+        for i in 0 as usize..params.len {
+            if i > 0 as usize {
+                self.expect(TokenKind.Comma);
+                if breaking { self.doc.line(); } else { self.doc.text(" "); }
+            }
+            if self.opt(TokenKind.KMut) { self.doc.text(" "); }
+            self.expect(TokenKind.Ident);
+            if self.opt(TokenKind.Colon) { self.doc.text(" "); self.type_(params[i].ty); }
+        }
+        if self.at(TokenKind.Comma) && self.peek_kind(1 as usize) == TokenKind.DotDotDot {
+            self.tok();
+            self.doc.line();
+        }
+        self.opt(TokenKind.DotDotDot);
+        self.opt(TokenKind.Comma);
+    }
+
+    // The `{ .. }` body of a struct, enum, trait or impl, the `{` at the cursor: one item per
+    // line, or as the source has it on one line.
+    fn struct_decl(self: &mut Printer, s: &StructDecl) {
+        self.expect(TokenKind.KStruct);
+        self.doc.text(" ");
+        self.expect(TokenKind.Ident);
+        self.type_params();
+        self.doc.text(" ");
+        let one_line = self.one_line_in_source();
+        self.expect(TokenKind.LBrace);
+        if s.fields.len == 0 as usize { self.close(TokenKind.RBrace); return; }
+        if one_line { self.doc.group(); }
+        self.doc.indent();
+        for i in 0 as usize..s.fields.len {
+            if one_line { self.doc.line(); } else { self.source_break(i == 0 as usize); }
+            if self.opt(TokenKind.KPub) { self.doc.text(" "); }
+            self.expect(TokenKind.Ident);
+            self.expect(TokenKind.Colon);
+            self.doc.text(" ");
+            self.type_(s.fields[i].ty);
+            if i + 1 as usize < s.fields.len || self.at(TokenKind.Comma) {
+                self.expect(TokenKind.Comma);
+            }
+        }
+        self.doc.dedent();
+        if one_line { self.doc.line(); } else { self.doc.hard(); }
+        self.close(TokenKind.RBrace);
+        if one_line { self.doc.end(); }
+    }
+
+    fn enum_decl(self: &mut Printer, e: &EnumDecl) {
+        self.expect(TokenKind.KEnum);
+        self.doc.text(" ");
+        self.expect(TokenKind.Ident);
+        self.type_params();
+        self.doc.text(" ");
+        let one_line = self.one_line_in_source();
+        self.expect(TokenKind.LBrace);
+        if e.variants.len == 0 as usize { self.close(TokenKind.RBrace); return; }
+        if one_line { self.doc.group(); }
+        self.doc.indent();
+        for i in 0 as usize..e.variants.len {
+            if one_line { self.doc.line(); } else { self.source_break(i == 0 as usize); }
+            self.expect(TokenKind.Ident);
+            if self.at(TokenKind.LParen) {
+                // The payload types: one type, or a tuple's elements.
+                // The payload: `(A, B)`, its types; or `((A, B))`, one tuple type.
+                let p = e.variants[i].payload;
+                let outer_close = self.closes.as_slice()[self.pos];
+                let inner_tuple = self.peek_kind(1 as usize) == TokenKind.LParen
+                    && self.closes.as_slice()[self.pos + 1 as usize] + 1 as u32 == outer_close;
+                match self.ast.types[p as usize] {
+                    Type.Tuple(ts) => {
+                        if inner_tuple {
+                            self.expect(TokenKind.LParen);
+                            self.type_(p);
+                            self.close(TokenKind.RParen);
+                        } else {
+                            self.type_list(ts);
+                        }
+                    },
+                    _ => {
+                        self.expect(TokenKind.LParen);
+                        self.type_(p);
+                        self.opt(TokenKind.Comma);
+                        self.close(TokenKind.RParen);
+                    },
+                }
+            }
+            if self.at(TokenKind.Equal) {
+                self.doc.text(" ");
+                self.tok();
+                self.doc.text(" ");
+                self.expect(TokenKind.Int);
+            }
+            if i + 1 as usize < e.variants.len || self.at(TokenKind.Comma) {
+                self.expect(TokenKind.Comma);
+            }
+        }
+        self.doc.dedent();
+        if one_line { self.doc.line(); } else { self.doc.hard(); }
+        self.close(TokenKind.RBrace);
+        if one_line { self.doc.end(); }
+    }
+
+    fn trait_decl(self: &mut Printer, t: &TraitDecl) {
+        self.expect(TokenKind.KTrait);
+        self.doc.text(" ");
+        self.expect(TokenKind.Ident);
+        self.type_params();
+        self.doc.text(" ");
+        self.expect(TokenKind.LBrace);
+        self.doc.indent();
+        let mut mi = 0 as usize;
+        let mut ai = 0 as usize;
+        let n = t.methods.len + t.assoc_types.len;
+        for i in 0 as usize..n {
+            self.item_break(i == 0 as usize);
+            if self.at(TokenKind.KType) && ai < t.assoc_types.len {
+                self.assoc_type(0 as TypeId);
+                ai = ai + 1 as usize;
+            } else if mi < t.methods.len {
+                self.attributes();
+                if self.opt(TokenKind.KPub) { self.doc.text(" "); }
+                self.fn_decl(&t.methods[mi]);
+                mi = mi + 1 as usize;
+            } else {
+                self.fail();
+            }
+        }
+        self.doc.dedent();
+        if n > 0 as usize { self.doc.hard(); }
+        self.close(TokenKind.RBrace);
+    }
+
+    // `type Name;` in a trait, `type Name = TY;` in an impl.
+    fn assoc_type(self: &mut Printer, ty: TypeId) {
+        self.expect(TokenKind.KType);
+        self.doc.text(" ");
+        self.expect(TokenKind.Ident);
+        if ty != 0 as TypeId {
+            self.doc.text(" ");
+            self.expect(TokenKind.Equal);
+            self.doc.text(" ");
+            self.type_(ty);
+        }
+        self.expect(TokenKind.Semi);
+    }
+
+    fn impl_decl(self: &mut Printer, im: &ImplDecl) {
+        self.expect(TokenKind.KImpl);
+        self.type_params();
+        self.doc.text(" ");
+        // `impl Target`, or `impl Trait<..> for Target`: the first type as written.
+        if im.trait_name != 0 as u32 {
+            self.path(im.trait_name);
+            if im.trait_type_args.len > 0 as usize { self.type_args(im.trait_type_args); }
+            self.doc.text(" ");
+            self.expect(TokenKind.KFor);
+            self.doc.text(" ");
+        }
+        self.type_(im.target_ty);
+        self.doc.text(" ");
+        self.expect(TokenKind.LBrace);
+        self.doc.indent();
+        let mut mi = 0 as usize;
+        let mut ci = 0 as usize;
+        let mut ai = 0 as usize;
+        let n = im.methods.len + im.constants.len + im.assoc_types.len;
+        for i in 0 as usize..n {
+            self.item_break(i == 0 as usize);
+            if self.at(TokenKind.KType) && ai < im.assoc_types.len {
+                self.assoc_type(im.assoc_types[ai].ty);
+                ai = ai + 1 as usize;
+                continue;
+            }
+            self.attributes();
+            if self.opt(TokenKind.KPub) { self.doc.text(" "); }
+            if self.at(TokenKind.KConst) && ci < im.constants.len {
+                self.const_decl(im.constants[ci].ty, im.constants[ci].value);
+                ci = ci + 1 as usize;
+            } else if mi < im.methods.len {
+                self.fn_decl(&im.methods[mi]);
+                mi = mi + 1 as usize;
+            } else {
+                self.fail();
+            }
+        }
+        self.doc.dedent();
+        if n > 0 as usize { self.doc.hard(); }
+        self.close(TokenKind.RBrace);
+    }
+}
+
+// The binding power of OP, as the parser has it (src/parser/expr.zrl).
+fn binary_prec(op: BinaryOp) -> u32 {
+    return match op {
+        BinaryOp.Mul | BinaryOp.Div | BinaryOp.Mod | BinaryOp.MulWrap => 40 as u32,
+        BinaryOp.Add | BinaryOp.Sub | BinaryOp.AddWrap | BinaryOp.SubWrap => 30 as u32,
+        BinaryOp.Shl | BinaryOp.Shr => 25 as u32,
+        BinaryOp.And => 18 as u32,
+        BinaryOp.Xor => 16 as u32,
+        BinaryOp.Or => 14 as u32,
+        BinaryOp.Eq
+            | BinaryOp.Ne
+            | BinaryOp.Lt
+            | BinaryOp.Le
+            | BinaryOp.Gt
+            | BinaryOp.Ge => 12 as u32,
+        BinaryOp.LAnd => 5 as u32,
+        BinaryOp.LOr => 2 as u32,
+        BinaryOp.Assign
+            | BinaryOp.AddAssign
+            | BinaryOp.SubAssign
+            | BinaryOp.MulAssign
+            | BinaryOp.DivAssign
+            | BinaryOp.ModAssign
+            | BinaryOp.AddWrapAssign
+            | BinaryOp.SubWrapAssign
+            | BinaryOp.MulWrapAssign
+            | BinaryOp.BitAndAssign
+            | BinaryOp.BitOrAssign
+            | BinaryOp.BitXorAssign
+            | BinaryOp.ShlAssign
+            | BinaryOp.ShrAssign => 1 as u32,
+    };
+}
+
+// Whether a run (an import, a `use`, an attribute, type parameters) has a space between
+// tokens A and B: none inside brackets, around `::`, or before `,` `;` `:` and an opening
+// bracket that follows a name (`borrows(a)`, `T<U>`, `a::{b}`).
+fn run_space(a: TokenKind, b: TokenKind) -> bool {
+    return match b {
+        TokenKind.Comma
+            | TokenKind.Semi
+            | TokenKind.Colon
+            | TokenKind.RParen
+            | TokenKind.RBracket
+            | TokenKind.RBrace
+            | TokenKind.Greater
+            // In a run, `>>` closes two type-parameter lists (`I: Source<T>>`), never a shift.
+            | TokenKind.GreaterGreater
+            | TokenKind.DoubleColon
+            | TokenKind.Dot
+            | TokenKind.LParen
+            | TokenKind.LBracket
+            | TokenKind.Less => false,
+        TokenKind.LBrace => a != TokenKind.DoubleColon,
+        _ => match a {
+            TokenKind.LParen
+                | TokenKind.LBracket
+                | TokenKind.LBrace
+                | TokenKind.Hash
+                | TokenKind.DoubleColon
+                | TokenKind.At
+                | TokenKind.Less => false,
+            _ => true,
+        },
+    };
+}

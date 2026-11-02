@@ -1,0 +1,26 @@
+// expected exit 81
+// The twin of return_ref_into_local_buffer: a buffer a parameter's arena owns outlives the frame,
+// so a view into it may be returned and read by the caller.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+fn first(a: &Arena, n: i32) -> Option<&i32> {
+    let mut v = Vec::<i32>.new_in(a);
+    v.push(n);
+    return v.get(0);
+}
+fn all(a: &Arena, n: i32) -> [i32] {
+    let mut v = Vec::<i32>.new_in(a);
+    v.push(n);
+    v.push(n);
+    return v.as_slice();
+}
+fn main() -> i32 {
+    let a = Arena.new(65536).unwrap();
+    let s = all(&a, 4);
+    match first(&a, 73) {
+        Option.Some(r) => { return *r + s[0] + s[1]; },
+        Option.None => { return 0; },
+    }
+}

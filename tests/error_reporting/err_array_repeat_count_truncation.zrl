@@ -1,0 +1,4 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_array_repeat_count_truncation.zrl:4:38: error: array repeat count does not fit: at most 4294967295 elements
+// The repeat count travels in 32 bits too: `[v; 4294967298]` used to build an array of 2.
+fn main() -> i32 { let a = [0 as u8; 4294967298]; return 0; }

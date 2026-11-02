@@ -1,0 +1,10 @@
+// name: Unknown field on a slice (read at a garbage offset, not a diagnostic)
+// expected: compile_reject
+// A slice has exactly `ptr`, `data` and `len`; `get_field_index` answers `0xffffffff` for anything else,
+// and that value is a field *index*. Until 2026-10-13 the compiler accepted this and emitted
+// `field_addr ..., 4294967295`: a read at a garbage offset from safe code. It is a located error now, and
+// the check is guarded by mutation M126.
+fn main() -> i32 {
+    let s: [u8] = "ab";
+    return s.nope as i32;
+}

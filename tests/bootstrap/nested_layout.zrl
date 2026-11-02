@@ -1,0 +1,34 @@
+// expected exit code: 0
+enum MyToken { A(u64), B }
+struct MySpan { line: u32, col: u32 }
+struct MyTokenWithSpan { token: MyToken, span: MySpan }
+struct MyParser { dummy: u8, cur: MyTokenWithSpan, peek: MyTokenWithSpan, other: u64 }
+fn main() -> i32 {
+    let mut p = MyParser {
+        dummy: 1,
+        cur: MyTokenWithSpan {
+            token: MyToken.A(100),
+            span: MySpan { line: 10, col: 20 },
+        },
+        peek: MyTokenWithSpan {
+            token: MyToken.B,
+            span: MySpan { line: 11, col: 21 },
+        },
+        other: 200,
+    };
+    if p.dummy != 1 { return 1; }
+    match p.cur.token {
+        MyToken.A(val) => { if val != 100 { return 2; } },
+        MyToken.B => { return 3; },
+    }
+    if p.cur.span.line != 10 { return 4; }
+    if p.cur.span.col != 20 { return 5; }
+    match p.peek.token {
+        MyToken.A(_) => { return 6; },
+        MyToken.B => {},
+    }
+    if p.peek.span.line != 11 { return 7; }
+    if p.peek.span.col != 21 { return 8; }
+    if p.other != 200 { return 9; }
+    return 0;
+}

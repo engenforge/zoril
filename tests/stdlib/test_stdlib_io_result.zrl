@@ -1,0 +1,310 @@
+// expected exit 0
+// Tests for Phase 1 of Result-returning I/O:
+// io::Error, write, read, open, close returning Result,
+// generic write_all with EINTR and short-write handling,
+// Option.expect and Result.expect,
+// print and eprint helpers.
+
+import "core.zrl";
+import "io.zrl";
+import "os/linux.zrl" as os_linux;
+import "proc.zrl";
+import "mem.zrl";
+import "mem_raw.zrl";
+use io::{Error, Fd, File, Read, Write, close, eprint, print, read, stderr, write, write_all};
+use os_linux::open;
+use os_linux::{sys_dup2, sys_fork, sys_pipe2, sys_wait4};
+use mem::{Arena, arena_raw};
+use mem_raw::zoril_allocator_alloc;
+
+fn test_error_methods() -> bool {
+    let e = Error.from_linux_errno(2);
+    if e.linux_errno() != 2 { return false; }
+    if !is_str_eq(e.linux_name(), "ENOENT") { return false; }
+    if !is_str_eq(e.message(), "No such file or directory") { return false; }
+
+    let e_badf = Error.from_linux_errno(9);
+    if e_badf.linux_errno() != 9 { return false; }
+    if !is_str_eq(e_badf.linux_name(), "EBADF") { return false; }
+    if !is_str_eq(e_badf.message(), "Bad file descriptor") { return false; }
+
+    let e_unk = Error.from_linux_errno(999);
+    if e_unk.linux_errno() != 999 { return false; }
+    if !is_str_eq(e_unk.message(), "errno 999") { return false; }
+    return true;
+}
+
+fn test_closed_fd() -> bool {
+    // 9999 is not an open descriptor
+    let res = write(unsafe { Fd.from_unix_raw(9999) }, "hello");
+    match res {
+        Ok(_) => { return false; },
+        Err(e) => {
+            if e.linux_errno() != 9 { return false; }
+            if !is_str_eq(e.linux_name(), "EBADF") { return false; }
+        },
+    }
+    return true;
+}
+
+fn test_missing_open() -> bool {
+    let res = open("/nonexistent_path_zoril_test_12345\0", 0 as u64, 0 as u64);
+    match res {
+        Ok(_) => { return false; },
+        Err(e) => {
+            if e.linux_errno() != 2 { return false; }
+            if !is_str_eq(e.linux_name(), "ENOENT") { return false; }
+        },
+    }
+    return true;
+}
+
+// Mock sink for regression testing: accepts at most 7 bytes per write call
+struct ShortWriter {
+    pub received: [u8; 64],
+    pub total: usize,
+}
+
+impl Write for ShortWriter {
+    fn write(self: &mut ShortWriter, buf: [u8]) -> Result<usize, Error> {
+        let mut n = buf.len;
+        if n > 7 as usize {
+            n = 7 as usize;
+        }
+        let mut i = 0 as usize;
+        while i < n {
+            self.received[self.total + i] = buf[i];
+            i = i + 1 as usize;
+        }
+        self.total = self.total + n;
+        return Result.Ok(n);
+    }
+}
+
+fn test_write_all_short_writes() -> bool {
+    let mut sink = ShortWriter {
+        received: [0 as u8; 64],
+        total: 0 as usize,
+    };
+    let input = "abcdefghijklmnopqrstuvwxyz0123456789"; // 36 bytes
+    let res = write_all(&mut sink, input);
+    match res {
+        Err(_) => { return false; },
+        Ok(_) => {},
+    }
+    if sink.total != 36 as usize { return false; }
+    let written = unsafe { @slice(&sink.received[0] as *u8, 36 as usize) };
+    if !is_str_eq(written, input) { return false; }
+    return true;
+}
+
+struct PipeWriter {
+    pub fd: Fd,
+}
+
+impl Write for PipeWriter {
+    fn write(self: &mut PipeWriter, buf: [u8]) -> Result<usize, Error> {
+        return write(self.fd, buf);
+    }
+}
+
+fn test_pipe_large_buffer() -> bool {
+    let pipefd = unsafe { @alloca<[i32; 2]>(1) };
+    if unsafe { sys_pipe2(&mut *pipefd as *mut [i32; 2], 0) }.is_err() { return false; }
+    let rfd = pipefd[0 as usize];
+    let wfd = pipefd[1 as usize];
+
+    let fork_res = sys_fork();
+    if fork_res.is_err() { return false; }
+    let pid = fork_res.ok().unwrap();
+
+    if pid == 0 {
+        // Child: drain pipe
+        unsafe {
+            @syscall(3, wfd as u64);
+        }                                   // close write end
+        let mut total = 0 as usize;
+        let mut buf = [0 as u8; 4096];
+        let mut checksum = 0 as u64;
+        while true {
+            let n = unsafe { @syscall(0, rfd as u64, &mut buf[0] as *mut u8, 4096 as u64) } as i64;
+            if n <= 0 {
+                break;
+            }
+            let mut i = 0 as usize;
+            while i < (n as usize) {
+                checksum = checksum + (buf[i] as u64);
+                i = i + 1 as usize;
+            }
+            total = total + (n as usize);
+        }
+        unsafe { @syscall(3, rfd as u64); }
+        // 131072 bytes with pattern 'A' (65) -> checksum = 131072 * 65 = 8519680
+        if total != 131072 as usize || checksum != 8519680 as u64 {
+            unsafe { @syscall(60, 42 as u64); }
+        }
+        unsafe { @syscall(60, 0 as u64); }
+    }
+
+    // Parent: write 128 KiB
+    unsafe {
+        @syscall(3, rfd as u64);
+    }                                   // close read end
+    let a = Arena.new(262144).unwrap();
+    let large_buf = unsafe { zoril_allocator_alloc(arena_raw(&a), 131072) as *mut u8 };
+    let mut j = 0 as usize;
+    while j < 131072 as usize {
+        let p = (large_buf as usize + j) as *mut u8;
+        unsafe { *p = 'A' as u8; }
+        j = j + 1 as usize;
+    }
+    let slice = unsafe { @slice(large_buf as *u8, 131072 as usize) };
+    let mut pw = PipeWriter { fd: unsafe { Fd.from_unix_raw(wfd) } };
+    let res = write_all(&mut pw, slice);
+    unsafe { @syscall(3, wfd as u64); }
+
+    let mut status: i32 = 0;
+    let _ = unsafe { sys_wait4(pid, &mut status as *mut i32, 0) };
+    let child_exit = (status >> 8) & 255;
+
+    match res {
+        Err(_) => { return false; },
+        Ok(_) => {},
+    }
+    return child_exit == 0;
+}
+
+fn test_option_expect() -> bool {
+    let opt_some = Option.Some(42);
+    if opt_some.expect("should not fail") != 42 {
+        return false;
+    }
+    return true;
+}
+
+fn test_expect_failure_in_child() -> bool {
+    let pipefd = unsafe { @alloca<[i32; 2]>(1) };
+    if unsafe { sys_pipe2(&mut *pipefd as *mut [i32; 2], 0) }.is_err() { return false; }
+    let rfd = pipefd[0 as usize];
+    let wfd = pipefd[1 as usize];
+
+    let fork_res = sys_fork();
+    if fork_res.is_err() { return false; }
+    let pid = fork_res.ok().unwrap();
+
+    if pid == 0 {
+        // Child: redirect stderr to wfd
+        unsafe { @syscall(3, rfd as u64); }
+        let _ = sys_dup2(unsafe { Fd.from_unix_raw(wfd) }, stderr());
+        unsafe { @syscall(3, wfd as u64); }
+
+        let r: Result<i32, Error> = Result.Err(Error.from_linux_errno(2));
+        let _ = r.expect("test_expect_err");
+        unsafe { @syscall(60, 0 as u64); }
+    }
+
+    unsafe { @syscall(3, wfd as u64); }
+    let mut buf = [0 as u8; 256];
+    let mut total = 0 as usize;
+    while total < 256 as usize {
+        let p = (&mut buf[0] as usize + total) as *mut u8;
+        let n = unsafe { @syscall(0, rfd as u64, p, (256 as usize - total) as u64) } as i64;
+        if n <= 0 as i64 {
+            break;
+        }
+        total = total + (n as usize);
+    }
+    unsafe { @syscall(3, rfd as u64); }
+
+    let mut status: i32 = 0;
+    let _ = unsafe { sys_wait4(pid, &mut status as *mut i32, 0) };
+    let child_exit = (status >> 8) & 255;
+
+    if child_exit != 1 { return false; }
+    if total <= 0 as usize { return false; }
+    let output = unsafe { @slice(&buf[0] as *u8, total) };
+    // Check that output contains message and ENOENT
+    let expected = "panic: test_expect_err: ENOENT (No such file or directory)\n";
+    return is_str_eq(output, expected);
+}
+
+fn test_print_closed_stdout_in_child() -> bool {
+    let pipefd = unsafe { @alloca<[i32; 2]>(1) };
+    if unsafe { sys_pipe2(&mut *pipefd as *mut [i32; 2], 0) }.is_err() { return false; }
+    let rfd = pipefd[0 as usize];
+    let wfd = pipefd[1 as usize];
+
+    let fork_res = sys_fork();
+    if fork_res.is_err() { return false; }
+    let pid = fork_res.ok().unwrap();
+
+    if pid == 0 {
+        // Child: close stdout (1), redirect stderr (2) to wfd
+        unsafe { @syscall(3, rfd as u64); }
+        let _ = sys_dup2(unsafe { Fd.from_unix_raw(wfd) }, stderr());
+        unsafe { @syscall(3, wfd as u64); }
+        unsafe {
+            @syscall(3, 1 as u64);
+        }                                 // close stdout
+
+        print("hello world");
+        unsafe { @syscall(60, 0 as u64); }
+    }
+
+    unsafe { @syscall(3, wfd as u64); }
+    let mut buf = [0 as u8; 256];
+    let mut total = 0 as usize;
+    while total < 256 as usize {
+        let p = (&mut buf[0] as usize + total) as *mut u8;
+        let n = unsafe { @syscall(0, rfd as u64, p, (256 as usize - total) as u64) } as i64;
+        if n <= 0 as i64 {
+            break;
+        }
+        total = total + (n as usize);
+    }
+    unsafe { @syscall(3, rfd as u64); }
+
+    let mut status: i32 = 0;
+    let _ = unsafe { sys_wait4(pid, &mut status as *mut i32, 0) };
+    let child_exit = (status >> 8) & 255;
+
+    if child_exit != 1 { return false; }
+    if total <= 0 as usize { return false; }
+    let output = unsafe { @slice(&buf[0] as *u8, total) };
+    let expected = "panic: print failed: EBADF (Bad file descriptor)\n";
+    return is_str_eq(output, expected);
+}
+
+fn test_eprint_closed_stderr_in_child() -> bool {
+    let fork_res = sys_fork();
+    if fork_res.is_err() { return false; }
+    let pid = fork_res.ok().unwrap();
+
+    if pid == 0 {
+        // Child: close stderr (2)
+        unsafe { @syscall(3, 2 as u64); }
+        eprint("hello stderr");
+        // Should not reach here
+        unsafe { @syscall(60, 0 as u64); }
+    }
+
+    let mut status: i32 = 0;
+    let _ = unsafe { sys_wait4(pid, &mut status as *mut i32, 0) };
+    let child_exit = (status >> 8) & 255;
+
+    // Must exit with chosen status 2
+    return child_exit == 2;
+}
+
+fn main() -> i32 {
+    if !test_error_methods() { return 1; }
+    if !test_closed_fd() { return 2; }
+    if !test_missing_open() { return 3; }
+    if !test_write_all_short_writes() { return 4; }
+    if !test_pipe_large_buffer() { return 5; }
+    if !test_option_expect() { return 6; }
+    if !test_expect_failure_in_child() { return 7; }
+    if !test_print_closed_stdout_in_child() { return 8; }
+    if !test_eprint_closed_stderr_in_child() { return 9; }
+    return 0;
+}

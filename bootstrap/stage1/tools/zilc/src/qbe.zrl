@@ -1,0 +1,1991 @@
+import "core.zrl";
+import "mem.zrl";
+import "il_instr.zrl";
+import "il_type.zrl";
+import "il_cfg.zrl";
+import "intern.zrl";
+import "io.zrl";
+
+// Reinterpreting an f64's bits is type punning, which is what the marker is for.
+fn f64_to_bits(v: f64) -> u64 {
+    return unsafe { *( (&v as usize) as *u64 ) };
+}
+
+fn is_phase2_mangled(name: [u8]) -> bool {
+    if name.len < 3 as usize { return false; }
+    if name[0] != 'z' as u8 { return false; }
+    if name[name.len - 1 as usize] != 'E' as u8 { return false; }
+    let mut i = 1 as usize;
+    let end = name.len - 1 as usize;
+    let mut comp_count = 0 as usize;
+    while i < end {
+        if name[i] < '0' as u8 || name[i] > '9' as u8 { return false; }
+        let mut len = 0 as usize;
+        while i < end && name[i] >= '0' as u8 && name[i] <= '9' as u8 {
+            len = len * 10 as usize + (name[i] - '0' as u8) as usize;
+            i = i + 1 as usize;
+        }
+        if len == 0 as usize { return false; }
+        if i + len > end { return false; }
+        i = i + len;
+        comp_count = comp_count + 1 as usize;
+    }
+    return i == end && comp_count > 0 as usize;
+}
+
+fn emit_path_component(fd: u32, comp: [u8]) {
+    if comp.len == 0 as usize { return; }
+    write_u64(fd as u64, comp.len as u64);
+    qbe_write(fd, comp);
+}
+
+fn emit_path_components(fd: u32, s: [u8]) {
+    let mut start = 0 as usize;
+    let mut i = 0 as usize;
+    while i < s.len {
+        let c = s[i];
+        if c == '/' as u8 || c == '.' as u8 {
+            if i > start {
+                let comp = unsafe { @slice((s.ptr as usize + start) as *u8, i - start) };
+                emit_path_component(fd, comp);
+            }
+            start = i + 1 as usize;
+        } else if c == ':' as u8 && i + 1 as usize < s.len && s[i + 1 as usize] == ':' as u8 {
+            if i > start {
+                let comp = unsafe { @slice((s.ptr as usize + start) as *u8, i - start) };
+                emit_path_component(fd, comp);
+            }
+            i = i + 1 as usize; // skip second ':'
+            start = i + 1 as usize;
+        }
+        i = i + 1 as usize;
+    }
+    if start < s.len {
+        let comp = unsafe { @slice((s.ptr as usize + start) as *u8, s.len - start) };
+        emit_path_component(fd, comp);
+    }
+}
+
+fn str_has_delim(s: [u8]) -> bool {
+    let mut i = 0 as usize;
+    while i < s.len {
+        let c = s[i];
+        if c == '/' as u8 || c == '.' as u8 || (c == ':' as u8 && i + 1 as usize < s.len && s[i + 1 as usize] == ':' as u8) {
+            return true;
+        }
+        i = i + 1 as usize;
+    }
+    return false;
+}
+
+// Largest copy emitted inline (QBE `blit`) rather than as a call to memcpy.
+const BLIT_MAX: u64 = 256;
+
+pub struct QBEEmitter {
+    pub fd: u32,
+    pub module: &mut ILModule,
+    pub intern_table: &mut InternTable,
+    pub arena: *mut Arena,
+
+    pub ssa_types: *mut u32,
+    pub ssa_types_len: usize,
+    pub ssa_names: *mut u32,
+    pub next_id_base: u32,
+    pub current_func: *mut ILFunction,
+
+    pub alloc_sizes: *mut usize,
+    pub alloc_sizes_len: usize,
+
+    // The current function's integer constants by SSA id (const_known[ssa]), so a copy whose
+    // size is a constant can be emitted inline.
+    pub const_vals: [mut u64],
+    pub const_known: [mut bool],
+
+    // Sequential string ID table: string_ptrs[i] = intern-table data pointer for string i
+    pub string_ptrs: *mut u64,
+    pub string_count: u32,
+
+    pub module_doc: u32, // interned "# Role:...\n# Algorithm:..." block to emit at file top
+    pub module_name: [u8],
+}
+
+impl QBEEmitter {
+    pub fn new(arena: *mut Arena, module: *mut ILModule, intern_table: *mut InternTable, fd: u32) -> QBEEmitter {
+        return QBEEmitter {
+            fd: fd,
+            module: module,
+            intern_table: intern_table,
+            arena: arena,
+            ssa_types: 0 as *mut u32,
+            ssa_types_len: 0 as usize,
+            ssa_names: 0 as *mut u32,
+            next_id_base: 1000000 as u32,
+            current_func: 0 as *mut ILFunction,
+            alloc_sizes: 0 as *mut usize,
+            alloc_sizes_len: 0 as usize,
+            const_vals: @slice(0 as *mut u64, 0 as usize),
+            const_known: @slice(0 as *mut bool, 0 as usize),
+            string_ptrs: 0 as *mut u64,
+            string_count: 0 as u32,
+            module_doc: 0 as u32,
+            module_name: unsafe { @slice(0 as *u8, 0 as usize) },
+        };
+    }
+
+    // The three raw side tables carry their length in a sibling field; these are
+    // the marked boundaries where they become bounds-checked slices.
+    // Out-of-range means "no recorded type", which is the same 0 this returns for
+    // temporaries. The pre-boundary code read past the table here and used whatever
+    // it found; `ILFunction.get_ssa_type` in src/il_cfg.zrl has always had this
+    // guard, and zilc's copy of the accessor was simply missing it.
+    fn ssa_type_at(self: &QBEEmitter, i: usize) -> u32 {
+        if i >= self.ssa_types_len { return 0 as u32; }
+        let types = unsafe { @slice(self.ssa_types, self.ssa_types_len) };
+        return types[i];
+    }
+
+    // 0 means "not a recorded aggregate allocation", which is exactly what every
+    // caller tests for, so an out-of-range SSA id (a temporary, or an id past the
+    // table) answers the question correctly rather than reading past the end.
+    fn alloc_size_of(self: &QBEEmitter, i: usize) -> usize {
+        if i >= self.alloc_sizes_len { return 0 as usize; }
+        let sizes = unsafe { @slice(self.alloc_sizes, self.alloc_sizes_len) };
+        return sizes[i];
+    }
+
+    fn set_alloc_size(self: &mut QBEEmitter, i: usize, sz: usize) {
+        if i >= self.alloc_sizes_len { return; }
+        let mut sizes = unsafe { @slice(self.alloc_sizes, self.alloc_sizes_len) };
+        sizes[i] = sz;
+    }
+
+    fn string_ptr_at(self: &QBEEmitter, i: usize) -> u64 {
+        let ptrs = unsafe { @slice(self.string_ptrs, self.string_count as usize) };
+        return ptrs[i];
+    }
+
+    fn next_id(self: &mut QBEEmitter) -> SSAId {
+        let id = self.next_id_base;
+        self.next_id_base = self.next_id_base + 1 as u32;
+        return id;
+    }
+
+    fn emit_func_sym(self: &QBEEmitter, name: [u8], is_extern: bool) {
+        // Already Phase 2 mangled?
+        if is_phase2_mangled(name) {
+            qbe_write(self.fd, "$");
+            qbe_write(self.fd, name);
+            return;
+        }
+
+        let has_delim = str_has_delim(name);
+
+        if !has_delim {
+            if is_extern || is_unmangled_symbol_name(name) {
+                qbe_write(self.fd, "$");
+                qbe_write(self.fd, name);
+                return;
+            }
+        }
+
+        // Emit Phase 2 mangled symbol: $z<len><comp>+E
+        qbe_write(self.fd, "$z");
+
+        if !has_delim && self.module_name.len > 0 as usize {
+            emit_path_components(self.fd, self.module_name);
+        }
+        emit_path_components(self.fd, name);
+        qbe_write(self.fd, "E");
+    }
+
+    fn emit_ssa(self: &QBEEmitter, id: SSAId) {
+        if id == 0xffffffff as u32 {
+            qbe_write(self.fd, "0");
+            return;
+        }
+        if id >= 1000000 as u32 {
+            qbe_write(self.fd, "%v");
+            write_u64(self.fd as u64, id as u64);
+            return;
+        }
+        
+        let name = self.cur_func().get_ssa_name(id);
+        if name != 0 as u32 {
+            qbe_write(self.fd, "%v");
+            qbe_write(self.fd, self.intern_table.lookup(name));
+            qbe_write(self.fd, "_");
+            write_u64(self.fd as u64, id as u64);
+        } else {
+            qbe_write(self.fd, "%v");
+            write_u64(self.fd as u64, id as u64);
+        }
+    }
+
+    fn emit_block_label(self: &QBEEmitter, id: BlockId) {
+        let p_block = &self.module.blocks[id as usize];
+        let name = (*p_block).name;
+        if name != 0 as u32 {
+            qbe_write(self.fd, "@");
+            qbe_write(self.fd, self.intern_table.lookup(name));
+            qbe_write(self.fd, "_");
+            write_u64(self.fd as u64, id as u64);
+        } else {
+            qbe_write(self.fd, "@b");
+            write_u64(self.fd as u64, id as u64);
+        }
+    }
+
+    fn is_unit_type(self: &QBEEmitter, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return true; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        if (*p_ty).def.get_tag() == ILTYPE_PRIMITIVE {
+            return (*p_ty).def.get_Primitive().get_tag() == ILPRIM_UNIT;
+        }
+        return false;
+    }
+
+    fn is_aggregate(self: &QBEEmitter, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 || ty_id == 0xffffffff as u32 || ty_id as usize > self.module.types.len { return false; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        let tag = (*p_ty).def.get_tag();
+        if tag == ILTYPE_USER {
+            let user = (*p_ty).def.get_User();
+            if user.id == 0 as u32 { return true; } // Assume aggregate if user_id is not yet set
+            if user.id == 0xffffffff as u32 || user.id as usize >= self.module.typedefs.len { return true; }
+            let def = &self.module.typedefs[user.id as usize];
+            let dtag = def.get_tag();
+            return dtag == 0 as u32 || dtag == 1 as u32; // Struct or Enum
+        }
+        return tag == ILTYPE_TUPLE || tag == ILTYPE_SLICE || tag == ILTYPE_ARRAY;
+    }
+
+    fn requires_pass_by_ref(self: &QBEEmitter, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 || ty_id == 0xffffffff as u32 || ty_id as usize > self.module.types.len { return false; }
+        return self.is_aggregate(ty_id);
+    }
+
+    fn emit_type_token(self: &QBEEmitter, ty_id: u32) {
+        if self.is_aggregate(ty_id) {
+            let name = self.get_aggregate_name(ty_id);
+            qbe_write(self.fd, ":");
+            qbe_write(self.fd, self.intern_table.lookup(name));
+        } else {
+            self.emit_abi_class(ty_id);
+        }
+    }
+
+    fn emit_abi_class_str(self: &QBEEmitter, ty_id: u32) -> [u8] {
+        if ty_id == 0 as u32 { return "w"; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        return match (*p_ty).def {
+            ILType.Primitive(p) => match p.get_tag() {
+                ILPRIM_F32 => "s",
+                ILPRIM_F64 => "d",
+                ILPRIM_U64 | ILPRIM_I64 | ILPRIM_USIZE | ILPRIM_ISIZE => "l",
+                ILPRIM_UNIT => "w",
+                _ => "w",
+            },
+            _ => "l",
+        };
+    }
+
+    fn emit_abi_class(self: &QBEEmitter, ty_id: u32) {
+        if ty_id == 0 as u32 { qbe_write(self.fd, "w"); return; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        match (*p_ty).def {
+            ILType.Primitive(p) => match p.get_tag() {
+                ILPRIM_F32 => { qbe_write(self.fd, "s"); },
+                ILPRIM_F64 => { qbe_write(self.fd, "d"); },
+                ILPRIM_U64 | ILPRIM_I64 | ILPRIM_USIZE | ILPRIM_ISIZE => { qbe_write(self.fd, "l"); },
+                ILPRIM_UNIT => { qbe_write(self.fd, "w"); },
+                _ => { qbe_write(self.fd, "w"); },
+            },
+            _ => { qbe_write(self.fd, "l"); },
+        }
+    }
+
+    fn emit_load_suffix(self: &QBEEmitter, ty_id: u32) {
+        if ty_id == 0 as u32 { qbe_write(self.fd, "l"); return; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        match (*p_ty).def {
+            ILType.Primitive(p) => match p.get_tag() {
+                ILPRIM_U8 | ILPRIM_BOOL => { qbe_write(self.fd, "ub"); },
+                ILPRIM_I8 => { qbe_write(self.fd, "sb"); },
+                ILPRIM_U16 => { qbe_write(self.fd, "uh"); },
+                ILPRIM_I16 => { qbe_write(self.fd, "sh"); },
+                ILPRIM_U32 | ILPRIM_CHAR => { qbe_write(self.fd, "uw"); },
+                ILPRIM_I32 => { qbe_write(self.fd, "sw"); },
+                ILPRIM_F32 => { qbe_write(self.fd, "s"); },
+                ILPRIM_F64 => { qbe_write(self.fd, "d"); },
+                _ => { qbe_write(self.fd, "l"); },
+            },
+            _ => { qbe_write(self.fd, "l"); },
+        }
+    }
+
+    fn emit_store_suffix(self: &QBEEmitter, ty_id: u32) {
+        if ty_id == 0 as u32 { qbe_write(self.fd, "l"); return; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        match (*p_ty).def {
+            ILType.Primitive(p) => match p.get_tag() {
+                ILPRIM_U8 | ILPRIM_I8 | ILPRIM_BOOL => { qbe_write(self.fd, "b"); },
+                ILPRIM_U16 | ILPRIM_I16 => { qbe_write(self.fd, "h"); },
+                ILPRIM_U32 | ILPRIM_I32 | ILPRIM_CHAR => { qbe_write(self.fd, "w"); },
+                ILPRIM_F32 => { qbe_write(self.fd, "s"); },
+                ILPRIM_F64 => { qbe_write(self.fd, "d"); },
+                _ => { qbe_write(self.fd, "l"); },
+            },
+            _ => { qbe_write(self.fd, "l"); },
+        }
+    }
+
+    fn get_enum_payload_offset(self: &QBEEmitter, type_id: u32) -> usize {
+        if type_id == 0 as u32 || type_id == 0xffffffff as u32 || type_id as usize > self.module.types.len { return 4 as usize; }
+        let p_ty = &self.module.types[type_id as usize - 1 as usize];
+        
+        match (*p_ty).def {
+            ILType.User(u) => {
+                if u.id == 0xffffffff as u32 || u.id as usize >= self.module.typedefs.len { return 4 as usize; }
+                let def = &self.module.typedefs[u.id as usize];
+                match (*def).get_tag() {
+                    IL_TYPEDEF_ENUM => {
+                        let e = (*def).get_Enum();
+                        let mut max_payload_align = 1 as usize;
+                        let mut i = 0 as usize;
+                        while i < e.variants.len {
+                            let v = e.variants[i];
+                            if v.payload != 0 as u32 {
+                                let a = self.get_type_align(v.payload);
+                                if a > max_payload_align { max_payload_align = a; }
+                            }
+                            i = i + 1 as usize;
+                        }
+                        if max_payload_align == 8 as usize { return 8 as usize; }
+                        return 4 as usize;
+                    },
+                    _ => { return 4 as usize; },
+                }
+            },
+            _ => { return 4 as usize; },
+        }
+    }
+
+    fn get_variant_discriminant(self: &QBEEmitter, type_id: u32, variant_idx: u32) -> u32 {
+        if type_id == 0 as u32 || type_id == 0xffffffff as u32 || type_id as usize > self.module.types.len { return variant_idx; }
+        let p_ty = &self.module.types[type_id as usize - 1 as usize];
+        match (*p_ty).def {
+            ILType.User(u) => {
+                if u.id == 0xffffffff as u32 || u.id as usize >= self.module.typedefs.len { return variant_idx; }
+                let def = &self.module.typedefs[u.id as usize];
+                match (*def).get_tag() {
+                    IL_TYPEDEF_ENUM => {
+                        let e = (*def).get_Enum();
+                        if variant_idx as usize >= e.variants.len { return variant_idx; }
+                        return e.variants[variant_idx as usize].discriminant;
+                    },
+                    _ => { return variant_idx; },
+                }
+            },
+            _ => { return variant_idx; },
+        }
+    }
+    fn is_pointer_like(self: &QBEEmitter, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 || ty_id == 0xffffffff as u32 || ty_id as usize > self.module.types.len { return false; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        match (*p_ty).def {
+            ILType.Ptr(_) | ILType.PtrMut(_) | ILType.Boxed(_) | ILType.BoxedMut(_) | ILType.Fn(_) | ILType.FD(_) | ILType.IORing => { return true; },
+            _ => { return false; }
+        }
+    }
+
+    fn get_type_size(self: &QBEEmitter, ty_id: u32) -> usize {
+        if ty_id == 0 as u32 || ty_id == 0xffffffff as u32 || ty_id as usize > self.module.types.len { return 0 as usize; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        
+        match (*p_ty).def {
+            ILType.Primitive(pt) => {
+                match pt.get_tag() {
+                    ILPRIM_U8 | ILPRIM_I8 | ILPRIM_BOOL => { return 1 as usize; },
+                    ILPRIM_U16 | ILPRIM_I16 => { return 2 as usize; },
+                    ILPRIM_U32 | ILPRIM_I32 | ILPRIM_F32 | ILPRIM_CHAR => { return 4 as usize; },
+                    ILPRIM_U64 | ILPRIM_I64 | ILPRIM_F64 | ILPRIM_USIZE | ILPRIM_ISIZE => { return 8 as usize; },
+                    // never (unlike unit, the other 0-returning fallthrough case below) isn't
+                    // actually inert: a diverging function's call result still gets a real
+                    // `alloc`+`store`/`load` emitted for it elsewhere in this file (the source
+                    // language doesn't special-case "never" when generating that boilerplate -
+                    // it's typed and stored just like any other scalar). get_type_size==0 trips
+                    // the "zero-size type: emit null pointer, no stack allocation" fast path
+                    // below, meant for unit - giving never a real address here (matching the "l"
+                    // 8-byte width emit_load_suffix/emit_store_suffix already fall back to for
+                    // it) avoids that store/load segfaulting on a null pointer.
+                    ILPRIM_NEVER => { return 8 as usize; },
+                    _ => { return 0 as usize; },
+                }
+            },
+            ILType.Ptr(_) | ILType.PtrMut(_) | ILType.Boxed(_) | ILType.BoxedMut(_) | ILType.Fn(_) | ILType.FD(_) | ILType.IORing => {
+                return 8 as usize;
+            },
+            ILType.Slice(_) => { return 16 as usize; },
+            ILType.Array(arr) => {
+                return self.get_type_size(arr.element) * arr.size as usize;
+            },
+            ILType.Tuple(fields) => {
+                let mut sz = 0 as usize;
+                let mut i = 0 as usize;
+                while i < fields.len {
+                    let fty = fields[i];
+                    let align = self.get_type_align(fty);
+                    sz = (sz + align - 1 as usize) / align * align;
+                    sz = sz + self.get_type_size(fty);
+                    i = i + 1 as usize;
+                }
+                let max_align = self.get_type_align(ty_id);
+                sz = (sz + max_align - 1 as usize) / max_align * max_align;
+                return sz;
+            },
+            ILType.User(user) => {
+                if user.id == 0xffffffff as u32 || user.id as usize >= self.module.typedefs.len { return 0 as usize; }
+                let def = &self.module.typedefs[user.id as usize];
+                match (*def).get_tag() {
+                    IL_TYPEDEF_STRUCT => {
+                        let s = (*def).get_Struct();
+                        let mut sz = 0 as usize;
+                        let mut i = 0 as usize;
+                        while i < s.fields.len {
+                            let f = s.fields[i];
+                            let align = self.get_type_align(f.ty);
+                            sz = (sz + align - 1 as usize) / align * align;
+                            sz = sz + self.get_type_size(f.ty);
+                            i = i + 1 as usize;
+                        }
+                        let max_align = self.get_type_align(ty_id);
+                        sz = (sz + max_align - 1 as usize) / max_align * max_align;
+                        return sz;
+                    },
+                    IL_TYPEDEF_ENUM => {
+                        let e = (*def).get_Enum();
+                        let mut max_payload_sz = 0 as usize;
+                        let mut i = 0 as usize;
+                        while i < e.variants.len {
+                            let v = e.variants[i];
+                            if v.payload != 0 as u32 {
+                                let vsz = self.get_type_size(v.payload);
+                                if vsz > max_payload_sz { max_payload_sz = vsz; }
+                            }
+                            i = i + 1 as usize;
+                        }
+                        let off = self.get_enum_payload_offset(ty_id);
+                        let mut sz = off + max_payload_sz;
+                        let max_align = self.get_type_align(ty_id);
+                        sz = (sz + max_align - 1 as usize) / max_align * max_align;
+                        return sz;
+                    },
+                    _ => { return 0 as usize; },
+                }
+            },
+            _ => { return 0 as usize; },
+        }
+    }
+
+    fn get_type_align(self: &QBEEmitter, ty_id: u32) -> usize {
+        if ty_id == 0 as u32 || ty_id == 0xffffffff as u32 || ty_id as usize > self.module.types.len { return 1 as usize; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        
+        match (*p_ty).def {
+            ILType.Primitive(_) => {
+                let sz = self.get_type_size(ty_id);
+                if sz == 0 as usize { return 1 as usize; }
+                return sz;
+            },
+            ILType.Ptr(_) | ILType.PtrMut(_) | ILType.Boxed(_) | ILType.BoxedMut(_) | ILType.Fn(_) | ILType.FD(_) | ILType.IORing | ILType.Slice(_) => {
+                return 8 as usize;
+            },
+            ILType.Array(arr) => {
+                return self.get_type_align(arr.element);
+            },
+            ILType.Tuple(fields) => {
+                let mut max_align = 1 as usize;
+                let mut i = 0 as usize;
+                while i < fields.len {
+                    let a = self.get_type_align(fields[i]);
+                    if a > max_align { max_align = a; }
+                    i = i + 1 as usize;
+                }
+                return max_align;
+            },
+            ILType.User(u) => {
+                if u.id == 0xffffffff as u32 || u.id as usize >= self.module.typedefs.len { return 1 as usize; }
+                let def = &self.module.typedefs[u.id as usize];
+                match (*def).get_tag() {
+                    IL_TYPEDEF_STRUCT => {
+                        let s = (*def).get_Struct();
+                        let mut max_align = 1 as usize;
+                        let mut i = 0 as usize;
+                        while i < s.fields.len {
+                            let a = self.get_type_align(s.fields[i].ty);
+                            if a > max_align { max_align = a; }
+                            i = i + 1 as usize;
+                        }
+                        return max_align;
+                    },
+                    IL_TYPEDEF_ENUM => {
+                        return self.get_enum_payload_offset(ty_id);
+                    },
+                    _ => { return 8 as usize; },
+                }
+            },
+            _ => { return 1 as usize; },
+        }
+    }
+
+    fn get_aggregate_name(self: &QBEEmitter, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 || ty_id == 0xffffffff as u32 || ty_id as usize > self.module.types.len { return 0 as u32; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        if (*p_ty).name != 0 as u32 { return (*p_ty).name; }
+        
+        let mut buf: [u8; 32] = [0; 32];
+        let mut v = ty_id as u64;
+        let mut i = 30 as usize;
+        while v > 0 as u64 {
+            buf[i] = ((v % 10 as u64) + 48 as u64) as u8;
+            v = v / 10 as u64;
+            i = i - 1 as usize;
+        }
+        buf[i] = 'T' as u8;
+        // A stack array has no safe array-to-slice spelling yet; `i` is in 0..31.
+        return self.intern_table.intern(unsafe { @slice((&buf as usize + i) as *u8, 31 as usize - i) });
+    }
+
+    // `current_func` is set per function being emitted; single marked forge.
+    fn cur_func(self: &QBEEmitter) -> &ILFunction {
+        return unsafe { &*self.current_func };
+    }
+
+    fn emit_aggregate_name(self: &QBEEmitter, ty_id: u32) {
+        let name = self.get_aggregate_name(ty_id);
+        qbe_write(self.fd, self.intern_table.lookup(name));
+    }
+
+    fn emit_class(self: &QBEEmitter, ty_id: u32) {
+        if self.is_aggregate(ty_id) {
+            qbe_write(self.fd, "l");
+        } else {
+            self.emit_abi_class(ty_id);
+        }
+    }
+
+    // A field or element in a `type :T = { .. }` layout. Unlike a value's class (`w` for
+    // anything up to 32 bits), a layout needs the real width: `b` / `h` for 1- and 2-byte
+    // scalars, or a struct of u8 fields is described four times too large.
+    fn emit_layout_token(self: &QBEEmitter, ty_id: u32) {
+        if !self.is_aggregate(ty_id) {
+            let sz = self.get_type_size(ty_id);
+            if sz == 1 as usize { qbe_write(self.fd, "b"); return; }
+            if sz == 2 as usize { qbe_write(self.fd, "h"); return; }
+        }
+        self.emit_type_token(ty_id);
+    }
+
+    fn emit_aggregate_layout(self: &QBEEmitter, ty_id: u32) {
+        if ty_id == 0 as u32 || ty_id == 0xffffffff as u32 || ty_id as usize > self.module.types.len { return; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        let tag = (*p_ty).def.get_tag();
+        if tag == ILTYPE_TUPLE {
+            let fields = (*p_ty).def.get_Tuple();
+            let mut k = 0 as usize;
+            let mut first = true;
+            let mut cur_off = 0 as usize;
+            while k < fields.len {
+                let fty = fields[k];
+                if self.get_type_size(fty) > 0 as usize {
+                    let align = self.get_type_align(fty);
+                    let padded_off = (cur_off + align - 1 as usize) / align * align;
+                    if padded_off > cur_off {
+                        if !first { qbe_write(self.fd, ", "); }
+                        qbe_write(self.fd, "b "); write_u64(self.fd as u64, (padded_off - cur_off) as u64);
+                        first = false;
+                    }
+                    if !first { qbe_write(self.fd, ", "); }
+                    self.emit_layout_token(fty);
+                    first = false;
+                    cur_off = padded_off + self.get_type_size(fty);
+                }
+                k = k + 1 as usize;
+            }
+            if first { qbe_write(self.fd, "b 0"); }
+        } else if tag == ILTYPE_SLICE {
+             qbe_write(self.fd, "l, l");
+        } else if tag == ILTYPE_ARRAY {
+             let arr = (*p_ty).def.get_Array();
+             if arr.size == 0 as u32 || arr.element == 0 as u32 || self.is_unit_type(arr.element) {
+                 qbe_write(self.fd, "b 0");
+             } else {
+                 // QBE's repeat count, not one token per element: a large array was millions
+                 // of writes here.
+                 self.emit_layout_token(arr.element);
+                 qbe_write(self.fd, " ");
+                 write_u64(self.fd as u64, arr.size as u64);
+             }
+        } else if tag == ILTYPE_USER {
+            let user = (*p_ty).def.get_User();
+            if user.id != 0xffffffff as u32 && user.id as usize < self.module.typedefs.len {
+                let def = &self.module.typedefs[user.id as usize];
+                match *def {
+                    ILTypeDef.Struct(s) => {
+                        let mut k = 0 as usize;
+                        let mut first = true;
+                        let mut cur_off = 0 as usize;
+                        while k < s.fields.len {
+                            let fty = s.fields[k].ty;
+                            if self.get_type_size(fty) > 0 as usize {
+                                let align = self.get_type_align(fty);
+                                let padded_off = (cur_off + align - 1 as usize) / align * align;
+                                if padded_off > cur_off {
+                                    if !first { qbe_write(self.fd, ", "); }
+                                    qbe_write(self.fd, "b "); write_u64(self.fd as u64, (padded_off - cur_off) as u64);
+                                    first = false;
+                                }
+                                if !first { qbe_write(self.fd, ", "); }
+                                self.emit_layout_token(fty);
+                                first = false;
+                                cur_off = padded_off + self.get_type_size(fty);
+                            }
+                            k = k + 1 as usize;
+                        }
+                        let total_sz = self.get_type_size(ty_id);
+                        if first { qbe_write(self.fd, "b 0"); }
+                        else if total_sz > cur_off {
+                            qbe_write(self.fd, ", b "); write_u64(self.fd as u64, (total_sz - cur_off) as u64);
+                        }
+                    },
+                    ILTypeDef.Enum(_) => {
+                        let sz = self.get_type_size(ty_id);
+                        let align = self.get_type_align(ty_id);
+                        if align == 8 as usize {
+                            qbe_write(self.fd, "l"); // 8 bytes (contains 4-byte tag + 4-byte padding)
+                            if sz > 8 as usize {
+                                qbe_write(self.fd, ", b ");
+                                write_u64(self.fd as u64, (sz - 8) as u64);
+                            }
+                        } else {
+                            qbe_write(self.fd, "w"); // 4 bytes
+                            if sz > 4 as usize {
+                                qbe_write(self.fd, ", b ");
+                                write_u64(self.fd as u64, (sz - 4) as u64);
+                            }
+                        }
+                    },
+                    ILTypeDef.Fn(_) => {}, // function types have no aggregate layout
+                }
+            }
+        }
+    }
+
+    fn can_emit_layout(self: &QBEEmitter, ty_id: u32, emitted: &[bool]) -> bool {
+        if ty_id == 0 as u32 || ty_id == 0xffffffff as u32 || ty_id as usize > self.module.types.len { return false; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        let tag = (*p_ty).def.get_tag();
+        if tag == ILTYPE_TUPLE {
+            let fields = (*p_ty).def.get_Tuple();
+            let mut k = 0 as usize;
+            while k < fields.len {
+                let fty = fields[k];
+                if self.is_aggregate(fty) {
+                    if !emitted[fty as usize - 1 as usize] { return false; }
+                }
+                k = k + 1 as usize;
+            }
+        } else if tag == ILTYPE_ARRAY {
+            let arr = (*p_ty).def.get_Array();
+            if self.is_aggregate(arr.element) {
+                if !emitted[arr.element as usize - 1 as usize] { return false; }
+            }
+        } else if tag == ILTYPE_USER {
+            let user = (*p_ty).def.get_User();
+            if user.id != 0xffffffff as u32 && user.id as usize < self.module.typedefs.len {
+                let def = &self.module.typedefs[user.id as usize];
+                match *def {
+                    ILTypeDef.Struct(s) => {
+                        let mut k = 0 as usize;
+                        while k < s.fields.len {
+                            let fty = s.fields[k].ty;
+                            if self.is_aggregate(fty) {
+                                if !emitted[fty as usize - 1 as usize] { return false; }
+                            }
+                            k = k + 1 as usize;
+                        }
+                    },
+                    ILTypeDef.Enum(e) => {
+                        let mut k = 0 as usize;
+                        while k < e.variants.len {
+                            let v = e.variants[k];
+                            if v.payload != 0 as u32 && self.is_aggregate(v.payload) {
+                                if !emitted[v.payload as usize - 1 as usize] { return false; }
+                            }
+                            k = k + 1 as usize;
+                        }
+                    },
+                    ILTypeDef.Fn(_) => {}, // function typedefs are not aggregate
+                }
+            }
+        }
+        return true;
+    }
+
+    fn emit_comment_block(self: &QBEEmitter, comment_id: u32, prefix: [u8]) {
+        let s = self.intern_table.lookup(comment_id);
+        let mut i = 0 as usize;
+        let mut start = 0 as usize;
+        while i < s.len {
+            if s[i] == '\n' as u8 {
+                qbe_write(self.fd, prefix);
+                qbe_write(self.fd, subslice(s, start, i - start));
+                qbe_write(self.fd, "\n");
+                start = i + 1 as usize;
+            }
+            i = i + 1 as usize;
+        }
+        if start < s.len {
+            qbe_write(self.fd, prefix);
+            qbe_write(self.fd, subslice(s, start, s.len - start));
+            qbe_write(self.fd, "\n");
+        }
+    }
+
+    // Like emit_comment_block but for doc text: each line is guaranteed to appear
+    // as a valid QBE comment.  If the stored line already starts with '#' (e.g.
+    // '# Role: …' from Zoril source or from scan_module_doc normalisation), it is
+    // emitted verbatim.  Otherwise '# ' is prepended so plain-text function docs
+    // (e.g. 'Called internally by the compiler …') are also valid QBE.
+    fn emit_doc_block(self: &QBEEmitter, comment_id: u32) {
+        let s = self.intern_table.lookup(comment_id);
+        let mut i = 0 as usize;
+        let mut start = 0 as usize;
+        while i < s.len {
+            if s[i] == '\n' as u8 {
+                let line = subslice(s, start, i - start);
+                if line.len == 0 as usize || line[0 as usize] != '#' as u8 {
+                    qbe_write(self.fd, "# ");
+                }
+                qbe_write(self.fd, line);
+                qbe_write(self.fd, "\n");
+                start = i + 1 as usize;
+            }
+            i = i + 1 as usize;
+        }
+        if start < s.len {
+            let line = subslice(s, start, s.len - start);
+            if line.len == 0 as usize || line[0 as usize] != '#' as u8 {
+                qbe_write(self.fd, "# ");
+            }
+            qbe_write(self.fd, line);
+            qbe_write(self.fd, "\n");
+        }
+    }
+
+    pub fn emit_module(self: &mut QBEEmitter) {
+        // 0. Emit file-level doc header if present.
+        if self.module.module_doc != 0 as u32 {
+            self.emit_doc_block(self.module.module_doc);
+            qbe_write(self.fd, "\n");
+        }
+        if self.module_doc != 0 as u32 {
+            self.emit_doc_block(self.module_doc);
+            qbe_write(self.fd, "\n");
+        }
+
+        // 1. Emit aggregate type definitions
+        let types_len = self.module.types.len;
+        let emitted_ptr = zoril_allocator_alloc(self.arena, types_len * 1 as usize) as *mut bool;
+        unsafe { memset(emitted_ptr as *mut u8, 0, types_len as u64); }
+        let mut emitted = unsafe { @slice(emitted_ptr, types_len) };
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            let mut i = 0 as usize;
+            while i < types_len {
+                let ty_id = i as u32 + 1 as u32;
+                if !emitted[i] && self.is_aggregate(ty_id) {
+                    if self.can_emit_layout(ty_id, &emitted) {
+                        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+                        let real_name = (*p_ty).name;
+                        if real_name != 0 as u32 {
+                            qbe_write(self.fd, "# ");
+                            self.emit_aggregate_name(ty_id);
+                            qbe_write(self.fd, " = ");
+                            qbe_write(self.fd, self.intern_table.lookup(real_name));
+                            qbe_write(self.fd, "\n");
+                        }
+                        let name = self.get_aggregate_name(ty_id);
+                        qbe_write(self.fd, "type :");
+                        qbe_write(self.fd, self.intern_table.lookup(name));
+                        qbe_write(self.fd, " = { ");
+                        self.emit_aggregate_layout(ty_id);
+                        qbe_write(self.fd, " }\n");
+                        emitted[i] = true;
+                        changed = true;
+                    }
+                }
+                i = i + 1 as usize;
+            }
+        }
+        
+        let mut i2 = 0 as usize;
+        while i2 < types_len {
+            let ty_id = i2 as u32 + 1 as u32;
+            if !emitted[i2] && self.is_aggregate(ty_id) {
+                let name = self.get_aggregate_name(ty_id);
+                qbe_write(self.fd, "type :");
+                qbe_write(self.fd, self.intern_table.lookup(name));
+                qbe_write(self.fd, " = { ");
+                self.emit_aggregate_layout(ty_id);
+                qbe_write(self.fd, " }\n");
+                emitted[i2] = true;
+            }
+            i2 = i2 + 1 as usize;
+        }
+
+        // 2. Emit globals
+        let mut gi = 0 as usize;
+        while gi < self.module.globals.len {
+            let g = &self.module.globals[gi];
+            if g.is_extern || g.name == 0 as u32 {
+                gi = gi + 1 as usize;
+                continue;
+            }
+            qbe_write(self.fd, "data ");
+            self.emit_func_sym(self.intern_table.lookup(g.name), g.is_extern);
+            qbe_write(self.fd, " = { ");
+            let gty = g.ty;
+            if self.is_unit_type(gty) {
+                qbe_write(self.fd, "b 0");
+            } else if self.is_aggregate(gty) {
+                let sz = self.get_type_size(gty);
+                if g.init_data_ptr as usize != 0 as usize && g.init_data_len > 0 as usize {
+                    // Emit bytes from init data
+                    let mut bi = 0 as usize;
+                    while bi < g.init_data_len {
+                        if bi > 0 as usize { qbe_write(self.fd, ", "); }
+                        qbe_write(self.fd, "b ");
+                        let init_bytes = unsafe { @slice(g.init_data_ptr, g.init_data_len) };
+            write_u64(self.fd as u64, init_bytes[bi] as u64);
+                        bi = bi + 1 as usize;
+                    }
+                } else {
+                    qbe_write(self.fd, "z "); write_u64(self.fd as u64, sz as u64);
+                }
+            } else if g.init_data_ptr as usize != 0 as usize && g.init_data_len > 0 as usize {
+                // Emit scalar initial value from init data
+                let sz = self.get_type_size(gty);
+                self.emit_type_token(gty);
+                qbe_write(self.fd, " ");
+                if sz == 8 as u64 {
+                    write_u64(self.fd as u64, unsafe { *( g.init_data_ptr as *u64 ) });
+                } else if sz == 4 as u64 {
+                    write_u64(self.fd as u64, unsafe { *( g.init_data_ptr as *u32 ) } as u64);
+                } else if sz == 2 as u64 {
+                    write_u64(self.fd as u64, unsafe { *( g.init_data_ptr as *u16 ) } as u64);
+                } else if sz == 1 as u64 {
+                    write_u64(self.fd as u64, unsafe { *( g.init_data_ptr as *u8 ) } as u64);
+                } else {
+                    qbe_write(self.fd, "0");
+                }
+            } else {
+                self.emit_type_token(gty);
+                qbe_write(self.fd, " 0");
+            }
+            qbe_write(self.fd, " }\n");
+            gi = gi + 1 as usize;
+        }
+
+        // 3. Emit float constant data sections
+        self.emit_float_data_sections();
+
+        // 4. Emit string data sections (scan all functions for StringConst instructions)
+        self.emit_string_data_sections();
+
+        // 4. Emit functions
+        let mut fi = 0 as usize;
+        while fi < self.module.functions.len {
+            let p_f = &self.module.functions[fi];
+            if !p_f.is_extern && p_f.blocks_len > 0 as usize {
+                self.emit_function(fi as u32);
+            }
+            fi = fi + 1 as usize;
+        }
+    }
+
+    fn emit_float_data_sections(self: &mut QBEEmitter) {
+        let max_floats = 512 as usize;
+        let emitted_d = zoril_allocator_alloc(self.arena, max_floats * 8) as *mut u64;
+        let emitted_s = zoril_allocator_alloc(self.arena, max_floats * 4) as *mut u32;
+        let mut emitted_d_count = 0 as usize;
+        let mut emitted_s_count = 0 as usize;
+        unsafe {
+            memset(emitted_d as *mut u8, 0, (max_floats * 8) as u64);
+            memset(emitted_s as *mut u8, 0, (max_floats * 4) as u64);
+        }
+        let mut seen_d = unsafe { @slice(emitted_d, max_floats) };
+        let mut seen_s = unsafe { @slice(emitted_s, max_floats) };
+
+        let mut fi = 0 as usize;
+        while fi < self.module.functions.len {
+            let p_f = &self.module.functions[fi];
+            if p_f.is_extern { fi = fi + 1 as usize; continue; }
+            let mut bi = 0 as usize;
+            while bi < p_f.blocks_len {
+                let block_idx = p_f.block_ids()[bi];
+                let ap_b = &self.module.blocks[block_idx as usize];
+                let mut ii = 0 as usize;
+                while ii < ap_b.instructions_len {
+                    let instr_idx = ap_b.instr_ids()[ii];
+                    let ainstr = &self.module.instrs[instr_idx as usize];
+                    if (*ainstr).get_tag() == IL_INSTR_CONST {
+                        let c = (*ainstr).get_Const();
+                        match c.val {
+                            ConstValue.F64(bits) => {
+                                let prim_tag = self.get_prim_tag(c.ty);
+                                if prim_tag == ILPRIM_F32 {
+                                    let v = unsafe { *( (&bits as usize) as *f64 ) };
+                                    let f32_val = v as f32;
+                                    let f32_bits = unsafe { *( (&f32_val as usize) as *u32 ) };
+                                    let mut found = false;
+                                    let mut ei = 0 as usize;
+                                    while ei < emitted_s_count {
+                                        if seen_s[ei] == f32_bits { found = true; break; }
+                                        ei = ei + 1 as usize;
+                                    }
+                                    if !found && emitted_s_count < max_floats {
+                                        seen_s[emitted_s_count] = f32_bits;
+                                        emitted_s_count = emitted_s_count + 1 as usize;
+                                        qbe_write(self.fd, "data $s_");
+                                        write_u64(self.fd as u64, f32_bits as u64);
+                                        qbe_write(self.fd, " = { w ");
+                                        write_u64(self.fd as u64, f32_bits as u64);
+                                        qbe_write(self.fd, " }\n");
+                                    }
+                                } else {
+                                    let bits_val = bits;
+                                    let mut found = false;
+                                    let mut ei = 0 as usize;
+                                    while ei < emitted_d_count {
+                                        if seen_d[ei] == bits_val { found = true; break; }
+                                        ei = ei + 1 as usize;
+                                    }
+                                    if !found && emitted_d_count < max_floats {
+                                        seen_d[emitted_d_count] = bits_val;
+                                        emitted_d_count = emitted_d_count + 1 as usize;
+                                        qbe_write(self.fd, "data $d_");
+                                        write_u64(self.fd as u64, bits_val);
+                                        qbe_write(self.fd, " = { l ");
+                                        write_u64(self.fd as u64, bits_val);
+                                        qbe_write(self.fd, " }\n");
+                                    }
+                                }
+                            },
+                            _ => {},
+                        }
+                    }
+                    ii = ii + 1 as usize;
+                }
+                bi = bi + 1 as usize;
+            }
+            fi = fi + 1 as usize;
+        }
+    }
+
+    fn emit_string_data_sections(self: &mut QBEEmitter) {
+        // Build a sequential ID table: collect unique string ptrs in first-encounter order,
+        // then emit as $S0, $S1, ... for stable, run-independent labels.
+        let max_strings = 4096 as usize;
+        let ptrs = zoril_allocator_alloc(self.arena, max_strings * 8) as *mut u64;
+        let mut count = 0 as usize;
+        unsafe { memset(ptrs as *mut u8, 0, (max_strings * 8) as u64); }
+        let mut seen_ptrs = unsafe { @slice(ptrs, max_strings) };
+
+        let mut fi = 0 as usize;
+        while fi < self.module.functions.len {
+            let p_f = &self.module.functions[fi];
+            let mut bi = 0 as usize;
+            while bi < p_f.blocks_len {
+                let block_idx = p_f.block_ids()[bi];
+                let ap_b = &self.module.blocks[block_idx as usize];
+                let mut ii = 0 as usize;
+                while ii < ap_b.instructions_len {
+                    let instr_idx = ap_b.instr_ids()[ii];
+                    let ainstr = &self.module.instrs[instr_idx as usize];
+                    match *ainstr {
+                        ILInstr.StringConst(str_slice) => {
+                            let str_ptr = str_slice.ptr as u64;
+                            let mut found = false;
+                            let mut ei = 0 as usize;
+                            while ei < count {
+                                if seen_ptrs[ei] == str_ptr {
+                                    found = true;
+                                    break;
+                                }
+                                ei = ei + 1 as usize;
+                            }
+                            if !found && count < max_strings {
+                                seen_ptrs[count] = str_ptr;
+                                // Emit: data $S<seq_id> = { b ..., b 0 }
+                                qbe_write(self.fd, "data $S");
+                                write_u64(self.fd as u64, count as u64);
+                                qbe_write(self.fd, " = {");
+                                let mut si = 0 as usize;
+                                while si < str_slice.len {
+                                    qbe_write(self.fd, " b ");
+                                    write_u64(self.fd as u64, str_slice[si] as u64);
+                                    qbe_write(self.fd, ",");
+                                    si = si + 1 as usize;
+                                }
+                                qbe_write(self.fd, " b 0 }\n");
+                                count = count + 1 as usize;
+                            }
+                        },
+                        _ => {}
+                    }
+                    ii = ii + 1 as usize;
+                }
+                bi = bi + 1 as usize;
+            }
+            fi = fi + 1 as usize;
+        }
+        // Store the table so emit_string_const can look up sequential IDs
+        self.string_ptrs = ptrs;
+        self.string_count = count as u32;
+    }
+
+    fn index_constants(self: &mut QBEEmitter, p_f: &ILFunction) {
+        let n = p_f.result_types_len;
+        self.const_vals = unsafe { @slice(zoril_allocator_alloc(self.arena, n * 8 + 8) as *mut u64, n) };
+        self.const_known = unsafe { @slice(zoril_allocator_alloc(self.arena, n + 1) as *mut bool, n) };
+        unsafe { memset(self.const_known.ptr as *mut u8, 0, n as u64); }
+        let mut bi = 0 as usize;
+        while bi < p_f.blocks_len {
+            let p_b = &self.module.blocks[p_f.block_ids()[bi] as usize];
+            let mut ii = 0 as usize;
+            while ii < p_b.instructions_len {
+                let ssa = p_b.ssa_result_ids()[ii];
+                let p_i = &self.module.instrs[p_b.instr_ids()[ii] as usize];
+                if (ssa as usize) < n && (*p_i).get_tag() == IL_INSTR_CONST {
+                    match (*p_i).get_Const().val {
+                        ConstValue.U64(v) => { self.const_vals[ssa as usize] = v; self.const_known[ssa as usize] = true; },
+                        ConstValue.I64(v) => { if v >= 0 as i64 { self.const_vals[ssa as usize] = v as u64; self.const_known[ssa as usize] = true; } },
+                        _ => {},
+                    }
+                }
+                ii = ii + 1 as usize;
+            }
+            bi = bi + 1 as usize;
+        }
+    }
+
+    fn emit_function(self: &mut QBEEmitter, func_idx: u32) {
+        let _ = write(3, "\n"); // progress fd: one newline per emitted function; silently ignored if fd 3 not open
+        let p_f = &self.module.functions[func_idx as usize];
+        self.current_func = p_f;
+        self.ssa_types = p_f.result_types;
+        self.ssa_types_len = p_f.result_types_len;
+        self.ssa_names = p_f.ssa_names;
+        self.index_constants(p_f);
+        
+        if p_f.doc_comment != 0 as u32 {
+            self.emit_doc_block(p_f.doc_comment);
+        }
+        
+        qbe_write(self.fd, "# function ");
+        qbe_write(self.fd, self.intern_table.lookup(p_f.name));
+        qbe_write(self.fd, "\n");
+        
+        let fn_name_slice = self.intern_table.lookup(p_f.name);
+        let is_main = is_str_eq(fn_name_slice, "main");
+        let f_local = p_f.is_local;
+        if f_local {
+            if !is_main {
+                qbe_write(self.fd, "function ");
+            } else {
+                qbe_write(self.fd, "export function ");
+            }
+        } else {
+            qbe_write(self.fd, "export function ");
+        }
+        if !self.is_unit_type(p_f.ret_ty) && !self.requires_pass_by_ref(p_f.ret_ty) {
+            self.emit_abi_class(p_f.ret_ty);
+            qbe_write(self.fd, " ");
+        }
+        self.emit_func_sym(self.intern_table.lookup(p_f.name), p_f.is_extern);
+        qbe_write(self.fd, "(");
+        
+        let mut k = 0 as usize;
+        while k < p_f.params_len {
+            if k > 0 as usize { qbe_write(self.fd, ", "); }
+            let p = &p_f.params[k];
+            self.emit_type_token(p.ty);
+            qbe_write(self.fd, " ");
+            self.emit_ssa(p.ssa);
+            k = k + 1 as usize;
+        }
+        qbe_write(self.fd, ") {\n");
+
+        // Stack allocations for aggregates
+        let ssa_cap = p_f.result_types_len + 1024 as usize; // Extra room for temps
+        self.alloc_sizes = zoril_allocator_alloc(self.arena, ssa_cap * 8 as usize) as *mut usize;
+        self.alloc_sizes_len = ssa_cap;
+        unsafe { memset(self.alloc_sizes as *mut u8, 0, (ssa_cap * 8 as usize) as u64); }
+
+        // Emit blocks
+        let mut last_comment = 0 as u32;
+        let mut bi = 0 as usize;
+        while bi < p_f.blocks_len {
+            let block_idx = p_f.block_ids()[bi];
+            let p_b = &self.module.blocks[block_idx as usize];
+            let b_name = (*p_b).name;
+            qbe_write(self.fd, "# block ");
+            if b_name != 0 as u32 {
+                qbe_write(self.fd, self.intern_table.lookup(b_name));
+                qbe_write(self.fd, "_");
+                write_u64(self.fd as u64, block_idx as u64);
+            } else {
+                qbe_write(self.fd, "b");
+                write_u64(self.fd as u64, block_idx as u64);
+            }
+            qbe_write(self.fd, "\n");
+            
+            self.emit_block_label(block_idx); qbe_write(self.fd, "\n");
+            
+            if bi == 0 as usize {
+                // All alloc instructions must be in the first block
+                let mut abi = 0 as usize;
+                while abi < p_f.blocks_len {
+                    let ablock_idx = p_f.block_ids()[abi];
+                    let ap_b = &self.module.blocks[ablock_idx as usize];
+                    let mut aii = 0 as usize;
+                    while aii < ap_b.instructions_len {
+                        let ainstr_idx = ap_b.instr_ids()[aii];
+                        let ainstr = &self.module.instrs[ainstr_idx as usize];
+                        let assa = ap_b.ssa_result_ids()[aii];
+                        
+                        let is_already_alloc = if assa != 0xffffffff as u32 {
+                            self.alloc_size_of(assa as usize) != 0 as usize
+                        } else { false };
+
+                        if !is_already_alloc {
+                            if ainstr.get_tag() == IL_INSTR_ALLOC {
+                                let a = ainstr.get_Alloc();
+                                let region_tag = a.region.get_tag();
+                                if region_tag != 2 as u32 { // Not Region.Heap
+                                    let sz = self.get_type_size(a.ty);
+                                    let align = self.get_type_align(a.ty);
+
+                                    // PERFORMANCE: every @alloca in ZIL-0 becomes a QBE stack slot here.
+                                    // ZIL-0 uses @alloca for ALL locals (no SSA-register locals in the
+                                    // format), so struct fields are accessed via pointer arithmetic on the
+                                    // alloca address — which prevents QBE's mem2reg from promoting them
+                                    // to registers. Combined with no function inlining (each bvec_byte /
+                                    // bvec_str / find_fn call is a full call, not inlined), this produces
+                                    // code ~38-42x slower than clang/gcc -O2 on the same source.
+                                    // The gap is a constant factor, not an algorithmic problem.
+                                    // Fix: for allocas whose address never escapes into pointer arithmetic,
+                                    // detect them here and emit QBE SSA temporaries (storel/loadl) instead
+                                    // of alloc+store/load; QBE can then register-allocate them. Separately,
+                                    // add an inlining pass (or QBE @inline hints) for small leaf functions.
+                                    if sz == 0 as u64 || align == 0 as u64 {
+                                        // Zero-size type (e.g. unit): emit null pointer, no stack allocation
+                                        qbe_write(self.fd, "    "); self.emit_ssa(assa); qbe_write(self.fd, " =l copy 0\n");
+                                    } else {
+                                        qbe_write(self.fd, "    "); self.emit_ssa(assa); qbe_write(self.fd, " =l alloc");
+                                        write_u64(self.fd as u64, align as u64); qbe_write(self.fd, " ");
+                                        write_u64(self.fd as u64, sz as u64); qbe_write(self.fd, "\n");
+                                        self.set_alloc_size(assa as usize, sz);
+                                    }
+                                }
+                            } else if assa != 0xffffffff as u32 {
+                                let assa_ty = self.get_ssa_type(assa);
+                                let tag = ainstr.get_tag();
+                                if self.is_aggregate(assa_ty) && tag != IL_INSTR_CONST && tag != IL_INSTR_STRING_CONST {
+                                    let sz = self.get_type_size(assa_ty);
+                                    let mut align = self.get_type_align(assa_ty);
+                                    if align < 4 as usize { align = 4 as usize; }
+                                    if align > 8 as usize { align = 8 as usize; }
+                                    qbe_write(self.fd, "    "); self.emit_ssa(assa); qbe_write(self.fd, " =l alloc");
+                                    write_u64(self.fd as u64, align as u64); qbe_write(self.fd, " ");
+                                    write_u64(self.fd as u64, sz as u64); qbe_write(self.fd, "\n");
+                                    self.set_alloc_size(assa as usize, sz);
+                                }
+                            }
+                        }
+                        aii = aii + 1 as usize;
+                    }
+                    abi = abi + 1 as usize;
+                }
+            }
+
+            let mut ii = 0 as usize;
+            while ii < p_b.instructions_len {
+                let instr_idx = p_b.instr_ids()[ii];
+                let ssa = p_b.ssa_result_ids()[ii];
+
+                let comment = self.module.instr_comments[instr_idx as usize];
+                if comment != 0 as u32 && comment != last_comment {
+                    self.emit_comment_block(comment, "    # ");
+                    last_comment = comment;
+                }
+
+                self.emit_instruction(ssa, &self.module.instrs[instr_idx as usize], ii);
+                ii = ii + 1 as usize;
+            }
+            bi = bi + 1 as usize;
+        }
+        
+        qbe_write(self.fd, "}\n");
+    }
+
+    fn emit_instruction(self: &mut QBEEmitter, ssa: SSAId, instr: ILInstr, instr_idx: usize) {
+        let tag = instr.get_tag();
+        let res_ty = if ssa != 0xffffffff as u32 { self.get_ssa_type(ssa) } else { 0 as u32 };
+
+        if tag == IL_INSTR_ALLOC {
+            let a = instr.get_Alloc();
+            let size = self.get_type_size(a.ty);
+            let region_tag = a.region.get_tag();
+            if region_tag == 2 as u32 { // Region.Heap
+                qbe_write(self.fd, "    ");
+                self.emit_ssa(ssa);
+                qbe_write(self.fd, " =l call $zoril_allocator_alloc(l 0, l ");
+                if a.allocator == NO_SSA as u32 {
+                    qbe_write(self.fd, "0");
+                } else {
+                    self.emit_ssa(a.allocator);
+                }
+                qbe_write(self.fd, ", l ");
+                write_u64(self.fd as u64, size as u64);
+                qbe_write(self.fd, ")\n");
+            }
+            return;
+        }
+        
+        if tag >= IL_INSTR_ADD && tag <= IL_INSTR_DIV {
+            let b = instr.get_Add();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_abi_class(res_ty); qbe_write(self.fd, " ");
+            if tag == IL_INSTR_ADD { qbe_write(self.fd, "add"); }
+            else if tag == IL_INSTR_SUB { qbe_write(self.fd, "sub"); }
+            else if tag == IL_INSTR_MUL { qbe_write(self.fd, "mul"); }
+            else if tag == IL_INSTR_DIV {
+                let prim_tag = self.get_prim_tag(res_ty);
+                let is_float = prim_tag == ILPRIM_F32 || prim_tag == ILPRIM_F64;
+                if is_float || self.is_signed_prim(res_ty) { qbe_write(self.fd, "div"); }
+                else { qbe_write(self.fd, "udiv"); }
+            }
+            qbe_write(self.fd, " "); self.emit_ssa(b.lhs); qbe_write(self.fd, ", "); self.emit_ssa(b.rhs); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_REM {
+            let b = instr.get_Add();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_abi_class(res_ty); qbe_write(self.fd, " ");
+            if self.is_signed_prim(res_ty) { qbe_write(self.fd, "rem"); }
+            else { qbe_write(self.fd, "urem"); }
+            qbe_write(self.fd, " "); self.emit_ssa(b.lhs); qbe_write(self.fd, ", "); self.emit_ssa(b.rhs); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_NEG {
+            let val = instr.get_Neg();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_abi_class(res_ty); qbe_write(self.fd, " sub 0, "); self.emit_ssa(val); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_NOT {
+            let val = instr.get_Not();
+            let prim_tag = self.get_prim_tag(res_ty);
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa);
+            if prim_tag == ILPRIM_BOOL {
+                qbe_write(self.fd, " =w ceqw "); self.emit_ssa(val); qbe_write(self.fd, ", 0\n");
+            } else {
+                qbe_write(self.fd, " ="); self.emit_abi_class(res_ty); qbe_write(self.fd, " xor "); self.emit_ssa(val); qbe_write(self.fd, ", -1\n");
+            }
+        } else if tag >= IL_INSTR_AND && tag <= IL_INSTR_SHR {
+            let b = instr.get_Add();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_abi_class(res_ty); qbe_write(self.fd, " ");
+            if tag == IL_INSTR_AND { qbe_write(self.fd, "and"); }
+            else if tag == IL_INSTR_OR { qbe_write(self.fd, "or"); }
+            else if tag == IL_INSTR_XOR { qbe_write(self.fd, "xor"); }
+            else if tag == IL_INSTR_SHL { qbe_write(self.fd, "shl"); }
+            else if tag == IL_INSTR_SHR {
+                if self.is_signed_prim(res_ty) { qbe_write(self.fd, "sar"); }
+                else { qbe_write(self.fd, "shr"); }
+            }
+            qbe_write(self.fd, " "); self.emit_ssa(b.lhs); qbe_write(self.fd, ", "); self.emit_ssa(b.rhs); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_WRAPPING_ADD || tag == IL_INSTR_CHECKED_ADD {
+            // Wrapping/checked add: plain add (QBE integers wrap by default)
+            let b = instr.get_Add();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_abi_class(res_ty); qbe_write(self.fd, " add "); self.emit_ssa(b.lhs); qbe_write(self.fd, ", "); self.emit_ssa(b.rhs); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_WRAPPING_SUB || tag == IL_INSTR_CHECKED_SUB {
+            let b = instr.get_Sub();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_abi_class(res_ty); qbe_write(self.fd, " sub "); self.emit_ssa(b.lhs); qbe_write(self.fd, ", "); self.emit_ssa(b.rhs); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_WRAPPING_MUL || tag == IL_INSTR_CHECKED_MUL {
+            let b = instr.get_Mul();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_abi_class(res_ty); qbe_write(self.fd, " mul "); self.emit_ssa(b.lhs); qbe_write(self.fd, ", "); self.emit_ssa(b.rhs); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_SATURATING_ADD {
+            // Saturating unsigned add: or(sum, neg(sum < a)) for wrapping detection
+            let b = instr.get_Add();
+            let sum_tmp = self.next_id();
+            let ovf_tmp = self.next_id();
+            let mask_tmp = self.next_id();
+            let class = self.emit_abi_class_str(res_ty);
+            qbe_write(self.fd, "    "); self.emit_ssa(sum_tmp); qbe_write(self.fd, " ="); qbe_write(self.fd, class); qbe_write(self.fd, " add "); self.emit_ssa(b.lhs); qbe_write(self.fd, ", "); self.emit_ssa(b.rhs); qbe_write(self.fd, "\n");
+            qbe_write(self.fd, "    "); self.emit_ssa(ovf_tmp); qbe_write(self.fd, " =w cult"); qbe_write(self.fd, class); qbe_write(self.fd, " "); self.emit_ssa(sum_tmp); qbe_write(self.fd, ", "); self.emit_ssa(b.lhs); qbe_write(self.fd, "\n");
+            qbe_write(self.fd, "    "); self.emit_ssa(mask_tmp); qbe_write(self.fd, " ="); qbe_write(self.fd, class); qbe_write(self.fd, " sub 0, "); self.emit_ssa(ovf_tmp); qbe_write(self.fd, "\n");
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); qbe_write(self.fd, class); qbe_write(self.fd, " or "); self.emit_ssa(sum_tmp); qbe_write(self.fd, ", "); self.emit_ssa(mask_tmp); qbe_write(self.fd, "\n");
+        } else if tag >= IL_INSTR_CMP_LT && tag <= IL_INSTR_CMP_NE {
+            let b = instr.get_CmpEq(); // They all use ILBinaryOp
+            let op_ty = self.get_ssa_type(b.lhs);
+            let op_tag = self.get_prim_tag(op_ty);
+            let is_float = op_tag == ILPRIM_F32 || op_tag == ILPRIM_F64;
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =w c");
+            if tag == IL_INSTR_CMP_EQ { qbe_write(self.fd, "eq"); }
+            else if tag == IL_INSTR_CMP_NE { qbe_write(self.fd, "ne"); }
+            else if tag == IL_INSTR_CMP_LT {
+                if is_float { qbe_write(self.fd, "lt"); }
+                else if self.is_signed_prim(op_ty) { qbe_write(self.fd, "slt"); } else { qbe_write(self.fd, "ult"); }
+            }
+            else if tag == IL_INSTR_CMP_LE {
+                if is_float { qbe_write(self.fd, "le"); }
+                else if self.is_signed_prim(op_ty) { qbe_write(self.fd, "sle"); } else { qbe_write(self.fd, "ule"); }
+            }
+            else if tag == IL_INSTR_CMP_GT {
+                if is_float { qbe_write(self.fd, "gt"); }
+                else if self.is_signed_prim(op_ty) { qbe_write(self.fd, "sgt"); } else { qbe_write(self.fd, "ugt"); }
+            }
+            else if tag == IL_INSTR_CMP_GE {
+                if is_float { qbe_write(self.fd, "ge"); }
+                else if self.is_signed_prim(op_ty) { qbe_write(self.fd, "sge"); } else { qbe_write(self.fd, "uge"); }
+            }
+            self.emit_abi_class(op_ty);
+            qbe_write(self.fd, " "); self.emit_ssa(b.lhs); qbe_write(self.fd, ", "); self.emit_ssa(b.rhs); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_LOAD {
+            let src = instr.get_Load();
+            if self.is_unit_type(res_ty) {
+                qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =w copy 0\n");
+            } else {
+                qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_class(res_ty); qbe_write(self.fd, " load"); self.emit_load_suffix(res_ty); qbe_write(self.fd, " "); self.emit_ssa(src); qbe_write(self.fd, "\n");
+            }
+        } else if tag == IL_INSTR_STORE {
+            let s = instr.get_Store();
+            let val_ty = self.get_ssa_type(s.val);
+            if self.is_aggregate(val_ty) {
+                self.emit_memcpy(s.ptr, s.val, self.get_type_size(val_ty) as u64, tag, ssa, instr_idx);
+            } else if !self.is_unit_type(val_ty) {
+                qbe_write(self.fd, "    store"); self.emit_store_suffix(val_ty); qbe_write(self.fd, " "); self.emit_ssa(s.val); qbe_write(self.fd, ", "); self.emit_ssa(s.ptr); qbe_write(self.fd, "\n");
+            }
+        } else if tag == IL_INSTR_CONST {
+            let c = instr.get_Const();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_abi_class(c.ty);
+            match c.val {
+                ConstValue.U64(v) => { qbe_write(self.fd, " copy "); write_u64(self.fd as u64, v); },
+                ConstValue.I64(v) => { qbe_write(self.fd, " copy "); write_i64(self.fd as u64, v); },
+                ConstValue.F64(bits) => {
+                    let prim_tag = self.get_prim_tag(c.ty);
+                    if prim_tag == ILPRIM_F32 {
+                        let v = unsafe { *( (&bits as usize) as *f64 ) };
+                        let f32_val = v as f32;
+                        let f32_bits = unsafe { *( (&f32_val as usize) as *u32 ) };
+                        qbe_write(self.fd, " loads $s_");
+                        write_u64(self.fd as u64, f32_bits as u64);
+                    } else {
+                        qbe_write(self.fd, " loadd $d_");
+                        write_u64(self.fd as u64, bits);
+                    }
+                },
+                ConstValue.Bool(v) => { qbe_write(self.fd, " copy "); if v != 0 as u64 { qbe_write(self.fd, "1"); } else { qbe_write(self.fd, "0"); } },
+            }
+            qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_FIELD_ADDR {
+            let f = instr.get_FieldAddr();
+            let struct_ptr_ty = self.get_ssa_type(f.val);
+            let struct_ty = self.get_ptr_inner_type(struct_ptr_ty);
+            let off = self.get_field_offset(struct_ty, f.field_idx);
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l add "); self.emit_ssa(f.val); qbe_write(self.fd, ", "); write_u64(self.fd as u64, off as u64); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_MOVE {
+            let src = instr.get_Move();
+            let ty = self.get_ssa_type(src);
+            if self.is_aggregate(ty) {
+                if ssa != 0xffffffff as u32 {
+                    let encoded = self.alloc_size_of(ssa as usize);
+                    if encoded != 0 as usize {
+                        self.emit_memcpy(ssa, src, encoded as u64, tag, ssa, instr_idx);
+                    } else {
+                        qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l copy "); self.emit_ssa(src); qbe_write(self.fd, "\n");
+                    }
+                }
+            } else if !self.is_unit_type(ty) {
+                if ssa != 0xffffffff as u32 {
+                    qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_abi_class(ty); qbe_write(self.fd, " copy "); self.emit_ssa(src); qbe_write(self.fd, "\n");
+                }
+            }
+        } else if tag == IL_INSTR_CALL || tag == IL_INSTR_CALL_PTR {
+            let c = if tag == IL_INSTR_CALL { instr.get_Call() } else { (instr.get_CallPtr() as *u32 as usize) as *CallInstr };
+            let func_ptr = if tag == IL_INSTR_CALL_PTR { instr.get_CallPtr().func_ptr } else { 0 as u32 };
+            let ret_ty = self.get_ssa_type(ssa);
+            let is_sret = self.requires_pass_by_ref(ret_ty);
+            let mut name_id = if tag == IL_INSTR_CALL { c.name_id } else { 0 as u32 };
+            let mut name = if tag == IL_INSTR_CALL { self.intern_table.lookup(name_id) } else { "" };
+            let mut is_extern = c.is_extern;
+
+            if tag == IL_INSTR_CALL {
+                let mut is_fid = false;
+                if name.len > 1 as usize && name[0] == 'f' as u8 {
+                    let mut i = 1 as usize;
+                    is_fid = true;
+                    while i < name.len {
+                        if name[i] < '0' as u8 || name[i] > '9' as u8 {
+                            is_fid = false;
+                            break;
+                        }
+                        i = i + 1 as usize;
+                    }
+                }
+                
+                if is_fid {
+                    let mut fid = 0 as u32;
+                    let mut i = 1 as usize;
+                    while i < name.len {
+                        fid = fid * 10 as u32 + (name[i] - '0' as u8) as u32;
+                        i = i + 1 as usize;
+                    }
+                    if (fid as usize) < self.module.functions.len {
+                        let p_func = &self.module.functions[fid as usize];
+                        if (*p_func).name != 0 as u32 {
+                            name_id = (*p_func).name;
+                            name = self.intern_table.lookup(name_id);
+                            is_extern = (*p_func).is_extern;
+                        }
+                    }
+                } else {
+                    let p_func = self.module.find_function_by_name(name_id);
+                    if p_func as usize != 0 as usize {
+                        is_extern = (*p_func).is_extern;
+                    }
+                }
+            }
+
+            // A copy of a constant size is emitted inline rather than calling the runtime
+            // memcpy (`rep movsb`): the call is slow for small sizes and makes the slots it
+            // touches escape, so QBE reloads them (doc/performance/zero_overhead_gap.md).
+            if tag == IL_INSTR_CALL && is_str_eq(name, "memcpy") && c.args.len == 3 as usize && self.is_unit_type(ret_ty) {
+                let n_ssa = c.args[2];
+                if (n_ssa as usize) < self.const_known.len && self.const_known[n_ssa as usize] && self.const_vals[n_ssa as usize] <= BLIT_MAX {
+                    self.emit_memcpy(c.args[0], c.args[1], self.const_vals[n_ssa as usize], tag, ssa, instr_idx);
+                    return;
+                }
+            }
+
+            qbe_write(self.fd, "    ");
+            // The sret slot and env ptr are already pre-included in c.args by the lowerers.
+            // For sret: the return slot is c.args[0]; we don't print a result assignment.
+            // For non-sret non-unit: print the result assignment.
+            if !self.is_unit_type(ret_ty) && !is_sret {
+                self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_abi_class(ret_ty); qbe_write(self.fd, " ");
+            }
+            qbe_write(self.fd, "call ");
+            if tag == IL_INSTR_CALL_PTR { self.emit_ssa(func_ptr); } else { self.emit_func_sym(name, is_extern); }
+            qbe_write(self.fd, "(");
+
+            let mut j = 0 as usize;
+            while j < c.args.len {
+                if j > 0 as usize { qbe_write(self.fd, ", "); }
+                let arg_ssa = c.args[j];
+                let arg_ty = self.get_ssa_type(arg_ssa);
+                
+                let mut force_ptr = false;
+                if tag == IL_INSTR_CALL {
+                    if is_str_eq(name, "memcpy") || is_str_eq(name, "memset") || is_str_eq(name, "memcmp") {
+                        if self.is_aggregate(arg_ty) {
+                            force_ptr = true;
+                        }
+                    }
+                }
+                
+                if force_ptr {
+                    qbe_write(self.fd, "l");
+                } else {
+                    self.emit_type_token(arg_ty);
+                }
+                qbe_write(self.fd, " ");
+                self.emit_ssa(arg_ssa);
+                j = j + 1 as usize;
+            }
+            qbe_write(self.fd, ")\n");
+        } else if tag == IL_INSTR_SUM_CONSTRUCT {
+            let s = instr.get_SumConstruct();
+            let disc = self.get_variant_discriminant(s.type_id, s.variant_idx);
+            qbe_write(self.fd, "    storew "); write_u64(self.fd as u64, disc as u64); qbe_write(self.fd, ", "); self.emit_ssa(ssa); qbe_write(self.fd, "\n");
+            if s.payload != NO_SSA as u32 {
+                let p_ty = &self.module.types[s.type_id as usize - 1 as usize];
+                let user = (*p_ty).def.get_User();
+                let def = &self.module.typedefs[user.id as usize];
+                let e = def.get_Enum();
+                let val_ty = e.variants[s.variant_idx as usize].payload;
+                
+                let payload_ptr = self.next_id();
+                let payload_off = self.get_enum_payload_offset(s.type_id);
+                qbe_write(self.fd, "    "); self.emit_ssa(payload_ptr); qbe_write(self.fd, " =l add "); self.emit_ssa(ssa); qbe_write(self.fd, ", "); write_u64(self.fd as u64, payload_off as u64); qbe_write(self.fd, "\n");
+                if self.is_aggregate(val_ty) {
+                     self.emit_memcpy(payload_ptr, s.payload, self.get_type_size(val_ty) as u64, tag, ssa, instr_idx);
+                } else {
+                     qbe_write(self.fd, "    store"); self.emit_store_suffix(val_ty); qbe_write(self.fd, " "); self.emit_ssa(s.payload); qbe_write(self.fd, ", "); self.emit_ssa(payload_ptr); qbe_write(self.fd, "\n");
+                }
+            }
+        } else if tag == IL_INSTR_SLICE_CONSTRUCT {
+            let s = instr.get_SliceConstruct();
+            qbe_write(self.fd, "    storel "); self.emit_ssa(s.ptr); qbe_write(self.fd, ", "); self.emit_ssa(ssa); qbe_write(self.fd, "\n");
+            let len_ptr = self.next_id();
+            qbe_write(self.fd, "    "); self.emit_ssa(len_ptr); qbe_write(self.fd, " =l add "); self.emit_ssa(ssa); qbe_write(self.fd, ", 8\n");
+            qbe_write(self.fd, "    storel "); self.emit_ssa(s.len); qbe_write(self.fd, ", "); self.emit_ssa(len_ptr); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_STRUCT_CONSTRUCT {
+            let s = instr.get_StructConstruct();
+            let p_ty = &self.module.types[s.ty as usize - 1 as usize];
+            let user = (*p_ty).def.get_User();
+            let def = &self.module.typedefs[user.id as usize];
+            let st = def.get_Struct();
+            
+            let mut k = 0 as usize;
+            let mut cur_off = 0 as usize;
+            while k < s.fields.len {
+                let f_ssa = s.fields[k];
+                let f_ty = st.fields[k].ty;
+                if self.get_type_size(f_ty) > 0 as usize {
+                    let align = self.get_type_align(f_ty);
+                    cur_off = (cur_off + align - 1 as usize) / align * align;
+                    let addr = self.next_id();
+                    qbe_write(self.fd, "    "); self.emit_ssa(addr); qbe_write(self.fd, " =l add "); self.emit_ssa(ssa); qbe_write(self.fd, ", "); write_u64(self.fd as u64, cur_off as u64); qbe_write(self.fd, "\n");
+                    if self.is_aggregate(f_ty) {
+                        self.emit_memcpy(addr, f_ssa, self.get_type_size(f_ty) as u64, tag, ssa, instr_idx);
+                    } else {
+                        qbe_write(self.fd, "    store"); self.emit_store_suffix(f_ty); qbe_write(self.fd, " "); self.emit_ssa(f_ssa); qbe_write(self.fd, ", "); self.emit_ssa(addr); qbe_write(self.fd, "\n");
+                    }
+                    cur_off = cur_off + self.get_type_size(f_ty);
+                }
+                k = k + 1 as usize;
+            }
+        } else if tag == IL_INSTR_TUPLE_CONSTRUCT {
+            let fields = instr.get_TupleConstruct();
+            let p_ty = &self.module.types[res_ty as usize - 1 as usize];
+            let field_types = (*p_ty).def.get_Tuple();
+            
+            let mut k = 0 as usize;
+            let mut cur_off = 0 as usize;
+            while k < fields.len {
+                let f_ssa = fields[k];
+                let f_ty = field_types[k];
+                if self.get_type_size(f_ty) > 0 as usize {
+                    let align = self.get_type_align(f_ty);
+                    cur_off = (cur_off + align - 1 as usize) / align * align;
+                    let addr = self.next_id();
+                    qbe_write(self.fd, "    "); self.emit_ssa(addr); qbe_write(self.fd, " =l add "); self.emit_ssa(ssa); qbe_write(self.fd, ", "); write_u64(self.fd as u64, cur_off as u64); qbe_write(self.fd, "\n");
+                    if self.is_aggregate(f_ty) {
+                        self.emit_memcpy(addr, f_ssa, self.get_type_size(f_ty) as u64, tag, ssa, instr_idx);
+                    } else {
+                        qbe_write(self.fd, "    store"); self.emit_store_suffix(f_ty); qbe_write(self.fd, " "); self.emit_ssa(f_ssa); qbe_write(self.fd, ", "); self.emit_ssa(addr); qbe_write(self.fd, "\n");
+                    }
+                    cur_off = cur_off + self.get_type_size(f_ty);
+                }
+                k = k + 1 as usize;
+            }
+        } else if tag == IL_INSTR_ARRAY_CONSTRUCT {
+            let elements = instr.get_ArrayConstruct();
+            let p_ty = &self.module.types[res_ty as usize - 1 as usize];
+            let arr = (*p_ty).def.get_Array();
+            let elem_ty = arr.element;
+            let elem_size = self.get_type_size(elem_ty);
+            let elem_align = self.get_type_align(elem_ty);
+            
+            let mut k = 0 as usize;
+            while k < elements.len {
+                let f_ssa = elements[k];
+                let off = k * elem_size;
+                let addr = self.next_id();
+                qbe_write(self.fd, "    "); self.emit_ssa(addr); qbe_write(self.fd, " =l add "); self.emit_ssa(ssa); qbe_write(self.fd, ", "); write_u64(self.fd as u64, off as u64); qbe_write(self.fd, "\n");
+                if self.is_aggregate(elem_ty) {
+                    self.emit_memcpy(addr, f_ssa, elem_size as u64, tag, ssa, instr_idx);
+                } else {
+                    qbe_write(self.fd, "    store"); self.emit_store_suffix(elem_ty); qbe_write(self.fd, " "); self.emit_ssa(f_ssa); qbe_write(self.fd, ", "); self.emit_ssa(addr); qbe_write(self.fd, "\n");
+                }
+                k = k + 1 as usize;
+            }
+        } else if tag == IL_INSTR_STRING_CONST {
+            let id = instr.get_StringConst();
+            // Look up the sequential string ID assigned during emit_string_data_sections
+            let str_ptr = id.ptr as u64;
+            let mut seq_id = 0 as u32;
+            let mut si2 = 0 as u32;
+            while si2 < self.string_count {
+                if self.string_ptr_at(si2 as usize) == str_ptr {
+                    seq_id = si2;
+                    break;
+                }
+                si2 = si2 + 1 as u32;
+            }
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l copy $S"); write_u64(self.fd as u64, seq_id as u64); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_GLOBAL_ADDR {
+            let gi = instr.get_GlobalAddr();
+            let g = &self.module.globals[gi as usize];
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l copy ");
+            self.emit_func_sym(self.intern_table.lookup(g.name), g.is_extern);
+            qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_FUNC_ADDR {
+            let func_id = instr.get_FuncAddr();
+            let p_fa = &self.module.functions[func_id as usize];
+            let fa_name = self.intern_table.lookup((*p_fa).name);
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l copy ");
+            self.emit_func_sym(fa_name, (*p_fa).is_extern);
+            qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_GETENV {
+            // Self-hosted closures pass env as second param (after sret)
+            let ret_ty = self.cur_func().ret_ty;
+            let sret_offset = if self.requires_pass_by_ref(ret_ty) { 1 as usize } else { 0 as usize };
+            let env_param_idx = sret_offset as u32 + 1 as u32;
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l copy "); self.emit_ssa(env_param_idx); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_SLICE_LOAD {
+            let s = instr.get_SliceLoad();
+            let ptr_reg = self.next_id();
+            qbe_write(self.fd, "    "); self.emit_ssa(ptr_reg); qbe_write(self.fd, " =l loadl "); self.emit_ssa(s.base); qbe_write(self.fd, "\n");
+            let off_reg = self.next_id();
+            let elem_sz = self.get_type_size(res_ty);
+            qbe_write(self.fd, "    "); self.emit_ssa(off_reg); qbe_write(self.fd, " =l mul "); self.emit_ssa(s.idx); qbe_write(self.fd, ", "); write_u64(self.fd as u64, elem_sz as u64); qbe_write(self.fd, "\n");
+            let addr_reg = self.next_id();
+            qbe_write(self.fd, "    "); self.emit_ssa(addr_reg); qbe_write(self.fd, " =l add "); self.emit_ssa(ptr_reg); qbe_write(self.fd, ", "); self.emit_ssa(off_reg); qbe_write(self.fd, "\n");
+            if self.is_aggregate(res_ty) {
+                self.emit_memcpy(ssa, addr_reg, self.get_type_size(res_ty) as u64, tag, ssa, instr_idx);
+            } else {
+                qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_class(res_ty); qbe_write(self.fd, " load"); self.emit_load_suffix(res_ty); qbe_write(self.fd, " "); self.emit_ssa(addr_reg); qbe_write(self.fd, "\n");
+            }
+        } else if tag == IL_INSTR_ARRAY_LOAD {
+            let s = instr.get_ArrayLoad();
+            let off_reg = self.next_id();
+            let elem_sz = self.get_type_size(res_ty);
+            qbe_write(self.fd, "    "); self.emit_ssa(off_reg); qbe_write(self.fd, " =l mul "); self.emit_ssa(s.idx); qbe_write(self.fd, ", "); write_u64(self.fd as u64, elem_sz as u64); qbe_write(self.fd, "\n");
+            let addr_reg = self.next_id();
+            qbe_write(self.fd, "    "); self.emit_ssa(addr_reg); qbe_write(self.fd, " =l add "); self.emit_ssa(s.base); qbe_write(self.fd, ", "); self.emit_ssa(off_reg); qbe_write(self.fd, "\n");
+            if self.is_aggregate(res_ty) {
+                self.emit_memcpy(ssa, addr_reg, self.get_type_size(res_ty) as u64, tag, ssa, instr_idx);
+            } else {
+                qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_class(res_ty); qbe_write(self.fd, " load"); self.emit_load_suffix(res_ty); qbe_write(self.fd, " "); self.emit_ssa(addr_reg); qbe_write(self.fd, "\n");
+            }
+        } else if tag == IL_INSTR_SLICE_STORE {
+            let s = instr.get_SliceStore();
+            let ptr_reg = self.next_id();
+            qbe_write(self.fd, "    "); self.emit_ssa(ptr_reg); qbe_write(self.fd, " =l loadl "); self.emit_ssa(s.base); qbe_write(self.fd, "\n");
+            let off_reg = self.next_id();
+            let val_ty = self.get_ssa_type(s.val);
+            let elem_sz = self.get_type_size(val_ty);
+            qbe_write(self.fd, "    "); self.emit_ssa(off_reg); qbe_write(self.fd, " =l mul "); self.emit_ssa(s.idx); qbe_write(self.fd, ", "); write_u64(self.fd as u64, elem_sz as u64); qbe_write(self.fd, "\n");
+            let addr_reg = self.next_id();
+            qbe_write(self.fd, "    "); self.emit_ssa(addr_reg); qbe_write(self.fd, " =l add "); self.emit_ssa(ptr_reg); qbe_write(self.fd, ", "); self.emit_ssa(off_reg); qbe_write(self.fd, "\n");
+            if self.is_aggregate(val_ty) {
+                self.emit_memcpy(addr_reg, s.val, self.get_type_size(val_ty) as u64, tag, ssa, instr_idx);
+            } else {
+                qbe_write(self.fd, "    store"); self.emit_store_suffix(val_ty); qbe_write(self.fd, " "); self.emit_ssa(s.val); qbe_write(self.fd, ", "); self.emit_ssa(addr_reg); qbe_write(self.fd, "\n");
+            }
+        } else if tag == IL_INSTR_ARRAY_STORE {
+            let s = instr.get_ArrayStore();
+            let off_reg = self.next_id();
+            let val_ty = self.get_ssa_type(s.val);
+            let elem_sz = self.get_type_size(val_ty);
+            qbe_write(self.fd, "    "); self.emit_ssa(off_reg); qbe_write(self.fd, " =l mul "); self.emit_ssa(s.idx); qbe_write(self.fd, ", "); write_u64(self.fd as u64, elem_sz as u64); qbe_write(self.fd, "\n");
+            let addr_reg = self.next_id();
+            qbe_write(self.fd, "    "); self.emit_ssa(addr_reg); qbe_write(self.fd, " =l add "); self.emit_ssa(s.base); qbe_write(self.fd, ", "); self.emit_ssa(off_reg); qbe_write(self.fd, "\n");
+            if self.is_aggregate(val_ty) {
+                self.emit_memcpy(addr_reg, s.val, self.get_type_size(val_ty) as u64, tag, ssa, instr_idx);
+            } else {
+                qbe_write(self.fd, "    store"); self.emit_store_suffix(val_ty); qbe_write(self.fd, " "); self.emit_ssa(s.val); qbe_write(self.fd, ", "); self.emit_ssa(addr_reg); qbe_write(self.fd, "\n");
+            }
+        } else if tag == IL_INSTR_CAST {
+            let c = instr.get_Cast();
+            let from_ty = self.get_ssa_type(c.val);
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_abi_class(res_ty); qbe_write(self.fd, " ");
+            self.emit_cast_op(from_ty, res_ty);
+            qbe_write(self.fd, " "); self.emit_ssa(c.val); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_VARIANT_MATCH {
+            let v = instr.get_VariantMatch();
+            // Use a fresh temporary to avoid redefining the same SSA register
+            let tmp = self.next_id();
+            qbe_write(self.fd, "    "); self.emit_ssa(tmp); qbe_write(self.fd, " =w loaduw "); self.emit_ssa(v.val); qbe_write(self.fd, "\n");
+            let disc = self.get_variant_discriminant(v.type_id, v.variant_idx);
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =w ceqw "); self.emit_ssa(tmp); qbe_write(self.fd, ", "); write_u64(self.fd as u64, disc as u64); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_UNWRAP {
+            let val = instr.get_Unwrap();
+            let enum_ptr_ty = self.get_ssa_type(val);
+            let enum_ty = self.get_ptr_inner_type(enum_ptr_ty);
+            let offset = self.get_enum_payload_offset(enum_ty);
+            
+            if self.is_aggregate(res_ty) || self.is_pointer_like(res_ty) {
+                qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l add "); self.emit_ssa(val); qbe_write(self.fd, ", "); write_u64(self.fd as u64, offset as u64); qbe_write(self.fd, "\n");
+            } else {
+                let tmp = self.next_id();
+                qbe_write(self.fd, "    "); self.emit_ssa(tmp); qbe_write(self.fd, " =l add "); self.emit_ssa(val); qbe_write(self.fd, ", "); write_u64(self.fd as u64, offset as u64); qbe_write(self.fd, "\n");
+                
+                qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_abi_class(res_ty); qbe_write(self.fd, " load");
+                self.emit_load_suffix(res_ty); qbe_write(self.fd, " "); self.emit_ssa(tmp); qbe_write(self.fd, "\n");
+            }
+        } else if tag == IL_INSTR_IS_SOME {
+            // Check if discriminant != 0 (Some variant) — not used in ZIR pipeline but handle gracefully
+            let val = instr.get_Unwrap(); // same layout
+            let tmp = self.next_id();
+            qbe_write(self.fd, "    "); self.emit_ssa(tmp); qbe_write(self.fd, " =w loaduw "); self.emit_ssa(val); qbe_write(self.fd, "\n");
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =w cnew "); self.emit_ssa(tmp); qbe_write(self.fd, ", 0\n");
+        } else if tag == IL_INSTR_SYSCALL {
+            let s = instr.get_Syscall();
+            // Use __zoril_syscall_N where N = number of data arguments
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l call $__zoril_syscall_");
+            write_u64(self.fd as u64, s.args.len as u64);
+            qbe_write(self.fd, "(l ");
+            self.emit_ssa(s.num);
+            let mut j = 0 as usize;
+            while j < s.args.len {
+                qbe_write(self.fd, ", l ");
+                self.emit_ssa(s.args[j]);
+                j = j + 1 as usize;
+            }
+            qbe_write(self.fd, ")\n");
+        } else if tag == IL_INSTR_PHI {
+            let p = instr.get_Phi();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " ="); self.emit_abi_class(res_ty); qbe_write(self.fd, " phi ");
+            let mut j = 0 as usize;
+            while j < p.preds.len {
+                if j > 0 as usize { qbe_write(self.fd, ", "); }
+                self.emit_block_label(p.preds[j].block);
+                qbe_write(self.fd, " "); self.emit_ssa(p.preds[j].val);
+                j = j + 1 as usize;
+            }
+            qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_JMP {
+            qbe_write(self.fd, "    jmp "); self.emit_block_label(instr.get_Jmp()); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_UNREACHABLE {
+            qbe_write(self.fd, "    hlt\n");
+        } else if tag == IL_INSTR_BRANCH {
+            let b = instr.get_Branch();
+            qbe_write(self.fd, "    jnz "); self.emit_ssa(b.cond);
+            qbe_write(self.fd, ", "); self.emit_block_label(b.then_block);
+            qbe_write(self.fd, ", "); self.emit_block_label(b.else_block);
+            qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_RET {
+            let val = instr.get_Ret();
+            let ret_ty = self.cur_func().ret_ty;
+            let is_sret = self.requires_pass_by_ref(ret_ty);
+            if val == 0xffffffff as u32 || self.is_unit_type(ret_ty) || is_sret {
+                qbe_write(self.fd, "    ret\n");
+            } else {
+                qbe_write(self.fd, "    ret "); self.emit_ssa(val); qbe_write(self.fd, "\n");
+            }
+        } else if tag == IL_INSTR_DROP || tag == IL_INSTR_RELEASE {
+            // No-op for now unless it's a linear resource that needs closing
+        } else if tag == IL_INSTR_BORROW || tag == IL_INSTR_REGION_CAST || tag == IL_INSTR_LIKELY || tag == IL_INSTR_UNLIKELY || tag == IL_INSTR_END_BORROW {
+            // Metadata-only; emit a copy to preserve the SSA value
+            let val = instr.get_Unwrap(); // same single-field layout
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l copy "); self.emit_ssa(val); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_BOUNDS_CHECK {
+            // No-op in QBE emitter
+        } else if tag == IL_INSTR_SLICE_LEN {
+            let base = instr.get_SliceLen();
+            let addr_reg = self.next_id();
+            qbe_write(self.fd, "    "); self.emit_ssa(addr_reg); qbe_write(self.fd, " =l add "); self.emit_ssa(base); qbe_write(self.fd, ", 8\n");
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l loadl "); self.emit_ssa(addr_reg); qbe_write(self.fd, "\n");
+        } else if tag == IL_INSTR_FDOPEN {
+            let o = instr.get_FDOpen();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l call $__zoril_syscall_4(l 257, l -100, l ");
+            self.emit_ssa(o.path); qbe_write(self.fd, ", l ");
+            write_u64(self.fd as u64, o.flags); qbe_write(self.fd, ", l ");
+            write_u64(self.fd as u64, o.mode); qbe_write(self.fd, ")\n");
+        } else if tag == IL_INSTR_FDCLOSE {
+            let fd = instr.get_FDClose();
+            qbe_write(self.fd, "    call $__zoril_syscall_1(l 3, l "); self.emit_ssa(fd); qbe_write(self.fd, ")\n");
+        } else if tag == IL_INSTR_FDREAD {
+            let io = instr.get_FDRead();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l call $__zoril_syscall_3(l 0, l ");
+            self.emit_ssa(io.fd); qbe_write(self.fd, ", l "); self.emit_ssa(io.buf); qbe_write(self.fd, ", l "); self.emit_ssa(io.count); qbe_write(self.fd, ")\n");
+        } else if tag == IL_INSTR_FDWRITE {
+            let io = instr.get_FDWrite();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l call $__zoril_syscall_3(l 1, l ");
+            self.emit_ssa(io.fd); qbe_write(self.fd, ", l "); self.emit_ssa(io.buf); qbe_write(self.fd, ", l "); self.emit_ssa(io.count); qbe_write(self.fd, ")\n");
+        } else if tag == IL_INSTR_IORING_SETUP {
+            let entries = instr.get_IORingSetup();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l call $__zoril_syscall_2(l 425, l ");
+            self.emit_ssa(entries); qbe_write(self.fd, ", l 0)\n");
+        } else if tag == IL_INSTR_IORING_ENTER {
+            let e = instr.get_IORingEnter();
+            qbe_write(self.fd, "    "); self.emit_ssa(ssa); qbe_write(self.fd, " =l call $__zoril_syscall_6(l 426, l ");
+            self.emit_ssa(e.ring); qbe_write(self.fd, ", l ");
+            write_u64(self.fd as u64, e.to_submit as u64); qbe_write(self.fd, ", l ");
+            write_u64(self.fd as u64, e.min_complete as u64); qbe_write(self.fd, ", l 0, l 0, l 0)\n");
+        } else if tag == IL_INSTR_IORING_CLOSE {
+            let fd = instr.get_IORingClose();
+            qbe_write(self.fd, "    call $__zoril_syscall_1(l 3, l "); self.emit_ssa(fd); qbe_write(self.fd, ")\n");
+        } else if tag == IL_INSTR_PARAM {
+            let param_idx = instr.get_Param() as usize;
+            if param_idx < self.cur_func().params_len {
+                let param_ssa = self.cur_func().param(param_idx).ssa;
+                if ssa != param_ssa {
+                    qbe_write(self.fd, "    ");
+                    self.emit_ssa(ssa);
+                    qbe_write(self.fd, " =");
+                    self.emit_abi_class(self.get_ssa_type(ssa));
+                    qbe_write(self.fd, " copy ");
+                    self.emit_ssa(param_ssa);
+                    qbe_write(self.fd, "\n");
+                }
+            }
+        } else {
+            // Unhandled instruction tag: emit ICE to make missing cases visible
+            qbe_write(self.fd, "    # ICE: unhandled IL instruction tag ");
+            write_u64(self.fd as u64, tag as u64);
+            qbe_write(self.fd, "\n");
+            qbe_write(self.fd, "    call $abort()\n");
+        }
+    }
+
+    fn is_w_tag(self: &QBEEmitter, tag: u32) -> bool {
+        return tag == ILPRIM_U8 || tag == ILPRIM_U16 || tag == ILPRIM_U32 || 
+               tag == ILPRIM_I8 || tag == ILPRIM_I16 || tag == ILPRIM_I32 || 
+               tag == ILPRIM_BOOL || tag == ILPRIM_CHAR || tag == ILPRIM_UNIT ||
+               tag == ILPRIM_NEVER;
+    }
+
+    fn emit_cast_op(self: &QBEEmitter, from_ty: u32, to_ty: u32) {
+        let from_tag = self.get_prim_tag(from_ty);
+        let to_tag = self.get_prim_tag(to_ty);
+
+        let from_is_f32 = from_tag == ILPRIM_F32;
+        let from_is_f64 = from_tag == ILPRIM_F64;
+        let to_is_f32 = to_tag == ILPRIM_F32;
+        let to_is_f64 = to_tag == ILPRIM_F64;
+
+        // Float conversions
+        if from_is_f64 && to_is_f32 { qbe_write(self.fd, "truncd"); return; }
+        if from_is_f32 && to_is_f64 { qbe_write(self.fd, "exts"); return; }
+        // Integer to float: swtof/uwtof (i32/u32) or sltof/ultof (i64/u64), works for both f32 and f64 result
+        if to_is_f32 || to_is_f64 {
+            let from_is_long = from_tag == ILPRIM_I64 || from_tag == ILPRIM_U64 || from_tag == ILPRIM_ISIZE || from_tag == ILPRIM_USIZE;
+            if from_is_long { if self.is_signed_prim(from_ty) { qbe_write(self.fd, "sltof"); } else { qbe_write(self.fd, "ultof"); } }
+            else { if self.is_signed_prim(from_ty) { qbe_write(self.fd, "swtof"); } else { qbe_write(self.fd, "uwtof"); } }
+            return;
+        }
+        // Float to integer: stosi (f32) or dtosi (f64), works for both i32 and i64 result
+        if from_is_f32 { qbe_write(self.fd, "stosi"); return; }
+        if from_is_f64 { qbe_write(self.fd, "dtosi"); return; }
+
+        let from_is_w = self.is_w_tag(from_tag);
+        let to_is_w = self.is_w_tag(to_tag);
+
+        if from_is_w && !to_is_w {
+            if self.is_signed_prim(from_ty) { qbe_write(self.fd, "extsw"); }
+            else { qbe_write(self.fd, "extuw"); }
+        } else if !from_is_w && to_is_w {
+            qbe_write(self.fd, "copy"); // Truncation is implicit in QBE copy from l to w
+        } else {
+            qbe_write(self.fd, "copy");
+        }
+    }
+
+    fn emit_memcpy(self: &QBEEmitter, dest: SSAId, src: SSAId, size: u64, tag: u32, ssa: SSAId, instr_idx: usize) {
+        if size == 0 as u64 { return; }
+        if size <= BLIT_MAX {
+            // QBE expands `blit` into loads and stores, and can merge the slots it copies
+            // between, which explicit loads and stores through computed addresses defeat.
+            qbe_write(self.fd, "    blit "); self.emit_ssa(src); qbe_write(self.fd, ", "); self.emit_ssa(dest);
+            qbe_write(self.fd, ", "); write_u64(self.fd as u64, size); qbe_write(self.fd, "\n");
+            return;
+        }
+        qbe_write(self.fd, "    call ");
+        self.emit_func_sym("memcpy", true);
+        qbe_write(self.fd, "(l "); self.emit_ssa(dest); qbe_write(self.fd, ", l "); self.emit_ssa(src); qbe_write(self.fd, ", l "); write_u64(self.fd as u64, size); qbe_write(self.fd, ")\n");
+    }
+
+    fn get_ssa_type(self: &QBEEmitter, id: SSAId) -> u32 {
+        if id == 0xffffffff as u32 { return 0 as u32; }
+        if id >= 1000000 as u32 { return 0 as u32; } // Temporaries
+        return self.ssa_type_at(id as usize);
+    }
+
+    fn is_signed_prim(self: &QBEEmitter, ty_id: u32) -> bool {
+        let tag = self.get_prim_tag(ty_id);
+        return tag == ILPRIM_I8 || tag == ILPRIM_I16 || tag == ILPRIM_I32 || tag == ILPRIM_I64 || tag == ILPRIM_ISIZE;
+    }
+
+    fn get_prim_tag(self: &QBEEmitter, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 || ty_id == 0xffffffff as u32 || ty_id as usize > self.module.types.len { return 0xffffffff as u32; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        if (*p_ty).def.get_tag() == ILTYPE_PRIMITIVE {
+            return (*p_ty).def.get_Primitive().get_tag();
+        }
+        return 0xffffffff as u32;
+    }
+
+    fn get_field_offset(self: &QBEEmitter, ty_id: u32, field_idx: u32) -> usize {
+        if ty_id == 0 as u32 || ty_id == 0xffffffff as u32 || ty_id as usize > self.module.types.len { return 0 as usize; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        let tag = (*p_ty).def.get_tag();
+        if tag == ILTYPE_USER {
+            let user = (*p_ty).def.get_User();
+            let def = &self.module.typedefs[user.id as usize];
+            match *def {
+                ILTypeDef.Struct(s) => {
+                    let mut off = 0 as usize;
+                    let mut i = 0 as usize;
+                    while i < field_idx as usize {
+                        let fty = s.fields[i].ty;
+                        let align = self.get_type_align(fty);
+                        off = (off + align - 1 as usize) / align * align;
+                        off = off + self.get_type_size(fty);
+                        i = i + 1 as usize;
+                    }
+                    if field_idx as usize >= s.fields.len { return off; }
+                    let target_fty = s.fields[field_idx as usize].ty;
+                    let target_align = self.get_type_align(target_fty);
+                    return (off + target_align - 1 as usize) / target_align * target_align;
+                },
+                ILTypeDef.Enum(_) => {
+                    if field_idx == 0 as u32 { return 0 as usize; } // tag
+                    return self.get_enum_payload_offset(ty_id);
+                },
+                ILTypeDef.Fn(_) => {}, // function typedefs have no fields
+            }
+        }
+        if tag == ILTYPE_TUPLE {
+            let types = (*p_ty).def.get_Tuple();
+            let mut off = 0 as usize;
+            let mut i = 0 as usize;
+            while i < field_idx as usize {
+                let fty = types[i];
+                let align = self.get_type_align(fty);
+                off = (off + align - 1 as usize) / align * align;
+                off = off + self.get_type_size(fty);
+                i = i + 1 as usize;
+            }
+            let target_fty = types[field_idx as usize];
+            let target_align = self.get_type_align(target_fty);
+            return (off + target_align - 1 as usize) / target_align * target_align;
+        }
+        if tag == ILTYPE_SLICE {
+            if field_idx == 1 as u32 { return 8 as usize; }
+            return 0 as usize;
+        }
+        return 0 as usize;
+    }
+
+    pub fn get_ptr_inner_type(self: &QBEEmitter, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 || ty_id == 0xffffffff as u32 || ty_id as usize > self.module.types.len { return 0 as u32; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        let tag = (*p_ty).def.get_tag();
+        if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT {
+            return (*p_ty).def.get_Ptr();
+        }
+        return 0 as u32;
+    }
+
+    fn needs_env_ptr(self: &QBEEmitter, is_extern: bool, name_id: u32) -> bool {
+        if is_extern { return false; }
+        let name = self.intern_table.lookup(name_id);
+        // Builtins or special functions might not need env
+        if is_str_eq(name, "main") { return false; }
+        if is_str_eq(name, "malloc") || is_str_eq(name, "free") || is_str_eq(name, "memcpy") { return false; }
+        return true;
+    }
+}
+
+fn qbe_write(fd: u32, s: [u8]) {
+    must_write(fd as u64, s);
+}

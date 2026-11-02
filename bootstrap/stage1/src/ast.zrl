@@ -1,0 +1,805 @@
+// AST (Abstract Syntax Tree) Data Structures
+// Data-oriented design using indices into arena-allocated arrays.
+
+import "core.zrl";
+import "mem.zrl";
+import "io.zrl";
+import "vec.zrl";
+
+pub const EXPR_LITERAL: u32 = 0;
+pub const EXPR_IDENT: u32 = 1;
+pub const EXPR_UNARY: u32 = 2;
+pub const EXPR_BINARY: u32 = 3;
+pub const EXPR_CALL: u32 = 4;
+pub const EXPR_GENERIC: u32 = 5;
+pub const EXPR_INTRINSIC: u32 = 6;
+pub const EXPR_BLOCK: u32 = 7;
+pub const EXPR_IF: u32 = 8;
+pub const EXPR_MATCH: u32 = 9;
+pub const EXPR_STRUCT_LITERAL: u32 = 10;
+pub const EXPR_MEMBER_ACCESS: u32 = 11;
+pub const EXPR_TUPLE_ACCESS: u32 = 12;
+pub const EXPR_INDEX: u32 = 13;
+pub const EXPR_BOXED: u32 = 14;
+pub const EXPR_CAST: u32 = 15;
+pub const EXPR_ARRAY_LITERAL: u32 = 16;
+pub const EXPR_ARRAY_REPEAT: u32 = 17;
+pub const EXPR_TUPLE_LITERAL: u32 = 18;
+pub const EXPR_CLOSURE: u32 = 19;
+pub const EXPR_TRY: u32 = 20;
+pub const EXPR_RETURN: u32 = 21;
+pub const EXPR_BREAK: u32 = 22;
+pub const EXPR_CONTINUE: u32 = 23;
+pub const EXPR_SIZEOF: u32 = 24;
+pub const EXPR_ALIGNOF: u32 = 25;
+
+pub const DECL_FN: u32 = 0;
+pub const DECL_STRUCT: u32 = 1;
+pub const DECL_ENUM: u32 = 2;
+pub const DECL_TRAIT: u32 = 3;
+pub const DECL_IMPL: u32 = 4;
+pub const DECL_TYPE_ALIAS: u32 = 5;
+pub const DECL_CONST: u32 = 6;
+pub const DECL_STATIC: u32 = 7;
+pub const DECL_IMPORT: u32 = 8;
+pub const DECL_NONE: u32 = 9;
+
+pub const LITERAL_INT: u32 = 0;
+pub const LITERAL_FLOAT: u32 = 1;
+pub const LITERAL_STRING: u32 = 2;
+pub const LITERAL_CHAR: u32 = 3;
+pub const LITERAL_BOOL: u32 = 4;
+
+pub const UNARY_NEG: u32 = 0;
+pub const UNARY_NOT: u32 = 1;
+pub const UNARY_DEREF: u32 = 2;
+pub const UNARY_REF: u32 = 3;
+pub const UNARY_REFMUT: u32 = 4;
+
+pub const BINARY_ADD: u32 = 0;
+pub const BINARY_SUB: u32 = 1;
+pub const BINARY_MUL: u32 = 2;
+pub const BINARY_DIV: u32 = 3;
+pub const BINARY_MOD: u32 = 4;
+pub const BINARY_ADDWRAP: u32 = 5;
+pub const BINARY_SUBWRAP: u32 = 6;
+pub const BINARY_MULWRAP: u32 = 7;
+pub const BINARY_EQ: u32 = 8;
+pub const BINARY_NE: u32 = 9;
+pub const BINARY_LT: u32 = 10;
+pub const BINARY_LE: u32 = 11;
+pub const BINARY_GT: u32 = 12;
+pub const BINARY_GE: u32 = 13;
+pub const BINARY_AND: u32 = 14;
+pub const BINARY_OR: u32 = 15;
+pub const BINARY_XOR: u32 = 16;
+pub const BINARY_SHL: u32 = 17;
+pub const BINARY_SHR: u32 = 18;
+// ZIR-only: the @shl_wrap / @shr_wrap intrinsics, a shift whose count is masked to the
+// operand's width instead of checked (the explicit opt-out from the shift-count check).
+pub const BINARY_SHL_MASKED: u32 = 40;
+pub const BINARY_SHR_MASKED: u32 = 41;
+pub const BINARY_ASSIGN: u32 = 19;
+pub const BINARY_ADD_ASSIGN: u32 = 20;
+pub const BINARY_SUB_ASSIGN: u32 = 21;
+pub const BINARY_MUL_ASSIGN: u32 = 22;
+pub const BINARY_DIV_ASSIGN: u32 = 23;
+pub const BINARY_MOD_ASSIGN: u32 = 24;
+pub const BINARY_ADDWRAP_ASSIGN: u32 = 25;
+pub const BINARY_SUBWRAP_ASSIGN: u32 = 26;
+pub const BINARY_MULWRAP_ASSIGN: u32 = 27;
+pub const BINARY_BITAND_ASSIGN: u32 = 28;
+pub const BINARY_BITOR_ASSIGN: u32 = 29;
+pub const BINARY_BITXOR_ASSIGN: u32 = 30;
+pub const BINARY_SHL_ASSIGN: u32 = 31;
+pub const BINARY_SHR_ASSIGN: u32 = 32;
+
+pub const PATTERN_LITERAL: u32 = 0;
+pub const PATTERN_IDENT: u32 = 1;
+pub const PATTERN_WILDCARD: u32 = 2;
+pub const PATTERN_ENUM_VARIANT: u32 = 3;
+pub const PATTERN_RANGE: u32 = 4;
+pub const PATTERN_OR: u32 = 5;
+pub const PATTERN_TUPLE: u32 = 6;
+pub const PATTERN_STRUCT: u32 = 7;
+pub const PATTERN_MUT_IDENT: u32 = 8;
+
+pub const TYPE_PRIMITIVE: u32 = 0;
+pub const TYPE_PTR: u32 = 1;
+pub const TYPE_PTRMUT: u32 = 2;
+pub const TYPE_REF: u32 = 3;
+pub const TYPE_REFMUT: u32 = 4;
+pub const TYPE_SLICE: u32 = 5;
+pub const TYPE_ARRAY: u32 = 6;
+pub const TYPE_TUPLE: u32 = 7;
+pub const TYPE_FN: u32 = 8;
+pub const TYPE_PATH: u32 = 9;
+pub const TYPE_VAR: u32 = 10;
+pub const TYPE_SLICE_MUT: u32 = 11;
+
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+    pub line: u32,
+    pub col: u32,
+}
+
+// Handles into AST arenas
+pub type ExprId = u32;
+pub type TypeId = u32;
+pub type StmtId = u32;
+pub type PatternId = u32;
+pub type DeclId = u32;
+
+pub enum BinaryOp {
+    Add, Sub, Mul, Div, Mod,
+    AddWrap, SubWrap, MulWrap,
+    Eq, Ne, Lt, Le, Gt, Ge,
+    And, Or, Xor, Shl, Shr,
+    Assign,
+    AddAssign, SubAssign, MulAssign, DivAssign, ModAssign,
+    AddWrapAssign, SubWrapAssign, MulWrapAssign,
+    BitAndAssign, BitOrAssign, BitXorAssign,
+    ShlAssign, ShrAssign,
+    LAnd, LOr,
+}
+
+
+impl BinaryOp {
+    pub fn get_tag(self: &BinaryOp) -> u32 { return unsafe { *(self as *u32) }; }
+}
+
+pub struct BinaryExpr {
+    pub op: BinaryOp,
+    pub lhs: ExprId,
+    pub rhs: ExprId,
+}
+
+pub struct UnaryExpr {
+    pub op: UnaryOp,
+    pub expr: ExprId,
+}
+
+pub enum UnaryOp {
+    Neg, Not, Deref, Ref, RefMut,
+}
+
+impl UnaryOp {
+    pub fn get_tag(self: &UnaryOp) -> u32 { return unsafe { *(self as *u32) }; }
+}
+
+pub struct CallExpr {
+    pub callee: ExprId,
+    pub args: [ExprId],
+    pub type_args: [TypeId],
+}
+
+pub struct GenericExpr {
+    pub expr: ExprId,
+    pub type_args: [TypeId],
+}
+
+pub struct IntrinsicExpr {
+    pub name: u32,
+    pub args: [ExprId],
+    pub type_args: [TypeId],
+}
+
+pub struct BlockExpr {
+    pub stmts: [StmtId],
+    pub tail_expr: ExprId, // 0 if none
+    pub is_unsafe: bool,
+}
+
+pub struct IfExpr {
+    pub cond: ExprId,
+    pub then_block: ExprId,
+    pub else_block: ExprId, // 0 if none
+}
+
+pub struct MatchExpr {
+    pub expr: ExprId,
+    pub arms: [MatchArm],
+}
+
+pub struct MatchArm {
+    pub pattern: PatternId,
+    pub guard: ExprId, // 0 if none
+    pub body: ExprId,
+}
+
+pub enum Pattern {
+    Literal(Literal),
+    Ident(u32),
+    Wildcard,
+    EnumVariant(VariantPattern),
+    Range(RangePattern),
+    Or([PatternId]),
+    Tuple([PatternId]),       // (p, q, ..)
+    Struct(StructPattern),    // Name { field: p, short, .. }
+    MutIdent(u32),            // `mut name`: a binding that can be assigned
+}
+
+impl Pattern {
+    pub fn get_tag(self: &Pattern) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Ident(self: &Pattern) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Literal(self: &Pattern) -> &Literal { return unsafe { &*((self as usize + 8) as *Literal) }; }
+    pub fn get_EnumVariant(self: &Pattern) -> &VariantPattern { return unsafe { &*((self as usize + 8) as *VariantPattern) }; }
+    pub fn get_Range(self: &Pattern) -> &RangePattern { return unsafe { &*((self as usize + 8) as *RangePattern) }; }
+    pub fn get_Or(self: &Pattern) -> [PatternId] { return unsafe { *( (self as usize + 8) as *[PatternId] ) }; }
+    pub fn get_Tuple(self: &Pattern) -> [PatternId] { return unsafe { *( (self as usize + 8) as *[PatternId] ) }; }
+    pub fn get_Struct(self: &Pattern) -> &StructPattern { return unsafe { &*((self as usize + 8) as *StructPattern) }; }
+}
+
+pub struct VariantPattern {
+    pub type_name: u32, // 0 if unqualified
+    pub variant_name: u32,
+    // Sub-patterns for the payload: one for the payload itself, or one per element when
+    // the payload is a tuple (`V(a, b)`). Empty when the pattern names no payload.
+    pub payload: [PatternId],
+}
+
+pub struct StructPattern {
+    pub type_name: u32,
+    pub fields: [FieldPattern],
+    pub has_rest: bool, // `..`: fields not named match anything
+}
+
+pub struct FieldPattern {
+    pub name: u32,
+    pub pattern: PatternId, // `field` alone is a binding named `field`
+}
+
+pub struct RangePattern {
+    pub start: Literal,
+    pub end: Literal,
+    pub inclusive: bool,
+}
+
+pub struct StructLiteralExpr {
+    pub struct_name: u32,
+    pub type_args: [TypeId],
+    pub fields: [FieldValue],
+}
+
+pub struct FieldValue {
+    pub name: u32,
+    pub value: ExprId,
+}
+
+impl Expr {
+    pub fn get_tag(self: &Expr) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Ident(self: &Expr) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Generic(self: &Expr) -> &GenericExpr { return unsafe { &*((self as usize + 8) as *GenericExpr) }; }
+    pub fn get_Literal(self: &Expr) -> &Literal { return unsafe { &*((self as usize + 8) as *Literal) }; }
+    pub fn get_Binary(self: &Expr) -> &BinaryExpr { return unsafe { &*((self as usize + 8) as *BinaryExpr) }; }
+    pub fn get_Unary(self: &Expr) -> &UnaryExpr { return unsafe { &*((self as usize + 8) as *UnaryExpr) }; }
+    pub fn get_Call(self: &Expr) -> &CallExpr { return unsafe { &*((self as usize + 8) as *CallExpr) }; }
+    pub fn get_MemberAccess(self: &Expr) -> &MemberAccessExpr { return unsafe { &*((self as usize + 8) as *MemberAccessExpr) }; }
+    pub fn get_TupleAccess(self: &Expr) -> &TupleAccessExpr { return unsafe { &*((self as usize + 8) as *TupleAccessExpr) }; }
+    pub fn get_Index(self: &Expr) -> &IndexExpr { return unsafe { &*((self as usize + 8) as *IndexExpr) }; }
+    pub fn get_Cast(self: &Expr) -> &CastExpr { return unsafe { &*((self as usize + 8) as *CastExpr) }; }
+    pub fn get_ArrayLiteral(self: &Expr) -> &ArrayLiteralExpr { return unsafe { &*((self as usize + 8) as *ArrayLiteralExpr) }; }
+    pub fn get_ArrayRepeat(self: &Expr) -> &ArrayRepeatExpr { return unsafe { &*((self as usize + 8) as *ArrayRepeatExpr) }; }
+    pub fn get_TupleLiteral(self: &Expr) -> &TupleLiteralExpr { return unsafe { &*((self as usize + 8) as *TupleLiteralExpr) }; }
+    pub fn get_Intrinsic(self: &Expr) -> &IntrinsicExpr { return unsafe { &*((self as usize + 8) as *IntrinsicExpr) }; }
+    pub fn get_If(self: &Expr) -> &IfExpr { return unsafe { &*((self as usize + 8) as *IfExpr) }; }
+    pub fn get_Match(self: &Expr) -> &MatchExpr { return unsafe { &*((self as usize + 8) as *MatchExpr) }; }
+    pub fn get_StructLiteral(self: &Expr) -> &StructLiteralExpr { return unsafe { &*((self as usize + 8) as *StructLiteralExpr) }; }
+    pub fn get_Block(self: &Expr) -> &BlockExpr { return unsafe { &*((self as usize + 8) as *BlockExpr) }; }
+    pub fn get_Try(self: &Expr) -> ExprId { return unsafe { *( (self as usize + 8) as *ExprId ) }; }
+    pub fn get_Return(self: &Expr) -> ExprId { return unsafe { *( (self as usize + 8) as *ExprId ) }; }
+    pub fn get_Sizeof(self: &Expr) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Alignof(self: &Expr) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+}
+
+pub struct MemberAccessExpr {
+    pub expr: ExprId,
+    pub member: u32,
+}
+
+pub struct TupleAccessExpr {
+    pub expr: ExprId,
+    pub index: u64,
+}
+
+pub struct IndexExpr {
+    pub expr: ExprId,
+    pub index: ExprId,
+}
+
+pub struct BoxExpr {
+    pub expr: ExprId,
+    pub allocator: ExprId, // 0 if default (global heap)
+}
+
+pub struct CastExpr {
+    pub expr: ExprId,
+    pub target_ty: TypeId,
+}
+
+pub struct ArrayLiteralExpr {
+    pub elements: [ExprId],
+}
+
+pub struct ArrayRepeatExpr {
+    pub value: ExprId,
+    pub len: ExprId,
+}
+
+pub struct TupleLiteralExpr {
+    pub elements: [ExprId],
+}
+
+pub struct ClosureExpr {
+    pub params: [Param],
+    pub ret_ty: TypeId,
+    pub body: ExprId,
+}
+
+pub enum Expr {
+    Literal(Literal),
+    Ident(u32),
+    Unary(UnaryExpr),
+    Binary(BinaryExpr),
+    Call(CallExpr),
+    Generic(GenericExpr),
+    Intrinsic(IntrinsicExpr),
+    Block(BlockExpr),
+    If(IfExpr),
+    Match(MatchExpr),
+    StructLiteral(StructLiteralExpr),
+    MemberAccess(MemberAccessExpr),
+    TupleAccess(TupleAccessExpr),
+    Index(IndexExpr),
+    Boxed(BoxExpr),
+    Cast(CastExpr),
+    ArrayLiteral(ArrayLiteralExpr),
+    ArrayRepeat(ArrayRepeatExpr),
+    TupleLiteral(TupleLiteralExpr),
+    Closure(ClosureExpr),
+    Try(ExprId),
+    Return(ExprId),
+    Break,
+    Continue,
+    Sizeof(TypeId),
+    Alignof(TypeId),
+}
+
+pub enum Literal {
+    Int((u64, u32)), // value, suffix index (0-15, 0xffffffff if none)
+    Float(f64),
+    String(u32),
+    Char(u32),
+    Bool(bool),
+}
+
+impl Literal {
+    pub fn get_tag(self: &Literal) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Int(self: &Literal) -> u64 { match *self { Literal.Int(v) => v.0, _ => 0 as u64 } }
+    pub fn get_Int_suffix(self: &Literal) -> u32 { match *self { Literal.Int(v) => v.1, _ => 0xffffffff as u32 } }
+    pub fn get_Int_full(self: &Literal) -> (u64, u32) { match *self { Literal.Int(v) => v, _ => (0 as u64, 0xffffffff as u32) } }
+    pub fn get_Float(self: &Literal) -> f64 { return unsafe { *( (self as usize + 8) as *f64 ) }; }
+    pub fn get_String(self: &Literal) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Char(self: &Literal) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Bool(self: &Literal) -> bool { return unsafe { *( (self as usize + 8) as *bool ) }; }
+}
+
+pub enum Type {
+    Primitive(PrimitiveType),
+    Ptr(TypeId),
+    PtrMut(TypeId),
+    Ref(TypeId),
+    RefMut(TypeId),
+    Slice(TypeId),
+    Array((TypeId, usize)),
+    Tuple([TypeId]),
+    Fn(FnType),
+    Path((u32, [TypeId])), // name, type_args
+    Var(u32), // type parameter
+    SliceMut(TypeId), // [mut T]
+}
+
+impl Type {
+    pub fn get_tag(self: &Type) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Primitive(self: &Type) -> PrimitiveType { return unsafe { *( (self as usize + 8) as *PrimitiveType ) }; }
+    pub fn get_Ptr(self: &Type) -> TypeId { return unsafe { *( (self as usize + 8) as *TypeId ) }; }
+    pub fn get_PtrMut(self: &Type) -> TypeId { return unsafe { *( (self as usize + 8) as *TypeId ) }; }
+    pub fn get_Ref(self: &Type) -> TypeId { return unsafe { *( (self as usize + 8) as *TypeId ) }; }
+    pub fn get_RefMut(self: &Type) -> TypeId { return unsafe { *( (self as usize + 8) as *TypeId ) }; }
+    pub fn get_Slice(self: &Type) -> TypeId { return unsafe { *( (self as usize + 8) as *TypeId ) }; }
+    pub fn get_Array(self: &Type) -> (TypeId, usize) { return unsafe { *( (self as usize + 8) as *(TypeId, usize) ) }; }
+    pub fn get_Tuple(self: &Type) -> [TypeId] { return unsafe { *( (self as usize + 8) as *[TypeId] ) }; }
+    pub fn get_Fn(self: &Type) -> &FnType { return unsafe { &*((self as usize + 8) as *FnType) }; }
+    pub fn get_Path(self: &Type) -> (u32, [TypeId]) { return unsafe { *( (self as usize + 8) as *(u32, [TypeId]) ) }; }
+    pub fn get_Var(self: &Type) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_SliceMut(self: &Type) -> TypeId { return unsafe { *( (self as usize + 8) as *TypeId ) }; }
+}
+
+pub enum PrimitiveType {
+    U8, U16, U32, U64, USize,
+    I8, I16, I32, I64, ISize,
+    F32, F64,
+    Bool, Char, Unit, Never,
+}
+
+impl PrimitiveType {
+    pub fn get_tag(self: &PrimitiveType) -> u32 { return unsafe { *(self as *u32) }; }
+}
+
+pub struct FnType {
+    pub params: [TypeId],
+    pub ret_ty: TypeId,
+    pub is_variadic: bool,
+}
+
+pub enum Decl {
+    Fn(FnDecl),
+    Struct(StructDecl),
+    Enum(EnumDecl),
+    Trait(TraitDecl),
+    Impl(ImplDecl),
+    TypeAlias(TypeAliasDecl),
+    Const(ConstDecl),
+    Static(StaticDecl),
+    Import(u32),
+    None,
+}
+
+pub struct TypeParam {
+    pub name: u32,
+    pub bounds: [TypeId],
+}
+
+pub struct FnDecl {
+    pub name: u32,
+    pub params: [Param],
+    pub ret_ty: TypeId,
+    pub body: ExprId, // 0 if extern
+    pub is_pub: bool,
+    pub is_extern: bool,
+    pub is_variadic: bool,
+    pub must_use: bool,
+    pub type_params: [TypeParam],
+    pub doc_comment: u32, // interned multi-line comment block preceding this function
+    pub source_file: u32, // interned path of file that declared this
+    pub has_summary: bool,
+    pub summary_escape: u64,
+    pub summary_stash: u64,
+    pub summary_storage: u64, // parameters whose own storage the result may point into
+    pub summary_stores: u64, // parameters whose own storage the body writes into memory outside it
+    pub summary_into: u64, // parameters whose memory receives those writes; bit 63: a global or unknown
+    pub summary_ret_stack: bool,
+    pub summary_alloc: usize,
+    // `#[borrows(p, ...)]`: the returned reference points into these parameters only
+    // (`#[borrows()]`: into none of them). Without it, Rust's elision rules decide.
+    pub has_borrows: bool,
+    pub borrows: [u32], // parameter names
+    // Half-open range of ExprIds allocated while parsing this function (its whole body).
+    pub expr_start: u32,
+    pub expr_end: u32,
+}
+
+pub struct StructDecl {
+    pub name: u32,
+    pub fields: [Field],
+    pub is_pub: bool,
+    pub must_use: bool,
+    pub type_params: [TypeParam],
+    pub source_file: u32,
+}
+
+pub struct Field {
+    pub name: u32,
+    pub ty: TypeId,
+    pub is_pub: bool,
+}
+
+pub struct EnumDecl {
+    pub name: u32,
+    pub variants: [Variant],
+    pub is_pub: bool,
+    pub must_use: bool,
+    pub type_params: [TypeParam],
+    pub source_file: u32,
+}
+
+pub struct Variant {
+    pub name: u32,
+    pub payload: TypeId, // 0 if none
+    pub discriminant: u32,
+    pub has_discriminant: bool,
+}
+
+pub struct TraitDecl {
+    pub name: u32,
+    pub methods: [FnDecl],
+    pub is_pub: bool,
+    pub type_params: [TypeParam],
+    pub source_file: u32,
+}
+
+pub struct ImplDecl {
+    pub trait_name: u32, // 0 if inherent
+    pub target_ty: TypeId,
+    pub methods: [FnDecl],
+    pub constants: [ConstDecl],
+    pub type_params: [TypeParam],
+    pub trait_type_args: [TypeId],
+    pub source_file: u32,
+}
+
+pub struct TypeAliasDecl {
+    pub name: u32,
+    pub target: TypeId,
+    pub is_pub: bool,
+    pub source_file: u32,
+}
+
+pub struct ConstDecl {
+    pub name: u32,
+    pub ty: TypeId,
+    pub value: ExprId,
+    pub is_pub: bool,
+    pub source_file: u32,
+}
+
+pub struct StaticDecl {
+    pub name: u32,
+    pub is_mut: bool,
+    pub ty: TypeId,
+    pub value: ExprId,
+    pub is_pub: bool,
+    pub source_file: u32,
+}
+
+pub struct Param {
+    pub name: u32,
+    pub ty: TypeId,
+    pub is_mut: bool,
+}
+
+pub struct LetStmt {
+    // `let (a, b) = e;` and the like: the pattern, with NAME and IS_MUT unused. 0 for a
+    // plain `let [mut] name`.
+    pub pattern: PatternId,
+    pub name: u32,
+    pub ty: TypeId,
+    pub init: ExprId,
+    pub is_mut: bool,
+}
+
+pub struct WhileStmt {
+    pub cond: ExprId,
+    pub body: ExprId,
+}
+
+// `for var in start..end BODY`, or, with `end` 0, `for PATTERN in ITERABLE BODY` (`start` is
+// the iterable). The iterator form keeps its source pieces for printing and is lowered
+// through three statements the parser builds: `bind` (`let mut <var> = ITERABLE;`, `var` a
+// compiler-internal name), then `slice_loop` when the iterable is a slice or array, else
+// `iter_loop`, which calls `next()` until it returns `None`.
+pub struct ForStmt {
+    pub var: u32,
+    pub start: ExprId,
+    pub end: ExprId,
+    pub body: ExprId,
+    pub pattern: PatternId,
+    pub bind: StmtId,
+    pub slice_loop: StmtId,
+    pub iter_loop: StmtId,
+}
+
+pub enum Stmt {
+    Let(LetStmt),
+    Expr(ExprId),
+    While(WhileStmt),
+    For(ForStmt),
+    Defer(ExprId),
+    Return(ExprId),
+    Break,
+    Continue,
+}
+
+impl Decl {
+    pub fn get_tag(self: &Decl) -> u32 {
+        let s = *self;
+        return match s {
+            Decl.Fn(_) => DECL_FN,
+            Decl.Struct(_) => DECL_STRUCT,
+            Decl.Enum(_) => DECL_ENUM,
+            Decl.Trait(_) => DECL_TRAIT,
+            Decl.Impl(_) => DECL_IMPL,
+            Decl.TypeAlias(_) => DECL_TYPE_ALIAS,
+            Decl.Const(_) => DECL_CONST,
+            Decl.Static(_) => DECL_STATIC,
+            Decl.Import(_) => DECL_IMPORT,
+            Decl.None => DECL_NONE,
+        };
+    }
+
+    pub fn get_Fn(self: &Decl) -> &FnDecl { return unsafe { &*((self as usize + 8) as *FnDecl) }; }
+    pub fn get_Struct(self: &Decl) -> &StructDecl { return unsafe { &*((self as usize + 8) as *StructDecl) }; }
+    pub fn get_Enum(self: &Decl) -> &EnumDecl { return unsafe { &*((self as usize + 8) as *EnumDecl) }; }
+    pub fn get_Trait(self: &Decl) -> &TraitDecl { return unsafe { &*((self as usize + 8) as *TraitDecl) }; }
+    pub fn get_Impl(self: &Decl) -> &ImplDecl { return unsafe { &*((self as usize + 8) as *ImplDecl) }; }
+    pub fn get_TypeAlias(self: &Decl) -> &TypeAliasDecl { return unsafe { &*((self as usize + 8) as *TypeAliasDecl) }; }
+    pub fn get_Const(self: &Decl) -> &ConstDecl { return unsafe { &*((self as usize + 8) as *ConstDecl) }; }
+    pub fn get_Static(self: &Decl) -> &StaticDecl { return unsafe { &*((self as usize + 8) as *StaticDecl) }; }
+    pub fn get_Import(self: &Decl) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+}
+
+// One `import` resolved while parsing: `from_module` imported the file `to_file` (canonical path as
+// resolved, extension included), which belongs to module `to_module` (differs from `to_file` only
+// for a .zri, which names the source module it was emitted from). Recorded for every import,
+// including repeats, so the driver and the interface printer see the real dependency edges.
+pub struct ImportEdge {
+    pub from_module: u32,
+    pub to_file: u32,
+    pub to_module: u32,
+}
+
+pub struct AST {
+    pub arena: *mut Arena,
+    pub import_edges: Vec<ImportEdge>,
+    pub module_doc: u32, // interned multi-line comment block at top of file
+
+    pub exprs: Vec<Expr>,
+    pub expr_spans: Vec<Span>,
+
+    pub types: Vec<Type>,
+    pub type_spans: Vec<Span>,
+
+    pub stmts: Vec<Stmt>,
+    pub stmt_spans: Vec<Span>,
+    pub stmt_comments: Vec<u32>, // interned literal source comment preceding the statement, 0 if none
+
+    pub patterns: Vec<Pattern>,
+    pub pattern_spans: Vec<Span>,
+
+    pub decls: Vec<Decl>,
+    pub decl_spans: Vec<Span>,
+}
+
+impl AST {
+    // Names (identifiers and member names) appearing in the bodies of this module's public generic
+    // functions and generic/own-generic public methods. Those bodies are instantiated by whoever
+    // calls them, so whatever they mention must be linkable (global linkage) and described by the
+    // module's interface. Over-approximate: a local shadowing a function name only costs an export.
+    pub fn collect_generic_body_refs(self: &AST, target_sf: u32, out: &mut Vec<u32>) {
+        let mut i = 0 as usize;
+        while i < self.decls.len {
+            let p_decl: &Decl = &self.decls[i];
+            match *p_decl {
+                Decl.Fn(f) => {
+                    if f.source_file == target_sf && f.is_pub && f.type_params.len > 0 as usize {
+                        self.note_body_refs(&f, out);
+                    }
+                },
+                Decl.Impl(imp) => {
+                    if imp.source_file == target_sf {
+                        let p_tgt: &Type = &self.types[imp.target_ty as usize];
+                        let mut generic_impl = false;
+                        if p_tgt.get_tag() == TYPE_PATH {
+                            if p_tgt.get_Path().1.len > 0 as usize { generic_impl = true; }
+                        }
+                        let mut k = 0 as usize;
+                        while k < imp.methods.len {
+                            let m = imp.methods[k];
+                            if m.is_pub && (generic_impl || m.type_params.len > 0 as usize) {
+                                self.note_body_refs(&m, out);
+                            }
+                            k = k + 1 as usize;
+                        }
+                    }
+                },
+                _ => {},
+            }
+            i = i + 1 as usize;
+        }
+    }
+
+    fn note_body_refs(self: &AST, f: &FnDecl, out: &mut Vec<u32>) {
+        let mut e = f.expr_start as usize;
+        while e < f.expr_end as usize && e < self.exprs.len {
+            let p: &Expr = &self.exprs[e];
+            match *p {
+                Expr.Ident(n) => { out.push(n); },
+                Expr.MemberAccess(m) => { out.push(m.member); },
+                _ => {},
+            }
+            e = e + 1 as usize;
+        }
+    }
+
+    pub fn new(arena: *mut Arena) -> *mut AST {
+        let ast = zoril_allocator_alloc(arena, sizeof(AST)) as *mut AST;
+        
+        let mut a = AST {
+            arena: arena,
+            // Not the lexer's module_doc: that isn't known until parsing runs.
+            // parser.zrl sets this from the lexer's captured comment once the
+            // first blank-line reset has been seen. Leaving this field out of
+            // the literal entirely (as it was) left it holding whatever
+            // garbage was on the stack for `a` -- the struct-literal field
+            // checker verifies the fields that ARE present, it does not (yet)
+            // require every declared field to be present, so a missing field
+            // compiled silently.
+            module_doc: 0 as u32,
+            import_edges: Vec::<ImportEdge>.new_in(arena),
+            exprs: Vec::<Expr>.new_in(arena),
+            expr_spans: Vec::<Span>.new_in(arena),
+            types: Vec::<Type>.new_in(arena),
+            type_spans: Vec::<Span>.new_in(arena),
+            stmts: Vec::<Stmt>.new_in(arena),
+            stmt_spans: Vec::<Span>.new_in(arena),
+            stmt_comments: Vec::<u32>.new_in(arena),
+            patterns: Vec::<Pattern>.new_in(arena),
+            pattern_spans: Vec::<Span>.new_in(arena),
+            decls: Vec::<Decl>.new_in(arena),
+            decl_spans: Vec::<Span>.new_in(arena),
+        };
+
+        // Push dummy items at index 0 for 1-based indexing
+        a.exprs.push(Expr.Literal(Literal.Bool(false)));
+        a.expr_spans.push(Span { start: 0, end: 0, line: 0, col: 0 });
+        a.types.push(Type.Primitive(PrimitiveType.Unit));
+        a.type_spans.push(Span { start: 0, end: 0, line: 0, col: 0 });
+        a.stmts.push(Stmt.Break);
+        a.stmt_spans.push(Span { start: 0, end: 0, line: 0, col: 0 });
+        a.stmt_comments.push(0 as u32);
+        a.patterns.push(Pattern.Wildcard);
+        a.pattern_spans.push(Span { start: 0, end: 0, line: 0, col: 0 });
+        a.decls.push(Decl.None);
+        a.decl_spans.push(Span { start: 0, end: 0, line: 0, col: 0 });
+
+        unsafe { *ast = a; }
+        return ast;
+    }
+
+    pub fn alloc_expr(self: &mut AST, expr: Expr, span: Span) -> ExprId {
+        let id = self.exprs.len as ExprId;
+        self.exprs.push(expr);
+        self.expr_spans.push(span);
+        return id;
+    }
+
+    pub fn alloc_type(self: &mut AST, ty: Type, span: Span) -> TypeId {
+        let id = self.types.len as TypeId;
+        self.types.push(ty);
+        self.type_spans.push(span);
+        return id;
+    }
+
+    pub fn alloc_stmt(self: &mut AST, stmt: Stmt, span: Span, comment: u32) -> StmtId {
+        let id = self.stmts.len as StmtId;
+        self.stmts.push(stmt);
+        self.stmt_spans.push(span);
+        self.stmt_comments.push(comment);
+        return id;
+    }
+
+    pub fn alloc_pattern(self: &mut AST, pattern: Pattern, span: Span) -> PatternId {
+        let id = self.patterns.len as PatternId;
+        self.patterns.push(pattern);
+        self.pattern_spans.push(span);
+        return id;
+    }
+
+    pub fn alloc_decl_at(self: &mut AST, decl: Decl, span: Span) -> DeclId {
+        let id = self.decls.len as DeclId;
+        self.decls.push(decl);
+        self.decl_spans.push(span);
+        return id;
+    }
+
+    pub fn alloc_decl(self: &mut AST, decl: Decl) -> DeclId {
+        return self.alloc_decl_at(decl, Span { start: 0, end: 0, line: 0, col: 0 });
+    }
+
+    pub fn exprs(self: &AST) -> [Expr] { return self.exprs.as_slice(); }
+    pub fn decls(self: &AST) -> [Decl] { return self.decls.as_slice(); }
+    pub fn types(self: &AST) -> [Type] { return self.types.as_slice(); }
+    pub fn stmts(self: &AST) -> [Stmt] { return self.stmts.as_slice(); }
+    pub fn patterns(self: &AST) -> [Pattern] { return self.patterns.as_slice(); }
+}

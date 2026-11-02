@@ -1,0 +1,21 @@
+// name: Stack-capturing closure stored out via fn value call
+// expected: known_gap
+// gap: Storage facts drops provenance for stack-capturing closure passed through fn value
+// observed: exit 77
+fn default_fn() -> i32 { return 0; }
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn forward_fn_target(v: fn() -> i32) -> fn() -> i32 { return v; }
+fn escape_storer(out: &mut fn() -> i32) {
+    let x = 42;
+    let src_val = || -> i32 { return x; };
+    let carried = src_val;
+    let f_ptr: fn(fn() -> i32) -> fn() -> i32 = forward_fn_target;
+    let routed = f_ptr(carried);
+    *out = routed;
+}
+fn main() -> i32 {
+    let mut dest_val: fn() -> i32 = default_fn;
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    return dest_val();
+}

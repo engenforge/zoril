@@ -1,0 +1,9 @@
+struct Simple { x: i32 }
+impl Simple {
+    fn foo(self: &mut Simple) {}
+}
+fn main() -> i32 {
+    let mut s = Simple { x: 0 };
+    s.foo();
+    return 0;
+}

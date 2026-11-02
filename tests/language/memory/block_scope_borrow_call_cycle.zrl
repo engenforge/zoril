@@ -1,0 +1,20 @@
+// A cycle in the storage summary is *unknown* rather than "points into nothing" (probe 167), so a
+// call to this pair is read as handing back each tied argument's own storage - the strict side. The
+// program is still accepted because the borrow's last use (`*y`) is inside `x`'s scope: what the
+// test pins is that the walk terminates on a cycle instead of following `a` -> `b` -> `a` forever,
+// and that the strict reading does not reject a use that ends in time.
+fn a(r: &i32, n: i32) -> &i32 {
+    if n <= 0 { return r; }
+    return b(r, n - 1);
+}
+
+fn b(r: &i32, n: i32) -> &i32 {
+    return a(r, n - 1);
+}
+
+fn main() -> i32 {
+    let x: i32 = 5;
+    let y = a(&x, 3);
+    if *y != 5 { return 1; }
+    return 0;
+}

@@ -1,0 +1,16 @@
+// expected compile fail
+// EXPECT: error: region escape: returning a pointer to local stack storage
+// Returning a reference into a Box in a field of a by-value parameter dropped at return is rejected.
+struct S {
+    b: Box<i32>,
+}
+
+fn get(s: S) -> &i32 {
+    return &*s.b;
+}
+
+fn main() -> i32 {
+    let s = S { b: box 5 };
+    let r = get(s);
+    return *r;
+}

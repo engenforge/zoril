@@ -1,0 +1,19 @@
+export function w $f(w %n, l %p) {
+@s
+	jmp @h
+@h
+	%i =w phi @s 0, @b %i2
+	%t =w phi @s 0, @b %t2
+	%c =w csltw %i, %n
+	jnz %c, @b, @e
+@b
+	%o =l extsw %i
+	%o8 =l mul %o, 4
+	%a =l add %p, %o8
+	%v =w loadw %a
+	%t2 =w add %t, %v
+	%i2 =w add %i, 1
+	jmp @h
+@e
+	ret %t
+}

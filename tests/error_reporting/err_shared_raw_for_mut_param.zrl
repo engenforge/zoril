@@ -1,0 +1,14 @@
+// expected compile fail
+// A `*T` where `*mut T` is expected: this is the pair the conversion audit removed (the task's
+// "a `*T` written through as `*mut T` without a cast"). The cast is the way to say it (see §5.8 row 8).
+// EXPECT: tests/error_reporting/err_shared_raw_for_mut_param.zrl:13:21: error: type mismatch: expected `*mut i32`, found `*i32`
+
+fn take_mut_raw(p: *mut i32) -> i32 {
+    return unsafe { *p };
+}
+
+fn main() -> i32 {
+    let mut x: i32 = 1;
+    let r: *i32 = &mut x as *i32;
+    return unsafe { take_mut_raw(r) };
+}

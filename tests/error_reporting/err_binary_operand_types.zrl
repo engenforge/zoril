@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_binary_operand_types.zrl:10:13: error: operands `f64` and `i64` do not convert to one type without losing information (write `as`)
+// EXPECT: tests/error_reporting/err_binary_operand_types.zrl:12:5: error: cannot implicitly narrow 64-bit value to 32 bits (truncation is silent; write `as` to ask for it)
+// Operands of different types were converted to the left one's type: `5i32 + 2^32` was 5,
+// `d += big` truncated, and an integer mixed into float arithmetic silently.
+fn main() -> i32 {
+    let a = 5 as i64;
+    let big = 4294967296 as i64;
+    let f = 1.5;
+    let g = f + a;
+    let mut d = 5 as i32;
+    d += big;
+    return 0;
+}

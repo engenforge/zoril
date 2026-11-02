@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_typ_mismatch.zrl:4:18: error: type mismatch: expected `i32`, found `[u8]`
+fn main() -> i32 {
+    let x: i32 = "not an int";
+    return x;
+}

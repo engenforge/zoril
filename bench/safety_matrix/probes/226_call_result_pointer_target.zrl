@@ -1,0 +1,12 @@
+// name: Call result used as assignment target is rejected
+// expected: compile_reject
+// A call's result is a value, not a place the caller named, so the assignment-target check
+// refuses storing through the address it returned.
+fn address() -> *mut u64 {
+    return 4096 as *mut u64;
+}
+
+fn main() -> i32 {
+    address() = 9 as *mut u64;
+    return 0;
+}

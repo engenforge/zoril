@@ -1,0 +1,5 @@
+// expected compile fail
+fn main() -> i32 {
+    let x = 123bad;
+    return 0;
+}

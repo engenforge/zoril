@@ -1,0 +1,11 @@
+// expected compile fail
+// Forging a pointer from an integer is safe; *using* it is what needs `unsafe`. This is the
+// moved half of what tests/functional/pointers/int_to_raw_ptr_cast.zrl now accepts: the same
+// cast, followed by a dereference outside `unsafe`, and the error is reported at the
+// dereference.
+// EXPECT: tests/error_reporting/err_int_to_raw_ptr_cast_deref.zrl:9:13: error: dereference of raw pointer requires unsafe block
+fn main() -> i32 {
+    let p = 0x401000 as *mut u8;
+    let v = *p;
+    return v as i32;
+}

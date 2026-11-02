@@ -1,0 +1,20 @@
+// name: A value moved into itself through its own `&mut`, then read through it (use after free)
+// expected: compile_reject
+// `*rm = a` drops the old `*rm` and moves `a` into the same place. Recording that drop against the
+// pointer local made the live `&mut` invisible to the conflict scan, so the move was accepted and the
+// read through the reference afterwards came from freed storage (exit 139: see
+// tests/error_reporting/err_self_move_through_mut_ref_arena.zrl). Without a read afterwards the same
+// program is accepted and merely leaks - which is the listed difference in bench/fuzz.
+import "mem.zrl";
+use mem::Arena;
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536).unwrap();
+    let rm = &mut a;
+    *rm = a;
+    let mut v = Vec::<u64>.new_in(&*rm);
+    v.push(7);
+    return 0;
+}

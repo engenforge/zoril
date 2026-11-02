@@ -1,0 +1,15 @@
+// expected compile fail
+// EXPECT: error: arithmetic operator not supported on reference operands (dereference it)
+// A reference never converts to an integer implicitly, in either operand position: `1 + r`
+// used to type the literal as a pointer and add the two addresses; `r + 1` likewise.
+fn first(r: &u64) {
+    let x = 1 + r;
+}
+
+fn second(r: &u64) {
+    let y = r + 1;
+}
+
+fn main() -> i32 {
+    return 0;
+}

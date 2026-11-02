@@ -1,0 +1,32 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::{print, stdout};
+use fmt::write_u64;
+
+struct TestStruct {}
+
+impl TestStruct {
+    const VALUE: u64 = 42 as u64;
+
+    pub fn get_value() -> u64 {
+        return TestStruct.VALUE;
+    }
+}
+
+fn main() -> i32 {
+    let val = TestStruct.get_value();
+    print("Value: ");
+    let mut out = stdout();
+    let _ = write_u64(&mut out, val);
+    print("\n");
+
+    if val == 42 as u64 {
+        print("PASS\n");
+        return 0;
+    } else {
+        print("FAIL: expected 42, got ");
+        let _ = write_u64(&mut out, val);
+        print("\n");
+        return 1;
+    }
+}

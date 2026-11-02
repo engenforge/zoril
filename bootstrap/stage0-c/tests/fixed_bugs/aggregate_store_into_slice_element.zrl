@@ -1,0 +1,21 @@
+// expected exit 0
+// Storing a struct into a slice element (s[i] = P { ... }) was sized and stored by the value's
+// type: an aggregate travels as a pointer, so an 8-byte address went to an 8-byte stride in a
+// slice of 24-byte structs. The verifier also reported the fresh @slice field as "leaked".
+// Found by removing the raw-pointer workaround (#5) in src/lower_zir/expr.zrl.
+import "mem.zrl";
+struct P { base: u32, projs: [u64] }
+fn main() -> i32 {
+    let arena = arena_init(4096 as u64);
+    let ptr = zoril_allocator_alloc(arena, 3 as u64 * sizeof(P)) as *mut P;
+    let mut s = unsafe { @slice(ptr, 3 as usize) };
+    let mut i = 0 as usize;
+    while i < 3 as usize {
+        s[i] = P { base: (i + 1 as usize) as u32, projs: unsafe { @slice(0 as *mut u64, 0 as usize) } };
+        i = i + 1 as usize;
+    }
+    if s[0].base != 1 as u32 { return 1; }
+    if s[2].base != 3 as u32 { return 2; }
+    if s[1].projs.len != 0 as usize { return 3; }
+    return 0;
+}

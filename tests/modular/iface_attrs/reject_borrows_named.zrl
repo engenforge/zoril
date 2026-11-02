@@ -1,0 +1,12 @@
+// expected compile fail
+import "lib.zrl";
+
+fn main() -> i32 {
+    let b = 2;
+    let mut r: &i32 = &b;
+    {
+        let a = 1;
+        r = lib::gen_borrows(&b, &a);
+    }
+    return *r;
+}

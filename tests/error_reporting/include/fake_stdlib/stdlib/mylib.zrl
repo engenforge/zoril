@@ -1,0 +1,26 @@
+// A user library that sits at `<project root>/stdlib/mylib.zrl`, the directory the compiler used
+// to read as a vendored standard library. It defines its own `Arena` with `mark` and `reset_to`,
+// and carries none of the provenance the compiler reserves for the standard library's own `mem`:
+// where a file was *loaded from* is designated by `-I stdlib=<dir>`, never inferred from a
+// directory called `stdlib`, so `reset_to` here is an ordinary `&mut self` method and conflicts
+// with every live borrow of the value (err_arena_spoof_project_stdlib_dir.zrl).
+import "vec.zrl";
+use vec::Vec;
+
+pub struct ArenaMark {
+    off: u64,
+}
+
+pub struct Arena {
+    pub v: Vec<u64>,
+}
+
+impl Arena {
+    pub fn mark(self: &Arena) -> ArenaMark {
+        return ArenaMark { off: 0 as u64 };
+    }
+
+    pub fn reset_to(self: &mut Arena, m: ArenaMark) {
+        self.v = Vec::<u64>.new();
+    }
+}

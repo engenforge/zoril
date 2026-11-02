@@ -1,0 +1,66 @@
+// expected exit code: 127
+// 09: Traits, impl blocks, trait bounds, and static dispatch.
+// Demonstrates: trait, impl Trait for Type, method resolution, generic constraints.
+
+trait Measurable {
+    fn measure(self: &Self) -> i32;
+}
+
+trait Describable {
+    fn code(self: &Self) -> i32;
+}
+
+struct Circle {
+    radius: i32,
+}
+
+struct Rectangle {
+    width: i32,
+    height: i32,
+}
+
+impl Measurable for Circle {
+    fn measure(self: &Circle) -> i32 {
+        // Approximate area: pi * r^2 ~ 3 * r^2
+        return 3 * self.radius * self.radius;
+    }
+}
+
+impl Describable for Circle {
+    fn code(self: &Circle) -> i32 {
+        return 1;
+    }
+}
+
+impl Measurable for Rectangle {
+    fn measure(self: &Rectangle) -> i32 {
+        return self.width * self.height;
+    }
+}
+
+impl Describable for Rectangle {
+    fn code(self: &Rectangle) -> i32 {
+        return 2;
+    }
+}
+
+// Generic function with trait bound — dispatched statically via monomorphization
+fn total_measure<T: Measurable>(a: &T, b: &T) -> i32 {
+    return a.measure() + b.measure();
+}
+
+fn describe<T: Describable>(obj: &T) -> i32 {
+    return obj.code();
+}
+
+fn main() -> i32 {
+    let c1 = Circle { radius: 5 };
+    let c2 = Circle { radius: 3 };
+    let r1 = Rectangle { width: 4, height: 6 };
+
+    let circle_total = total_measure(&c1, &c2);
+    let rect_area = r1.measure();
+    let kind = describe(&c1);
+
+    return circle_total + rect_area + kind;
+}

@@ -1,0 +1,15 @@
+// expected compile fail
+// EXPECT: error: cannot assign to 'e' because it is borrowed
+// A match arm binding through a reference keeps the enum borrowed.
+enum E { A(Box<i32>), B }
+fn main() -> i32 {
+    let mut e = E.A(box 5);
+    match &e {
+        E.A(x) => {
+            e = E.B;
+            return **x;
+        },
+        E.B => { return 1; },
+    }
+    return 0;
+}

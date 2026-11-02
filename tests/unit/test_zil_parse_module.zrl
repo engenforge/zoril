@@ -1,0 +1,88 @@
+// expected exit code: 0
+//
+// Exercises ZilParser against a complete textual ZIL module,
+// covering struct definition, function definition, parameters, blocks,
+// and various classes of instructions (const, alloc, store, field_addr, load, add, ret).
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "intern.zrl";
+import "il_instr.zrl";
+import "il_type.zrl";
+import "il_cfg.zrl";
+import "zil_parse.zrl";
+import "io.zrl";
+use il_cfg::ILModule;
+use intern::InternTable;
+use io::{write, stdout};
+use mem_raw::arena_init;
+use zil_parse::ZilParser;
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init((1024 as u64) * 1024 * 64) };
+    let mut table = unsafe { InternTable.new_raw(arena) };
+    let module = unsafe { &mut *ILModule.new(arena, 0) };
+
+    let zil_src = "
+type T0: struct { x: i32, y: i64 }
+
+f1: i32 main(p0: PtrMut<T0, 'local>) {
+  @b0:
+    v1: PtrMut<i32, 'local> = field_addr p0, 0
+    v2: i32 = const 42
+    v3: unit = store v1, v2
+    v4: i32 = load v1
+    v5: i32 = const 10
+    v6: i32 = add v4, v5
+    ret v6
+}
+";
+
+    write(stdout(), "Before new parser\n");
+    let mut parser = ZilParser.new(zil_src, module, table);
+    write(stdout(), "Before parse_module\n");
+    parser.parse_module();
+    write(stdout(), "After parse_module\n");
+
+    write(stdout(), "Verify typedef\n");
+    // Verify typedef
+    if module.typedefs.len() != 1 { return 1; }
+    write(stdout(), "Get typedef 0\n");
+    match *(module.typedefs.get(0).unwrap()) {
+        ILTypeDef.Struct(s) => {
+            write(stdout(), "Check fields len\n");
+            if s.fields.len != 2 { return 2; }
+            write(stdout(), "Lookup name0\n");
+            let name0 = table.lookup(s.fields[0 as usize].name);
+            if !is_str_eq(name0, "x") { return 3; }
+            write(stdout(), "Lookup name1\n");
+            let name1 = table.lookup(s.fields[1 as usize].name);
+            if !is_str_eq(name1, "y") { return 4; }
+        },
+        _ => { return 5; },
+    }
+
+    write(stdout(), "Verify function\n");
+    // Verify function
+    if module.functions.len() != 2 { return 6; } // index 0 is placeholder, f1 is at index 1
+    write(stdout(), "Get function 1\n");
+    let p_func = module.functions.get(1).unwrap();
+    write(stdout(), "Lookup fname\n");
+    let fname = table.lookup((*p_func).name);
+    if !is_str_eq(fname, "main") { return 7; }
+    if (*p_func).params_len != 1 { return 8; }
+    
+    write(stdout(), "Verify blocks\n");
+    // Verify blocks
+    if (*p_func).blocks_len != 1 { return 9; }
+    let block_idx = unsafe { *(((*p_func).blocks as usize) as *mut u32) };
+    write(stdout(), "Get block\n");
+    let p_block = module.blocks.get(block_idx as usize).unwrap();
+    
+    write(stdout(), "Verify instruction count\n");
+    // Verify instruction count
+    if (*p_block).instructions_len != 7 { return 10; }
+
+    write(stdout(), "all parse_module cases passed\n");
+    return 0;
+}

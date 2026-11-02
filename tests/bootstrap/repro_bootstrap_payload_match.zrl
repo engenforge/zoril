@@ -1,0 +1,47 @@
+
+import "io.zrl";
+import "fmt.zrl";
+use io::{write, stdout};
+use fmt::write_u64;
+
+struct Payload {
+    x: u32,
+}
+
+enum Data {
+    Empty,
+    WithPayload(Payload),
+}
+
+impl Data {
+    pub fn get_tag(self: &Data) -> u32 {
+        return match *self {
+            Data.Empty => 0,
+            Data.WithPayload(_) => 1,
+        } as u32;
+    }
+    
+    pub fn get_Payload(self: &Data) -> Payload {
+        return match *self {
+            Data.WithPayload(p) => p,
+            _ => { return Payload { x: 0 }; },
+        };
+    }
+}
+
+fn main() -> i32 {
+    let d = Data.WithPayload(Payload { x: 42 as u32 });
+    let tag = d.get_tag();
+    let p = d.get_Payload();
+    
+    let mut out = stdout();
+    write(stdout(), "Tag: "); let _ = write_u64(&mut out, tag as u64); write(stdout(), "\n");
+    write(stdout(), "Val: "); let _ = write_u64(&mut out, p.x as u64); write(stdout(), "\n");
+    
+    if tag == 1 as u32 && p.x == 42 as u32 {
+        write(stdout(), "Pass\n");
+        return 0;
+    }
+    write(stdout(), "Fail\n");
+    return 1;
+}

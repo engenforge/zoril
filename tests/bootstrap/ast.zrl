@@ -1,0 +1,70 @@
+// expected compile success
+import "mem_raw.zrl";
+use mem_raw::ArenaHeader;
+
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+    pub line: u32,
+    pub col: u32,
+}
+
+pub struct Param {
+    pub name: u32,
+    pub type_id: u32,
+}
+
+pub struct TypeParam {
+    pub name: u32,
+}
+
+pub struct ConstDecl {
+    pub name: u32,
+}
+
+pub struct FnDecl {
+    pub name: u32,
+    pub type_params: [TypeParam],
+    pub params: [Param],
+    pub ret_ty: u32,
+    pub body: u32,
+    pub is_pub: bool,
+    pub is_extern: bool,
+    pub is_variadic: bool,
+    pub must_use: bool,
+    pub span: Span,
+}
+
+pub struct ImplDecl {
+    pub trait_name: u32,
+    pub target_ty: u32,
+    pub methods: [FnDecl],
+    pub constants: [ConstDecl],
+    pub type_params: [TypeParam],
+}
+
+pub enum Decl {
+    Fn(FnDecl),
+    Struct(u32),
+    Enum(u32),
+    Trait(u32),
+    Impl(ImplDecl),
+}
+
+pub struct AST {
+    pub decls: [Decl],
+    pub arena: *mut ArenaHeader,
+}
+
+impl AST {
+    pub fn new(arena: *mut ArenaHeader) -> AST {
+        return AST {
+            decls: @slice(0 as usize as *Decl, 0 as usize),
+            arena: arena,
+        };
+    }
+    
+    pub fn alloc_decl(self: &mut AST, d: Decl) {
+        // Mock implementation doesn't really need to do much
+    }
+}

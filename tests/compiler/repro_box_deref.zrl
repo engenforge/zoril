@@ -1,0 +1,7 @@
+struct Foo { x: i32 }
+fn use_foo(f: &mut Foo) {}
+fn main() -> i32 {
+    let mut f = box Foo { x: 42 };
+    use_foo(*f);
+    return 0;
+}

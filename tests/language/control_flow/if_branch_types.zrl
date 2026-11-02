@@ -1,0 +1,26 @@
+// expected exit 0
+// An `if` with no expected type takes its type from a branch that has one, so a bare
+// `Option.None` branch, first, last or in an `else if` chain, is the same `Option` as the
+// others. It used to get whichever `Option` instance existed first: an `Option<u32>` holding
+// a pointer lost its upper half.
+import "core.zrl";
+fn first_none(c: bool, p: &u64) -> u64 {
+    let o = if c { Option.None } else { Option.Some(p) };
+    return match o { Some(r) => *r, None => 0 };
+}
+fn last_none(c: bool, p: &u64) -> u64 {
+    let o = if c { Option.Some(p) } else { Option.None };
+    return match o { Some(r) => *r, None => 0 };
+}
+fn chain(n: i32, p: &u64, q: &u64) -> u64 {
+    let o = if n == 0 { Option.Some(p) } else if n == 1 { Option.None } else { Option.Some(q) };
+    return match o { Some(r) => *r, None => 0 };
+}
+fn main() -> i32 {
+    let a = 0x1234567890 as u64;
+    let b = 7 as u64;
+    if first_none(false, &a) != a || first_none(true, &a) != 0 { return 1; }
+    if last_none(true, &a) != a || last_none(false, &a) != 0 { return 2; }
+    if chain(0, &a, &b) != a || chain(1, &a, &b) != 0 || chain(2, &a, &b) != b { return 3; }
+    return 0;
+}

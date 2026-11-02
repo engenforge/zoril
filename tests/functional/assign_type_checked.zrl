@@ -1,0 +1,24 @@
+// Positive counterpart to err_assign_type_mismatch / err_struct_literal_field_type:
+// the assignment and struct-literal type checks must not reject same-type stores
+// or the implicit numeric widening the `let` path has always allowed.
+// expected exit code: 7
+import "core.zrl";
+import "mem_raw.zrl";
+use mem_raw::{arena_init, zoril_allocator_alloc};
+
+struct Holder { pub p: *mut u8, pub n: usize }
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(1024 as u64 * 1024) };
+    let raw = unsafe { zoril_allocator_alloc(arena, 16 as u64) } as *mut u8;
+
+    let mut h = Holder { p: raw, n: 0 as usize };   // same-type literal
+    h.p = raw;                                      // same-type field assignment
+
+    let mut wide: u64 = 0 as u64;
+    let narrow: u32 = 7 as u32;
+    wide = narrow;                                  // implicit widening still works
+
+    if h.p as u64 != raw as u64 { return 1; }
+    return wide as i32;
+}

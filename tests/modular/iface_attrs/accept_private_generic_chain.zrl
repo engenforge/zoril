@@ -1,0 +1,10 @@
+// expected exit 0
+import "lib_chain.zrl";
+use lib_chain::ChG;
+
+fn main() -> i32 {
+    if lib_chain::ch_pub::<i32>(1) != 10 { return 1; }
+    let g = ChG::<i32> { v: 1 };
+    if g.pub_get() != 20 { return 2; }
+    return 0;
+}

@@ -1,0 +1,17 @@
+// expected compile fail
+// `@ptr_cast` and `@ptr_from_int` are decided by what they produce: a raw pointer is safe to
+// create (every use of one is gated on its type) and a number only loses the address, but a
+// reference or a slice is a forge nothing checks - a reference is not null-checked and a slice's
+// length is not checked - so those stay behind `unsafe`. The accepted half is
+// tests/language/pointers/ptr_cast_and_int_cast.zrl.
+// EXPECT: tests/error_reporting/err_ptr_cast_to_reference_or_slice.zrl:12:13: error: forging a reference or a slice requires unsafe block
+// EXPECT: tests/error_reporting/err_ptr_cast_to_reference_or_slice.zrl:13:13: error: forging a reference or a slice requires unsafe block
+// EXPECT: tests/error_reporting/err_ptr_cast_to_reference_or_slice.zrl:15:13: error: forging a reference or a slice requires unsafe block
+fn main() -> i32 {
+    let addr: u64 = 0x1234;
+    let r = @ptr_cast<&u32>(addr);
+    let t = @ptr_from_int<&u32>(addr);
+    let p = addr as *u8;
+    let s = @ptr_cast<[u8]>(p);
+    return 0;
+}

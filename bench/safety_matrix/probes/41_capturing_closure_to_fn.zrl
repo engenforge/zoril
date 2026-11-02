@@ -1,0 +1,16 @@
+// name: Capturing closure passed to fn value parameter
+// expected: accept
+// A function value carries its environment (two words, since 2026-10-05), so a capturing
+// closure passed where `fn(...)` is expected is called with its captures. Until then the
+// environment was bound to the variable statically and the callee passed none; the coercion
+// was rejected at compile time.
+
+fn apply(f: fn(i32) -> i32, x: i32) -> i32 {
+    return f(x);
+}
+
+fn main() -> i32 {
+    let k = 5;
+    if apply(|x: i32| -> i32 { x + k }, 2) != 7 { return 1; }
+    return 0;
+}

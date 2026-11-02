@@ -1,0 +1,90 @@
+// Drop glue: a value that needs dropping is dropped when the aggregate that owns it is dropped,
+// whether or not the aggregate has its own Drop impl.
+static mut DROPS: i32 = 0;
+static mut OUTER: i32 = 0;
+
+struct D { x: i64 }
+
+trait Drop {
+    fn drop(self: &mut Self);
+}
+
+impl Drop for D {
+    fn drop(self: &mut D) {
+        DROPS = DROPS + 1;
+    }
+}
+
+struct W { a: i64, d: D }
+struct N { w: W, e: D }
+
+// Own Drop impl and a droppable field: own drop first, then the field.
+struct O { d: D }
+
+impl Drop for O {
+    fn drop(self: &mut O) {
+        OUTER = OUTER + 1;
+    }
+}
+
+enum E { Empty, Has(D) }
+
+fn take_w(w: W) -> i64 {
+    return w.a;
+}
+
+fn struct_field() { let w = W { a: 1, d: D { x: 1 } }; }
+fn nested() { let n = N { w: W { a: 1, d: D { x: 1 } }, e: D { x: 2 } }; }
+fn enum_payload(c: bool) { let e = if c { E.Has(D { x: 1 }) } else { E.Empty }; }
+fn tuple_elems() { let t = (D { x: 1 }, 5, D { x: 2 }); }
+fn array_elems() { let a = [D { x: 1 }, D { x: 2 }, D { x: 3 }]; }
+fn own_and_field() { let o = O { d: D { x: 1 } }; }
+fn moved_into_struct() { let d = D { x: 1 }; let w = W { a: 1, d: d }; }
+fn conditional_move_of_aggregate(c: bool) {
+    let w = W { a: 1, d: D { x: 1 } };
+    if c {
+        let n = take_w(w);
+    }
+}
+
+fn main() -> i32 {
+    DROPS = 0;
+    struct_field();
+    if DROPS != 1 { return 10; }
+
+    DROPS = 0;
+    nested();
+    if DROPS != 2 { return 20; }
+
+    DROPS = 0;
+    enum_payload(true);
+    if DROPS != 1 { return 30; }
+    enum_payload(false);
+    if DROPS != 1 { return 31; }
+
+    DROPS = 0;
+    tuple_elems();
+    if DROPS != 2 { return 40; }
+
+    DROPS = 0;
+    array_elems();
+    if DROPS != 3 { return 50; }
+
+    DROPS = 0;
+    OUTER = 0;
+    own_and_field();
+    if DROPS != 1 { return 60; }
+    if OUTER != 1 { return 61; }
+
+    DROPS = 0;
+    moved_into_struct();
+    if DROPS != 1 { return 70; }
+
+    DROPS = 0;
+    conditional_move_of_aggregate(true);
+    if DROPS != 1 { return 80; }
+    conditional_move_of_aggregate(false);
+    if DROPS != 2 { return 81; }
+
+    return 0;
+}

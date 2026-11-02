@@ -1,0 +1,14 @@
+// name: A write through a `&mut` ends its borrow, so a shared borrow aliases it
+// expected: compile_reject
+// `*rm = 5` used to end the borrow `rm` itself holds, so `&x` was accepted while `rm` went on being
+// used and the shared borrow observed writes made through the `&mut`. With a `Drop` value in the
+// place (see tests/error_reporting/err_mut_ref_write_ends_borrow_arena.zrl) that is a segfault in
+// safe code.
+fn main() -> i32 {
+    let mut x: i32 = 3;
+    let rm = &mut x;
+    *rm = 5;
+    let q = &x;
+    *rm = 11;
+    return *q - 11;
+}

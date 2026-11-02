@@ -1,0 +1,14 @@
+// expected exit 0
+// A `[mut T]` is Copy, as every slice is: reading one out of a struct field does not move
+// it. stage0-C treated mutable slices as move-only, so passing `h.s` twice, as the
+// compiler's own src/main.zrl does with `summary_pass.summaries`, was "use of moved value".
+struct H { s: [mut i32] }
+fn first(s: [i32]) -> i32 { return s[0]; }
+fn main() -> i32 {
+    let mut a = [7, 8, 9];
+    let h = H { s: @slice(&mut a[0] as *mut i32, 3 as usize) as [mut i32] };
+    let x = first(h.s);
+    let y = first(h.s);
+    if x + y != 14 { return 1; }
+    return 0;
+}

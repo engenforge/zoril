@@ -1,0 +1,20 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_uncalled_method_private_call.zrl:14:16: error: cannot access private method: secret
+// EXPECT: tests/error_reporting/err_uncalled_method_private_call.zrl:14:16: note: `secret` is private to tests/error_reporting/include/err_uncalled_method_private_helper.zrl
+// A method nothing calls still resolves its names as the module that writes it: the privacy rule is
+// the same one a called method gets (`err_private_method_cross_module.zrl`), so a library cannot
+// ship an uncalled method that reaches into another module's private surface.
+import "include/err_uncalled_method_private_helper.zrl";
+use err_uncalled_method_private_helper::Widget;
+
+struct Holder { w: Widget }
+
+impl Holder {
+    fn never_called(self: &Holder) -> i32 {
+        return self.w.secret();
+    }
+}
+
+pub fn main() -> i32 {
+    return 0;
+}

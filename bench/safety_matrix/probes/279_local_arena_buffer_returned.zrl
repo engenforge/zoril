@@ -1,0 +1,19 @@
+// name: A reference into a local arena's Vec buffer returned from the frame
+// expected: compile_reject
+// The `Vec` is anchored to a local `Arena`; the arena handle is dropped at the return and unmaps
+// the region the reference points into.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn view() -> &i32 {
+    let a = Arena.new(65536).unwrap();
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(77);
+    return v.get(0).unwrap();
+}
+
+fn main() -> i32 {
+    return *view();
+}

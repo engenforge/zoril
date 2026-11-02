@@ -1,0 +1,17 @@
+// expected exit 0
+// A private method, associated function and associated constant stay usable where they are
+// declared; a `pub` method is callable from another module. The rejecting forms of the same two
+// calls are tests/error_reporting/err_private_method_cross_module.zrl and
+// err_private_assoc_fn_cross_module.zrl.
+import "private_method_lib.zrl";
+use private_method_lib::{Shaped, Widget};
+
+fn main() -> i32 {
+    let w = Widget { n: 1 };
+    // `secret()` inside the module (7 + ...) and the module's own private items through `total`.
+    if w.sum_private() != 3 { return 1; }
+    if Widget.total() != 12 { return 2; }
+    // A trait impl's method is public as the trait is, without `pub` on the method.
+    if w.girth() != 2 { return 3; }
+    return 0;
+}

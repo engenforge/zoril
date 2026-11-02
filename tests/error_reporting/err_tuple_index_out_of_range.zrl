@@ -1,0 +1,7 @@
+// expected compile fail
+// A tuple has no element 5. This reached the ZIL half, which cannot answer for it, and took the compiler
+// down with "not a tuple or out of bounds".
+// EXPECT: tests/error_reporting/err_tuple_index_out_of_range.zrl:7:43: error: this tuple index is out of range
+// EXPECT: tests/error_reporting/err_tuple_index_out_of_range.zrl:7:43: error: this tuple index is out of range
+
+fn main() -> i32 { let t = (1, 2); return t.5; }

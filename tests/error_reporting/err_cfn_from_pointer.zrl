@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_cfn_from_pointer.zrl:8:13: error: cannot cast pointer to function pointer outside `unsafe`: a code address can be null
+// A raw pointer may become a C function pointer only inside `unsafe`, where non-null is the
+// caller's obligation. Outside it, the cast would forge a code address from a pointer nothing
+// checked.
+fn main() -> i32 {
+    let p = 0 as *mut u8;
+    let f = p as extern "C" fn(i32) -> i32;
+    return 0;
+}

@@ -1,0 +1,21 @@
+// name: Assignment to a field of a moved struct that owns storage is rejected
+// expected: compile_reject
+// Assigning to a field through a moved struct base (`o.x = 20`) is rejected as a use
+// of moved value.
+import "vec.zrl";
+use vec::Vec;
+
+struct Owner {
+    v: Vec<i32>,
+    x: i32,
+}
+
+fn main() -> i32 {
+    let mut o = Owner {
+        v: Vec::<i32>.new(),
+        x: 10,
+    };
+    let o2 = o;
+    o.x = 20;
+    return o2.x;
+}

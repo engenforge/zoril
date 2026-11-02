@@ -1,0 +1,26 @@
+// expected compile fail
+// EXPECT: error: arithmetic operator not supported on function-value operands
+// EXPECT: error: comparison operator not supported on function-value operands
+// A function value is a code pointer (plus an environment), not a number.
+fn target() -> u64 {
+    return 0;
+}
+
+fn add_right(g: fn() -> u64) {
+    let y = 1 + g;
+}
+
+fn add_left(g: fn() -> u64) {
+    let y = g + 1;
+}
+
+fn less(g: fn() -> u64, h: fn() -> u64) {
+    let y = g < h;
+}
+
+fn main() -> i32 {
+    if false {
+        return 1;
+    }
+    return 0;
+}

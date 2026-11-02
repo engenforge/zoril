@@ -1,0 +1,19 @@
+// expected exit code: 0
+// A `static`'s or `const`'s initializer is read in the module it is written in, the way a function
+// body is: another module's constant resolves there whether it is written qualified
+// (`geom_lib::SIDES`) or brought in bare by `use`, and the declared type is read there too.
+// Before the static-initializer task both were an internal compiler error (the qualified form) or
+// a located error (the bare form, whose lookup ignored the module).
+import "geom_lib.zrl";
+use geom_lib::SIDES;
+
+const DOUBLE: i32 = geom_lib::SIDES * 2;
+const BARE: i32 = SIDES + 1;
+static POINTER: *mut geom_lib::Point = 0 as *mut geom_lib::Point;
+
+fn main() -> i32 {
+    if DOUBLE != 8 { return 1; }
+    if BARE != 5 { return 2; }
+    if POINTER as u64 != 0 as u64 { return 3; }
+    return 0;
+}

@@ -1,0 +1,42 @@
+// Tests that mutable function parameters can be mutated and that mutations
+// are visible in loop conditions (not reading the original SSA value).
+
+fn count_bits(mut n: u32) -> i32 {
+    let mut count = 0;
+    while n != 0 {
+        count = count + (n & 1) as i32;
+        n = n >> 1;
+    }
+    return count;
+}
+
+fn countdown(mut n: i32) -> i32 {
+    let mut total = 0;
+    while n > 0 {
+        total = total + n;
+        n = n - 1;
+    }
+    return total;
+}
+
+fn double_param(mut x: i32) -> i32 {
+    x = x * 2;
+    return x;
+}
+
+fn main() -> i32 {
+    // count_bits: count set bits in 0b1010 = 2 bits
+    if count_bits(0b1010) != 2 { return 1; }
+    // count_bits: 0b1111 = 4 bits
+    if count_bits(0b1111) != 4 { return 2; }
+    // count_bits: 0 = 0 bits
+    if count_bits(0) != 0 { return 3; }
+
+    // countdown: 1+2+3+4+5 = 15
+    if countdown(5) != 15 { return 4; }
+
+    // double_param: mutation visible in returned value
+    if double_param(21) != 42 { return 5; }
+
+    return 0;
+}

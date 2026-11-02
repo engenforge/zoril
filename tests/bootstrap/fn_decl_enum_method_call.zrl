@@ -1,0 +1,48 @@
+// expected exit code: 0
+// Verifies a 64-byte FnDecl-like enum survives a method call pass-by-value.
+// This mirrors AST.alloc_decl(Decl.Fn(fn_decl)) in the self-hosted compiler.
+struct FnDeclLike {
+    name: u32,
+    params_ptr: *u64,
+    params_len: u64,
+    ret_ty: u32,
+    body: u32,
+    is_pub: bool,
+    is_extern: bool,
+    is_variadic: bool,
+    must_use: bool,
+    type_params_ptr: *u32,
+    type_params_len: u64,
+}
+
+enum DeclLike {
+    Fn(FnDeclLike),
+    None,
+}
+
+struct AST { result: u64 }
+
+impl AST {
+    fn alloc_decl(self: *mut AST, decl: DeclLike) {
+        match decl {
+            DeclLike.Fn(f) => {
+                unsafe { self.result = f.name as u64 + f.params_len; }
+            },
+            _ => {}
+        }
+    }
+}
+
+fn main() -> i32 {
+    let f = FnDeclLike {
+        name: 42, params_ptr: 0 as *u64, params_len: 7,
+        ret_ty: 0, body: 0, is_pub: false, is_extern: false,
+        is_variadic: false, must_use: false,
+        type_params_ptr: 0 as *u32, type_params_len: 0,
+    };
+    let d = DeclLike.Fn(f);
+    let mut ast = AST { result: 0 };
+    (&mut ast).alloc_decl(d);
+    if ast.result != 49 { return 1; }
+    return 0;
+}

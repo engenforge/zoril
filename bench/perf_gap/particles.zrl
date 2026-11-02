@@ -1,0 +1,29 @@
+// An array of structs updated through `&mut self` methods.
+const SCALE: i32 = 300000; // gate: 3000
+struct P { x: i64, y: i64, vx: i64, vy: i64 }
+impl P {
+    fn step(self: &mut P) {
+        self.x = self.x + self.vx;
+        self.y = self.y + self.vy;
+        if self.x < 0 as i64 || self.x > 100000 as i64 { self.vx = 0 as i64 - self.vx; }
+        if self.y < 0 as i64 || self.y > 100000 as i64 { self.vy = 0 as i64 - self.vy; }
+    }
+    fn energy(self: &P) -> i64 { return self.vx * self.vx + self.vy * self.vy; }
+}
+fn main() -> i32 {
+    let mut ps: [P; 1024] = [P { x: 0 as i64, y: 0 as i64, vx: 0 as i64, vy: 0 as i64 }; 1024];
+    let mut i = 0 as usize;
+    while i < 1024 as usize {
+        ps[i] = P { x: (i * 97 as usize) as i64, y: (i * 89 as usize) as i64, vx: (i % 7 as usize) as i64 + 1 as i64, vy: (i % 5 as usize) as i64 + 1 as i64 };
+        i = i + 1 as usize;
+    }
+    let mut e = 0 as i64;
+    let mut r = 0;
+    while r < SCALE {
+        let mut j = 0 as usize;
+        while j < 1024 as usize { ps[j].step(); j = j + 1 as usize; }
+        e = e + ps[r as usize % 1024 as usize].energy() + ps[7].x;
+        r = r + 1;
+    }
+    return (e % 251 as i64) as i32;
+}

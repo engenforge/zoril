@@ -1,0 +1,32 @@
+// name: Storing a parameter arena view into a &mut destination returned by a helper is accepted
+// expected: accept
+// Storing a view of a parameter's arena into a &mut returned by a helper function is accepted.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct H {
+    s: [i32],
+}
+
+fn slot(h: &mut H) -> &mut [i32] {
+    return &mut h.s;
+}
+
+fn f(h: &mut H, a: &Arena) {
+    let mut v = Vec::<i32>.new_in(a);
+    v.push(7);
+    *slot(h) = v.as_slice();
+}
+
+fn main() -> i32 {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return 1; },
+    };
+    let e: [i32] = @slice(0 as *i32, 0);
+    let mut h = H { s: e };
+    f(&mut h, &a);
+    return if h.s[0] == 7 { 0 } else { 1 };
+}

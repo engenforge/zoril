@@ -1,0 +1,80 @@
+// expected exit 0
+// ABI and Layout stress tests
+
+struct Mixed {
+    a: u8,
+    b: u64,
+    c: u8,
+}
+
+enum ComplexEnum {
+    A(u8),
+    B(u64),
+    C(Mixed),
+}
+
+fn test_mixed_layout() -> i32 {
+    // Mixed: offset a=0, pad 7, offset b=8, offset c=16, pad 7, total=24, align=8
+    if sizeof(Mixed) != 24 { return 1; }
+    if alignof(Mixed) != 8 { return 2; }
+    return 0;
+}
+
+fn test_enum_layout() -> i32 {
+    // ComplexEnum: tag=4, max_align=8. payload_offset=8. 
+    // max_payload_size = sizeof(Mixed) = 24.
+    // total_size = 8 + 24 = 32. align=8.
+    if sizeof(ComplexEnum) != 32 { return 10; }
+    if alignof(ComplexEnum) != 8 { return 11; }
+    return 0;
+}
+
+struct Big { a: u64, b: u64, c: u64, d: u64 } // 32 bytes
+
+fn make_big(x: u64) -> Big {
+    return Big { a: x, b: x+1, c: x+2, d: x+3 };
+}
+
+fn test_match_sret(c: i32) -> Big {
+    let res = match c {
+        1 => make_big(100),
+        2 => {
+            let b = make_big(200);
+            b
+        },
+        _ => if c > 10 { make_big(300) } else { make_big(400) },
+    };
+    return res;
+}
+
+fn test_if_sret(c: bool) -> Big {
+    return if c { make_big(500) } else { make_big(600) };
+}
+
+pub fn main() -> i32 {
+    let mut r = test_mixed_layout();
+    if r != 0 { return r; }
+
+    r = test_enum_layout();
+    if r != 0 { return r; }
+
+    let b1 = test_match_sret(1);
+    if b1.a != 100 as u64 { return 20; }
+    
+    let b2 = test_match_sret(2);
+    if b2.a != 200 as u64 { return 21; }
+
+    let b3 = test_match_sret(11);
+    if b3.a != 300 as u64 { return 22; }
+
+    let b4 = test_match_sret(0);
+    if b4.a != 400 as u64 { return 23; }
+
+    let b5 = test_if_sret(true);
+    if b5.a != 500 as u64 { return 24; }
+
+    let b6 = test_if_sret(false);
+    if b6.a != 600 as u64 { return 25; }
+
+    return 0;
+}

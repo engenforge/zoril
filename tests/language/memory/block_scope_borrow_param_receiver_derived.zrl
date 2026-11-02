@@ -1,0 +1,46 @@
+// expected exit 42
+// The precision half of resolving a parameter receiver: `v.get(0)` on `v: &Vec<u64>` is followed to
+// `Vec::get`, whose own mask says the result points into no parameter's own storage (it hands back
+// into the buffer the receiver references). So this borrow is *derived*, and a derived borrow is
+// exempt at the scope end of a local whose type frees nothing - the `Vec` is a handle over an arena
+// buffer that outlives it, which is the whole point of the arena line. The same shape with
+// `as_slice` is what `block_scope_borrow_ends_inside.zrl` already pins for a *local* receiver; the
+// type a parameter names has no IL instance while the body is walked (a body is walked when it is
+// declared), so the lookup is by the type's *name* (`storage_receiver_name`,
+// `storage_method_of_type_name`). Read every unresolvable callee as the worst case instead and this
+// is rejected: mutation M100 is the mutant this pins.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn first(v: &Vec<u64>) -> Option<&u64> {
+    return v.get(0 as u64);
+}
+
+fn slice_of(v: &Vec<u64>) -> [u64] {
+    return v.as_slice();
+}
+
+fn main() -> i32 {
+    let a: Arena = Arena.new(4096).unwrap();
+    let mut out: Option<&u64> = Option.None;
+    {
+        let mut v = Vec::<u64>.new_in(&a);
+        v.push(42 as u64);
+        out = first(&v);
+    }
+    let mut base = Vec::<u64>.new_in(&a);
+    base.push(1 as u64);
+    let mut sl: [u64] = base.as_slice();
+    {
+        let mut w = Vec::<u64>.new_in(&a);
+        w.push(5 as u64);
+        sl = slice_of(&w);
+    }
+    if sl.len != 1 || sl[0] != 5 { return 1; }
+    return match out {
+        Option.Some(r) => *r as i32,
+        Option.None => 0,
+    };
+}

@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_call_through_value.zrl:15:5: error: cannot let 'x' go out of scope while it is still borrowed
+
+// A call through a function *value* (`let f = cb; f(&x)`) has no summary, so its result may point
+// into any argument's own storage. The inherited borrow was recorded as derived, which exempted it
+// at `x`'s scope end and let `y = f(&x)` outlive `x` (probe 171).
+fn cb(p: &i32) -> &i32 { return p; }
+
+fn main() -> i32 {
+    let mut y: &i32 = &0;
+    {
+        let x: i32 = 7;
+        let f = cb;
+        y = f(&x);
+    }
+    return *y;
+}

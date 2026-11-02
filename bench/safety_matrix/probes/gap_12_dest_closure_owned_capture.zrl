@@ -1,0 +1,27 @@
+// name: Whole assignment to closure owned capture bypasses frame escape check
+// expected: compile_reject
+// Rejected by the interprocedural summary pass, which every build enforces and which reads what a call returns through its aggregate result and through the memory its arguments point at.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct Holder { s: [i32], keep_non_copy: Vec<i32> }
+
+fn main() -> i32 {
+    let mut h = Holder { s: @slice(0 as *i32, 0), keep_non_copy: Vec::<i32>.new() };
+    let mut c = |store_mode: bool| -> i32 {
+        let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return -1; } };
+        let mut v = Vec::<i32>.new_in(&a);
+        if store_mode {
+            v.push(42);
+            h = Holder { s: v.as_slice(), keep_non_copy: Vec::<i32>.new() };
+            return 0;
+        } else {
+            v.push(77);
+            return h.s[0];
+        }
+    };
+    let _ = c(true);
+    return c(false);
+}

@@ -1,0 +1,1467 @@
+import "core.zrl";
+import "diag.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "ast.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "il_cfg.zrl";
+import "il_layout.zrl";
+import "resolve.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "intern.zrl";
+import "module_path.zrl";
+import "bytevec.zrl";
+import "mono.zrl";
+import "builder.zrl";
+import "vec.zrl";
+import "state.zrl";
+import "types.zrl";
+import "zir.zrl";
+import "lower_zir.zrl";
+import "check_zir.zrl";
+import "lower_zir_to_zil.zrl";
+import "lower_zir/decl.zrl";
+import "progress.zrl";
+use ast::{AST, Decl, ExprId, FnDecl, ImplDecl, PrimitiveType, Span, StaticDecl, TYPE_PATH, TYPE_PRIMITIVE, TYPE_SLICE, TYPE_SLICE_MUT, Type, TypeId, TypeParam, UnaryOp, primitive_type_name};
+use bytevec::ByteVec;
+use check_zir::ZirVerifier;
+use decl::ZirLowerer;
+use diag::diag_start;
+use il_cfg::{ILFunction, ILGlobal, ILParam, extern_type_complaint, is_zoril_extern_decl};
+use il_instr::{ILInstr, NO_SSA, SSAId, StoreInstr};
+use il_layout::{type_size, type_size_overflows, type_size_too_deep};
+use il_type::{ILArray, ILPRIM_U8, ILPrimitive, ILSlice, ILTYPE_ARRAY, ILTYPE_BOXED, ILTYPE_BOXEDMUT, ILTYPE_FN, ILTYPE_PTR, ILTYPE_FD, ILTYPE_PRIMITIVE, ILTYPE_PTRMUT, ILTYPE_RAWPTR, ILTYPE_RAWPTRMUT, ILTYPE_SLICE, ILTYPE_TUPLE, ILTYPE_USER, ILType, ILTypeDecl, ILTypeDef, IL_TYPEDEF_ENUM, IL_TYPEDEF_STRUCT};
+use io::eprint;
+use intern::InternTable;
+use lower_zir_to_zil::ZirToZilLowerer;
+use mem_raw::{arena_reset, zoril_allocator_alloc};
+use mono::INFER_RESULT;
+use progress::progress_name;
+use resolve::SymbolKind;
+use state::Driver;
+use types::{CONST_FORM_ERROR, CONST_FORM_NOT_CONST, CONST_FORM_STRING, ConstInit};
+use vec::Vec;
+use zir::ZirModule;
+
+impl Driver {
+
+    // A private function used by a public generic body must be linkable from the TU that
+    // instantiates the body (see AST.collect_generic_body_refs).
+    fn collect_generic_private_refs(self: &mut Driver) {
+        let ast: &AST = self.resolver.ast;
+        ast.collect_generic_body_refs(self.target_source_file, &mut self.generic_private_refs);
+    }
+
+    // A method can be named from a generic body as `x.m()` (member name) or `T.m()` (the parser
+    // joins that into the IL name `T_m`), so both spellings count.
+    fn is_method_generic_reachable(self: &mut Driver, type_name: u32, method: u32) -> bool {
+        if self.is_generic_reachable(method) { return true; }
+        let mut full = unsafe { ByteVec.new_raw(self.arena) };
+        full.push_slice(self.intern_table.lookup(type_name));
+        full.push(':' as u8);
+        full.push(':' as u8);
+        full.push_slice(self.intern_table.lookup(method));
+        return self.is_generic_reachable(self.intern_table.intern(full.as_slice()));
+    }
+
+    fn is_generic_reachable(self: &Driver, name: u32) -> bool {
+        let mut i = 0 as usize;
+        while i < self.generic_private_refs.len() {
+            if self.generic_private_refs.as_slice()[i] == name { return true; }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
+    // Whether an IL type can hold a reference: the walk is `ILModule.type_holds_reference`
+    // (src/il_cfg.zrl), shared with the ZIR checker and with the `static mut` rule below. This
+    // wrapper answers for a parameter's *declared* type, through `param_holds_reference`.
+    fn type_holds_reference(self: &mut Driver, ty_id: u32) -> bool {
+        return self.module.type_holds_reference(ty_id, 0 as usize);
+    }
+
+    fn param_holds_reference(self: &mut Driver, ast_ty: TypeId) -> bool {
+        let mut il = self.resolver.resolve_type(ast_ty);
+        if il == 0 as u32 && self.implicit_self_ty != 0 as u32 {
+            il = self.implicit_self_ty;
+        }
+        if il == 0 as u32 { return false; }
+        return self.type_holds_reference(il);
+    }
+
+    fn is_ref_self(self: &Driver, f: &FnDecl) -> bool {
+        if f.params.len == 0 as usize { return false; }
+        if f.params[0].name != self.resolver.intern_table.intern("self") { return false; }
+        let ty_id = f.params[0].ty;
+        if ty_id == 0 as TypeId || (ty_id as usize) >= self.resolver.ast.types.len() {
+            return false;
+        }
+        return match self.resolver.ast.types[ty_id as usize] {
+            Type.Ref(_) | Type.RefMut(_) => true,
+            _ => false,
+        };
+    }
+
+    // Which parameters a returned reference or pointer may point into (bit i = user
+    // parameter i). `#[borrows(..)]` names them. Otherwise: `self` if the function has a
+    // reference `self`, else every parameter whose type can hold a reference. (Rust's
+    // elision rules give the same answer wherever Rust accepts the signature unannotated.)
+    fn compute_ret_ties(self: &mut Driver, f: &FnDecl) -> u64 {
+        let mut mask = 0 as u64;
+        if f.has_borrows {
+            let mut bi = 0 as usize;
+            while bi < f.borrows.len {
+                let mut found = false;
+                let mut pi = 0 as usize;
+                while pi < f.params.len && pi < 64 as usize {
+                    if f.params[pi].name == f.borrows[bi] {
+                        mask = mask | ((1 as u64) << (pi as u64));
+                        found = true;
+                    }
+                    pi = pi + 1 as usize;
+                }
+                if !found {
+                    let sp = if f.body != 0 as ExprId {
+                        self.resolver.ast.expr_spans[f.body as usize]
+                    } else {
+                        Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 }
+                    };
+                    self.report_error_concat(
+                        "#[borrows] names no parameter of this function: ",
+                        self.resolver.intern_table.lookup(f.borrows[bi]),
+                        sp
+                    );
+                    eprint("\n");
+                }
+                bi = bi + 1 as usize;
+            }
+            return mask;
+        }
+        if self.is_ref_self(f) {
+            return 1 as u64;
+        }
+        let mut pi = 0 as usize;
+        while pi < f.params.len && pi < 64 as usize {
+            if self.param_holds_reference(f.params[pi].ty) {
+                mask = mask | ((1 as u64) << (pi as u64));
+            }
+            pi = pi + 1 as usize;
+        }
+        return mask;
+    }
+
+    fn compute_stores_declared(self: &mut Driver, f: &FnDecl) -> (u64, u64) {
+        let mut from = 0 as u64;
+        let mut to = 0 as u64;
+        if !f.has_stores { return (from, to); }
+        let mut bi = 0 as usize;
+        while bi < f.stores_from.len && bi < f.stores_to.len {
+            from = from | self.param_bit(f, f.stores_from[bi], true);
+            let is_static = bi < f.stores_static.len && f.stores_static[bi];
+            if is_static {
+                // Bit 63: the target is a global (src/verify.zrl, STORE_GLOBAL_BIT).
+                to = to | 0x8000000000000000 as u64;
+            } else {
+                to = to | self.param_bit(f, f.stores_to[bi], false);
+            }
+            bi = bi + 1 as usize;
+        }
+        return (from, to);
+    }
+
+    fn param_bit(self: &mut Driver, f: &FnDecl, name: u32, is_source: bool) -> u64 {
+        let mut pi = 0 as usize;
+        while pi < f.params.len && pi < 63 as usize {
+            if f.params[pi].name == name {
+                return (1 as u64) << (pi as u64);
+            }
+            pi = pi + 1 as usize;
+        }
+        let sp = if f.body != 0 as ExprId {
+            self.resolver.ast.expr_spans[f.body as usize]
+        } else {
+            Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 }
+        };
+        if is_source {
+            self.report_error_concat(
+                "#[stores] names no parameter of this function: ",
+                self.resolver.intern_table.lookup(name),
+                sp
+            );
+        } else {
+            self.report_error_concat(
+                "#[stores] target names no parameter of this function: ",
+                self.resolver.intern_table.lookup(name),
+                sp
+            );
+        }
+        eprint("\n");
+        return 0 as u64;
+    }
+
+    // A reference, a slice, or a struct holding a (non-raw) reference field.
+    fn static_type_holds_ref(self: &mut Driver, ast_ty: TypeId, il_ty: u32) -> bool {
+        if ast_ty != 0 as TypeId && (ast_ty as usize) < self.resolver.ast.types.len() {
+            let p_ty: &Type = &self.resolver.ast.types[ast_ty as usize];
+            match *p_ty {
+                Type.Ref(_) | Type.RefMut(_) | Type.Slice(_) | Type.SliceMut(_) => { return true; },
+                _ => {},
+            }
+        }
+        return self.il_type_holds_ref(il_ty);
+    }
+
+    // The static-signature flavour of the same question: does the type of a `static mut` hold a
+    // reference? It is the shared walk now (`ILModule.type_holds_reference`), so a reference
+    // reached through a box or an enum payload counts too - the copy that used to live here looked
+    // through neither.
+    fn il_type_holds_ref(self: &mut Driver, ty_id: u32) -> bool {
+        return self.module.type_holds_reference_no_pointer(ty_id, 0 as usize);
+    }
+
+    // Lowers the module: its statics and constants, then every non-generic function and each
+    // Drop impl's `drop` (and in compile-only mode the methods other TUs may call), each
+    // function lowered as it is instantiated. Generic ones are instantiated from their uses.
+    pub fn lower_module(self: &mut Driver) {
+        self.module.module_doc = self.resolver.ast.module_doc;
+        if self.compile_only { self.collect_generic_private_refs(); }
+        // Each declaration is copied out: holding a slice of the AST across the `&mut self` calls
+        // below would keep the resolver borrowed for the whole pass.
+        // Globals first: a body that reads a static declared later in the file must find it.
+        for i in 0 as usize..self.resolver.ast.decls.len() {
+            let p_decl: Decl = self.resolver.ast.decls[i];
+            match p_decl {
+                Decl.Static(s) => { self.lower_static(&s); },
+                Decl.Const(c) => {
+                    self.add_global(
+                        c.name,
+                        self.resolver.resolve_type(c.ty),
+                        c.value,
+                        c.is_pub,
+                        false,
+                        c.source_file
+                    );
+                },
+                _ => {},
+            }
+        }
+        if self.had_error { return; }
+        for i in 0 as usize..self.resolver.ast.decls.len() {
+            let p_decl: Decl = self.resolver.ast.decls[i];
+            match p_decl {
+                Decl.Fn(f) => {
+                    if f.type_params.len == 0 as usize {
+                        let func_id = self.mono.instantiate_function(
+                            i as u32,
+                            @slice(0 as *mut u32, 0 as usize)
+                        );
+                        self.resolver.define_root(f.name, SymbolKind.Function(func_id), false);
+                    }
+                },
+                Decl.Impl(imp) => {
+                    self.mono.check_concrete_trait_impl(i as u32);
+                    self.instantiate_impl_methods(&imp);
+                },
+                _ => {},
+            }
+        }
+        self.check_impl_trait_bounds();
+        self.check_copy_impls();
+        // Last, so everything the program's called code reaches is lowered by now: what this phase
+        // adds is exactly what nothing calls. Only a whole-program build sees the whole program:
+        // `-c` checks the methods of its own module in `instantiate_impl_methods`.
+        if !self.compile_only && !self.had_error {
+            self.check_uncalled_methods();
+        }
+    }
+
+    // Checks every non-generic method body the program declares, whether or not anything calls it:
+    // a method nothing calls is still part of the program, and without this the first sign of an
+    // error in one is the build of whoever first calls it - in *their* module. Free functions are
+    // checked this way already; `-c` applies the rule to its own module's methods.
+    //
+    // A generic method's body is checked when instantiated, and so is a method of an impl whose
+    // target is written with a type parameter (`impl<T> W<T>`) or that declares its own: none has a
+    // `Self` to check against until an instance supplies one; a concrete `impl W<i32>` is checked here.
+    //
+    // Emission is untouched: the bodies this lowers are dropped by `ILModule.drop_check_only_code`
+    // once the checks that read them have run, so the ZIL stays what the called code lowers to.
+    fn check_uncalled_methods(self: &mut Driver) {
+        // What this phase must give back when the checks that read these bodies are done
+        // (ILModule.drop_check_only_code): the module as it is now.
+        self.module.typedefs_before_check = unsafe {
+            self.module.typedefs.clone_in_raw(self.module.arena)
+        };
+        self.module.funcs_before_check = self.module.functions.len();
+        self.module.check_code_pending = true;
+        let drop_name = self.intern_table.intern("Drop");
+        let no_args = @slice(0 as *mut u32, 0 as usize);
+        let saved_module = self.resolver.current_module;
+        let mut di = 0 as usize;
+        while di < self.resolver.ast.decls.len() {
+            self.check_declared_type_size(di as u32);
+            di = di + 1 as usize;
+        }
+        let mut i = 0 as usize;
+        while i < self.resolver.ast.decls.len() {
+            let p_decl: Decl = self.resolver.ast.decls[i];
+            let imp = match p_decl { Decl.Impl(x) => x, _ => { i = i + 1 as usize; continue; } };
+            i = i + 1 as usize;
+            // A Drop impl's `drop` is lowered with the module (instantiate_impl_methods), which is
+            // also where the trait's own methods are checked against it (check_concrete_trait_impl).
+            if imp.trait_name == drop_name {
+                continue;
+            }
+            // An impl whose target is written with a type parameter (`impl<T> W<T>`, `impl W<T>`)
+            // or that declares parameters of its own (`impl<A> Tr<A> for S`) names no single type:
+            // its methods have no one `Self` to be checked against, and an instance is where they
+            // are checked, like a generic method's body (Monomorphizer.impl_target_is_concrete).
+            if !self.mono.impl_target_is_concrete(&imp) {
+                continue;
+            }
+            // The impl's `impl T` names T in its own module, and a method body resolves its names
+            // there too (lower_fn_in_module), so the target type must be resolved there.
+            self.resolver.current_module = imp.source_file;
+            let base_ty = self.resolver.resolve_type(imp.target_ty);
+            if base_ty == 0 as u32 { continue; }
+            let type_name = self.builder.get_type_decl(base_ty).name;
+            // A trait's default method a non-generic impl inherits is in IMP.methods (with
+            // default_of set) and is checked here like any other: it is a body of this program, and
+            // whether it type-checks can depend on the impl's Self (a field it names).
+            for m in imp.methods {
+                if m.type_params.len == 0 as usize && m.body != 0 as ExprId {
+                    self.mono.instantiate_method(m, no_args, type_name, m.name, &imp, base_ty);
+                }
+            }
+        }
+        self.resolver.current_module = saved_module;
+    }
+
+    // A struct or enum with no type parameters has one layout, and the program declares it even
+    // when nothing names it: an unused declaration is checked as an uncalled method is. A generic
+    // one has no layout until an instance fixes its arguments, and that instance is checked where
+    // it is written (resolve_type). The instantiations this adds are dropped with the rest of this
+    // phase's (ILModule.drop_check_only_code).
+    fn check_declared_type_size(self: &mut Driver, decl_id: u32) {
+        let p_decl: &Decl = &self.resolver.ast.decls[decl_id as usize];
+        let decl_file = match *p_decl {
+            Decl.Struct(st) => if st.type_params.len > 0 as usize {
+                return;
+            } else {
+                st.source_file
+            },
+            Decl.Enum(en) => if en.type_params.len > 0 as usize { return; } else { en.source_file },
+            _ => { return; },
+        };
+        let saved_module = self.resolver.current_module;
+        let saved_file_path = self.file_path;
+        if decl_file != 0 as u32 {
+            self.resolver.current_module = decl_file;
+            self.file_path = self.intern_table.lookup(decl_file);
+        }
+        let no_args = @slice(0 as *mut u32, 0 as usize);
+        let ty = self.mono.instantiate_type(decl_id, no_args);
+        // A component too large on its own is reported where it is written (resolve_type); this is
+        // the whole-type case, whose sum or payload layout is only too large once laid out.
+        if ty != 0 as u32 && !self.resolver.reported_type_size {
+            let size = type_size(self.module, ty);
+            if type_size_overflows(size) {
+                diag_start(self.file_path, self.resolver.ast.decl_spans[decl_id as usize], "error");
+                if type_size_too_deep(size) {
+                    eprint("type nests more than 100 levels deep by value: it has no layout\n");
+                } else {
+                    eprint(
+                        "type is larger than isize::MAX: its size cannot be computed without wrapping\n"
+                    );
+                }
+                self.had_error = true;
+                self.resolver.reported_type_size = true;
+            }
+        }
+        self.resolver.current_module = saved_module;
+        self.file_path = saved_file_path;
+    }
+
+    fn lower_static(self: &mut Driver, s: &StaticDecl) {
+        // The static's own module: its declared type and its initializer are read there.
+        let saved_file_path = self.file_path;
+        let saved_module = self.resolver.current_module;
+        if s.source_file != 0 as u32 {
+            self.file_path = self.intern_table.lookup(s.source_file);
+            self.resolver.current_module = s.source_file;
+        }
+        let ty = self.resolver.resolve_type(s.ty);
+        // A `static mut` lives forever and can be reassigned from anywhere, so a reference
+        // stored in it outlives what it borrows (`G = r` with a parameter `r`, then read after
+        // the caller returns). An immutable static is fixed by its constant initializer.
+        if s.is_mut && self.static_type_holds_ref(s.ty, ty) {
+            self.report_error_concat(
+                "a static mut cannot hold a reference or slice (use a raw pointer): ",
+                "",
+                self.resolver.ast.expr_spans[s.value as usize]
+            );
+            eprint(self.resolver.intern_table.lookup(s.name));
+            eprint("\n");
+        }
+        self.add_global(s.name, ty, s.value, s.is_pub, s.is_mut, s.source_file);
+        self.resolver.current_module = saved_module;
+        self.file_path = saved_file_path;
+    }
+
+    // A module global NAME of type TY, holding the constant VALUE.
+    fn add_global(
+        self: &mut Driver,
+        name: u32,
+        ty: u32,
+        value: ExprId,
+        is_pub: bool,
+        is_mut: bool,
+        source_file: u32
+    ) {
+        // A name that did not resolve has no type; the resolver reported it where it was written.
+        if ty == 0 as u32 {
+            return;
+        }
+        // A global's initializer is read in the module it is written in, the way a body is: names
+        // in it resolve there (a `use`, another module's `ns::NAME`, a type of that module), and
+        // its diagnostics name its file, not the one being compiled.
+        let saved_file_path = self.file_path;
+        let saved_module = self.resolver.current_module;
+        if source_file != 0 as u32 {
+            self.file_path = self.intern_table.lookup(source_file);
+            self.resolver.current_module = source_file;
+        }
+        self.add_global_in_module(name, ty, value, is_pub, is_mut, source_file);
+        self.resolver.current_module = saved_module;
+        self.file_path = saved_file_path;
+    }
+
+    fn add_global_in_module(
+        self: &mut Driver,
+        name: u32,
+        ty: u32,
+        value: ExprId,
+        is_pub: bool,
+        is_mut: bool,
+        source_file: u32
+    ) {
+        let span = self.resolver.ast.expr_spans[value as usize];
+        // A function value's environment is made at run time; a global is a constant.
+        if self.builder.get_type_decl(ty).def.get_tag() == ILTYPE_FN {
+            self.report_error_concat(
+                "a static or constant cannot hold a function value: ",
+                self.intern_table.lookup(name),
+                span
+            );
+            eprint("\n");
+            return;
+        }
+        // What the initializer is, and what it evaluates to. A form a constant context cannot
+        // hold (a struct or array literal, a call, another static's name) is reported here rather
+        // than guessed at, and the checker below is never handed one.
+        let mut cv = ConstInit {
+            int_value: 0 as u64,
+            float_value: 0.0,
+            float_is_f32: false,
+            str_id: 0 as u32
+        };
+        let form = self.const_init_form(value, ty, &mut cv);
+        if form == CONST_FORM_ERROR {
+            return;
+        }
+        if form == CONST_FORM_NOT_CONST {
+            self.report_error(
+                "a static or constant initializer must be a constant: an integer, float, char, bool, byte string or enum variant",
+                span
+            );
+            eprint("\n");
+            return;
+        }
+        // It must also be a value of the declared type, by the same rules a `let` of it answers to.
+        if !self.check_global_initializer(value, ty, form, span, &cv) {
+            return;
+        }
+        // Its bytes, in a buffer zero-filled to the declared size: every byte of a global's data
+        // section is either written here or a zero, so no path can copy uninitialised compiler
+        // memory into an object file again.
+        let ty_size = self.get_type_size(ty) as usize;
+        let alloc_size = if ty_size == 0 as usize { 8 as usize } else { ty_size };
+        let data = unsafe { zoril_allocator_alloc(self.arena, alloc_size as u64) } as *mut u8;
+        let mut i = 0 as usize;
+        while i < alloc_size {
+            self.write_const_byte(data, i, 0 as u8);
+            i = i + 1 as usize;
+        }
+        self.write_const_image(form, &cv, ty, data, ty_size);
+        self.module.alloc_global(ILGlobal {
+            id: 0 as u32, name: name, ty: ty,
+            init_data_ptr: data, init_data_len: ty_size,
+            is_pub: is_pub, is_extern: false, is_mut: is_mut,
+            source_file: source_file,
+        });
+    }
+
+    // Whether VALUE, whose form is FORM, is a value of the declared type TY. The ZIR checker is
+    // the language's own expression checker, so the initializer answers to exactly the rules a
+    // `let` of that type does: `static P: Big = 7` is the mismatch a local of type `Big` is,
+    // reported in the same words at the initializer. The ZIR it emits is discarded with the
+    // scratch arena, and it is only asked about the forms the walk accepted.
+    fn check_global_initializer(
+        self: &mut Driver,
+        value: ExprId,
+        ty: u32,
+        form: u32,
+        span: Span,
+        cv: &ConstInit
+    ) -> bool {
+        let scratch_offset = unsafe { (*self.scratch_arena).offset };
+        let ok = self.check_global_initializer_in_scratch(value, ty, form, span, cv);
+        unsafe { arena_reset(self.scratch_arena, scratch_offset); }
+        return ok;
+    }
+
+    fn check_global_initializer_in_scratch(
+        self: &mut Driver,
+        value: ExprId,
+        ty: u32,
+        form: u32,
+        span: Span,
+        cv: &ConstInit
+    ) -> bool {
+        // The string form is settled before the lowerer takes the driver's fields: the answer needs
+        // `intern_table`, `is_u8_array_of_len` and `u8_array_ty`, which the lowerer already holds.
+        let mut string_len = 0 as usize;
+        let mut string_ok = true;
+        let mut arr_ty = 0 as u32;
+        if form == CONST_FORM_STRING {
+            // In a function body a string literal is `[u8]`, a slice - and a slice descriptor is
+            // not a constant: its data pointer would have to be a relocation. In a constant
+            // context it is the byte array of its own length, so what must match is the length
+            // (`const G: [u8; 5] = "hello"`), and a mismatch names both lengths.
+            string_len = self.intern_table.lookup(cv.str_id).len;
+            if !self.is_u8_array_of_len(ty, string_len) {
+                arr_ty = self.u8_array_ty(string_len as u32);
+                string_ok = false;
+            }
+        }
+        let mut zir_low = ZirLowerer.new(
+            self.scratch_arena,
+            self.arena,
+            self.resolver,
+            self.intern_table,
+            self.mono,
+            self.module
+        );
+        zir_low.file_path = self.file_path;
+        zir_low.compile_only = self.compile_only;
+        if form == CONST_FORM_STRING {
+            if !string_ok {
+                zir_low.report_type_mismatch(ty, arr_ty, span);
+                self.had_error = true;
+            }
+            return string_ok;
+        }
+        let block = zir_low.new_block("global");
+        zir_low.switch_to_block(block);
+        // Set so that anything the checker judges against the enclosing function's result type
+        // (a `?` or a `return`, neither of which the walk accepts) is judged against TY instead.
+        zir_low.current_ret_ty = ty;
+        if !zir_low.check_initializer_value(value, ty, span) {
+            self.had_error = true;
+            return false;
+        }
+        return true;
+    }
+
+    // Whether TY is `[u8; LEN]`.
+    fn is_u8_array_of_len(self: &mut Driver, ty: u32, len: usize) -> bool {
+        if ty == 0 as u32 || ty as usize > self.module.types.len() { return false; }
+        return match self.module.types[ty as usize - 1 as usize].def {
+            ILType.Array(a) => {
+                a.size as usize == len && self.il_primitive_tag(a.element) == ILPRIM_U8
+            },
+            _ => false,
+        };
+    }
+
+    // The type `[u8; LEN]`: what a byte string that does not fit its declared type is reported as.
+    fn u8_array_ty(self: &mut Driver, len: u32) -> u32 {
+        let u8_ty = self.get_primitive_type(ILPrimitive.U8);
+        return self.module.alloc_type(ILTypeDecl {
+            id: 0,
+            name: 0,
+            def: ILType.Array(ILArray { element: u8_ty, size: len }),
+            source_file: 0 as u32
+        });
+    }
+
+    // The methods of IMP lowered whether or not anything here calls them: a Drop impl's `drop`,
+    // which drop glue calls; and in compile-only mode, for a non-generic type of this TU, the
+    // methods other TUs may call (public ones, and those a public generic body names).
+    fn instantiate_impl_methods(self: &mut Driver, imp: &ImplDecl) {
+        if !self.mono.impl_target_is_concrete(imp) { return; }
+        let saved_module = self.resolver.current_module;
+        if imp.source_file != 0 as u32 { self.resolver.current_module = imp.source_file; }
+        let base_ty = self.resolver.resolve_type(imp.target_ty);
+        if base_ty == 0 as u32 {
+            self.resolver.current_module = saved_module;
+            return;
+        }
+        let type_name = self.builder.get_type_decl(base_ty).name;
+        let no_args = @slice(0 as *mut u32, 0 as usize);
+        if imp.trait_name == self.intern_table.intern("Drop") {
+            let drop_name = self.intern_table.intern("drop");
+            for m in imp.methods {
+                if m.name == drop_name {
+                    self.lowering_drop_impl = true;
+                    self.mono.instantiate_method(m, no_args, type_name, drop_name, imp, base_ty);
+                    self.lowering_drop_impl = false;
+                }
+            }
+            self.resolver.current_module = saved_module;
+            return;
+        }
+        if !self.compile_only
+            || imp.source_file != self.target_source_file
+            || self.is_generic_instance(base_ty) {
+            self.resolver.current_module = saved_module;
+            return;
+        }
+        // A trait's default method copied in is each user TU's own (lower_fn_instance).
+        for m in imp.methods {
+            if m.type_params.len == 0 as usize
+                && m.default_of == 0 as u32
+                && (m.is_pub
+                    || imp.trait_name != 0 as u32
+                    || self.is_method_generic_reachable(type_name, m.name)) {
+                self.mono.instantiate_method(m, no_args, type_name, m.name, imp, base_ty);
+            }
+        }
+        self.resolver.current_module = saved_module;
+    }
+
+    // Whether TY is a generic struct or enum (or an instance of one).
+    fn is_generic_instance(self: &mut Driver, ty: u32) -> bool {
+        let typedef_id = match self.builder.get_type_decl(ty).def {
+            ILType.User(u) => u.id,
+            _ => 0 as u32
+        };
+        let decl_id = self.mono.get_typedef_origin(typedef_id);
+        if decl_id == 0 as u32 || decl_id as usize >= self.resolver.ast.decls.len() {
+            return false;
+        }
+        return match self.resolver.ast.decls[decl_id as usize] {
+            Decl.Struct(s) => s.type_params.len > 0 as usize,
+            Decl.Enum(e) => e.type_params.len > 0 as usize,
+            _ => false,
+        };
+    }
+
+    // Lowers F as NAME, resolving its names from F's module.
+    pub fn do_lower_fn(self: &mut Driver, f: &FnDecl, name: u32) -> u32 {
+        let saved_module = self.resolver.current_module;
+        if f.source_file != 0 as u32 { self.resolver.current_module = f.source_file; }
+        let id = self.lower_fn_in_module(f, name);
+        self.resolver.current_module = saved_module;
+        return id;
+    }
+
+    // Declares F as the IL function NAME and, unless another TU does, lowers its body.
+    fn lower_fn_in_module(self: &mut Driver, f: &FnDecl, name: u32) -> u32 {
+        let saved_file_path = self.file_path;
+        if f.source_file != 0 as u32 { self.file_path = self.intern_table.lookup(f.source_file); }
+        let saved_fn_name = self.current_fn_name;
+        self.current_fn_name = name;
+        if saved_fn_name == 0 as u32 {
+            progress_name("Lowering function: ", self.intern_table.lookup(name));
+        }
+        self.set_ice_context(name);
+        // A `main` declared without a result returns 0; a closure's may be inferred.
+        let mut ret_ty = self.resolver.resolve_type(f.ret_ty);
+        if f.ret_ty == 0 as TypeId { ret_ty = self.mono.closure_ret_ty(f.name); }
+        // A closure whose result is its body's is declared with none; lowering the body sets
+        // it (run_body_passes_in_scratch).
+        if ret_ty == INFER_RESULT {
+            ret_ty = 0 as u32;
+        }
+        let is_void_main = self.intern_table.lookup(name) == "main"
+            && (ret_ty == self.unit_type() || ret_ty == 0 as u32);
+        if is_void_main { ret_ty = self.get_primitive_type(ILPrimitive.I32); }
+        let is_sret = self.requires_pass_by_ref(ret_ty);
+        if f.is_extern { self.check_extern_signature(f, ret_ty); }
+        let needs_env = self.needs_env_ptr(f.is_extern, name);
+        let params = self.il_params(f, ret_ty, is_sret, needs_env);
+        let il_func_id = self.declare_function(f, name, ret_ty, params);
+        if f.is_export {
+            self.check_unique_export(f, name, il_func_id);
+        }
+        if f.is_export && f.body != 0 as ExprId {
+            self.check_reserved_symbol(f, name, "an exported extern \"C\" function");
+        } else if self.hosted && f.body != 0 as ExprId && !f.is_extern {
+            // In a hosted program an unmangled name is libc's: a plain function named `free`
+            // would replace libc's own for all of libc.
+            if self.interned_is(name, "free")
+                || self.interned_is(name, "malloc")
+                || self.interned_is(name, "abort")
+                || self.interned_is(name, "zoril_main") {
+                self.check_reserved_symbol(f, name, "a function in a hosted program");
+            }
+        }
+        if self.should_lower_body(f) {
+            self.lower_fn_body(
+                f,
+                name,
+                il_func_id,
+                params.ptr as *mut ILParam,
+                ret_ty,
+                is_sret,
+                needs_env,
+                is_void_main
+            );
+        }
+        self.current_fn_name = saved_fn_name;
+        self.file_path = saved_file_path;
+        if saved_fn_name != 0 as u32 { self.set_ice_context(saved_fn_name); }
+        return il_func_id;
+    }
+
+    // A name that is a symbol of the runtime or of libc cannot be exported (or, hosted, defined): the
+    // definition would replace the real one for the whole process.
+    fn check_reserved_symbol(self: &mut Driver, f: &FnDecl, name: u32, what: [u8]) {
+        if !self.is_runtime_symbol(name) { return; }
+        self.report_error_concat(
+            "the name is reserved for the runtime and libc, so ",
+            what,
+            self.resolver.ast.expr_spans[f.body as usize]
+        );
+        eprint(" cannot be named `");
+        eprint(self.intern_table.lookup(name));
+        eprint("`\n");
+    }
+
+    // Whether an interned name is one the runtime or libc defines. The comparison ends with the
+    // call, so a caller can test several in a row and still call `&mut self` between them; holding
+    // the `lookup` slice would keep the table borrowed instead.
+    fn is_runtime_symbol(self: &mut Driver, name: u32) -> bool {
+        if self.interned_is(name, "main")
+            || self.interned_is(name, "abort")
+            || self.interned_is(name, "malloc")
+            || self.interned_is(name, "free")
+            || self.interned_is(name, "realloc")
+            || self.interned_is(name, "calloc")
+            || self.interned_is(name, "memcpy")
+            || self.interned_is(name, "memset")
+            || self.interned_is(name, "memcmp")
+            || self.interned_is(name, "memmove")
+            || self.interned_is(name, "write")
+            || self.interned_is(name, "read")
+            || self.interned_is(name, "open")
+            || self.interned_is(name, "close")
+            || self.interned_is(name, "exit")
+            || self.interned_is(name, "_exit")
+            || self.interned_is(name, "fd_open")
+            || self.interned_is(name, "fd_close")
+            || self.interned_is(name, "_start")
+            || self.interned_is(name, "zoril_main")
+            || self.interned_is(name, "zoril_argc")
+            || self.interned_is(name, "zoril_argv")
+            || self.interned_is(name, "zoril_abort")
+            || self.interned_is(name, "zoril_slice_eq")
+            || self.interned_is(name, "zoril_allocator_alloc")
+            || self.interned_is(name, "zoril_sys_syscall")
+            || self.interned_is(name, "zoril_memcpy")
+            || self.interned_is(name, "zoril_memset") {
+            return true;
+        }
+        return self.interned_has_prefix(name, "__zoril_");
+    }
+
+    fn interned_is(self: &mut Driver, name: u32, lit: [u8]) -> bool {
+        return self.intern_table.lookup(name) == lit;
+    }
+
+    fn interned_has_prefix(self: &mut Driver, name: u32, prefix: [u8]) -> bool {
+        let n = self.intern_table.lookup(name);
+        return n.len >= prefix.len && subslice(n, 0 as usize, prefix.len) == prefix;
+    }
+
+    // An exported `extern "C"` function is a C symbol with its plain name, so two of them in one
+    // program would be one symbol: the second is an error that names the first.
+    fn check_unique_export(self: &mut Driver, f: &FnDecl, name: u32, il_func_id: u32) {
+        let mut i = 0 as usize;
+        while i < self.module.functions.len() {
+            let p_f = &self.module.functions[i];
+            if i != il_func_id as usize && p_f.is_export && p_f.name == name {
+                let mut msg = unsafe { ByteVec.new_raw(self.arena) };
+                msg.push_slice(
+                    "two exported extern \"C\" functions share one symbol; it is already defined in "
+                );
+                msg.push_slice(self.intern_table.lookup(p_f.source_file));
+                msg.push_slice(": ");
+                self.report_error_concat(
+                    msg.as_slice(),
+                    self.intern_table.lookup(name),
+                    decl_span_of_body(self.resolver.ast, f)
+                );
+                eprint("\n");
+                return;
+            }
+            i = i + 1 as usize;
+        }
+    }
+
+    // An extern function follows the C ABI, so its signature may use only what C can take
+    // (`extern_type_complaint`). The first offending type is reported, at its own position.
+    fn check_extern_signature(self: &mut Driver, f: &FnDecl, ret_ty: u32) {
+        for p in f.params {
+            let ty = self.resolver.resolve_type(p.ty);
+            let why = extern_type_complaint(
+                self.module,
+                ty,
+                false,
+                !(f.is_export && f.body != 0 as ExprId)
+            );
+            if why.len > 0 as usize {
+                self.report_error_concat(
+                    "an extern function cannot take or return ",
+                    why,
+                    self.resolver.ast.type_spans[p.ty as usize]
+                );
+                eprint(": ");
+                eprint(self.intern_table.lookup(f.name));
+                eprint("\n");
+                return;
+            }
+        }
+        let why = extern_type_complaint(
+            self.module,
+            ret_ty,
+            true,
+            !(f.is_export && f.body != 0 as ExprId)
+        );
+        if why.len > 0 as usize {
+            self.report_error_concat(
+                "an extern function cannot take or return ",
+                why,
+                self.resolver.ast.type_spans[f.ret_ty as usize]
+            );
+            eprint(": ");
+            eprint(self.intern_table.lookup(f.name));
+            eprint("\n");
+        }
+    }
+
+    // An internal error's note: "while compiling `NAME` (FILE)".
+    fn set_ice_context(self: &mut Driver, name: u32) {
+        let mut note = unsafe { ByteVec.new_raw(self.arena) };
+        note.push_slice("while compiling `");
+        note.push_slice(self.intern_table.lookup(name));
+        note.push_slice("` (");
+        note.push_slice(self.file_path);
+        note.push_slice(")");
+        set_ice_note(note.as_slice());
+    }
+
+    fn unit_type(self: &mut Driver) -> u32 {
+        return self.get_primitive_type(ILPrimitive.Unit);
+    }
+
+    // F's IL parameters: the hidden result pointer (IS_SRET) and environment (NEEDS_ENV), then
+    // F's own, an aggregate passed by pointer.
+    // The parameter list is a fresh arena list, not a view of the driver.
+    #[borrows()]
+    fn il_params(
+        self: &mut Driver,
+        f: &FnDecl,
+        ret_ty: u32,
+        is_sret: bool,
+        needs_env: bool
+    ) -> [ILParam] {
+        let mut count = f.params.len;
+        if is_sret { count = count + 1 as usize; }
+        if needs_env { count = count + 1 as usize; }
+        let mut params = unsafe { Vec::<ILParam>.with_capacity_in_raw(self.arena, count) };
+        if is_sret {
+            let ty = self.module.alloc_type(ILTypeDecl {
+                id: 0 as u32,
+                name: 0 as u32,
+                def: ILType.Ptr(ret_ty),
+                source_file: 0 as u32
+            });
+            params.push(ILParam {
+                name: self.intern_table.intern("__sret"),
+                ty: ty,
+                ssa: 0 as SSAId,
+                by_ref: false
+            });
+        }
+        for pi in 0 as usize..f.params.len {
+            let p = &f.params[pi];
+            let mut ty = self.resolver.resolve_type(p.ty);
+            if p.ty == 0 as TypeId && ty == 0 as u32 {
+                ty = self.mono.closure_param_ty(f.name, pi);
+            }
+            // A `self` written without a type takes the impl's.
+            if ty == 0 as u32 && self.implicit_self_ty != 0 as u32 {
+                ty = self.implicit_self_ty;
+            }
+            // A function value goes by value, its two words in registers (`:T` in QBE, the
+            // SysV classification of `{l, l}`); other aggregates by pointer.
+            let by_ref = self.is_aggregate(ty)
+                && self.builder.get_type_decl(ty).def.get_tag() != ILTYPE_FN;
+            if by_ref {
+                ty = self.module.alloc_type(ILTypeDecl {
+                    id: 0 as u32,
+                    name: 0 as u32,
+                    def: ILType.Ptr(ty),
+                    source_file: 0 as u32
+                });
+            }
+            params.push(ILParam {
+                name: p.name,
+                ty: ty,
+                ssa: 0 as SSAId,
+                by_ref: by_ref
+            });
+        }
+        // A closure's environment comes last: a call through a function value passes it
+        // after the arguments, where a plain function ignores it.
+        if needs_env {
+            let ty = self.get_ptr_type(self.unit_type());
+            params.push(ILParam {
+                name: self.intern_table.intern("__env"),
+                ty: ty,
+                ssa: 0 as SSAId,
+                by_ref: false
+            });
+        }
+        return params.as_slice();
+    }
+
+    // Adds the IL function NAME for F, with no body yet.
+    fn declare_function(
+        self: &mut Driver,
+        f: &FnDecl,
+        name: u32,
+        ret_ty: u32,
+        params: [ILParam]
+    ) -> u32 {
+        let is_local = self.is_local_function(f, name);
+        let owner_len = self.owner_len_of(name);
+        let ret_ties = self.compute_ret_ties(f);
+        let (decl_from, decl_to) = self.compute_stores_declared(f);
+        let decl_span = if f.body != 0 as ExprId {
+            self.resolver.ast.expr_spans[f.body as usize]
+        } else {
+            Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 }
+        };
+        // A body this TU lowers gets its masks from the canonical ZIR (run_body_passes), unknown
+        // until then; one it does not lower keeps the pre-change reading (known, no parameter
+        // storage), not the unknown one the IL region checks read as "stores every pointer".
+        let lowers_body = self.should_lower_body(f);
+        // A trait's default method belongs to the impl it was copied into.
+        let source_file = if f.default_of != 0 as u32 {
+            self.resolver.ast.decls[f.default_of as usize].source_file()
+        } else {
+            f.source_file
+        };
+        let arena_op = arena_lifecycle_op(f, name, source_file, self.intern_table);
+        return self.module.alloc_function(ILFunction {
+            id: 0 as u32, name: name, params: params.ptr as *mut ILParam, params_len: params.len,
+            ret_ty: ret_ty,
+            blocks: 0 as *mut u32, blocks_len: 0 as usize, blocks_cap: 0 as usize,
+            result_types: 0 as *mut u32, result_types_len: 0 as usize, result_types_cap: 0 as usize,
+            ssa_names: 0 as *mut u32, is_variadic: f.is_variadic,
+            is_extern: f.is_extern
+                && f.body
+                    == 0 as ExprId, is_export: f.is_export, is_unsafe: f.is_unsafe, is_local: is_local, is_pub: f.is_pub, must_use: f.must_use,
+            arena_alloc_bytes: if f.has_summary { f.summary_alloc } else { 0 as usize },
+            doc_comment: f.doc_comment,
+            source_file: source_file,
+            owner_len: owner_len,
+            has_summary: f.has_summary,
+            summary_escape: f.summary_escape,
+            summary_stash: f.summary_stash,
+            summary_escape_via: f.summary_escape_via,
+            summary_stash_via: f.summary_stash_via,
+            summary_storage: f.summary_storage,
+            summary_ret_stack: f.summary_ret_stack,
+            ret_ties: ret_ties,
+            // An import keeps its `.zri` summary. A body's mask is computed from its canonical ZIR
+            // by `run_body_passes` before the borrow checker runs (compute_ret_storage_zir); until
+            // then it is unknown, which is the strict answer a self-recursive call reads. The IL
+            // verifier recomputes it in full later (compute_ret_storage) and exports it in `.zri`.
+            ret_storage: if f.has_summary {
+                f.summary_storage
+            } else {
+                0 as u64
+            },
+            stores_storage: if f.has_summary { f.summary_stores } else { 0 as u64 },
+            store_targets: if f.has_summary { f.summary_into } else { 0 as u64 },
+            has_stores_declared: f.has_stores,
+            stores_declared_from: decl_from,
+            stores_declared_to: decl_to,
+            decl_span: decl_span,
+            is_stdlib: f.source_is_stdlib,
+            // A method of a generic type carries the parameters on its impl.
+            is_generic: f.type_params.len > 0 as usize || self.is_specialization,
+            from_interface: f.from_interface,
+            // Known when an interface described the masks, or once the body's ZIR has been read
+            // (compute_ret_storage_zir). A `-c` import whose `.zri` carried no `#[summary]` is
+            // the unknown case: `0` then means "no information", not "nothing escapes". A plain C
+            // `extern fn` is known-nothing because reaching one already requires `unsafe`. Anything
+            // else is unknown until its body is read, which callers read as "may point into every
+            // argument" - the strict side (probe 167).
+            storage_known: f.has_storage
+                || (f.is_extern && !f.is_export)
+                || (f.body != 0 as ExprId && !lowers_body),
+            has_borrows: f.has_borrows,
+            // How the borrow checker identifies the arena lifecycle primitives; decided here from
+            // where the declaration was loaded from, never from a user file's name
+            // (doc/spec/modular_compilation.md).
+            arena_mark: arena_op == ARENA_OP_MARK,
+            arena_reset_to: arena_op == ARENA_OP_RESET_TO,
+            arena_reset: arena_op == ARENA_OP_RESET,
+            arena_init_result: arena_op == ARENA_OP_INIT_RESULT,
+            allocator_free: arena_op == ARENA_OP_ALLOCATOR_FREE,
+            buffer_external: arena_op == ARENA_OP_BUFFER_EXTERNAL,
+            buffer_anchored: arena_op == ARENA_OP_BUFFER_ANCHORED,
+        });
+    }
+
+    // Whether F, lowered as NAME, is private to this TU in compile-only mode: a specialization
+    // (each TU makes its own), or a private function no public generic body names.
+    fn is_local_function(self: &mut Driver, f: &FnDecl, name: u32) -> bool {
+        if !self.compile_only { return false; }
+        if self.is_specialization { return true; }
+        if self.lowering_drop_impl { return false; }
+        return !f.is_pub
+            && self.intern_table.lookup(name) != "main"
+            && !self.is_generic_reachable(f.name)
+            && !self.is_generic_reachable(name);
+    }
+
+    // The length of the owning type's name at the start of a method's NAME (`Type::m`); 0 for
+    // a function.
+    fn owner_len_of(self: &mut Driver, name: u32) -> u32 {
+        if self.current_owner_len != 0 as u32 { return self.current_owner_len; }
+        let s = self.intern_table.lookup(name);
+        let mut i = 0 as usize;
+        while i + 1 as usize < s.len {
+            if s[i] == ':' as u8 && s[i + 1 as usize] == ':' as u8 { return i as u32; }
+            i = i + 1 as usize;
+        }
+        return 0 as u32;
+    }
+
+    // Whether F's body is lowered here: not an extern's, nor in compile-only mode a
+    // non-generic function of another TU, which that TU lowers.
+    fn should_lower_body(self: &mut Driver, f: &FnDecl) -> bool {
+        if f.body == 0 as ExprId { return false; }
+        if self.is_specialization { return true; }
+        return !is_zoril_extern_decl(
+            f.is_extern && f.body == 0 as ExprId,
+            f.source_file,
+            f.type_params.len,
+            self.compile_only,
+            self.target_source_file
+        );
+    }
+
+    // Lowers F's body into function IL_FUNC_ID, ending it with its return.
+    fn lower_fn_body(
+        self: &mut Driver,
+        f: &FnDecl,
+        name: u32,
+        il_func_id: u32,
+        params: *mut ILParam,
+        ret_ty: u32,
+        is_sret: bool,
+        needs_env: bool,
+        is_void_main: bool
+    ) {
+        let saved_func_idx = self.builder.current_func_idx;
+        let saved_block_idx = self.builder.current_block_idx;
+        let saved_entry_block = self.builder.entry_block_idx;
+        let saved_ssa_id = self.builder.next_ssa_id;
+        let saved_span = self.builder.current_span;
+        let saved_sret = self.sret_ssa;
+        self.builder.current_func_idx = il_func_id;
+        self.builder.next_ssa_id = 1 as SSAId;
+        self.sret_ssa = NO_SSA as u32;
+        self.resolver.push_scope();
+
+        let alloc_block = self.new_block();
+        let start_block = self.new_block();
+        self.builder.entry_block_idx = alloc_block;
+        self.switch_to_block(start_block);
+        let mut hidden = 0 as usize;
+        if is_sret {
+            self.sret_ssa = self.emit_param(params, hidden);
+            hidden = hidden + 1 as usize;
+        }
+        // A closure's environment is its last parameter (il_params); GetEnv reads it.
+        if needs_env {
+            self.emit_param(params, hidden + f.params.len);
+        }
+        if let Option.Some(body_val) = self.run_body_passes(f, name, hidden as u32) {
+            // A closure's inferred result was set while its body was lowered.
+            let final_ret = self.module.functions[il_func_id as usize].ret_ty;
+            self.check_body_type(body_val, final_ret, is_void_main);
+            if !self.is_terminated() { self.emit_fn_return(body_val, final_ret, is_void_main); }
+            self.switch_to_block(alloc_block);
+            self.emit(ILInstr.Jmp(start_block));
+        }
+
+        self.resolver.pop_scope();
+        self.builder.current_func_idx = saved_func_idx;
+        self.builder.current_block_idx = saved_block_idx;
+        self.builder.entry_block_idx = saved_entry_block;
+        self.builder.next_ssa_id = saved_ssa_id;
+        self.builder.current_span = saved_span;
+        self.sret_ssa = saved_sret;
+    }
+
+    // The `param` instruction of hidden parameter IDX.
+    fn emit_param(self: &mut Driver, params: *mut ILParam, idx: usize) -> SSAId {
+        let p = (params as usize + idx * sizeof(ILParam)) as *mut ILParam;
+        unsafe {
+            let ssa = self.emit_with_type(ILInstr.Param(idx as u32), (*p).ty);
+            (*p).ssa = ssa;
+            return ssa;
+        }
+    }
+
+    // F's body through the pipeline: lowered to ZIR, checked, then lowered to ZIL in the
+    // function being built (its own parameters from ZIR_ARG_START). The body's value, or None
+    // when lowering or checking it failed. The ZIR lives in the scratch arena, reset after.
+    fn run_body_passes(
+        self: &mut Driver,
+        f: &FnDecl,
+        name: u32,
+        zir_arg_start: u32
+    ) -> Option<SSAId> {
+        let scratch_offset = unsafe { (*self.scratch_arena).offset };
+        let result = self.run_body_passes_in_scratch(f, name, zir_arg_start);
+        unsafe { arena_reset(self.scratch_arena, scratch_offset); }
+        return result;
+    }
+
+    fn run_body_passes_in_scratch(
+        self: &mut Driver,
+        f: &FnDecl,
+        name: u32,
+        zir_arg_start: u32
+    ) -> Option<SSAId> {
+        // The instance's source file is resolved before the lowerer takes the driver's fields.
+        let current_source_file = if f.source_file != 0 as u32 {
+            f.source_file
+        } else {
+            self.intern_table.intern(self.file_path)
+        };
+        let mut zir_low = ZirLowerer.new(
+            self.scratch_arena,
+            self.arena,
+            self.resolver,
+            self.intern_table,
+            self.mono,
+            self.module
+        );
+        // Errors name F's file (lower_fn_in_module set file_path); an instance with no origin
+        // names the entry file.
+        zir_low.file_path = self.file_path;
+        zir_low.current_source_file = current_source_file;
+        zir_low.compile_only = self.compile_only;
+        zir_low.implicit_self_ty = self.implicit_self_ty;
+        let mut zir_func = zir_low.lower_function(f, name);
+        if zir_low.had_error {
+            self.had_error = true;
+            return Option.None;
+        }
+        // A closure's result found in its body (never an aggregate, see infer_result_from).
+        if zir_low.infer_ret && zir_func.ret_ty != 0 as u32 {
+            let p_func = self.module.get_function_mut(self.builder.current_func_idx as usize);
+            p_func.ret_ty = zir_func.ret_ty;
+        }
+        // The function's own ret_storage, from its canonical ZIR: the borrow checker below reads
+        // it at every call site, and the IL verifier recomputes it later from the lowered body.
+        check_zir::compute_ret_storage_zir(
+            self.scratch_arena,
+            self.module,
+            &zir_func,
+            self.builder.current_func_idx as u32
+        );
+        // `--emit-zir-stats`: a census of the canonical ZIR, before this frame's scratch arena is
+        // reset (the counter arrays are part of the Driver, so nothing is allocated here).
+        if self.collect_zir_stats {
+            self.zir_stats.note_function(&zir_func);
+        }
+        let mut zm = ZirModule { funcs: unsafe { @slice(&mut zir_func, 1 as usize) } };
+
+        let mut zir_ver = ZirVerifier.new(
+            self.scratch_arena,
+            &mut zm,
+            self.module,
+            self.intern_table
+        );
+        zir_ver.file_path = self.file_path;
+        zir_ver.verify();
+        // The routes this body's reported rejections travelled through; `--emit-zir-stats`
+        // prints their union, and the route-coverage gate counts only those.
+        if self.collect_zir_stats {
+            self.zir_stats.note_reject_via(zir_ver.reject_via);
+        }
+        if zir_ver.had_error {
+            self.had_error = true;
+            return Option.None;
+        }
+
+        let mut zir_to_zil = ZirToZilLowerer.new(
+            self.scratch_arena,
+            self.arena,
+            self.resolver,
+            self.mono,
+            self.intern_table,
+            &mut zm,
+            self.module,
+            self.builder,
+            self.sret_ssa,
+            zir_arg_start
+        );
+        zir_to_zil.checked = self.checked;
+        let body_val = zir_to_zil.lower();
+        if zir_to_zil.had_error { self.had_error = true; }
+        return Option.Some(body_val);
+    }
+
+    // The body's value must have the declared return type.
+    fn check_body_type(self: &mut Driver, body_val: SSAId, ret_ty: u32, is_void_main: bool) {
+        if body_val == NO_SSA as u32
+            || ret_ty == 0 as u32
+            || ret_ty == self.unit_type()
+            || is_void_main {
+            return;
+        }
+        let body_ty = self.get_ssa_type(body_val);
+        if body_ty == 0 as u32 || body_ty == NO_SSA as u32 || self.types_match(ret_ty, body_ty) {
+            return;
+        }
+        self.report_error("type mismatch: the function returns `", self.builder.current_span);
+        eprint(self.mono.type_display(ret_ty));
+        eprint("`, found `");
+        eprint(self.mono.type_display(body_ty));
+        eprint("`\n");
+    }
+
+    // The return ending a body whose value is BODY_VAL: an aggregate is stored through the
+    // hidden result pointer, and a `main` declared without a result returns 0.
+    fn emit_fn_return(self: &mut Driver, body_val: SSAId, ret_ty: u32, is_void_main: bool) {
+        if self.sret_ssa != NO_SSA as u32 && body_val != NO_SSA as u32 {
+            if self.is_aggregate(self.get_ssa_type(body_val)) {
+                self.emit(ILInstr.Store(StoreInstr { ptr: self.sret_ssa, val: body_val }));
+                self.emit(ILInstr.Ret(NO_SSA as u32));
+            } else {
+                self.emit(ILInstr.Ret(body_val));
+            }
+        } else if is_void_main {
+            let zero = self.emit_const_u64(0 as u64, ret_ty);
+            self.emit(ILInstr.Ret(zero));
+        } else if ret_ty == self.unit_type() || ret_ty == 0 as u32 {
+            self.emit(ILInstr.Ret(NO_SSA as u32));
+        } else {
+            self.emit(ILInstr.Ret(body_val));
+        }
+    }
+
+    // Lowers F as NAME with its type parameters bound to TYPE_ARGS (a method's include its
+    // type's), and `Self` (and SELF_NAME) to SELF_TY. Like a generic instance, a closure is
+    // lowered (and local) in each TU that lowers the body it is written in: its name is only
+    // unique within the TU, and a generic body is lowered wherever it is instantiated.
+    pub fn lower_fn_instance(
+        self: &mut Driver,
+        f: &FnDecl,
+        name: u32,
+        type_params: [TypeParam],
+        type_args: [u32],
+        self_name: u32,
+        self_ty: u32,
+        is_closure: bool
+    ) -> u32 {
+        let saved_func_idx = self.builder.current_func_idx;
+        let saved_block_idx = self.builder.current_block_idx;
+        let saved_ssa_id = self.builder.next_ssa_id;
+        self.resolver.push_scope();
+
+        for i in 0 as usize..type_params.len {
+            if i < type_args.len {
+                self.resolver.define(type_params[i].name, SymbolKind.Type(type_args[i]), false);
+            }
+        }
+        if self_name != 0 as u32 {
+            self.resolver.define(self_name, SymbolKind.Type(self_ty), false);
+        }
+        let self_id = self.intern_table.intern("Self");
+        self.resolver.define(self_id, SymbolKind.Type(self_ty), false);
+        let saved_implicit_self_ty = self.implicit_self_ty;
+        self.implicit_self_ty = self_ty;
+        let saved_owner_len = self.current_owner_len;
+        self.current_owner_len = 0 as u32;
+        if self_name != 0 as u32 {
+            self.current_owner_len = self.intern_table.lookup(self_name).len as u32;
+        }
+
+        let saved_spec = self.is_specialization;
+        // A trait's default method is lowered in every TU that uses it, like a generic.
+        self.is_specialization = is_closure
+            || f.default_of != 0 as u32
+            || type_params.len > 0 as usize
+            || type_args.len > 0 as usize
+            || f.type_params.len > 0 as usize;
+
+        let id = self.do_lower_fn(f, name);
+
+        self.is_specialization = saved_spec;
+        self.implicit_self_ty = saved_implicit_self_ty;
+        self.current_owner_len = saved_owner_len;
+        self.resolver.pop_scope();
+        self.builder.current_func_idx = saved_func_idx;
+        self.builder.current_block_idx = saved_block_idx;
+        self.builder.next_ssa_id = saved_ssa_id;
+        return id;
+    }
+}
+
+// The arena lifecycle primitives: `0` none, 1 `mem::Arena::mark`, 2 `mem::Arena::reset_to`.
+const ARENA_OP_NONE: u8 = 0 as u8;
+const ARENA_OP_MARK: u8 = 1 as u8;
+const ARENA_OP_RESET_TO: u8 = 2 as u8;
+const ARENA_OP_RESET: u8 = 3 as u8;
+const ARENA_OP_INIT_RESULT: u8 = 4 as u8;
+const ARENA_OP_ALLOCATOR_FREE: u8 = 5 as u8;
+// A collection constructor whose buffer is the caller's (see `ILFunction.buffer_external`).
+const ARENA_OP_BUFFER_EXTERNAL: u8 = 6 as u8;
+// `new_in` / `with_capacity_in`: the buffer belongs to the `&Arena` argument.
+const ARENA_OP_BUFFER_ANCHORED: u8 = 7 as u8;
+
+// Whether NAME ends with TAIL as a whole path component (`Arena::mark` matches `X::Arena::mark`,
+// never `MyArena::mark`).
+// True when the module identity PATH names the file NAME (`stdlib/mem_raw.zrl` and a
+// project-relative `mem_raw.zrl` both name `mem_raw.zrl`).
+fn ends_with_file_name(path: [u8], name: [u8]) -> bool {
+    if name.len == 0 as usize || path.len < name.len { return false; }
+    let start = path.len - name.len;
+    if subslice(path, start, name.len) != name { return false; }
+    return start == 0 as usize || path[start - 1 as usize] == '/' as u8;
+}
+
+// True when PATH ends with TAIL, with no boundary rule. The heap allocator's name is matched this
+// way rather than as a whole literal because `scripts/check_runtimes.sh` reads every `zoril_*`
+// string in the compiler's own source as a runtime symbol the codegen can emit, and
+// `allocator_free` is a stdlib function, not a runtime one.
+fn ends_with_bytes(path: [u8], tail: [u8]) -> bool {
+    if tail.len == 0 as usize || path.len < tail.len { return false; }
+    return subslice(path, path.len - tail.len, tail.len) == tail;
+}
+
+fn ends_with_path_component(name: [u8], tail: [u8]) -> bool {
+    if name.len < tail.len { return false; }
+    if name.len == tail.len { return name == tail; }
+    let start = name.len - tail.len;
+    if start < 2 as usize { return false; }
+    if subslice(name, start, tail.len) != tail { return false; }
+    return name[start - 2 as usize] == ':' as u8 && name[start - 1 as usize] == ':' as u8;
+}
+
+// Which standard-library item F is, if any, decided by *where the declaration was loaded from* - a
+// root the compiler was told is the standard library (`-I stdlib=<dir>`, the installed one; see
+// `loaded_from_stdlib_root`) - and the item name. Identity is designated, never inferred: no user
+// file answers yes by name or by directory, which is what used to hand the `Arena` epoch exemption
+// (and a use-after-free, probe 218) to a user `Arena`. A shadowing file has no stdlib `Arena`.
+fn arena_lifecycle_op(f: &FnDecl, name: u32, source_file: u32, table: &mut InternTable) -> u8 {
+    if f.is_extern { return ARENA_OP_NONE; }
+    if !f.source_is_stdlib { return ARENA_OP_NONE; }
+    let full = table.lookup(name);
+    if ends_with_path_component(full, "Arena::mark") { return ARENA_OP_MARK; }
+    if ends_with_path_component(full, "Arena::reset_to") { return ARENA_OP_RESET_TO; }
+    // The collection constructors whose buffer is the caller's (`new_raw` / `new_in_raw`, the
+    // unsafe escape hatch) and whose buffer belongs to their `&Arena` argument (`new_in`,
+    // `with_capacity_in`, and the arena-only `new` of ByteVec/HashMap/InternTable/Command). An
+    // instance name carries the type arguments (`Vec_T<i32>::new_in`), so identity comes from the
+    // standard-library file plus the method, the way `mem_raw` above is identified.
+    let src_name = table.lookup(source_file);
+    if ends_with_file_name(src_name, "vec.zrl") {
+        if ends_with_bytes(full, "::new_in") || ends_with_bytes(full, "::with_capacity_in") {
+            return ARENA_OP_BUFFER_ANCHORED;
+        }
+        if ends_with_bytes(full, "::new_in_raw")
+            || ends_with_bytes(full, "::with_capacity_in_raw")
+            || ends_with_bytes(full, "::clone_in_raw") {
+            return ARENA_OP_BUFFER_EXTERNAL;
+        }
+    }
+    if ends_with_file_name(src_name, "string.zrl") {
+        if ends_with_bytes(full, "::new_in") { return ARENA_OP_BUFFER_ANCHORED; }
+        if ends_with_bytes(full, "::new_in_raw")
+            || ends_with_bytes(full, "::with_capacity_in_raw")
+            || ends_with_bytes(full, "::clone_in_raw") {
+            return ARENA_OP_BUFFER_EXTERNAL;
+        }
+    }
+    if ends_with_file_name(src_name, "bytevec.zrl") {
+        if ends_with_bytes(full, "::new") { return ARENA_OP_BUFFER_ANCHORED; }
+        if ends_with_bytes(full, "::new_raw") { return ARENA_OP_BUFFER_EXTERNAL; }
+    }
+    if ends_with_file_name(src_name, "hashmap.zrl") {
+        if ends_with_bytes(full, "::new") { return ARENA_OP_BUFFER_ANCHORED; }
+        if ends_with_bytes(full, "::new_raw") { return ARENA_OP_BUFFER_EXTERNAL; }
+    }
+    if ends_with_file_name(src_name, "intern.zrl") || ends_with_file_name(src_name, "proc.zrl") {
+        if ends_with_bytes(full, "::new") { return ARENA_OP_BUFFER_ANCHORED; }
+        if ends_with_bytes(full, "::new_raw") { return ARENA_OP_BUFFER_EXTERNAL; }
+    }
+    // A free function is declared under its own name, so the module identity is what says which
+    // module it is: the primitives a checked build instruments live in the stdlib's mem_raw.
+    // `zoril_allocator_free` is the one choke point every heap block passes through (`heap_free`,
+    // `Vec::free`), which is where a `--checked` build catches two live copies releasing one block
+    // (the lowering emits the instrumented release in its place, src/lower_zir_to_zil.zrl).
+    if ends_with_file_name(table.lookup(source_file), "mem_raw.zrl") {
+        if full == "arena_reset" { return ARENA_OP_RESET; }
+        if full == "arena_init_result" { return ARENA_OP_INIT_RESULT; }
+        if ends_with_bytes(full, "allocator_free") { return ARENA_OP_ALLOCATOR_FREE; }
+    }
+    return ARENA_OP_NONE;
+}
+
+// Driver.lower_fn_instance for the Monomorphizer (set_lowerer), CTX being the Driver.
+pub fn driver_lower_fn_instance(
+    ctx: *mut u8,
+    f: *FnDecl,
+    name: u32,
+    params: *TypeParam,
+    n_params: usize,
+    args: *u32,
+    n_args: usize,
+    self_name: u32,
+    self_ty: u32,
+    is_closure: bool
+) -> u32 {
+    return unsafe {
+        (*(ctx as *mut Driver)).lower_fn_instance(
+            &*f,
+            name,
+            @slice(params, n_params),
+            @slice(args, n_args),
+            self_name,
+            self_ty,
+            is_closure
+        )
+    };
+}
+
+// Where an error about F is reported: its body, or no line for an interface's bodiless declaration.
+fn decl_span_of_body(ast: &AST, f: &FnDecl) -> Span {
+    if f.body != 0 as ExprId { return ast.expr_spans[f.body as usize]; }
+    return Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 };
+}

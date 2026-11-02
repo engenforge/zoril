@@ -1,0 +1,9 @@
+// name: Generic null-cast hole (0 as T where T=&U)
+// expected: compile_reject
+fn make<T>() -> T {
+    return (0 as u64) as T;
+}
+fn main() -> i32 {
+    let r: &i32 = make::<&i32>();
+    return *r;
+}

@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/include/cross_file_borrow_helper.zrl:21:9: error: cannot assign to 'self.inner.a' because it is borrowed
+import "include/cross_file_borrow_helper.zrl";
+use cross_file_borrow_helper::{Inner, Outer};
+
+fn main() {
+    let mut o = Outer { inner: Inner { a: 1, b: false } };
+    o.conflict();
+}

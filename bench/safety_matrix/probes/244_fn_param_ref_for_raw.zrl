@@ -1,0 +1,6 @@
+// name: A `fn(&i32)` used as a `fn(*i32)`
+// expected: compile_reject
+// The reverse of the pointer rule holds for parameters: a function expecting a valid reference cannot be
+// called through a type that accepts any raw pointer, or `f(0 as *i32)` hands it a null reference.
+fn d(r: &i32) -> i32 { return *r; }
+fn main() -> i32 { let f: fn(*i32) -> i32 = d; return f(0 as *i32); }

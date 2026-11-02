@@ -1,0 +1,2 @@
+#[summary(escape = 0, stash = 0, ret_stack = true, alloc = 0)]
+pub fn get_dangling() -> *mut i32;

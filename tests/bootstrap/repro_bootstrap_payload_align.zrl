@@ -1,0 +1,42 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::stdout;
+use fmt::write_u64;
+
+// This struct mimics SyscallInstr
+pub struct Payload {
+    pub num: u32,
+    pub dummy: u32, // pad to 8
+    pub ptr: usize,
+    pub len: usize,
+}
+
+// This enum mimics ILInstr
+pub enum Container {
+    Other(u32),
+    Target(Payload),
+}
+
+impl Container {
+    pub fn get_Target(self: &Container) -> &Payload {
+        // Offset 8 matches ILInstr payload start
+        unsafe { return &*((self as usize + 8) as *Payload); }
+    }
+}
+
+fn main() -> i32 {
+    let mut p = Payload { num: 42 as u32, dummy: 0 as u32, ptr: 123 as usize, len: 456 as usize };
+    let mut c = Container.Target(p);
+    
+    let target_ptr = c.get_Target();
+    let n = target_ptr.num;
+    
+    let mut out = stdout();
+    let _ = write_u64(&mut out, n as u64);
+    let _ = write_u64(&mut out, 10);
+    
+    if n != 42 as u32 {
+        return 1;
+    }
+    return 0;
+}

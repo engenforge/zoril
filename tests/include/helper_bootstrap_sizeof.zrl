@@ -1,0 +1,3 @@
+// Re-exports for testing sizeof across module imports
+import "bytevec.zrl";
+import "intern.zrl";

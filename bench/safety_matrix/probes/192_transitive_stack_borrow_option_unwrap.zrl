@@ -1,0 +1,20 @@
+// name: Transitive stack borrow escape through Option.unwrap
+// expected: compile_reject
+// A stack-allocated buffer borrowed and wrapped in Option cannot escape its enclosing
+// block scope when unwrapped, even though Option itself has no Drop.
+import "core.zrl";
+
+fn first(s: [u8]) -> Option<[u8]> {
+    if s.len == 0 as usize { return Option.None; }
+    return Option.Some(subslice(s, 0, 1));
+}
+
+fn main() -> i32 {
+    let mut outer: [u8] = "";
+    {
+        let buf: [u8; 4] = [1 as u8, 2 as u8, 3 as u8, 4 as u8];
+        let opt = first(&buf);
+        outer = opt.unwrap();
+    }
+    return outer.len as i32;
+}

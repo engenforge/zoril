@@ -1,0 +1,8 @@
+// An imported module that exports a C-callable function of its own.
+extern "C" fn zoril_helper_mul(a: i32, b: i32) -> i32 {
+    return a * b;
+}
+
+pub fn triple(a: i32) -> i32 {
+    return zoril_helper_mul(a, 3);
+}

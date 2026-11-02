@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: error: dereference of raw pointer requires unsafe block
+// A raw pointer reached through a struct field is dereferenced by the field access after it.
+struct Inner { v: i32 }
+struct Outer { p: *Inner }
+fn main() -> i32 { let o = Outer { p: 0 as *Inner }; return o.p.v; }

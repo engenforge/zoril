@@ -1,0 +1,19 @@
+// expected exit 0
+// An impl's methods and constants are reached through the type: `Foo::new()`, `Foo.new()`,
+// `Foo::LIMIT`, `Foo.LIMIT`, `x.get()`. They have no free-function names (`Foo_new`), so a
+// free function of that name is unrelated.
+pub struct Foo { v: i32 }
+impl Foo {
+    const LIMIT: i32 = 40;
+    pub fn new() -> Foo { return Foo { v: 1 }; }
+    pub fn get(self: &Foo) -> i32 { return self.v; }
+}
+fn Foo_new() -> i32 { return 100; }
+fn main() -> i32 {
+    let a = Foo::new();
+    let b = Foo.new();
+    if a.get() + b.get() != 2 { return 1; }
+    if Foo::LIMIT + Foo.LIMIT != 80 { return 2; }
+    if Foo_new() != 100 { return 3; }
+    return 0;
+}

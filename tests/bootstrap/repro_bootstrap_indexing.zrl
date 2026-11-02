@@ -1,0 +1,14 @@
+import "io.zrl";
+use io::print;
+
+enum Decl {
+    Fn(u32),
+    Import(u32),
+}
+
+fn main() -> i32 {
+    let mut arr = [Decl.Fn(0 as u32), Decl.Fn(0 as u32)];
+    let d = arr[0];
+    print("Access 0 done\n");
+    return 0;
+}

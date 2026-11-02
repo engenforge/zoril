@@ -1,0 +1,6 @@
+# scripts/unsafe_scan.sh allowlist: <path>|<line text, trimmed>|<why the marker may stay>
+# Empty: every `unsafe` marker the scan can remove is either redundant (removed) or a
+# required marker around an operation exercised by an importer, so no survivor remains.
+# Earlier entries for `Vec::clone_in` / `clone_in_raw` and `String::with_capacity` were removed
+# once tests exercised those helpers
+# (tests/stdlib/test_stdlib_vec_clone_in.zrl, tests/stdlib/test_stdlib_string_with_capacity.zrl).

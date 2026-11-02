@@ -1,0 +1,15 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_str_from_utf8_slice_escape.zrl:13:5: error: cannot let 'buf' go out of scope while it is still borrowed
+// EXPECT: tests/error_reporting/err_str_from_utf8_slice_escape.zrl:11:32: note: borrow of 'buf' taken here
+import "str.zrl";
+use str::Str;
+
+fn main() -> i32 {
+    let mut outer: [u8] = "";
+    {
+        let buf: [u8; 4] = [65 as u8, 66 as u8, 67 as u8, 68 as u8];
+        let st = Str.from_utf8(&buf).unwrap();
+        outer = st.as_bytes();
+    }
+    return outer.len as i32;
+}

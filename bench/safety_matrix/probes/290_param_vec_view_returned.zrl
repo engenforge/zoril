@@ -1,0 +1,21 @@
+// name: A view of a parameter Vec returned from the frame
+// expected: accept
+// The collection is the caller's storage, not this frame's: a `&Vec` parameter may be viewed and
+// the view returned. This is the accepted twin of probes 278 and 285-289.
+import "vec.zrl";
+use vec::Vec;
+
+fn first(v: &Vec<i32>) -> &i32 {
+    return v.get(0).unwrap();
+}
+
+fn all(v: &Vec<i32>) -> [i32] {
+    return v.as_slice();
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(41);
+    let s = all(&v);
+    return *first(&v) - s[0];
+}

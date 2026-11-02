@@ -1,0 +1,8 @@
+// expected exit 0
+// The types an extern signature may use: bool, sized integers, usize/isize, floats and raw pointers.
+extern fn ok_scalars(a: bool, b: u8, c: i16, d: u32, e: i64, f: usize, g: isize, h: f32, i: f64) -> i32;
+extern fn ok_ptrs(p: *u8, q: *mut u8, r: **u8) -> *mut u8;
+extern fn ok_never() -> never;
+extern fn ok_unit(p: *u8);
+extern fn ok_variadic(fmt: *u8, ...) -> i32;
+fn main() -> i32 { return 0; }

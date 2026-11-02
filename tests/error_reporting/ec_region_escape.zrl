@@ -1,0 +1,14 @@
+// expected compile fail
+// Tests that this frame's stack storage cannot escape into memory that outlives the frame: the
+// global outlives the call that made `x`. The file used to pin the same rule for
+// `box(allocator)`, whose arena form is not implemented and is now rejected by the lowering
+// (see tests/error_reporting/err_box_allocator_not_implemented.zrl).
+// EXPECT: tests/error_reporting/ec_region_escape.zrl:11:5: error: region escape: a pointer to local stack storage is written to memory that outlives this function
+static mut G: *mut i32 = 0 as *mut i32;
+
+fn stash() {
+    let mut x: i32 = 42;
+    G = &mut x;
+}
+
+fn main() -> i32 { stash(); return 0; }

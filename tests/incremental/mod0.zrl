@@ -1,0 +1,13 @@
+// Translation unit test module
+import "helper.zrl";
+use helper::helper_add;
+
+pub fn mod0_calc(x: i64) -> i64 {
+    return helper_add(x, 10);
+}
+
+pub fn mod0_main() -> i64 {
+    let v = mod0_calc(32);
+    if v != 42 { return 1; }
+    return 0;
+}

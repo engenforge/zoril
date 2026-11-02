@@ -1,0 +1,29 @@
+// expected compile fail
+
+trait Hashable {
+    fn hash(self: &Self) -> u64;
+}
+
+fn needs_hashable<T: Hashable>(t: &T) -> u64 {
+    return t.hash();
+}
+
+struct NotHashable {
+    x: i32,
+}
+
+struct Map<K: Hashable, V> {
+    key: K,
+    val: V,
+}
+
+fn main() {
+    let nh = NotHashable { x: 42 };
+    // This should fail because NotHashable doesn't implement Hashable
+    needs_hashable(&nh);
+
+    let m = Map<NotHashable, i32> {
+        key: NotHashable { x: 1 },
+        val: 42,
+    };
+}

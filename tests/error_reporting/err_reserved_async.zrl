@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: `async` is a reserved word, kept for a future feature
+// The nine words reserved for future features (surface_syntax.md §2.1) cannot be identifiers, so
+// adding the feature later cannot break a program that used one as a name.
+fn f() -> i32 {
+    let async = 1;
+    return async;
+}

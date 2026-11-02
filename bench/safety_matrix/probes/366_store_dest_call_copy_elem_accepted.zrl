@@ -1,0 +1,34 @@
+// name: Storing a copied element into a &mut destination returned by a helper is accepted
+// expected: accept
+// Storing a copied scalar element into a &mut returned by a helper function is accepted.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct HElem {
+    s: i32,
+}
+
+fn slot_elem(h: &mut HElem) -> &mut i32 {
+    return &mut h.s;
+}
+
+fn f(h: &mut HElem) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; },
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    *slot_elem(h) = match v.get(0 as usize) {
+        Option.Some(val) => *val,
+        Option.None => 0,
+    };
+}
+
+fn main() -> i32 {
+    let mut h = HElem { s: 0 };
+    f(&mut h);
+    return if h.s == 42 { 0 } else { 1 };
+}

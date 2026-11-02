@@ -1,0 +1,31 @@
+// name: A call through a `fn` value stores a stack reference into the caller's memory
+// expected: compile_reject
+// `put(h, &x)` written directly is rejected: `put` stores its `&i32` parameter into `h`, memory
+// that outlives the frame. Through a `fn` value the callee is not visible at the call, so the
+// coercion is what is refused: a function with that contract cannot become a `fn` value.
+struct H {
+    p: &i32,
+}
+
+fn put(h: &mut H, p: &i32) {
+    h.p = p;
+}
+
+fn fill(h: &mut H) {
+    let x = 5;
+    let f: fn(&mut H, &i32) = put;
+    f(h, &x);
+}
+
+fn churn() -> i32 {
+    let a: [i32; 64] = [77; 64];
+    return a[3];
+}
+
+fn main() -> i32 {
+    let dummy = 0;
+    let mut h = H { p: &dummy };
+    fill(&mut h);
+    let _q = churn();
+    return *h.p;
+}

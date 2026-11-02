@@ -1,0 +1,24 @@
+// The shape of err_block_scope_borrow_param_receiver_method, with the reference's last use inside
+// `s`'s scope: the strict reading only removes the `Drop` exemption, so a borrow that ends in time
+// still compiles. What this pins is that resolving a parameter receiver (`l.grab()`) does not
+// reject the forwarding itself.
+struct Wrapper {
+    v: i32,
+}
+
+impl Wrapper {
+    fn grab(self: &Wrapper) -> &i32 { return &self.v; }
+}
+
+fn h(l: &Wrapper, q: &i32, n: i32) -> &i32 {
+    if n <= 0 { return q; }
+    return l.grab();
+}
+
+fn main() -> i32 {
+    let s = Wrapper { v: 5 };
+    let w: i32 = 3;
+    let y = h(&s, &w, 1);
+    if *y != 5 { return 1; }
+    return 0;
+}

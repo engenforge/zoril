@@ -1,0 +1,22 @@
+// name: Stack reference stored out via enum payload
+// expected: known_gap
+// gap: Storage facts drops provenance for stack reference carried in enum payload
+// observed: exit 77
+import "core.zrl";
+use core::Option;
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn escape_storer(out: &mut &i32) {
+    let x = 42;
+    let src_val = &x;
+    let carrier_opt = Option.Some(src_val);
+    let carried = match carrier_opt { Option.Some(item) => item, Option.None => { return; } };
+    let routed = carried;
+    *out = routed;
+}
+fn main() -> i32 {
+    let mut seed = 0;
+    let mut dest_val: &i32 = &seed;
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    return *dest_val;
+}

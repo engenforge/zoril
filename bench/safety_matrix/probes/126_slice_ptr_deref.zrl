@@ -1,0 +1,8 @@
+// name: Dereference of a slice's data pointer
+// expected: compile_reject
+// A slice's `.ptr` is a raw pointer: a safe empty slice may hold a null one. `*e.ptr`
+// was not seen as a raw dereference and faulted in safe code.
+fn main() -> i32 {
+    let e: [u8] = @slice(0 as *u8, 0);
+    return (*e.ptr) as i32;
+}

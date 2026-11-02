@@ -1,0 +1,26 @@
+// name: A non-scalar static mut is accessible inside unsafe and an unsafe fn
+// expected: accept
+// `unsafe` is the escape hatch the rule leaves open: the borrow/type-confusion risk is then the
+// programmer's contract, the same as any other unchecked operation.
+enum E {
+    N,
+    A(Box<i32>),
+    B(u64),
+}
+
+static mut G: E = E.N;
+
+unsafe fn set_b() {
+    G = E.B(41);
+}
+
+fn main() -> i32 {
+    unsafe {
+        G = E.A(box 7);
+        set_b();
+        match &G {
+            E.B(v) => { if *v == 41 { return 0; } return 1; },
+            _ => { return 2; }
+        }
+    }
+}

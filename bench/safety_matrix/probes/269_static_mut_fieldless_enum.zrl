@@ -1,0 +1,19 @@
+// name: A fieldless enum static mut read and written in safe code
+// expected: compile_reject
+// A write to a fieldless enum cannot retype it, but the static rule's scalar exemption is
+// deliberately narrow (integers, floats, bool, char, raw pointers): loosening it later is
+// compatible, tightening it after the release is not.
+enum E {
+    N,
+    M,
+}
+
+static mut G: E = E.N;
+
+fn main() -> i32 {
+    G = E.M;
+    match G {
+        E.N => { return 1; },
+        E.M => { return 2; }
+    }
+}

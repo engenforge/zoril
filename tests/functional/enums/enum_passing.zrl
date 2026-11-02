@@ -1,0 +1,36 @@
+// expected exit code: 0
+import "io.zrl";
+
+enum TokenSmall { A(u64), B }
+
+struct Payload { a: u64, b: u64, c: u64 }
+enum TokenLarge { Ident(Payload), Number(u64), Eof }
+
+fn get_tag_small(tok: TokenSmall) -> u64 {
+    match tok {
+        TokenSmall.A(_) => 1 as u64,
+        TokenSmall.B => 0 as u64,
+    }
+}
+
+impl TokenLarge {
+    fn get_tag_large(self: TokenLarge) -> u64 {
+        match self {
+            TokenLarge.Ident(_) => 1 as u64,
+            _ => 0 as u64,
+        }
+    }
+}
+
+fn main() -> i32 {
+    // Test passing small enum by value
+    let tok_s = TokenSmall.A(123 as u64);
+    if get_tag_small(tok_s) != 1 as u64 { return 1; }
+
+    // Test passing large enum (aggregate) by value
+    let p = Payload { a: 10 as u64, b: 20 as u64, c: 30 as u64 };
+    let tok_l = TokenLarge.Ident(p);
+    if tok_l.get_tag_large() != 1 as u64 { return 2; }
+
+    return 0;
+}

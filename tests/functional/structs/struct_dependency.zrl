@@ -1,0 +1,44 @@
+// expected exit code: 0
+struct Inner { a: u64, b: u64, c: u64, d: u64 }
+struct Outer {
+    ptr1: *mut u8,
+    val1: u64,
+    val2: u64,
+    inner: Inner,
+    ptr2: *mut u8,
+}
+impl Inner {
+    pub fn new(val: u64) -> Inner {
+        return Inner { a: val, b: val + 1, c: val + 2, d: val + 3 };
+    }
+}
+fn init_outer(o: *mut Outer) {
+    unsafe {
+        *o = Outer {
+            ptr1: @ptr_from_int<*mut u8>(1234),
+            val1: 100,
+            val2: 200,
+            inner: Inner.new(10),
+            ptr2: @ptr_from_int<*mut u8>(5678),
+        };
+    }
+}
+fn main() -> i32 {
+    let mut o: Outer = Outer {
+        ptr1: 0 as *mut u8,
+        val1: 0,
+        val2: 0,
+        inner: Inner { a: 0, b: 0, c: 0, d: 0 },
+        ptr2: 0 as *mut u8,
+    };
+    init_outer(&mut o);
+    if o.ptr1 != @ptr_from_int<*mut u8>(1234) { return 1; }
+    if o.val1 != 100 as u64 { return 2; }
+    if o.val2 != 200 as u64 { return 3; }
+    if o.inner.a != 10 as u64 { return 4; }
+    if o.inner.b != 11 as u64 { return 5; }
+    if o.inner.c != 12 as u64 { return 6; }
+    if o.inner.d != 13 as u64 { return 7; }
+    if o.ptr2 != @ptr_from_int<*mut u8>(5678) { return 8; }
+    return 0;
+}

@@ -1,0 +1,20 @@
+// expected compile fail
+
+trait Base {}
+
+trait Derived<T: Base> {
+    fn do_it(self: &Self, t: T);
+}
+
+struct NotBase {}
+
+struct MyDerived {}
+impl Derived<NotBase> for MyDerived {
+    fn do_it(self: &MyDerived, t: NotBase) {}
+}
+
+fn main() {
+    let d = MyDerived {};
+    let b = NotBase {};
+    d.do_it(b);
+}

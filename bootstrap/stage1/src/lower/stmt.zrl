@@ -1,0 +1,278 @@
+import "core.zrl";
+import "mem.zrl";
+import "io.zrl";
+import "ast.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "il_cfg.zrl";
+import "resolve.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "intern.zrl";
+import "bytevec.zrl";
+import "mono.zrl";
+import "builder.zrl";
+import "vec.zrl";
+import "env.zrl";
+import "expr.zrl";
+
+impl Lowerer {
+
+    pub fn lower_stmt(self: &mut Lowerer, stmt_id: StmtId) {
+        if stmt_id == 0 as StmtId { return; }
+        let p_stmt: &Stmt = &self.resolver.ast.stmts[stmt_id as usize];
+        match *p_stmt {
+            Stmt.Let(l) => {
+                // Pre-resolve the declared type to properly instantiate generic types.
+                // This ensures that when lower_expr runs, generic typedefs are available.
+                let mut expected_ty = 0 as u32;
+                if l.ty != 0 as u32 {
+                    expected_ty = self.resolver.resolve_type(l.ty);
+                    if expected_ty == 0 as u32 {
+                        let span = &self.resolver.ast.stmt_spans[stmt_id as usize];
+                        self.report_error("unresolved type in let binding", *span);
+                    }
+                }
+                let mut val = self.lower_expr_with_expected(l.init, expected_ty);
+                let actual_ty = self.get_ssa_type(val);
+                if expected_ty != 0 as u32 && actual_ty != 0 as u32 && !self.types_match(expected_ty, actual_ty) {
+                    let span = &self.resolver.ast.expr_spans[l.init as usize];
+                    must_write(2, self.file_path);
+                    must_write(2, ":");
+                    write_u64(2, span.line as u64);
+                    must_write(2, ":");
+                    write_u64(2, span.col as u64);
+                    must_write(2, ": error: type mismatch: expected `");
+                    must_write(2, self.mono.type_display(expected_ty));
+                    must_write(2, "`, found `");
+                    must_write(2, self.mono.type_display(actual_ty));
+                    must_write(2, "`\n");
+                    self.had_error = true;
+                }
+
+                if l.name != 0 as u32 {
+                    self.resolver.define(l.name, SymbolKind.Local(stmt_id), false);
+                    let opt_sym = self.resolver.resolve_ptr(l.name);
+                    match opt_sym {
+                        Some(sym) => {
+                            let p_entry = self.get_or_create_symbol_entry(sym);
+                            if l.is_mut {
+                            let mut ty = self.resolver.resolve_type(l.ty);
+                            if ty == 0 as u32 {
+                                ty = self.get_ssa_type(val);
+                            }
+
+                            // Detect if init is an explicit ref (&/&mut expr) or a cast expression.
+                            // For these, don't deep-copy the pointed-to aggregate (the pointer IS the value).
+                            let mut is_ptr_value = self.is_expr_ptr_value(l.init, val);
+                            let mut inner_ty = 0 as u32;
+                            if ty != 0 as u32 && !is_ptr_value {
+                                if ty == 0 as u32 { ICE("get_type_decl 0 at stmt.zrl:88"); }
+                                let p_ty_decl: &ILTypeDecl = self.builder.get_type_decl(ty);
+                                let tag = (*p_ty_decl).def.get_tag();
+                                if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT {
+                                    let pt = (*p_ty_decl).def.get_Ptr();
+                                    if self.is_aggregate(pt) { inner_ty = pt; }
+                                }
+                            }
+
+                            (*p_entry).ty = ty;
+                            let ptr_ty = self.get_ptr_type(ty);
+                            let saved = self.builder.current_block_idx;
+                            self.switch_to_block(self.builder.entry_block_idx);
+                            let slot = self.emit_with_type(ILInstr.Alloc(AllocInstr { region: Region.Local, ty: ty, allocator: NO_SSA as u32 }), ptr_ty);
+                            self.switch_to_block(saved);
+
+                            if inner_ty != 0 as u32 {
+                                let inner_ptr_ty = self.get_ptr_type(inner_ty);
+                                let saved2 = self.builder.current_block_idx;
+                                self.switch_to_block(self.builder.entry_block_idx);
+                                let own_mem = self.emit_with_type(ILInstr.Alloc(AllocInstr { region: Region.Local, ty: inner_ty, allocator: NO_SSA as u32 }), inner_ptr_ty);
+                                self.switch_to_block(saved2);
+                                
+                                self.emit(ILInstr.Store(StoreInstr { ptr: own_mem, val: val }));
+                                self.emit(ILInstr.Store(StoreInstr { ptr: slot, val: own_mem }));
+                            } else {
+                                self.emit(ILInstr.Store(StoreInstr { ptr: slot, val: val }));
+                            }
+                            self.set_symbol_addr_ssa(sym, slot);
+                        } else {
+                            let mut ty = self.resolver.resolve_type(l.ty);
+                            if ty == 0 as u32 { ty = self.get_ssa_type(val); }
+
+                            // Deep copy for immutable Ptr(aggregate) bindings unless the init
+                            // is an explicit &/&mut reference or a Cast expression.
+                            let mut is_ptr_value2 = self.is_expr_ptr_value(l.init, val);
+                            let mut inner_ty2 = 0 as u32;
+                            if ty != 0 as u32 && !is_ptr_value2 {
+                                if ty == 0 as u32 { ICE("get_type_decl 0 at stmt.zrl:125"); }
+                                let p_ty_decl2: &ILTypeDecl = self.builder.get_type_decl(ty);
+                                let tag2 = (*p_ty_decl2).def.get_tag();
+                                if tag2 == ILTYPE_PTR || tag2 == ILTYPE_PTRMUT {
+                                    let pt2 = (*p_ty_decl2).def.get_Ptr();
+                                    if self.is_aggregate(pt2) { inner_ty2 = pt2; }
+                                }
+                            }
+
+                            if inner_ty2 != 0 as u32 {
+                                let inner_ptr_ty2 = self.get_ptr_type(inner_ty2);
+                                let saved3 = self.builder.current_block_idx;
+                                self.switch_to_block(self.builder.entry_block_idx);
+                                let own_mem2 = self.emit_with_type(ILInstr.Alloc(AllocInstr { region: Region.Local, ty: inner_ty2, allocator: NO_SSA as u32 }), inner_ptr_ty2);
+                                self.switch_to_block(saved3);
+                                
+                                self.emit(ILInstr.Store(StoreInstr { ptr: own_mem2, val: val }));
+                                self.set_symbol_ssa(sym, own_mem2);
+                                (*p_entry).ty = ty;
+                            } else {
+                                self.set_symbol_ssa(sym, val);
+                                (*p_entry).ty = ty;
+                            }
+                        }
+                    },
+                    None => {},
+                }
+            }
+            },
+            Stmt.Expr(e) => {
+                self.lower_expr(e);
+            },
+            Stmt.While(w) => {
+                let cond_block = self.new_block();
+                let body_block = self.new_block();
+                let exit_block = self.new_block();
+
+                let p_loop = (self.loop_stack as usize + self.loop_stack_len * sizeof(LoopBlocks)) as *mut LoopBlocks;
+                (*p_loop).cond = cond_block;
+                (*p_loop).incr = cond_block;
+                (*p_loop).exit = exit_block;
+                self.loop_stack_len = self.loop_stack_len + 1 as usize;
+
+                self.emit(ILInstr.Jmp(cond_block));
+                self.switch_to_block(cond_block);
+                let cond = self.lower_expr(w.cond);
+                self.emit(ILInstr.Branch(BranchInstr { cond: cond, then_block: body_block, else_block: exit_block }));
+
+                self.switch_to_block(body_block);
+                self.lower_expr(w.body);
+                if !self.is_terminated() {
+                    self.emit(ILInstr.Jmp(cond_block));
+                }
+
+                self.loop_stack_len = self.loop_stack_len - 1 as usize;
+                self.switch_to_block(exit_block);
+            },
+            Stmt.For(f) => {
+                let start_val = self.lower_expr(f.start);
+                let end_val = self.lower_expr(f.end);
+                let ty = self.get_ssa_type(start_val);
+
+                let var_addr = self.emit(ILInstr.Alloc(AllocInstr { region: Region.Local, ty: ty, allocator: NO_SSA as u32 }));
+                self.emit(ILInstr.Store(StoreInstr { ptr: var_addr, val: start_val }));
+
+                let cond_block = self.new_block();
+                let body_block = self.new_block();
+                let incr_block = self.new_block();
+                let exit_block = self.new_block();
+
+                let p_loop = (self.loop_stack as usize + self.loop_stack_len * sizeof(LoopBlocks)) as *mut LoopBlocks;
+                (*p_loop).cond = cond_block;
+                (*p_loop).incr = incr_block;
+                (*p_loop).exit = exit_block;
+                self.loop_stack_len = self.loop_stack_len + 1 as usize;
+
+                self.emit(ILInstr.Jmp(cond_block));
+                self.switch_to_block(cond_block);
+                let cur_var = self.emit_with_type(ILInstr.Load(var_addr), ty);
+                let cond = self.emit_with_type(ILInstr.CmpLt(ILBinaryOp { lhs: cur_var, rhs: end_val }), self.get_primitive_type(ILPrimitive.Bool));
+                self.emit(ILInstr.Branch(BranchInstr { cond: cond, then_block: body_block, else_block: exit_block }));
+
+                self.switch_to_block(body_block);
+                self.resolver.push_scope();
+                let sym = self.resolver.define(f.var, SymbolKind.Local(stmt_id), false);
+                self.set_symbol_ssa_ptr(sym, cur_var);
+                self.lower_expr(f.body);
+                if !self.is_terminated() {
+                    self.emit(ILInstr.Jmp(incr_block));
+                }
+                self.resolver.pop_scope();
+
+                self.switch_to_block(incr_block);
+                let reload_var = self.emit_with_type(ILInstr.Load(var_addr), ty);
+                let next_var = self.emit_with_type(ILInstr.Add(ILBinaryOp { lhs: reload_var, rhs: self.emit_const_u64(1, ty) }), ty);
+                self.emit(ILInstr.Store(StoreInstr { ptr: var_addr, val: next_var }));
+                self.emit(ILInstr.Jmp(cond_block));
+
+                self.loop_stack_len = self.loop_stack_len - 1 as usize;
+                self.switch_to_block(exit_block);
+            },
+            Stmt.Return(e) => {
+                let mut val = NO_SSA as u32;
+                if e != 0 as ExprId {
+                    let p_func: &ILFunction = &self.module.functions[self.builder.current_func_idx as usize];
+                    val = self.lower_expr_with_expected(e, (*p_func).ret_ty);
+                }
+                self.emit_defers();
+                if self.sret_ssa != NO_SSA as u32 {
+                    if val != NO_SSA as u32 {
+                        self.emit(ILInstr.Store(StoreInstr { ptr: self.sret_ssa, val: val }));
+                        self.emit(ILInstr.Ret(NO_SSA as u32));
+                    } else {
+                        self.emit(ILInstr.Ret(NO_SSA as u32));
+                    }
+                } else {
+                    self.emit(ILInstr.Ret(val));
+                }
+                self.builder.current_block_idx = NO_SSA as u32;
+            },
+            Stmt.Break => {
+                if self.loop_stack_len > self.loop_stack_base {
+                    let blocks = *((self.loop_stack as usize + (self.loop_stack_len - 1 as usize) * sizeof(LoopBlocks)) as *mut LoopBlocks);
+                    self.emit(ILInstr.Jmp(blocks.exit));
+                    self.builder.current_block_idx = NO_SSA as u32;
+                }
+            },
+            Stmt.Continue => {
+                if self.loop_stack_len > self.loop_stack_base {
+                    let blocks = *((self.loop_stack as usize + (self.loop_stack_len - 1 as usize) * sizeof(LoopBlocks)) as *mut LoopBlocks);
+                    self.emit(ILInstr.Jmp(blocks.incr));
+                    self.builder.current_block_idx = NO_SSA as u32;
+                }
+            },
+            Stmt.Defer(e) => {
+                // Push the deferred expression onto the function-level defer list.
+                if self.defer_list_len >= self.defer_list_cap {
+                    ICE("lower_stmt: defer list overflow");
+                }
+                let defer_off = self.defer_list_len * sizeof(ExprId);
+                *((self.defer_list as usize + defer_off) as *mut ExprId) = e;
+                self.defer_list_len = self.defer_list_len + 1 as usize;
+            },
+        }
+    }
+
+    pub fn get_int_literal(self: &mut Lowerer, expr_id: ExprId) -> u64 {
+        if expr_id == 0 as ExprId { return 0 as u64; }
+        let p_expr: &Expr = &self.resolver.ast.exprs[expr_id as usize];
+        let tag = p_expr.get_tag();
+        if tag == EXPR_LITERAL {
+            let lit = p_expr.get_Literal();
+            if lit.get_tag() == LITERAL_INT {
+                return lit.get_Int();
+            }
+        }
+        return 0 as u64;
+    }
+
+    pub fn is_numeric(self: &mut Lowerer, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty: &ILTypeDecl = &self.module.types[ty_id as usize - 1 as usize];
+        match (*p_ty).def {
+            ILType.Primitive(p) => {
+                let tag = p.get_tag();
+                return tag <= ILPRIM_F64 || tag == ILPRIM_CHAR;
+            },
+            _ => { return false; },
+        }
+    }
+}

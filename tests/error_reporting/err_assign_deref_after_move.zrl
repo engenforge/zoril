@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: error: use of moved value
+struct Holder {
+    b: Box<i32>,
+}
+
+fn consume(h: Holder) {}
+
+fn main() -> i32 {
+    let mut h = Holder { b: box 10 };
+    consume(h);
+    *h.b = 20;
+    return 0;
+}

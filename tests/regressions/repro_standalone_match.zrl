@@ -1,0 +1,56 @@
+import "io.zrl";
+use io::print;
+
+enum Region { Static, Local, Heap, Custom([u8]) }
+enum FDCap { R, W, RW }
+struct ILPtr { target: u32, region: Region }
+struct ILSlice { element: u32, is_mut: bool, region: Region }
+struct ILArray { element: u32, size: usize }
+struct ILFn { params: [u32], ret_ty: u32, is_variadic: bool }
+struct ILUser { id: u32, type_args: [u32] }
+
+enum ILPrimitive {
+    U8, U16, U32, U64, USize,
+    I8, I16, I32, I64, ISize,
+    F32, F64, Bool, Char, Unit, Never,
+}
+
+enum ILType {
+    Primitive(ILPrimitive),
+    Ptr(ILPtr),
+    PtrMut(ILPtr),
+    Boxed(u32),
+    BoxedMut(u32),
+    Slice(ILSlice),
+    Array(ILArray),
+    Fn(ILFn),
+    Tuple([u32]),
+    FD(FDCap),
+    IORing,
+    User(ILUser),
+    Var(u32),
+}
+
+fn test_match(t: ILType) -> [u8] {
+    match t {
+        ILType.Primitive(p) => {
+            match p {
+                ILPrimitive.I32 => return "w",
+                _ => return "prim_other",
+            }
+        },
+        ILType.Ptr(_) => return "l",
+        _ => return "other",
+    }
+}
+
+fn main() -> i32 {
+    let t = ILType.Primitive(ILPrimitive.I32);
+    let res = test_match(t);
+    print(res);
+    print("\n");
+    if is_str_eq(res, "w") {
+        return 0;
+    }
+    return 1;
+}

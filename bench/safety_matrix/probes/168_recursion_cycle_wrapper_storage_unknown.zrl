@@ -1,0 +1,24 @@
+// name: Reference into a dead local's stack slot through a wrapper around a recursive callee
+// expected: compile_reject
+// The wrapper `g` is not recursive, so its own walk decides: it forwards its arguments to `f`, whose
+// mask is a lower bound (probe 167). Reading that bound out of the callee's IL function made `g`
+// look decided, and the wrapper's call was a derived borrow again, so `g(&x, &w)` - which returns
+// `&x` - outlived `x`. A callee whose masks are unknown makes the walk that reads it unknown too.
+fn f(p: &i32, q: &i32, n: i32) -> &i32 {
+    if n <= 0 { return q; }
+    return f(q, p, n - 1);
+}
+
+fn g(p: &i32, q: &i32) -> &i32 {
+    return f(p, q, 1);
+}
+
+fn main() -> i32 {
+    let mut y: &i32 = &0;
+    let w: i32 = 3;
+    {
+        let x: i32 = 7;
+        y = g(&x, &w);
+    }
+    return *y;
+}

@@ -1,0 +1,24 @@
+// SHA-256 (stdlib) over a 1 MiB buffer, 32 times: shifts, fixed arrays, method calls.
+import "sha256.zrl";
+import "vec.zrl";
+use sha256::Sha256;
+use vec::Vec;
+const SCALE: usize = 1048576; // gate: 16384
+fn main() -> i32 {
+    // Heap data, as the C version's static buffer is not on the stack.
+    let mut v = Vec::<u8>.new();
+    let mut i = 0 as usize;
+    while i < SCALE { v.push((i * 31 as usize) as u8); i = i + 1 as usize; }
+    let buf = v.as_mut_slice();
+    let mut acc = 0 as u32;
+    let mut r = 0;
+    while r < 32 {
+        let mut h = Sha256.new();
+        h.update(buf);
+        let d = h.finalize();
+        acc = acc + d[0] as u32 + d[31] as u32;
+        buf[0] = d[1];
+        r = r + 1;
+    }
+    return (acc % 251 as u32) as i32;
+}

@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: region escape
+// Storing a capturing closure into the caller's memory leaves it pointing at this frame.
+struct S { f: fn(i32) -> i32 }
+fn plain(x: i32) -> i32 { return x; }
+fn store(out: &mut S, k: i32) { out.f = |x: i32| -> i32 { x + k }; }
+fn main() -> i32 { let mut s = S { f: plain }; store(&mut s, 5); return (s.f)(2); }

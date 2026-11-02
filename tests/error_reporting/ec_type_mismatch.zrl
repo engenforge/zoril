@@ -1,0 +1,9 @@
+// Tests that a return type mismatch is reported at the mismatched expression.
+// EXPECT: tests/error_reporting/ec_type_mismatch.zrl:5:5: error: type mismatch: the function returns `i32`, found `[u8]`
+// expected compile fail
+fn answer() -> i32 {
+    "hello"  // @error "type mismatch: expected i32" :5
+}
+fn main() -> i32 {
+    answer()
+}

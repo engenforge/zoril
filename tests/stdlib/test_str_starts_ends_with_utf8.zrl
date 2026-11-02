@@ -1,0 +1,36 @@
+import "str.zrl";
+import "string.zrl";
+use str::Str;
+
+fn main() -> i32 {
+    let cafe = @str("café");
+
+    if !cafe.starts_with("caf") { return 1; }
+    if !cafe.starts_with("café") { return 2; }
+    if !cafe.starts_with("") { return 3; }
+    if cafe.starts_with("b") { return 4; }
+
+    if !cafe.ends_with("é") { return 5; }
+    if !cafe.ends_with("fé") { return 6; }
+    if !cafe.ends_with("café") { return 7; }
+    if !cafe.ends_with("") { return 8; }
+    if cafe.ends_with("a") { return 9; }
+
+    // Mid-codepoint slices must return false on Str:
+    // 'é' is [0xc3, 0xa9].
+    if cafe.ends_with("\xa9") {
+        return 10;
+    }
+    if cafe.starts_with("caf\xc3") { return 11; }
+    if cafe.starts_with("\xc3") { return 12; }
+    if cafe.ends_with("\xc3") { return 13; }
+    if cafe.starts_with("\xff") { return 14; }
+    if cafe.ends_with("\xff") { return 15; }
+
+    // Raw [u8] slice starts_with / ends_with remains byte-level:
+    let raw_bytes = "café";
+    if !raw_bytes.ends_with("\xa9") { return 16; }
+    if !raw_bytes.starts_with("caf\xc3") { return 17; }
+
+    return 0;
+}

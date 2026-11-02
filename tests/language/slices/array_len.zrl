@@ -1,0 +1,11 @@
+// expected exit 0
+// An array's `len` is its constant size, on the array and through a reference to it
+// (it was an internal compiler error).
+fn count(a: &[u8; 5]) -> usize { return a.len; }
+fn main() -> i32 {
+    let a = [1, 2, 3];
+    if a.len != 3 { return 1; }
+    let b = [0 as u8; 5];
+    if count(&b) != 5 { return 2; }
+    return 0;
+}

@@ -1,0 +1,3 @@
+import "method_twice_t.zrl";
+use method_twice_t::C;
+impl C { pub fn get(self: &C) -> i32 { return self.n; } }

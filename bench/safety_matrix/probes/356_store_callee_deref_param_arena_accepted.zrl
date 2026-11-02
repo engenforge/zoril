@@ -1,0 +1,32 @@
+// name: Storing a slice view backed by a parameter arena through reference copy_into is accepted
+// expected: accept
+// A callee store of a slice loaded through a reference parameter backed by a parameter arena is accepted.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn copy_into(dst: &mut [i32], src: &[i32]) {
+    *dst = *src;
+}
+
+fn f(a: &Arena, out: &mut [i32]) {
+    let mut v = Vec::<i32>.new_in(a);
+    v.push(7);
+    let local = v.as_slice();
+    copy_into(out, &local);
+}
+
+fn main() -> i32 {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return 1; }
+    };
+    let e: [i32] = @slice(0 as *i32, 0);
+    let mut s = e;
+    f(&a, &mut s);
+    if s.len == 1 as usize && s[0] == 7 {
+        return 0;
+    }
+    return 1;
+}

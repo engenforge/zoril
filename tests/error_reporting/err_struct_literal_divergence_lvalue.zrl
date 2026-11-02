@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_struct_literal_divergence_lvalue.zrl:5:18: error: expected identifier, but found let
+struct S0 { a: i32 }
+fn main() {
+    let s = S0 { let a = 1; };
+}

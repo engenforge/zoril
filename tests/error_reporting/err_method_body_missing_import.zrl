@@ -1,0 +1,18 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_method_body_missing_import.zrl:12:47: error: unresolved symbol: span_of
+// EXPECT: tests/error_reporting/err_method_body_missing_import.zrl:12:47: note: `span_of` is in `err_private_method_helper`: write `err_private_method_helper::span_of`, or add `use err_private_method_helper::span_of;`
+// A method body resolves names as a free function's body does: the file's own items, what its
+// `use`s bring in, the prelude. Importing the module is not enough, and this is the rule
+// `src/driver/types.zrl` broke until 2026-10-13 (it called `type_align` with no `use`), where a
+// whole-program build hid it because an uncalled method body is never lowered.
+import "include/err_private_method_helper.zrl";
+use err_private_method_helper::Widget;
+
+impl Widget {
+    fn widened(self: &Widget) -> i32 { return span_of(self.n); }
+}
+
+pub fn main() -> i32 {
+    let w = Widget { n: 1 };
+    return w.widened();
+}

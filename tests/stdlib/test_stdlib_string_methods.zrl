@@ -1,0 +1,150 @@
+// expected exit 0
+// Tests for string and slice inherent methods, edge cases, and Str mirroring.
+
+import "string.zrl";
+import "str.zrl";
+import "mem.zrl";
+use mem::Arena;
+use str::Str;
+use string::String;
+
+fn main() -> i32 {
+    let arena = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return 99; },
+    };
+
+    // 1. starts_with
+    if !"".starts_with("") {
+        return 1;
+    }
+    if !"hello".starts_with("") { return 2; }
+    if "hello".starts_with("hello world") { return 3; }
+    if !"hello".starts_with("he") { return 4; }
+    if "hello".starts_with("ha") { return 5; }
+
+    // 2. ends_with
+    if !"".ends_with("") {
+        return 6;
+    }
+    if !"hello".ends_with("") { return 7; }
+    if "hello".ends_with("say hello") { return 8; }
+    if !"hello".ends_with("lo") { return 9; }
+    if "hello".ends_with("ko") { return 10; }
+
+    // 3. sub
+    let s = "abcdef";
+    if s.sub(0 as usize, 3 as usize) != "abc" { return 11; }
+    if s.sub(10 as usize, 2 as usize).len != 0 as usize { return 12; }
+    if s.sub(4 as usize, 10 as usize) != "ef" { return 13; }
+    if s.sub(2 as usize, 18446744073709551615 as usize) != "cdef" { return 14; }
+
+    // 4. trim
+    if "".trim().len != 0 as usize {
+        return 15;
+    }
+    if "   \t\r\n  ".trim().len != 0 as usize { return 16; }
+    if "  hello".trim() != "hello" { return 17; }
+    if "hello  \t".trim() != "hello" { return 18; }
+    if " \t hello world \r\n".trim() != "hello world" { return 19; }
+
+    // 5. find and find_byte
+    if "".find("a").is_some() {
+        return 20;
+    }
+    match "banana".find("an") {
+        Option.Some(idx) => { if idx != 1 as usize { return 21; } },
+        Option.None => { return 22; },
+    }
+    match "banana".find("b") {
+        Option.Some(idx) => { if idx != 0 as usize { return 23; } },
+        Option.None => { return 24; },
+    }
+    match "banana".find("z") {
+        Option.Some(_) => { return 25; },
+        Option.None => {},
+    }
+    match "banana".find_byte('a' as u8) {
+        Option.Some(idx) => { if idx != 1 as usize { return 21; } },
+        Option.None => { return 22; },
+    }
+    match "banana".find_byte('z' as u8) {
+        Option.Some(_) => { return 25; },
+        Option.None => {},
+    }
+
+    // 6. contains
+    if !"banana".contains("") {
+        return 26;
+    }
+    if !"banana".contains("nan") { return 27; }
+    if "banana".contains("xyz") { return 28; }
+    if "banana".contains("longer than banana") { return 29; }
+
+    // 7. split
+    let parts0 = "a,b,c".split(',' as u8, &arena);
+    if parts0.len() != 3 as usize { return 30; }
+    if parts0.as_slice()[0 as usize] != "a" { return 31; }
+    if parts0.as_slice()[1 as usize] != "b" { return 32; }
+    if parts0.as_slice()[2 as usize] != "c" { return 33; }
+
+    // Adjacent, leading, trailing delimiters
+    let parts1 = ",a,,b,".split(',' as u8, &arena);
+    if parts1.len() != 5 as usize { return 34; }
+    if parts1.as_slice()[0 as usize] != "" { return 35; }
+    if parts1.as_slice()[1 as usize] != "a" { return 36; }
+    if parts1.as_slice()[2 as usize] != "" { return 37; }
+    if parts1.as_slice()[3 as usize] != "b" { return 38; }
+    if parts1.as_slice()[4 as usize] != "" { return 39; }
+
+    // 8. parse_i64
+    if "".parse_i64().is_some() {
+        return 40;
+    }
+    if "+".parse_i64().is_some() { return 41; }
+    if "-".parse_i64().is_some() { return 42; }
+    if "12a3".parse_i64().is_some() { return 43; }
+    match "-42".parse_i64() {
+        Option.Some(v) => { if v != -42 as i64 { return 44; } },
+        Option.None => { return 45; },
+    }
+    match "+100".parse_i64() {
+        Option.Some(v) => { if v != 100 as i64 { return 46; } },
+        Option.None => { return 47; },
+    }
+    match "987".parse_i64() {
+        Option.Some(v) => { if v != 987 as i64 { return 48; } },
+        Option.None => { return 49; },
+    }
+
+    // 9. parse_u64
+    if "".parse_u64().is_some() {
+        return 50;
+    }
+    if "-1".parse_u64().is_some() { return 51; }
+    if "12x".parse_u64().is_some() { return 52; }
+    match "12345".parse_u64() {
+        Option.Some(v) => { if v != 12345 as u64 { return 53; } },
+        Option.None => { return 54; },
+    }
+
+    // 10. String.as_slice()
+    let mut str_buf = String.new();
+    str_buf.push_str("   foobar   ");
+    if str_buf.as_slice().trim() != "foobar" { return 55; }
+    if !str_buf.as_slice().contains("foo") { return 56; }
+
+    // 11. Str methods
+    let st = @str("  héllo world  ");
+    if !st.starts_with("  hé") { return 57; }
+    if !st.ends_with("ld  ") { return 58; }
+    if !st.contains("world") { return 59; }
+    match st.find("w") {
+        Option.Some(idx) => { if idx != 9 as usize { return 60; } },
+        Option.None => { return 61; },
+    }
+    let trimmed = st.trim();
+    if trimmed.as_bytes() != "héllo world" { return 62; }
+
+    return 0;
+}

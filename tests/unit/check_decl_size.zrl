@@ -1,0 +1,23 @@
+import "ast.zrl";
+import "resolve.zrl";
+import "io.zrl";
+import "fmt.zrl";
+import "il_type.zrl";
+use ast::{Decl, Type};
+use io::{print, stdout};
+use fmt::write_u64;
+use resolve::Symbol;
+
+fn main() -> i32 {
+    let mut out = stdout();
+    print("sizeof(Decl) = ");
+    let _ = write_u64(&mut out, sizeof(Decl));
+    print("\n");
+    print("sizeof(Symbol) = ");
+    let _ = write_u64(&mut out, sizeof(Symbol));
+    print("\n");
+    print("sizeof(Type) = ");
+    let _ = write_u64(&mut out, sizeof(Type));
+    print("\n");
+    return 0;
+}

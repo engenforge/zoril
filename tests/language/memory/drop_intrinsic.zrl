@@ -1,0 +1,36 @@
+// Tests @drop(x) intrinsic: explicit manual drop/consumption of a value.
+// @drop(x) evaluates x (consuming it) and has unit type.
+// For types implementing the Drop trait, the destructor is invoked.
+
+static mut DROP_COUNT: i32 = 0;
+
+struct Resource { id: i32 }
+
+trait Drop {
+    fn drop(self: Resource);
+}
+
+impl Drop for Resource {
+    fn drop(self: Resource) {
+        DROP_COUNT = DROP_COUNT + 1;
+    }
+}
+
+fn make_resource(id: i32) -> Resource { return Resource { id: id }; }
+
+fn main() -> i32 {
+    // @drop on a plain value — evaluates expression, discards result
+    let x: i32 = 42;
+    @drop(x);
+
+    // @drop on a Drop-implementing type — should call destructor
+    let r = make_resource(1);
+    @drop(r);
+    if DROP_COUNT != 1 { return 1; }
+
+    // @drop on a second resource
+    @drop(make_resource(2));
+    if DROP_COUNT != 2 { return 2; }
+
+    return 0;
+}

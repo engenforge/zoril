@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: region escape
+// A capturing closure's environment lives in the frame that made it; a struct returned from
+// that frame must not carry it.
+struct S { f: fn(i32) -> i32 }
+fn make(k: i32) -> S { return S { f: |x: i32| -> i32 { x + k } }; }
+fn main() -> i32 { let s = make(5); return (s.f)(2); }

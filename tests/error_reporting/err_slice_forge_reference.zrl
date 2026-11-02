@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: forging a slice with @slice requires unsafe block: its length is not checked
+// A reference does not make the length checked: this wrote past a three-element array.
+fn main() -> i32 {
+    let mut a = [1, 2, 3];
+    let s: [i32] = @slice(&mut a[0], 1000 as u64);
+    s[999] = 7;
+    return 0;
+}

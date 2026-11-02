@@ -1,0 +1,121 @@
+// Zoril Standard Library: Core types and traits
+
+import "core0.zrl";
+
+pub enum Option<T> {
+    None,
+    Some(T),
+}
+
+impl<T> Option<T> {
+    pub fn is_some(self: &Option<T>) -> bool {
+        return match *self {
+            Some(_) => true,
+            None => false,
+        };
+    }
+
+    pub fn is_none(self: &Option<T>) -> bool {
+        return match *self {
+            Some(_) => false,
+            None => true,
+        };
+    }
+
+    pub fn unwrap(self: Option<T>) -> T {
+        return match self {
+            Some(v) => v,
+            None => {
+                zoril_user_panic("called Option.unwrap() on a None value");
+            },
+        };
+    }
+}
+
+pub enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+impl<T, E> Result<T, E> {
+    pub fn is_ok(self: &Result<T, E>) -> bool {
+        return match *self {
+            Ok(_) => true,
+            Err(_) => false,
+        };
+    }
+
+    pub fn is_err(self: &Result<T, E>) -> bool {
+        return match *self {
+            Ok(_) => false,
+            Err(_) => true,
+        };
+    }
+
+    pub fn ok(self: Result<T, E>) -> Option<T> {
+        return match self {
+            Ok(v) => Option.Some(v),
+            Err(_) => Option.None,
+        };
+    }
+
+    pub fn unwrap(self: Result<T, E>) -> T {
+        return match self {
+            Ok(v) => v,
+            Err(_) => {
+                zoril_user_panic("called Result.unwrap() on an Err value");
+            },
+        };
+    }
+
+    pub fn err(self: Result<T, E>) -> Option<E> {
+        return match self {
+            Ok(_) => Option.None,
+            Err(e) => Option.Some(e),
+        };
+    }
+
+    pub fn map<U>(self: Result<T, E>, f: fn(T) -> U) -> Result<U, E> {
+        return match self {
+            Ok(v) => Result.Ok(f(v)),
+            Err(e) => Result.Err(e),
+        };
+    }
+
+    pub fn map_err<F>(self: Result<T, E>, f: fn(E) -> F) -> Result<T, F> {
+        return match self {
+            Ok(v) => Result.Ok(v),
+            Err(e) => Result.Err(f(e)),
+        };
+    }
+}
+
+// Equality that is an equivalence relation: reflexive, symmetric and
+// transitive. Implementations for the primitive types and Option are in cmp.zrl.
+pub trait Eq {
+    fn eq(self: &Self, other: &Self) -> bool;
+}
+
+// Explicit duplication. A clone owns its own copy of everything the original
+// owns (a cloned String gets its own buffer). Implementations for the primitive
+// types, Option, Vec and String are in clone.zrl; #[derive(Clone)] writes one
+// for a struct whose fields all implement Clone.
+pub trait Clone {
+    fn clone(self: &Self) -> Self;
+}
+
+// Implicit, bitwise duplication on assignment and argument passing. Copy is
+// structural: a type is Copy exactly when it owns no value that implements
+// Drop, so a `T: Copy` bound needs no impl, and `impl Copy for T` is rejected
+// for a type that is not.
+pub trait Copy {
+}
+
+// Values that are equal under Eq must hash equally.
+pub trait Hash {
+    fn hash(self: &Self) -> u64;
+}
+
+pub trait Error {
+    fn message(self: &Self) -> [u8];
+}

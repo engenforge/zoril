@@ -1,0 +1,34 @@
+// expected exit code: 206
+// 10: Closures — non-capturing (function pointers) and environment-capturing.
+// Demonstrates: lambda syntax, capture, function pointer types, indirect calls.
+
+fn apply(f: fn(i32) -> i32, x: i32) -> i32 {
+    return f(x);
+}
+
+fn compose(f: fn(i32) -> i32, g: fn(i32) -> i32, x: i32) -> i32 {
+    return f(g(x));
+}
+
+fn main() -> i32 {
+    // Non-capturing closure: lowered to a plain function pointer
+    let double = |x: i32| -> i32 { x * 2 };
+    let inc = |x: i32| -> i32 { x + 1 };
+
+    let a = apply(double, 21);     // 42
+    let b = compose(double, inc, 5); // double(inc(5)) = 12
+
+    // Capturing closure: captures `offset` from the enclosing scope
+    let offset = 100;
+    let add_offset = |x: i32| -> i32 { x + offset };
+    let c = add_offset(42);        // 142
+
+    // Closure capturing mutable state
+    let mut total = 0;
+    let accumulate = |n: i32| -> i32 {
+        return total + n;
+    };
+    let d = accumulate(10);
+
+    return a + b + c + d;
+}

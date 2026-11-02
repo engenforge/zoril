@@ -1,0 +1,28 @@
+// name: A `fn` value returned by a function carries a stashing callee
+// expected: compile_reject
+// `pick` hands the stashing `put` back as a value; the coercion inside `pick` is refused, so no
+// caller can obtain a `fn` value whose contract the checker cannot see.
+struct H {
+    p: &i32,
+}
+
+fn put(h: &mut H, p: &i32) {
+    h.p = p;
+}
+
+fn pick() -> fn(&mut H, &i32) {
+    return put;
+}
+
+fn fill(h: &mut H) {
+    let x = 5;
+    let f = pick();
+    f(h, &x);
+}
+
+fn main() -> i32 {
+    let dummy = 0;
+    let mut h = H { p: &dummy };
+    fill(&mut h);
+    return *h.p;
+}

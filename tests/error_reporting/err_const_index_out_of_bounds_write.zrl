@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_const_index_out_of_bounds_write.zrl:5:27: error: index 3 is out of bounds for an array of length 3
+// EXPECT: tests/error_reporting/err_const_index_out_of_bounds_write.zrl:8:5: error: index 3 is out of bounds for an array of length 3
+// A write at index == length, through a reference to the array, the cast spelled out.
+fn set(d: &mut [u8; 3]) { d[3 as usize] = 1 as u8; }
+fn main() -> i32 {
+    let mut data = [1 as u8, 2 as u8, 7 as u8];
+    data[3] = 0 as u8;
+    set(&mut data);
+    return 0;
+}

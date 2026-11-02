@@ -1,0 +1,864 @@
+import "ast.zrl";
+import "resolve.zrl";
+import "lower_all.zrl";
+import "il_cfg.zrl";
+import "il_type.zrl";
+import "intern.zrl";
+import "mem.zrl";
+import "io.zrl";
+import "bytevec.zrl";
+
+pub struct Monomorphizer {
+    pub arena: *mut Arena,
+    pub module: &mut ILModule,
+    pub resolver: &mut Resolver,
+    pub intern_table: &mut InternTable,
+    pub lowerer: *mut Lowerer,
+
+    pub mono_functions: MonoRegistry,
+    pub mono_types: MonoRegistry,
+    pub mono_typedefs: MonoRegistry,
+    pub typedef_to_decl: Vec<u32>,
+
+    pub cap_func_idxs: Vec<u32>,
+    pub cap_env_local_ids: Vec<u32>,
+
+    pub pending_cap_names: *mut u32,
+    pub pending_cap_tys: *mut u32,
+    pub pending_cap_len: usize,
+    pub pending_cap_env_ty: u32,
+    pub closure_count: u32,
+
+    pub mangle_buf: *mut ByteVec,
+}
+
+impl Monomorphizer {
+    pub fn new(arena: *mut Arena, module: &mut ILModule, resolver: &mut Resolver, intern_table: &mut InternTable) -> *mut Monomorphizer {
+        let m = zoril_allocator_alloc(arena, sizeof(Monomorphizer)) as *mut Monomorphizer;
+        unsafe {
+            *m = Monomorphizer {
+                arena: arena,
+                module: module,
+                resolver: resolver,
+                intern_table: intern_table,
+                lowerer: 0 as *mut Lowerer,
+                mono_functions: MonoRegistry.new(arena),
+                mono_types: MonoRegistry.new(arena),
+                mono_typedefs: MonoRegistry.new(arena),
+                typedef_to_decl: Vec::<u32>.new_in(arena),
+                cap_func_idxs: Vec::<u32>.new_in(arena),
+                cap_env_local_ids: Vec::<u32>.new_in(arena),
+                pending_cap_names: 0 as *mut u32,
+                pending_cap_tys: 0 as *mut u32,
+                pending_cap_len: 0 as usize,
+                pending_cap_env_ty: 0 as u32,
+                closure_count: 0 as u32,
+                mangle_buf: ByteVec.new(arena),
+            };
+        }
+        return m;
+    }
+
+    pub fn set_lowerer(self: &mut Monomorphizer, lowerer: *mut Lowerer) {
+        self.lowerer = lowerer;
+    }
+
+    pub fn lower_closure_fn(self: &mut Monomorphizer, f: &FnDecl, name: u32) -> u32 {
+        return unsafe { (*self.lowerer).lower_fn_instance(f, name, f.type_params.ptr, f.type_params.len, 0 as *u32, 0 as usize, 0 as u32, 0 as u32) };
+    }
+
+    pub fn instantiate_type(self: &mut Monomorphizer, decl_id: u32, type_args: [u32]) -> u32 {
+        let existing = self.mono_types.lookup(decl_id, type_args);
+        if existing != 0xffffffff as u32 {
+            let p_ty: &mut ILTypeDecl = &mut self.module.types[existing as usize - 1 as usize];
+            if p_ty.name == 0 as u32 {
+                let ast: &AST = self.resolver.ast;
+                let p_decl: &Decl = &ast.decls[decl_id as usize];
+                match *p_decl {
+                    Decl.Struct(s) => { p_ty.name = s.name; },
+                    Decl.Enum(e) => { p_ty.name = e.name; },
+                    Decl.Fn(_) | Decl.Trait(_) | Decl.Impl(_) | Decl.TypeAlias(_) | Decl.Const(_) | Decl.Static(_) | Decl.Import(_) | Decl.None => {},
+                }
+            }
+            return existing;
+        }
+
+
+        let ast: &AST = self.resolver.ast;
+        let p_decl: &Decl = &ast.decls[decl_id as usize];
+        let mut name_id = 0 as u32;
+        let mut decl_source_file = 0 as u32;
+        match *p_decl {
+            Decl.Struct(s) => { name_id = s.name; decl_source_file = s.source_file; },
+            Decl.Enum(e) => { name_id = e.name; decl_source_file = e.source_file; },
+            _ => {
+                ICE("Monomorphizer.instantiate_type: expected struct or enum declaration");
+            }
+        }
+
+        let buf = self.mangle_buf;
+        let saved_len = unsafe { (*buf).len };
+        let orig_name = self.intern_table.lookup(name_id);
+        buf.push_slice(orig_name);
+        
+        if type_args.len > 0 as usize {
+            buf.push('_' as u8);
+            buf.push('T' as u8);
+            let mut j = 0 as usize;
+            while j < type_args.len {
+                self.get_type_mangled_name_to(type_args[j], buf);
+                j = j + 1 as usize;
+            }
+        }
+        let mangled = unsafe { @slice(( (*buf).data as usize + saved_len ) as *u8, (*buf).len - saved_len) };
+        name_id = self.intern_table.intern(mangled);
+        unsafe { (*buf).len = saved_len; }
+
+        let mut args_vec = Vec::<u32>.new_in(self.arena);
+        let mut j = 0 as usize;
+        while j < type_args.len {
+            args_vec.push(type_args[j]);
+            j = j + 1 as usize;
+        }
+
+        let new_ty = self.module.alloc_type(ILTypeDecl {
+            id: 0 as u32,
+            name: name_id,
+            def: ILType.User(ILUser { id: 0 as u32, name: name_id, type_args: args_vec.as_slice() }),
+            // Unlike the anonymous derived types resolve_type builds (Ptr, Slice,
+            // Tuple, ...), this IS a named user type -- Foo<i32> is legitimately
+            // attributable to wherever `struct Foo<T>` was declared, which is
+            // exactly what decl_source_file, read off *p_decl above, already
+            // records. Free to propagate, not a bare 0.
+            source_file: decl_source_file,
+        });
+        self.mono_types.insert(decl_id, type_args, new_ty);
+
+        let typedef_id = if type_args.len > 0 as usize {
+            self.lower_generic_typedef(decl_id, type_args)
+        } else {
+            self.lower_typedef(decl_id)
+        };
+        // Update the type definition with the correct typedef ID
+        let p_new_ty: &mut ILTypeDecl = &mut self.module.types[new_ty as usize - 1 as usize];
+        match p_new_ty.def {
+            ILType.User(u) => {
+                let mut u2 = u;
+                u2.id = typedef_id;
+
+                p_new_ty.def = ILType.User(u2);
+                self.module.rebuild_type_hash_table();
+            },
+            _ => { ICE("Monomorphizer.instantiate_type: expected ILType.User"); }
+        }
+        return new_ty;
+    }
+
+    pub fn instantiate_function(self: &mut Monomorphizer, decl_id: u32, type_args: [u32]) -> u32 {
+        let existing = self.mono_functions.lookup(decl_id, type_args);
+        if existing != 0xffffffff as u32 { return existing; }
+
+        let ast: &AST = self.resolver.ast;
+        let p_decl: &Decl = &ast.decls[decl_id as usize];
+        match *p_decl {
+            Decl.Fn(f) => {
+            let name = self.mangle_name(f.name, type_args);
+            
+            let mut i = 0 as usize;
+            while i < self.module.functions.len {
+                let p_func: &ILFunction = &self.module.functions[i];
+                if p_func.name == name && p_func.owner_len == 0 as u32 {
+                    self.mono_functions.insert(decl_id, type_args, i as u32);
+                    return i as u32;
+                }
+                i = i + 1 as usize;
+            }
+            
+            let id = unsafe { (*self.lowerer).lower_fn_instance(&f, name, f.type_params.ptr, f.type_params.len, type_args.ptr, type_args.len, 0 as u32, 0 as u32) };
+            self.mono_functions.insert(decl_id, type_args, id);
+            return id;
+        },
+        _ => { ICE("instantiate_function: expected fn declaration"); }
+    }
+}
+    pub fn instantiate_method(self: &mut Monomorphizer, f: &FnDecl, type_args: [u32], self_name: u32, method_name: u32, imp: &ImplDecl, self_ty: u32) -> u32 {
+        // Extract receiver type args and struct decl_id from self_ty (the IL type for the receiver).
+        // In Zoril, `impl Foo<T>` sets imp.type_params.len=0 (T is not an explicit impl type param).
+        // The struct's type params and base name come from the AST struct/enum declaration.
+        let mut recv_type_args = @slice(0 as *mut u32, 0 as usize);
+        let mut typedef_id_for_recv = 0 as u32;
+        if self_ty != 0 as u32 {
+            let p_selfty: &ILTypeDecl = &self.module.types[self_ty as usize - 1 as usize];
+            match p_selfty.def {
+                ILType.User(u) => {
+                    recv_type_args = u.type_args;
+                    typedef_id_for_recv = u.id;
+                },
+                _ => {},
+            }
+        }
+
+        // Get the struct/enum decl_id via typedef_to_decl, then get type params and base name.
+        let struct_decl_id = self.get_typedef_origin(typedef_id_for_recv);
+        let mut struct_type_params = @slice(0 as *mut TypeParam, 0 as usize);
+        let mut struct_base_name = 0 as u32;
+        if struct_decl_id != 0 as u32 && struct_decl_id as usize < self.resolver.ast.decls.len {
+            let ast: &AST = self.resolver.ast;
+            let p_decl: &Decl = &ast.decls[struct_decl_id as usize];
+            match *p_decl {
+                Decl.Struct(s) => { struct_type_params = s.type_params; struct_base_name = s.name; },
+                Decl.Enum(e) => { struct_type_params = e.type_params; struct_base_name = e.name; },
+                _ => {},
+            }
+        }
+
+        // For `impl Stack<i32>` called as `Stack.new()`: the receiver at call site is uninstantiated
+        // (recv_type_args=[]), but the impl's target type has concrete args (e.g. i32).
+        // Resolve imp.target_ty to get those concrete args as a fallback.
+        if recv_type_args.len == 0 as usize && struct_type_params.len > 0 as usize {
+            let ast: &AST = self.resolver.ast;
+            let p_tgt: &Type = &ast.types[imp.target_ty as usize];
+            if p_tgt.get_tag() == TYPE_PATH {
+                let path = p_tgt.get_Path();
+                let path_targs = path.1;
+                if path_targs.len > 0 as usize {
+                    let resolved = self.resolver.resolve_type_list(path_targs.ptr as *mut u32, path_targs.len);
+                    let mut all_valid = true;
+                    let mut vi = 0 as usize;
+                    while vi < resolved.len {
+                        if resolved[vi] == 0 as u32 { all_valid = false; break; }
+                        vi = vi + 1 as usize;
+                    }
+                    if all_valid { recv_type_args = resolved; }
+                }
+            }
+        }
+
+        // Build the effective type name from the struct's base name + recv_type_args.
+        // This ensures correctness whether self_name is already mangled (Vec_Ti32) or bare (Stack).
+        let buf = self.mangle_buf;
+        let saved_len_eff = unsafe { (*buf).len };
+        if struct_base_name != 0 as u32 {
+            let base_str = self.intern_table.lookup(struct_base_name);
+            buf.push_slice(base_str);
+            if recv_type_args.len > 0 as usize {
+                buf.push('_' as u8);
+                buf.push('T' as u8);
+                let mut ri = 0 as usize;
+                while ri < recv_type_args.len {
+                    self.get_type_mangled_name_to(recv_type_args[ri], buf);
+                    ri = ri + 1 as usize;
+                }
+            }
+        } else if self_name != 0 as u32 {
+            let sn_str = self.intern_table.lookup(self_name);
+            buf.push_slice(sn_str);
+        } else {
+            self.get_type_mangled_name_to(self_ty, buf);
+        }
+        let mangled_eff = unsafe { @slice(( (*buf).data as usize + saved_len_eff ) as *u8, (*buf).len - saved_len_eff) };
+        let effective_type_name = self.intern_table.intern(mangled_eff);
+        unsafe { (*buf).len = saved_len_eff; }
+
+        // Build "EffectiveTypeName_MethodName[_TMethodArgs]".
+        let saved_len_mangled = unsafe { (*buf).len };
+        let eff_str = self.intern_table.lookup(effective_type_name);
+        buf.push_slice(eff_str);
+        buf.push(':' as u8);
+        buf.push(':' as u8);
+        let method_name_str = self.intern_table.lookup(method_name);
+        buf.push_slice(method_name_str);
+        if type_args.len > 0 as usize {
+            buf.push('_' as u8);
+            buf.push('T' as u8);
+            let mut j = 0 as usize;
+            while j < type_args.len {
+                self.get_type_mangled_name_to(type_args[j], buf);
+                j = j + 1 as usize;
+            }
+        }
+        let mangled_final = unsafe { @slice(( (*buf).data as usize + saved_len_mangled ) as *u8, (*buf).len - saved_len_mangled) };
+        let mangled_name = self.intern_table.intern(mangled_final);
+        unsafe { (*buf).len = saved_len_mangled; }
+
+        let mut i = 0 as usize;
+        while i < self.module.functions.len {
+            let p_func: &ILFunction = &self.module.functions[i];
+            if p_func.name == mangled_name && p_func.owner_len > 0 as u32 {
+                return i as u32;
+            }
+            i = i + 1 as usize;
+        }
+
+        // Build combined type params: struct's type params + method's own type params.
+        let mut combined_params = Vec::<TypeParam>.new_in(self.arena);
+        let mut idx = 0 as usize;
+        while idx < struct_type_params.len {
+            combined_params.push(struct_type_params[idx]);
+            idx = idx + 1 as usize;
+        }
+        let mut f_idx = 0 as usize;
+        while f_idx < f.type_params.len {
+            combined_params.push(f.type_params[f_idx]);
+            f_idx = f_idx + 1 as usize;
+        }
+
+        // Build combined type args: receiver_type_args + method_type_args.
+        let mut total_args_arr = Vec::<u32>.new_in(self.arena);
+        let mut ai = 0 as usize;
+        while ai < recv_type_args.len {
+            total_args_arr.push(recv_type_args[ai]);
+            ai = ai + 1 as usize;
+        }
+        let mut aj = 0 as usize;
+        while aj < type_args.len {
+            total_args_arr.push(type_args[aj]);
+            aj = aj + 1 as usize;
+        }
+
+        let id = unsafe { (*self.lowerer).lower_fn_instance(f, mangled_name, combined_params.data, combined_params.len(), total_args_arr.data, total_args_arr.len(), effective_type_name, self_ty) };
+        return id;
+    }
+
+    pub fn lower_typedef(self: &mut Monomorphizer, decl_id: DeclId) -> u32 {
+        let empty_type_args = @slice(0 as *u32, 0 as usize);
+        let existing = self.mono_typedefs.lookup(decl_id, empty_type_args);
+        if existing != 0xffffffff as u32 { return existing; }
+
+        // Guard: decl_id may be a typedef slot ID (from alloc_typedef for generics) that
+        // is out of the decls array range or points to a non-type decl. In that case the
+        // typedef at that slot is already initialized; just return 0 and let callers read it.
+        if decl_id as usize >= self.resolver.ast.decls.len {
+            return 0 as u32;
+        }
+
+        let ast: &AST = self.resolver.ast;
+        let p_decl: &Decl = &ast.decls[decl_id as usize];
+        match *p_decl {
+            Decl.Struct(s) => {
+                let mut fields = Vec::<ILField>.new_in(self.arena);
+                let mut k = 0 as usize;
+                while k < s.fields.len {
+                    fields.push(ILField { name: s.fields[k].name, ty: self.resolver.resolve_type(s.fields[k].ty), is_raw_ptr: self.resolver.is_raw_ptr_type(s.fields[k].ty) });
+                    k = k + 1 as usize;
+                }
+                il_module_set_typedef(self.module, decl_id, ILTypeDef.Struct(ILStruct { fields: fields.as_slice() }));
+                self.mono_typedefs.insert(decl_id, empty_type_args, decl_id);
+                self.set_typedef_origin(decl_id, decl_id);
+                return decl_id;
+                },
+                Decl.Enum(e) => {
+                let mut variants = Vec::<ILVariant>.new_in(self.arena);
+                let mut k = 0 as usize;
+                while k < e.variants.len {
+                    let mut disc = k as u32;
+                    if e.variants[k].has_discriminant {
+                        disc = e.variants[k].discriminant;
+                    }
+                    variants.push(ILVariant { name: e.variants[k].name, payload: self.resolver.resolve_type(e.variants[k].payload), discriminant: disc });
+                    k = k + 1 as usize;
+                }
+                il_module_set_typedef(self.module, decl_id, ILTypeDef.Enum(ILEnum { variants: variants.as_slice() }));
+                self.mono_typedefs.insert(decl_id, empty_type_args, decl_id);
+                self.set_typedef_origin(decl_id, decl_id);
+                return decl_id;
+                },
+
+            _ => {
+                // The decl at this ID is not a struct or enum (e.g., it is an impl block).
+                // This happens when a typedef slot ID from alloc_typedef (used for generic
+                // instantiations) happens to equal a non-type decl's index. The typedef at
+                // this slot is already initialized by lower_generic_typedef; return 0 so
+                // callers can read it directly.
+                return 0 as u32;
+            }
+        }
+    }
+
+    pub fn lower_generic_typedef(self: &mut Monomorphizer, decl_id: DeclId, type_args: [u32]) -> u32 {
+        let existing = self.mono_typedefs.lookup(decl_id, type_args);
+        if existing != 0xffffffff as u32 { return existing; }
+
+        let ast: &AST = self.resolver.ast;
+        let p_decl: &Decl = &ast.decls[decl_id as usize];
+
+        // Push a fresh scope so each instantiation's type-param bindings are isolated.
+        self.resolver.push_scope();
+
+        match *p_decl {
+            Decl.Struct(s) => {
+                let mut pi = 0 as usize;
+                while pi < s.type_params.len {
+                    if pi < type_args.len {
+                        self.resolver.define(s.type_params[pi].name, SymbolKind.Type(type_args[pi]), false);
+                    }
+                    pi = pi + 1 as usize;
+                }
+            },
+            Decl.Enum(e) => {
+                let mut pi = 0 as usize;
+                while pi < e.type_params.len {
+                    if pi < type_args.len {
+                        self.resolver.define(e.type_params[pi].name, SymbolKind.Type(type_args[pi]), false);
+                    }
+                    pi = pi + 1 as usize;
+                }
+            },
+            Decl.Fn(_) | Decl.Trait(_) | Decl.Impl(_) | Decl.TypeAlias(_) | Decl.Const(_) |
+            Decl.Static(_) | Decl.Import(_) | Decl.None => {},
+        }
+
+        let saved_bypass = self.resolver.bypass_cache;
+        self.resolver.bypass_cache = true;
+
+        let mut typedef_id = 0 as u32;
+        match *p_decl {
+            Decl.Struct(s) => {
+                let mut fields = Vec::<ILField>.new_in(self.arena);
+                let mut k = 0 as usize;
+                while k < s.fields.len {
+                    fields.push(ILField { name: s.fields[k].name, ty: self.resolver.resolve_type(s.fields[k].ty), is_raw_ptr: self.resolver.is_raw_ptr_type(s.fields[k].ty) });
+                    k = k + 1 as usize;
+                }
+                typedef_id = self.module.alloc_typedef(ILTypeDef.Struct(ILStruct { fields: fields.as_slice() }));
+            },
+            Decl.Enum(e) => {
+                let mut variants = Vec::<ILVariant>.new_in(self.arena);
+                let mut k = 0 as usize;
+                while k < e.variants.len {
+                    let mut disc = k as u32;
+                    if e.variants[k].has_discriminant {
+                        disc = e.variants[k].discriminant;
+                    }
+                    variants.push(ILVariant { name: e.variants[k].name, payload: self.resolver.resolve_type(e.variants[k].payload), discriminant: disc });
+                    k = k + 1 as usize;
+                }
+                typedef_id = self.module.alloc_typedef(ILTypeDef.Enum(ILEnum { variants: variants.as_slice() }));
+            },
+            _ => { ICE("Monomorphizer.lower_generic_typedef: expected struct or enum"); }
+        }
+
+        self.resolver.bypass_cache = saved_bypass;
+        self.resolver.pop_scope();
+        self.mono_typedefs.insert(decl_id, type_args, typedef_id);
+        self.set_typedef_origin(typedef_id, decl_id);
+        return typedef_id;
+    }
+
+    pub fn set_typedef_origin(self: &mut Monomorphizer, typedef_id: u32, decl_id: u32) {
+        if typedef_id == 0 as u32 { return; }
+        let idx = typedef_id as usize;
+        self.typedef_to_decl.ensure_len(idx + 1 as usize);
+        self.typedef_to_decl.set(idx, decl_id);
+    }
+
+    pub fn get_typedef_origin(self: &Monomorphizer, typedef_id: u32) -> u32 {
+        if typedef_id == 0 as u32 { return 0 as u32; }
+        match self.typedef_to_decl.get(typedef_id as usize) {
+            Option.Some(p_origin) => {
+                if *p_origin == 0 as u32 { return typedef_id; }
+                return *p_origin;
+            },
+            Option.None => { return typedef_id; },
+        }
+    }
+
+    // A type as the source spells it, for diagnostics: `&fd<w>`, `[u8]`, `(i32, bool)`,
+    // `fn(i32) -> i32`, `Vec<u32>`. The IL erases the difference between `&T` and `*T`, so
+    // pointers print as references.
+    pub fn type_display(self: &mut Monomorphizer, ty: u32) -> [u8] {
+        let mut out = ByteVec.new(self.arena);
+        self.write_type_display(ty, out, 0 as usize);
+        return out.as_slice();
+    }
+
+    fn write_type_display(self: &mut Monomorphizer, ty: u32, out: &mut ByteVec, depth: usize) {
+        if ty == 0 as u32 || ty as usize > self.module.types.len || depth > 8 as usize {
+            out.push_slice("_");
+            return;
+        }
+        let decl: &ILTypeDecl = &self.module.types[ty as usize - 1 as usize];
+        match decl.def {
+            ILType.Primitive(p) => {
+                let t = p.get_tag();
+                let names = "u8   u16  u32  u64  usizei8   i16  i32  i64  isizef32  f64  bool char ()   !    ";
+                if t < 16 as u32 {
+                    let start = (t * 5 as u32) as usize;
+                    let mut end = start + 5 as usize;
+                    while end > start && names[end - 1 as usize] == ' ' as u8 { end = end - 1 as usize; }
+                    out.push_slice(subslice(names, start, end - start));
+                } else {
+                    out.push_slice("_");
+                }
+            },
+            ILType.Ptr(inner) => { out.push_slice("&"); self.write_type_display(inner, out, depth + 1 as usize); },
+            ILType.PtrMut(inner) => { out.push_slice("&mut "); self.write_type_display(inner, out, depth + 1 as usize); },
+            ILType.Boxed(inner) => { out.push_slice("Box<"); self.write_type_display(inner, out, depth + 1 as usize); out.push_slice(">"); },
+            ILType.BoxedMut(inner) => { out.push_slice("Box<"); self.write_type_display(inner, out, depth + 1 as usize); out.push_slice(">"); },
+            ILType.Slice(sl) => { out.push_slice(if sl.mutable { "[mut " } else { "[" }); self.write_type_display(sl.element, out, depth + 1 as usize); out.push_slice("]"); },
+            ILType.Array(ar) => {
+                out.push_slice("[");
+                self.write_type_display(ar.element, out, depth + 1 as usize);
+                out.push_slice("; ");
+                self.push_decimal(out, ar.size as u64);
+                out.push_slice("]");
+            },
+            ILType.Fn(f) => {
+                out.push_slice("fn(");
+                let mut i = 0 as usize;
+                while i < f.params.len {
+                    if i > 0 as usize { out.push_slice(", "); }
+                    self.write_type_display(f.params[i], out, depth + 1 as usize);
+                    i = i + 1 as usize;
+                }
+                out.push_slice(")");
+                if f.ret_ty != 0 as u32 {
+                    out.push_slice(" -> ");
+                    self.write_type_display(f.ret_ty, out, depth + 1 as usize);
+                }
+            },
+            ILType.Tuple(elems) => {
+                out.push_slice("(");
+                let mut i = 0 as usize;
+                while i < elems.len {
+                    if i > 0 as usize { out.push_slice(", "); }
+                    self.write_type_display(elems[i], out, depth + 1 as usize);
+                    i = i + 1 as usize;
+                }
+                out.push_slice(")");
+            },
+            ILType.FD(cap) => {
+                let c = cap.get_tag();
+                if c == 0 as u32 { out.push_slice("fd<r>"); } else if c == 1 as u32 { out.push_slice("fd<w>"); } else { out.push_slice("fd<rw>"); }
+            },
+            ILType.IORing => { out.push_slice("ioring"); },
+            ILType.User(u) => {
+                let mut name = "_";
+                if decl.name != 0 as u32 { name = self.intern_table.lookup(decl.name); }
+                else if u.name != 0 as u32 { name = self.intern_table.lookup(u.name); }
+                if u.type_args.len > 0 as usize {
+                    // An instantiation is named `Base_T<mangled args>`: strip exactly that
+                    // suffix to recover `Base`, then spell the arguments.
+                    let mut suffix = ByteVec.new(self.arena);
+                    suffix.push_slice("_T");
+                    let mut k = 0 as usize;
+                    while k < u.type_args.len {
+                        self.get_type_mangled_name_to(u.type_args[k], suffix);
+                        k = k + 1 as usize;
+                    }
+                    let sfx = suffix.as_slice();
+                    if name.len > sfx.len && is_str_eq(subslice_from(name, name.len - sfx.len), sfx) {
+                        name = subslice(name, 0 as usize, name.len - sfx.len);
+                    }
+                }
+                out.push_slice(name);
+                if u.type_args.len > 0 as usize {
+                    out.push_slice("<");
+                    let mut i = 0 as usize;
+                    while i < u.type_args.len {
+                        if i > 0 as usize { out.push_slice(", "); }
+                        self.write_type_display(u.type_args[i], out, depth + 1 as usize);
+                        i = i + 1 as usize;
+                    }
+                    out.push_slice(">");
+                }
+            },
+            ILType.Var(v) => { out.push_slice(self.intern_table.lookup(v.name)); },
+        }
+    }
+
+    fn push_decimal(self: &Monomorphizer, out: &mut ByteVec, v: u64) {
+        if v >= 10 as u64 { self.push_decimal(out, v / 10 as u64); }
+        out.push(('0' as u64 + v % 10 as u64) as u8);
+    }
+
+    pub fn get_type_name(self: &Monomorphizer, ty: u32) -> u32 {
+        if ty == 0 as u32 { return 0 as u32; }
+        let p_ty: &ILTypeDecl = &self.module.types[ty as usize - 1 as usize];
+        if p_ty.name != 0 as u32 {
+            return p_ty.name;
+        }
+        return 0 as u32; // Default
+    }
+
+    pub fn get_type_mangled_name(self: &mut Monomorphizer, ty_id: u32) -> [u8] {
+        if ty_id == 0 as u32 { return "void"; }
+        let p_ty: &ILTypeDecl = &self.module.types[ty_id as usize - 1 as usize];
+        if p_ty.name != 0 as u32 {
+            return self.intern_table.lookup(p_ty.name);
+        }
+
+        let buf = self.mangle_buf;
+        let saved_len = unsafe { (*buf).len };
+        self.get_type_mangled_name_to(ty_id, buf);
+        let mangled = unsafe { @slice(( (*buf).data as usize + saved_len ) as *u8, (*buf).len - saved_len) };
+        let id = self.intern_table.intern(mangled);
+        
+        // Re-get p_ty because intern() might have reallocated something? 
+        // No, module.types is stable during interning.
+        let p_ty2: &mut ILTypeDecl = &mut self.module.types[ty_id as usize - 1 as usize];
+        p_ty2.name = id;
+        unsafe { (*buf).len = saved_len; }
+        return self.intern_table.lookup(id);
+    }
+
+    fn get_type_mangled_name_to(self: &mut Monomorphizer, ty_id: u32, buf: &mut ByteVec) {
+        if ty_id == 0 as u32 { 
+            buf.push_slice("void");
+            return;
+        }
+
+        let p_ty: &ILTypeDecl = &self.module.types[ty_id as usize - 1 as usize];
+        if p_ty.name != 0 as u32 {
+            buf.push_slice(self.intern_table.lookup(p_ty.name));
+            return;
+        }
+
+        match p_ty.def {
+            ILType.Primitive(p) => {
+                let prim_tag = p.get_tag();
+                if prim_tag == ILPRIM_U8 { buf.push_slice("u8"); }
+                else if prim_tag == ILPRIM_U16 { buf.push_slice("u16"); }
+                else if prim_tag == ILPRIM_U32 { buf.push_slice("u32"); }
+                else if prim_tag == ILPRIM_U64 { buf.push_slice("u64"); }
+                else if prim_tag == ILPRIM_USIZE { buf.push_slice("usize"); }
+                else if prim_tag == ILPRIM_I8 { buf.push_slice("i8"); }
+                else if prim_tag == ILPRIM_I16 { buf.push_slice("i16"); }
+                else if prim_tag == ILPRIM_I32 { buf.push_slice("i32"); }
+                else if prim_tag == ILPRIM_I64 { buf.push_slice("i64"); }
+                else if prim_tag == ILPRIM_ISIZE { buf.push_slice("isize"); }
+                else if prim_tag == ILPRIM_F32 { buf.push_slice("f32"); }
+                else if prim_tag == ILPRIM_F64 { buf.push_slice("f64"); }
+                else if prim_tag == ILPRIM_BOOL { buf.push_slice("bool"); }
+                else if prim_tag == ILPRIM_CHAR { buf.push_slice("char"); }
+                else if prim_tag == ILPRIM_UNIT { buf.push_slice("unit"); }
+                else if prim_tag == ILPRIM_NEVER { buf.push_slice("never"); }
+                else { buf.push_slice("unknown_prim"); }
+            },
+            ILType.Ptr(inner) => {
+                buf.push('p' as u8);
+                self.get_type_mangled_name_to(inner, buf);
+            },
+            ILType.PtrMut(inner) => {
+                buf.push('p' as u8);
+                buf.push('m' as u8);
+                self.get_type_mangled_name_to(inner, buf);
+            },
+            ILType.Boxed(inner) => {
+                buf.push('b' as u8);
+                self.get_type_mangled_name_to(inner, buf);
+            },
+            ILType.BoxedMut(inner) => {
+                buf.push('b' as u8);
+                buf.push('m' as u8);
+                self.get_type_mangled_name_to(inner, buf);
+            },
+            ILType.Slice(s) => {
+                buf.push('s' as u8);
+                if s.mutable { buf.push('m' as u8); }
+                self.get_type_mangled_name_to(s.element, buf);
+            },
+            ILType.Array(a) => {
+                buf.push('a' as u8);
+                self.get_type_mangled_name_to(a.element, buf);
+            },
+            ILType.Tuple(types) => {
+                buf.push('t' as u8);
+                let mut i = 0 as usize;
+                while i < types.len {
+                    self.get_type_mangled_name_to(types[i], buf);
+                    i = i + 1 as usize;
+                }
+            },
+            ILType.User(u) => {
+                let name = self.intern_table.lookup(u.name);
+                buf.push_slice(name);
+                if u.type_args.len > 0 as usize {
+                    buf.push('_' as u8);
+                    buf.push('T' as u8);
+                    let mut i = 0 as usize;
+                    while i < u.type_args.len {
+                        self.get_type_mangled_name_to(u.type_args[i], buf);
+                        i = i + 1 as usize;
+                    }
+                }
+            },
+            ILType.FD(inner) => {
+                buf.push_slice("fd_");
+                let cap_tag = inner.get_tag();
+                if cap_tag == 0 as u32 { buf.push('r' as u8); }
+                else if cap_tag == 1 as u32 { buf.push('w' as u8); }
+                else { buf.push_slice("rw"); }
+            },
+            ILType.IORing => { buf.push_slice("ioring"); },
+            ILType.Var(v) => {
+                if v.name != 0 as u32 {
+                    buf.push_slice(self.intern_table.lookup(v.name));
+                } else {
+                    buf.push_slice("var");
+                }
+            },
+            ILType.Fn(f) => {
+                buf.push('f' as u8);
+                self.get_type_mangled_name_to(f.ret_ty, buf);
+                let mut i = 0 as usize;
+                while i < f.params.len {
+                    self.get_type_mangled_name_to(f.params[i], buf);
+                    i = i + 1 as usize;
+                }
+            },
+        }
+    }
+
+    fn mangle_name(self: &mut Monomorphizer, name_id: u32, type_args: [u32]) -> u32 {
+        if type_args.len == 0 as usize { return name_id; }
+
+        let buf = self.mangle_buf;
+        let saved_len = unsafe { (*buf).len };
+
+        let orig_name = self.intern_table.lookup(name_id);
+        buf.push_slice(orig_name);
+        buf.push('_' as u8);
+        buf.push('T' as u8);
+        let mut j = 0 as usize;
+        while j < type_args.len {
+            self.get_type_mangled_name_to(type_args[j], buf);
+            j = j + 1 as usize;
+        }
+
+        let mangled = unsafe { @slice(( (*buf).data as usize + saved_len ) as *u8, (*buf).len - saved_len) };
+        let id = self.intern_table.intern(mangled);
+        unsafe { (*buf).len = saved_len; }
+        return id;
+    }
+
+    pub fn register_zir_closure_env(self: &mut Monomorphizer, func_idx: u32, env_local_id: u32) {
+        self.cap_func_idxs.push(func_idx);
+        self.cap_env_local_ids.push(env_local_id);
+    }
+
+    pub fn lookup_zir_closure_env(self: &Monomorphizer, func_idx: u32) -> u32 {
+        let mut i = 0 as usize;
+        while i < self.cap_func_idxs.len() {
+            if self.cap_func_idxs[i] == func_idx {
+                return self.cap_env_local_ids[i];
+            }
+            i = i + 1 as usize;
+        }
+        return 0 as u32;
+    }
+}
+
+pub struct MonoRegistry {
+    pub keys: *mut u32, // [decl_id, arg_count, args...]
+    pub values: *mut u32,
+    pub len: usize,
+    pub cap: usize,
+    pub arena: *mut Arena,
+}
+
+impl MonoRegistry {
+    pub fn new(arena: *mut Arena) -> MonoRegistry {
+        return MonoRegistry {
+            keys: zoril_allocator_alloc(arena, 1024 * 4 * 16) as *mut u32,
+            values: zoril_allocator_alloc(arena, 1024 * 4) as *mut u32,
+            len: 0 as usize,
+            cap: 1024 as usize,
+            arena: arena,
+        };
+    }
+
+    // MonoRegistry packs its key/value pairs into raw byte buffers
+    // ([decl_id, arg_count, args...] / values) rather than using safe
+    // collections, the same unsafe-inside/safe-outside shape as InternTable.
+    // These three functions are the unsafe interior.
+    pub fn lookup(self: &MonoRegistry, decl_id: u32, args: [u32]) -> u32 {
+        unsafe {
+        let mut i = 0 as usize;
+        let mut ptr = self.keys as usize;
+        while i < self.len {
+            let p_decl = ptr as *mut u32;
+            let cur_decl = *p_decl;
+            let p_count = (ptr + 4) as *mut u32;
+            let cur_count = *p_count;
+            if cur_decl == decl_id && cur_count as usize == args.len {
+                let mut match_ok = true;
+                let mut j = 0 as usize;
+                while j < args.len {
+                    let off_a = 8 + j * 4;
+                    let p_arg = (ptr + off_a) as *mut u32;
+                    if *p_arg != args[j] {
+                        match_ok = false;
+                        break;
+                    }
+                    j = j + 1 as usize;
+                }
+                if match_ok {
+                    let off_v = i * 4 as usize;
+                    let p_val = (self.values as usize + off_v) as *mut u32;
+                    return *p_val;
+                }
+            }
+            ptr = ptr + 8 + cur_count as usize * 4;
+            i = i + 1 as usize;
+        }
+
+        return 0xffffffff as u32;
+        }
+    }
+
+    pub fn reverse_lookup_decl_id(self: &MonoRegistry, value: u32) -> Option<u32> {
+        unsafe {
+        let mut i = 0 as usize;
+        let mut ptr = self.keys as usize;
+        while i < self.len {
+            let off_v = i * 4 as usize;
+            let p_val = (self.values as usize + off_v) as *mut u32;
+            if *p_val == value {
+                let p_decl = ptr as *mut u32;
+                return Option.Some(*p_decl);
+            }
+            let cur_count = *((ptr + 4) as *mut u32);
+            ptr = ptr + 8 + cur_count as usize * 4;
+            i = i + 1 as usize;
+        }
+        return Option.None;
+        }
+    }
+
+    pub fn insert(self: &mut MonoRegistry, decl_id: u32, args: [u32], value: u32) {
+        if self.len >= self.cap {
+            ICE("MonoRegistry overflow");
+        }
+
+        unsafe {
+        let mut ptr = self.keys as usize;
+        let mut i = 0 as usize;
+        while i < self.len {
+            let cur_count = *((ptr + 4) as *mut u32);
+            ptr = ptr + 8 + cur_count as usize * 4;
+            i = i + 1 as usize;
+        }
+
+        if ptr + 8 + args.len * 4 > self.keys as usize + 4096 * 4 {
+            ICE("MonoRegistry key buffer overflow");
+        }
+
+        let p_decl = ptr as *mut u32;
+        *p_decl = decl_id;
+        let p_count = (ptr + 4) as *mut u32;
+        *p_count = args.len as u32;
+        let mut j = 0 as usize;
+        while j < args.len {
+            let off_a = 8 + j * 4;
+            let p_arg = (ptr + off_a) as *mut u32;
+            *p_arg = args[j];
+            j = j + 1 as usize;
+        }
+        let off_v = self.len * 4 as usize;
+        let p_val = (self.values as usize + off_v) as *mut u32;
+        *p_val = value;
+        self.len = self.len + 1 as usize;
+        }
+    }
+}

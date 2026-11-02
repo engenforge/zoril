@@ -1,0 +1,10 @@
+// EXPECT: tests/error_reporting/err_saf_must_use_discard.zrl:8:5: warning: unused result from #[must_use] function
+#[must_use]
+fn critical_op() -> i32 {
+    return 1;
+}
+
+fn main() -> i32 {
+    critical_op();
+    return 0;
+}

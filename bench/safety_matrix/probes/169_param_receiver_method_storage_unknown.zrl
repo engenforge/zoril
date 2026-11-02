@@ -1,0 +1,32 @@
+// name: Reference into a dead local's stack slot through a method on a parameter
+// expected: compile_reject
+// A method whose receiver is a parameter (`l.grab()`) used to be a callee the storage walk could
+// not follow: it resolved a receiver only for `self`, so the call contributed *no* bits to `h`'s
+// mask - and an empty mask means "decided: points into no parameter's own storage", which reads as
+// a *derived* borrow. The scope-end rule exempts a derived borrow for a type without `Drop`, so
+// `y = h(&s, &w, 1)` - which returns `l.grab()`, i.e. `&s.v` - outlived `s` and read its dead slot
+// (5). The walk resolves a parameter receiver by its declared type now (`storage_param_type`), so
+// `h`'s mask marks `l`, and a callee it still cannot resolve is read as the worst case instead
+// (probe 170 is that half).
+struct Wrapper {
+    v: i32,
+}
+
+impl Wrapper {
+    fn grab(self: &Wrapper) -> &i32 { return &self.v; }
+}
+
+fn h(l: &Wrapper, q: &i32, n: i32) -> &i32 {
+    if n <= 0 { return q; }
+    return l.grab();
+}
+
+fn main() -> i32 {
+    let mut y: &i32 = &0;
+    let w: i32 = 3;
+    {
+        let s = Wrapper { v: 5 };
+        y = h(&s, &w, 1);
+    }
+    return *y;
+}

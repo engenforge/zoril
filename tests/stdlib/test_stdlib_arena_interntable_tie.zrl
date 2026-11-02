@@ -1,0 +1,28 @@
+// Safe arena handle: an InternTable from new(&arena) is tied to its arena, so it must be used
+// and dropped before the arena is reset or destroyed.
+// expected exit 0
+
+import "intern.zrl";
+import "mem.zrl";
+use intern::InternTable;
+use mem::Arena;
+
+// The table lives in this frame and is dropped when the function returns, releasing its borrow
+// of `a`.
+fn intern_len(a: &Arena) -> usize {
+    let mut t = InternTable.new(a);
+    let id = t.intern("hello");
+    return t.lookup(id).len;
+}
+
+fn main() -> i32 {
+    let mut arena = Arena.new(1 << 20).unwrap();
+    if intern_len(&arena) != 5 {
+        return 1;
+    }
+    arena.reset(); // no InternTable from `arena` is live
+    if intern_len(&arena) != 5 {
+        return 2;
+    }
+    return 0;
+}

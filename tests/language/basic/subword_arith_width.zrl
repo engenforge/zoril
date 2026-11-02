@@ -1,0 +1,118 @@
+// A sub-word arithmetic result must stay inside its declared type, whether it is
+// still a temporary or has been stored into a declared narrow local.
+//
+// Until 2026-09-28 those two disagreed: u8/u16 arithmetic ran in a 32-bit
+// register and only a *store* truncated it, so `200u8 + 100u8` was 300 as a
+// temporary and 44 once stored, and comparing the two gave false. The wrapping
+// operators (+% -% *%) always masked; the plain ones did not. See
+// surface_syntax.md 11.2.6. Each case below checks the temporary, the stored
+// value, and that they agree.
+// expected exit code: 0
+
+fn main() -> i32 {
+    // --- u8: add, sub, mul, shl ---
+    let a: u8 = 200;
+    let a_stored: u8 = a + 100u8;
+    if a_stored != 44u8 { return 1; }
+    if a + 100u8 != 44u8 { return 2; }
+    if a + 100u8 != a_stored { return 3; }
+
+    let b: u8 = 0;
+    let b_stored: u8 = b - 1u8;
+    if b_stored != 255u8 { return 4; }
+    if b - 1u8 != 255u8 { return 5; }
+
+    let c: u8 = 200;
+    let c_stored: u8 = c * 2u8;
+    if c_stored != 144u8 { return 6; }
+    if c * 2u8 != 144u8 { return 7; }
+
+    // The bit shifted out of a u8 is gone (an in-range count; >= 8 now traps).
+    let d: u8 = 128;
+    let sh1: u8 = 1;
+    let d_stored: u8 = d << sh1;
+    if d_stored != 0u8 { return 8; }
+    if d << sh1 != 0u8 { return 9; }
+
+    // --- i8 ---
+    let e: i8 = 127;
+    let e_stored: i8 = e + 1i8;
+    if e_stored != -128i8 { return 10; }
+    if e + 1i8 != -128i8 { return 11; }
+
+    let f: i8 = -128;
+    let f_stored: i8 = f - 1i8;
+    if f_stored != 127i8 { return 12; }
+    if f - 1i8 != 127i8 { return 13; }
+
+    let g: i8 = 100;
+    let g_stored: i8 = g * 2i8;
+    if g_stored != -56i8 { return 14; }
+    if g * 2i8 != -56i8 { return 15; }
+
+    // --- u16 ---
+    let h: u16 = 60000;
+    let h_stored: u16 = h + 10000u16;
+    if h_stored != 4464u16 { return 16; }
+    if h + 10000u16 != 4464u16 { return 17; }
+
+    let i: u16 = 0;
+    if i - 1u16 != 65535u16 { return 18; }
+
+    let j: u16 = 40000;
+    if j * 2u16 != 14464u16 { return 19; }
+
+    // --- i16 ---
+    let k: i16 = 32767;
+    let k_stored: i16 = k + 1i16;
+    if k_stored != -32768i16 { return 20; }
+    if k + 1i16 != -32768i16 { return 21; }
+
+    let l: i16 = -32768;
+    if l - 1i16 != 32767i16 { return 22; }
+
+    // --- widths that were always correct must stay correct ---
+    let m: u32 = 4000000000;
+    if m + 1000000000u32 != 705032704u32 { return 23; }
+
+    // --- the plain and wrapping operators must now agree everywhere ---
+    let n: u8 = 200;
+    if n + 100u8 != n +% 100u8 { return 24; }
+    if n - 201u8 != n -% 201u8 { return 25; }
+    if n * 2u8 != n *% 2u8 { return 26; }
+
+    // --- a narrow result used directly as a value, not just compared ---
+    let sum: u8 = 200;
+    if (sum + 100u8) as u64 != 44u64 { return 27; }
+
+    // --- the unary operators are the same rule, and were missed on 2026-09-28 ---
+    // `!0u8` left 0xffffffff in the register and only a store truncated it, so the
+    // temporary and the stored value disagreed exactly as the binary case did.
+    let p: u8 = 0;
+    let p_stored: u8 = !p;
+    if p_stored != 255u8 { return 28; }
+    if !p != 255u8 { return 29; }
+    if !p != p_stored { return 30; }
+
+    let q: u16 = 0;
+    let q_stored: u16 = !q;
+    if q_stored != 65535u16 { return 31; }
+    if !q != 65535u16 { return 32; }
+
+    // `-(-128i8)` is 128, which is not an i8; it must wrap back to -128.
+    let r: i8 = -128;
+    let r_stored: i8 = -r;
+    if r_stored != -128i8 { return 33; }
+    if -r != -128i8 { return 34; }
+
+    let s: i16 = -32768;
+    let s_stored: i16 = -s;
+    if s_stored != -32768i16 { return 35; }
+    if -s != -32768i16 { return 36; }
+
+    // A negation that does fit must be left alone.
+    let t: i8 = 100;
+    if -t != -100i8 { return 37; }
+
+    return 0;
+}

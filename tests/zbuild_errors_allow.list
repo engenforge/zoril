@@ -1,0 +1,6 @@
+# Compile-fail tests whose diagnostic differs under an installed zbuild, with the reason and the
+# KNOWN_ISSUES.md entry that documents it. scripts/test_zbuild_errors.sh fails on an entry that now matches.
+tests/error_reporting/err_uncalled_method_borrow.zrl zbuild builds one module at a time and checks only the methods something calls (KNOWN_ISSUES.md section 4: "A method nothing calls is checked by a whole-program build, not by -c")
+tests/error_reporting/err_uncalled_method_checks.zrl zbuild builds one module at a time and checks only the methods something calls (KNOWN_ISSUES.md section 4: "A method nothing calls is checked by a whole-program build, not by -c")
+tests/error_reporting/err_uncalled_method_private_call.zrl zbuild builds one module at a time and checks only the methods something calls (KNOWN_ISSUES.md section 4: "A method nothing calls is checked by a whole-program build, not by -c")
+tests/error_reporting/err_uncalled_specialization_method_checks.zrl zbuild builds one module at a time and checks only the methods something calls (KNOWN_ISSUES.md section 4: "A method nothing calls is checked by a whole-program build, not by -c")

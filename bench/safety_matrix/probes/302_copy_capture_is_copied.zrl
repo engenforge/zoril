@@ -1,0 +1,12 @@
+// name: A Copy capture is copied, so the outer binding stays usable
+// expected: accept
+// The accepted twin of probes 298-301: an i32 is `Copy`, the closure sees the value as it was
+// when the closure was made, and the outer binding keeps working.
+fn main() -> i32 {
+    let mut n = 1;
+    let f = || { return n; };
+    n = 2;
+    let a = f();
+    if a != 1 || n != 2 { return 90; }
+    return 0;
+}

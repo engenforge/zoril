@@ -1,0 +1,42 @@
+// expected exit code: 42
+// 40: Wrapping arithmetic operators (+%, -%, *%).
+// These operators bypass overflow checks (or default panics) and perform modulo arithmetic.
+
+fn main() -> i32 {
+    // Unsigned wrapping
+    let max_u8: u8 = 255;
+    let wrapped_add_u8 = max_u8 +% 1u8; // Should be 0
+    if wrapped_add_u8 != 0u8 { return 1; }
+
+    let min_u8: u8 = 0;
+    let wrapped_sub_u8 = min_u8 -% 1u8; // Should be 255
+    if wrapped_sub_u8 != 255u8 { return 2; }
+
+    // Signed wrapping
+    let max_i8: i8 = 127;
+    let wrapped_add_i8 = max_i8 +% 1i8; // Should be -128
+    if wrapped_add_i8 != -128i8 { return 3; }
+
+    let min_i8: i8 = -128;
+    let wrapped_sub_i8 = min_i8 -% 1i8; // Should be 127
+    if wrapped_sub_i8 != 127i8 { return 4; }
+
+    // Multiplicative wrapping
+    let a: u32 = 0x8000_0000;
+    let wrapped_mul = a *% 2u32; // Should be 0
+    if wrapped_mul != 0u32 { return 5; }
+
+    // Compound assignment wrapping
+    let mut x: u8 = 250;
+    x +%= 10u8; // 260 -> 4
+    if x != 4u8 { return 6; }
+
+    x -%= 5u8; // 4 - 5 -> 255
+    if x != 255u8 { return 7; }
+
+    let mut y: u8 = 64;
+    y *%= 4u8; // 256 -> 0
+    if y != 0u8 { return 8; }
+
+    return 42;
+}

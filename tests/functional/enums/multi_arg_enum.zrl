@@ -1,0 +1,12 @@
+enum Bar { X(u32, u32) }
+fn test(b: Bar) -> u32 {
+    match b {
+        Bar.X(a, b) => { return a + b; }
+    }
+}
+fn main() -> i32 {
+    // Was `return 0;` -- the test could not fail. Now asserts the payload
+    // values actually arrive: X(3, 4) must sum to 7.
+    if test(Bar.X(3 as u32, 4 as u32)) != 7 as u32 { return 1 as i32; }
+    return 0 as i32;
+}

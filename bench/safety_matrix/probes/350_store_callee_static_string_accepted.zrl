@@ -1,0 +1,20 @@
+// name: A static string passed to a callee that stores it into a parameter is accepted
+// expected: accept
+// A string literal has static storage duration, so passing it to a callee that stores it through a parameter is accepted.
+fn stash_str(out: &mut [u8], s: [u8]) {
+    *out = s;
+}
+
+fn f(out: &mut [u8]) {
+    stash_str(out, "hello");
+}
+
+fn main() -> i32 {
+    let e: [u8] = @slice(0 as *u8, 0);
+    let mut s = e;
+    f(&mut s);
+    if s.len == 5 as usize && s[0] == ('h' as u8) {
+        return 0;
+    }
+    return 1;
+}

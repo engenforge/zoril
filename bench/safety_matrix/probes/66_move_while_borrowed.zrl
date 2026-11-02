@@ -1,0 +1,11 @@
+// name: Move of a value while a reference to it is live
+// expected: compile_reject
+struct B { v: Box<i32> }
+fn main() -> i32 {
+    let b = B { v: box 5 };
+    let r = &b;
+    let c = b;
+    if *(*r).v != 5 { return 1; }
+    if *c.v != 5 { return 2; }
+    return 0;
+}

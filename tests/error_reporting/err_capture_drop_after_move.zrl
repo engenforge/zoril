@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: cannot drop value 's' that may have been moved
+// The closure's environment owns the captured String, so dropping the outer binding while the
+// closure is live is rejected (doc/spec/surface_syntax.md §5.2; probe 298).
+import "string.zrl";
+use string::String;
+
+fn main() -> i32 {
+    let mut s = String.new();
+    s.push_str("abcdefgh");
+    let f = || { return s.as_slice()[0] as i32; };
+    @drop(s);
+    return f();
+}

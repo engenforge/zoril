@@ -1,0 +1,7 @@
+enum Baz { X(u32, u32, u32) }
+fn test(b: Baz) -> u32 {
+    match b {
+        Baz.X(a, _, _) => { return a; }
+    }
+}
+fn main() -> i32 { return 0; }

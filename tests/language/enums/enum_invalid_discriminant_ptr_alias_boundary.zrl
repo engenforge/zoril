@@ -1,0 +1,18 @@
+// expected exit 1
+// Boundary probe: raw-pointer dereference (*p) bypasses enum constructor checks,
+// but matching on an invalid discriminant traps deterministically via zoril_abort().
+
+enum E {
+    A,
+    B,
+}
+
+fn main() -> i32 {
+    let mut raw: i32 = 99;
+    let p = &mut raw as *mut i32 as *E;
+    let e = unsafe { *p };
+    return match e {
+        A => 1,
+        B => 2,
+    };
+}

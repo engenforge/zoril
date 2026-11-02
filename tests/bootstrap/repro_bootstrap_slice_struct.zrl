@@ -1,0 +1,25 @@
+// Repro for bootstrap compiler bug: miscompilation of slice indexing for structs with u32 fields.
+
+struct Small {
+    a: u32,
+    b: u32,
+}
+
+fn test(s: [Small]) -> u32 {
+    let mut sum = 0 as u32;
+    let mut i = 0 as usize;
+    while i < s.len {
+        sum = sum + s[i].b;
+        i = i + 1 as usize;
+    }
+    return sum;
+}
+
+fn main() -> i32 {
+    let mut arr = [Small { a: 1, b: 10 }, Small { a: 2, b: 20 }];
+    let s = unsafe { @slice(&mut arr as *mut Small, 2) };
+    if test(s) == 30 {
+        return 0;
+    }
+    return 1;
+}

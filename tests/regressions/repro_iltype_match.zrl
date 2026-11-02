@@ -1,0 +1,25 @@
+import "il_type.zrl";
+import "io.zrl";
+use il_type::{ILPrimitive, ILType};
+use io::print;
+
+fn test_match(t: ILType) -> [u8] {
+    match t {
+        ILType.Primitive(p) => {
+            if p == ILPrimitive.I32 { return "i32_ok"; }
+            return "prim_other";
+        },
+        _ => return "other",
+    }
+}
+
+fn main() -> i32 {
+    let t = ILType.Primitive(ILPrimitive.I32);
+    let res = test_match(t);
+    print(res);
+    print("\n");
+    if is_str_eq(res, "i32_ok") {
+        return 0;
+    }
+    return 1;
+}

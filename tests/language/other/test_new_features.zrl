@@ -1,0 +1,57 @@
+// Test newly implemented lowering features
+
+const GLOBAL_CONST: u64 = 42;
+static GLOBAL_STATIC: u64 = 100;
+
+fn test_for_loop() -> i32 {
+    let mut sum = 0;
+    for i in 1..6 {
+        sum = sum + i;
+    }
+    if sum == 15 { return 0; }
+    return 1;
+}
+
+fn test_array_indexing() -> i32 {
+    let arr = [10, 20, 30, 40];
+    if arr[0] != 10 { return 1; }
+    if arr[3] != 40 { return 1; }
+    return 0;
+}
+
+fn test_tuple_access() -> i32 {
+    let t = (1, 2, 3);
+    if t.0 != 1 { return 1; }
+    if t.2 != 3 { return 1; }
+    return 0;
+}
+
+fn test_sizeof_alignof() -> i32 {
+    if sizeof(u64) != 8 { return 1; }
+    if alignof(u64) != 8 { return 1; }
+    return 0;
+}
+
+fn test_globals() -> i32 {
+    if GLOBAL_CONST != 42 { return 1; }
+    if GLOBAL_STATIC != 100 { return 1; }
+    return 0;
+}
+
+fn test_intrinsics() -> i32 {
+    // @slice is tested via strings mostly, but let's try direct
+    let p = 0 as *u8;
+    let s = @slice(p, 0 as u64);
+    if s.len != 0 as u64 { return 1; }
+    return 0;
+}
+
+fn main() -> i32 {
+    if test_for_loop() != 0 { return 1; }
+    if test_array_indexing() != 0 { return 2; }
+    if test_tuple_access() != 0 { return 3; }
+    if test_sizeof_alignof() != 0 { return 4; }
+    if test_globals() != 0 { return 5; }
+    if test_intrinsics() != 0 { return 6; }
+    return 0;
+}

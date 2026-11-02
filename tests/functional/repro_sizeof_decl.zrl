@@ -1,0 +1,20 @@
+// expected exit 64
+struct Span { start: u32, end: u32, line: u32, col: u32 }
+struct Param { name: u32, ty: u32 }
+struct FnDecl {
+    name: u32,
+    params: [Param],
+    ret_ty: u32,
+    body: u32,
+    is_pub: bool,
+    is_extern: bool,
+    is_variadic: bool,
+    must_use: bool,
+    type_params: [u32],
+}
+enum Decl {
+    Fn(FnDecl),
+    Import(u32),
+    None,
+}
+fn main() -> i32 { return sizeof(Decl) as i32; }

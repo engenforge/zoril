@@ -1,0 +1,17 @@
+// name: Masked shift (@shl_wrap) masks the count to the operand's width
+// expected: accept
+// The explicit opt-out from the shift-count check. The count is masked to the width of
+// the operand's type, not of the register it happens to be computed in, so the answer is
+// the same on every target. (A plain << used to mask to the register width: a known gap
+// until 2026-10-02, when out-of-range counts started to trap.)
+fn main() -> i32 {
+    let v32: u32 = 1 as u32;
+    if @shl_wrap(v32, 32 as u32) != 1 as u32 { return 1; }   // 32 & 31 == 0
+    if @shl_wrap(v32, 40 as u32) != 256 as u32 { return 2; } // 40 & 31 == 8
+    let v8: u8 = 1 as u8;
+    if @shl_wrap(v8, 9 as u8) != 2 as u8 { return 3; }       // 9 & 7 == 1, not 9 & 31
+    let v64: u64 = 1 as u64;
+    if @shl_wrap(v64, 65 as u64) != 2 as u64 { return 4; }
+    if @shr_wrap(256 as u32, 40 as u32) != 1 as u32 { return 5; }
+    return 0;
+}

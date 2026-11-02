@@ -1,0 +1,31 @@
+import "io.zrl";
+use io::print;
+
+enum Val {
+    A(u32),
+    B(u32),
+}
+
+fn main() -> i32 {
+    let arr = [Val.A(1), Val.A(2), Val.B(3)];
+
+    let mut ok = true;
+    match arr[0] {
+        Val.A(v) => { if v != 1 as u32 { ok = false; print("FAIL 0\n"); } },
+        _ => { ok = false; print("FAIL 0 type\n"); }
+    }
+    match arr[1] {
+        Val.A(v) => { if v != 2 as u32 { ok = false; print("FAIL 1\n"); } },
+        _ => { ok = false; print("FAIL 1 type\n"); }
+    }
+    match arr[2] {
+        Val.B(v) => { if v != 3 as u32 { ok = false; print("FAIL 2\n"); } },
+        _ => { ok = false; print("FAIL 2 type\n"); }
+    }
+
+    if ok {
+        print("ARRAY LIT OK\n");
+        return 0;
+    }
+    return 1;
+}

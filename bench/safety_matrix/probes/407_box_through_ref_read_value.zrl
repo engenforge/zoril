@@ -1,0 +1,19 @@
+// name: A read through a reference to a Box reads the boxed value
+// expected: accept
+// `r.y` with `r: &Box<Point>` reads the Point the Box owns. It once read the 8 bytes past the stack
+// slot that holds the Box's pointer, a silent wrong value (exit 0 where 22 was written). The value read
+// is the one stored; exit 0.
+struct Point { x: i64, y: i64 }
+
+fn read_y(p: &Box<Point>) -> i64 {
+    return p.y;
+}
+
+fn main() -> i32 {
+    let b = box Point { x: 20, y: 22 };
+    let r = &b;
+    if r.y != 22 { return 1; }
+    if read_y(&b) != 22 { return 2; }
+    if r.x + r.y != 42 { return 3; }
+    return 0;
+}

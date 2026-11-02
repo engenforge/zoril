@@ -1,0 +1,58 @@
+import "core.zrl";
+
+// Reproduces: match expression returning large aggregate (>16 bytes) corrupts result.
+//
+// Root cause: in zoril-c's IR lowerer, when a match expression returns a large
+// struct (> 16 bytes, i.e. using sret), the phi-node convergence block:
+//   1. Each arm writes the result to the outer sret pointer (%v1) AND stores
+//      the pointer VALUE to phi_slot via `storel %v1, %phi_slot`.
+//   2. At convergence: `memcpy(%tmp, %phi_slot, 32)` reads 32 bytes starting
+//      at phi_slot itself (not at the address stored in phi_slot).
+//      phi_slot[0..7] = pointer value (address), phi_slot[8..31] = zero.
+//   3. `memcpy(%v1, %tmp, 32)` then OVERWRITES the correctly computed result
+//      with this garbage (pointer bytes + zeros), zeroing the Span fields.
+//
+// Observed: span fields always read as 0 regardless of what was written.
+
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+    pub line: u32,
+    pub col: u32,
+}
+
+// Large enum: tag(4) + pad(4) + payload(8) = 16 bytes
+pub enum BigTok {
+    Unit,
+    Val(u64),
+}
+
+// Large struct: 32 bytes — above 16-byte sret threshold
+pub struct BigStruct {
+    pub tok: BigTok,  // 16 bytes
+    pub loc: Span,    // 16 bytes
+}
+
+fn make_it(line: u32) -> BigStruct {
+    return BigStruct {
+        tok: BigTok.Unit,
+        loc: Span { start: line, end: line, line: line, col: line },
+    };
+}
+
+// match expression returning large struct — triggers the phi-slot corruption bug
+fn match_test(c: u8, line: u32) -> BigStruct {
+    return match c {
+        40 => make_it(line),
+        41 => make_it(line),
+        _ => make_it(line),
+    };
+}
+
+fn main() -> i32 {
+    let s = match_test(40 as u8, 42 as u32);
+    // If the bug is present, loc.line will be 0 (zeroed by phi-slot memcpy)
+    if s.loc.line != 42 as u32 { return 1; }
+    if s.loc.col != 42 as u32 { return 2; }
+    return 0;
+}

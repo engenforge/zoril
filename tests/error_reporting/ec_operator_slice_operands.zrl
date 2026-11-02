@@ -1,0 +1,22 @@
+// expected compile fail
+// EXPECT: error: arithmetic operator not supported on slice operands
+// EXPECT: error: comparison operator not supported on slice operands
+// A slice is a data pointer and a length, not a number. Both operand positions are covered.
+fn add_right(s: [u64]) {
+    let y = 1 + s;
+}
+
+fn add_left(s: [u64]) {
+    let y = s + 1;
+}
+
+fn less(s: [u64], t: [u64]) {
+    let y = s < t;
+}
+
+fn main() -> i32 {
+    if false {
+        return 1;
+    }
+    return 0;
+}

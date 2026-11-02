@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: `super` is a reserved word, kept for a future feature
+fn f() -> i32 {
+    let super = 1;
+    return super;
+}

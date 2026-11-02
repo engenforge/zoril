@@ -1,0 +1,5 @@
+// name: Unaligned pointer store
+// expected: compile_reject
+// Unaligned access is still unchecked by design, but only reachable through
+// the marker. See 34_unaligned_access_unsafe.zrl for the marked form.
+fn main() -> i32 { let mut b = [0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8]; let q = (&mut b[1] as *mut u8) as *mut i64; *q = 7 as i64; return 0; }

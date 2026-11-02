@@ -1,0 +1,36 @@
+// expected exit code: 0
+pub enum Status {
+    Ok,
+    Error(u32),
+}
+impl Status {
+    pub const MAGIC: u32 = 0xCAFE;
+    pub fn is_ok(self: &Status) -> bool {
+        return match *self {
+            Status.Ok => true,
+            _ => false,
+        };
+    }
+    pub fn new_error(code: u32) -> Status {
+        return Status.Error(code);
+    }
+}
+pub enum MyResult<T, E> {
+    Ok(T),
+    Err(E),
+}
+impl MyResult<T, E> {
+    pub fn success(val: T) -> MyResult<T, E> {
+        return MyResult.Ok(val);
+    }
+}
+fn main() -> i32 {
+    if Status.MAGIC != 0xCAFE as u32 {
+        return 10;
+    }
+    let r = MyResult::<i32, bool>.Ok(100);
+    return match r {
+        MyResult.Ok(v) => if v == 100 { 0 } else { 1 },
+        _ => 2,
+    };
+}

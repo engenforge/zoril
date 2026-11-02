@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/ec_variadic_missing_fixed.zrl:6:14: error: wrong number of arguments (expected 1, got 0)
+extern fn printf(fmt: *u8, ...) -> i32;
+
+fn main() {
+    unsafe { printf(); }
+}

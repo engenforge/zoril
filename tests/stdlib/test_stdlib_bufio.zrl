@@ -1,0 +1,692 @@
+// expected exit 0
+// Tests for Phase 1b: BufWriter and BufReader
+
+import "core0.zrl";
+import "core.zrl";
+import "io.zrl";
+import "file.zrl";
+import "os/linux.zrl" as os_linux;
+import "string.zrl";
+import "vec.zrl";
+import "bufio.zrl";
+use bufio::{BufReader, BufWriter};
+use io::{Error, File, Read, Write, write_all};
+use string::String;
+use vec::Vec;
+
+// --- Mock Writers for Testing ---
+
+// Sink that accepts at most 1 byte per write call
+struct OneByteWriter {
+    pub received: [u8; 128],
+    pub count: usize,
+    pub calls: usize,
+}
+
+impl Write for OneByteWriter {
+    fn write(self: &mut OneByteWriter, buf: [u8]) -> Result<usize, Error> {
+        self.calls = self.calls + 1 as usize;
+        if buf.len == 0 as usize {
+            return Result.Ok(0 as usize);
+        }
+        self.received[self.count] = buf[0];
+        self.count = self.count + 1 as usize;
+        return Result.Ok(1 as usize);
+    }
+}
+
+// Sink that returns EINTR on the first call, then succeeds
+struct EintrWriter {
+    pub received: [u8; 128],
+    pub count: usize,
+    pub eintr_count: usize,
+}
+
+impl Write for EintrWriter {
+    fn write(self: &mut EintrWriter, buf: [u8]) -> Result<usize, Error> {
+        if self.eintr_count == 0 as usize {
+            self.eintr_count = 1 as usize;
+            return Result.Err(Error.from_linux_errno(4)); // EINTR
+        }
+        let mut i = 0 as usize;
+        while i < buf.len {
+            self.received[self.count + i] = buf[i];
+            i = i + 1 as usize;
+        }
+        self.count = self.count + buf.len;
+        return Result.Ok(buf.len);
+    }
+}
+
+// Sink that always fails with EIO
+struct FailingWriter {
+    pub call_count: usize,
+}
+
+impl Write for FailingWriter {
+    fn write(self: &mut FailingWriter, buf: [u8]) -> Result<usize, Error> {
+        self.call_count = self.call_count + 1 as usize;
+        return Result.Err(Error.from_linux_errno(5)); // EIO
+    }
+}
+
+// Vector-like memory sink
+struct MemoryWriter {
+    pub buf: [u8; 256],
+    pub len: usize,
+}
+
+impl Write for MemoryWriter {
+    fn write(self: &mut MemoryWriter, buf: [u8]) -> Result<usize, Error> {
+        let mut i = 0 as usize;
+        while i < buf.len {
+            self.buf[self.len + i] = buf[i];
+            i = i + 1 as usize;
+        }
+        self.len = self.len + buf.len;
+        return Result.Ok(buf.len);
+    }
+}
+
+// Sink that writes partially on first call, fails on second, succeeds afterwards
+struct PartialWriteThenErrorWriter {
+    pub received: [u8; 128],
+    pub count: usize,
+    pub call_count: usize,
+}
+
+impl Write for PartialWriteThenErrorWriter {
+    fn write(self: &mut PartialWriteThenErrorWriter, buf: [u8]) -> Result<usize, Error> {
+        self.call_count = self.call_count + 1 as usize;
+        if self.call_count == 1 as usize {
+            let to_write = if buf.len > 4 as usize { 4 as usize } else { buf.len };
+            let mut i = 0 as usize;
+            while i < to_write {
+                self.received[self.count + i] = buf[i];
+                i = i + 1 as usize;
+            }
+            self.count = self.count + to_write;
+            return Result.Ok(to_write);
+        }
+        if self.call_count == 2 as usize {
+            return Result.Err(Error.from_linux_errno(5)); // EIO
+        }
+        let mut i = 0 as usize;
+        while i < buf.len {
+            self.received[self.count + i] = buf[i];
+            i = i + 1 as usize;
+        }
+        self.count = self.count + buf.len;
+        return Result.Ok(buf.len);
+    }
+}
+
+// Sink that fails with EIO and increments a caller-owned counter
+struct FailingPtrWriter {
+    pub call_count: *mut usize,
+}
+
+impl Write for FailingPtrWriter {
+    fn write(self: &mut FailingPtrWriter, buf: [u8]) -> Result<usize, Error> {
+        // SAFETY: call_count points to a valid live usize in caller scope.
+        unsafe { *self.call_count = *self.call_count + 1 as usize; }
+        return Result.Err(Error.from_linux_errno(5));
+    }
+}
+
+// Reader that returns EINTR on first read call, then reads data
+struct EintrReader {
+    pub data: [u8; 128],
+    pub data_len: usize,
+    pub pos: usize,
+    pub eintr_injected: bool,
+}
+
+impl Read for EintrReader {
+    fn read(self: &mut EintrReader, buf: [mut u8]) -> Result<usize, Error> {
+        if !self.eintr_injected {
+            self.eintr_injected = true;
+            return Result.Err(Error.from_linux_errno(4)); // EINTR
+        }
+        if self.pos >= self.data_len {
+            return Result.Ok(0 as usize);
+        }
+        if buf.len == 0 as usize {
+            return Result.Ok(0 as usize);
+        }
+        let mut to_copy = self.data_len - self.pos;
+        if to_copy > buf.len {
+            to_copy = buf.len;
+        }
+        let mut i = 0 as usize;
+        while i < to_copy {
+            buf[i] = self.data[self.pos + i];
+            i = i + 1 as usize;
+        }
+        self.pos = self.pos + to_copy;
+        return Result.Ok(to_copy);
+    }
+}
+
+// --- Mock Readers for Testing ---
+
+// Source that yields at most 1 byte per read call
+struct OneByteReader {
+    pub data: [u8; 128],
+    pub data_len: usize,
+    pub pos: usize,
+}
+
+impl Read for OneByteReader {
+    fn read(self: &mut OneByteReader, buf: [mut u8]) -> Result<usize, Error> {
+        if self.pos >= self.data_len {
+            return Result.Ok(0 as usize); // EOF
+        }
+        if buf.len == 0 as usize {
+            return Result.Ok(0 as usize);
+        }
+        buf[0] = self.data[self.pos];
+        self.pos = self.pos + 1 as usize;
+        return Result.Ok(1 as usize);
+    }
+}
+
+// --- Test Cases ---
+
+fn test_buf_writer_one_byte_sink() -> bool {
+    let mut sink = OneByteWriter {
+        received: [0 as u8; 128],
+        count: 0 as usize,
+        calls: 0 as usize,
+    };
+    {
+        let mut writer = BufWriter::<OneByteWriter>.with_capacity(sink, 16 as usize);
+        let msg = "Hello, BufWriter!"; // 17 bytes
+        match write_all(&mut writer, msg) {
+            Ok(_) => {},
+            Err(_) => { return false; },
+        }
+        // At 17 bytes with cap 16: first 16 bytes were buffered, 17th triggered flush of 16
+        // or direct write. Now flush remaining.
+        match writer.flush() {
+            Ok(_) => {},
+            Err(_) => { return false; },
+        }
+        sink = match writer.into_inner() {
+            Ok(s) => s,
+            Err(_) => { return false; },
+        };
+    }
+    if sink.count != 17 as usize { return false; }
+    let res = unsafe { @slice(&sink.received[0] as *u8, 17 as usize) };
+    return is_str_eq(res, "Hello, BufWriter!");
+}
+
+fn test_buf_writer_eintr_retry() -> bool {
+    let sink = EintrWriter {
+        received: [0 as u8; 128],
+        count: 0 as usize,
+        eintr_count: 0 as usize,
+    };
+    let mut writer = BufWriter::<EintrWriter>.with_capacity(sink, 16 as usize);
+    let msg = "test eintr retry"; // 16 bytes
+    match writer.write(msg) {
+        Ok(_) => {},
+        Err(_) => { return false; },
+    }
+    match writer.flush() {
+        Ok(_) => {},
+        Err(_) => { return false; },
+    }
+    let inner = match writer.into_inner() {
+        Ok(s) => s,
+        Err(_) => { return false; },
+    };
+    if inner.eintr_count != 1 as usize { return false; }
+    if inner.count != 16 as usize { return false; }
+    let res = unsafe { @slice(&inner.received[0] as *u8, 16 as usize) };
+    return is_str_eq(res, "test eintr retry");
+}
+
+fn test_buf_writer_failing_sink() -> bool {
+    let sink = FailingWriter { call_count: 0 as usize };
+    let mut writer = BufWriter::<FailingWriter>.with_capacity(sink, 8 as usize);
+    let msg = "fail me please"; // 14 bytes (> cap 8)
+    // Writing > 8 bytes should attempt to flush and fail with EIO
+    match writer.write(msg) {
+        Ok(_) => { return false; },
+        Err(e) => {
+            if e.linux_errno() != 5 {
+                return false;
+            }                                  // EIO
+        },
+    }
+    return true;
+}
+
+fn test_buf_writer_capacities() -> bool {
+    // 1. Write below capacity
+    let sink1 = MemoryWriter { buf: [0 as u8; 256], len: 0 as usize };
+    let mut w1 = BufWriter::<MemoryWriter>.with_capacity(sink1, 16 as usize);
+    let _ = w1.write("12345"); // 5 bytes
+    // Not flushed yet
+    if w1.get_ref().len != 0 as usize {
+        return false;
+    }
+    let _ = w1.flush();
+    if w1.get_ref().len != 5 as usize { return false; }
+
+    // 2. Write exactly at capacity
+    let sink2 = MemoryWriter { buf: [0 as u8; 256], len: 0 as usize };
+    let mut w2 = BufWriter::<MemoryWriter>.with_capacity(sink2, 8 as usize);
+    let _ = w2.write("12345678"); // exactly 8 bytes
+    // When exactly full, it flushes
+    if w2.get_ref().len != 8 as usize {
+        return false;
+    }
+
+    // 3. Write larger than capacity directly
+    let sink3 = MemoryWriter { buf: [0 as u8; 256], len: 0 as usize };
+    let mut w3 = BufWriter::<MemoryWriter>.with_capacity(sink3, 8 as usize);
+    let _ = w3.write("1234567890abcdef"); // 16 bytes
+    if w3.get_ref().len != 16 as usize { return false; }
+    let res = unsafe { @slice(&w3.get_ref().buf[0] as *u8, 16 as usize) };
+    return is_str_eq(res, "1234567890abcdef");
+}
+
+fn test_buf_reader_one_byte_source() -> bool {
+    let mut src = OneByteReader {
+        data: [0 as u8; 128],
+        data_len: 23 as usize,
+        pos: 0 as usize,
+    };
+    let input = "line 1\nline two\nlast"; // 7 + 9 + 4 = 20 bytes (wait: "line 1\n" is 7, "line two\n" is 9, "last" is 4, total 20)
+    let mut i = 0 as usize;
+    while i < input.len {
+        src.data[i] = input[i];
+        i = i + 1 as usize;
+    }
+    src.data_len = input.len;
+
+    // Small buffer capacity of 4 bytes: tests buffer boundaries
+    let mut reader = BufReader::<OneByteReader>.with_capacity(src, 4 as usize);
+
+    // Read line 1: "line 1\n"
+    let mut l1 = String.new();
+    let n1 = match reader.read_line(&mut l1) {
+        Ok(n) => n,
+        Err(_) => { return false; },
+    };
+    if n1 != 7 as usize { return false; }
+    if !is_str_eq(l1.as_slice(), "line 1\n") { return false; }
+
+    // Read line 2: "line two\n"
+    let mut l2 = String.new();
+    let n2 = match reader.read_line(&mut l2) {
+        Ok(n) => n,
+        Err(_) => { return false; },
+    };
+    if n2 != 9 as usize { return false; }
+    if !is_str_eq(l2.as_slice(), "line two\n") { return false; }
+
+    // Read line 3: "last" (EOF without trailing newline)
+    let mut l3 = String.new();
+    let n3 = match reader.read_line(&mut l3) {
+        Ok(n) => n,
+        Err(_) => { return false; },
+    };
+    if n3 != 4 as usize { return false; }
+    if !is_str_eq(l3.as_slice(), "last") { return false; }
+
+    // EOF: should return 0 bytes
+    let mut l4 = String.new();
+    let n4 = match reader.read_line(&mut l4) {
+        Ok(n) => n,
+        Err(_) => { return false; },
+    };
+    if n4 != 0 as usize { return false; }
+
+    return true;
+}
+
+fn test_buf_reader_delimiter_at_end_of_fill() -> bool {
+    let mut src = OneByteReader {
+        data: [0 as u8; 128],
+        data_len: 4 as usize,
+        pos: 0 as usize,
+    };
+    // Buffer cap 4, string "abc\n" has \n as exactly 4th byte
+    src.data[0] = 'a' as u8;
+    src.data[1] = 'b' as u8;
+    src.data[2] = 'c' as u8;
+    src.data[3] = '\n' as u8;
+    src.data_len = 4 as usize;
+
+    let mut reader = BufReader::<OneByteReader>.with_capacity(src, 4 as usize);
+    let mut line = String.new();
+    let n = match reader.read_line(&mut line) {
+        Ok(n) => n,
+        Err(_) => { return false; },
+    };
+    if n != 4 as usize { return false; }
+    if !is_str_eq(line.as_slice(), "abc\n") { return false; }
+    return true;
+}
+
+struct PtrWriter {
+    pub target: *mut usize,
+}
+
+impl Write for PtrWriter {
+    fn write(self: &mut PtrWriter, buf: [u8]) -> Result<usize, Error> {
+        unsafe { *self.target = *self.target + buf.len; }
+        return Result.Ok(buf.len);
+    }
+}
+
+fn test_buf_writer_flush_on_drop() -> bool {
+    let mut total = 0 as usize;
+    {
+        let sink = PtrWriter { target: &mut total };
+        let mut writer = BufWriter::<PtrWriter>.with_capacity(sink, 16 as usize);
+        let _ = writer.write("drop_flush"); // 10 bytes, < cap 16
+        // Writer goes out of scope and drops without explicit flush
+    }
+    return total == 10 as usize;
+}
+
+fn test_buf_reader_empty_line_and_read_until() -> bool {
+    let mut src = OneByteReader {
+        data: [0 as u8; 128],
+        data_len: 0 as usize,
+        pos: 0 as usize,
+    };
+    let input = "first:middle:end";
+    let mut i = 0 as usize;
+    while i < input.len {
+        src.data[i] = input[i];
+        i = i + 1 as usize;
+    }
+    src.data_len = input.len;
+
+    let mut reader = BufReader::<OneByteReader>.with_capacity(src, 4 as usize);
+    let mut v = Vec::<u8>.new();
+    let n1 = match reader.read_until(':' as u8, &mut v) {
+        Ok(n) => n,
+        Err(_) => { return false; },
+    };
+    if n1 != 6 as usize {
+        return false;
+    }                                     // "first:"
+    if !is_str_eq(v.as_slice(), "first:") { return false; }
+
+    let mut v2 = Vec::<u8>.new();
+    let n2 = match reader.read_until(':' as u8, &mut v2) {
+        Ok(n) => n,
+        Err(_) => { return false; },
+    };
+    if n2 != 7 as usize {
+        return false;
+    }                                     // "middle:"
+    if !is_str_eq(v2.as_slice(), "middle:") { return false; }
+
+    let mut v3 = Vec::<u8>.new();
+    let n3 = match reader.read_until(':' as u8, &mut v3) {
+        Ok(n) => n,
+        Err(_) => { return false; },
+    };
+    if n3 != 3 as usize {
+        return false;
+    }                                     // "end" (EOF without delimiter)
+    if !is_str_eq(v3.as_slice(), "end") { return false; }
+
+    return true;
+}
+
+fn test_buf_buffer_and_read_trait() -> bool {
+    // 1. BufWriter.buffer()
+    let sink = MemoryWriter { buf: [0 as u8; 256], len: 0 as usize };
+    let mut writer = BufWriter::<MemoryWriter>.with_capacity(sink, 16 as usize);
+    let _ = writer.write("hello");
+    let wbuf = writer.buffer();
+    if wbuf.len != 5 as usize { return false; }
+    if !is_str_eq(wbuf, "hello") { return false; }
+    let _ = writer.flush();
+    let wbuf_empty = writer.buffer();
+    if wbuf_empty.len != 0 as usize { return false; }
+
+    // 2. BufReader.buffer() and BufReader.read()
+    let mut src = OneByteReader {
+        data: [0 as u8; 128],
+        data_len: 11 as usize,
+        pos: 0 as usize,
+    };
+    let input = "hello world";
+    let mut i = 0 as usize;
+    while i < input.len {
+        src.data[i] = input[i];
+        i = i + 1 as usize;
+    }
+    let mut reader = BufReader::<OneByteReader>.with_capacity(src, 16 as usize);
+    if reader.buffer().len != 0 as usize { return false; }
+    let fill_slice = match reader.fill_buf() {
+        Ok(s) => s,
+        Err(_) => { return false; },
+    };
+    if fill_slice.len != 1 as usize { return false; }
+    let rbuf = reader.buffer();
+    if rbuf.len != 1 as usize { return false; }
+    if rbuf[0] != 'h' as u8 { return false; }
+
+    // Call Read::read on BufReader
+    let mut dest = Vec::<u8>.new();
+    dest.ensure_len(8 as usize);
+    let n = match reader.read(dest.as_mut_slice()) {
+        Ok(n) => n,
+        Err(_) => { return false; },
+    };
+    if n != 1 as usize { return false; }
+    if dest[0] != 'h' as u8 { return false; }
+
+    return true;
+}
+
+fn test_buf_writer_file_into_inner() -> bool {
+    let path = "/tmp/test_zoril_buf_writer_into_inner.tmp";
+    let f = match File.create(path) {
+        Ok(f) => f,
+        Err(_) => { return false; },
+    };
+    {
+        let mut writer = BufWriter::<File>.with_capacity(f, 64 as usize);
+        match write_all(&mut writer, "hello from bufwriter file") {
+            Ok(_) => {},
+            Err(_) => { return false; },
+        }
+        let inner_res = writer.into_inner();
+        let mut f_recovered = match inner_res {
+            Ok(inner) => inner,
+            Err(_) => { return false; },
+        };
+        // Verify f_recovered is still a valid open file by writing more data to it
+        match write_all(&mut f_recovered, " and extra") {
+            Ok(_) => {},
+            Err(_) => { return false; },
+        }
+        let _ = f_recovered.close();
+    }
+    // Now verify the contents written to the file
+    let mut f_read = match os_linux::open_file(path, 0 as u64, 0 as u64) {
+        Ok(f) => f,
+        Err(_) => { return false; },
+    };
+    let mut read_buf = Vec::<u8>.new();
+    read_buf.ensure_len(64 as usize);
+    let n = match f_read.read(read_buf.as_mut_slice()) {
+        Ok(bytes) => bytes,
+        Err(_) => { return false; },
+    };
+    let _ = f_read.close();
+    // SAFETY: path is a null-terminated string literal for unlink syscall.
+    unsafe { @syscall(87, path.ptr); }
+    let expected = "hello from bufwriter file and extra";
+    if n != expected.len { return false; }
+    let actual = unsafe { @slice(read_buf.as_ptr() as *u8, n) };
+    return is_str_eq(actual, expected);
+}
+
+fn test_buf_writer_string_into_inner() -> bool {
+    let s = String.new();
+    let mut writer = BufWriter::<String>.with_capacity(s, 16 as usize);
+    match write_all(&mut writer, "hello string sink") {
+        Ok(_) => {},
+        Err(_) => { return false; },
+    }
+    let inner_res = writer.into_inner();
+    let s_recovered = match inner_res {
+        Ok(inner) => inner,
+        Err(_) => { return false; },
+    };
+    return is_str_eq(s_recovered.as_slice(), "hello string sink");
+}
+
+fn test_buf_reader_file_into_inner() -> bool {
+    let path = "/tmp/test_zoril_buf_reader_into_inner.tmp";
+    let mut f_write = match File.create(path) {
+        Ok(f) => f,
+        Err(_) => { return false; },
+    };
+    let data = "abcdefghijklmnop";
+    match write_all(&mut f_write, data) {
+        Ok(_) => {},
+        Err(_) => { return false; },
+    }
+    let _ = f_write.close();
+
+    let f_read = match os_linux::open_file(path, 0 as u64, 0 as u64) {
+        Ok(f) => f,
+        Err(_) => { return false; },
+    };
+    let mut reader = BufReader::<File>.with_capacity(f_read, 8 as usize);
+    let mut chunk = Vec::<u8>.new();
+    chunk.ensure_len(4 as usize);
+    let n = match reader.read(chunk.as_mut_slice()) {
+        Ok(bytes) => bytes,
+        Err(_) => { return false; },
+    };
+    if n != 4 as usize { return false; }
+
+    let mut f_recovered = reader.into_inner();
+    // f_recovered should still be open and readable without errors
+    let mut rest = Vec::<u8>.new();
+    rest.ensure_len(16 as usize);
+    let n2 = match f_recovered.read(rest.as_mut_slice()) {
+        Ok(bytes) => bytes,
+        Err(_) => { return false; },
+    };
+    let _ = f_recovered.close();
+    // SAFETY: path is a null-terminated string literal for unlink syscall.
+    unsafe { @syscall(87, path.ptr); }
+
+    // 8 bytes were read by BufReader into its 8-byte buffer, 4 consumed by chunk.
+    // The underlying file position in f_recovered is at byte 8 (since BufReader read 8 bytes from fd).
+    // The next read from f_recovered gets the remaining 8 bytes ("ijklmnop").
+    if n2 != 8 as usize {
+        return false;
+    }
+    let sub = unsafe { @slice(rest.as_ptr() as *u8, n2) };
+    return is_str_eq(sub, "ijklmnop");
+}
+
+fn test_buf_writer_partial_write_error_recovery() -> bool {
+    let sink = PartialWriteThenErrorWriter {
+        received: [0 as u8; 128],
+        count: 0 as usize,
+        call_count: 0 as usize,
+    };
+    let mut writer = BufWriter::<PartialWriteThenErrorWriter>.with_capacity(sink, 16 as usize);
+    let _ = writer.write("12345678");
+    // Call 1 writes 4 bytes ("1234"), Call 2 returns Err(EIO).
+    // flush() should shift unwritten "5678" to front and return Err(EIO).
+    let res1 = writer.flush();
+    if res1.is_ok() { return false; }
+    if writer.buffer().len != 4 as usize { return false; }
+    if !is_str_eq(writer.buffer(), "5678") { return false; }
+
+    // Second flush: Call 3 succeeds and writes remaining "5678".
+    let res2 = writer.flush();
+    if res2.is_err() { return false; }
+    if writer.buffer().len != 0 as usize { return false; }
+
+    let ref_sink = writer.get_ref();
+    if ref_sink.count != 8 as usize { return false; }
+    let written_str = unsafe { @slice(&ref_sink.received[0] as *u8, 8 as usize) };
+    return is_str_eq(written_str, "12345678");
+}
+
+fn test_buf_writer_failed_flush_drop_no_retry() -> bool {
+    let mut count = 0 as usize;
+    {
+        let sink = FailingPtrWriter { call_count: &mut count as *mut usize };
+        let mut writer = BufWriter::<FailingPtrWriter>.with_capacity(sink, 16 as usize);
+        let _ = writer.write("test_drop");
+        let res = writer.flush();
+        if res.is_ok() { return false; }
+        if count != 1 as usize { return false; }
+        // writer drops here; drop must NOT retry flush
+    }
+    return count == 1 as usize;
+}
+
+fn test_buf_reader_eintr_retry() -> bool {
+    let mut src = EintrReader {
+        data: [0 as u8; 128],
+        data_len: 0 as usize,
+        pos: 0 as usize,
+        eintr_injected: false,
+    };
+    let input = "line with eintr\n";
+    let mut i = 0 as usize;
+    while i < input.len {
+        src.data[i] = input[i];
+        i = i + 1 as usize;
+    }
+    src.data_len = input.len;
+
+    let mut reader = BufReader::<EintrReader>.with_capacity(src, 8 as usize);
+    let mut line = String.new();
+    let n = match reader.read_line(&mut line) {
+        Ok(n) => n,
+        Err(_) => { return false; },
+    };
+    if n != input.len { return false; }
+    return is_str_eq(line.as_slice(), input);
+}
+
+fn test_buf_writer_no_eager_flush_error() -> bool {
+    let sink = FailingWriter { call_count: 0 as usize };
+    let mut writer = BufWriter::<FailingWriter>.with_capacity(sink, 16 as usize);
+    let res = writer.write("12345678");
+    if res.is_err() { return false; }
+    return writer.get_ref().call_count == 0 as usize;
+}
+
+fn main() -> i32 {
+    if !test_buf_writer_one_byte_sink() { return 1; }
+    if !test_buf_writer_eintr_retry() { return 2; }
+    if !test_buf_writer_failing_sink() { return 3; }
+    if !test_buf_writer_capacities() { return 4; }
+    if !test_buf_writer_flush_on_drop() { return 5; }
+    if !test_buf_reader_one_byte_source() { return 6; }
+    if !test_buf_reader_delimiter_at_end_of_fill() { return 7; }
+    if !test_buf_reader_empty_line_and_read_until() { return 8; }
+    if !test_buf_buffer_and_read_trait() { return 9; }
+    if !test_buf_writer_file_into_inner() { return 10; }
+    if !test_buf_writer_string_into_inner() { return 11; }
+    if !test_buf_reader_file_into_inner() { return 12; }
+    if !test_buf_writer_partial_write_error_recovery() { return 13; }
+    if !test_buf_writer_failed_flush_drop_no_retry() { return 14; }
+    if !test_buf_reader_eintr_retry() { return 15; }
+    if !test_buf_writer_no_eager_flush_error() { return 16; }
+    return 0;
+}

@@ -1,0 +1,1023 @@
+import "zir.zrl";
+import "ast.zrl";
+import "resolve.zrl";
+import "intern.zrl";
+import "mono.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "fmt.zrl";
+import "decl.zrl";
+use ast::{BINARY_AND, BINARY_EQ, BINARY_GE, BINARY_LE, BINARY_LT, DECL_CONST, DECL_STATIC, Decl, ExprId, Literal, MatchExpr, Pattern, PatternId, RangePattern, Span, StructPattern, VariantPattern};
+use bytevec::ByteVec;
+use decl::ZirLowerer;
+use il_type::{ILPrimitive, ILTYPE_BOXED, ILTYPE_BOXEDMUT, ILTYPE_PTR, ILTYPE_PTRMUT, ILTYPE_TUPLE, ILTYPE_USER, ILTypeDef, IL_TYPEDEF_STRUCT, is_reference_tag};
+use io::{eprint, stderr};
+use fmt::write_u64;
+use mem_raw::zoril_allocator_alloc;
+use resolve::{Symbol, SymbolKind};
+use zir::{LOCAL_KIND_LET, LOCAL_KIND_LETMUT, LOCAL_KIND_TMP, Place, Projection, ZirRvalue, ZirStmt, ZirTerminator};
+
+// Where a tuple or struct sub-pattern is tested: the value's place and type, after
+// looking through a reference (DEREF) if there was one.
+pub struct PatternTarget {
+    pub place: Place,
+    pub ty: u32,
+    pub deref: bool,
+}
+
+impl ZirLowerer {
+    pub fn lower_match(self: &mut ZirLowerer, m: &MatchExpr, expected_ty: u32) -> Place {
+        let mut scrut_place = self.lower_expr(m.expr, 0 as u32);
+        let scrut_ty = self.get_place_type(&scrut_place);
+        // A computed place (`code[pc]`, `s.field`) is evaluated once: each arm's test would
+        // otherwise index, bounds-check and load it again. Only for a Copy value, which no arm
+        // can move out of, so the copy matches exactly as the place does (bindings copy their
+        // payload either way).
+        if scrut_place.projections.len > 0 as usize
+            && scrut_ty != 0 as u32
+            && self.is_copy_type(scrut_ty) {
+            let once = self.define_local(0 as *mut Symbol, scrut_ty, LOCAL_KIND_TMP);
+            self.emit(ZirStmt.Let(once, ZirRvalue.Use(scrut_place), self.get_expr_span(m.expr)));
+            scrut_place = Place {
+                base: once,
+                projections: @slice(0 as *mut Projection, 0 as usize)
+            };
+        }
+        let span = self.get_expr_span(m.expr);
+
+        // Arms first: a malformed pattern is reported there, and would only cascade into a
+        // "missing case" here.
+        let errors_before = self.had_error;
+        self.had_error = false;
+
+        let exit_block = self.new_block("match_exit");
+        // The result local is made when an arm first produces a value. Making it up front from
+        // `expected_ty` left an uninitialized local behind when every arm returns, and the return's
+        // scope cleanup then dropped it ("cannot drop value ... that is not owned", m6).
+        let mut result_place = Place {
+            base: 0 as u32,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+        let mut result_ty = expected_ty;
+
+        let mut any_arm_alive = false;
+        let mut arm_idx = 0 as usize;
+        while arm_idx < m.arms.len {
+            let arm = &m.arms[arm_idx];
+
+            // Each arm has its own scope for patterns and body
+            self.push_scope();
+
+            let arm_body_block = self.new_block("match_arm");
+            let next_arm_check_block = if arm_idx + 1 < m.arms.len {
+                self.new_block("match_check")
+            } else {
+                0 as u32
+            };
+
+            let fail_block = if next_arm_check_block != 0 as u32 {
+                next_arm_check_block
+            } else {
+                let unreachable_block = self.new_block("unreachable");
+                // `current_block_idx` is stored as usize because it indexes
+                // `self.blocks`, but block ids are u32 and this value round-trips
+                // from one (`switch_to_block` does `id as usize`), so the cast is
+                // documenting a width the value is already known to fit.
+                let saved = self.current_block_idx;
+                self.switch_to_block(unreachable_block);
+                self.terminate(ZirTerminator.Unreachable);
+                self.switch_to_block(saved as u32);
+                unreachable_block
+            };
+
+            self.lower_pattern(scrut_place, scrut_ty, arm.pattern, arm_body_block, fail_block);
+
+            self.switch_to_block(arm_body_block);
+
+            if arm.guard != 0 as u32 {
+                let guard_pass_block = self.new_block("match_guard_pass");
+                let guard_place = self.lower_expr(arm.guard, 0 as u32);
+                self.check_condition(arm.guard, &guard_place);
+                self.terminate(ZirTerminator.Branch(guard_place, guard_pass_block, fail_block));
+                self.switch_to_block(guard_pass_block);
+            }
+
+            if !self.pattern_peels_pointer(self.get_type_tag(scrut_ty)) {
+                self.consume_place_if_move(&scrut_place);
+            }
+
+            let arm_res = self.lower_expr(arm.body, result_ty);
+            if result_ty == 0 as u32 {
+                result_ty = self.get_place_type(&arm_res);
+                self.check_type_known(result_ty, self.get_expr_span(arm.body));
+            }
+
+            if !self.blocks[self.current_block_idx].is_terminated
+                && result_ty != 0 as u32
+                && !self.is_unit_type(result_ty) {
+                if arm_res.base == 0 as u32 {
+                    if !self.had_error {
+                        self.report_prefix(self.get_expr_span(arm.body));
+                        eprint("this `match` arm produces no value, but `");
+                        eprint(self.mono.type_display(result_ty));
+                        eprint("` was expected\n");
+                    }
+                } else {
+                    if result_place.base == 0 as u32 {
+                        result_place.base = self.define_local(
+                            0 as *mut Symbol,
+                            result_ty,
+                            LOCAL_KIND_LETMUT
+                        );
+                    }
+                    let final_res = self.branch_value_as(
+                        arm_res,
+                        result_ty,
+                        self.get_expr_span(arm.body),
+                        "match"
+                    );
+                    self.consume_place_if_move(&final_res);
+                    self.emit(
+                        ZirStmt.Assign(
+                            result_place,
+                            ZirRvalue.Use(final_res),
+                            self.get_expr_span(arm.body)
+                        )
+                    );
+                }
+            }
+
+            if !self.blocks[self.current_block_idx].is_terminated {
+                any_arm_alive = true;
+                self.terminate(ZirTerminator.Jmp(exit_block));
+            }
+
+            self.pop_scope(self.get_expr_span(arm.body));
+
+            if next_arm_check_block != 0 as u32 {
+                self.switch_to_block(next_arm_check_block);
+            }
+            arm_idx = arm_idx + 1 as usize;
+        }
+
+        if !self.had_error {
+            self.check_match_exhaustiveness(m, scrut_ty, span);
+        }
+        self.had_error = self.had_error || errors_before;
+
+        self.switch_to_block(exit_block);
+        if !any_arm_alive {
+            self.terminate(ZirTerminator.Unreachable);
+        }
+        return result_place;
+    }
+
+    pub fn lower_pattern(
+        self: &mut ZirLowerer,
+        scrut_place: Place,
+        scrut_ty: u32,
+        pat_id: PatternId,
+        pass_block: u32,
+        fail_block: u32
+    ) {
+        self.lower_pattern_at(scrut_place, scrut_ty, pat_id, pass_block, fail_block, false);
+    }
+
+    // Test PAT against the value at SCRUT_PLACE (of type SCRUT_TY): jump to PASS_BLOCK with its
+    // bindings made, or to FAIL_BLOCK. Patterns nest: a tuple, struct or variant pattern tests
+    // each of its sub-patterns against the projected place, one after another. BY_REF is set
+    // once matching has gone through a reference (Rust's match ergonomics): bindings below that point bind a reference to the value, not a copy of it,
+    // so nothing is moved out of borrowed memory.
+    fn lower_pattern_at(
+        self: &mut ZirLowerer,
+        scrut_place: Place,
+        scrut_ty: u32,
+        pat_id: PatternId,
+        pass_block: u32,
+        fail_block: u32,
+        by_ref: bool
+    ) {
+        let pat: Pattern = self.resolver.ast.patterns[pat_id as usize];
+        let span = if (pat_id as usize) < self.resolver.ast.pattern_spans.len() {
+            self.resolver.ast.pattern_spans[pat_id as usize]
+        } else {
+            Span { start: 0, end: 0, line: 0, col: 0 }
+        };
+
+        match pat {
+            Pattern.Wildcard => {
+                self.terminate(ZirTerminator.Jmp(pass_block));
+            },
+            Pattern.Ident(name) => {
+                self.lower_pattern_ident(
+                    scrut_place,
+                    scrut_ty,
+                    name,
+                    pass_block,
+                    fail_block,
+                    span,
+                    by_ref
+                );
+            },
+            Pattern.MutIdent(name) => {
+                self.bind_pattern_name(name, scrut_place, scrut_ty, by_ref, true, span);
+                self.terminate(ZirTerminator.Jmp(pass_block));
+            },
+            Pattern.Literal(lit) => {
+                self.lower_literal_pattern(
+                    lit,
+                    scrut_place,
+                    scrut_ty,
+                    pass_block,
+                    fail_block,
+                    span
+                );
+            },
+            Pattern.EnumVariant(vp) => {
+                self.lower_pattern_enum_variant(
+                    scrut_place,
+                    scrut_ty,
+                    &vp,
+                    pass_block,
+                    fail_block,
+                    span,
+                    by_ref
+                );
+            },
+            Pattern.Tuple(elems) => {
+                self.lower_tuple_pattern(
+                    elems,
+                    scrut_place,
+                    scrut_ty,
+                    pat_id,
+                    pass_block,
+                    fail_block,
+                    span,
+                    by_ref
+                );
+            },
+            Pattern.Struct(sp) => {
+                let t = self.pattern_through_ref(scrut_place, scrut_ty);
+                self.lower_pattern_struct(
+                    t.place,
+                    t.ty,
+                    &sp,
+                    pass_block,
+                    fail_block,
+                    span,
+                    by_ref || t.deref
+                );
+            },
+            Pattern.Or(pats) => {
+                let mut pi = 0 as usize;
+                while pi < pats.len {
+                    let next_pat_check_block = if pi + 1 < pats.len {
+                        self.new_block("pat_check")
+                    } else {
+                        fail_block
+                    };
+                    self.lower_pattern_at(
+                        scrut_place,
+                        scrut_ty,
+                        pats[pi],
+                        pass_block,
+                        next_pat_check_block,
+                        by_ref
+                    );
+                    if pi + 1 < pats.len {
+                        self.switch_to_block(next_pat_check_block);
+                    }
+                    pi = pi + 1 as usize;
+                }
+            },
+            Pattern.Range(rp) => {
+                self.lower_range_pattern(rp, scrut_place, scrut_ty, pass_block, fail_block, span);
+            },
+        }
+    }
+
+    fn lower_literal_pattern(
+        self: &mut ZirLowerer,
+        lit: Literal,
+        scrut_place: Place,
+        scrut_ty: u32,
+        pass_block: u32,
+        fail_block: u32,
+        span: Span
+    ) {
+        self.check_pattern_int(&lit, scrut_ty, span);
+        let lit_val = self.extract_literal_u64(&lit);
+        let lit_ty = self.get_literal_type(&lit);
+        let tmp_lit = self.define_local(0 as *mut Symbol, lit_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp_lit, ZirRvalue.Const(lit_val, lit_ty), span));
+        let lit_place = Place {
+            base: tmp_lit,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+
+        let cond_tmp = self.define_local(
+            0 as *mut Symbol,
+            self.get_primitive_type(ILPrimitive.Bool),
+            LOCAL_KIND_TMP
+        );
+        self.emit(
+            ZirStmt.Let(cond_tmp, ZirRvalue.BinaryOp(BINARY_EQ, scrut_place, lit_place), span)
+        );
+        let cond_place = Place {
+            base: cond_tmp,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+        self.terminate(ZirTerminator.Branch(cond_place, pass_block, fail_block));
+    }
+
+    fn lower_tuple_pattern(
+        self: &mut ZirLowerer,
+        elems: [PatternId],
+        scrut_place: Place,
+        scrut_ty: u32,
+        pat_id: PatternId,
+        pass_block: u32,
+        fail_block: u32,
+        span: Span,
+        by_ref: bool
+    ) {
+        let t = self.pattern_through_ref(scrut_place, scrut_ty);
+        let place = t.place;
+        let ty = t.ty;
+        let n = self.tuple_arity(ty);
+        if n != elems.len {
+            self.report_prefix(span);
+            eprint("this tuple pattern has ");
+            let mut err = stderr();
+            let _ = write_u64(&mut err, elems.len as u64);
+            eprint(" elements, but the value is `");
+            eprint(self.mono.type_display(ty));
+            eprint("`\n");
+            self.declare_pattern_bindings(pat_id);
+            self.terminate(ZirTerminator.Jmp(fail_block));
+            return;
+        }
+        let places = self.alloc_places(n);
+        let tys = self.alloc_u32s(n);
+        let mut i = 0 as usize;
+        while i < n {
+            places[i] = self.append_projection(&place, Projection.TupleIndex(i as u32));
+            tys[i] = self.get_tuple_elem_type(ty, i as u32);
+            i = i + 1 as usize;
+        }
+        self.lower_pattern_seq(places, tys, elems, pass_block, fail_block, by_ref || t.deref);
+    }
+
+    fn lower_range_pattern(
+        self: &mut ZirLowerer,
+        rp: RangePattern,
+        scrut_place: Place,
+        scrut_ty: u32,
+        pass_block: u32,
+        fail_block: u32,
+        span: Span
+    ) {
+        self.check_pattern_int(&rp.start, scrut_ty, span);
+        self.check_pattern_int(&rp.end, scrut_ty, span);
+        let lo_val = self.extract_literal_u64(&rp.start);
+        let lo_ty = self.get_literal_type(&rp.start);
+        let tmp_lo = self.define_local(0 as *mut Symbol, lo_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp_lo, ZirRvalue.Const(lo_val, lo_ty), span));
+        let lo_place = Place {
+            base: tmp_lo,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+
+        let hi_val = self.extract_literal_u64(&rp.end);
+        let hi_ty = self.get_literal_type(&rp.end);
+        let tmp_hi = self.define_local(0 as *mut Symbol, hi_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp_hi, ZirRvalue.Const(hi_val, hi_ty), span));
+        let hi_place = Place {
+            base: tmp_hi,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+
+        let cond_lo = self.define_local(
+            0 as *mut Symbol,
+            self.get_primitive_type(ILPrimitive.Bool),
+            LOCAL_KIND_TMP
+        );
+        self.emit(ZirStmt.Let(cond_lo, ZirRvalue.BinaryOp(BINARY_GE, scrut_place, lo_place), span));
+        let cond_lo_place = Place {
+            base: cond_lo,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+
+        let cond_hi = self.define_local(
+            0 as *mut Symbol,
+            self.get_primitive_type(ILPrimitive.Bool),
+            LOCAL_KIND_TMP
+        );
+        let op = if rp.inclusive { BINARY_LE } else { BINARY_LT };
+        self.emit(ZirStmt.Let(cond_hi, ZirRvalue.BinaryOp(op, scrut_place, hi_place), span));
+        let cond_hi_place = Place {
+            base: cond_hi,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+
+        let cond = self.define_local(
+            0 as *mut Symbol,
+            self.get_primitive_type(ILPrimitive.Bool),
+            LOCAL_KIND_TMP
+        );
+        self.emit(
+            ZirStmt.Let(cond, ZirRvalue.BinaryOp(BINARY_AND, cond_lo_place, cond_hi_place), span)
+        );
+        let cond_place = Place {
+            base: cond,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+
+        self.terminate(ZirTerminator.Branch(cond_place, pass_block, fail_block));
+    }
+
+    fn lower_pattern_ident(
+        self: &mut ZirLowerer,
+        scrut_place: Place,
+        scrut_ty: u32,
+        name: u32,
+        pass_block: u32,
+        fail_block: u32,
+        span: Span,
+        by_ref: bool
+    ) {
+        match self.get_variant_index(scrut_ty, name) {
+            Some(v_idx) => {
+                // It's a bare variant pattern
+                let cond_tmp = self.define_local(
+                    0 as *mut Symbol,
+                    self.get_primitive_type(ILPrimitive.Bool),
+                    LOCAL_KIND_TMP
+                );
+                self.emit(
+                    ZirStmt.Let(
+                        cond_tmp,
+                        ZirRvalue.VariantCheck(scrut_place, scrut_ty, v_idx),
+                        span
+                    )
+                );
+                let cond_place = Place {
+                    base: cond_tmp,
+                    projections: @slice(0 as *mut Projection, 0 as usize)
+                };
+                self.terminate(ZirTerminator.Branch(cond_place, pass_block, fail_block));
+            },
+            None => {
+                // Check if the identifier resolves to a constant — if so, compare against it
+                let opt_sym = self.resolver.resolve_ptr(name);
+                match opt_sym {
+                    Some(sym) => {
+                        if let Option.Some(k_payload) = sym.global_decl() {
+                            let p_decl: Decl = self.resolver.ast.decls[k_payload as usize];
+                            match p_decl.get_tag() {
+                                DECL_CONST => {
+                                    let c = p_decl.get_Const();
+                                    let const_place = self.lower_expr(c.value, scrut_ty);
+                                    self.branch_if_equal(
+                                        scrut_place,
+                                        const_place,
+                                        pass_block,
+                                        fail_block,
+                                        span
+                                    );
+                                    return;
+                                },
+                                DECL_STATIC => {
+                                    let st = p_decl.get_Static();
+                                    let const_place = self.lower_expr(st.value, scrut_ty);
+                                    self.branch_if_equal(
+                                        scrut_place,
+                                        const_place,
+                                        pass_block,
+                                        fail_block,
+                                        span
+                                    );
+                                    return;
+                                },
+                                _ => {},
+                            }
+                        } else if let SymbolKind.AssocConst(k_payload) = sym.kind {
+                            let impl_decl_id = k_payload >> 16;
+                            let item_idx = k_payload & 0xffff as u32;
+                            let imp = match self.resolver.ast.decls[impl_decl_id as usize] {
+                                Decl.Impl(i) => i,
+                                _ => { return; },
+                            };
+                            if item_idx as usize < imp.constants.len {
+                                let c = &imp.constants[item_idx as usize];
+                                let const_place = self.lower_expr(c.value, scrut_ty);
+                                self.branch_if_equal(
+                                    scrut_place,
+                                    const_place,
+                                    pass_block,
+                                    fail_block,
+                                    span
+                                );
+                                return;
+                            }
+                        }
+                    },
+                    None => {
+                        // A constant of a module this one does not see would silently become a
+                        // binding that matches everything.
+                        if self.resolver.names_hidden_constant(name) {
+                            self.report_error_with_symbol(
+                                "a pattern names a constant that is not in scope here (it would bind a new variable): ",
+                                name,
+                                span
+                            );
+                            self.note_name_hint(name, span);
+                        }
+                    },
+                }
+
+                // It's a binding pattern
+                self.bind_pattern_name(name, scrut_place, scrut_ty, by_ref, false, span);
+                self.terminate(ZirTerminator.Jmp(pass_block));
+            }
+        }
+    }
+
+    fn lower_pattern_enum_variant(
+        self: &mut ZirLowerer,
+        scrut_place: Place,
+        scrut_ty: u32,
+        vp: &VariantPattern,
+        pass_block: u32,
+        fail_block: u32,
+        span: Span,
+        by_ref: bool
+    ) {
+        match self.get_variant_index(scrut_ty, vp.variant_name) {
+            Option.Some(v_idx) => {
+                self.lower_variant_match(
+                    scrut_place,
+                    scrut_ty,
+                    v_idx,
+                    vp,
+                    pass_block,
+                    fail_block,
+                    span,
+                    by_ref
+                );
+            },
+            Option.None => {
+                // Not a variant: an associated constant (`Parser.INITIAL_FIELD_CAP`), compared.
+                let value = self.assoc_const_value(vp);
+                if value != 0 as ExprId {
+                    let const_place = self.lower_expr(value, 0 as u32);
+                    self.branch_if_equal(scrut_place, const_place, pass_block, fail_block, span);
+                    return;
+                }
+                self.report_prefix(span);
+                eprint("no variant or associated constant `");
+                eprint(self.intern_table.lookup(vp.variant_name));
+                eprint("` in `");
+                if vp.type_name != 0 as u32 {
+                    eprint(self.intern_table.lookup(vp.type_name));
+                } else {
+                    eprint(self.mono.type_display(scrut_ty));
+                }
+                eprint("`\n");
+                self.terminate(ZirTerminator.Jmp(fail_block));
+            },
+        }
+    }
+
+    // The value of the associated constant `Type::NAME` a pattern names; 0 if there is none.
+    fn assoc_const_value(self: &mut ZirLowerer, vp: &VariantPattern) -> ExprId {
+        if vp.type_name == 0 as u32 { return 0 as ExprId; }
+        let mut full = unsafe { ByteVec.new_raw(self.arena) };
+        full.push_slice(self.intern_table.lookup(vp.type_name));
+        full.push_slice("::");
+        full.push_slice(self.intern_table.lookup(vp.variant_name));
+        if let Option.Some(sym) = self.resolver.resolve_ptr(
+            self.intern_table.intern(full.as_slice())
+        ) {
+            if let SymbolKind.AssocConst(packed) = sym.kind {
+                let imp = self.resolver.ast.decls[(packed >> 16) as usize].get_Impl();
+                let k = (packed & 0xffff as u32) as usize;
+                if k < imp.constants.len && imp.constants[k].name == vp.variant_name {
+                    return imp.constants[k].value;
+                }
+            }
+        }
+        return 0 as ExprId;
+    }
+
+    // The scrutinee is variant V_IDX: test the tag, then match the payload's patterns.
+    fn lower_variant_match(
+        self: &mut ZirLowerer,
+        scrut_place: Place,
+        scrut_ty: u32,
+        v_idx: u32,
+        vp: &VariantPattern,
+        pass_block: u32,
+        fail_block: u32,
+        span: Span,
+        by_ref: bool
+    ) {
+        let cond_tmp = self.define_local(
+            0 as *mut Symbol,
+            self.get_primitive_type(ILPrimitive.Bool),
+            LOCAL_KIND_TMP
+        );
+        self.emit(
+            ZirStmt.Let(cond_tmp, ZirRvalue.VariantCheck(scrut_place, scrut_ty, v_idx), span)
+        );
+        let cond_place = Place {
+            base: cond_tmp,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+
+        let bind_block = self.new_block("match_bind");
+        self.terminate(ZirTerminator.Branch(cond_place, bind_block, fail_block));
+        self.switch_to_block(bind_block);
+
+        if vp.payload.len == 0 as usize {
+            self.terminate(ZirTerminator.Jmp(pass_block));
+            return;
+        }
+        let payload_ty = self.get_variant_payload_type(scrut_ty, v_idx);
+        if payload_ty == 0 as u32 {
+            self.report_error("this variant has no payload to match", span);
+            self.terminate(ZirTerminator.Jmp(fail_block));
+            return;
+        }
+        let payload_ptr_ty = self.get_ptr_type(payload_ty);
+        let payload_tmp = self.define_local(0 as *mut Symbol, payload_ptr_ty, LOCAL_KIND_TMP);
+        self.emit(
+            ZirStmt.Let(payload_tmp, ZirRvalue.EnumPayload(scrut_place, scrut_ty, v_idx), span)
+        );
+        let tmp_place = Place {
+            base: payload_tmp,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+        let payload_place = self.append_projection(&tmp_place, Projection.Deref);
+        // Matching an enum through a reference binds its payload by reference.
+        let scrut_tag = self.get_type_tag(scrut_ty);
+        let sub_by_ref = by_ref || self.pattern_peels_pointer(scrut_tag);
+
+        if vp.payload.len == 1 as usize {
+            self.lower_pattern_at(
+                payload_place,
+                payload_ty,
+                vp.payload[0],
+                pass_block,
+                fail_block,
+                sub_by_ref
+            );
+            return;
+        }
+        // `V(a, b)`: one pattern per element of a tuple payload.
+        let n = self.tuple_arity(payload_ty);
+        if n != vp.payload.len {
+            self.report_prefix(span);
+            eprint("this pattern gives ");
+            let mut err = stderr();
+            let _ = write_u64(&mut err, vp.payload.len as u64);
+            eprint(" payload elements, but the payload is `");
+            eprint(self.mono.type_display(payload_ty));
+            eprint("`\n");
+            let mut k = 0 as usize;
+            while k < vp.payload.len {
+                self.declare_pattern_bindings(vp.payload[k]);
+                k = k + 1 as usize;
+            }
+            self.terminate(ZirTerminator.Jmp(fail_block));
+            return;
+        }
+        let places = self.alloc_places(n);
+        let tys = self.alloc_u32s(n);
+        let mut k = 0 as usize;
+        while k < n {
+            places[k] = self.append_projection(&payload_place, Projection.TupleIndex(k as u32));
+            tys[k] = self.get_tuple_elem_type(payload_ty, k as u32);
+            k = k + 1 as usize;
+        }
+        self.lower_pattern_seq(places, tys, vp.payload, pass_block, fail_block, sub_by_ref);
+    }
+
+    // Test PATS[i] against PLACES[i] in turn: each passes on to the next, the last to PASS.
+    fn lower_pattern_seq(
+        self: &mut ZirLowerer,
+        places: [mut Place],
+        tys: [mut u32],
+        pats: [PatternId],
+        pass_block: u32,
+        fail_block: u32,
+        by_ref: bool
+    ) {
+        if pats.len == 0 as usize {
+            self.terminate(ZirTerminator.Jmp(pass_block));
+            return;
+        }
+        let mut i = 0 as usize;
+        while i < pats.len {
+            let last = i + 1 as usize == pats.len;
+            let next = if last { pass_block } else { self.new_block("pat_next") };
+            self.lower_pattern_at(places[i], tys[i], pats[i], next, fail_block, by_ref);
+            if !last { self.switch_to_block(next); }
+            i = i + 1 as usize;
+        }
+    }
+
+    // `Name { field: p, .. }` against a struct value at PLACE.
+    fn lower_pattern_struct(
+        self: &mut ZirLowerer,
+        place: Place,
+        ty: u32,
+        sp: &StructPattern,
+        pass_block: u32,
+        fail_block: u32,
+        span: Span,
+        by_ref: bool
+    ) {
+        if !self.is_struct_type(ty) || !self.struct_type_named(ty, sp.type_name) {
+            self.report_prefix(span);
+            eprint("this pattern is for `");
+            eprint(self.intern_table.lookup(sp.type_name));
+            eprint("`, but the value is `");
+            eprint(self.mono.type_display(ty));
+            eprint("`\n");
+            self.declare_struct_pattern_bindings(sp);
+            self.terminate(ZirTerminator.Jmp(fail_block));
+            return;
+        }
+        let n = sp.fields.len;
+        let places = self.alloc_places(n);
+        let tys = self.alloc_u32s(n);
+        let pats = self.alloc_u32s(n);
+        let mut i = 0 as usize;
+        while i < n {
+            let f = &sp.fields[i];
+            let idx = self.get_field_index(ty, f.name);
+            if idx == 0xffffffff as u32 {
+                self.report_prefix(span);
+                eprint("`");
+                eprint(self.mono.type_display(ty));
+                eprint("` has no field `");
+                eprint(self.intern_table.lookup(f.name));
+                eprint("`\n");
+                self.declare_struct_pattern_bindings(sp);
+                self.terminate(ZirTerminator.Jmp(fail_block));
+                return;
+            }
+            places[i] = self.append_projection(&place, Projection.Field(f.name));
+            tys[i] = self.get_field_type(ty, idx);
+            pats[i] = f.pattern;
+            i = i + 1 as usize;
+        }
+        if !sp.has_rest && n < self.struct_field_count(ty) {
+            self.report_prefix(span);
+            eprint("this pattern does not name every field of `");
+            eprint(self.mono.type_display(ty));
+            eprint("`; add `..` to ignore the rest\n");
+        }
+        self.lower_pattern_seq(places, tys, pats, pass_block, fail_block, by_ref);
+    }
+
+    // After a pattern error: declare the names it would bind, with no type, so the arm body
+    // does not add "unresolved symbol" errors for them.
+    pub fn declare_pattern_bindings(self: &mut ZirLowerer, pat_id: PatternId) {
+        if pat_id as usize >= self.resolver.ast.patterns.len() { return; }
+        let pat: Pattern = self.resolver.ast.patterns[pat_id as usize];
+        match pat {
+            Pattern.Ident(name) | Pattern.MutIdent(name) => {
+                if self.resolver.lookup_current_scope_ptr(name).is_none()
+                    && !self.is_const_ident(name) {
+                    let sym = self.resolver.define(name, SymbolKind.Local(0), false);
+                    self.define_local(sym, 0 as u32, LOCAL_KIND_LETMUT);
+                }
+            },
+            Pattern.EnumVariant(vp) => {
+                let mut i = 0 as usize;
+                while i < vp.payload.len {
+                    self.declare_pattern_bindings(vp.payload[i]);
+                    i = i + 1 as usize;
+                }
+            },
+            Pattern.Tuple(elems) => {
+                let mut i = 0 as usize;
+                while i < elems.len { self.declare_pattern_bindings(elems[i]); i = i + 1 as usize; }
+            },
+            Pattern.Struct(sp) => { self.declare_struct_pattern_bindings(&sp); },
+            Pattern.Or(alts) => {
+                if alts.len > 0 as usize { self.declare_pattern_bindings(alts[0]); }
+            },
+            Pattern.Literal(_) | Pattern.Wildcard | Pattern.Range(_) => {},
+        }
+    }
+
+    fn declare_struct_pattern_bindings(self: &mut ZirLowerer, sp: &StructPattern) {
+        let mut i = 0 as usize;
+        while i < sp.fields.len {
+            self.declare_pattern_bindings(sp.fields[i].pattern);
+            i = i + 1 as usize;
+        }
+    }
+
+    // Whether a pattern looks through a value of tag TAG without naming a dereference: only a
+    // safe reference (`&T` / `&mut T`) or a `Box` may be peeled. A raw pointer is *not*: peeling
+    // it reads arbitrary memory with no `unsafe` marker, and a `*T` that is reborrowed into a
+    // safe `&T` by a binding used to segfault in safe code (Unified Solution E, probes 216/217).
+    fn pattern_peels_pointer(self: &ZirLowerer, tag: u32) -> bool {
+        return is_reference_tag(tag) || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT;
+    }
+
+    // A tuple or struct pattern looks through a reference to the value it points at.
+    // The result is a Place of scratch-arena data, like lower_expr's.
+    #[borrows()]
+    fn pattern_through_ref(self: &mut ZirLowerer, place: Place, ty: u32) -> PatternTarget {
+        let tag = self.get_type_tag(ty);
+        if self.pattern_peels_pointer(tag) {
+            return PatternTarget {
+                place: self.append_projection(&place, Projection.Deref),
+                ty: self.get_ptr_inner_type(ty),
+                deref: true
+            };
+        }
+        return PatternTarget { place: place, ty: ty, deref: false };
+    }
+
+    // Bind NAME to the value at PLACE (a copy), or to a reference to it when BY_REF. In an
+    // or-pattern every alternative binds the same local.
+    fn bind_pattern_name(
+        self: &mut ZirLowerer,
+        name: u32,
+        place: Place,
+        ty: u32,
+        by_ref: bool,
+        is_mut: bool,
+        span: Span
+    ) {
+        // Or-pattern alternatives share a binding; a `let` pattern's shadow the scope's.
+        let mut sym = 0 as *mut Symbol;
+        if !self.pattern_binds_fresh {
+            if let Some(s) = self.resolver.lookup_current_scope_ptr(name) {
+                sym = (s as usize) as *mut Symbol;
+            }
+        }
+        if sym as usize == 0 as usize {
+            sym = self.resolver.define(name, SymbolKind.Local(0), false);
+        }
+        let bind_ty = if by_ref { self.get_ptr_type(ty) } else { ty };
+        let mut local_id = self.get_local_by_symbol(sym);
+        if local_id == 0 as u32 {
+            local_id = self.define_local(
+                sym,
+                bind_ty,
+                if is_mut { LOCAL_KIND_LETMUT } else { LOCAL_KIND_LET }
+            );
+        } else {
+            self.check_or_binding_type(local_id, bind_ty, span);
+        }
+        if by_ref {
+            let reg = self.next_region_id;
+            self.next_region_id = self.next_region_id + 1 as u32;
+            self.emit(ZirStmt.Let(local_id, ZirRvalue.Ref(place, reg), span));
+        } else {
+            self.emit(ZirStmt.Let(local_id, ZirRvalue.Use(place), span));
+        }
+    }
+
+    pub fn struct_def(self: &mut ZirLowerer, ty: u32) -> *ILTypeDef {
+        if ty == 0 as u32 || self.get_type_tag(ty) != ILTYPE_USER { return 0 as *ILTypeDef; }
+        let id = self.get_type_decl(ty).def.get_User().id;
+        if id as usize >= self.module.typedefs.len() { return 0 as *ILTypeDef; }
+        let p_def = &self.module.typedefs[id as usize];
+        if p_def.get_tag() != IL_TYPEDEF_STRUCT { return 0 as *ILTypeDef; }
+        return p_def;
+    }
+
+    fn is_struct_type(self: &mut ZirLowerer, ty: u32) -> bool {
+        return self.struct_def(ty) as usize != 0 as usize;
+    }
+
+    pub fn struct_field_count(self: &mut ZirLowerer, ty: u32) -> usize {
+        let p_def = self.struct_def(ty);
+        if p_def as usize == 0 as usize { return 0 as usize; }
+        return unsafe { (*p_def).get_Struct().fields.len };
+    }
+
+    // Whether struct type TY is the one NAME declares: its own name, or for a generic struct
+    // an instantiation of it (`W` for `W_Ti32`).
+    fn struct_type_named(self: &mut ZirLowerer, ty: u32, name: u32) -> bool {
+        let ty_name = self.get_type_decl(ty).def.get_User().name;
+        if ty_name == name { return true; }
+        let a = self.intern_table.lookup(ty_name);
+        let b = self.intern_table.lookup(name);
+        return a.len > b.len && a[b.len] == '_' as u8 && subslice(a, 0 as usize, b.len) == b;
+    }
+
+    pub fn tuple_arity(self: &mut ZirLowerer, ty: u32) -> usize {
+        if ty == 0 as u32 || self.get_type_tag(ty) != ILTYPE_TUPLE { return 0 as usize; }
+        return self.get_type_decl(ty).def.get_Tuple().len;
+    }
+
+    #[borrows()]
+    fn alloc_places(self: &mut ZirLowerer, n: usize) -> [mut Place] {
+        return unsafe {
+            @slice(
+                zoril_allocator_alloc(self.arena, (n + 1 as usize) * sizeof(Place)) as *mut Place,
+                n
+            )
+        };
+    }
+
+    #[borrows()]
+    pub fn alloc_u32s(self: &mut ZirLowerer, n: usize) -> [mut u32] {
+        return unsafe {
+            @slice(zoril_allocator_alloc(self.arena, (n + 1 as usize) * 4) as *mut u32, n)
+        };
+    }
+
+    // Each alternative of an or-pattern (`A(x) | B(x)`) binds into the same local, which takes
+    // the type of the first alternative. A later alternative binding a different type would
+    // reinterpret its payload as that type: `R(x) | N(x)` with R(&i32), N(u64) dereferenced an
+    // integer in safe code.
+    fn check_or_binding_type(self: &mut ZirLowerer, local_id: u32, binding_ty: u32, span: Span) {
+        let existing_ty = self.locals[local_id as usize - 1 as usize].ty;
+        // Exact type identity, not types_match: that admits implicit integer conversions, and a
+        // binding has exactly one type.
+        if existing_ty != 0 as u32 && binding_ty != 0 as u32 && existing_ty != binding_ty {
+            self.report_error(
+                "a binding in an or-pattern must have the same type in every alternative",
+                span
+            );
+        }
+    }
+
+    pub fn report_missing_variant(self: &mut ZirLowerer, var_name: u32, span: Span) {
+        self.report_prefix(span);
+        eprint("non-exhaustive match: missing variant '");
+        eprint(self.intern_table.lookup(var_name));
+        eprint("'\n");
+    }
+
+    pub fn report_missing_case(self: &mut ZirLowerer, case_str: [u8], span: Span) {
+        self.report_prefix(span);
+        eprint("non-exhaustive match: missing case '");
+        eprint(case_str);
+        eprint("'\n");
+    }
+
+    pub fn report_missing_wildcard(self: &mut ZirLowerer, span: Span) {
+        self.report_prefix(span);
+        eprint("non-exhaustive match: missing wildcard pattern '_'\n");
+    }
+
+    // Whether NAME is a constant or static, or an associated constant (`T_C`), so a pattern
+    // naming it compares against it rather than binding.
+    pub fn is_const_ident(self: &ZirLowerer, name: u32) -> bool {
+        let decls = self.resolver.ast.decls.as_slice();
+        if let Option.Some(sym) = self.resolver.resolve_ptr(name) {
+            match sym.kind {
+                SymbolKind.Global(decl_id) => {
+                    if decl_id as usize >= decls.len { return false; }
+                    return match decls[decl_id as usize] {
+                        Decl.Const(_) | Decl.Static(_) => true,
+                        _ => false,
+                    };
+                },
+                SymbolKind.AssocConst(_) => { return true; },
+                _ => {},
+            }
+        }
+        return false;
+    }
+
+    // Branches to PASS when the scrutinee equals the constant's value, else to FAIL.
+    fn branch_if_equal(
+        self: &mut ZirLowerer,
+        scrut_place: Place,
+        const_place: Place,
+        pass_block: u32,
+        fail_block: u32,
+        span: Span
+    ) {
+        let cond_tmp = self.define_local(
+            0 as *mut Symbol,
+            self.get_primitive_type(ILPrimitive.Bool),
+            LOCAL_KIND_TMP
+        );
+        self.emit(
+            ZirStmt.Let(cond_tmp, ZirRvalue.BinaryOp(BINARY_EQ, scrut_place, const_place), span)
+        );
+        let cond_place = Place {
+            base: cond_tmp,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+        self.terminate(ZirTerminator.Branch(cond_place, pass_block, fail_block));
+    }
+}

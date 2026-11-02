@@ -1,0 +1,8 @@
+// name: Signed integer overflow
+// expected: accept
+fn main() -> i32 {
+    let max_i8: i8 = 127;
+    let w = max_i8 +% 1i8;
+    if w != -128i8 { return 1; }
+    return 0;
+}

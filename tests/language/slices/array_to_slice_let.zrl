@@ -1,0 +1,21 @@
+// expected exit 39
+// `&a` / `&mut a` on an array becomes a slice wherever one is expected, not only for a
+// parameter: in `let`, in an assignment and in a struct field. `&mut a` gives a `[mut T]`.
+struct View { s: [u8] }
+fn sum(s: [u8]) -> i32 {
+    let mut t = 0;
+    let mut i = 0 as usize;
+    while i < s.len { t = t + s[i] as i32; i = i + 1; }
+    return t;
+}
+fn main() -> i32 {
+    let mut a: [u8; 3] = [1, 2, 3];
+    let m: [mut u8] = &mut a;
+    m[0] = 10;
+    let b: [u8; 2] = [4, 5];
+    let mut t: [u8] = &b;
+    let first = sum(t);
+    t = &a;
+    let v = View { s: &a };
+    return first + sum(t) + sum(v.s); // 9 + 15 + 15
+}

@@ -1,0 +1,19 @@
+// name: Stack-capturing closure stored out via closure call
+// expected: compile_reject
+// Rejected by the interprocedural summary pass, which every build enforces and which reads what a call returns through its aggregate result and through the memory its arguments point at.
+fn default_fn() -> i32 { return 0; }
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn escape_storer(out: &mut fn() -> i32) {
+    let x = 42;
+    let src_val = || -> i32 { return x; };
+    let carried = src_val;
+    let f_clos = |item: fn() -> i32| -> fn() -> i32 { return item; };
+    let routed = f_clos(carried);
+    *out = routed;
+}
+fn main() -> i32 {
+    let mut dest_val: fn() -> i32 = default_fn;
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    return dest_val();
+}

@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_private_assoc_const_cross_module.zrl:10:12: error: cannot access private associated constant: SECRET
+// EXPECT: tests/error_reporting/err_private_assoc_const_cross_module.zrl:10:12: note: `SECRET` is private to tests/error_reporting/include/err_private_method_helper.zrl
+// An associated constant is as visible as a method is: without `pub` only the module that
+// declares it may read it (surface_syntax.md §11.1.2).
+import "include/err_private_method_helper.zrl";
+use err_private_method_helper::Widget;
+
+pub fn main() -> i32 {
+    return Widget.SECRET;
+}

@@ -1,0 +1,135 @@
+// Internal bump-backed byte vector buffers (ByteVec)
+
+import "mem.zrl";
+import "mem_raw.zrl";
+import "core0.zrl";
+use mem::{Arena, arena_raw, bounds_trap, grow_cap};
+use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+
+// Internal growable byte vector backed by bump-allocated memory from an arena.
+pub struct ByteVec {
+    data: *mut u8,
+    len: usize,
+    cap: usize,
+    arena: *mut ArenaHeader,
+}
+
+impl ByteVec {
+    // Safe: the returned `&mut ByteVec` borrows the arena, so resetting or destroying the
+    // arena while the ByteVec is live is a compile error.
+    pub fn new(a: &Arena) -> &mut ByteVec {
+        // SAFETY: the constructor's contract is the arena pointer, and `a` is the live,
+        // borrowed arena that the buffer is tied to.
+        return unsafe { ByteVec.new_raw(arena_raw(a)) };
+    }
+
+    // Constructs an empty ByteVec allocated from a raw arena header.
+    //
+    // CALLER OBLIGATION: caller must ensure arena is valid and initialized.
+    //
+    // The internal escape hatch for a raw arena pointer: the canonical unsafe-inside /
+    // safe-outside constructor (unsafe_policy.md §2). The result is not tied to the arena.
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    #[stores(arena -> arena)]
+    pub unsafe fn new_raw(arena: *mut ArenaHeader) -> &mut ByteVec {
+        let v = zoril_allocator_alloc(arena, sizeof(ByteVec)) as *mut ByteVec;
+        // Initialising freshly-allocated arena storage, then handing back a reference.
+        (*v).data = 0 as *mut u8;
+        (*v).len = 0 as usize;
+        (*v).cap = 0 as usize;
+        (*v).arena = arena;
+        return &mut *v;
+    }
+
+    // Appends a single byte to the end of the byte vector.
+    pub fn push(self: &mut ByteVec, b: u8) {
+        // SAFETY: `data`/`cap` are ByteVec's own invariant (`len < cap` after the branch below
+        // grows, and the buffer is the vector's own allocation).
+        unsafe {
+            if self.len >= self.cap {
+                let new_cap = if self.cap == 0 as usize {
+                    8 as usize
+                } else {
+                    grow_cap(self.cap)
+                };
+                let new_data = zoril_allocator_alloc(self.arena, new_cap) as *mut u8;
+                if self.data as usize != 0 as usize {
+                    let mut i = 0 as usize;
+                    while i < self.len {
+                        let p_src = (self.data as usize + i) as *mut u8;
+                        let p_dst = (new_data as usize + i) as *mut u8;
+                        *p_dst = *p_src;
+                        i = i + 1 as usize;
+                    }
+                }
+                self.data = new_data;
+                self.cap = new_cap;
+            }
+            let p = (self.data as usize + self.len) as *mut u8;
+            *p = b;
+            self.len = self.len + 1 as usize;
+        }
+    }
+
+    // Appends bytes from a raw pointer range [start, end) to the byte vector.
+    //
+    // CALLER OBLIGATION: start and end must point to valid accessible memory.
+    pub unsafe fn push_range(self: &mut ByteVec, ptr: *u8, start: usize, len: usize) {
+        let mut i = 0 as usize;
+        while i < len {
+            let p = (ptr as usize + start + i) as *mut u8;
+            self.push(*p);
+            i = i + 1 as usize;
+        }
+    }
+
+    // Appends all bytes from slice to the byte vector.
+    pub fn push_slice(self: &mut ByteVec, s: [u8]) {
+        // SAFETY: the source is `s` itself, untouched for the duration of the copy, and
+        // `push_range` reads only `s.len` bytes of it.
+        unsafe { self.push_range(s.ptr, 0 as usize, s.len); }
+    }
+
+    // Returns the contents of the byte vector as an immutable byte slice.
+    pub fn as_slice(self: &ByteVec) -> [u8] {
+        // SAFETY: `data`/`len` are ByteVec's own invariant: len bytes are live at data.
+        return unsafe { @slice(self.data, self.len) };
+    }
+
+    // Returns the number of bytes currently stored in the byte vector.
+    pub fn len(self: &ByteVec) -> usize {
+        return self.len;
+    }
+
+    // Returns the allocated byte capacity of the byte vector.
+    pub fn cap(self: &ByteVec) -> usize {
+        return self.cap;
+    }
+
+    // As `Vec::as_ptr`: reading the buffer's address is harmless, the fields are private so the
+    // address cannot be forged, and `&mut self` is what `as_mut_ptr` adds.
+    pub fn as_ptr(self: &ByteVec) -> *u8 {
+        return self.data as *u8;
+    }
+
+    // Returns a raw mutable pointer to the beginning of the buffer.
+    //
+    // CALLER OBLIGATION: caller must not read beyond len or write beyond cap.
+    pub fn as_mut_ptr(self: &mut ByteVec) -> *mut u8 {
+        return self.data;
+    }
+
+    // The arena this buffer allocates from (0 for the global heap).
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    pub unsafe fn raw_arena(self: &ByteVec) -> *mut ArenaHeader {
+        return self.arena;
+    }
+
+    // The length may only be set within the allocation (probe 164); growing goes through `push`.
+    pub unsafe fn set_len(self: &mut ByteVec, n: usize) {
+        if n > self.cap {
+            bounds_trap("ByteVec.set_len: length above capacity");
+        }
+        self.len = n;
+    }
+}

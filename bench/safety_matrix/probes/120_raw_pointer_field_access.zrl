@@ -1,0 +1,7 @@
+// name: Field access through a raw pointer
+// expected: compile_reject
+// `p.x` on a raw pointer dereferences it as `(*p).x` does, so it needs `unsafe` too. It
+// did not: a null `*Point` read through `p.x` faulted in safe code.
+struct Point { x: i32, y: i32 }
+fn get_x(p: *Point) -> i32 { return p.x; }
+fn main() -> i32 { return get_x(0 as *Point); }

@@ -1,0 +1,18 @@
+// expected exit 0
+// A generic method nothing instantiates is not checked, and cannot be: its body's `Self` and its
+// type parameters are not known until an instance exists (doc/spec/surface_syntax.md §11.1.1).
+// `bad` below would be a compile error - `nope` is on no field of any `T` - and is accepted only
+// because nothing instantiates it; `tests/error_reporting/err_generic_method_body_instantiated.zrl`
+// is the same body with one.
+struct S { a: i32 }
+
+impl S {
+    fn ok<T>(self: &S, x: T) -> i32 { return self.a; }
+    fn bad<T>(self: &S, x: T) -> i32 { return x.nope; }
+}
+
+fn main() -> i32 {
+    let s = S { a: 3 };
+    // `ok` is instantiated here (and checked); `bad` is not, which is why this program compiles.
+    return s.ok(7) - 3;
+}

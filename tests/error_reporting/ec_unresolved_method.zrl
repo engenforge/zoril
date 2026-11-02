@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/ec_unresolved_method.zrl:7:5: error: no field 'increment' on 'Counter'
+// Tests that an unresolved method call is reported at the receiver.
+struct Counter { n: i32 }
+fn main() -> i32 {
+    let c = Counter { n: 0 };
+    c.increment();  // @error "Unresolved method or variant: increment" :5
+    0
+}

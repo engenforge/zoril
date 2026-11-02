@@ -1,0 +1,19 @@
+pub enum Region {
+    Static,
+    Custom([u8]),
+}
+
+pub struct RegionCastInstr {
+    pub val: u32,
+    pub region: Region,
+}
+
+pub enum ILInstr {
+    Move(u32),
+    RegionCast(RegionCastInstr),
+}
+
+pub fn main() -> i32 {
+    let instr = ILInstr.RegionCast(RegionCastInstr { val: 42, region: Region.Static });
+    return 0;
+}

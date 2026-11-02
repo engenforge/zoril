@@ -1,0 +1,34 @@
+import "core.zrl";
+
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+    pub line: u32,
+    pub col: u32,
+}
+
+pub struct Lexer {
+    pub source: [u8],
+    pub pos: u64,
+    pub line: u32,
+    pub col: u32,
+    pub intern_table: u64,
+}
+
+fn make_lexer() -> Lexer {
+    return Lexer {
+        source: @slice(0 as *u8, 0 as usize),
+        pos: 1234,
+        line: 42,
+        col: 100,
+        intern_table: 0,
+    };
+}
+
+fn main() -> i32 {
+    let lex = make_lexer();
+    if lex.line != 42 {
+        return 1;
+    }
+    return 0;
+}

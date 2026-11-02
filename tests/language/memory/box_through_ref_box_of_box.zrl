@@ -1,0 +1,13 @@
+// A field read or write through a reference to a Box reaches the boxed value, not the Box's own slot.
+struct Point { x: i64, y: i64 }
+
+fn read(p: &Box<Box<Point>>) -> i64 {
+    return p.x + p.y;
+}
+
+fn main() -> i32 {
+    let inner = box Point { x: 20, y: 22 };
+    let outer = box inner;
+    if read(&outer) != 42 { return 1; }
+    return 0;
+}

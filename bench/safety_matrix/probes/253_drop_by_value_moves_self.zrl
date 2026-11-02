@@ -1,0 +1,34 @@
+// name: A by-value drop that moves self into a local drops once
+// expected: accept
+// `Drop` is recognised by name: this declares its own `trait Drop`, and the impl against it is
+// the one drop glue calls. `fn drop(self: D)` takes the value by value, so the body can move it
+// into a local. If the body moved it and the caller dropped it too, DROPS would be 2; if no drop
+// ran it would be 0. Either count returns non-zero, so the probe cannot pass with no drop.
+static mut DROPS: i32 = 0;
+
+struct D {
+    id: i32,
+}
+
+trait Drop {
+    fn drop(self: D);
+}
+
+impl Drop for D {
+    fn drop(self: D) {
+        let moved = self;
+        let _ = moved.id;
+        DROPS = DROPS + 1;
+    }
+}
+
+fn main() -> i32 {
+    {
+        let d = D { id: 7 };
+        let _ = d.id;
+    }
+    if DROPS != 1 {
+        return 7;
+    }
+    return 0;
+}

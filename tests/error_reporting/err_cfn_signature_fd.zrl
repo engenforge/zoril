@@ -1,0 +1,4 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_cfn_signature_fd.zrl:3:38: error: an extern "C" fn type cannot take or return a linear `fd<..>` handle (pass the descriptor as an `i32`)
+extern fn takes_cb(cb: extern "C" fn(fd<w>) -> i32) -> i32;
+fn main() -> i32 { return 0; }

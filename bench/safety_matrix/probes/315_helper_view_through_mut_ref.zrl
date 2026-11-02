@@ -1,0 +1,22 @@
+// name: A reference returned by a helper taking &mut cannot outlive a free()
+// expected: compile_reject
+// A helper function taking &mut Vec and returning a reference ties the reference's
+// borrow to the parameter; mutating or freeing the Vec while that reference lives is rejected.
+import "vec.zrl";
+use vec::Vec;
+
+fn first(v: &mut Vec<i32>) -> &i32 {
+    return v.get(0).unwrap();
+}
+
+fn evil(v: &mut Vec<i32>) -> i32 {
+    let r = first(v);
+    v.free();
+    return *r;
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    return evil(&mut v);
+}

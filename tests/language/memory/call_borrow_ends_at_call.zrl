@@ -1,0 +1,18 @@
+// expected exit 0
+// A call's receiver borrow ends when the call returns (task 2i step 1a): the inner `v.len()` reads
+// `v`, and the enclosing `v.push` still needs `&mut v`; a call whose result carries no reference
+// (`len` returns a `usize`) leaves `v` free afterwards.
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    v.push(2);
+    v.push(v.len() as i32);
+    if v.len() != 3 as usize { return 1; }
+    let n = v.len();
+    v.push(n as i32);
+    if v.len() != 4 as usize { return 2; }
+    return 0;
+}

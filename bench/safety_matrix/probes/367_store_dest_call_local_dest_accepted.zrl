@@ -1,0 +1,32 @@
+// name: Storing a frame-owned view into a local destination through a helper is accepted
+// expected: accept
+// Storing a frame-owned arena view into a destination that is a frame-local struct via a helper is accepted.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct H {
+    s: [i32],
+}
+
+fn slot(h: &mut H) -> &mut [i32] {
+    return &mut h.s;
+}
+
+fn f() -> i32 {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return 1; },
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(99);
+    let e: [i32] = @slice(0 as *i32, 0);
+    let mut local = H { s: e };
+    *slot(&mut local) = v.as_slice();
+    return if local.s[0] == 99 { 0 } else { 1 };
+}
+
+fn main() -> i32 {
+    return f();
+}

@@ -1,0 +1,18 @@
+// expected exit 0
+// A float literal is the double nearest its decimal value (round half to even), as in C:
+// `0.3` was 0x3fd3333333333334 when the lexer summed digit * 0.1^k.
+fn bits(x: f64) -> u64 { return unsafe { *((&x as usize) as *u64) }; }
+fn main() -> i32 {
+    if bits(0.3) != 0x3fd3333333333333 { return 1; }
+    if bits(0.1) != 0x3fb999999999999a { return 2; }
+    if 0.1 + 0.2 == 0.3 { return 3; }
+    if bits(3.141592653589793) != 0x400921fb54442d18 { return 4; }
+    if bits(9.999999999999999) != 0x4023ffffffffffff { return 5; }
+    if bits(1.7976931348623157) != 0x3ffcc359e067a348 { return 6; }
+    // Halfway between two doubles: rounds to the even one; any digit beyond tips it.
+    if bits(1.00000000000000011102230246251565404236316680908203125) != 0x3ff0000000000000 { return 7; }
+    if bits(1.00000000000000011102230246251565404236316680908203126) != 0x3ff0000000000001 { return 8; }
+    if bits(12345678901234567890.5) != 0x43e56a95319d63e1 { return 9; }
+    if bits(0.000_001) != 0x3eb0c6f7a0b5ed8d { return 10; }
+    return 0;
+}

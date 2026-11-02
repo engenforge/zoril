@@ -1,0 +1,168 @@
+import "mem.zrl";
+import "core.zrl";
+
+pub struct Vec<T> {
+    pub data: *mut T,
+    pub len: usize,
+    pub cap: usize,
+    pub arena: *mut Arena,
+}
+
+impl<T> Vec<T> {
+    pub fn new() -> Vec<T> {
+        return Vec {
+            data: 0 as *mut T,
+            len: 0 as usize,
+            cap: 0 as usize,
+            arena: 0 as *mut Arena,
+        };
+    }
+
+    pub fn new_in(arena: *mut Arena) -> Vec<T> {
+        return Vec {
+            data: 0 as *mut T,
+            len: 0 as usize,
+            cap: 0 as usize,
+            arena: arena,
+        };
+    }
+
+    pub fn with_capacity(arena: *mut Arena, cap: usize) -> Vec<T> {
+        let data = if cap > 0 as usize {
+            zoril_allocator_alloc(arena, cap * sizeof(T)) as *mut T
+        } else {
+            0 as *mut T
+        };
+        return Vec {
+            data: data,
+            len: 0 as usize,
+            cap: cap,
+            arena: arena,
+        };
+    }
+
+    pub fn clone_in(self: &Vec<T>, arena: *mut Arena) -> Vec<T> {
+        if self.len == 0 as usize { return Vec::<T>.new_in(arena); }
+        let new_data = zoril_allocator_alloc(arena, self.len * sizeof(T)) as *mut T;
+        unsafe { memcpy(new_data as *mut u8, self.data as *u8, self.len * sizeof(T)); }
+        return Vec { data: new_data, len: self.len, cap: self.len, arena: arena };
+    }
+
+    pub fn push(self: &mut Vec<T>, val: T) {
+        if self.len >= self.cap {
+            let new_cap = if self.cap == 0 as usize { 8 as usize } else { self.cap * 2 as usize };
+            let new_data = zoril_allocator_alloc(self.arena, new_cap * sizeof(T)) as *mut T;
+            if self.data as usize != 0 as usize && self.len > 0 as usize {
+                unsafe { memcpy(new_data as *mut u8, self.data as *u8, self.len * sizeof(T)); }
+            }
+            self.data = new_data;
+            self.cap = new_cap;
+        }
+        // Vec owns its storage and has just guaranteed capacity; writing the slot is the
+        // unsafe interior of a safe API (unsafe_policy.md §2).
+        let p = (self.data as usize + self.len * sizeof(T)) as *mut T;
+        unsafe { *p = val; }
+        self.len = self.len + 1 as usize;
+    }
+
+    pub fn pop(self: &mut Vec<T>) -> Option<T> {
+        if self.len == 0 as usize { return Option.None; }
+        self.len = self.len - 1 as usize;
+        let p = (self.data as usize + self.len * sizeof(T)) as *mut T;
+        return Option.Some(unsafe { *p });
+    }
+
+    pub fn get(self: &Vec<T>, index: usize) -> Option<&T> {
+        if index >= self.len {
+            return Option.None;
+        }
+        // Bounds were just checked, and the pointer is into Vec's own storage, so the
+        // reference handed out is valid for as long as the Vec is.
+        let p = (self.data as usize + index * sizeof(T)) as *T;
+        return Option.Some(unsafe { &*p });
+    }
+
+    pub fn get_mut(self: &mut Vec<T>, index: usize) -> Option<&mut T> {
+        if index >= self.len {
+            return Option.None;
+        }
+        let p = (self.data as usize + index * sizeof(T)) as *mut T;
+        return Option.Some(unsafe { &mut *p });
+    }
+
+    pub fn ensure_len(self: &mut Vec<T>, min_len: usize) {
+        if min_len <= self.len { return; }
+        if min_len > self.cap {
+            let mut new_cap = if self.cap == 0 as usize { 8 as usize } else { self.cap * 2 as usize };
+            while new_cap < min_len {
+                new_cap = new_cap * 2 as usize;
+            }
+            let new_data = zoril_allocator_alloc(self.arena, new_cap * sizeof(T)) as *mut T;
+            if self.data as usize != 0 as usize && self.len > 0 as usize {
+                unsafe { memcpy(new_data as *mut u8, self.data as *u8, self.len * sizeof(T)); }
+            }
+            self.data = new_data;
+            self.cap = new_cap;
+        }
+        let zero_start = (self.data as usize + self.len * sizeof(T)) as *mut u8;
+        let zero_bytes = (min_len - self.len) * sizeof(T);
+        unsafe { memset(zero_start, 0, zero_bytes); }
+        self.len = min_len;
+    }
+
+    pub fn resize(self: &mut Vec<T>, new_len: usize) {
+        if new_len > self.len {
+            self.ensure_len(new_len);
+        } else {
+            self.len = new_len;
+        }
+    }
+
+    pub fn set(self: &mut Vec<T>, index: usize, val: T) {
+        if index >= self.len {
+            @syscall(60 as u64, 134 as u64);
+            zoril_abort();
+        }
+        let p = (self.data as usize + index * sizeof(T)) as *mut T;
+        unsafe { *p = val; }
+    }
+
+    pub fn len(self: &Vec<T>) -> usize {
+        return self.len;
+    }
+
+    pub fn clear(self: &mut Vec<T>) {
+        self.len = 0 as usize;
+    }
+
+    pub fn as_slice(self: &Vec<T>) -> [T] {
+        // `data`/`len` are Vec's own invariant: len elements are live at data.
+        return unsafe { @slice(self.data, self.len) };
+    }
+
+    pub fn as_mut_slice(self: &mut Vec<T>) -> [mut T] {
+        // As as_slice; the `&mut self` is what lets the caller write the elements.
+        return unsafe { @slice(self.data, self.len) };
+    }
+
+    pub fn remove(self: &mut Vec<T>, index: usize) -> T {
+        if index >= self.len {
+            ICE("Vec.remove: index out of bounds");
+        }
+        // Shifting the tail down over the removed slot is raw element work on
+        // the Vec's own storage -- the unsafe interior behind a safe signature.
+        let val = unsafe { *((self.data as usize + index * sizeof(T)) as *mut T) };
+        unsafe {
+            let mut i = index;
+            while i + 1 as usize < self.len {
+                let src = (self.data as usize + (i + 1 as usize) * sizeof(T)) as *mut T;
+                let dst = (self.data as usize + i * sizeof(T)) as *mut T;
+                memcpy(dst as *mut u8, src as *u8, sizeof(T));
+                i = i + 1 as usize;
+            }
+        }
+        
+        self.len = self.len - 1 as usize;
+        return val;
+    }
+}

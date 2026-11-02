@@ -1,0 +1,3 @@
+// expected compile fail
+// EXPECT: shift count out of range (bit width 32, got 32)
+fn main() -> i32 { let a: u32 = 1 as u32; let b = a << 32; let mut c: u8 = 1 as u8; c <<= 9; return 0; }

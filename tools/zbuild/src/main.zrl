@@ -1,0 +1,261 @@
+// zbuild: incremental compilation driver for Zoril.
+// Implements doc/spec/modular_compilation.md §4-5 in 100% safe Zoril with zero unsafe markers.
+//
+// Phases: parse options -> locate and fingerprint the toolchain -> load the manifest ->
+// discover the import graph (asked of the compiler) -> compile stale modules in dependency
+// order -> write the manifest -> link -> collect garbage.
+
+import "core.zrl";
+import "clone.zrl";
+import "bytevec.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "string.zrl";
+import "vec.zrl";
+import "proc.zrl";
+import "fsys.zrl";
+import "module_path.zrl";
+import "util.zrl";
+import "options.zrl";
+import "manifest.zrl";
+import "tools.zrl";
+import "ctx.zrl";
+import "graph.zrl";
+import "build.zrl";
+import "fmt.zrl";
+use bytevec::ByteVec;
+use build::{ModResult, collect_garbage, empty_result, link_program, process_module, prune_manifest, write_manifest};
+use ctx::BuildCtx;
+use fsys::{acquire_file_lock, exe_dir_raw, make_dir_all_raw};
+use graph::{Graph, discover_graph};
+use io::{print, stdout};
+use fmt::write_u64;
+use manifest::{Entry, Manifest, ToolRec, empty_manifest, parse_manifest};
+use mem_raw::{ArenaHeader, arena_init};
+use module_path::{basename, find_project_root, get_cwd, is_within_dir, make_absolute, normalize_path, rel_within_dir, split_include_arg};
+use options::{Options, default_options, parse_args};
+use tools::{Tools, resolve_tools};
+use util::{fail2, fail_reason, file_exists, join_path, read_file_to_slice};
+use vec::Vec;
+
+fn prepare_cache(ctx: &BuildCtx) -> i32 {
+    let arena = ctx.arena;
+    let res1 = unsafe { make_dir_all_raw(ctx.iface_dir, arena) };
+    if res1.is_err() {
+        return fail_reason("cannot create ", ctx.iface_dir, res1.err().unwrap().message());
+    }
+    let res2 = unsafe { make_dir_all_raw(ctx.obj_dir, arena) };
+    if res2.is_err() {
+        return fail_reason("cannot create ", ctx.obj_dir, res2.err().unwrap().message());
+    }
+    let res3 = unsafe { make_dir_all_raw(ctx.tmp_dir, arena) };
+    if res3.is_err() {
+        return fail_reason("cannot create ", ctx.tmp_dir, res3.err().unwrap().message());
+    }
+    return 0;
+}
+
+fn load_manifest(cache_dir: [u8], arena: *mut ArenaHeader) -> Manifest {
+    let mut m = match read_file_to_slice(join_path(cache_dir, "manifest.tsv", arena), arena) {
+        Ok(c) => parse_manifest(c, arena),
+        Err(_) => empty_manifest(arena),
+    };
+    // Rows store object paths relative to the cache directory (see cache_relative in build.zrl).
+    let mut fixed = unsafe { Vec::<Entry>.new_in_raw(arena) };
+    let mut i = 0 as usize;
+    while i < m.entries.len() {
+        let mut e = m.entries.as_slice()[i];
+        if e.object.len > 0 && e.object[0] != '/' as u8 {
+            e.object = join_path(cache_dir, e.object, arena);
+        }
+        fixed.push(e);
+        i = i + 1;
+    }
+    m.entries = fixed;
+    return m;
+}
+
+// `zbuild --gc` with no entry: under the cache lock, drop manifest rows whose source file no
+// longer exists and delete every artifact no remaining row references.
+fn run_gc_only(opts: &Options, cwd: [u8], arena: *mut ArenaHeader) -> i32 {
+    let res_c = unsafe { make_dir_all_raw(opts.cache_dir, arena) };
+    if res_c.is_err() {
+        return fail_reason(
+            "cannot create cache directory: ",
+            opts.cache_dir,
+            res_c.err().unwrap().message()
+        );
+    }
+    let _lock = match acquire_file_lock(join_path(opts.cache_dir, "lock", arena)) {
+        Ok(l) => l,
+        Err(e) => return fail_reason(
+            "cannot acquire build cache lock in ",
+            opts.cache_dir,
+            e.message()
+        ),
+    };
+    let mut manifest = load_manifest(opts.cache_dir, arena);
+    let ctx = BuildCtx {
+        opts: opts.clone(),
+        tools: Tools {
+            compiler: "", zilc: "", qbe: "", asm_tool: "", ld: "", cc: "",
+            recs: manifest.tools.clone(), toolchain_id: manifest.toolchain,
+        },
+        cache_dir: opts.cache_dir,
+        iface_dir: join_path(opts.cache_dir, "iface", arena),
+        obj_dir: join_path(opts.cache_dir, "obj", arena),
+        tmp_dir: join_path(opts.cache_dir, "tmp", arena),
+        cwd: cwd,
+        arena: arena,
+    };
+    let mut removed = 0 as usize;
+    let rc = prune_manifest(&ctx, &mut manifest, &mut removed);
+    if rc != 0 { return rc; }
+    collect_garbage(&ctx, &manifest);
+    print("gc: removed ");
+    let mut out = stdout();
+    let _ = write_u64(&mut out, removed as u64);
+    print(" stale rows\n");
+    return 0;
+}
+
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    // SAFETY: zbuild build manager arena mapping.
+    let arena = unsafe { arena_init(1024 as u64 * 1024 * 128) }; // 128MB
+    let mut opts = default_options(arena);
+    let rc_args = parse_args(argc, argv, &mut opts);
+    if rc_args >= 0 { return rc_args; }
+
+    let cwd = get_cwd(arena);
+    if opts.gc && opts.entry.len == 0 {
+        return run_gc_only(&opts, cwd, arena);
+    }
+
+    // Default stdlib search path: installed (<prefix>/share/zoril/stdlib). It is passed to the
+    // compiler in the *named* form `-I stdlib=<dir>`, which is what designates a standard library:
+    // the compiler trusts a declaration with the arena lifecycle contract only when its file came
+    // from a root it was told is the standard library, never because a directory is called
+    // `stdlib` (doc/spec/modular_compilation.md). A user root that already answers to the name
+    // wins, and nothing is added when the directory is not installed.
+    let exe = unsafe { exe_dir_raw(arena) };
+    if exe.len > 0 {
+        let share_stdlib = join_path(join_path(exe, "../share/zoril", arena), "stdlib", arena);
+        let share_cand = join_path(share_stdlib, "core.zrl", arena);
+        if file_exists(share_cand, arena) {
+            let mut named = unsafe { ByteVec.new_raw(arena) };
+            named.push_slice("stdlib=");
+            named.push_slice(share_stdlib);
+            let named_arg = named.as_slice();
+            let mut found = false;
+            let mut i = 0 as usize;
+            while i < opts.inc_dirs.len() {
+                let entry = opts.inc_dirs.as_slice()[i];
+                if entry == named_arg { found = true; break; }
+                let (is_named, name, dir) = split_include_arg(entry);
+                let root_name = if is_named { name } else { basename(dir) };
+                if root_name == "stdlib" { found = true; break; }
+                i = i + 1;
+            }
+            if !found { opts.inc_dirs.push(named_arg); }
+        }
+    }
+
+    let project_root = if opts.root.len > 0 {
+        make_absolute(opts.root, cwd, arena)
+    } else {
+        find_project_root(opts.entry, cwd, arena)
+    };
+    opts.root = project_root;
+
+    let abs_entry = make_absolute(opts.entry, cwd, arena);
+    if !file_exists(abs_entry, arena) { return fail2("entry file not found: ", opts.entry); }
+    let entry = if is_within_dir(abs_entry, project_root) {
+        rel_within_dir(abs_entry, project_root)
+    } else {
+        normalize_path(opts.entry, arena)
+    };
+
+    let res_c2 = unsafe { make_dir_all_raw(opts.cache_dir, arena) };
+    if res_c2.is_err() {
+        return fail_reason(
+            "cannot create cache directory: ",
+            opts.cache_dir,
+            res_c2.err().unwrap().message()
+        );
+    }
+    let lock_path = join_path(opts.cache_dir, "lock", arena);
+    let _lock = match acquire_file_lock(lock_path) {
+        Ok(l) => l,
+        Err(e) => return fail_reason("cannot acquire build cache lock: ", lock_path, e.message()),
+    };
+
+    let mut manifest = load_manifest(opts.cache_dir, arena);
+    let mut tools = Tools {
+        compiler: "", zilc: "", qbe: "", asm_tool: "", ld: "", cc: "",
+        recs: unsafe { Vec::<ToolRec>.new_in_raw(arena) }, toolchain_id: "",
+    };
+    let rc_tools = resolve_tools(&opts, &manifest, &mut tools, arena);
+    if rc_tools != 0 { return rc_tools; }
+    // Objects built by a different compiler, zilc, qbe, assembler, or flag set are not reusable.
+    if manifest.toolchain != tools.toolchain_id {
+        manifest = empty_manifest(arena);
+    }
+
+    let ctx = BuildCtx {
+        opts: opts.clone(),
+        tools: tools,
+        cache_dir: opts.cache_dir,
+        iface_dir: join_path(opts.cache_dir, "iface", arena),
+        obj_dir: join_path(opts.cache_dir, "obj", arena),
+        tmp_dir: join_path(opts.cache_dir, "tmp", arena),
+        cwd: cwd,
+        arena: arena,
+    };
+    let rc_cache = prepare_cache(&ctx);
+    if rc_cache != 0 { return rc_cache; }
+
+    let mut g = Graph {
+        paths: unsafe { Vec::<[u8]>.new_in_raw(arena) }, files: unsafe {
+            Vec::<[u8]>.new_in_raw(arena)
+        },
+        edge_from: unsafe { Vec::<usize>.new_in_raw(arena) },
+        edge_to: unsafe { Vec::<usize>.new_in_raw(arena) }, order: unsafe {
+            Vec::<usize>.new_in_raw(arena)
+        },
+    };
+    let rc_graph = discover_graph(&ctx, entry, abs_entry, &mut g);
+    if rc_graph != 0 { return rc_graph; }
+
+    let mut results = unsafe { Vec::<ModResult>.new_in_raw(arena) };
+    let mut n = 0 as usize;
+    while n < g.paths.len() {
+        results.push(empty_result(arena));
+        n = n + 1;
+    }
+    let mut compiled = 0 as usize;
+    let mut step = 0 as usize;
+    while step < g.order.len() {
+        let rc = process_module(
+            &ctx,
+            &g,
+            g.order.as_slice()[step],
+            &manifest,
+            &mut results,
+            &mut compiled
+        );
+        if rc != 0 { return rc; }
+        step = step + 1;
+    }
+
+    let rc_manifest = write_manifest(&ctx, &mut manifest, &g, &results);
+    if rc_manifest != 0 { return rc_manifest; }
+    let rc_link = link_program(&ctx, &g, &results);
+    if rc_link != 0 { return rc_link; }
+    collect_garbage(&ctx, &manifest);
+
+    print("compiled: ");
+    let mut out = stdout();
+    let _ = write_u64(&mut out, compiled as u64);
+    print(" modules\n");
+    return 0;
+}

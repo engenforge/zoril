@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_private_assoc_fn_cross_module.zrl:11:12: error: cannot access private method: assoc_secret
+// EXPECT: tests/error_reporting/err_private_assoc_fn_cross_module.zrl:11:12: note: `assoc_secret` is private to tests/error_reporting/include/err_private_method_helper.zrl
+// An associated function written `T.f(..)` reaches the method the receiver form reaches, so a
+// private one is not nameable this way either (surface_syntax.md §11.1.2). `T::f(..)` is the same
+// path with two colons and is rejected by the same check.
+import "include/err_private_method_helper.zrl";
+use err_private_method_helper::Widget;
+
+pub fn main() -> i32 {
+    return Widget.assoc_secret();
+}

@@ -1,0 +1,35 @@
+// Reproduction for bootstrap compiler bug: Invalid IR for struct literal initialization.
+// The compiler generates a reference to v4294967295 (v-1) in the SSA output,
+// leading to a crash or hang in later stages.
+
+struct Small {
+    a: u64,
+    b: u64,
+}
+
+struct Large {
+    f1: *mut u64,
+    f2: u64,
+    f3: u64,
+    f4: *mut Small,
+    f5: *mut *mut u64,
+    f6: u64,
+    f7: *mut u64,
+}
+
+fn repro() {
+    let mut l = Large {
+        f1: 0 as *mut u64,
+        f2: 0 as u64,
+        f3: 0 as u64,
+        f4: 0 as *mut Small,
+        f5: 0 as *mut *mut u64,
+        f6: 0 as u64,
+        f7: 0 as *mut u64,
+    };
+}
+
+fn main() -> i32 {
+    repro();
+    return 0;
+}

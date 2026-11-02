@@ -1,0 +1,242 @@
+// Software floating-point arithmetic primitives
+//
+// The bootstrap subset has no float types, so the compiler itself does not execute float
+// arithmetic at runtime. These helpers implement the handful of operations it needs (float-literal
+// parsing in the lexer) in pure integer arithmetic with round-to-nearest-even, so the results match
+// hardware SSE bit-for-bit on the supported domain.
+//
+// Domain limits (enforced with ICE): finite operands only; add requires non-negative operands (the
+// compiler never subtracts via add). mul and the f64->f32 narrowing handle signs, denormals, and
+// overflow-to-infinity.
+
+import "core.zrl";
+
+const SOFTFP_F64_MANT_MASK: u64 = 0xFFFFFFFFFFFFF;   // low 52 bits
+const SOFTFP_F64_EXP_MASK: u64 = 0x7FF;
+
+// Full 64x64->128 multiply: returns the low 64 bits, stores the high 64
+// through p_hi. Written with 32-bit partial products so no step overflows.
+fn softfp_mul64_wide(a: u64, b: u64, p_hi: *mut u64) -> u64 {
+    let al = a & 0xFFFFFFFF as u64;
+    let ah = a >> 32;
+    let bl = b & 0xFFFFFFFF as u64;
+    let bh = b >> 32;
+    let ll = al * bl;
+    let lh = al * bh;
+    let hl = ah * bl;
+    let hh = ah * bh;
+    let cross = (ll >> 32) + (lh & 0xFFFFFFFF as u64) + (hl & 0xFFFFFFFF as u64);
+    // SAFETY: `p_hi` is this function's out-parameter for the high half; its contract (and its
+    // only caller) hands it a live `u64`.
+    unsafe { *p_hi = hh + (lh >> 32) + (hl >> 32) + (cross >> 32); }
+    return (ll & 0xFFFFFFFF as u64) | ((cross & 0xFFFFFFFF as u64) << 32);
+}
+
+// u64 -> f64 bits, round-to-nearest-even (matches hardware unsigned convert).
+pub fn softfp_u64_to_f64_bits(v: u64) -> u64 {
+    if v == 0 as u64 { return 0 as u64; }
+    let mut hi = 63 as u64;
+    while ((v >> hi) & 1 as u64) == 0 as u64 { hi = hi - 1 as u64; }
+    if hi <= 52 as u64 {
+        let mant = (v << (52 as u64 - hi)) & SOFTFP_F64_MANT_MASK;
+        return ((hi + 1023 as u64) << 52) | mant;
+    }
+    // 53+ significant bits: shift down and round to nearest even.
+    let shift = hi - 52 as u64;
+    let mut mant = v >> shift;
+    let rem = v & ((1 as u64 << shift) - 1 as u64);
+    let half = 1 as u64 << (shift - 1 as u64);
+    if rem > half || (rem == half && (mant & 1 as u64) == 1 as u64) {
+        mant = mant + 1 as u64;
+        if (mant >> 53) != 0 as u64 {
+            mant = mant >> 1;
+            hi = hi + 1 as u64;
+        }
+    }
+    return ((hi + 1023 as u64) << 52) | (mant & SOFTFP_F64_MANT_MASK);
+}
+
+// f64 + f64 on bit patterns. Both operands must be non-negative and finite.
+pub fn softfp_f64_add_bits(a: u64, b: u64) -> u64 {
+    if (a >> 63) != 0 as u64 || (b >> 63) != 0 as u64 {
+        zoril_user_panic("softfp_f64_add_bits: negative operand");
+    }
+    let ea_field = (a >> 52) & SOFTFP_F64_EXP_MASK;
+    let eb_field = (b >> 52) & SOFTFP_F64_EXP_MASK;
+    if ea_field == SOFTFP_F64_EXP_MASK || eb_field == SOFTFP_F64_EXP_MASK {
+        zoril_user_panic("softfp_f64_add_bits: non-finite operand");
+    }
+    if a == 0 as u64 { return b; }
+    if b == 0 as u64 { return a; }
+
+    // Unpack with implicit bit; denormals have effective exponent 1.
+    let mut ea = ea_field;
+    let mut ma = a & SOFTFP_F64_MANT_MASK;
+    if ea == 0 as u64 { ea = 1 as u64; } else { ma = ma | (1 as u64 << 52); }
+    let mut eb = eb_field;
+    let mut mb = b & SOFTFP_F64_MANT_MASK;
+    if eb == 0 as u64 { eb = 1 as u64; } else { mb = mb | (1 as u64 << 52); }
+
+    if eb > ea {
+        let te = ea;
+        ea = eb;
+        eb = te;
+        let tm = ma;
+        ma = mb;
+        mb = tm;
+    }
+
+    // Three guard/round/sticky bits.
+    ma = ma << 3;
+    mb = mb << 3;
+    let d = ea - eb;
+    if d != 0 as u64 {
+        if d >= 57 as u64 {
+            mb = 1 as u64;   // b != 0, so pure sticky
+        } else {
+            let mut sticky = 0 as u64;
+            if (mb & ((1 as u64 << d) - 1 as u64)) != 0 as u64 { sticky = 1 as u64; }
+            mb = (mb >> d) | sticky;
+        }
+    }
+
+    let mut m = ma + mb;
+    let mut e = ea;
+    if (m >> 56) != 0 as u64 {
+        let sticky = m & 1 as u64;
+        m = (m >> 1) | sticky;
+        e = e + 1 as u64;
+    }
+
+    // Round to nearest even on the 3 GRS bits.
+    let grs = m & 7 as u64;
+    m = m >> 3;
+    if grs > 4 as u64 || (grs == 4 as u64 && (m & 1 as u64) == 1 as u64) {
+        m = m + 1 as u64;
+        if (m >> 53) != 0 as u64 {
+            m = m >> 1;
+            e = e + 1 as u64;
+        }
+    }
+    if e >= SOFTFP_F64_EXP_MASK { zoril_user_panic("softfp_f64_add_bits: overflow"); }
+    if (m >> 52) == 0 as u64 {
+        return m;   // denormal result (only reachable when e == 1)
+    }
+    return (e << 52) | (m & SOFTFP_F64_MANT_MASK);
+}
+
+// f64 * f64 on bit patterns. Finite operands; signs, denormals, and
+// underflow-to-denormal handled; overflow is an ICE (the compiler never
+// multiplies its way to infinity).
+pub fn softfp_f64_mul_bits(a: u64, b: u64) -> u64 {
+    let sign = ((a ^ b) >> 63) << 63;
+    let a_mag = a & 0x7FFFFFFFFFFFFFFF as u64;
+    let b_mag = b & 0x7FFFFFFFFFFFFFFF as u64;
+    let ea_field = (a_mag >> 52) & SOFTFP_F64_EXP_MASK;
+    let eb_field = (b_mag >> 52) & SOFTFP_F64_EXP_MASK;
+    if ea_field == SOFTFP_F64_EXP_MASK || eb_field == SOFTFP_F64_EXP_MASK {
+        zoril_user_panic("softfp_f64_mul_bits: non-finite operand");
+    }
+    if a_mag == 0 as u64 || b_mag == 0 as u64 { return sign; }
+
+    // Unpack, normalizing denormals so both mantissas sit in [2^52, 2^53).
+    let mut ea = ea_field as i64;
+    let mut ma = a_mag & SOFTFP_F64_MANT_MASK;
+    if ea == 0 as i64 { ea = 1 as i64; } else { ma = ma | (1 as u64 << 52); }
+    while (ma >> 52) == 0 as u64 { ma = ma << 1; ea = ea - 1 as i64; }
+    let mut eb = eb_field as i64;
+    let mut mb = b_mag & SOFTFP_F64_MANT_MASK;
+    if eb == 0 as i64 { eb = 1 as i64; } else { mb = mb | (1 as u64 << 52); }
+    while (mb >> 52) == 0 as u64 { mb = mb << 1; eb = eb - 1 as i64; }
+
+    let mut hi = 0 as u64;
+    let lo = softfp_mul64_wide(ma, mb, &mut hi);
+
+    // Product is in [2^104, 2^106). Reduce to 53 significant bits + 3 GRS
+    // bits (56 total), ORing everything below into sticky.
+    let mut er = ea + eb - 1023 as i64;
+    let mut s = 49 as u64;                       // product < 2^105
+    if (hi >> 41) != 0 as u64 {                  // product >= 2^105
+        s = 50 as u64;
+        er = er + 1 as i64;
+    }
+    let mut m = (hi << (64 as u64 - s)) | (lo >> s);
+    if (lo & ((1 as u64 << s) - 1 as u64)) != 0 as u64 { m = m | 1 as u64; }
+
+    if er <= 0 as i64 {
+        // Underflow: shift into denormal position before rounding.
+        let k = (1 as i64 - er) as u64;
+        if k >= 60 as u64 {
+            m = 1 as u64;    // pure sticky
+        } else {
+            let mut sticky = 0 as u64;
+            if (m & ((1 as u64 << k) - 1 as u64)) != 0 as u64 { sticky = 1 as u64; }
+            m = (m >> k) | sticky;
+        }
+        er = 0 as i64;
+    }
+
+    let grs = m & 7 as u64;
+    m = m >> 3;
+    if grs > 4 as u64 || (grs == 4 as u64 && (m & 1 as u64) == 1 as u64) {
+        m = m + 1 as u64;
+        if (m >> 53) != 0 as u64 {
+            m = m >> 1;
+            er = er + 1 as i64;
+        }
+    }
+    if er == 0 as i64 {
+        // Denormal, or rounded up to the smallest normal (m == 2^52, whose
+        // bit pattern is exactly exponent field 1 with zero mantissa).
+        return sign | m;
+    }
+    if er >= SOFTFP_F64_EXP_MASK as i64 { zoril_user_panic("softfp_f64_mul_bits: overflow"); }
+    return sign | ((er as u64) << 52) | (m & SOFTFP_F64_MANT_MASK);
+}
+
+// f64 bits -> f32 bits, round-to-nearest-even (matches cvtsd2ss). Finite
+// input; overflow produces the f32 infinity like the hardware does.
+pub fn softfp_f64_to_f32_bits(bits: u64) -> u32 {
+    let sign32 = ((bits >> 63) << 31) as u32;
+    let e_field = (bits >> 52) & SOFTFP_F64_EXP_MASK;
+    if e_field == SOFTFP_F64_EXP_MASK {
+        zoril_user_panic("softfp_f64_to_f32_bits: non-finite operand");
+    }
+    let mant = bits & SOFTFP_F64_MANT_MASK;
+    if e_field == 0 as u64 {
+        // Zeros stay zero; f64 denormals (< 2^-1022) are far below half of
+        // the smallest f32 denormal (2^-150), so they also round to zero.
+        return sign32;
+    }
+
+    let m = mant | (1 as u64 << 52);
+    let e32 = (e_field as i64) - 1023 as i64 + 127 as i64;
+    if e32 >= 255 as i64 { return sign32 | 0x7F800000 as u32; }
+    if e32 <= 0 as i64 {
+        // f32 denormal (or zero): shift 29+(1-e32) with round-to-nearest-even.
+        let k = 29 as u64 + (1 as i64 - e32) as u64;
+        if k >= 54 as u64 {
+            return sign32;
+        }                                      // below half of the min denormal
+        let mut m24 = m >> k;
+        let rem = m & ((1 as u64 << k) - 1 as u64);
+        let half = 1 as u64 << (k - 1 as u64);
+        if rem > half || (rem == half && (m24 & 1 as u64) == 1 as u64) {
+            m24 = m24 + 1 as u64;   // may become the smallest normal; the bit
+        }                           // pattern is already correct in that case
+        return sign32 | (m24 as u32);
+    }
+    let mut e32u = e32 as u64;
+    let mut m24 = m >> 29;
+    let rem = m & ((1 as u64 << 29) - 1 as u64);
+    let half = 1 as u64 << 28;
+    if rem > half || (rem == half && (m24 & 1 as u64) == 1 as u64) {
+        m24 = m24 + 1 as u64;
+        if (m24 >> 24) != 0 as u64 {
+            m24 = m24 >> 1;
+            e32u = e32u + 1 as u64;
+            if e32u >= 255 as u64 { return sign32 | 0x7F800000 as u32; }
+        }
+    }
+    return sign32 | ((e32u as u32) << 23) | ((m24 as u32) & 0x7FFFFF as u32);
+}

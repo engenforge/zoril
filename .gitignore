@@ -1,0 +1,33 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+tests/**/*.out
+*.s
+*.ssa
+
+# Tracked source .s and .ssa files
+!rt/runtime.s
+!bootstrap/stage0-c/lib/rt/*.s
+!bootstrap/stage1/rt/runtime.s
+!tests/integration/external_stub.s
+!tools/zilc/test/*.ssa
+!scripts/qbe_probe/*.ssa
+
+# Scratch/temporary output files
+out.zil
+out.ssa
+
+# Profiling artifacts
+perf.data
+perf.data.old
+
+# Editor/OS files
+.DS_Store
+*~
+*.swp
+vgcore.*
+
+# Cache and local artifacts
+.zoril-cache/

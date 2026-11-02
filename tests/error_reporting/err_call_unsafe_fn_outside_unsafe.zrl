@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: error: call to unsafe function requires unsafe block
+unsafe fn dangerous() -> i32 {
+    return 42;
+}
+
+fn main() -> i32 {
+    dangerous();
+    return 0;
+}

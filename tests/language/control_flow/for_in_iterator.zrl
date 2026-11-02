@@ -1,0 +1,56 @@
+// expected exit 0
+// `for PAT in EXPR` runs over a slice by index, binding each element by reference, and over
+// anything else by calling `next()` until it returns `None`. The pattern may destructure;
+// `break` and `continue` work as in other loops; loops nest.
+import "vec.zrl";
+import "iter.zrl";
+use iter::range;
+use vec::Vec;
+struct P { x: i32, y: i32 }
+fn sum(s: [i32]) -> i32 {
+    let mut t = 0;
+    for x in s { t = t + *x; }
+    return t;
+}
+fn diff(ps: [P]) -> i32 {
+    let mut d = 0;
+    for P { x, y } in ps { d = d + *y - *x; }
+    return d;
+}
+fn main() -> i32 {
+    let a = [1, 2, 3, 4];
+    if sum(&a) != 10 { return 1; }
+
+    let mut v = Vec::<i32>.new();
+    v.push(5); v.push(6); v.push(7);
+    let mut t = 0;
+    for x in v.iter() {
+        if *x == 6 { continue; }
+        t = t + *x;
+    }
+    if t != 12 { return 2; }
+
+    let mut n = 0 as usize;
+    for i in range(0, 10) {
+        if i == 4 { break; }
+        n = n + i;
+    }
+    if n != 6 { return 3; }
+
+    let ps = [P { x: 1, y: 2 }, P { x: 3, y: 4 }];
+    let mut d = 0;
+    for P { x, y } in ps { d = d + *y - *x; }
+    if d != 2 || diff(&ps) != 2 { return 4; }
+
+    let mut pairs = 0;
+    for x in v.iter() {
+        for y in v.iter() {
+            if *x < *y { pairs = pairs + 1; }
+        }
+    }
+    if pairs != 3 { return 5; }
+
+    for i in 0..3 { t = t + i; }
+    if t != 15 { return 6; }
+    return 0;
+}

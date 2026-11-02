@@ -1,0 +1,17 @@
+// name: Function returning local alias of parameter reference misses ret_storage
+// expected: compile_reject
+fn id(r: &u64) -> &u64 {
+    let p = r;
+    return p;
+}
+
+fn main() -> i32 {
+    let zero: u64 = 0;
+    let mut out: &u64 = &zero;
+    for i in 0..2 {
+        let x: u64 = 7 + (i as u64) * 92;
+        if i == 0 { out = id(&x); }
+    }
+    // *out reads 99 instead of 7
+    return *out as i32;
+}

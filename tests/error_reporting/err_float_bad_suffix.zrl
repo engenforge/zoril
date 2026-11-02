@@ -1,0 +1,3 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_float_bad_suffix.zrl:3:28: error: a float literal's suffix is `f32` or `f64`
+fn main() -> i32 { let x = 1.5u8; return 0; }

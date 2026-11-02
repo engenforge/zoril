@@ -1,0 +1,12 @@
+enum Baz { X(u32, u32, u32) }
+fn test(b: Baz) -> u32 {
+    match b {
+        Baz.X(a, _, _) => { return a; }
+    }
+}
+fn main() -> i32 {
+    // Was `return 0;` -- the test could not fail. Now asserts the bound field is
+    // the FIRST one and the two wildcards did not shift it.
+    if test(Baz.X(5 as u32, 6 as u32, 7 as u32)) != 5 as u32 { return 1 as i32; }
+    return 0 as i32;
+}

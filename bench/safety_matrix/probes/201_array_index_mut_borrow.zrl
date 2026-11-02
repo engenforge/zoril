@@ -1,0 +1,9 @@
+// name: Mutable borrow of immutable array element bypasses immutability check
+// expected: compile_reject
+fn main() -> i32 {
+    let arr: [u64; 2] = [7, 8];
+    let p: &mut u64 = &mut arr[0];
+    *p = 55;
+    // arr[0] reads 55 instead of 7
+    return arr[0] as i32;
+}

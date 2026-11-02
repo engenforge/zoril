@@ -1,0 +1,22 @@
+// expected compile fail
+// EXPECT: error: cannot move borrowed value 'a'
+// A `[u8]` that `read_file` hands out borrows the arena, so destroying the arena while it is
+// live is a compile error (Stage 4 for the arena-taking functions).
+import "file.zrl";
+import "mem.zrl";
+use file::{read_file, write_file};
+use mem::Arena;
+
+fn consume(a: Arena) {}
+
+fn main() -> i32 {
+    let _ = write_file("/tmp/zoril_arena_fn_destroy.txt", "hello");
+    let a = Arena.new(65536).unwrap();
+    let content = match read_file("/tmp/zoril_arena_fn_destroy.txt", &a) {
+        Ok(bytes) => bytes,
+        Err(_) => { return 2; },
+    };
+    consume(a); // @error "cannot move borrowed value 'a'"
+    if content.len == 0 { return 3; }
+    return 0;
+}

@@ -1,0 +1,16 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_returned_arg.zrl:14:5: error: cannot let 'x' go out of scope while it is still borrowed
+
+// `id` hands back the reference it was given, so `r` points into `x` - whose storage ends at the
+// block's `}`. The ZIR-level storage summary reads that from `id`'s own body, so the local's type
+// freeing nothing (an `i32` has no `Drop`) no longer hides it.
+fn id(r: &i32) -> &i32 { return r; }
+
+fn main() -> i32 {
+    let mut r: &i32 = &0;
+    {
+        let x: i32 = 5;
+        r = id(&x);
+    }
+    return *r;
+}

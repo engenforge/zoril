@@ -1,0 +1,19 @@
+// name: A reference into a parameter arena's Vec buffer returned from the frame
+// expected: accept
+// The buffer belongs to the caller's arena, which outlives the frame; the same shape with a local
+// arena is probe 279.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn view(a: &Arena) -> &i32 {
+    let mut v = Vec::<i32>.new_in(a);
+    v.push(77);
+    return v.get(0).unwrap();
+}
+
+fn main() -> i32 {
+    let a = Arena.new(65536).unwrap();
+    return *view(&a) - 77;
+}

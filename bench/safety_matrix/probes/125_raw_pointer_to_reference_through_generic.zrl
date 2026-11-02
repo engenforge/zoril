@@ -1,0 +1,13 @@
+// name: Raw pointer converted to a reference through a type parameter
+// expected: compile_reject
+// closed by Phase D's distinct `*T` / `&T` IL types: a raw pointer passed as a type parameter comes back raw, so taking it as a reference is a type error
+// `id(p)` instantiates `T` with `*Point`; its result is then taken as a `&Point`. The
+// conversion is not seen, and safe code holds a null reference.
+struct Point { x: i32, y: i32 }
+fn id<T>(t: T) -> T { return t; }
+fn main() -> i32 {
+    let p = 0 as *Point;
+    let r: &Point = id(p);
+    if r as *Point as usize == 0 { return 0; }
+    return 1;
+}

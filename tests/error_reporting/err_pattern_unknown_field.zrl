@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_pattern_unknown_field.zrl:5:56: error: `P` has no field `z`
+// Only the real error: the binding `z` is still declared, so the arm body adds nothing.
+struct P { x: i32, y: i32 }
+fn main() -> i32 { let p = P { x: 1, y: 2 }; match p { P { z, .. } => { return z; } } }

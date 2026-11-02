@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_export_attribute_in_source.zrl:3:9: error: #[export] is written only by the compiler, in an interface
+#[export]
+extern fn strlen(p: *u8) -> usize;
+fn main() -> i32 { return strlen(0 as *u8) as i32; }

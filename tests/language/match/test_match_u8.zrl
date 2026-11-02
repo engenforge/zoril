@@ -1,0 +1,18 @@
+import "core.zrl";
+
+fn test_match_u8(c: u8) -> i32 {
+    return match c {
+        '(' => 1,
+        ')' => 2,
+        '{' => 3,
+        '}' => 4,
+        _ => 0,
+    };
+}
+
+fn main() -> i32 {
+    if test_match_u8('}' as u8) != 4 {
+        return 100;
+    }
+    return 0;
+}

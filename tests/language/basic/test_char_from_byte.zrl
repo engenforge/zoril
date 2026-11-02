@@ -1,0 +1,12 @@
+// expected exit 0
+// A byte is a Unicode scalar value, so it stands for a char both implicitly and with `as`.
+// The two spellings must agree; before this, `let c: char = b` compiled and `b as char` did not.
+fn main() -> i32 {
+    let b: u8 = 65;
+    let c1: char = b;
+    let c2 = b as char;
+    if c1 != c2 { return 1; }
+    if c1 as u32 != 65 { return 2; }
+    if c2 as u32 != 65 { return 3; }
+    return 0;
+}

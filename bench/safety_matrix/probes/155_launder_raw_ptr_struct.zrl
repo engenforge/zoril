@@ -1,0 +1,13 @@
+// name: Raw pointer laundered through a struct field
+// expected: compile_reject
+// closed: the dereference, field access and index checks decide from the IL type, which
+// keeps `RawPtr`/`RawPtrMut` through this route - so the program is a located type error.
+struct W<T> { v: T }
+fn main() -> i32 {
+    let mut x: i32 = 42;
+    let p = &mut x as *mut i32;
+    let w = W { v: p };
+    let v = *w.v;
+    if v == 42 { return 0; }
+    return 1;
+}

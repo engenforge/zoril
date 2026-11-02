@@ -1,0 +1,24 @@
+// A `self: &T` / `self: &mut T` method called on a non-Copy (Drop) value
+// borrows the receiver; it must not move it. Using the value afterwards, and
+// dropping it exactly once at scope end, are both legal.
+// expected exit 0
+
+struct Res { x: i64 }
+
+impl Res {
+    pub fn peek(self: &Res) -> i64 { return self.x; }
+    pub fn bump(self: &mut Res) { self.x = self.x + 1; }
+}
+
+impl Drop for Res {
+    pub fn drop(self: Res) { }
+}
+
+fn main() -> i32 {
+    let mut r = Res { x: 1 };
+    if r.peek() != 1 { return 1; }
+    r.bump();
+    if r.peek() != 2 { return 2; }
+    if r.x != 2 { return 3; }
+    return 0;
+}

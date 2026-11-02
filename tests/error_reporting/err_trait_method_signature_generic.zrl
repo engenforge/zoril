@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_trait_method_signature_generic.zrl:7:5: error: method `get` does not match trait `Source`: it returns `i64`, the trait `i32`
+// A generic impl is checked for each instance: here T is i32, and the trait's `get` returns T.
+trait Source<T> { fn get(self: &Self) -> T; }
+struct W<T> { v: T }
+impl<T: Copy> Source<T> for W<T> {
+    fn get(self: &W<T>) -> i64 { return 7 as i64; }
+}
+fn read<S: Source<i32>>(s: &S) -> i32 { return 0; }
+fn main() -> i32 { let w = W { v: 1 }; return (w.get() as i32) + read(&w); }

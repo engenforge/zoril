@@ -1,0 +1,9 @@
+// A real shared library: zlib's crc32, linked with -lz.
+extern fn crc32(crc: u64, buf: *u8, len: u32) -> u64;
+extern fn printf(fmt: *u8, ...) -> i32;
+
+fn main() -> i32 {
+    let c = unsafe { crc32(0, "hello".ptr, 5) };
+    unsafe { printf("crc=%lx\n".ptr, c); }
+    return 0;
+}

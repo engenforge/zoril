@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_trait_not_imported.zrl:7:13: error: unknown trait `Iterator`
+// EXPECT: tests/error_reporting/err_trait_not_imported.zrl:7:13: note: `Iterator` is in `iter`: write `iter::Iterator`, or add `use iter::Iterator;`
+// A trait outside the prelude is named through its module, like any other item.
+import "iter.zrl";
+use iter::range;
+fn count<I: Iterator>(it: I) -> i32 { return 0; }
+fn main() -> i32 { return count(range(0 as usize, 3 as usize)); }

@@ -1,0 +1,13 @@
+// name: A `&mut` pointed at an immutable place through `&mut &mut T` standing for `&mut &T`
+// expected: compile_reject
+// Behind a `&mut` the type is exact. `&mut &mut i32` accepted as `&mut &i32` let `*p = &imm` aim the
+// mutable reference `rm` at an immutable binding, and `*rm = 9` then wrote it.
+fn main() -> i32 {
+    let imm = 1;
+    let mut x = 2;
+    let mut rm: &mut i32 = &mut x;
+    let p: &mut &i32 = &mut rm;
+    *p = &imm;
+    *rm = 9;
+    return imm;
+}

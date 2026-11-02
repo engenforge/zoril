@@ -1,0 +1,32 @@
+export function $z3src6driver6module6Driver10add_globalE(l %vself_2, w %vname_5, w %vty_8, w %vvalue_11, w %vis_pub_14, w %vis_mut_17, w %vsource_file_20) {
+@b33739
+    %vself_1 =l alloc8 8
+    %vname_4 =l alloc4 4
+    %vty_7 =l alloc4 4
+    %vvalue_10 =l alloc4 4
+    %vis_pub_13 =l alloc1 1
+    %vis_mut_16 =l alloc1 1
+    %vsource_file_19 =l alloc4 4
+    %v60 =l alloc8 16
+    storel %vself_2, %vself_1
+    storew %vname_5, %vname_4
+    storew %vty_8, %vty_7
+    storew %vvalue_11, %vvalue_10
+    storeb %vis_pub_14, %vis_pub_13
+    storeb %vis_mut_17, %vis_mut_16
+    storew %vsource_file_20, %vsource_file_19
+    %vself_57 =l loadl %vself_1
+    %v58 =l add %vself_57, 24
+    %v59 =l loadl %v58
+    %vsource_file_61 =w loaduw %vsource_file_19
+    call $z6stdlib6intern11InternTable6lookupE(l %v60, l %v59, w %vsource_file_61)
+    %vself_76 =l loadl %vself_1
+    %vname_77 =w loaduw %vname_4
+    %vty_78 =w loaduw %vty_7
+    %vvalue_79 =w loaduw %vvalue_10
+    %vis_pub_80 =w loadub %vis_pub_13
+    %vis_mut_81 =w loadub %vis_mut_16
+    %vsource_file_82 =w loaduw %vsource_file_19
+    call $z3src6driver6module6Driver20add_global_in_moduleE(l %vself_76, w %vname_77, w %vty_78, w %vvalue_79, w %vis_pub_80, w %vis_mut_81, w %vsource_file_82)
+    ret
+}

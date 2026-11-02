@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_impl_trait_arg_bound.zrl:9:1: error: `Plain` does not implement `Named`
+// A trait's type argument in an impl must meet the trait parameter's bound. The error had no
+// location.
+trait Named { fn name(self: &Self) -> i32; }
+trait Holds<T: Named> { fn get(self: &Self) -> i32; }
+struct Plain { v: i32 }
+struct S { v: i32 }
+impl Holds<Plain> for S { fn get(self: &S) -> i32 { return self.v; } }
+fn main() -> i32 { return 0; }

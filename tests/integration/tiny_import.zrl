@@ -1,0 +1,1 @@
+import "core.zrl"; fn main() { let s = "hi"; if is_str_eq(s, "hi") { } }

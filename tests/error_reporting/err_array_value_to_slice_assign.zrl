@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: type mismatch
+// Assigning an array value to a slice place was accepted but not converted (see
+// err_array_value_to_slice_field.zrl). Build the slice explicitly: @slice(&mut a[0], n).
+struct P { b: [u64] }
+fn main() -> i32 {
+    let data = [10 as u64, 20 as u64];
+    let other = [1 as u64];
+    let mut p = P { b: other };
+    p.b = data;
+    return p.b[0] as i32;
+}

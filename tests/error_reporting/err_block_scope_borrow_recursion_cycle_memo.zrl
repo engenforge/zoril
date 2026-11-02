@@ -1,0 +1,30 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_recursion_cycle_memo.zrl:28:5: error: cannot let 'x' go out of scope while it is still borrowed
+
+// The memoized walk, not the callee's IL function: `f` is declared after both wrappers, so `h1`'s
+// walk reaches it as a body to walk on demand and records the lower bound its own cycle produced.
+// `h2` then reads that entry, so the entry has to say "unknown" (state 2) rather than only carrying
+// the mask - otherwise the second wrapper looks decided and `h2(&x, &w)`, which returns `&x`, is a
+// derived borrow again.
+fn h1(p: &i32, q: &i32) -> &i32 {
+    return f(p, q, 1);
+}
+
+fn h2(p: &i32, q: &i32) -> &i32 {
+    return f(p, q, 1);
+}
+
+fn f(p: &i32, q: &i32, n: i32) -> &i32 {
+    if n <= 0 { return q; }
+    return f(q, p, n - 1);
+}
+
+fn main() -> i32 {
+    let mut y: &i32 = &0;
+    let w: i32 = 3;
+    {
+        let x: i32 = 7;
+        y = h2(&x, &w);
+    }
+    return *y;
+}

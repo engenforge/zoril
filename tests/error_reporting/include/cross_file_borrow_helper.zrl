@@ -1,0 +1,24 @@
+// Helper for err_cross_file_borrow_conflict.zrl. Deliberately in a *different* file from the
+// test that imports it: the bug this pins (borrow-checker errors always naming the entry file's
+// path, with a line number computed against that file's own line table) only reproduces when the
+// conflicting code lives somewhere other than the entry file.
+pub struct Inner {
+    pub a: i64,
+    pub b: bool,
+}
+
+pub struct Outer {
+    pub inner: Inner,
+}
+
+impl Outer {
+    // A genuine conflict: `r` borrows `self.inner.a`; assigning `self.inner.a` writes the same
+    // place while that borrow is live. (A write to the sibling field `self.inner.b` is *not* a
+    // conflict: `places_overlap` compares the whole projection path, so distinct fields of one
+    // aggregate are disjoint.)
+    pub fn conflict(self: &mut Outer) -> i64 {
+        let r: &i64 = &self.inner.a;
+        self.inner.a = self.inner.a + 1;
+        return *r;
+    }
+}

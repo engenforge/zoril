@@ -1,0 +1,34 @@
+// expected exit code: 142
+// 31: Generic HashMap with auto-resizing, from the standard library.
+// Demonstrates: stdlib import, HashMap<K,V> new/insert/get, Hash and Drop traits.
+
+import "hashmap.zrl";
+import "mem.zrl";
+use hashmap::HashMap;
+use mem::Arena;
+
+fn main() -> i32 {
+    let arena = Arena.new(4096 as u64).unwrap();
+    let mut map = HashMap::<i32, i32>.new(&arena);
+
+    map.insert(10, 42);
+    map.insert(20, 100);
+    map.insert(30, 55);
+
+    let v1 = match map.get(&10) {
+        Some(v) => *v,
+        None => 0,
+    };
+
+    let v2 = match map.get(&20) {
+        Some(v) => *v,
+        None => 0,
+    };
+
+    let v3 = match map.get(&99) {
+        Some(v) => *v,
+        None => 0,
+    };
+
+    return v1 + v2 + v3; // 42 + 100 + 0 = 142
+}

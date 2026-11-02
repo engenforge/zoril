@@ -1,0 +1,8 @@
+// name: A reference to a local carrier that holds a static's address is accepted when it is passed directly
+// expected: accept
+// The accepted twin: the carrier holds a static, and `&c` names its slot, so what it holds is known.
+struct Carrier { v: &i32 }
+fn ex_ref(co: &Carrier) -> &i32 { return co.v; }
+static BASE: i32 = 7;
+fn pick() -> &i32 { let c = Carrier { v: &BASE }; return ex_ref(&c); }
+fn main() -> i32 { return *pick() - 7; }

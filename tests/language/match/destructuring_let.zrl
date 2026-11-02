@@ -1,0 +1,41 @@
+// expected exit 0
+// `let PAT = EXPR;` takes any pattern that matches every value: tuples, structs, nesting,
+// `_`, and `mut` per binding. The bindings land in the enclosing scope.
+import "vec.zrl";
+use vec::Vec;
+struct P { x: i32, y: i32 }
+struct Line { a: P, b: P }
+fn pair() -> (i32, i32) { return (3, 4); }
+fn main() -> i32 {
+    let (a, b) = pair();
+    if a + b != 7 { return 1; }
+
+    let P { x, y } = P { x: 5, y: 6 };
+    if x * y != 30 { return 2; }
+
+    let Line { a: P { x: ax, .. }, b: P { y: by, .. } } = Line {
+        a: P { x: 1, y: 2 },
+        b: P { x: 3, y: 4 }
+    };
+    if ax + by != 5 { return 3; }
+
+    let (mut c, _, (d, e)) = (10, 99, (1, 2));
+    c = c + d + e;
+    if c != 13 { return 4; }
+
+    let P { x: mut px, y: py } = P { x: 1, y: 2 };
+    px = px + py;
+    if px != 3 { return 5; }
+    let P { mut x, .. } = P { x: 4, y: 0 };
+    x = x + 1;
+    if x != 5 { return 7; }
+
+    // An owning value moves as a whole: a `let` pattern that destructures every field of a
+    // non-`Copy` aggregate is not tracked field by field yet (KNOWN_ISSUES §26), so the value is
+    // moved first and the pattern reads `Copy` fields.
+    let mut v = Vec::<i32>.new();
+    v.push(8);
+    let w = v;
+    if w.len() != 1 { return 6; }
+    return 0;
+}

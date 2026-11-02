@@ -1,0 +1,7 @@
+// name: Callee stores a reference to a local into caller memory
+// expected: compile_reject
+// put writes its p into h; fill passes &x for a local x, so h.r dangles once fill returns.
+struct H { r: &i32 }
+fn put(h: &mut H, p: &i32) { h.r = p; }
+fn fill(h: &mut H) { let x = 5; put(h, &x); }
+fn main() -> i32 { let y = 1; let mut h = H { r: &y }; fill(&mut h); return *h.r; }

@@ -1,0 +1,45 @@
+// Corpus 35: method calls with various receiver expression shapes.
+// Tests that the compiler correctly handles different expression kinds
+// as method call receivers — not just simple variable names.
+
+struct Counter { val: i32 }
+
+impl Counter {
+    fn inc(self: &mut Counter) { self.val = self.val + 1; }
+    fn add(self: &mut Counter, n: i32) { self.val = self.val + n; }
+    fn get(self: &Counter) -> i32 { return self.val; }
+}
+
+// Returns a raw mutable pointer — EXPR_CALL receiver returning *mut T
+fn borrow_mut(p: *mut Counter) -> *mut Counter { return p; }
+
+// Returns an immutable view — EXPR_CALL receiver returning *Counter
+fn borrow(p: *Counter) -> *Counter { return p; }
+
+fn make(n: i32) -> Counter { return Counter { val: n }; }
+
+fn main() -> i32 {
+    // Case 1: VAR receiver — baseline
+    let mut c = Counter { val: 0 };
+    c.inc();
+    if c.val != 1 { return 1; }
+
+    // Case 2: VAR receiver with multi-arg mutating method
+    c.add(9);
+    if c.val != 10 { return 2; }
+
+    // Case 3: CALL receiver returning *mut T — mutation must propagate
+    let mut d_box = box Counter { val: 0 };
+    let dp = d_box as *mut Counter;
+    unsafe {
+        borrow_mut(dp).inc();
+        if borrow(dp).get() != 1 { return 3; }
+        borrow_mut(dp).add(9);
+        if borrow(dp).get() != 10 { return 4; }
+    }
+
+    // Case 4: CALL receiver returning a value — read-only method on temporary
+    if make(42).get() != 42 { return 5; }
+
+    return 0;
+}

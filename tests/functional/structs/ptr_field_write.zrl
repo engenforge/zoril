@@ -1,0 +1,9 @@
+// expected exit code: 0
+import "io.zrl";
+struct S { x: i32 }
+fn main() -> i32 {
+    let mut s = S { x: 10 };
+    let p = &mut s;
+    (*p).x = 42;
+    if s.x == 42 { return 0; } else { return 1; }
+}

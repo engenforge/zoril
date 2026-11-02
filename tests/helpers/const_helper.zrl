@@ -1,0 +1,5 @@
+pub const X: i32 = 100;
+pub struct S {}
+impl S {
+    pub const Y: i32 = 200;
+}

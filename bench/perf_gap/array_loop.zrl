@@ -1,0 +1,12 @@
+// An indexed loop over a fixed array.
+const SCALE: i32 = 500000; // gate: 5000
+fn main() -> i32 {
+    let mut a: [i32; 4096] = [0 as i32; 4096];
+    let mut iter: i32 = 0;
+    while iter < SCALE {
+        let mut i: usize = 0;
+        while i < 4096 as usize { a[i] = a[i] + 1; i = i + 1 as usize; }
+        iter = iter + 1;
+    }
+    return (a[0] + a[4095]) % 251;
+}

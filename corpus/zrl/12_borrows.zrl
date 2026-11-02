@@ -1,0 +1,58 @@
+// 12: Immutable and mutable borrows with the verifier enforcing safety.
+// expected exit code: 33
+// Demonstrates: &T, &mut T, dereference, borrow of fields, slice borrows.
+
+struct Counter {
+    value: i32,
+    limit: i32,
+}
+
+fn read_counter(c: &Counter) -> i32 {
+    // Immutable borrow: can read but not modify
+    return c.value;
+}
+
+fn increment(c: &mut Counter) {
+    // Mutable borrow: can modify the pointee
+    if c.value < c.limit {
+        c.value += 1;
+    }
+}
+
+fn reset(c: &mut Counter) {
+    c.value = 0;
+}
+
+fn swap_values(a: &mut i32, b: &mut i32) {
+    let tmp = *a;
+    *a = *b;
+    *b = tmp;
+}
+
+fn sum_slice(data: &[i32]) -> i32 {
+    let mut total = 0;
+    for i in 0..data.len {
+        total += data[i];
+    }
+    return total;
+}
+
+fn main() -> i32 {
+    let mut c = Counter { value: 0, limit: 10 };
+
+    // Immutable borrow
+    let initial = read_counter(&c);
+
+    // Mutable borrow
+    increment(&mut c);
+    increment(&mut c);
+    increment(&mut c);
+    let after = read_counter(&c);
+
+    // Mutable borrows of individual variables
+    let mut x = 10;
+    let mut y = 20;
+    swap_values(&mut x, &mut y);
+
+    return after + x + y;
+}

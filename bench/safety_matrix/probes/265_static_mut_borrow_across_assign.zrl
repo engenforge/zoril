@@ -1,0 +1,21 @@
+// name: A payload enum static mut borrowed across an assignment
+// expected: compile_reject
+// The same type confusion without a call: `let r = &mut G;` then `G = E.B(4096);` left `r`
+// naming the old variant as if it were the new one. No `unsafe` appeared in the program.
+enum E {
+    N,
+    A(Box<i32>),
+    B(u64),
+}
+
+static mut G: E = E.N;
+
+fn main() -> i32 {
+    G = E.A(box 41);
+    let r = &mut G;
+    G = E.B(4096);
+    match r {
+        E.A(b) => { return **b; },
+        _ => { return 1; }
+    }
+}

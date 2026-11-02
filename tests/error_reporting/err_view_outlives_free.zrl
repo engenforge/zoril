@@ -1,0 +1,15 @@
+// expected compile fail
+// EXPECT: error: cannot mutably borrow 'v' while it is already borrowed
+// A view is carried by its holder: `get` returns a reference into the vector, so the borrow passes
+// to `r` and outlives the call, and freeing the vector while `r` is live is rejected (task 2i
+// step 1a: only a borrow nothing carries may end at the call).
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1234);
+    let r = v.get(0).unwrap();
+    v.free();
+    return *r & 255;
+}

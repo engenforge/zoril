@@ -1,0 +1,421 @@
+// Buffered stream wrappers (BufReader, BufWriter)
+
+import "core0.zrl";
+import "core.zrl";
+import "mem.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "vec.zrl";
+import "string.zrl";
+
+use core::{Option, Result};
+use io::{Error, Read, Write};
+use mem::Arena;
+use mem_raw::memcpy;
+use string::String;
+use vec::Vec;
+
+const DEFAULT_BUF_WRITER_CAPACITY: usize = 65536;
+const DEFAULT_BUF_READER_CAPACITY: usize = 8192;
+
+// Buffered stream wrapper that batches writes to an underlying sink to reduce system call overhead.
+pub struct BufWriter<W> {
+    inner: Option<W>,
+    buf: Vec<u8>,
+    written: usize,
+    failed: bool,
+}
+
+impl<W: Write> BufWriter<W> {
+    // Creates a new BufWriter wrapping inner with the default buffer capacity (8192 bytes).
+    pub fn new(inner: W) -> BufWriter<W> {
+        return BufWriter::<W>.with_capacity(inner, DEFAULT_BUF_WRITER_CAPACITY);
+    }
+
+    // Creates a new BufWriter wrapping inner with the specified buffer capacity.
+    pub fn with_capacity(inner: W, cap: usize) -> BufWriter<W> {
+        let mut buf = Vec::<u8>.with_capacity(cap);
+        buf.ensure_len(cap);
+        return BufWriter {
+            inner: Option.Some(inner),
+            buf: buf,
+            written: 0 as usize,
+            failed: false,
+        };
+    }
+
+    // Creates a new BufWriter allocated in arena a with the default buffer capacity.
+    pub fn new_in(inner: W, a: &Arena) -> BufWriter<W> {
+        return BufWriter::<W>.with_capacity_in(inner, a, DEFAULT_BUF_WRITER_CAPACITY);
+    }
+
+    // Creates a new BufWriter allocated in arena a with the specified buffer capacity.
+    pub fn with_capacity_in(inner: W, a: &Arena, cap: usize) -> BufWriter<W> {
+        let mut buf = Vec::<u8>.with_capacity_in(a, cap);
+        buf.ensure_len(cap);
+        return BufWriter {
+            inner: Option.Some(inner),
+            buf: buf,
+            written: 0 as usize,
+            failed: false,
+        };
+    }
+
+    // Returns an immutable reference to the underlying writer.
+    pub fn get_ref(self: &BufWriter<W>) -> &W {
+        if self.inner.is_none() {
+            zoril_user_panic("BufWriter.get_ref: inner already consumed");
+        }
+        return self.inner.get_ref();
+    }
+
+    // Returns a mutable reference to the underlying writer.
+    pub fn get_mut(self: &mut BufWriter<W>) -> &mut W {
+        if self.inner.is_none() {
+            zoril_user_panic("BufWriter.get_mut: inner already consumed");
+        }
+        return self.inner.get_mut();
+    }
+
+    // Returns the total byte capacity of the internal buffer.
+    pub fn capacity(self: &BufWriter<W>) -> usize {
+        return self.buf.cap();
+    }
+
+    // Returns the unwritten buffered data as a byte slice.
+    pub fn buffer(self: &BufWriter<W>) -> [u8] {
+        if self.written == 0 as usize {
+            return @slice(0 as *u8, 0 as usize);
+        }
+        // SAFETY: self.written bytes are live in self.buf.
+        return unsafe { @slice(self.buf.as_ptr() as *u8, self.written) };
+    }
+
+    // Flushes all buffered bytes to the underlying writer.
+    pub fn flush(self: &mut BufWriter<W>) -> Result<(), Error> {
+        if self.inner.is_none() {
+            return Result.Ok(());
+        }
+        let w = self.inner.get_mut();
+        let mut off = 0 as usize;
+        while off < self.written {
+            // SAFETY: self.written - off bytes are valid in self.buf starting at off.
+            let slice = unsafe {
+                @slice((self.buf.as_ptr() as usize + off) as *u8, self.written - off)
+            };
+            match w.write(slice) {
+                Result.Ok(0) => {
+                    if off > 0 as usize {
+                        let remaining = self.written - off;
+                        let dest = self.buf.as_mut_ptr() as *mut u8;
+                        let src = (self.buf.as_ptr() as usize + off) as *u8;
+                        // SAFETY: dest is before src in the same buffer, shifting remaining unwritten bytes forward.
+                        unsafe { memcpy(dest, src, remaining as u64); }
+                        self.written = remaining;
+                    }
+                    self.failed = true;
+                    return Result.Err(Error { errno: 5 as i32 });
+                },
+                Result.Ok(n) => {
+                    off = off + n;
+                },
+                Result.Err(e) => {
+                    if e.errno == 4 as i32 {
+                        continue;
+                    }
+                    if off > 0 as usize {
+                        let remaining = self.written - off;
+                        let dest = self.buf.as_mut_ptr() as *mut u8;
+                        let src = (self.buf.as_ptr() as usize + off) as *u8;
+                        // SAFETY: dest is before src in the same buffer, shifting remaining unwritten bytes forward.
+                        unsafe { memcpy(dest, src, remaining as u64); }
+                        self.written = remaining;
+                    }
+                    self.failed = true;
+                    return Result.Err(e);
+                },
+            }
+        }
+        self.written = 0 as usize;
+        self.failed = false;
+        return Result.Ok(());
+    }
+
+    // Flushes remaining bytes and returns the underlying writer.
+    pub fn into_inner(mut self) -> Result<W, Error> {
+        let flush_res = self.flush();
+        if let Result.Err(e) = flush_res {
+            return Result.Err(e);
+        }
+        let inner_opt = self.inner.take();
+        if inner_opt.is_none() {
+            zoril_user_panic("BufWriter.into_inner: inner already consumed");
+        }
+        return Result.Ok(inner_opt.unwrap());
+    }
+}
+
+impl<W: Write> Write for BufWriter<W> {
+    // Writes bytes into the buffer, flushing to the inner writer when full.
+    fn write(self: &mut BufWriter<W>, s: [u8]) -> Result<usize, Error> {
+        if s.len == 0 as usize {
+            return Result.Ok(0 as usize);
+        }
+        let cap = self.buf.cap();
+        if s.len > cap {
+            let flush_res = self.flush();
+            if let Result.Err(e) = flush_res {
+                return Result.Err(e);
+            }
+            let w = self.inner.get_mut();
+            while true {
+                match w.write(s) {
+                    Result.Ok(n) => {
+                        return Result.Ok(n);
+                    },
+                    Result.Err(e) => {
+                        if e.errno == 4 as i32 {
+                            continue;
+                        }
+                        self.failed = true;
+                        return Result.Err(e);
+                    },
+                }
+            }
+        }
+        if self.written + s.len > cap {
+            let flush_res = self.flush();
+            if let Result.Err(e) = flush_res {
+                return Result.Err(e);
+            }
+        }
+        let prev_written = self.written;
+        let dest = (self.buf.as_mut_ptr() as usize + self.written) as *mut u8;
+        // SAFETY: self.written + s.len <= cap was checked and ensured by the flush above.
+        unsafe { memcpy(dest, s.ptr as *u8, s.len as u64); }
+        self.written = self.written + s.len;
+        if self.written == cap {
+            let flush_res = self.flush();
+            if let Result.Err(e) = flush_res {
+                if self.written == cap {
+                    self.written = prev_written;
+                }
+                return Result.Err(e);
+            }
+        }
+        return Result.Ok(s.len);
+    }
+}
+
+impl<W: Write> Drop for BufWriter<W> {
+    // Flushes remaining buffered bytes and releases resources.
+    pub fn drop(self: &mut BufWriter<W>) {
+        if !self.failed && self.inner.is_some() && self.written > 0 as usize {
+            let _ = self.flush();
+        }
+    }
+}
+
+// Buffered stream wrapper that reads ahead from an underlying source to reduce system call overhead.
+pub struct BufReader<R> {
+    inner: R,
+    buf: Vec<u8>,
+    pos: usize,
+    cap: usize,
+}
+
+impl<R> BufReader<R> {
+    // Creates a new BufReader wrapping inner with the default buffer capacity (8192 bytes).
+    pub fn new(inner: R) -> BufReader<R> {
+        return BufReader::<R>.with_capacity(inner, DEFAULT_BUF_READER_CAPACITY);
+    }
+
+    // Creates a new BufReader wrapping inner with the specified buffer capacity.
+    pub fn with_capacity(inner: R, cap: usize) -> BufReader<R> {
+        let mut buf = Vec::<u8>.with_capacity(cap);
+        buf.ensure_len(cap);
+        return BufReader {
+            inner: inner,
+            buf: buf,
+            pos: 0 as usize,
+            cap: 0 as usize,
+        };
+    }
+
+    // Creates a new BufReader allocated in arena a with the default buffer capacity.
+    pub fn new_in(inner: R, a: &Arena) -> BufReader<R> {
+        return BufReader::<R>.with_capacity_in(inner, a, DEFAULT_BUF_READER_CAPACITY);
+    }
+
+    // Creates a new BufReader allocated in arena a with the specified buffer capacity.
+    pub fn with_capacity_in(inner: R, a: &Arena, cap: usize) -> BufReader<R> {
+        let mut buf = Vec::<u8>.with_capacity_in(a, cap);
+        buf.ensure_len(cap);
+        return BufReader {
+            inner: inner,
+            buf: buf,
+            pos: 0 as usize,
+            cap: 0 as usize,
+        };
+    }
+
+    // Returns an immutable reference to the underlying reader.
+    pub fn get_ref(self: &BufReader<R>) -> &R {
+        return &self.inner;
+    }
+
+    // Returns a mutable reference to the underlying reader.
+    pub fn get_mut(self: &mut BufReader<R>) -> &mut R {
+        return &mut self.inner;
+    }
+
+    // Returns the total byte capacity of the internal read buffer.
+    pub fn capacity(self: &BufReader<R>) -> usize {
+        return self.buf.cap();
+    }
+
+    // Returns the available unconsumed buffered data as a byte slice.
+    pub fn buffer(self: &BufReader<R>) -> [u8] {
+        if self.pos >= self.cap {
+            return @slice(0 as *u8, 0 as usize);
+        }
+        let available = self.cap - self.pos;
+        // SAFETY: available bytes from pos to cap are valid and initialized in buf.
+        return unsafe { @slice((self.buf.as_ptr() as usize + self.pos) as *u8, available) };
+    }
+
+    // Advances the internal read position by amt bytes.
+    pub fn consume(self: &mut BufReader<R>, amt: usize) {
+        let mut new_pos = self.pos + amt;
+        if new_pos > self.cap {
+            new_pos = self.cap;
+        }
+        self.pos = new_pos;
+    }
+
+    // Unwraps the BufReader, returning the underlying reader.
+    pub fn into_inner(mut self) -> R {
+        self.buf.free();
+        return self.inner;
+    }
+}
+
+impl<R: Read> BufReader<R> {
+    // Refills the internal buffer from the underlying reader if empty and returns available bytes.
+    pub fn fill_buf(self: &mut BufReader<R>) -> Result<[u8], Error> {
+        if self.pos >= self.cap {
+            self.pos = 0 as usize;
+            self.cap = 0 as usize;
+            let slice = self.buf.as_mut_slice();
+            while true {
+                let res = self.inner.read(slice);
+                match res {
+                    Result.Ok(n) => {
+                        self.cap = n;
+                        break;
+                    },
+                    Result.Err(e) => {
+                        if e.errno == 4 as i32 {
+                            continue;
+                        }
+                        return Result.Err(e);
+                    },
+                }
+            }
+        }
+        let available = self.cap - self.pos;
+        if available == 0 as usize {
+            return Result.Ok(@slice(0 as *u8, 0 as usize));
+        }
+        // SAFETY: self.cap - self.pos initialized bytes remain from self.pos.
+        let slice = unsafe { @slice((self.buf.as_ptr() as usize + self.pos) as *u8, available) };
+        return Result.Ok(slice);
+    }
+
+    // Reads bytes into buf until delimiter delim is encountered or EOF is reached.
+    pub fn read_until(
+        self: &mut BufReader<R>,
+        delim: u8,
+        out: &mut Vec<u8>
+    ) -> Result<usize, Error> {
+        let mut total = 0 as usize;
+        while true {
+            let available = match self.fill_buf() {
+                Result.Ok(s) => s,
+                Result.Err(e) => { return Result.Err(e); },
+            };
+            if available.len == 0 as usize {
+                break;
+            }
+            let mut found = false;
+            let mut delim_idx = 0 as usize;
+            let mut i = 0 as usize;
+            while i < available.len {
+                if available[i] == delim {
+                    delim_idx = i;
+                    found = true;
+                    break;
+                }
+                i = i + 1 as usize;
+            }
+            let amt = if found { delim_idx + 1 as usize } else { available.len };
+            // SAFETY: amt <= available.len, so amt bytes are inside available.
+            let sub = unsafe { @slice(available.ptr as *u8, amt) };
+            out.extend_from_slice(sub);
+            self.consume(amt);
+            total = total + amt;
+            if found {
+                break;
+            }
+        }
+        return Result.Ok(total);
+    }
+
+    // Reads bytes into buf until a newline (0x0A) byte is encountered or EOF is reached.
+    pub fn read_line(self: &mut BufReader<R>, out: &mut String) -> Result<usize, Error> {
+        return self.read_until('\n' as u8, out.as_mut_vec());
+    }
+}
+
+impl<R: Read> Read for BufReader<R> {
+    // Reads bytes into buf from the internal buffer, refilling from the underlying reader as needed.
+    fn read(self: &mut BufReader<R>, buf: [mut u8]) -> Result<usize, Error> {
+        if buf.len == 0 as usize {
+            return Result.Ok(0 as usize);
+        }
+        if self.pos >= self.cap {
+            let cap = self.buf.cap();
+            if buf.len >= cap {
+                self.pos = 0 as usize;
+                self.cap = 0 as usize;
+                while true {
+                    match self.inner.read(buf) {
+                        Result.Ok(n) => { return Result.Ok(n); },
+                        Result.Err(e) => {
+                            if e.errno == 4 as i32 {
+                                continue;
+                            }
+                            return Result.Err(e);
+                        },
+                    }
+                }
+            }
+            let fill_res = self.fill_buf();
+            if let Result.Err(e) = fill_res {
+                return Result.Err(e);
+            }
+            if self.cap == 0 as usize {
+                return Result.Ok(0 as usize);
+            }
+        }
+        let mut to_copy = self.cap - self.pos;
+        if to_copy > buf.len {
+            to_copy = buf.len;
+        }
+        let src = (self.buf.as_ptr() as usize + self.pos) as *u8;
+        // SAFETY: to_copy bytes are valid in self.buf and fit inside buf.
+        unsafe { memcpy(buf.ptr as *mut u8, src, to_copy as u64); }
+        self.pos = self.pos + to_copy;
+        return Result.Ok(to_copy);
+    }
+}

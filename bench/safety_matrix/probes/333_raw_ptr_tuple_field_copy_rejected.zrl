@@ -1,0 +1,17 @@
+// name: A struct containing a raw pointer in a tuple field is not Copy by default
+// expected: compile_reject
+// Under Copy option A+, a struct with a raw pointer inside a tuple field is Move-only unless `impl Copy` is declared.
+struct Buf {
+    p: (*mut u8, usize),
+}
+
+fn consume(b: Buf) -> usize {
+    return b.p.1;
+}
+
+fn main() -> i32 {
+    let b1 = Buf { p: (0 as *mut u8, 4) };
+    let b2 = b1;
+    let _ = consume(b1);
+    return consume(b2) as i32;
+}

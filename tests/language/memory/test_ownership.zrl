@@ -1,0 +1,93 @@
+struct Counter {
+    val: u32,
+}
+
+impl Counter {
+    fn inc(self: &mut Counter) {
+        self.val = self.val + 1;
+    }
+}
+
+enum Kind { A, B }
+struct Data { name: u32, kind: Kind }
+
+fn test_ptr(p: *mut Data) -> u32 {
+    if unsafe { (*p).name } == 1 {
+        unsafe { return (*p).name; }
+    }
+    return 0;
+}
+
+enum SymbolKind {
+    A(u32),
+    B(u32),
+}
+
+struct Symbol {
+    name: u32,
+    kind: SymbolKind,
+}
+
+struct Table {
+    symbols: *mut Symbol,
+    count: u64,
+}
+
+fn lookup(self: &Table, name: u32) -> *mut Symbol {
+    let mut i = 0 as u64;
+    while i < self.count {
+        let p = (self.symbols as u64 + i *% sizeof(Symbol)) as *mut Symbol;
+        if unsafe { (*p).name } == name {
+            return p;
+        }
+        i = i + 1;
+    }
+    return 0 as *mut Symbol;
+}
+
+struct Dummy {
+    val: u64,
+}
+
+impl Dummy {
+    fn get_val(self: &Dummy) -> u64 {
+        return self.val;
+    }
+
+    fn check(self: &mut Dummy) -> bool {
+        // Implicit cast from &mut to &
+        return self.get_val() == 42;
+    }
+}
+
+fn main() -> i32 {
+    // repro_double_drop.zrl
+    {
+        let mut c = Counter { val: 0 };
+        c.inc();
+        c.inc(); 
+    }
+
+    // repro_move_load.zrl
+    {
+        let mut d = Data { name: 1, kind: Kind.A };
+        if test_ptr(&mut d as *mut Data) != 1 { return 1; }
+    }
+
+    // repro_move_load_2 & 3
+    {
+        let mut s = Symbol { name: 1, kind: SymbolKind.A(1) };
+        let t = Table { symbols: &mut s as *mut Symbol, count: 1 };
+        let res = lookup(&t, 1);
+        if res == 0 as *mut Symbol { return 2; }
+    }
+
+    // repro_mut_to_imm_ref.zrl
+    {
+        let mut d = Dummy { val: 42 };
+        let ok = d.check();
+        if !ok { return 3; }
+    }
+
+    return 0;
+}

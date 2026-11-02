@@ -1,0 +1,19 @@
+// expected compile fail
+// EXPECT: cannot use 'v' while it is mutably borrowed
+// An enum variant with a tuple payload. The value is moved where it is written, before the later operand runs; the later operand uses the `&mut` taken from it.
+import "vec.zrl";
+use vec::Vec;
+
+struct H { w: Vec<i32>, n: usize }
+enum E { A(Vec<i32>, usize), B }
+fn f(a: Vec<i32>, n: usize) -> usize { return n + a.len(); }
+impl H { fn eat(self: H, n: usize) -> usize { return n; } }
+fn mk() -> Vec<i32> { return Vec::<i32>.new(); }
+
+fn main() -> i32 {
+    let mut v = mk();
+    v.push(7);
+    let r = &mut v;
+    let e = E.A(v, r.len());
+    return 0;
+}

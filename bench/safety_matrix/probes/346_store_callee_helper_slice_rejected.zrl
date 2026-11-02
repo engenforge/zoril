@@ -1,0 +1,32 @@
+// name: A frame-owned view stored through a two-level helper function is rejected
+// expected: compile_reject
+// Storing a view of a frame-owned arena buffer through a two-level helper function is rejected: caller summaries propagate callee store facts.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn stash(out: &mut [i32], s: [i32]) {
+    *out = s;
+}
+
+fn helper(out: &mut [i32], s: [i32]) {
+    stash(out, s);
+}
+
+fn f(out: &mut [i32]) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(7);
+    helper(out, v.as_slice());
+}
+
+fn main() -> i32 {
+    let e: [i32] = @slice(0 as *i32, 0);
+    let mut s = e;
+    f(&mut s);
+    return s[0];
+}

@@ -1,0 +1,852 @@
+import "il_type.zrl";
+import "il_instr.zrl";
+import "ast.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "progress.zrl";
+import "intern.zrl";
+use ast::Span;
+use bytevec::ByteVec;
+use il_instr::{BlockId, CALL_BY_NAME, CallInstr, ILInstr, SSAId};
+use il_type::{is_raw_pointer_tag, ILField, ILFn, ILPrimitive, ILStruct, ILTYPE_ARRAY, ILTYPE_BOXED, ILTYPE_BOXEDMUT, ILTYPE_FD, ILTYPE_FN, ILTYPE_PRIMITIVE, ILTYPE_PTR, ILTYPE_PTRMUT, ILTYPE_RAWPTR, ILTYPE_RAWPTRMUT, ILTYPE_SLICE, ILTYPE_TUPLE, ILTYPE_USER, ILType, ILTypeDecl, ILTypeDef, hash_type, is_any_pointer_tag, is_reference_tag, is_type_eq};
+use intern::InternTable;
+use mem_raw::{ArenaHeader, memcpy, memset, zoril_allocator_alloc};
+use vec::Vec;
+
+pub struct BasicBlock {
+    pub id: BlockId,
+    pub instructions: *mut u32, // Indices to ILInstr in ILModule
+    pub instructions_len: usize,
+    pub instructions_cap: usize,
+    pub ssa_results: *mut SSAId, // SSA ID for each instruction's result
+    pub name: u32, // Interned label hint (0 if none)
+}
+
+impl BasicBlock {
+    // `instructions` and `ssa_results` are raw parallel arrays with the length in
+    // a sibling field. These two are the marked boundary where they become
+    // bounds-checked slices, so callers walking a block do not each repeat it.
+    pub fn instr_ids(self: &BasicBlock) -> [u32] {
+        return unsafe { @slice(self.instructions, self.instructions_len) };
+    }
+
+    pub fn ssa_result_ids(self: &BasicBlock) -> [u32] {
+        return unsafe { @slice(self.ssa_results, self.instructions_len) };
+    }
+
+    pub fn new(arena: *mut ArenaHeader, id: BlockId) -> BasicBlock {
+        return BasicBlock {
+            id: id,
+            instructions: 0 as *mut u32,
+            instructions_len: 0 as usize,
+            instructions_cap: 0 as usize,
+            ssa_results: 0 as *mut SSAId,
+            name: 0 as u32,
+        };
+    }
+}
+
+// Non-owning handle into arena memory; safe to duplicate bitwise.
+impl Copy for BasicBlock {}
+
+pub struct ILFunction {
+    pub id: u32,
+    pub name: u32,
+    pub params: *mut ILParam,
+    pub params_len: usize,
+    pub ret_ty: u32,
+    pub result_types: *mut u32, // SSA -> Type ID
+    pub result_types_len: usize,
+    pub result_types_cap: usize,
+    pub ssa_names: *mut u32,    // SSA -> Name Intern ID
+    pub blocks: *mut u32, // Indices to BasicBlock in ILModule
+    pub blocks_len: usize,
+    pub blocks_cap: usize,
+    pub is_variadic: bool,
+    pub is_extern: bool,
+    // A Zoril function with a C ABI (`extern "C" fn f() { .. }`), defined here or declared from an
+    // interface: an unmangled symbol, no environment parameter, and a call needs no `unsafe`.
+    pub is_export: bool,
+    pub is_unsafe: bool,
+    pub is_local: bool,
+    pub is_pub: bool,
+    pub must_use: bool,
+    pub arena_alloc_bytes: usize,
+    pub doc_comment: u32,
+    pub source_file: u32,
+    // Methods: byte length of the owning type's name at the start of `name` (name is
+    // "<Type>_<method>"); 0 for free functions. Gives the mangler a structured identity
+    // (type, method) instead of a joined string.
+    pub owner_len: u32,
+    pub has_summary: bool,
+    pub summary_escape: u64,
+    pub summary_stash: u64,
+    pub summary_escape_via: u64,
+    pub summary_stash_via: u64,
+    pub summary_storage: u64,
+    // Parameters (hidden sret/env not counted) whose own storage the result may point into:
+    // an address derived from the parameter by field/index steps, with no load through it
+    // (`&self.v`, not `self.data`). Computed from the body (compute_ret_storage in
+    // src/verify.zrl), or read from the `.zri` `#[summary(storage = ..)]` of an import.
+    pub ret_storage: u64,
+    // Parameters whose own storage the body writes into memory outside its frame
+    // (`h.r = p` stores p), and the parameters whose memory receives those writes; bit
+    // STORE_INTO_GLOBAL stands for a global or memory of unknown origin. Same source as
+    // ret_storage (`#[summary(stores = .., into = ..)]` for an import).
+    pub stores_storage: u64,
+    pub store_targets: u64,
+    pub has_stores_declared: bool,
+    pub stores_declared_from: u64,
+    pub stores_declared_to: u64,
+    pub decl_span: Span,
+    pub is_stdlib: bool,
+    // A generic declaration: what it stores depends on the instantiation.
+    pub is_generic: bool,
+    pub from_interface: bool, // FnDecl.from_interface
+    // Whether the three masks above are *known* for this function. They are computed together (the
+    // IL fixpoint for a body, `#[summary(.., storage = ..)]` for an import), and `0` is a real
+    // answer for each of them ("points into no parameter's own storage", "stores nothing"), so
+    // without this bit an unknown callee - an `extern`, or an import whose `.zri` predates the
+    // fields - is indistinguishable from a harmless one, and every consumer answers "no escape".
+    // The limits of such fallbacks are in `doc/SAFETY.md` §4.4; the consumers treat unknown as
+    // the worst case.
+    pub storage_known: bool,
+    pub summary_ret_stack: bool,
+    // Which parameters a returned reference/pointer may point into (bit i = parameter i,
+    // counted without sret/env): `#[borrows(...)]` if given, else Rust's elision rules.
+    // Consulted by the borrow checker and the region-escape verifier at each call.
+    pub ret_ties: u64,
+    pub has_borrows: bool,
+    // This function is (or is the imported interface of) the standard library's
+    // `mem::Arena::{mark, reset_to}`, whose lifecycle the borrow checker exempts from the epoch
+    // check (`src/check_zir.zrl`). Decided by `Driver.declare_function` from where the declaration
+    // was loaded from - a standard-library root - never from the callee's name or file name
+    // (doc/spec/modular_compilation.md).
+    pub arena_mark: bool,
+    pub arena_reset_to: bool,
+    // The same provenance test for the functions a `--checked` build instruments:
+    // `mem_raw::arena_reset` (its rewind is undone, so released space stays poisoned and is never
+    // handed out again), `mem_raw::arena_init_result` (its capacity is doubled, because a checked
+    // build never reuses the space a reset releases), and `mem_raw::zoril_allocator_free`, the
+    // choke point every heap block is released through: the lowering emits an instrumented release
+    // in place of the call, which marks the block and traps when it is released a second time (two
+    // live copies of one owner).
+    pub arena_reset: bool,
+    pub arena_init_result: bool,
+    pub allocator_free: bool,
+    pub buffer_external: bool,
+    pub buffer_anchored: bool,
+    // The declared result is a raw pointer. The IL type does not say (`&T` and `*T` share
+    // `Ptr`), and a call's result needs it: `*f()` on a raw result needs `unsafe`.
+}
+
+impl ILFunction {
+    // The block-id list and the SSA-type table, as bounds-checked slices. Same
+    // marked-boundary role as `BasicBlock.instr_ids`.
+    pub fn block_ids(self: &ILFunction) -> [u32] {
+        return unsafe { @slice(self.blocks, self.blocks_len) };
+    }
+
+    pub fn result_type_ids(self: &ILFunction) -> [u32] {
+        return unsafe { @slice(self.result_types, self.result_types_len) };
+    }
+
+    // `params` is a raw ILParam array manufactured during lowering. This is the
+    // one marked site that hands an element out as a safe reference, so callers
+    // do not each repeat the pointer arithmetic.
+    pub fn param(self: &ILFunction, i: usize) -> &ILParam {
+        return unsafe { &*((self.params as usize + i * sizeof(ILParam)) as *ILParam) };
+    }
+
+    pub fn param_mut(self: &mut ILFunction, i: usize) -> &mut ILParam {
+        return unsafe { &mut *((self.params as usize + i * sizeof(ILParam)) as *mut ILParam) };
+    }
+
+    pub fn get_ssa_type(self: &ILFunction, ssa: SSAId) -> u32 {
+        if ssa as usize >= self.result_types_len { return 0 as u32; }
+        let types = unsafe { @slice(self.result_types, self.result_types_len) };
+        return types[ssa as usize];
+    }
+
+    // Whether the symbol is a C one: unmangled and called without an environment. A foreign
+    // declaration is; so is a function Zoril defines for C to call.
+    pub fn has_c_symbol(self: &ILFunction) -> bool {
+        return self.is_extern || self.is_export;
+    }
+
+    pub fn is_zoril_extern(self: &ILFunction, compile_only: bool, target_source_file: u32) -> bool {
+        let bl = self.blocks_len;
+        if bl > 0 as usize { return false; }
+        let sf = self.source_file;
+        let ext = self.is_extern;
+        return is_zoril_extern_decl(ext, sf, 0 as usize, compile_only, target_source_file);
+    }
+
+    pub fn set_ssa_type(self: &mut ILFunction, arena: *mut ArenaHeader, ssa: SSAId, ty: u32) {
+        if ssa as usize >= self.result_types_cap {
+            let mut new_cap = if self.result_types_cap == 0 as usize {
+                256 as usize
+            } else {
+                self.result_types_cap * 2 as usize
+            };
+            if new_cap <= ssa as usize { new_cap = ssa as usize + 256 as usize; }
+            let new_types = unsafe {
+                zoril_allocator_alloc(arena, new_cap * 4 as usize)
+            } as *mut u32;
+            if self.result_types as usize != 0 as usize {
+                unsafe {
+                    memcpy(
+                        new_types as *mut u8,
+                        self.result_types as *u8,
+                        (self.result_types_len * 4 as usize) as u64
+                    );
+                }
+            }
+            let mut i = self.result_types_len;
+            unsafe {
+                let mut types_slice = @slice(new_types, new_cap);
+                while i < new_cap {
+                    types_slice[i] = 0 as u32;
+                    i = i + 1 as usize;
+                }
+            }
+            self.result_types = new_types;
+            self.result_types_cap = new_cap;
+
+            // Also grow ssa_names to match new cap
+            let new_names = unsafe {
+                zoril_allocator_alloc(arena, new_cap * 4 as usize)
+            } as *mut u32;
+            if self.ssa_names as usize != 0 as usize {
+                unsafe {
+                    memcpy(
+                        new_names as *mut u8,
+                        self.ssa_names as *u8,
+                        (self.result_types_len * 4 as usize) as u64
+                    );
+                }
+            }
+            let mut i2 = self.result_types_len;
+            unsafe {
+                let mut names_slice = @slice(new_names, new_cap);
+                while i2 < new_cap {
+                    names_slice[i2] = 0 as u32;
+                    i2 = i2 + 1 as usize;
+                }
+            }
+            self.ssa_names = new_names;
+        }
+        if ssa as usize >= self.result_types_len {
+            self.result_types_len = ssa as usize + 1 as usize;
+        }
+        unsafe { @slice(self.result_types, self.result_types_cap)[ssa as usize] = ty; }
+    }
+
+    pub fn get_ssa_name(self: &ILFunction, ssa: SSAId) -> u32 {
+        if self.ssa_names as usize == 0 as usize { return 0 as u32; }
+        if ssa as usize >= self.result_types_len { return 0 as u32; }
+        let names = unsafe { @slice(self.ssa_names, self.result_types_len) };
+        return names[ssa as usize];
+    }
+
+    pub fn set_ssa_name(self: &mut ILFunction, arena: *mut ArenaHeader, ssa: SSAId, name: u32) {
+        if ssa as usize >= self.result_types_cap {
+            self.set_ssa_type(arena, ssa, 0 as u32); // Grows result_types and ssa_names
+        }
+        if self.ssa_names as usize != 0 as usize {
+            unsafe { @slice(self.ssa_names, self.result_types_cap)[ssa as usize] = name; }
+        }
+    }
+}
+
+// Non-owning handle into arena memory; safe to duplicate bitwise.
+impl Copy for ILFunction {}
+
+pub struct ILParam {
+    pub name: u32,
+    pub ty: u32,
+    pub ssa: SSAId,
+    // An aggregate passed by value, which the ABI passes through a pointer: TY is that
+    // pointer, and the source-level parameter type its pointee.
+    pub by_ref: bool,
+}
+
+pub struct ILGlobal {
+    pub id: u32,
+    pub name: u32,
+    pub ty: u32,
+    pub init_data_ptr: *mut u8,
+    pub init_data_len: usize,
+    pub is_pub: bool,
+    pub is_extern: bool,
+    pub is_mut: bool,
+    pub source_file: u32,
+}
+
+pub struct ILModule {
+    pub arena: *mut ArenaHeader,
+    pub module_doc: u32,
+    pub functions: Vec<ILFunction>,
+    pub types: Vec<ILTypeDecl>,
+    pub globals: Vec<ILGlobal>,
+    pub typedefs: Vec<ILTypeDef>,
+    // The module as it stood before `Driver.check_uncalled_methods` checked the methods nothing
+    // calls: `typedefs` as it was then, and how many functions it had. Checking a body may name a
+    // type the program's own code never does - a generic instance (appended to the table) or a
+    // declaration whose slot was still an empty placeholder (whose entry it now defines) - and
+    // neither belongs in the emitted ZIL, so `drop_check_only_code` puts the table back and drops
+    // the functions once every check that reads them has run.
+    pub typedefs_before_check: Vec<ILTypeDef>,
+    pub funcs_before_check: usize,
+    // Whether those bodies are in the module: set by the check phase, cleared by the drop. False
+    // in every other build (a `-c` build emits what it checks).
+    pub check_code_pending: bool,
+    pub ssa_results: *mut u32,
+    pub instrs: Vec<ILInstr>,
+    pub instr_spans: Vec<Span>,
+    pub instr_comments: Vec<u32>, // Interned source-line comment text per instruction (0 if none)
+    pub blocks: Vec<BasicBlock>,
+    pub type_hash_buckets: *mut u32,
+    pub type_hash_cap: usize,
+}
+
+impl ILModule {
+    // Does a value of IL type TY_ID hold a reference (so a borrow has to follow it)? This is the
+    // one place the question is answered: `check_zir`'s borrow propagation, the driver's signature
+    // ties and its `static mut` rule each had a near-copy until 2026-10-12, and the copies had
+    // drifted apart - only the ZIR one counted a *function-valued* type, only the driver's two
+    // looked through `Box`, and the `static mut` rule looked through neither boxes nor enums, so a
+    // *slice* behind either was accepted (`static mut S: Box<[u8]>`, `Option<[u8]>`). A reference
+    // inside a box or an enum payload is still missed there, because the IL does not carry raw-ness
+    // in the type - `&T` and `*T` are one type until Phase D.
+    //
+    // `POINTERS_COUNT`: whether a pointer, reference or function *type* is itself an answer (they
+    // are addresses; a `fn` value is a code pointer until it is a closure, whose environment the
+    // borrow question wants counted and the `static mut` rule does not). That is the one difference
+    // the callers legitimately have, so it is a parameter rather than a copy: the borrow
+    // propagation and signature ties ask "can this type carry a reference?", where a `&T`/`*T` is
+    // the plainest yes, while the `static mut` rule asks "does the address of something borrowed
+    // live in this static?" and recommends a raw pointer as the escape hatch - counting one there
+    // rejected the very shape it tells the programmer to write (`static mut G: *mut i32`).
+    //
+    // Past the recursion limit the answer is unknown, and unknown reads as "it does hold one" (the
+    // rule the unknown->accept audit settled on, probe 174). A raw-pointer *field* is skipped
+    // wherever a field is walked: the pointer is the escape hatch, and a `Vec` (a raw buffer
+    // pointer) must not count as holding a reference. Any other field shape is walked with the
+    // caller's policy.
+    fn holds_reference_inner(
+        self: &ILModule,
+        ty_id: u32,
+        depth: usize,
+        pointers_count: bool
+    ) -> bool {
+        let past_limit = depth > 8 as usize;
+        if past_limit { return true; }
+        if ty_id == 0 as u32 { return false; }
+        if ty_id as usize > self.types.len() {
+            ICE("ILModule.holds_reference_inner: ty_id out of bounds");
+        }
+        let p_decl: &ILTypeDecl = &self.types[ty_id as usize - 1 as usize];
+        let tag = p_decl.def.get_tag();
+        if tag == ILTYPE_SLICE { return true; }
+        if is_reference_tag(tag) || tag == ILTYPE_FN { return true; }
+        if pointers_count && is_raw_pointer_tag(tag) { return true; }
+        if tag == ILTYPE_BOXED {
+            return self.holds_reference_inner(
+                p_decl.def.get_Boxed(),
+                depth + 1 as usize,
+                pointers_count
+            );
+        }
+        if tag == ILTYPE_BOXEDMUT {
+            return self.holds_reference_inner(
+                p_decl.def.get_BoxedMut(),
+                depth + 1 as usize,
+                pointers_count
+            );
+        }
+        if tag == ILTYPE_ARRAY {
+            return self.holds_reference_inner(
+                p_decl.def.get_Array().element,
+                depth + 1 as usize,
+                pointers_count
+            );
+        }
+        if tag == ILTYPE_TUPLE {
+            for t in p_decl.def.get_Tuple() {
+                if self.holds_reference_inner(*t, depth + 1 as usize, pointers_count) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if tag != ILTYPE_USER { return false; }
+        let uid = p_decl.def.get_User().id;
+        if uid == 0xffffffff as u32 || uid as usize >= self.typedefs.len() { return false; }
+        match self.typedefs[uid as usize] {
+            ILTypeDef.Struct(st) => {
+                for f in st.fields {
+                    // A raw-pointer field holds no reference, which its type now says.
+                    if is_raw_pointer_tag(self.types[f.ty as usize - 1 as usize].def.get_tag()) {
+                        continue;
+                    }
+                    let ftag = self.types[f.ty as usize - 1 as usize].def.get_tag();
+                    // A slice field counts for both flavours. A non-raw pointer field does too, but
+                    // only the `static mut` flavour needs it *here*: the pointer flavour reaches the
+                    // same answer by recursing into the field's type, and that recursion is the
+                    // depth-limited one - which is what makes a reference nine levels down still
+                    // caught by the limit (probe 174). Answering a pointer field here regardless
+                    // would take that case out of the limit's reach.
+                    if ftag == ILTYPE_SLICE || (!pointers_count && is_reference_tag(ftag)) {
+                        return true;
+                    }
+                    if self.holds_reference_inner(f.ty, depth + 1 as usize, pointers_count) {
+                        return true;
+                    }
+                }
+            },
+            ILTypeDef.Enum(en) => {
+                for v in en.variants {
+                    if v.payload != 0 as u32
+                        && self.holds_reference_inner(
+                            v.payload,
+                            depth + 1 as usize,
+                            pointers_count
+                        ) {
+                        return true;
+                    }
+                }
+            },
+            ILTypeDef.Fn(_) => { return true; },
+        }
+        return false;
+    }
+
+    // The borrow propagation and the signature ties: a `&T`/`*T` is itself an answer.
+    pub fn type_holds_reference(self: &ILModule, ty_id: u32, depth: usize) -> bool {
+        return self.holds_reference_inner(ty_id, depth, true);
+    }
+
+    // The `static mut` rule's flavour: an address the static holds is a raw pointer unless it is a
+    // slice or a reference the walk reaches through a field, array, tuple, box or enum payload, so a
+    // pointer *type* is not an answer here (see `holds_reference_inner`).
+    pub fn type_holds_reference_no_pointer(self: &ILModule, ty_id: u32, depth: usize) -> bool {
+        return self.holds_reference_inner(ty_id, depth, false);
+    }
+
+    #[stores(arena -> arena)]
+    pub fn new(arena: *mut ArenaHeader, ast_decls_len: usize) -> *mut ILModule {
+        let m = unsafe { zoril_allocator_alloc(arena, sizeof(ILModule)) } as *mut ILModule;
+
+        let mut typedefs = unsafe {
+            Vec::<ILTypeDef>.with_capacity_in_raw(arena, ast_decls_len + 1024 as usize)
+        };
+        let mut i = 0 as usize;
+        let empty_def = ILTypeDef.Struct(ILStruct {
+            fields: @slice(0 as *mut ILField, 0 as usize),
+            is_copy_opt_out: false,
+        });
+        while i < ast_decls_len {
+            typedefs.push(empty_def);
+            i = i + 1 as usize;
+        }
+
+        let type_hash_cap = 8192 as usize;
+        let type_hash_buckets = unsafe {
+            zoril_allocator_alloc(arena, type_hash_cap * 4 as usize)
+        } as *mut u32;
+        unsafe { memset(type_hash_buckets as *mut u8, 0, (type_hash_cap * 4 as usize) as u64); }
+
+        unsafe {
+            *m = ILModule {
+                arena: arena,
+                module_doc: 0 as u32,
+                functions: unsafe { Vec::<ILFunction>.with_capacity_in_raw(arena, 1024) },
+                types: unsafe { Vec::<ILTypeDecl>.with_capacity_in_raw(arena, 8192) },
+                globals: unsafe { Vec::<ILGlobal>.with_capacity_in_raw(arena, 512) },
+                typedefs: typedefs,
+                typedefs_before_check: unsafe { Vec::<ILTypeDef>.new_in_raw(arena) },
+                funcs_before_check: 0 as usize,
+                check_code_pending: false,
+                ssa_results: 0 as *mut u32,
+                instrs: unsafe { Vec::<ILInstr>.with_capacity_in_raw(arena, 50000) },
+                instr_spans: unsafe { Vec::<Span>.with_capacity_in_raw(arena, 50000) },
+                instr_comments: unsafe { Vec::<u32>.with_capacity_in_raw(arena, 50000) },
+                blocks: unsafe { Vec::<BasicBlock>.with_capacity_in_raw(arena, 4096) },
+                type_hash_buckets: type_hash_buckets,
+                type_hash_cap: type_hash_cap,
+            };
+        }
+
+        return m;
+    }
+
+    pub fn alloc_function(self: &mut ILModule, f: ILFunction) -> u32 {
+        let id = self.functions.len() as u32;
+        let mut f2 = f;
+        f2.id = id;
+        self.functions.push(f2);
+        return id;
+    }
+
+    pub fn alloc_global(self: &mut ILModule, g: ILGlobal) -> u32 {
+        let id = self.globals.len() as u32;
+        let mut mut_g = g;
+        mut_g.id = id;
+        self.globals.push(mut_g);
+        return id;
+    }
+
+    pub fn alloc_type(self: &mut ILModule, t: ILTypeDecl) -> u32 {
+        let h = hash_type(t.def);
+        let mut bucket_idx = (h % (self.type_hash_cap as u64)) as usize;
+
+        let mut buckets = unsafe { @slice(self.type_hash_buckets, self.type_hash_cap) };
+        while true {
+            let type_id = buckets[bucket_idx];
+            if type_id == 0 as u32 { break; }
+
+            let p_existing = &self.types[type_id as usize - 1 as usize];
+            if is_type_eq(p_existing.def, t.def) {
+                return type_id;
+            }
+            bucket_idx = (bucket_idx + 1 as usize) % self.type_hash_cap;
+        }
+
+        let id = (self.types.len() + 1 as usize) as u32;
+
+        let mut t_mut = t;
+        t_mut.id = id;
+        self.types.push(t_mut);
+
+        buckets[bucket_idx] = id;
+        return id;
+    }
+
+    pub fn rebuild_type_hash_table(self: &mut ILModule) {
+        unsafe {
+            memset(self.type_hash_buckets as *mut u8, 0, (self.type_hash_cap * 4 as usize) as u64);
+        }
+        let mut i = 0 as usize;
+        let mut buckets = unsafe { @slice(self.type_hash_buckets, self.type_hash_cap) };
+        while i < self.types.len() {
+            let type_id = (i + 1 as usize) as u32;
+            let p_ty = &self.types[i];
+            let h = hash_type(p_ty.def);
+            let mut bucket_idx = (h % (self.type_hash_cap as u64)) as usize;
+            while true {
+                if buckets[bucket_idx] == 0 as u32 {
+                    buckets[bucket_idx] = type_id;
+                    break;
+                }
+                bucket_idx = (bucket_idx + 1 as usize) % self.type_hash_cap;
+            }
+            i = i + 1 as usize;
+        }
+    }
+
+    pub fn alloc_block(self: &mut ILModule, b: BasicBlock) -> u32 {
+        let id = self.blocks.len() as u32;
+        let mut mut_b = b;
+        mut_b.id = id;
+        self.blocks.push(mut_b);
+        return id;
+    }
+
+    pub fn alloc_instr(self: &mut ILModule, instr: ILInstr, span: Span, comment: u32) -> u32 {
+        let id = self.instrs.len() as u32;
+        self.instrs.push(instr);
+        self.instr_spans.push(span);
+        self.instr_comments.push(comment);
+        return id;
+    }
+
+    pub fn alloc_typedef(self: &mut ILModule, def: ILTypeDef) -> u32 {
+        let id = self.typedefs.len() as u32;
+        self.typedefs.push(def);
+        return id;
+    }
+
+    // Drops what checking the methods nothing calls added: the functions it lowered (with the types
+    // and type definitions they made) and the type definitions it wrote over the program's own,
+    // back to the state the phase found (see `typedefs_before_check`).
+    //
+    // The driver calls the check phase last and its caller calls this once the IL verifier and the
+    // summary pass have read those bodies: every writer runs after this point, so the ZIL and the
+    // object are what the program's *called* code lowers to, byte for byte.
+    pub fn drop_check_only_code(self: &mut ILModule) {
+        if !self.check_code_pending { return; }
+        self.check_code_pending = false;
+        let n = self.typedefs_before_check.len();
+        let mut i = 0 as usize;
+        while i < n {
+            self.typedefs.set(i, self.typedefs_before_check[i]);
+            i = i + 1 as usize;
+        }
+        // SAFETY: a checked body only appends (a generic instance's type definition) or defines a
+        // slot the table already had, so both lengths are at least what they were, and shrinking a
+        // Vec to a length it had is the operation `set_len` exists for.
+        unsafe {
+            self.typedefs.set_len(n);
+            self.functions.set_len(self.funcs_before_check);
+        }
+    }
+
+    // Reference-returning accessors: the raw-pointer-creation site lives here, so
+    // callers can hold &mut ILXxx instead of a *ILXxx and avoid a deref marker.
+    pub fn get_function_mut(self: &mut ILModule, index: usize) -> &mut ILFunction {
+        return &mut self.functions[index];
+    }
+    pub fn get_type_mut(self: &mut ILModule, index: usize) -> &mut ILTypeDecl {
+        return &mut self.types[index];
+    }
+    pub fn get_global_mut(self: &mut ILModule, index: usize) -> &mut ILGlobal {
+        return &mut self.globals[index];
+    }
+    pub fn get_typedef_mut(self: &mut ILModule, index: usize) -> &mut ILTypeDef {
+        return &mut self.typedefs[index];
+    }
+    pub fn get_instr_mut(self: &mut ILModule, index: usize) -> &mut ILInstr {
+        return &mut self.instrs[index];
+    }
+    pub fn get_block_mut(self: &mut ILModule, index: usize) -> &mut BasicBlock {
+        return &mut self.blocks[index];
+    }
+
+    // The function a call calls: by index when the call has one, else the first of its name.
+    pub fn callee(self: &ILModule, c: &CallInstr) -> *mut ILFunction {
+        if c.func_idx != CALL_BY_NAME && (c.func_idx as usize) < self.functions.len() {
+            return &self.functions[c.func_idx as usize] as *ILFunction as *mut ILFunction;
+        }
+        return self.find_function_by_name(c.name_id);
+    }
+
+    pub fn find_function_by_name(self: &ILModule, name_id: u32) -> *mut ILFunction {
+        let mut i = 0 as usize;
+        while i < self.functions.len() {
+            let p_f = &self.functions[i];
+            if p_f.name == name_id { return p_f; }
+            i = i + 1 as usize;
+        }
+        return 0 as *mut ILFunction;
+    }
+}
+
+pub fn il_module_set_typedef(module: &mut ILModule, id: u32, def: ILTypeDef) {
+    module.typedefs.ensure_len(id as usize + 1 as usize);
+    module.typedefs.set(id as usize, def);
+}
+
+pub fn is_zoril_extern_decl(
+    is_extern: bool,
+    source_file: u32,
+    type_params_len: usize,
+    compile_only: bool,
+    target_sf: u32
+) -> bool {
+    if !compile_only { return false; }
+    if is_extern { return false; }
+    if source_file == 0 as u32 { return false; }
+    if source_file == target_sf { return false; }
+    if type_params_len > 0 as usize { return false; }
+    return true;
+}
+
+pub fn extract_module_name(path: [u8]) -> [u8] {
+    let mut last_slash = -1 as i64;
+    let mut i = 0 as usize;
+    while i < path.len {
+        if path[i] == '/' as u8 {
+            last_slash = i as i64;
+        }
+        i = i + 1 as usize;
+    }
+    let start = if last_slash >= 0 as i64 { (last_slash + 1 as i64) as usize } else { 0 as usize };
+    let mut end = path.len;
+    if end >= start + 4 as usize
+        && path[end - 4 as usize] == '.' as u8
+        && path[end - 3 as usize] == 'z' as u8
+        && path[end - 2 as usize] == 'r' as u8 {
+        if path[end - 1 as usize] == 'l' as u8 || path[end - 1 as usize] == 'i' as u8 {
+            end = end - 4 as usize;
+        }
+    }
+    if end > start {
+        return subslice(path, start, end - start);
+    }
+    return path;
+}
+
+// Symbols that keep their plain name because something outside Zoril refers to them by it
+// (rt/runtime.s, the C ABI, compiler-emitted trap calls). Everything else is module-qualified.
+// Shared by the ZIL printer and zilc so definition and call sites cannot drift.
+pub fn is_unmangled_symbol_name(name: [u8]) -> bool {
+    if name == "main"
+        || name == "abort"
+        || name == "malloc"
+        || name == "free"
+        || name == "zoril_main" {
+        return true;
+    }
+    if name.len >= 16 as usize {
+        if subslice(name, 0 as usize, 16 as usize) == "__zoril_syscall_" { return true; }
+    }
+    return false;
+}
+
+// The `fn` type of F as source code sees it: its own parameters, without the hidden result
+// pointer and environment, and an aggregate the ABI passes by pointer as the aggregate. A call
+// through a pointer of this type passes aggregates by pointer, as a direct call does.
+pub fn fn_type_of(m: &mut ILModule, table: &mut InternTable, f: &ILFunction) -> u32 {
+    let sret = table.intern("__sret");
+    let env = table.intern("__env");
+    let mut params = unsafe { Vec::<u32>.new_in_raw(m.arena) };
+    for i in 0 as usize..f.params_len {
+        let p = f.param(i);
+        if p.name == sret || p.name == env { continue; }
+        params.push(
+            if p.by_ref { m.types[p.ty as usize - 1 as usize].def.get_Ptr() } else { p.ty }
+        );
+    }
+    let fn_ty = m.alloc_type(ILTypeDecl {
+        id: 0 as u32,
+        name: 0 as u32,
+        def: ILType.Fn(ILFn {
+            params: params.as_slice(),
+            ret_ty: f.ret_ty,
+            is_variadic: f.is_variadic,
+            c_abi: f.is_export
+        }),
+        source_file: 0 as u32
+    });
+    // The name of an `extern "C"` function used as a value is a C function pointer: one thin
+    // pointer to the signature, with no environment.
+    if f.is_export {
+        return m.alloc_type(ILTypeDecl {
+            id: 0 as u32,
+            name: 0 as u32,
+            def: ILType.RawPtr(fn_ty),
+            source_file: 0 as u32
+        });
+    }
+    return fn_ty;
+}
+
+// Whether a Zoril function takes the hidden environment pointer through which a closure reads
+// its captures: closures (`_closure_N`) only, as their last parameter (doc/spec/abi.md). A call
+// through a function value passes the value's environment last, which a plain function, having
+// no such parameter, never reads.
+pub fn takes_env_ptr(is_extern: bool, name: [u8]) -> bool {
+    if is_extern { return false; }
+    return name.len > 9 as usize && subslice(name, 0 as usize, 9 as usize) == "_closure_";
+}
+
+// Canonical module identity for mangling: the path with its .zrl/.zri extension and any "."/empty
+// segments removed, segments joined by "::" ("a/util.zrl" -> "a::util"). Bytes outside
+// [A-Za-z0-9_] become '_', and a segment that starts with a digit gets a leading '_', so every
+// segment is a legal ZIL identifier (zilc reads a name by the same rule as the language's own).
+#[stores(arena -> arena)]
+pub fn canonical_module_stem(arena: *mut ArenaHeader, path: [u8]) -> [u8] {
+    let mut end = path.len;
+    if end >= 4 as usize
+        && path[end - 4 as usize] == '.' as u8
+        && path[end - 3 as usize] == 'z' as u8
+        && path[end - 2 as usize] == 'r' as u8 {
+        if path[end - 1 as usize] == 'l' as u8 || path[end - 1 as usize] == 'i' as u8 {
+            end = end - 4 as usize;
+        }
+    }
+    let mut out = unsafe { ByteVec.new_raw(arena) };
+    let mut first = true;
+    let mut seg_start = 0 as usize;
+    let mut i = 0 as usize;
+    while i <= end {
+        if i == end || path[i] == '/' as u8 {
+            let seg_len = i - seg_start;
+            let is_dot = seg_len == 1 as usize && path[seg_start] == '.' as u8;
+            if seg_len > 0 as usize && !is_dot {
+                if !first {
+                    out.push(':' as u8);
+                    out.push(':' as u8);
+                }
+                first = false;
+                if path[seg_start] >= '0' as u8 && path[seg_start] <= '9' as u8 {
+                    out.push('_' as u8);
+                }
+                let mut j = seg_start;
+                while j < i {
+                    let b = path[j];
+                    let ok = (b >= 'a' as u8 && b <= 'z' as u8)
+                        || (b >= 'A' as u8 && b <= 'Z' as u8)
+                        || (b >= '0' as u8 && b <= '9' as u8)
+                        || b == '_' as u8;
+                    if ok { out.push(b); } else { out.push('_' as u8); }
+                    j = j + 1 as usize;
+                }
+            }
+            seg_start = i + 1 as usize;
+        }
+        i = i + 1 as usize;
+    }
+    return out.as_slice();
+}
+
+// What C cannot take or return, for TY as a parameter or (IS_RETURN) a result of an `extern`
+// signature or of an `extern "C" fn(..)` type: "" when it can (`bool`, the sized integers,
+// `usize`/`isize`, the floats, raw pointers, and no value or `never` as a result), otherwise the
+// type and what to pass instead. What is rejected has no C ABI of its own: a Zoril aggregate is
+// passed by pointer, a slice is two words, a reference a borrow, a Box an allocator - and every
+// answer is a literal, so a caller may hold it across further calls on the module.
+#[borrows()]
+pub fn extern_type_complaint(m: &ILModule, ty: u32, is_return: bool, allow_fd: bool) -> [u8] {
+    if ty == 0 as u32 { return ""; }
+    let def = &m.types[ty as usize - 1 as usize].def;
+    let tag = def.get_tag();
+    if tag == ILTYPE_RAWPTR || tag == ILTYPE_RAWPTRMUT { return ""; }
+    // The linear `fd<w>` handle is a language feature of its own (a descriptor the checker tracks).
+    // It stays allowed in the declaration of a foreign function, where it was before; the surfaces
+    // that are new (a C function pointer type, a function Zoril defines for C) take the stricter side.
+    if tag == ILTYPE_FD {
+        if allow_fd { return ""; }
+        return "a linear `fd<..>` handle (pass the descriptor as an `i32`)";
+    }
+    if tag == ILTYPE_PRIMITIVE {
+        let prim = def.get_Primitive();
+        let ptag = prim.get_tag();
+        if ptag == ILPrimitive.Char.get_tag() {
+            return "`char` (pass a `u32`)";
+        }
+        if ptag == ILPrimitive.Unit.get_tag() || ptag == ILPrimitive.Never.get_tag() {
+            if is_return { return ""; }
+            if ptag == ILPrimitive.Never.get_tag() {
+                return "a `never` value (use a sized integer, `bool`, a float or a raw pointer)";
+            }
+            return "a `unit` value (use a sized integer, `bool`, a float or a raw pointer)";
+        }
+        return "";
+    }
+    if tag == ILTYPE_FN {
+        return "a Zoril function value (code and environment; C passes code only)";
+    }
+    if tag == ILTYPE_SLICE {
+        return "a slice (a pointer and a length; pass `s.ptr` and the length separately)";
+    }
+    if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT {
+        return "a reference (pass a raw pointer, `*T` or `*mut T`)";
+    }
+    if tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT {
+        return "a Box (Zoril's allocator owns it; pass a raw pointer)";
+    }
+    if tag == ILTYPE_TUPLE {
+        return "a tuple (pass a raw pointer to a struct)";
+    }
+    if tag == ILTYPE_ARRAY {
+        return "an array (pass a raw pointer to its first element)";
+    }
+    if tag == ILTYPE_USER {
+        return "a struct or enum by value (pass a raw pointer to it, `*mut T`)";
+    }
+    return "a value of this type (use a sized integer, `bool`, a float or a raw pointer)";
+}

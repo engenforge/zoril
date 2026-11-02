@@ -1,0 +1,18 @@
+// @alloca<T>() and @alloca<T>(1) allocate exactly one T on the stack and
+// return *mut T. For fixed-size buffers use an array type instead:
+// @alloca<[u8; 64]>(1) or a local array literal.
+// expected exit 0
+
+pub fn main() -> i32 {
+    let p = unsafe { @alloca<u64>(1) };
+    *p = 41;
+    *p = *p + 1;
+    if *p != 42 { return 1; }
+
+    let arr = unsafe { @alloca<[u8; 4]>(1) };
+    (*arr)[0 as usize] = 10;
+    (*arr)[3 as usize] = 13;
+    if (*arr)[0 as usize] != 10 { return 2; }
+    if (*arr)[3 as usize] != 13 { return 3; }
+    return 0;
+}

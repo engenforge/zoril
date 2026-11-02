@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/ec_illegal_recursion.zrl:4:1: error: `S` contains itself by value, so it has no size (put it behind a pointer or a box)
+// Reported at the declaration; the size computation used to stop the compiler with no location.
+struct S {
+    a: S
+}
+
+pub fn main() {
+    let x: S = 0 as S;
+    let y = sizeof(S);
+}

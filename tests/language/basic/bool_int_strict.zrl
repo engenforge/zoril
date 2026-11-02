@@ -1,0 +1,34 @@
+// expected exit code: 0
+// bool participates in == != and bitwise & | ^ with other bools, and can be
+// used with integers only through an explicit `as` cast. (Mixing bool and
+// non-bool operands, bool arithmetic, and relational comparison on bool are
+// compile errors — see tests/error_reporting/ec_bool_*.zrl.)
+
+fn main() -> i32 {
+    let t = true;
+    let f = false;
+
+    if t == f { return 1; }
+    if t != true { return 2; }
+
+    let and_v = t & f;
+    if and_v { return 3; }
+    let or_v = t | f;
+    if !or_v { return 4; }
+    let xor_v = t ^ t;
+    if xor_v { return 5; }
+
+    let n = (t as i32) + 6;
+    if n != 7 { return 6; }
+
+    if (1 < 2) == (3 < 4) {} else { return 9; }
+
+    let mut acc = t;
+    acc &= f;
+    if acc { return 7; }
+    let mut acc2 = f;
+    acc2 |= t;
+    if !acc2 { return 8; }
+
+    return 0;
+}

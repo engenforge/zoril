@@ -1,0 +1,11 @@
+// name: An element of a non-scalar static mut array borrowed across a write
+// expected: compile_reject
+// The element borrow is not tracked when the whole static is reassigned. An array is not a scalar
+// under the static rule, so reaching it needs `unsafe`.
+static mut B: [u8; 4] = "abcd";
+
+fn main() -> i32 {
+    let r = &mut B[0];
+    B = [119 as u8, 120 as u8, 121 as u8, 122 as u8];
+    return *r as i32;
+}

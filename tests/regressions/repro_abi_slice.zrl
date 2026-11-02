@@ -1,0 +1,10 @@
+pub fn hash_slice(s: [u8]) -> u64 {
+    return s.len as u64;
+}
+fn main() -> i32 {
+    // Was `fn main() {}` -- the test could not fail. Now asserts the slice's len
+    // survives the ABI, which is the half of the fat pointer this repro is about.
+    let mut buf = [1 as u8, 2, 3];
+    if hash_slice(&mut buf) != 3 { return 1; }
+    return 0;
+}

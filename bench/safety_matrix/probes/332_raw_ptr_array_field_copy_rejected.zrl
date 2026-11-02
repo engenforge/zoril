@@ -1,0 +1,18 @@
+// name: A struct containing a raw pointer in an array field is not Copy by default
+// expected: compile_reject
+// Under Copy option A+, a struct with a raw pointer inside an array field is Move-only unless `impl Copy` is declared.
+struct Buf {
+    slots: [*mut u8; 2],
+    n: usize,
+}
+
+fn consume(b: Buf) -> usize {
+    return b.n;
+}
+
+fn main() -> i32 {
+    let b1 = Buf { slots: [0 as *mut u8, 0 as *mut u8], n: 2 };
+    let b2 = b1;
+    let _ = consume(b1);
+    return consume(b2) as i32;
+}

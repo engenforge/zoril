@@ -1,0 +1,32 @@
+// expected compile fail
+// EXPECT: error: arithmetic operator not supported on struct operands
+// EXPECT: error: arithmetic operator not supported on tuple operands
+// EXPECT: error: arithmetic operator not supported on array operands
+// EXPECT: error: arithmetic operator not supported on box operands
+// Every aggregate operand class: a struct, a tuple, an array and a box.
+struct S {
+    a: u64
+}
+
+fn add_struct(s: S) {
+    let y = 1 + s;
+}
+
+fn add_tuple(t: (u64, u64)) {
+    let y = 1 + t;
+}
+
+fn add_array(a: [u64; 2]) {
+    let y = 1 + a;
+}
+
+fn add_box(b: Box<u64>) {
+    let y = 1 + b;
+}
+
+fn main() -> i32 {
+    if false {
+        return 1;
+    }
+    return 0;
+}

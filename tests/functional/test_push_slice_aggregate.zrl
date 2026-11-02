@@ -1,0 +1,53 @@
+// expected exit code: 0
+import "mem_raw.zrl";
+import "vec.zrl";
+use mem_raw::arena_init;
+use vec::Vec;
+
+struct Item {
+    tag: u32,
+    payload: [u32],
+}
+
+fn take_item(val: Item) -> u32 {
+    if val.payload.len > 0 as usize {
+        return val.tag + val.payload[0];
+    }
+    return val.tag;
+}
+
+pub fn main() -> i32 {
+    let arena = unsafe { arena_init(65536) };
+    let mut data0 = [10 as u32, 20 as u32];
+    let mut data1 = [30 as u32, 40 as u32, 50 as u32];
+
+    let mut items = [
+        Item { tag: 100, payload: &mut data0 },
+        Item { tag: 200, payload: &mut data1 },
+    ];
+    let slice = unsafe { @slice(&mut items[0], 2 as usize) };
+
+    // Direct pass of slice[idx] to by-value aggregate function
+    let r0 = take_item(slice[0]);
+    if r0 != 110 { return 1; }
+    let r1 = take_item(slice[1]);
+    if r1 != 230 { return 2; }
+
+    // Direct push of slice[idx] to Vec<Item>
+    let mut v = unsafe { Vec::<Item>.new_in_raw(arena) };
+    v.push(slice[0]);
+    v.push(slice[1]);
+
+    if v.len() != 2 as usize { return 3; }
+    if v[0].tag != 100 { return 4; }
+    if v[0].payload.len != 2 as usize { return 5; }
+    if v[0].payload[0] != 10 { return 6; }
+    if v[0].payload[1] != 20 { return 7; }
+
+    if v[1].tag != 200 { return 8; }
+    if v[1].payload.len != 3 as usize { return 9; }
+    if v[1].payload[0] != 30 { return 10; }
+    if v[1].payload[2] != 50 { return 11; }
+
+    return 0;
+}

@@ -1,0 +1,422 @@
+// The parser: tokens to the AST, by recursive descent with operator precedence for binary
+// expressions. This file has the Parser and its token handling; the grammar is in src/parser/.
+
+import "diag.zrl";
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "intern.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "ast.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "module_path.zrl";
+import "parser/base.zrl";
+import "parser/module.zrl";
+import "parser/decl.zrl";
+import "parser/parse_type.zrl";
+import "parser/pattern.zrl";
+import "parser/stmt.zrl";
+import "parser/expr.zrl";
+use ast::{AST, Span};
+use base::{FileModule, LoadState, Parser};
+use bytevec::ByteVec;
+use diag::diag_start;
+use intern::InternTable;
+use io::eprint;
+use lexer::Lexer;
+use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+use module_path::{ModuleResolution, derive_module_identity, is_designated_stdlib_file, make_absolute, module_resolution_new, normalize_path};
+use token::{RESERVED_BASE, Token, TokenKind, TokenWithSpan};
+use vec::Vec;
+
+// Whether ABS_PATH was loaded from the root the compiler was *told* is the standard library: an
+// `-I stdlib=<dir>` argument that contains it, or the standard library beside its own installation
+// (`../share/zoril/stdlib`, which `src/main.zrl` adds in the same named form). Identity is
+// designated, never inferred: a bare `-I <dir>/stdlib`, a `<project>/stdlib/` inside the program's
+// own tree (`build/mutation/<id>/stdlib` included) and a file named `mem.zrl` are ordinary roots
+// and files, because a program that can name a directory `stdlib` must not be handed the arena
+// lifecycle contract.
+//
+// A `.zri` import cannot be asked: an interface lives in an interface directory, so its location
+// says nothing. It carries the answer instead (`// zri-stdlib: 1`, `zri_declares_stdlib`), which
+// only a compile that was told the root can produce, and that closes the round trip: `zbuild`
+// compiling a project's own `stdlib/mylib.zrl` finds it under no designated root, so the interface
+// says nothing and the consumer trusts it no further than an ordinary module.
+fn loaded_from_stdlib_root(
+    mr: *mut ModuleResolution,
+    include_ids: *u32,
+    include_count: usize,
+    table: &InternTable,
+    arena: *mut ArenaHeader,
+    abs_path: [u8],
+    iface_declares_stdlib: bool
+) -> bool {
+    if iface_declares_stdlib { return true; }
+    let cwd = unsafe { (*mr).cwd };
+    let incs = unsafe { @slice(include_ids, include_count) };
+    let mut k = 0 as usize;
+    while k < include_count {
+        if is_designated_stdlib_file(table.lookup(incs[k]), cwd, abs_path, arena) {
+            return true;
+        }
+        k = k + 1 as usize;
+    }
+    return false;
+}
+
+impl Parser {
+    const INITIAL_DECL_CAP: usize = 1024 as usize;
+    const INITIAL_PARAM_CAP: usize = 64 as usize;
+    const INITIAL_TYPE_ARG_CAP: usize = Parser.INITIAL_FIELD_CAP;
+    const INITIAL_FIELD_CAP: usize = 64 as usize;
+    const INITIAL_VARIANT_CAP: usize = 64 as usize;
+    const INITIAL_METHOD_CAP: usize = 64 as usize;
+    const INITIAL_ARM_CAP: usize = 64 as usize;
+
+    // The parser owns its lexer: it is moved into the AST's arena, next to the parser, so
+    // neither points into the caller's frame.
+    #[stores(ast -> ast, table -> ast, include_ids -> ast, state -> ast)]
+    pub fn new(
+        lexer: Lexer,
+        ast: &mut AST,
+        table: &mut InternTable,
+        file_path: [u8],
+        include_ids: *u32,
+        include_count: usize,
+        state: *mut LoadState
+    ) -> *mut Parser {
+        return Parser.new_modular(
+            lexer,
+            ast,
+            table,
+            file_path,
+            "",
+            include_ids,
+            include_count,
+            state,
+            0 as *mut ModuleResolution,
+            false
+        );
+    }
+
+    #[stores(ast -> ast, table -> ast, module_path -> ast, include_ids -> ast, state -> ast, mr_in -> ast)]
+    pub fn new_modular(
+        lexer: Lexer,
+        ast: &mut AST,
+        table: &mut InternTable,
+        file_path: [u8],
+        module_path: [u8],
+        include_ids: *u32,
+        include_count: usize,
+        state: *mut LoadState,
+        mr_in: *mut ModuleResolution,
+        iface_declares_stdlib: bool
+    ) -> *mut Parser {
+        unsafe {
+            let mut mr = mr_in;
+            let arena = (*ast).arena;
+            let p = zoril_allocator_alloc(arena, sizeof(Parser)) as *mut Parser;
+            let owned_lexer = zoril_allocator_alloc(arena, sizeof(Lexer)) as *mut Lexer;
+            *owned_lexer = lexer;
+            let norm_path = normalize_path(file_path, arena);
+            if mr as usize == 0 as usize {
+                let default_mr = zoril_allocator_alloc(
+                    arena,
+                    sizeof(ModuleResolution)
+                ) as *mut ModuleResolution;
+                let inc_vec = unsafe { Vec::<u32>.new_in_raw(arena) };
+                *default_mr = module_resolution_new(
+                    file_path,
+                    "",
+                    &inc_vec,
+                    &mut *table as *mut InternTable,
+                    arena
+                );
+                mr = default_mr;
+            }
+            let mut mod_path = module_path;
+            if mod_path.len == 0 as usize {
+                let abs_path = make_absolute(norm_path, (*mr).cwd, arena);
+                let derived = derive_module_identity(&*mr, abs_path, arena);
+                if derived.len > 0 as usize {
+                    mod_path = derived;
+                } else {
+                    mod_path = norm_path;
+                }
+            }
+            let mut root_file_id = 0 as u32;
+            let mut root_mod_id = 0 as u32;
+            if state as usize == 0 as usize {
+                let root_file_abs = make_absolute(norm_path, (*mr).cwd, arena);
+                root_file_id = table.intern(root_file_abs);
+                root_mod_id = table.intern(mod_path);
+            }
+            let source_in_stdlib = loaded_from_stdlib_root(
+                mr,
+                include_ids,
+                include_count,
+                table,
+                arena,
+                make_absolute(norm_path, (*mr).cwd, arena),
+                iface_declares_stdlib
+            );
+            *p = Parser {
+                lexer: &mut *owned_lexer,
+                cur: TokenWithSpan {
+                    token: Token.Eof,
+                    span: Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 }
+                },
+                peek: TokenWithSpan {
+                    token: Token.Eof,
+                    span: Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 }
+                },
+                cur_comment: 0 as u32,
+                peek_comment: 0 as u32,
+                arena: arena,
+                ast: ast,
+                intern_table: table,
+                file_path: norm_path,
+                module_path: mod_path,
+                source_in_stdlib: source_in_stdlib,
+                last_error_pos: 0 as u32,
+                had_error: false,
+                last_import_span: Span {
+                    start: 0 as u32,
+                    end: 0 as u32,
+                    line: 0 as u32,
+                    col: 0 as u32
+                },
+                last_import_alias: 0 as u32,
+                derive_clone_next: false,
+                quiet: false,
+                quiet_error: false,
+
+                state: state,
+
+                include_ids: include_ids,
+                include_count: include_count,
+                mr: mr,
+            };
+            if p.state as usize == 0 as usize {
+                let st = zoril_allocator_alloc(arena, sizeof(LoadState)) as *mut LoadState;
+                *st = LoadState {
+                    loaded: unsafe { Vec::<u32>.new_in_raw(arena) },
+                    active: unsafe { Vec::<u32>.new_in_raw(arena) },
+                    active_names: unsafe { Vec::<u32>.new_in_raw(arena) },
+                    file_modules: unsafe { Vec::<FileModule>.new_in_raw(arena) },
+                    iface_dir: "",
+                    iface_shadows: true,
+                    require_interface: false,
+                    verbose: false,
+                    deps_only: false,
+                    fmt_only: false,
+                    mr: mr,
+                };
+                (*st).loaded.push(root_file_id);
+                (*st).active.push(root_file_id);
+                (*st).active_names.push(root_mod_id);
+                (*st).file_modules.push(FileModule { file: root_file_id, module: root_mod_id });
+                (*p).state = st;
+            }
+            (*p).next_token();
+            // module_doc was captured at the first blank-line reset in the lexer (before any token).
+            if (*(*p).ast).module_doc == 0 as u32 {
+                (*(*p).ast).module_doc = (*(*p).lexer).module_doc;
+            }
+            (*p).next_token();
+            return p;
+        }
+    }
+
+    pub fn report_error(self: &mut Parser, msg: [u8], span: Span) {
+        if self.quiet { self.quiet_error = true; return; }
+        if span.start <= self.last_error_pos && self.last_error_pos != 0 as u32 {
+            return;
+        }
+        self.had_error = true;
+        self.last_error_pos = span.start;
+        diag_start(self.file_path, span, "error");
+        eprint(msg);
+        eprint("\n");
+    }
+
+    pub fn report_expected(self: &mut Parser, expected: TokenKind) {
+        if self.quiet { self.quiet_error = true; return; }
+        if self.cur.span.start <= self.last_error_pos && self.last_error_pos != 0 as u32 {
+            return;
+        }
+        self.had_error = true;
+        self.last_error_pos = self.cur.span.start;
+
+        diag_start(self.file_path, self.cur.span, "error");
+        eprint("expected ");
+        eprint(self.token_kind_str(expected));
+        eprint(", but found ");
+        eprint(self.token_message(&self.cur.token));
+        eprint("\n");
+    }
+
+    pub fn next_token(self: &mut Parser) {
+        self.cur = self.peek;
+        self.cur_comment = self.peek_comment;
+        self.peek = self.lexer.next_token();
+        self.peek_comment = self.lexer.last_lexed_comment;
+    }
+
+    pub fn expect(self: &mut Parser, kind: Token) {
+        if self.cur.token.kind() == kind.kind() {
+            self.next_token();
+        } else {
+            self.report_expected(kind.kind());
+            self.next_token(); // PROGRESS
+        }
+    }
+
+    pub fn token_kind_str(self: &Parser, kind: TokenKind) -> [u8] {
+        match kind {
+            TokenKind.KFn => { return "fn"; },
+            TokenKind.KStruct => { return "struct"; },
+            TokenKind.KEnum => { return "enum"; },
+            TokenKind.KTrait => { return "trait"; },
+            TokenKind.KImpl => { return "impl"; },
+            TokenKind.KLet => { return "let"; },
+            TokenKind.KMut => { return "mut"; },
+            TokenKind.KIf => { return "if"; },
+            TokenKind.KElse => { return "else"; },
+            TokenKind.KMatch => { return "match"; },
+            TokenKind.KWhile => { return "while"; },
+            TokenKind.KFor => { return "for"; },
+            TokenKind.KIn => { return "in"; },
+            TokenKind.KReturn => { return "return"; },
+            TokenKind.KBreak => { return "break"; },
+            TokenKind.KContinue => { return "continue"; },
+            TokenKind.KDefer => { return "defer"; },
+            TokenKind.KType => { return "type"; },
+            TokenKind.KPub => { return "pub"; },
+            TokenKind.KExtern => { return "extern"; },
+            TokenKind.KBox => { return "box"; },
+            TokenKind.KTry => { return "try"; },
+            TokenKind.KSizeof => { return "sizeof"; },
+            TokenKind.KAlignof => { return "alignof"; },
+            TokenKind.KAs => { return "as"; },
+            TokenKind.KConst => { return "const"; },
+            TokenKind.KStatic => { return "static"; },
+            TokenKind.KImport => { return "import"; },
+            TokenKind.Ident => { return "identifier"; },
+            TokenKind.Int => { return "integer literal"; },
+            TokenKind.Float => { return "float literal"; },
+            TokenKind.Char => { return "char literal"; },
+            TokenKind.String => { return "string literal"; },
+            TokenKind.Bool => { return "boolean literal"; },
+            TokenKind.Plus => { return "+"; },
+            TokenKind.Minus => { return "-"; },
+            TokenKind.Star => { return "*"; },
+            TokenKind.Slash => { return "/"; },
+            TokenKind.Percent => { return "%"; },
+            TokenKind.Equal => { return "="; },
+            TokenKind.EqualEqual => { return "=="; },
+            TokenKind.BangEqual => { return "!="; },
+            TokenKind.Less => { return "<"; },
+            TokenKind.Greater => { return ">"; },
+            TokenKind.LessEqual => { return "<="; },
+            TokenKind.GreaterEqual => { return ">="; },
+            TokenKind.Amp => { return "&"; },
+            TokenKind.Pipe => { return "|"; },
+            TokenKind.Caret => { return "^"; },
+            TokenKind.Bang => { return "!"; },
+            TokenKind.AmpAmp => { return "&&"; },
+            TokenKind.PipePipe => { return "||"; },
+            TokenKind.Dot => { return "."; },
+            TokenKind.DotDot => { return ".."; },
+            TokenKind.DotDotDot => { return "..."; },
+            TokenKind.Comma => { return ","; },
+            TokenKind.Colon => { return ":"; },
+            TokenKind.Semi => { return ";"; },
+            TokenKind.Arrow => { return "->"; },
+            TokenKind.FatArrow => { return "=>"; },
+            TokenKind.LParen => { return "("; },
+            TokenKind.RParen => { return ")"; },
+            TokenKind.LBrace => { return "{"; },
+            TokenKind.RBrace => { return "}"; },
+            TokenKind.LBracket => { return "["; },
+            TokenKind.RBracket => { return "]"; },
+            TokenKind.Question => { return "?"; },
+            TokenKind.Underscore => { return "_"; },
+            TokenKind.At => { return "@"; },
+            TokenKind.DoubleColon => { return "::"; },
+            TokenKind.Hash => { return "#"; },
+            TokenKind.Eof => { return "EOF"; },
+            TokenKind.Invalid => { return "invalid token (unterminated string)"; },
+            TokenKind.KLoop => { return "loop"; },
+            TokenKind.KUnsafe => { return "unsafe"; },
+            TokenKind.KUse => { return "use"; },
+            TokenKind.PlusEqual => { return "+="; },
+            TokenKind.MinusEqual => { return "-="; },
+            TokenKind.StarEqual => { return "*="; },
+            TokenKind.SlashEqual => { return "/="; },
+            TokenKind.PercentEqual => { return "%="; },
+            TokenKind.PlusPercent => { return "+%"; },
+            TokenKind.MinusPercent => { return "-%"; },
+            TokenKind.StarPercent => { return "*%"; },
+            TokenKind.PlusPercentEqual => { return "+%="; },
+            TokenKind.MinusPercentEqual => { return "-%="; },
+            TokenKind.StarPercentEqual => { return "*%="; },
+            TokenKind.AmpEqual => { return "&="; },
+            TokenKind.PipeEqual => { return "|="; },
+            TokenKind.CaretEqual => { return "^="; },
+            TokenKind.LessLess => { return "<<"; },
+            TokenKind.GreaterGreater => { return ">>"; },
+            TokenKind.LessLessEqual => { return "<<="; },
+            TokenKind.GreaterGreaterEqual => { return ">>="; },
+        }
+    }
+
+    pub fn is_kind(self: &Parser, kind: TokenKind) -> bool {
+        return self.cur.token.kind() == kind;
+    }
+
+    // What to print for a token: a reserved word names itself and says why it cannot be one, and
+    // any other token is its kind's name (token.zrl RESERVED_BASE).
+    pub fn token_message(self: &Parser, t: &Token) -> [u8] {
+        match *t {
+            Token.Invalid(code) => {
+                if code < RESERVED_BASE { return "invalid token (unterminated string)"; }
+                let i = code - RESERVED_BASE;
+                if i == 0 as u32 { return "`async` is a reserved word, kept for a future feature"; }
+                if i == 1 as u32 { return "`await` is a reserved word, kept for a future feature"; }
+                if i == 2 as u32 { return "`dyn` is a reserved word, kept for a future feature"; }
+                if i == 3 as u32 { return "`move` is a reserved word, kept for a future feature"; }
+                if i == 4 as u32 { return "`where` is a reserved word, kept for a future feature"; }
+                if i == 5 as u32 { return "`yield` is a reserved word, kept for a future feature"; }
+                if i == 6 as u32 { return "`macro` is a reserved word, kept for a future feature"; }
+                if i == 7 as u32 { return "`union` is a reserved word, kept for a future feature"; }
+                return "`super` is a reserved word, kept for a future feature";
+            },
+            _ => { return self.token_kind_str(t.kind()); },
+        }
+    }
+
+    pub fn peek_is_kind(self: &Parser, kind: TokenKind) -> bool {
+        return self.peek.token.kind() == kind;
+    }
+
+    // The name ID (just read) with each `::NAME` that follows: the single name "a::b::c".
+    // A path through a module (`io::write`) or to a type's item (`Vec::new`), told apart
+    // when the name is resolved.
+    pub fn parse_path_rest(self: &mut Parser, id: u32) -> u32 {
+        if !(self.is_kind(TokenKind.DoubleColon) && self.peek_is_kind(TokenKind.Ident)) {
+            return id;
+        }
+        let mut full = unsafe { ByteVec.new_raw(self.arena) };
+        full.push_slice(self.intern_table.lookup(id));
+        while self.is_kind(TokenKind.DoubleColon) && self.peek_is_kind(TokenKind.Ident) {
+            self.next_token();
+            full.push_slice("::");
+            full.push_slice(self.intern_table.lookup(self.cur.token.get_ident_id()));
+            self.next_token();
+        }
+        return self.intern_table.intern(full.as_slice());
+    }
+}

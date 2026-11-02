@@ -1,0 +1,25 @@
+// expected compile fail
+// A bare name must be this module's own, brought in by `use`, or the prelude's (core.zrl).
+// EXPECT: error: unresolved symbol: weight
+// EXPECT: note: `weight` is in `geom_lib`: write `geom_lib::weight`, or add `use geom_lib::weight;`
+// EXPECT: error: unknown type `Point`
+// EXPECT: note: `Point` is in `geom_lib`: write `geom_lib::Point`, or add `use geom_lib::Point;`
+// EXPECT: error: unresolved symbol: Vec
+// The two EXPECT lines below pin the note's wording, the file it names and its tail, but not
+// the *include root* it is spelled with: `stdlib/vec.zrl` under `-I stdlib`, and something
+// else wherever the stdlib is reached from. A root-pinned path made every run of
+// `scripts/mutation-check.sh` fail this test (it compiles with a staged copy of `stdlib/`),
+// which cost the harness its SURVIVED verdict for a day - see the task of 2026-10-12 and
+// `scripts/test_mutation_check.sh`, the canary that now guards it.
+// EXPECT: note: `Vec` is defined in
+// EXPECT: vec.zrl, which this module does not import
+// EXPECT: error: a pattern names a constant that is not in scope here (it would bind a new variable): SIDES
+import "geom_lib.zrl";
+import "string.zrl";
+
+fn main() -> i32 {
+    let n = weight(geom_lib::Shape.Empty);
+    let p: Point = geom_lib::Point.new(1, 2);
+    let v = Vec::<i32>.new();
+    return match n { SIDES => 1, _ => 0 };
+}

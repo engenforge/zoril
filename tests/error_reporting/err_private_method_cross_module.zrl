@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_private_method_cross_module.zrl:12:12: error: cannot access private method: secret
+// EXPECT: tests/error_reporting/err_private_method_cross_module.zrl:12:12: note: `secret` is private to tests/error_reporting/include/err_private_method_helper.zrl
+// A method is the type's wherever its impl is (surface_syntax.md §11.1.1), but naming it is still
+// the module boundary's business: without `pub` only the module that declares it may call it. The
+// accepted twin is tests/language/modules/private_method_visibility.zrl.
+import "include/err_private_method_helper.zrl";
+use err_private_method_helper::Widget;
+
+pub fn main() -> i32 {
+    let w = Widget { n: 1 };
+    return w.secret();
+}

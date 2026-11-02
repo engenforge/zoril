@@ -1,0 +1,40 @@
+// 23: Global state with const and static declarations.
+// expected exit code: 34
+// Demonstrates: const, static, static mut, global access from multiple functions.
+
+const MAX_ENTRIES: i32 = 256;
+const VERSION: i32 = 1;
+const MASK: u32 = 0xFF_00_FF;
+
+static mut entry_count: i32 = 0;
+static mut last_value: i32 = 0;
+
+fn add_entry(value: i32) -> bool {
+    if entry_count >= MAX_ENTRIES {
+        return false;
+    }
+    entry_count += 1;
+    last_value = value;
+    return true;
+}
+
+fn get_count() -> i32 {
+    return entry_count;
+}
+
+fn get_last() -> i32 {
+    return last_value;
+}
+
+fn main() -> i32 {
+    add_entry(10);
+    add_entry(20);
+    add_entry(30);
+
+    let count = get_count();     // 3
+    let last = get_last();       // 30
+    let ver = VERSION;           // 1
+    let m = MASK as i32;
+
+    return count + last + ver;
+}

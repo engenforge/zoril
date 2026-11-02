@@ -1,0 +1,43 @@
+// 20: First-class function pointers and indirect dispatch.
+// Demonstrates: fn(T) -> R type, function address, indirect call, callback patterns.
+// expected exit code: 140
+
+fn add(a: i32, b: i32) -> i32 { return a + b; }
+fn sub(a: i32, b: i32) -> i32 { return a - b; }
+fn mul(a: i32, b: i32) -> i32 { return a * b; }
+
+fn apply_op(op: fn(i32, i32) -> i32, x: i32, y: i32) -> i32 {
+    return op(x, y);
+}
+
+fn select_op(code: i32) -> fn(i32, i32) -> i32 {
+    if code == 0 {
+        return add;
+    } else if code == 1 {
+        return sub;
+    }
+    return mul;
+}
+
+fn transform_array(data: &mut [i32; 4], f: fn(i32) -> i32) {
+    for i in 0..4 {
+        data[i] = f(data[i]);
+    }
+}
+
+fn main() -> i32 {
+    // Direct function pointer usage
+    let op = select_op(0);
+    let a = apply_op(op, 10, 20);  // 30
+
+    // Passing different operations
+    let b = apply_op(sub, 100, 42);  // 58
+    let c = apply_op(mul, 6, 7);     // 42
+
+    // Transforming data with a function pointer
+    let mut data = [1, 2, 3, 4];
+    let doubler = |x: i32| -> i32 { x * 2 };
+    transform_array(&mut data, doubler);
+
+    return a + b + c + data[0] + data[3];
+}

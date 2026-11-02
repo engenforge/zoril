@@ -1,0 +1,84 @@
+import "io.zrl";
+import "vec.zrl";
+import "string.zrl";
+
+use io::{Error, Write, write_all};
+use vec::Vec;
+use string::String;
+
+struct SimpleWriter {
+    total: usize,
+}
+
+impl Write for SimpleWriter {
+    fn write(self: &mut SimpleWriter, buf: [u8]) -> Result<usize, Error> {
+        self.total = self.total + buf.len;
+        return Result.Ok(buf.len);
+    }
+}
+
+// 1. Method call on &mut parameter inside a loop (io.zrl:463 shape)
+fn test_writer_loop(w: &mut SimpleWriter) -> bool {
+    let mut i = 0 as usize;
+    let mut data: [u8; 4] = [1 as u8, 2, 3, 4];
+    while i < 5 as usize {
+        let res = w.write(unsafe { @slice(&mut data[0] as *mut u8, 4 as usize) });
+        if res.is_err() { return false; }
+        i = i + 1 as usize;
+    }
+    return w.total == 20 as usize;
+}
+
+fn consume_vec(v: Vec<i32>) -> usize {
+    return v.len();
+}
+
+// 2. Non-Copy temporary Vec constructed and consumed inside a loop
+fn test_vec_temp_loop() -> bool {
+    let mut i = 0 as usize;
+    let mut count = 0 as usize;
+    while i < 5 as usize {
+        count = count + consume_vec(Vec::<i32>.new());
+        i = i + 1 as usize;
+    }
+    return count == 0 as usize;
+}
+
+fn consume_string(s: String) -> usize {
+    return s.len();
+}
+
+// 3. Non-Copy temporary String constructed and consumed inside a loop
+fn test_string_temp_loop() -> bool {
+    let mut i = 0 as usize;
+    let mut count = 0 as usize;
+    while i < 5 as usize {
+        count = count + consume_string(String.new());
+        i = i + 1 as usize;
+    }
+    return count == 0 as usize;
+}
+
+fn mutate_counter(c: &mut usize) {
+    *c = *c + 1 as usize;
+}
+
+// 4. Free function taking &mut called repeatedly inside a loop
+fn test_mut_ref_loop() -> bool {
+    let mut count = 0 as usize;
+    let mut i = 0 as usize;
+    while i < 5 as usize {
+        mutate_counter(&mut count);
+        i = i + 1 as usize;
+    }
+    return count == 5 as usize;
+}
+
+fn main() -> i32 {
+    let mut w = SimpleWriter { total: 0 as usize };
+    if !test_writer_loop(&mut w) { return 1; }
+    if !test_vec_temp_loop() { return 2; }
+    if !test_string_temp_loop() { return 3; }
+    if !test_mut_ref_loop() { return 4; }
+    return 0;
+}

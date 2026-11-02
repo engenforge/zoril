@@ -1,0 +1,16 @@
+// expected exit 134
+// A failed `mmap` must be reported, not used. Linux returns -errno (-ENOMEM is -12) for a failed
+// syscall, and `mmap_or_trap` (formerly `must_mmap`) tested for the libc `MAP_FAILED` of -1, so it handed `arena_init` a value
+// in that range, the arena header was written through it, and the process died with 139 and no
+// message (doc/SAFETY.md §4.4). `syscall_failed` decides it on the integer the kernel
+// returned - the range [-4095, -1] - so the failure is reported where it happens. It *traps*
+// (exit 134), like the arena's own overflow and capacity paths: a failed mmap is memory
+// exhaustion, and the safety matrix reads 134 as "trapped" (`doc/spec/safety_model.md` §4).
+// 2^61 bytes cannot be mapped on linux/x86_64, so the failure is deterministic, not environmental.
+import "mem_raw.zrl";
+use mem_raw::arena_init;
+
+fn main() -> i32 {
+    let a = unsafe { arena_init(2305843009213693952) };
+    return 0;
+}

@@ -1,0 +1,9 @@
+enum Explicit {
+    A = 1,
+    B = 2,
+}
+
+fn main() -> i32 {
+    let a = Explicit.A;
+    return 0;
+}

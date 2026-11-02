@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: error: cannot access private field: fd
+// File.fd is private to io.zrl to prevent forging an owned File around arbitrary descriptors.
+import "io.zrl";
+use io::{File, stdout};
+
+fn main() -> i32 {
+    let _ = File { fd: stdout() };
+    return 0;
+}

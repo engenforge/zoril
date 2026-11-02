@@ -1,0 +1,19 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_uncalled_method_borrow.zrl:12:9: error: cannot assign to 'self.v' because it is borrowed
+// EXPECT: tests/error_reporting/err_uncalled_method_borrow.zrl:11:23: note: borrow of 'self.v' taken here
+// The borrow checker runs over a method's body whether or not the method is called: a conflict
+// nothing reaches today is still a conflict, and the caller that first reaches it must not be the
+// one to find out. The accepted twin is
+// tests/language/structs/uncalled_method_checked.zrl.
+struct S { v: i32 }
+impl S {
+    fn never_called(self: &mut S) -> i32 {
+        let r: &i32 = &self.v;
+        self.v = 7;
+        return *r;
+    }
+}
+
+fn main() -> i32 {
+    return 0;
+}

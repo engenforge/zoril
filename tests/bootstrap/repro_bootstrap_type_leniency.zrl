@@ -1,0 +1,11 @@
+// expected compile fail
+struct AST { arena: u64 }
+fn takes_ref(ast: &mut AST) {
+    let _ = (*ast).arena;
+}
+fn main() -> i32 {
+    let mut ast_val = AST { arena: 42 as u64 };
+    let ast = &mut ast_val; // ast: *mut AST
+    takes_ref(&mut ast); // Passes &mut *mut AST to *mut AST
+    return 0;
+}

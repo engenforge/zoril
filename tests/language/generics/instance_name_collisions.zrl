@@ -1,0 +1,17 @@
+// expected exit 0
+// Distinct instantiations get distinct functions. Instance names joined their type arguments'
+// names with nothing between them, so `sz::<A, BC>` and `sz::<AB, C>` were both `sz_TABC`, and
+// an array's length was left out, so `[u8; 3]` and `[u8; 5]` shared one instance: the second
+// call ran the first instance.
+struct A { x: u8 }
+struct BC { x: u64, y: u64 }
+struct AB { x: u32 }
+struct C { x: u16 }
+fn sz<X, Y>() -> usize { return sizeof(X) * 100 + sizeof(Y); }
+fn size_of<T>() -> usize { return sizeof(T); }
+fn main() -> i32 {
+    if sz::<A, BC>() != 116 { return 1; }
+    if sz::<AB, C>() != 402 { return 2; }
+    if size_of::<[u8; 3]>() != 3 || size_of::<[u8; 5]>() != 5 { return 3; }
+    return 0;
+}

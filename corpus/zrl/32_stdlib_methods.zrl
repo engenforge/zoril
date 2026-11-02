@@ -1,0 +1,44 @@
+// expected exit code: 10
+// 32: Option and Result standard library methods.
+// Demonstrates: is_ok, is_err, is_some, is_none, ok(), err() from core.zrl.
+
+import "core.zrl";
+
+fn divide(a: i32, b: i32) -> Result<i32, i32> {
+    if b == 0 {
+        return Result.Err(-1);
+    }
+    return Result.Ok(a / b);
+}
+
+fn main() -> i32 {
+    let r = divide(10, 2);  // Result.Ok(5)
+    let e = divide(5, 0);   // Result.Err(-1)
+
+    // Borrow-based predicates (do not consume the values)
+    let ok_flag: i32 = if r.is_ok() { 1 } else { 0 };   // 1
+    let err_flag: i32 = if e.is_err() { 1 } else { 0 };  // 1
+
+    // Consuming conversions
+    let some_opt = r.ok();  // Option.Some(5), moves r
+    let e_opt = e.err();    // Option.Some(-1), moves e
+
+    let some_flag: i32 = if some_opt.is_some() { 1 } else { 0 };   // 1
+    let e_flag: i32 = if e_opt.is_some() { 1 } else { 0 };         // 1
+
+    // Extract the wrapped value
+    let val = match some_opt {
+        Some(v) => v,
+        None => 0,
+    }; // 5 — also consumes some_opt
+
+    @drop(e_opt);
+
+    // is_none: ok() on an Err result yields Option.None
+    let none_opt = divide(1, 0).ok();  // Result.Err(-1).ok() → Option.None
+    let none_flag: i32 = if none_opt.is_none() { 1 } else { 0 };  // 1
+    @drop(none_opt);
+
+    return val + ok_flag + err_flag + some_flag + e_flag + none_flag;
+    // 5 + 1 + 1 + 1 + 1 + 1 = 10
+}

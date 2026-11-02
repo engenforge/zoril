@@ -1,0 +1,17 @@
+// name: [u8]::split result tied to Arena parameter
+// expected: compile_reject
+// [u8]::split returns a Vec allocated in Arena `a`. The returned Vec borrows `a` and
+// cannot remain live across `a.reset()`.
+import "mem.zrl";
+import "string.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = Arena.new(4096 as u64).unwrap();
+    let text: [u8] = "a,b,c";
+    let parts = text.split(',' as u8, &a);
+    a.reset();
+    return parts.len() as i32;
+}

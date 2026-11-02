@@ -1,0 +1,4 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_extern_reference_param.zrl:3:24: error: an extern function cannot take or return a reference (pass a raw pointer, `*T` or `*mut T`): takes_ref
+extern fn takes_ref(p: &mut i32) -> i32;
+fn main() -> i32 { return 0; }

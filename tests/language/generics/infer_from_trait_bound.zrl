@@ -1,0 +1,33 @@
+// A type parameter used only in another parameter's trait bound
+// (`fn first<T, S: Source<T>>(s: &mut S) -> T`) is inferred from the impl of
+// that trait for the argument's type, including generic impls.
+// expected exit 0
+
+trait Source<T> {
+    fn take(self: &mut Self) -> T;
+}
+
+struct Const { v: i64 }
+impl Source<i64> for Const {
+    fn take(self: &mut Const) -> i64 { return self.v; }
+}
+
+struct Boxed<T> { v: T }
+impl<T> Source<T> for Boxed<T> {
+    fn take(self: &mut Boxed<T>) -> T { return self.v; }
+}
+
+fn first<T, S: Source<T>>(s: &mut S) -> T {
+    return s.take();
+}
+
+fn main() -> i32 {
+    let mut c = Const { v: 5000000000 };
+    let a = first(&mut c);
+    if a != 5000000000 { return 1; }
+
+    let mut b = Boxed { v: 7 as u8 };
+    let x = first(&mut b);
+    if x != 7 { return 2; }
+    return 0;
+}

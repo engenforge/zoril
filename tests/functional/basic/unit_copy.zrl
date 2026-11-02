@@ -1,0 +1,6 @@
+// expected exit code: 0
+fn dummy_write() {}
+fn main() -> i32 {
+    let _ = dummy_write();
+    return 0;
+}

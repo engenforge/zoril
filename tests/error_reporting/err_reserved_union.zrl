@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: `union` is a reserved word, kept for a future feature
+fn union() -> i32 {
+    return 0;
+}

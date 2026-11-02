@@ -1,0 +1,16 @@
+// expected compile fail
+
+trait Hashable {
+    fn hash(self: &Self) -> u64;
+}
+
+struct NotHashable {}
+
+fn call_hash<T: Hashable>(t: &T) {
+    t.hash();
+}
+
+fn main() {
+    let nh = NotHashable {};
+    call_hash(&nh);
+}

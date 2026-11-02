@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: error: region escape: returning a pointer to local stack storage
+// Returning a reference into a by-value parameter Box dropped at return is rejected.
+fn inner(b: Box<i32>) -> &i32 {
+    return &*b;
+}
+
+fn main() -> i32 {
+    let r = inner(box 5);
+    return *r;
+}

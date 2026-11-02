@@ -1,0 +1,44 @@
+// expected exit code: 113
+// 13: Arrays, slices, indexing, and bounds-checked access.
+// Demonstrates: [T; N], [T], array literals, indexing, .len, .ptr, trailing commas.
+
+fn array_sum(arr: &[i32; 4]) -> i32 {
+    let mut total = 0;
+    for i in 0..4 {
+        total += arr[i];
+    }
+    return total;
+}
+
+fn slice_max(s: &[i32]) -> i32 {
+    let mut best = s[0];
+    for i in 1..s.len {
+        if s[i] > best {
+            best = s[i];
+        }
+    }
+    return best;
+}
+
+fn fill_ascending(s: &mut [i32; 5]) {
+    for i in 0..5 {
+        s[i] = i as i32;
+    }
+}
+
+fn main() -> i32 {
+    // Array literal with trailing comma
+    let data = [10, 20, 30, 40,];
+    let total = array_sum(&data);
+
+    // Slice from array
+    let values = [5, 3, 8, 1, 9, 2, 7];
+    let biggest = slice_max(&values);
+
+    // Mutable array
+    let mut seq = [0, 0, 0, 0, 0];
+    fill_ascending(&mut seq);
+    let last = seq[4];
+
+    return total + biggest + last;
+}

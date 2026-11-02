@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: error: type `Res` does not implement trait `Copy`
+import "core.zrl";
+
+struct Res { x: i32 }
+impl Drop for Res { fn drop(self) {} }
+
+fn keep<T: Copy>(x: T) -> T { return x; }
+
+fn main() -> i32 {
+    let r = Res { x: 1 };
+    let k = keep(r); // @error "type `Res` does not implement trait `Copy`"
+    return k.x;
+}

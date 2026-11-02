@@ -1,0 +1,9 @@
+// name: Pointer forged from integer
+// expected: compile_reject
+// Forging a pointer from an integer is safe (probe 122); *using* it is not, so this is rejected
+// at the store, where the marker belongs. See 33_forged_pointer_unsafe.zrl for the marked form.
+fn main() -> i32 {
+    let p = 4096 as *mut u8;
+    *p = 65 as u8;
+    return 0;
+}

@@ -1,0 +1,14 @@
+struct T { y: i32 }
+enum E { X(i32), Y }
+impl T {
+    const K: i32 = 1;
+    fn new() -> T { return T { y: 1 }; }
+    fn f(self: &T) -> i32 { return self.y; }
+}
+impl E { fn g(self: &E) -> i32 { return match *self { E.X(v) => v, E.Y => 0 }; } }
+pub fn from_a() -> i32 {
+    let t = T.new();
+    let e = E.X(1);
+    if t.f() != T.K || e.g() != 1 { return 100; }
+    return t.f();
+}

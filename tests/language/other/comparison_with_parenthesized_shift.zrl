@@ -1,0 +1,12 @@
+// expected exit 0
+// `a < (b << c)` is a comparison. After `a <` the parser tries type arguments (`W<T> { .. }`);
+// that try reported errors for `(b << c)` instead of giving up quietly.
+fn below(bits: u64, magnitude: u64) -> bool {
+    return magnitude < ((1 as u64) << bits);
+}
+fn main() -> i32 {
+    if !below(3, 7) || below(3, 8) { return 1; }
+    let n = 2;
+    if !(n < (1 << 2)) { return 2; }
+    return 0;
+}

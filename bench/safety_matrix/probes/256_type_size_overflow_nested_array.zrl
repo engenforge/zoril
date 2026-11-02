@@ -1,0 +1,12 @@
+// name: A nested array type whose size wraps past 2^64
+// expected: compile_reject
+// Each array dimension was checked to fit in 32 bits, but not the size of the whole type: the
+// product wrapped, so `sizeof([[[[u8; 65536]; 65536]; 65536]; 65536])` was 0 and every bounds
+// check on a value of that type passed. The size is now computed with checked multiplication and
+// a type above isize::MAX is rejected.
+fn main() -> i32 {
+    if sizeof([[[[u8; 65536]; 65536]; 65536]; 65536]) == 0 as u64 {
+        return 1;
+    }
+    return 0;
+}

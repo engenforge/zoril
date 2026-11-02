@@ -1,0 +1,21 @@
+// name: Element reference stored out via fn value call
+// expected: known_gap
+// gap: Storage facts drops provenance for element reference passed through fn value
+// observed: exit 77
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn forward_fn_target(v: &i32) -> &i32 { return v; }
+fn escape_storer(out: &mut &i32) {
+    let mut arr = [42, 0];
+    let src_val = &arr[0];
+    let carried = src_val;
+    let f_ptr: fn(&i32) -> &i32 = forward_fn_target;
+    let routed = f_ptr(carried);
+    *out = routed;
+}
+fn main() -> i32 {
+    let mut seed = 0;
+    let mut dest_val: &i32 = &seed;
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    return *dest_val;
+}

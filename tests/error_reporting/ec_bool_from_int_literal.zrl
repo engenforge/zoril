@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: error: cannot implicitly convert between bool and non-bool (use `as`)
+// The `let` position used to answer this with `type mismatch: expected type N
+// (tag 0), found M (tag 0)` -- raw type ids for a bool/int confusion that has a
+// name. It now routes through `report_conv_or_type_mismatch` like the call-argument
+// sites always did. See err_implicit_narrowing_let.zrl for the sibling case.
+
+fn main() -> i32 {
+    let b: bool = 5;
+    if b { return 1; }
+    return 0;
+}

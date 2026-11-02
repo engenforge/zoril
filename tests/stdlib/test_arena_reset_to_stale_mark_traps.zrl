@@ -1,0 +1,16 @@
+// expected exit 134
+// Passing a mark captured before a.reset() must trap at runtime with "stale arena mark".
+
+import "mem.zrl";
+use mem::Arena;
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return 1; },
+    };
+    let mark_stale = a.mark();
+    a.reset();
+    a.reset_to(mark_stale);
+    return 0;
+}

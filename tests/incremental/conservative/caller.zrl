@@ -1,0 +1,8 @@
+import "lib.zrl";
+use lib::{S, take};
+
+pub fn main() -> i32 {
+    let mut s = S { a: 1 };
+    take(&mut s);
+    return 0;
+}

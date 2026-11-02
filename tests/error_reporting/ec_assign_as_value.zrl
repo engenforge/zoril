@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: error: assignment is a statement and yields no value
+
+fn main() -> i32 {
+    let mut x = 1;
+    let y = x = 5;
+    return y;
+}

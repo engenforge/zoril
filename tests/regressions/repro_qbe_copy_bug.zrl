@@ -1,0 +1,9 @@
+import "core.zrl";
+import "io.zrl";
+use io::print;
+
+fn main() -> i32 {
+    let msg = "Hello";
+    print(msg);
+    return 0;
+}

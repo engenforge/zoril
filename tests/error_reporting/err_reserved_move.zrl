@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: `move` is a reserved word, kept for a future feature
+fn f() -> i32 {
+    let move = 1;
+    return move;
+}

@@ -1,0 +1,9 @@
+// Helper for err_uncalled_method_private_call.zrl: a type with a public method and a private one,
+// in a module the test imports. The test's own method that calls the private one is never called -
+// the privacy check must still refuse it, in the caller's module and at the call.
+pub struct Widget { pub n: i32 }
+
+impl Widget {
+    pub fn shown(self: &Widget) -> i32 { return self.n; }
+    fn secret(self: &Widget) -> i32 { return self.n + 1; }
+}

@@ -1,0 +1,30 @@
+// name: A collection allocated in a &mut Arena parameter cannot outlive reset()
+// expected: compile_reject
+// A collection allocated in an arena through a &mut Arena parameter keeps the arena
+// borrowed; calling reset() on the arena while the collection is live is rejected.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn churn(a: &mut Arena) {
+    let mut w = Vec::<i32>.new_in(a);
+    let mut i = 0;
+    while i < 100 {
+        w.push(999);
+        i = i + 1;
+    }
+}
+
+fn evil(a: &mut Arena) -> i32 {
+    let mut v = Vec::<i32>.new_in(a);
+    v.push(42);
+    a.reset();
+    churn(a);
+    return *v.get(0).unwrap();
+}
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536).unwrap();
+    return evil(&mut a);
+}

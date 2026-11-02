@@ -1,0 +1,8 @@
+import "lib.zrl";
+use lib::{S, stash};
+
+pub fn main() -> i32 {
+    let mut s = S { a: 7 };
+    let p = stash(&mut s);
+    return unsafe { (*p).a };
+}

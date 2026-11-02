@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_arena_oom_compile_time.zrl:11:25: error: arena capacity exceeded at compile time
+
+import "local_mem.zrl";
+use local_mem::{arena_init, zoril_allocator_alloc};
+
+fn test_oom() {
+    let arena = arena_init(1024 as u64);
+
+    // Triggers the compile-time capacity error. One line, so the pinned diagnostic keeps its line and column: `arena` is an owned `Box<ArenaHeader>` and the allocator wants a mutable pointer to it, so borrow the box.
+    let data = unsafe { zoril_allocator_alloc(&mut *arena, 2048 as u64) };
+}
+
+fn main() -> i32 {
+    test_oom();
+    return 0;
+}

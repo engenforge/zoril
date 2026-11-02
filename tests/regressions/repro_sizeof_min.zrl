@@ -1,0 +1,36 @@
+pub enum Large {
+    V0, V1, V2, V3, V4, V5, V6, V7, V8, V9,
+    V10, V11, V12, V13, V14, V15, V16, V17, V18, V19,
+    V20, V21, V22, V23, V24, V25,
+    Target(u32),
+    Int(u64),
+    Float(f64),
+    Bool(bool),
+    Ident(u32),
+    String(u32),
+    Eof,
+    Invalid(u32),
+    V29, V30, V31, V32, V33, V34, V35, V36, V37, V38, V39,
+    V40, V41, V42, V43, V44, V45, V46, V47, V48, V49,
+    V50, V51, V52, V53, V54, V55, V56, V57, V58, V59,
+    V60, V61, V62, V63, V64, V65, V66, V67, V68, V69,
+    V70, V71, V72, V73, V74, V75, v76, V77, V78, V79,
+}
+
+pub fn get_target(v: u32) -> Large {
+    return Large.Target(v);
+}
+
+pub fn get_int(v: u64) -> Large {
+    return Large.Int(v);
+}
+fn main() -> i32 {
+    // Was `fn main() {}` -- the test could not fail. This test exists for enum
+    // *layout* with a large variant count, so it now round-trips a payload
+    // through two different variants and checks the values survive.
+    let t = get_target(42);
+    match t { Large.Target(v) => { if v != 42 { return 1; } }, _ => { return 2; } }
+    let i = get_int(0x1122_3344_5566_7788);
+    match i { Large.Int(v) => { if v != 0x1122_3344_5566_7788 { return 3; } }, _ => { return 4; } }
+    return 0;
+}

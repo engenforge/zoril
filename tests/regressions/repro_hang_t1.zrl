@@ -1,0 +1,2 @@
+enum E { A, B }
+pub fn main() -> i32 { let e = E.A; let x = 0; return x; }

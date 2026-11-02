@@ -1,0 +1,4 @@
+// name: Write into a string literal
+// expected: compile_reject
+// A string literal is a `[u8]`: every use of "hello" shares the one constant.
+fn main() -> i32 { let s = "hello"; s[0] = 'H' as u8; return s[0] as i32; }

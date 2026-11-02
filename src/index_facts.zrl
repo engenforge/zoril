@@ -1,0 +1,318 @@
+// Facts that make a fixed-size array's bounds check redundant: "local L is below B", where L is an
+// unsigned integer local whose address is never taken, so only its own assignments change it. A
+// fact comes from the true edge of a branch on `L < C` (or `L <= C`, `C > L`, `C >= L`) into a
+// block that edge alone reaches, and from a check that has already passed; it passes on to a
+// block whose only predecessor it held at the end of, and dies when L is assigned. An index into
+// an array of N elements needs no check while a fact `L < B` with B <= N holds.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "vec.zrl";
+import "zir.zrl";
+import "il_type.zrl";
+import "il_cfg.zrl";
+use il_cfg::ILModule;
+use il_type::{ILPRIM_U16, ILPRIM_U32, ILPRIM_U64, ILPRIM_U8, ILPRIM_USIZE, ILType};
+use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+use vec::Vec;
+use zir::{Place, ZirFunction, ZirRvalue, ZirStmt, ZirTerminator};
+
+const OP_LT: u32 = 10;
+const OP_LE: u32 = 11;
+const OP_GT: u32 = 12;
+const OP_GE: u32 = 13;
+
+pub struct IndexFact {
+    pub local: u32,
+    pub bound: u64,
+}
+
+pub struct IndexFacts {
+    arena: *mut ArenaHeader,
+    // By local id: whether facts about it can be trusted.
+    eligible: [mut bool],
+    // By local id: the constant a single-assignment local holds, when it holds one.
+    is_const: [mut bool],
+    const_val: [mut u64],
+    // By block: the facts that hold on entry.
+    entry: Vec<[IndexFact]>,
+    // The facts holding at the point being lowered.
+    pub current: Vec<IndexFact>,
+}
+
+impl IndexFacts {
+    // No facts: before a function is lowered.
+    pub fn empty(arena: *mut ArenaHeader) -> IndexFacts {
+        return IndexFacts {
+            arena: arena,
+            eligible: new_bools(arena, 0 as usize),
+            is_const: new_bools(arena, 0 as usize),
+            const_val: new_u64s(arena, 0 as usize),
+            entry: unsafe { Vec::<[IndexFact]>.new_in_raw(arena) },
+            current: unsafe { Vec::<IndexFact>.new_in_raw(arena) },
+        };
+    }
+
+    pub fn new(arena: *mut ArenaHeader, func: &ZirFunction, module: &ILModule) -> IndexFacts {
+        let n = func.locals.len + 1 as usize;
+        let mut f = IndexFacts {
+            arena: arena,
+            eligible: new_bools(arena, n),
+            is_const: new_bools(arena, n),
+            const_val: new_u64s(arena, n),
+            entry: unsafe { Vec::<[IndexFact]>.with_capacity_in_raw(arena, func.blocks.len) },
+            current: unsafe { Vec::<IndexFact>.new_in_raw(arena) },
+        };
+        f.find_eligible(func, module);
+        f.find_constants(func);
+        f.find_entry_facts(func);
+        return f;
+    }
+
+    // Starts block BI with the facts that hold on entry to it.
+    pub fn enter_block(self: &mut IndexFacts, bi: usize) {
+        self.current = unsafe { Vec::<IndexFact>.new_in_raw(self.arena) };
+        if bi < self.entry.len() {
+            for fact in self.entry.as_slice()[bi] { self.current.push(*fact); }
+        }
+    }
+
+    // Whether local LOCAL is known below LEN here (an index into LEN elements needs no check).
+    pub fn below(self: &IndexFacts, local: u32, len: u64) -> bool {
+        for fact in self.current.as_slice() {
+            if fact.local == local && fact.bound <= len { return true; }
+        }
+        return false;
+    }
+
+    // A check that LOCAL is below LEN has passed.
+    pub fn note_checked(self: &mut IndexFacts, local: u32, len: u64) {
+        if (local as usize) < self.eligible.len && self.eligible[local as usize] {
+            self.current.push(IndexFact { local: local, bound: len });
+        }
+    }
+
+    // STMT has run: what it assigns is no longer what the facts said.
+    pub fn after_stmt(self: &mut IndexFacts, stmt: &ZirStmt) {
+        let mut any = false;
+        for fact in self.current.as_slice() { if kills(stmt, fact.local) { any = true; } }
+        if !any { return; }
+        let mut kept = unsafe { Vec::<IndexFact>.new_in_raw(self.arena) };
+        for fact in self.current.as_slice() {
+            if !kills(stmt, fact.local) { kept.push(*fact); }
+        }
+        self.current = kept;
+    }
+
+    // Unsigned integer locals whose address no statement takes.
+    fn find_eligible(self: &mut IndexFacts, func: &ZirFunction, module: &ILModule) {
+        for loc in func.locals {
+            if (loc.id as usize) < self.eligible.len && is_unsigned(module, loc.ty) {
+                self.eligible[loc.id as usize] = true;
+            }
+        }
+        for b in func.blocks {
+            for st in b.statements {
+                let rv = match *st {
+                    ZirStmt.Let(_, rv, _) => rv,
+                    ZirStmt.Assign(_, rv, _) => rv,
+                    _ => { continue; }
+                };
+                match rv {
+                    ZirRvalue.Ref(p, _) | ZirRvalue.RefMut(p, _) => {
+                        if (p.base as usize) < self.eligible.len {
+                            self.eligible[p.base as usize] = false;
+                        }
+                    },
+                    _ => {},
+                }
+            }
+        }
+    }
+
+    // Locals assigned once, by `let`, from a constant or a cast of one (`4096 as usize`).
+    fn find_constants(self: &mut IndexFacts, func: &ZirFunction) {
+        let n = self.is_const.len;
+        let assigns = new_u64s(self.arena, n);
+        for b in func.blocks {
+            for st in b.statements {
+                match *st {
+                    ZirStmt.Let(id, _, _) => { count_assign(assigns, id); },
+                    ZirStmt.Assign(p, _, _) => { count_assign(assigns, p.base); },
+                    ZirStmt.Intrinsic(_, args, _) => {
+                        for a in args { count_assign(assigns, a.base); }
+                    },
+                    ZirStmt.Drop(_, _) | ZirStmt.EndBorrow(_, _) | ZirStmt.DropIfLive(_, _) => {},
+                }
+            }
+        }
+        // In block order: a cast's operand is defined before it.
+        for b in func.blocks {
+            for st in b.statements {
+                if let ZirStmt.Let(id, rv, _) = *st {
+                    if (id as usize) >= n || assigns[id as usize] != 1 as u64 { continue; }
+                    match rv {
+                        ZirRvalue.Const(v, _) => {
+                            self.is_const[id as usize] = true;
+                            self.const_val[id as usize] = v;
+                        },
+                        ZirRvalue.Cast(p, _) => {
+                            if p.projections.len == 0 as usize
+                                && (p.base as usize) < n
+                                && self.is_const[p.base as usize] {
+                                self.is_const[id as usize] = true;
+                                self.const_val[id as usize] = self.const_val[p.base as usize];
+                            }
+                        },
+                        _ => {},
+                    }
+                }
+            }
+        }
+    }
+
+    // The facts on entry to each block, in block order (a block whose single predecessor comes
+    // later, a loop's back edge, gets none).
+    fn find_entry_facts(self: &mut IndexFacts, func: &ZirFunction) {
+        let nb = func.blocks.len;
+        let preds = new_u64s(self.arena, nb + 1 as usize);
+        let pred_of = new_u64s(self.arena, nb + 1 as usize);
+        for bi in 0 as usize..nb {
+            match func.blocks[bi].terminator {
+                ZirTerminator.Jmp(t) => { count_pred(preds, pred_of, t, bi); },
+                ZirTerminator.Branch(_, t, e) => {
+                    count_pred(preds, pred_of, t, bi);
+                    count_pred(preds, pred_of, e, bi);
+                },
+                ZirTerminator.Ret(_) | ZirTerminator.Unreachable => {},
+            }
+        }
+        for bi in 0 as usize..nb {
+            let mut facts = unsafe { Vec::<IndexFact>.new_in_raw(self.arena) };
+            let p = pred_of[bi] as usize;
+            if bi > 0 as usize && preds[bi] == 1 as u64 && p < bi {
+                let pb = &func.blocks[p];
+                for fact in self.entry.as_slice()[p] {
+                    let mut dead = false;
+                    for st in pb.statements { if kills(st, fact.local) { dead = true; } }
+                    if !dead { facts.push(*fact); }
+                }
+                if let ZirTerminator.Branch(cond, t, e) = pb.terminator {
+                    if t as usize == bi && e as usize != bi {
+                        let edge = self.branch_fact(pb.statements, cond);
+                        if edge.bound != 0 as u64 { facts.push(edge); }
+                    }
+                }
+            }
+            self.entry.push(facts.as_slice());
+        }
+    }
+
+    // The fact a branch on COND establishes on its true edge, COND defined among STMTS as an
+    // unsigned comparison of an eligible local with a constant, the local not assigned after
+    // it; bound 0 for none.
+    fn branch_fact(self: &IndexFacts, stmts: [ZirStmt], cond: Place) -> IndexFact {
+        let none = IndexFact { local: 0 as u32, bound: 0 as u64 };
+        if cond.projections.len != 0 as usize { return none; }
+        let mut at = stmts.len;
+        let mut i = 0 as usize;
+        while i < stmts.len {
+            if let ZirStmt.Let(id, _, _) = stmts[i] { if id == cond.base { at = i; } }
+            i = i + 1 as usize;
+        }
+        if at == stmts.len { return none; }
+        let (op, lhs, rhs) = match stmts[at] {
+            ZirStmt.Let(_, rv, _) => match rv {
+                ZirRvalue.BinaryOp(op, l, r) => (op, l, r),
+                _ => { return none; }
+            },
+            _ => { return none; }
+        };
+        let mut fact = none;
+        if (op == OP_LT || op == OP_LE) && self.is_local(&lhs) && self.is_constant(&rhs) {
+            fact = IndexFact { local: lhs.base, bound: self.const_val[rhs.base as usize] };
+        } else if (op == OP_GT || op == OP_GE) && self.is_constant(&lhs) && self.is_local(&rhs) {
+            fact = IndexFact { local: rhs.base, bound: self.const_val[lhs.base as usize] };
+        } else {
+            return none;
+        }
+        if op == OP_LE || op == OP_GE {
+            if fact.bound == 0xffffffffffffffff as u64 { return none; }
+            fact.bound = fact.bound + 1 as u64;
+        }
+        // The local must still hold the value compared when the branch is taken.
+        let mut j = at + 1 as usize;
+        while j < stmts.len {
+            if kills(&stmts[j], fact.local) { return none; }
+            j = j + 1 as usize;
+        }
+        return fact;
+    }
+
+    fn is_local(self: &IndexFacts, p: &Place) -> bool {
+        return p.projections.len == 0 as usize
+            && (p.base as usize) < self.eligible.len
+            && self.eligible[p.base as usize];
+    }
+
+    fn is_constant(self: &IndexFacts, p: &Place) -> bool {
+        return p.projections.len == 0 as usize
+            && (p.base as usize) < self.is_const.len
+            && self.is_const[p.base as usize];
+    }
+}
+
+// Whether STMT assigns LOCAL: as a `let`'s or an assignment's target, or an intrinsic's argument.
+fn kills(stmt: &ZirStmt, local: u32) -> bool {
+    return match *stmt {
+        ZirStmt.Let(id, _, _) => id == local,
+        ZirStmt.Assign(p, _, _) => p.base == local,
+        ZirStmt.Intrinsic(_, args, _) => {
+            let mut hit = false;
+            for a in args { if a.base == local { hit = true; } }
+            hit
+        },
+        ZirStmt.Drop(_, _) | ZirStmt.EndBorrow(_, _) | ZirStmt.DropIfLive(_, _) => false,
+    };
+}
+
+fn count_assign(assigns: [mut u64], id: u32) {
+    if (id as usize) < assigns.len { assigns[id as usize] = assigns[id as usize] + 1 as u64; }
+}
+
+fn count_pred(preds: [mut u64], pred_of: [mut u64], target: u32, from: usize) {
+    if (target as usize) >= preds.len { return; }
+    preds[target as usize] = preds[target as usize] + 1 as u64;
+    pred_of[target as usize] = from as u64;
+}
+
+fn is_unsigned(module: &ILModule, ty: u32) -> bool {
+    if ty == 0 as u32 || ty as usize > module.types.len() { return false; }
+    return match module.types[ty as usize - 1 as usize].def {
+        ILType.Primitive(p) => {
+            let t = p.get_tag();
+            t == ILPRIM_U8
+                || t == ILPRIM_U16
+                || t == ILPRIM_U32
+                || t == ILPRIM_U64
+                || t == ILPRIM_USIZE
+        },
+        _ => false,
+    };
+}
+
+fn new_bools(arena: *mut ArenaHeader, n: usize) -> [mut bool] {
+    let p = unsafe { zoril_allocator_alloc(arena, (n + 1 as usize) as u64) } as *mut bool;
+    let out = unsafe { @slice(p, n) };
+    for i in 0 as usize..n { out[i] = false; }
+    return out;
+}
+
+fn new_u64s(arena: *mut ArenaHeader, n: usize) -> [mut u64] {
+    let p = unsafe {
+        zoril_allocator_alloc(arena, ((n + 1 as usize) * 8 as usize) as u64)
+    } as *mut u64;
+    let out = unsafe { @slice(p, n) };
+    for i in 0 as usize..n { out[i] = 0 as u64; }
+    return out;
+}

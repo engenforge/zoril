@@ -1,0 +1,10 @@
+// name: Move inside a loop body (moved on the first iteration)
+// expected: compile_reject
+fn take(x: Box<i32>) -> i32 { return *x; }
+fn main() -> i32 {
+    let b = box 5;
+    let mut i = 0;
+    let mut t = 0;
+    while i < 2 { t = t + take(b); i = i + 1; }
+    return t - 10;
+}

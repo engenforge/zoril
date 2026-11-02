@@ -1,0 +1,16 @@
+// name: A reference into a local Vec's buffer returned from the frame
+// expected: compile_reject
+// `Vec::new` allocates on the global heap; a reference into storage owned by this frame (a collection,
+// a box or an arena) cannot outlive the frame, whether or not the collection frees its buffer.
+import "vec.zrl";
+use vec::Vec;
+
+fn view() -> &i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(77);
+    return v.get(0).unwrap();
+}
+
+fn main() -> i32 {
+    return *view();
+}

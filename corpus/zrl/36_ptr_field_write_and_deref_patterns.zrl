@@ -1,0 +1,56 @@
+// Regression tests for pointer-through-struct-field writes and related lvalue patterns.
+//
+// id:044: (*ptr).field = val was writing to a local stack copy of *ptr instead
+// of through the pointer.  lower_member_address called lower_expression for
+// EXPR_UNARY("*") objects instead of lower_lvalue.
+//
+// id:042: pointer null comparison (p == 0 as *T) returned NULL from
+// il_build_cmp_eq because validate_arithmetic_operands didn't allow PTR/BOX.
+
+struct Counter { id: u32, hits: u64 }
+struct Registry { slot: *mut Counter }
+
+// --- id:044: write through single pointer dereference ---
+fn increment(r: &mut Registry) {
+    unsafe { (*r.slot).hits = (*r.slot).hits + 1 as u64; }
+}
+
+// --- chained: (*ptr.field).field = val ---
+struct ArenaHeader { counter: *mut Counter }
+fn bump_via_arena(a: *mut ArenaHeader) {
+    unsafe { (*a.counter).hits = (*a.counter).hits + 1 as u64; }
+}
+
+// --- id:042: pointer equality and null comparison ---
+fn is_null(p: *Counter) -> bool {
+    return p == 0 as *Counter;
+}
+
+fn same_ptr(a: *Counter, b: *Counter) -> bool {
+    return a == b;
+}
+
+fn main() -> i32 {
+    // id:044: basic (*struct_field_ptr).scalar = ...
+    let mut c = Counter { id: 1 as u32, hits: 0 as u64 };
+    let mut reg = Registry { slot: &mut c as *mut Counter };
+    increment(&mut reg);
+    increment(&mut reg);
+    increment(&mut reg);
+    if c.hits != 3 as u64 { return 1; }
+
+    // chained: (*ptr.field).field write
+    let mut c2 = Counter { id: 2 as u32, hits: 0 as u64 };
+    let mut arena = ArenaHeader { counter: &mut c2 as *mut Counter };
+    bump_via_arena(&mut arena as *mut ArenaHeader);
+    bump_via_arena(&mut arena as *mut ArenaHeader);
+    if c2.hits != 2 as u64 { return 2; }
+
+    // id:042: pointer null comparison must not miscompile
+    if !is_null(0 as *Counter) { return 3; }
+    if is_null(&c as *Counter) { return 4; }
+    if !same_ptr(&c as *Counter, &c as *Counter) { return 5; }
+    if same_ptr(&c as *Counter, &c2 as *Counter) { return 6; }
+
+    return 0;
+}

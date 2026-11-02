@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_bool_from_u8.zrl:5:36: error: cannot implicitly convert between bool and non-bool (use `as`)
+// A u8 is the size of a bool, which once made the two the same type to `let`.
+fn main() -> i32 {
+    let x = 3 as u8; let b: bool = x;
+    if b { return 1; }
+    return 0;
+}

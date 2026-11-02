@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: error: type mismatch: cannot mix bool and non-bool operands
+
+fn main() -> i32 {
+    if true < 3 { return 1; }
+    return 0;
+}

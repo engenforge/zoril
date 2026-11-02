@@ -1,0 +1,12 @@
+// name: Base mutated while a reference in a copied pair is live
+// expected: compile_reject
+// Propagating borrows copies all borrows held by the source, so copying a pair of references
+// keeps both places borrowed.
+fn main() -> i32 {
+    let mut a: i32 = 10;
+    let mut b: i32 = 20;
+    let pair = (&a, &b);
+    let p2 = pair;
+    a = 30;
+    return *p2.0;
+}

@@ -1,0 +1,4 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_extern_export_generic.zrl:3:36: error: an extern "C" function with a body cannot be generic
+extern "C" fn id<T>(a: i32) -> i32 { return a; }
+fn main() -> i32 { return 0; }

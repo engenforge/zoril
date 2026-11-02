@@ -1,0 +1,15 @@
+// expected compile fail
+// EXPECT: holds a linear resource (fd or ioring) that must be explicitly closed
+extern fn open_r(path: *u8) -> fd<r>;
+extern fn open_w(path: *u8) -> fd<w>;
+extern fn open_rw(path: *u8) -> fd<rw>;
+extern fn close_r(f: fd<r>);
+extern fn close_w(f: fd<w>);
+extern fn close_rw(f: fd<rw>);
+extern fn write_to(f: &fd<w>, b: *u8, n: u64) -> i64;
+extern fn read_from(f: &fd<r>, b: *mut u8, n: u64) -> i64;
+struct H { f: fd<w>, n: i32 }
+fn main() -> i32 {
+    let h = H { f: unsafe { open_w("x".ptr) }, n: 1 };
+    return 0;
+}

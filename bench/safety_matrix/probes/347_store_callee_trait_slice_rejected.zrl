@@ -1,0 +1,37 @@
+// name: A frame-owned view stored through a trait method is rejected
+// expected: compile_reject
+// Storing a view of a frame-owned arena buffer through a trait method is rejected.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct H {
+    s: [i32],
+}
+
+trait Stash {
+    fn put(self: &mut Self, s: [i32]);
+}
+
+impl Stash for H {
+    fn put(self: &mut H, s: [i32]) {
+        self.s = s;
+    }
+}
+
+fn f(out: &mut H) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(7);
+    out.put(v.as_slice());
+}
+
+fn main() -> i32 {
+    let mut h = H { s: @slice(0 as *i32, 0) };
+    f(&mut h);
+    return h.s[0];
+}

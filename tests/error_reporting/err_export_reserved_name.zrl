@@ -1,0 +1,4 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_export_reserved_name.zrl:3:12: error: the name is reserved for the runtime and libc, so an exported extern "C" function cannot be named `write`
+extern "C" fn write(fd: i32, buf: *u8, n: usize) -> isize { return 0 as isize; }
+fn main() -> i32 { return 0; }

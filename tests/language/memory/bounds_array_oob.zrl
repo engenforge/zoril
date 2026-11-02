@@ -1,0 +1,8 @@
+// expected exit 134
+// Out-of-bounds fixed-array index must trap. The bound is the array type's
+// compile-time size rather than a loaded len, but the trap is the same.
+fn main() -> i32 {
+    let mut data = [1 as u8, 2, 7];
+    let i = 99 as usize;
+    return data[i] as i32;
+}

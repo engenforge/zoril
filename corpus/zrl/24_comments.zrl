@@ -1,0 +1,34 @@
+// 24: Comment styles including nested block comments.
+// expected exit code: 30
+// Demonstrates: // single-line, /* multi-line */, /* /* nested */ */.
+
+/*
+ * Top-level documentation comment.
+ * This is a multi-line comment.
+ */
+
+/* Nested comments are supported:
+   /* This inner comment does not break the outer one. */
+   Still inside the outer comment.
+*/
+
+fn add(a: i32, b: i32) -> i32 {
+    // Single-line comment
+    return a + b; // Trailing comment
+}
+
+fn main() -> i32 {
+    /* Inline block comment */ let x = 10;
+
+    /*
+     * You can comment out code that contains comments:
+     *
+     * /* let unused = 999; */
+     */
+
+    let y = add(x, 20);
+
+    // /* This is a single-line comment, the /* does not start a block */
+
+    return y;
+}

@@ -1,0 +1,25 @@
+// name: Option<&T> from Vec::get kept across a reallocating push
+// expected: compile_reject
+// The Option holds a reference into v (get's result borrows its `self`), so the push that may
+// reallocate v's buffer conflicts with it. A known gap until 2026-10-03.
+
+import "vec.zrl";
+import "mem.zrl";
+use mem::Arena;
+use vec::Vec;
+fn main() -> i32 {
+    let arena = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return 1; },
+    };
+    let mut v = Vec::<i32>.new_in(&arena);
+    v.push(7);
+    let o = v.get(0 as usize);
+    let mut i = 0;
+    while i < 1000 { v.push(i); i = i + 1; }
+    match o {
+        Option.Some(r) => { if *r != 7 { return 1; } },
+        Option.None => { return 2; },
+    }
+    return 0;
+}

@@ -1,0 +1,199 @@
+// ZIR route census: which constructs a program lowers to, its CFG shape, and the routes its
+// rejection travelled through.
+//
+// `zoril --emit-zir-stats` prints one line per construct with its count, `cfg join` and
+// `cfg backedge`, then `reject-via` with the routes the checker's errors involved (see
+// src/route_set.zrl and the `via` mask on a borrow). `scripts/check_route_coverage.sh` reads
+// the `reject-via` set to decide what a row's evidence covers, and uses the census as a
+// lowering smoke test.
+
+import "io.zrl";
+import "fmt.zrl";
+import "route_set.zrl";
+import "zir.zrl";
+use fmt::write_u64;
+use io::{print, stdout};
+use route_set::{ROUTE_BACKEDGE, ROUTE_JOIN, ROUTE_RV_COUNT, ROUTE_STMT_COUNT, ROUTE_STMT_BASE, ROUTE_TERM_COUNT, ROUTE_TERM_BASE, route_bit, route_carries, rv_index, rv_name, stmt_index, stmt_name, term_index, term_name};
+use zir::{ZirFunction, ZirStmt, ZirRvalue, ZirTerminator};
+
+pub struct ZirStats {
+    pub rv: [u64; 25],
+    pub stmt: [u64; 6],
+    pub term: [u64; 4],
+    pub joins: u64,
+    pub backedges: u64,
+    pub functions: u64,
+    // The union of every reported rejection's route mask: the constructs and CFG shapes the
+    // checker's errors actually involved.
+    pub reject_via: u64,
+}
+
+impl ZirStats {
+    pub fn new() -> ZirStats {
+        return ZirStats {
+            rv: [0 as u64; 25],
+            stmt: [0 as u64; 6],
+            term: [0 as u64; 4],
+            joins: 0 as u64,
+            backedges: 0 as u64,
+            functions: 0 as u64,
+            reject_via: 0 as u64,
+        };
+    }
+
+    // Add one lowered function body to the census.
+    pub fn note_function(self: &mut ZirStats, f: &ZirFunction) {
+        self.functions = self.functions + 1 as u64;
+        let blocks_len = f.blocks.len;
+        let mut bi = 0 as usize;
+        while bi < blocks_len {
+            let b = &f.blocks[bi];
+            let mut si = 0 as usize;
+            while si < b.statements.len {
+                let st = &b.statements[si];
+                let sidx = stmt_index(st) as usize;
+                self.stmt[sidx] = self.stmt[sidx] + 1 as u64;
+                match *st {
+                    ZirStmt.Let(_, rv, _) | ZirStmt.Assign(_, rv, _) => {
+                        let ridx = rv_index(&rv) as usize;
+                        self.rv[ridx] = self.rv[ridx] + 1 as u64;
+                    },
+                    _ => {},
+                }
+                si = si + 1 as usize;
+            }
+            let tidx = term_index(&b.terminator) as usize;
+            self.term[tidx] = self.term[tidx] + 1 as u64;
+            bi = bi + 1 as usize;
+        }
+
+        // CFG facts. A back-edge is an edge to a block at or before its source, the same
+        // positional reading `Verifier.loop_blocks` uses. A join is a block with two or more
+        // distinct predecessor edges.
+        bi = 0 as usize;
+        while bi < blocks_len {
+            let (t1, t2) = term_targets(&f.blocks[bi].terminator);
+            if t1 < blocks_len && t1 <= bi { self.backedges = self.backedges + 1 as u64; }
+            if t2 < blocks_len && t2 <= bi { self.backedges = self.backedges + 1 as u64; }
+            let mut preds = 0 as usize;
+            let mut src = 0 as usize;
+            while src < blocks_len {
+                let (s1, s2) = term_targets(&f.blocks[src].terminator);
+                if s1 == bi && s1 != src { preds = preds + 1 as usize; }
+                if s2 == bi && s2 != src { preds = preds + 1 as usize; }
+                src = src + 1 as usize;
+            }
+            if preds >= 2 as usize { self.joins = self.joins + 1 as u64; }
+            bi = bi + 1 as usize;
+        }
+    }
+
+    // Add one rejected function body's route mask.
+    pub fn note_reject_via(self: &mut ZirStats, mask: u64) {
+        self.reject_via = self.reject_via | mask;
+    }
+
+    // One line per construct, including zero counts, so a reader of the output can tell
+    // "not used" from "this build does not report it".
+    pub fn print(self: &ZirStats) {
+        let mut out = stdout();
+        let mut i = 0 as u32;
+        while i < ROUTE_RV_COUNT {
+            print("rv ");
+            print(rv_name(i));
+            print(" ");
+            let _ = write_u64(&mut out, self.rv[i as usize]);
+            print("\n");
+            i = i + 1 as u32;
+        }
+        i = 0 as u32;
+        while i < ROUTE_STMT_COUNT {
+            print("stmt ");
+            print(stmt_name(i));
+            print(" ");
+            let _ = write_u64(&mut out, self.stmt[i as usize]);
+            print("\n");
+            i = i + 1 as u32;
+        }
+        i = 0 as u32;
+        while i < ROUTE_TERM_COUNT {
+            print("term ");
+            print(term_name(i));
+            print(" ");
+            let _ = write_u64(&mut out, self.term[i as usize]);
+            print("\n");
+            i = i + 1 as u32;
+        }
+        print("cfg join ");
+        let _ = write_u64(&mut out, self.joins);
+        print("\ncfg backedge ");
+        let _ = write_u64(&mut out, self.backedges);
+        print("\nfunctions ");
+        let _ = write_u64(&mut out, self.functions);
+        print("\nreject-via");
+
+        i = 0 as u32;
+        while i < ROUTE_RV_COUNT {
+            if (self.reject_via & route_bit(i)) != 0 as u64 {
+                print(" rv:");
+                print(rv_name(i));
+            }
+            i = i + 1 as u32;
+        }
+        i = 0 as u32;
+        while i < ROUTE_STMT_COUNT {
+            if (self.reject_via & route_bit(ROUTE_STMT_BASE + i)) != 0 as u64 {
+                print(" stmt:");
+                print(stmt_name(i));
+            }
+            i = i + 1 as u32;
+        }
+        i = 0 as u32;
+        while i < ROUTE_TERM_COUNT {
+            if (self.reject_via & route_bit(ROUTE_TERM_BASE + i)) != 0 as u64 {
+                print(" term:");
+                print(term_name(i));
+            }
+            i = i + 1 as u32;
+        }
+        if (self.reject_via & route_bit(ROUTE_JOIN)) != 0 as u64 { print(" cfg:join"); }
+        if (self.reject_via & route_bit(ROUTE_BACKEDGE)) != 0 as u64 { print(" cfg:backedge"); }
+        print("\n");
+
+        // The carrying vocabulary: the routes a borrow can travel through into a reported
+        // error, and so the only routes a row's `Routes` cell may list. It is printed rather
+        // than repeated in the gate, so a route added to `route_carries` cannot drift out of
+        // the check. `--emit-zir-stats` is run on any program; this line is the same one.
+        print("carry");
+        i = 0 as u32;
+        while i < ROUTE_RV_COUNT {
+            if route_carries(i) {
+                print(" rv:");
+                print(rv_name(i));
+            }
+            i = i + 1 as u32;
+        }
+        i = 0 as u32;
+        while i < ROUTE_STMT_COUNT {
+            if route_carries(ROUTE_STMT_BASE + i) {
+                print(" stmt:");
+                print(stmt_name(i));
+            }
+            i = i + 1 as u32;
+        }
+        if route_carries(ROUTE_JOIN) { print(" cfg:join"); }
+        if route_carries(ROUTE_BACKEDGE) { print(" cfg:backedge"); }
+        print("\n");
+    }
+}
+
+// The successor block indices, with `blocks_len`-sized callers treating a huge value as none.
+const NO_TARGET: usize = 0xffffffff as usize;
+
+fn term_targets(term: &ZirTerminator) -> (usize, usize) {
+    return match *term {
+        ZirTerminator.Jmp(t) => (t as usize, NO_TARGET),
+        ZirTerminator.Branch(_, t1, t2) => (t1 as usize, t2 as usize),
+        ZirTerminator.Ret(_) | ZirTerminator.Unreachable => (NO_TARGET, NO_TARGET),
+    };
+}

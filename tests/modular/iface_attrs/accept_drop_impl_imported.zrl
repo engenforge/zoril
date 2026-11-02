@@ -1,0 +1,12 @@
+// expected exit 0
+import "lib.zrl";
+use lib::{Guard, GUARD_DROPS};
+
+fn main() -> i32 {
+    {
+        let g = Guard { x: 3 };
+        let h = Guard { x: 4 };
+    }
+    if GUARD_DROPS != 7 { return 1; }
+    return 0;
+}

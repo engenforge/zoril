@@ -1,0 +1,12 @@
+import "multi_link_types.zrl";
+use multi_link_types::Point;
+
+pub const SCALE_FACTOR: i64 = 3;
+
+pub fn scale_point(p: &Point, factor: i64) -> Point {
+    return Point { x: p.x * factor, y: p.y * factor };
+}
+
+pub fn add_points(a: &Point, b: &Point) -> Point {
+    return Point { x: a.x + b.x, y: a.y + b.y };
+}

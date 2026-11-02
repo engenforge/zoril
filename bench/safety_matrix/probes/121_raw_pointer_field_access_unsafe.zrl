@@ -1,0 +1,7 @@
+// name: Field access through a raw pointer (inside unsafe)
+// expected: runtime_fault
+// The escape hatch half of 120_raw_pointer_field_access.zrl: inside `unsafe` the
+// auto-dereference is unchecked, and a null pointer faults.
+struct Point { x: i32, y: i32 }
+fn get_x(p: *Point) -> i32 { return unsafe { p.x }; }
+fn main() -> i32 { return get_x(0 as *Point); }

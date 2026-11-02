@@ -1,0 +1,15 @@
+// expected compile fail
+// A shared reference where `&mut` is expected: the callee would write through a handle its
+// caller only lent for reading, so this direction is refused (see safety_model.md §5.8 row 6).
+// EXPECT: tests/error_reporting/err_shared_ref_for_mut_param.zrl:14:12: error: type mismatch: expected `&mut i32`, found `&i32`
+
+fn take_mut(p: &mut i32) -> i32 {
+    *p = 5;
+    return *p;
+}
+
+fn main() -> i32 {
+    let x: i32 = 1;
+    let r: &i32 = &x;
+    return take_mut(r);
+}

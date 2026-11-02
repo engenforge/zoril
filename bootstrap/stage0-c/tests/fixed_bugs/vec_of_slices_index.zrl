@@ -1,0 +1,23 @@
+// expected exit 0
+// A `Vec<[T]>`'s elements are slice headers. stage0-C read `v[i]` as indexing through a
+// pointer to one slice header (the data pointer is a `*[T]` either way), so it loaded the
+// first element's data pointer and stepped by `T`'s size; and a slice element read out of a
+// slice of slices (`v.as_slice()[i]`) was loaded as an address instead of copied. Found
+// re-pinning stage1: the exhaustiveness checker keeps its pattern matrix as `Vec<[mut u32]>`.
+import "vec.zrl";
+fn second_first(rows: &Vec<[mut u32]>) -> u32 {
+    let row = rows.as_slice()[1];
+    return row[0];
+}
+fn main() -> i32 {
+    let mut a = [7 as u32, 8 as u32];
+    let mut b = [9 as u32, 10 as u32, 11 as u32];
+    let mut v = Vec::<[mut u32]>.new();
+    v.push(&mut a);
+    v.push(&mut b);
+    let row = v[1];
+    if row.len != 3 as usize || row[2] != 11 as u32 { return 1; }
+    if second_first(&v) != 9 as u32 { return 2; }
+    if v.as_slice()[0][1] != 8 as u32 { return 3; }
+    return 0;
+}

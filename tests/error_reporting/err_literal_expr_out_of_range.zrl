@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_literal_expr_out_of_range.zrl:5:36: error: integer literal 256 is out of range for `u8`
+// A literal inside an expression that takes its type from context is range-checked against
+// that type, never truncated.
+fn main() -> i32 { let x: u8 = 1 + 256; return x as i32; }

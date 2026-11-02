@@ -1,0 +1,189 @@
+// Functional iteration traits and combinators (Iterator, range)
+//
+// An Iterator yields items, of its associated type Item, until it returns None. Loops written
+// against it carry no index, so they cannot step off either end of a collection. The adapters are
+// default methods of the trait, so they chain on any iterator:
+//
+//     v.iter().map(double).filter(is_even).fold(0, add)
+//
+// The functions passed to map/filter/fold are function values; a closure that captures its
+// environment cannot be passed as one yet.
+
+import "core.zrl";
+import "vec.zrl";
+import "hashmap.zrl";
+use hashmap::HashMap;
+use vec::Vec;
+
+// Trait for sequential traversal over collections and generators.
+pub trait Iterator {
+    type Item;
+
+    // Advances the iterator and returns the next element, or None when finished.
+    fn next(self: &mut Self) -> Option<Self::Item>;
+
+    // Returns an iterator adapter that applies f to each element.
+    fn map<U>(self: Self, f: fn(Self::Item) -> U) -> Map<Self, U> {
+        return Map { inner: self, f: f };
+    }
+
+    // Returns an iterator adapter that yields only elements matching predicate keep.
+    fn filter(self: Self, keep: fn(Self::Item) -> bool) -> Filter<Self> {
+        return Filter { inner: self, keep: keep };
+    }
+
+    // Folds all elements into an accumulator using function f starting from init.
+    fn fold<A>(self: Self, init: A, f: fn(A, Self::Item) -> A) -> A {
+        let mut it = self;
+        let mut acc = init;
+        while true {
+            match it.next() {
+                Some(item) => { acc = f(acc, item); },
+                None => { return acc; },
+            }
+        }
+        return acc;
+    }
+
+    // Consumes the iterator, collecting all elements into a new heap-allocated Vec.
+    fn collect(self: Self) -> Vec<Self::Item> {
+        let mut it = self;
+        let mut out = Vec::<Self::Item>.new();
+        while true {
+            match it.next() {
+                Some(item) => { out.push(item); },
+                None => { return out; },
+            }
+        }
+        return out;
+    }
+}
+
+// Iterator yielding shared references to elements in a Vec.
+pub struct VecIter<T> {
+    pub vec: &Vec<T>,
+    pub index: usize,
+}
+
+impl<T> Iterator for VecIter<T> {
+    type Item = &T;
+
+    // Yields a reference to the next element in the vector.
+    fn next(self: &mut VecIter<T>) -> Option<&T> {
+        let item = self.vec.get(self.index);
+        if item.is_some() {
+            self.index = self.index + 1;
+        }
+        return item;
+    }
+}
+
+impl<T> Vec<T> {
+    // Returns an iterator over elements in the collection.
+    pub fn iter(self: &Vec<T>) -> VecIter<T> {
+        return VecIter { vec: self, index: 0 as usize };
+    }
+}
+
+// Iterator yielding key-value pairs from a HashMap.
+pub struct HashMapIter<K, V> {
+    pub map: &HashMap<K, V>,
+    pub slot: usize,
+}
+
+impl<K, V> Iterator for HashMapIter<K, V> {
+    type Item = (&K, &V);
+
+    // Yields the next (&K, &V) pair from the hash map.
+    fn next(self: &mut HashMapIter<K, V>) -> Option<(&K, &V)> {
+        while self.slot < self.map.cap() {
+            let index = self.slot;
+            self.slot = self.slot + 1 as usize;
+            // `entry_at` checks the index against the table size itself.
+            let entry = self.map.entry_at(index);
+            if entry.occupied {
+                return Option.Some((&entry.key, &entry.value));
+            }
+        }
+        return Option.None;
+    }
+}
+
+impl<K, V> HashMap<K, V> {
+    // Returns an iterator over elements in the collection.
+    pub fn iter(self: &HashMap<K, V>) -> HashMapIter<K, V> {
+        return HashMapIter { map: self, slot: 0 as usize };
+    }
+}
+
+// Half-open integer range iterator [start, end).
+pub struct Range {
+    pub next_value: usize,
+    pub end: usize,
+}
+
+impl Iterator for Range {
+    type Item = usize;
+
+    // Yields the next integer in the range.
+    fn next(self: &mut Range) -> Option<usize> {
+        if self.next_value >= self.end {
+            return Option.None;
+        }
+        let value = self.next_value;
+        self.next_value = self.next_value + 1;
+        return Option.Some(value);
+    }
+}
+
+// Constructs a Range iterator from start up to (excluding) end.
+pub fn range(start: usize, end: usize) -> Range {
+    return Range { next_value: start, end: end };
+}
+
+// Iterator adapter that maps values using a function.
+pub struct Map<I, U> {
+    pub inner: I,
+    pub f: fn(I::Item) -> U,
+}
+
+impl<I: Iterator, U> Iterator for Map<I, U> {
+    type Item = U;
+
+    // Yields the next mapped element.
+    fn next(self: &mut Map<I, U>) -> Option<U> {
+        return match self.inner.next() {
+            Some(item) => Option.Some((self.f)(item)),
+            None => Option.None,
+        };
+    }
+}
+
+// Iterator adapter that filters values using a predicate function.
+//
+// The iterator v.filter(keep) returns: the items of the inner iterator for which keep(item)
+// is true. Items are passed to keep by value, so they must be copyable (references and
+// primitives are).
+pub struct Filter<I> {
+    pub inner: I,
+    pub keep: fn(I::Item) -> bool,
+}
+
+impl<I: Iterator> Iterator for Filter<I> {
+    type Item = I::Item;
+
+    // Yields the next element that satisfies the predicate.
+    fn next(self: &mut Filter<I>) -> Option<I::Item> {
+        while true {
+            match self.inner.next() {
+                Some(item) => {
+                    if (self.keep)(item) {
+                        return Option.Some(item);
+                    }
+                },
+                None => { return Option.None; },
+            }
+        }
+        return Option.None;
+    }
+}

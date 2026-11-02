@@ -1,0 +1,32 @@
+// A struct literal inside the head of an `if`, `if let`, `match` or `while` of a generic body (A7.11):
+// the parser forbids it there unparenthesized, so the interface must write the parentheses.
+import "core.zrl";
+use core::Option;
+
+pub struct HdP { pub x: i32 }
+pub struct HdW { pub o: Option<i32> }
+pub fn hd_if<T>(_t: T, y: i32) -> i32 {
+    if (HdP { x: y }).x == 42 { return 1; }
+    return 0;
+}
+pub fn hd_while<T>(_t: T, y: i32) -> i32 {
+    let mut n = 0;
+    while (HdP { x: n }).x < y { n = n + 1; }
+    return n;
+}
+pub fn hd_match<T>(_t: T, y: i32) -> i32 {
+    match (HdP { x: y }).x {
+        42 => { return 1; },
+        _ => { return 0; },
+    }
+}
+pub fn hd_if_let<T>(_t: T, y: i32) -> i32 {
+    if let Option.Some(v) = (HdW { o: Option.Some(y) }).o {
+        return v - 41;
+    }
+    return 0;
+}
+pub fn hd_operand<T>(_t: T, y: i32) -> i32 {
+    if 42 == (HdP { x: y }).x && !((HdP { x: 1 }).x == 2) { return 1; }
+    return 0;
+}

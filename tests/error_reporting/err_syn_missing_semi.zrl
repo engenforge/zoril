@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_syn_missing_semi.zrl:5:5: error: expected ;, but found return
+fn main() -> i32 {
+    let x = 1 + 2
+    return x;
+}

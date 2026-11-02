@@ -1,0 +1,30 @@
+// Safe arena handle: a Vec built with new_in(&arena) is tied to its arena, so it must be
+// used and dropped before the arena is reset or destroyed. Both are accepted here because
+// no Vec from `arena` is live at either point.
+// expected exit 0
+
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+// The Vec lives in this frame and is dropped when the function returns, releasing its
+// borrow of `a`.
+fn checksum(a: &Arena) -> u64 {
+    let mut v = Vec::<u64>.new_in(a);
+    v.push(10);
+    v.push(20);
+    return *v.get(0).unwrap() + *v.get(1).unwrap();
+}
+
+fn main() -> i32 {
+    let mut arena = Arena.new(65536).unwrap();
+    if checksum(&arena) != 30 {
+        return 1;
+    }
+    arena.reset(); // no Vec from `arena` is live
+    if checksum(&arena) != 30 {
+        return 2;
+    }
+    return 0;
+}

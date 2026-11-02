@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/ec_block_comment_col.zrl:5:26: error: unresolved symbol: nonexistent
+// Tests that an error after an inline block comment reports the correct column.
+fn main() -> i32 {
+    let x = /* a hint */ nonexistent;  // @error "Unresolved symbol: nonexistent" :26
+    0
+}

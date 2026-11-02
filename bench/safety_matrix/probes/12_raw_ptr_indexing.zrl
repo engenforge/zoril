@@ -1,0 +1,11 @@
+// name: Raw-pointer indexing
+// expected: compile_reject
+// Raw-pointer indexing is `*(p + i)` with the arithmetic spelled as a subscript,
+// and is now scoped by the marker like every other unchecked operation. See
+// 36_raw_ptr_indexing_unsafe.zrl for the marked form, which still accepts.
+fn main() -> i32 {
+    let mut arr = [1 as u8, 2 as u8, 7 as u8, 9 as u8];
+    let p = &mut arr[0] as *mut u8;
+    if p[2 as usize] != 7 as u8 { return 1; }
+    return 0;
+}

@@ -1,0 +1,39 @@
+import "multi_link_types.zrl";
+import "multi_link_math.zrl";
+import "multi_link_generic.zrl";
+use multi_link_generic::{make_pair, swap_pair};
+use multi_link_math::{SCALE_FACTOR, add_points, scale_point};
+use multi_link_types::{ORIGIN_X, ORIGIN_Y, Point};
+
+fn main() -> i32 {
+    // 1. Globals and struct instantiation across modules
+    let p0 = Point { x: ORIGIN_X, y: ORIGIN_Y };
+    if p0.x != 10 || p0.y != 20 { return 1; }
+    if SCALE_FACTOR != 3 { return 2; }
+
+    // 2. Struct methods across modules
+    let d = p0.manhattan_dist();
+    if d != 30 { return 3; }
+
+    let p1 = p0.translate(5, -5 as i64);
+    if p1.x != 15 || p1.y != 15 { return 4; }
+
+    // 3. Cross-module function calls with struct references
+    let p2 = scale_point(&p1, SCALE_FACTOR);
+    if p2.x != 45 || p2.y != 45 { return 5; }
+
+    let p3 = add_points(&p0, &p2);
+    if p3.x != 55 || p3.y != 65 { return 6; }
+
+    // 4. Cross-module generic instantiation with primitive type
+    let pair_i = make_pair::<i64>(100 as i64, 200 as i64);
+    let swapped_i = swap_pair::<i64>(pair_i);
+    if swapped_i.first != 200 || swapped_i.second != 100 { return 7; }
+
+    // 5. Cross-module generic instantiation with shared struct type
+    let pair_p = make_pair::<Point>(p0, p1);
+    let swapped_p = swap_pair::<Point>(pair_p);
+    if swapped_p.first.x != 15 || swapped_p.second.x != 10 { return 8; }
+
+    return 0;
+}

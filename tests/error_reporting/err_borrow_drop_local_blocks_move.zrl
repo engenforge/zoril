@@ -1,0 +1,26 @@
+// expected compile fail
+// EXPECT: error: cannot move borrowed value 'a'
+// A value with a `Drop` impl is used at its drop, so a borrow it holds keeps the borrowed value
+// immovable even after its last explicit use: the liveness computation counts `ZirStmt.Drop` as a
+// use, which is what makes the liveness-based move check safe. Here `Watcher` holds `&a` and is
+// dropped at the end of main, after the arena is destroyed.
+import "mem.zrl";
+use mem::Arena;
+
+struct Watcher { anchor: &Arena }
+
+impl Drop for Watcher {
+    fn drop(self: &mut Watcher) {
+        let _ = self.anchor as usize;
+    }
+}
+
+fn consume(a: Arena) {}
+
+fn main() -> i32 {
+    let a = Arena.new(65536).unwrap();
+    let w = Watcher { anchor: &a };
+    let k = w.anchor as usize;
+    consume(a); // @error "cannot move borrowed value 'a'"
+    return k as i32;
+}

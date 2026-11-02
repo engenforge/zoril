@@ -1,0 +1,28 @@
+// name: Linear fd leaked inside a value nested past the linear walk's limit
+// expected: compile_reject
+// `type_holds_linear` stops recursing past eight levels and answered *false* there - "holds no linear
+// resource" for a type it could not finish reading - so an `fd` nested deeper than that was dropped
+// without complaint: the value's scope exit closed nothing and the descriptor leaked. One to eight
+// levels are rejected both before and after; the depth is the whole point. The limit was doing double
+// duty as the cycle breaker, which is why the answer could not simply be flipped: with "unknown =
+// holds one" every *recursive* type reads as holding a resource (`enum List { Cons(i32, Box<List>) }`
+// and the corpus linked lists are rejected with this message). The breaker is explicit now - the
+// types the walk has already entered - so a recursive type that holds no `fd` stays accepted and a
+// nested one is found at any depth (doc/SAFETY.md §4.4).
+extern fn open_w(path: *u8) -> fd<w>;
+extern fn close_w(f: fd<w>);
+
+struct S1 { f: fd<w> }
+struct S2 { a: S1 }
+struct S3 { a: S2 }
+struct S4 { a: S3 }
+struct S5 { a: S4 }
+struct S6 { a: S5 }
+struct S7 { a: S6 }
+struct S8 { a: S7 }
+struct S9 { a: S8 }
+
+fn main() -> i32 {
+    let v = S9 { a: S8 { a: S7 { a: S6 { a: S5 { a: S4 { a: S3 { a: S2 { a: S1 { f: unsafe { open_w("/dev/null".ptr) } } } } } } } } } };
+    return 0;
+}

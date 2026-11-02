@@ -1,0 +1,18 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_nested_slice_coherence.zrl:10:1: error: `SSu8::elem_count` is defined twice; the other is at tests/error_reporting/err_nested_slice_coherence.zrl:4:1
+
+impl<T> [[T]] {
+    pub fn elem_count(self: &[[T]]) -> usize {
+        return self.len;
+    }
+}
+
+impl [[u8]] {
+    pub fn elem_count(self: &[[u8]]) -> usize {
+        return self.len;
+    }
+}
+
+fn main() -> i32 {
+    return 0;
+}

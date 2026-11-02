@@ -1,0 +1,19 @@
+// name: Moving a &mut Vec parameter invalidates the source reference
+// expected: compile_reject
+// Passing or assigning a &mut Vec reference moves it. In `let b = a;`, subsequent use
+// of `a` (such as `a.free()`) is rejected as use of a moved value.
+import "vec.zrl";
+use vec::Vec;
+
+fn evil(a: &mut Vec<i32>) -> i32 {
+    let b = a;
+    let r = b.get(0).unwrap();
+    a.free();
+    return *r;
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    return evil(&mut v);
+}

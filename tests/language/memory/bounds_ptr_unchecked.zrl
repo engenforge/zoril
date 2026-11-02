@@ -1,0 +1,13 @@
+// expected exit 7
+// Raw-pointer indexing is deliberately NOT bounds-checked: a pointer carries
+// no length, so there is nothing to check against.
+//
+// This reads one past a 3-element array through a raw pointer and is expected
+// to succeed. If a future change "helpfully" starts bounds-checking pointers --
+// which would require a length it does not have -- this test fails loudly
+// rather than the restriction being quietly lost.
+fn main() -> i32 {
+    let mut arr = [1 as u8, 2, 7, 9];
+    let p = &mut arr[0] as *mut u8;
+    return unsafe { p[2 as usize] } as i32;
+}

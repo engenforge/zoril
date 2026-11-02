@@ -1,0 +1,19 @@
+// name: Storing a view of a captured shared reference's referent is accepted
+// expected: accept
+// Storing a view through a captured & reference into a captured &mut destination is accepted.
+struct Holder {
+    s: [i32],
+}
+
+fn main() -> i32 {
+    let data: [i32; 3] = [10, 20, 30];
+    let h = Holder { s: unsafe { @slice(&data[0], 3 as usize) } };
+    let hr = &h;
+    let mut dest: [i32] = @slice(0 as *i32, 0 as usize);
+    let out = &mut dest;
+    let f = || {
+        *out = hr.s;
+    };
+    f();
+    return if dest.len == 3 as usize { 0 } else { 1 };
+}

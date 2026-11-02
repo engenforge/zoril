@@ -1,0 +1,13 @@
+// expected compile fail
+// Tests that multiple mutable borrows to the same value are an error.
+// EXPECT: error: cannot mutably borrow 'r' more than once
+struct Resource { id: i32 }
+
+fn main() -> i32 {
+    let mut r = Resource { id: 1 };
+    let s = &mut r;
+    let t = &mut r; // @error "cannot mutably borrow 'r' more than once"
+    s.id = 2;
+    t.id = 3;
+    0
+}

@@ -1,0 +1,25 @@
+// name: A method call on a non-scalar static mut, then a write to it
+// expected: compile_reject
+// The receiver is a borrow of the static; the write after the call is not seen by the borrow
+// checker. A non-scalar static mut is reachable only in `unsafe`.
+enum E {
+    N,
+    B(u64),
+}
+
+impl E {
+    fn get(self: &mut E) -> i32 {
+        return match self {
+            E.B(v) => *v as i32,
+            E.N => 0
+        };
+    }
+}
+
+static mut G: E = E.N;
+
+fn main() -> i32 {
+    let r = G.get();
+    G = E.B(2);
+    return r;
+}

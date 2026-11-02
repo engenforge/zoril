@@ -1,0 +1,13 @@
+// name: A raw pointer dereferenced after passing through a tuple (no unsafe)
+// expected: compile_reject
+// closed: the dereference check now decides from the IL type, which keeps `RawPtr`/`RawPtrMut`
+// through a tuple projection - so this program is a located type error instead of a silent hole.
+fn main() -> i32 {
+    let mut x: u32 = 7;
+    let p: *mut u32 = &mut x as *mut u32;
+    let t = (p, 1);
+    let q = t.0;
+    *q = 9;
+    if x != 9 { return 1; }
+    return 0;
+}

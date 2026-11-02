@@ -1,0 +1,44 @@
+// expected exit 0
+// The operand order is the source order, and a value moves where it is written: each of these is
+// correct, and a move that happens only after the last use of a borrow is accepted. Twins of the
+// `operand_move_order_*` error tests.
+import "vec.zrl";
+use vec::Vec;
+
+struct H { w: Vec<i32>, n: usize }
+struct P { a: i32, b: i32 }
+fn f(a: Vec<i32>, n: usize) -> usize { return n + a.len(); }
+fn g(n: usize, a: Vec<i32>) -> usize { return n + a.len(); }
+fn mk() -> Vec<i32> { return Vec::<i32>.new(); }
+
+fn main() -> i32 {
+    let mut v = mk();
+    v.push(7);
+    // The borrow's last use is an earlier operand: nothing observes the move.
+    let r = &mut v;
+    let h = H { n: r.len(), w: v };
+    if h.n != 1 || h.w.len() != 1 { return 1; }
+    let mut v2 = mk();
+    v2.push(1);
+    v2.push(2);
+    let r2 = &mut v2;
+    let k = g(r2.len(), v2);
+    if k != 4 { return 2; }
+    // The borrow's last use is a statement before the move.
+    let mut v3 = mk();
+    v3.push(5);
+    let r3 = &mut v3;
+    let n3 = r3.len();
+    let k3 = f(v3, n3);
+    if k3 != 2 { return 3; }
+    // A `Copy` value read while the borrow is used later in the same expression: no move.
+    let mut x = 5;
+    let rm = &mut x;
+    *rm = 6;
+    let p = P { a: 1, b: *rm };
+    if p.a + p.b != 7 { return 4; }
+    // Moved operands before a call with a non-trivial later operand, none borrowed.
+    let k5 = f(mk(), mk().len());
+    if k5 != 0 { return 5; }
+    return 0;
+}

@@ -1,0 +1,24 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_recursion_cycle.zrl:22:5: error: cannot let 'x' go out of scope while it is still borrowed
+
+// The storage walk of a function that is being walked is a cycle, and the mask it produces is a
+// lower bound: here `a`'s mark for its first parameter is reachable only through the recursive
+// call, so the walk of `a` sees `return q` (parameter 1) and nothing else. Read as "points into no
+// parameter's own storage", that made `a(&x, &w, 1)` - which recurses to `a(&w, &x, 0)` and hands
+// back `&x` - a *derived* borrow, which the scope-end rule exempts for a type with no `Drop`; `y`
+// then read the dead slot. The walk reports the cycle now, so the function's masks are unknown and
+// its call is read as handing back each tied argument's own storage.
+fn a(p: &i32, q: &i32, n: i32) -> &i32 {
+    if n <= 0 { return q; }
+    return a(q, p, n - 1);
+}
+
+fn main() -> i32 {
+    let mut y: &i32 = &0;
+    let w: i32 = 3;
+    {
+        let x: i32 = 7;
+        y = a(&x, &w, 1);
+    }
+    return *y;
+}

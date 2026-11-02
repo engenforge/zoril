@@ -1,0 +1,76 @@
+// The parser's state: the Parser, and the import-loading state its sub-parsers share. Its own
+// module so that the grammar files in src/parser/ (each an `impl Parser`) and src/parser.zrl,
+// which imports them, can all name it.
+
+import "mem_raw.zrl";
+import "vec.zrl";
+import "ast.zrl";
+import "intern.zrl";
+import "lexer.zrl";
+import "token.zrl";
+import "module_path.zrl";
+use ast::{AST, Span};
+use intern::InternTable;
+use lexer::Lexer;
+use mem_raw::ArenaHeader;
+use module_path::ModuleResolution;
+use token::TokenWithSpan;
+use vec::Vec;
+
+pub struct Parser {
+    pub lexer: &mut Lexer,
+    pub cur: TokenWithSpan,
+    pub peek: TokenWithSpan,
+    // The `//` block in effect when `cur` / `peek` was lexed (Lexer.last_lexed_comment). The
+    // lexer's own `pending_block` is a token ahead, and may already be cleared.
+    pub cur_comment: u32,
+    pub peek_comment: u32,
+    pub arena: *mut ArenaHeader,
+    pub ast: &mut AST,
+    pub intern_table: &mut InternTable,
+    pub file_path: [u8],
+    // Identity recorded as `source_file` on declarations and used for symbol mangling. Equals
+    // file_path except for a .zri, which names the source module it was emitted from.
+    pub module_path: [u8],
+    // This file was loaded from a root the compiler was told is the standard library
+    // (`loaded_from_stdlib_root`, src/parser.zrl), recorded on every declaration it makes.
+    pub source_in_stdlib: bool,
+    pub last_error_pos: u32,
+    pub had_error: bool,
+    pub last_import_span: Span,
+    pub last_import_alias: u32, // the `as` name of that import, 0 if none
+    // Set by parse_declaration for a `#[derive(Clone)]` struct; parse_module then
+    // appends the synthesized impl right after the struct.
+    pub derive_clone_next: bool,
+    // While a speculative parse runs (try_generic_struct_literal): errors are not reported,
+    // only noted in QUIET_ERROR, and the speculation then fails.
+    pub quiet: bool,
+    pub quiet_error: bool,
+
+    pub state: *mut LoadState,
+
+    pub include_ids: *u32,
+    pub include_count: usize,
+    pub mr: *mut ModuleResolution,
+}
+
+pub struct FileModule {
+    pub file: u32,
+    pub module: u32,
+}
+
+// Import-resolution state shared by the root parser and every sub-parser it spawns.
+pub struct LoadState {
+    pub loaded: Vec<u32>,              // resolved file ids already parsed (or probed)
+    pub active: Vec<u32>,              // import stack (file ids), for cycle detection
+    pub active_names: Vec<u32>,        // import stack (module identities), for cycle printing
+    pub file_modules: Vec<FileModule>, // module identity of each loaded file
+    pub iface_dir: [u8],               // interfaces of imported modules are looked up here
+    pub iface_shadows: bool,           // true: an interface wins over its source; false: only used if the source is absent
+    pub require_interface: bool,       // --require-interface: an import with no interface under `iface_dir`
+    // is an error naming the path looked up, not a fall back to its source
+    pub verbose: bool,                 // -v: say which interface was looked for when falling back to a source
+    pub deps_only: bool,               // --emit-deps: read only `import` declarations, skip every other item unparsed
+    pub fmt_only: bool,                // `zoril fmt`: this file alone, as written (imports not loaded, nothing derived)
+    pub mr: *mut ModuleResolution,
+}

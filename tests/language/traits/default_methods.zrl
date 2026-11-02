@@ -1,0 +1,83 @@
+// expected exit 0
+// A trait method with a body is a default: an impl that does not define it gets it, with
+// `Self` the impl's type and the trait's parameters bound to the impl's trait arguments. An
+// impl may override it, a default may call other defaults, and a default may be generic.
+trait Shape {
+    fn area(self: &Self) -> i32;
+    fn double_area(self: &Self) -> i32 { return self.area() * 2; }
+    fn quad_area(self: &Self) -> i32 { return self.double_area() * 2; }
+    fn scaled<T: Scale>(self: &Self, s: T) -> i32 { return s.apply(self.area()); }
+}
+
+trait Scale { fn apply(self: &Self, x: i32) -> i32; }
+struct Times { k: i32 }
+impl Scale for Times { fn apply(self: &Times, x: i32) -> i32 { return x * self.k; } }
+
+struct Sq { s: i32 }
+impl Shape for Sq {
+    fn area(self: &Sq) -> i32 { return self.s * self.s; }
+}
+
+struct Rect { w: i32, h: i32 }
+impl Shape for Rect {
+    fn area(self: &Rect) -> i32 { return self.w * self.h; }
+    fn double_area(self: &Rect) -> i32 { return 1000; }
+}
+
+// A trait with a parameter: the default sees it as the impl's trait argument.
+trait Source<T> {
+    fn get(self: &mut Self) -> T;
+    fn get_twice(self: &mut Self) -> (T, T) {
+        let a = self.get();
+        let b = self.get();
+        return (a, b);
+    }
+}
+
+struct Counter { n: i64 }
+impl Source<i64> for Counter {
+    fn get(self: &mut Counter) -> i64 {
+        self.n = self.n + 1;
+        return self.n;
+    }
+}
+
+// A generic impl: the default is instantiated for each type argument.
+struct Wrap<T> { v: T }
+impl<T: Copy> Source<T> for Wrap<T> {
+    fn get(self: &mut Wrap<T>) -> T { return self.v; }
+}
+
+// A default that takes and returns Self by value.
+trait Bump {
+    fn bump(self: Self) -> Self;
+    fn bump2(self: Self) -> Self { return self.bump().bump(); }
+}
+impl Bump for Sq { fn bump(self: Sq) -> Sq { return Sq { s: self.s + 1 }; } }
+
+fn total<S: Shape>(s: &S) -> i32 { return s.quad_area(); }
+
+fn main() -> i32 {
+    let q = Sq { s: 3 };
+    if q.area() != 9 { return 1; }
+    if q.double_area() != 18 { return 2; }
+    if q.quad_area() != 36 { return 3; }
+    let r = Rect { w: 2, h: 5 };
+    if r.double_area() != 1000 { return 4; }
+    // The default quad_area calls the override, not the default double_area.
+    if r.quad_area() != 2000 { return 5; }
+    if total(&q) != 36 { return 6; }
+    if q.scaled(Times { k: 4 }) != 36 { return 7; }
+
+    let mut c = Counter { n: 0 };
+    let p = c.get_twice();
+    if p.0 != 1 || p.1 != 2 { return 8; }
+    let mut w = Wrap { v: 7 };
+    let wp = w.get_twice();
+    if wp.0 != 7 || wp.1 != 7 { return 9; }
+    let mut wb = Wrap { v: true };
+    if !wb.get_twice().1 { return 10; }
+
+    if q.bump2().s != 5 { return 11; }
+    return 0;
+}

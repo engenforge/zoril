@@ -1,0 +1,11 @@
+pub static mut KEEP: usize = 0 as usize;
+
+pub trait Stash {
+    fn stash(self: &Self);
+}
+
+impl Stash for u64 {
+    fn stash(self: &u64) {
+        KEEP = self as *u64 as usize;
+    }
+}

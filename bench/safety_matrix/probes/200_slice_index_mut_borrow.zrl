@@ -1,0 +1,13 @@
+// name: Mutable borrow of slice element allows mutating read-only slice
+// expected: compile_reject
+fn mutate_slice(s: [u64]) {
+    let p: &mut u64 = &mut s[0];
+    *p = 99;
+}
+
+fn main() -> i32 {
+    let arr: [u64; 2] = [7, 8];
+    mutate_slice(&arr);
+    // arr[0] reads 99 instead of 7
+    return arr[0] as i32;
+}

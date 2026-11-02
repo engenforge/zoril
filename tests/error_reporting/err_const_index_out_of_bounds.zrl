@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_const_index_out_of_bounds.zrl:7:12: error: index 99 is out of bounds for an array of length 3
+// An index written as a constant is checked against a fixed-size array's length at compile
+// time; it trapped at run time.
+fn main() -> i32 {
+    let data = [1 as u8, 2 as u8, 7 as u8];
+    return data[99] as i32;
+}

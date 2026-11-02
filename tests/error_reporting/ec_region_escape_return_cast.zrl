@@ -1,0 +1,9 @@
+// expected compile fail
+// Returning a stack pointer behind a cast must be rejected (cannot defeat region escape).
+// EXPECT: error: region escape: returning a pointer to local stack storage
+struct S { a: i32 }
+fn dangle() -> *mut S {
+    let mut s = S { a: 1 as i32 };
+    return &mut s as *mut S;
+}
+fn main() -> i32 { let p = dangle(); return unsafe { (*p).a }; }

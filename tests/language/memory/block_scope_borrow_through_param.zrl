@@ -1,0 +1,16 @@
+// expected exit 0
+// A reference reached by loading through a parameter points wherever that reference pointed, not
+// into the parameter's own storage, so the parameter ending its scope is not a dangling borrow: `r`
+// borrows `x`, which is still alive.
+fn deref_ref(p: &&i32) -> &i32 { return *p; }
+
+fn main() -> i32 {
+    let x: i32 = 5;
+    let mut r: &i32 = &x;
+    {
+        let p: &i32 = &x;
+        r = deref_ref(&p);
+    }
+    if *r != 5 { return 1; }
+    return 0;
+}

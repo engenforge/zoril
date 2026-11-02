@@ -1,0 +1,13 @@
+// expected compile fail
+// Tests that mutable and immutable borrows to the same value cannot coexist.
+// EXPECT: error: cannot mutably borrow 'r' while it is already borrowed
+struct Resource { id: i32 }
+
+fn main() -> i32 {
+    let mut r = Resource { id: 1 };
+    let s = &r;
+    let t = &mut r; // @error "cannot mutably borrow 'r' while it is already borrowed"
+    let x = s.id;
+    t.id = 2;
+    0
+}

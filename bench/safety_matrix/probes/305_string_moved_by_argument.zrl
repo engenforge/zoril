@@ -1,0 +1,16 @@
+// name: A String passed by value to a function is moved, not copied
+// expected: compile_reject
+// The caller's binding is the same owner as the callee's parameter; using it afterwards was
+// reading a value the callee owns (and may free).
+import "string.zrl";
+use string::String;
+
+fn take(s: String) -> i32 {
+    return s.len() as i32;
+}
+
+fn main() -> i32 {
+    let s = String.new();
+    let n = take(s);
+    return s.len() as i32 + n;
+}

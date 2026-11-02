@@ -1,0 +1,895 @@
+// Name and Type Resolution for Zoril v1.1
+// Maps AST Identifiers to concrete types and storage locations.
+
+import "core.zrl";
+import "mem.zrl";
+import "vec.zrl";
+import "intern.zrl";
+import "ast.zrl";
+import "il_type.zrl";
+import "il_cfg.zrl";
+// mono.zrl is imported by main.zrl; omitting it here breaks the resolve <-> mono cycle
+
+pub struct MethodSymbol {
+    pub type_name: u32,
+    pub method_name: u32,
+    pub packed: u32,
+    pub must_use: bool,
+}
+
+pub enum SymbolKind {
+    Global(DeclId),
+    Local(StmtId),
+    Param(u32), // Param index
+    Const(DeclId),
+    Static(DeclId),
+    Type(u32), // Index to ILType
+    Primitive(ILPrimitive),
+    Builtin(u32), // Builtin ID
+    Function(u32), // Index to ILFunction
+    Method(u32),   // Packed (impl_decl_id << 16) | method_idx
+}
+
+pub const SYM_GLOBAL: u32 = 0;
+pub const SYM_LOCAL: u32 = 1;
+pub const SYM_PARAM: u32 = 2;
+pub const SYM_CONST: u32 = 3;
+pub const SYM_STATIC: u32 = 4;
+pub const SYM_TYPE: u32 = 5;
+pub const SYM_PRIMITIVE: u32 = 6;
+pub const SYM_BUILTIN: u32 = 7;
+pub const SYM_FUNCTION: u32 = 8;
+pub const SYM_METHOD: u32 = 9;
+
+// Number of `ILPrimitive` tags, and so the length of `Resolver.primitives`.
+pub const PRIMITIVE_TAG_COUNT: usize = 16;
+
+impl SymbolKind {
+    pub fn get_tag(self: &SymbolKind) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Type(self: &SymbolKind) -> u32 { return unsafe { *( (self as usize + 4) as *u32 ) }; }
+    pub fn get_Primitive(self: &SymbolKind) -> ILPrimitive { return unsafe { *( (self as usize + 4) as *ILPrimitive ) }; }
+    pub fn get_Global(self: &SymbolKind) -> u32 { return unsafe { *( (self as usize + 4) as *u32 ) }; }
+    pub fn get_Const(self: &SymbolKind) -> u32 { return unsafe { *( (self as usize + 4) as *u32 ) }; }
+    pub fn get_Static(self: &SymbolKind) -> u32 { return unsafe { *( (self as usize + 4) as *u32 ) }; }
+    pub fn get_Function(self: &SymbolKind) -> u32 { return unsafe { *( (self as usize + 4) as *u32 ) }; }
+    pub fn get_Local(self: &SymbolKind) -> u32 { return unsafe { *( (self as usize + 4) as *u32 ) }; }
+    pub fn get_Param(self: &SymbolKind) -> u32 { return unsafe { *( (self as usize + 4) as *u32 ) }; }
+    pub fn get_Builtin(self: &SymbolKind) -> u32 { return unsafe { *( (self as usize + 4) as *u32 ) }; }
+    pub fn get_Method(self: &SymbolKind) -> u32 { return unsafe { *( (self as usize + 4) as *u32 ) }; }
+}
+
+pub struct Symbol {
+    pub name: u32,
+    pub kind_tag: u32,
+    pub kind_payload: u32,
+    pub must_use: bool,
+}
+
+pub struct SymbolTable {
+    pub symbols: *mut *mut Symbol,
+    pub count: usize,
+    pub cap: usize,
+    pub arena: *mut Arena,
+    pub buckets: *mut u32,
+    pub bucket_cap: usize,
+}
+
+impl SymbolTable {
+    pub fn new(arena: *mut Arena, initial_cap: usize) -> *mut SymbolTable {
+        let st = zoril_allocator_alloc(arena, sizeof(SymbolTable)) as *mut SymbolTable;
+        let sz_ptr = 8 as usize;
+        let bucket_cap = initial_cap * 2;
+        let buckets = zoril_allocator_alloc(arena, bucket_cap * 4 as usize) as *mut u32;
+        unsafe {
+            memset(buckets as *mut u8, 0, (bucket_cap * 4 as usize) as u64);
+            *st = SymbolTable {
+                symbols: zoril_allocator_alloc(arena, initial_cap * sz_ptr) as *mut *mut Symbol,
+                count: 0 as usize,
+                cap: initial_cap,
+                arena: arena,
+                buckets: buckets,
+                bucket_cap: bucket_cap,
+            };
+        }
+        return st;
+    }
+
+    // SymbolTable's raw open-addressed hash table (symbols/buckets) is the same
+    // unsafe-inside/safe-outside shape as stdlib's InternTable, so this whole
+    // function is the unsafe interior rather than a place to migrate.
+    pub fn insert(self: &mut SymbolTable, name: u32, kind_tag: u32, kind_payload: u32, must_use: bool) -> *mut Symbol {
+        let sz_ptr = 8 as usize;
+        unsafe {
+        if self.count >= self.cap {
+            let old_cap = self.cap;
+            self.cap = if old_cap == 0 as usize { 16 as usize } else { old_cap * 2 as usize };
+            let new_syms = zoril_allocator_alloc(self.arena, self.cap * sz_ptr) as *mut *mut Symbol;
+            if self.symbols as usize != 0 as usize {
+                memcpy(new_syms as *mut u8, self.symbols as *u8, (old_cap * sz_ptr) as u64);
+            }
+            self.symbols = new_syms;
+
+            // Re-hash buckets
+            let new_bucket_cap = self.cap * 2;
+            let new_buckets = zoril_allocator_alloc(self.arena, new_bucket_cap * 4 as usize) as *mut u32;
+            memset(new_buckets as *mut u8, 0, (new_bucket_cap * 4 as usize) as u64);
+
+            let mut j = 0 as usize;
+            while j < self.count {
+                let p_s = *((self.symbols as usize + j * 8) as *mut *mut Symbol);
+                let mut b_idx = ((*p_s).name as usize) % new_bucket_cap;
+                while true {
+                    let p_b = (new_buckets as usize + b_idx * 4) as *mut u32;
+                    if *p_b == 0 as u32 {
+                        *p_b = (j + 1 as usize) as u32;
+                        break;
+                    }
+                    b_idx = (b_idx + 1 as usize) % new_bucket_cap;
+                }
+                j = j + 1 as usize;
+            }
+            self.buckets = new_buckets;
+            self.bucket_cap = new_bucket_cap;
+        }
+
+        let p_sym = zoril_allocator_alloc(self.arena, sizeof(Symbol)) as *mut Symbol;
+        *p_sym = Symbol {
+            name: name,
+            kind_tag: kind_tag,
+            kind_payload: kind_payload,
+            must_use: must_use,
+        };
+
+        let s_idx = self.count;
+        let p_ptr = (self.symbols as usize + s_idx * sz_ptr) as *mut *mut Symbol;
+        *p_ptr = p_sym;
+        self.count = self.count + 1 as usize;
+
+        // Add to buckets
+        if self.bucket_cap > 0 as usize {
+            let mut b_idx = (name as usize) % self.bucket_cap;
+            while true {
+                let p_b = (self.buckets as usize + b_idx * 4) as *mut u32;
+                if *p_b == 0 as u32 {
+                    *p_b = (s_idx + 1 as usize) as u32;
+                    break;
+                }
+                b_idx = (b_idx + 1 as usize) % self.bucket_cap;
+            }
+        }
+
+        return p_sym;
+        }
+    }
+
+    // Symbols are allocated one by one in the arena and never move, so the result does
+    // not point into the table's (growable) bucket arrays.
+    #[borrows()]
+    pub fn lookup_ptr(self: &SymbolTable, name: u32) -> Option<&Symbol> {
+        if self.count == 0 as usize { return Option.None; }
+
+        unsafe {
+        if self.bucket_cap > 0 as usize {
+            // Shadowing: a re-declared name is inserted again further along
+            // the same probe chain, so scan the whole chain and return the
+            // most recently inserted match, not the first.
+            let mut found = 0 as *mut Symbol;
+            let mut b_idx = (name as usize) % self.bucket_cap;
+            while true {
+                let s_idx_plus_1 = *((self.buckets as usize + b_idx * 4) as *mut u32);
+                if s_idx_plus_1 == 0 as u32 { break; }
+
+                let s_idx = s_idx_plus_1 as usize - 1 as usize;
+                let p_sym = *((self.symbols as usize + s_idx * 8) as *mut *mut Symbol);
+                if (*p_sym).name == name { found = p_sym; }
+
+                b_idx = (b_idx + 1 as usize) % self.bucket_cap;
+            }
+            if found as usize != 0 as usize { return Option.Some(&*found); }
+            return Option.None;
+        }
+
+        // Fallback to linear search if no buckets
+        let mut i = self.count - 1 as usize;
+        while true {
+            let p_sym = *((self.symbols as usize + i * 8) as *mut *mut Symbol);
+            if (*p_sym).name == name { return Option.Some(&*p_sym); }
+            if i == 0 as usize { break; }
+            i = i - 1 as usize;
+        }
+        return Option.None;
+        }
+    }
+}
+
+pub struct Scope {
+    pub symbols: *mut SymbolTable,
+    pub parent: *mut Scope,
+}
+
+impl Scope {
+    // Parent-pointer tree walked mutably -- the classic shape references
+    // handle badly (Option<&mut Scope> fights the borrow checker on every
+    // ascent). Mark now; the real fix is index-based scopes, recorded as a
+    // design change rather than done here.
+    pub fn new(arena: *mut Arena, parent: *mut Scope) -> *mut Scope {
+        let s = zoril_allocator_alloc(arena, sizeof(Scope)) as *mut Scope;
+        unsafe {
+            (*s).symbols = SymbolTable.new(arena, 1024);
+            (*s).parent = parent;
+        }
+        return s;
+    }
+}
+
+pub struct Resolver {
+    pub arena: *mut Arena,
+    pub ast: &AST,
+    pub module: &mut ILModule,
+    pub intern_table: &mut InternTable,
+    pub file_path: [u8],
+    pub current_scope: *mut Scope,
+    pub current_type_args_ptr: *mut u32,
+    pub current_type_args_len: usize,
+    pub resolve_type_depth: usize,
+    pub mono: *mut Monomorphizer,
+    pub type_map: *mut u32,
+    pub type_map_len: usize,
+    pub primitives: *mut u32, // Array of 16 u32
+    pub methods: Vec<MethodSymbol>,
+    pub bypass_cache: bool,
+    pub had_error: bool,
+}
+
+impl Resolver {
+    pub fn lookup_method(self: &Resolver, type_name: u32, method_name: u32) -> Option<&MethodSymbol> {
+        let mut i = 0 as usize;
+        while i < self.methods.len {
+            let m = &self.methods.as_slice()[i];
+            if m.type_name == type_name && m.method_name == method_name {
+                return Option.Some(m);
+            }
+            i = i + 1 as usize;
+        }
+        return Option.None;
+    }
+
+    fn report_error(self: &mut Resolver, msg: [u8], span: Span) {
+        self.had_error = true;
+        must_write(1, self.file_path);
+        must_write(1, ":");
+        write_u64(1, span.line as usize);
+        must_write(1, ":");
+        write_u64(1, span.col as usize);
+        must_write(1, ": error: ");
+        must_write(1, msg);
+        must_write(1, "\n");
+    }
+
+    pub fn map_primitive_tag(self: &Resolver, tag: u32) -> ILPrimitive {
+        if tag == ILPRIM_U8 { return ILPrimitive.U8; }
+        if tag == ILPRIM_U16 { return ILPrimitive.U16; }
+        if tag == ILPRIM_U32 { return ILPrimitive.U32; }
+        if tag == ILPRIM_U64 { return ILPrimitive.U64; }
+        if tag == ILPRIM_USIZE { return ILPrimitive.USize; }
+        if tag == ILPRIM_I8 { return ILPrimitive.I8; }
+        if tag == ILPRIM_I16 { return ILPrimitive.I16; }
+        if tag == ILPRIM_I32 { return ILPrimitive.I32; }
+        if tag == ILPRIM_I64 { return ILPrimitive.I64; }
+        if tag == ILPRIM_ISIZE { return ILPrimitive.ISize; }
+        if tag == ILPRIM_F32 { return ILPrimitive.F32; }
+        if tag == ILPRIM_F64 { return ILPrimitive.F64; }
+        if tag == ILPRIM_BOOL { return ILPrimitive.Bool; }
+        if tag == ILPRIM_CHAR { return ILPrimitive.Char; }
+        if tag == ILPRIM_UNIT { return ILPrimitive.Unit; }
+        return ILPrimitive.Never;
+    }
+
+    pub fn push_scope(self: &mut Resolver) {
+        self.current_scope = Scope.new(self.arena, self.current_scope);
+    }
+
+    pub fn pop_scope(self: &mut Resolver) {
+        let parent = unsafe { (*self.current_scope).parent };
+        if parent as usize != 0 as usize {
+            self.current_scope = parent;
+        }
+    }
+
+    pub fn define(self: &mut Resolver, name: u32, kind: SymbolKind, must_use: bool) -> *mut Symbol {
+        let tag = kind.get_tag();
+        let mut payload = 0 as u32;
+        if tag == SYM_TYPE { payload = kind.get_Type(); }
+        else if tag == SYM_PRIMITIVE { payload = kind.get_Primitive().get_tag(); }
+        else if tag == SYM_GLOBAL { payload = kind.get_Global(); }
+        else if tag == SYM_CONST { payload = kind.get_Const(); }
+        else if tag == SYM_STATIC { payload = kind.get_Static(); }
+        else if tag == SYM_FUNCTION { payload = kind.get_Function(); }
+        else if tag == SYM_LOCAL { payload = kind.get_Local(); }
+        else if tag == SYM_PARAM { payload = kind.get_Param(); }
+        else if tag == SYM_BUILTIN { payload = kind.get_Builtin(); }
+        else if tag == SYM_METHOD { payload = kind.get_Method(); }
+
+        let symbols = unsafe { (*self.current_scope).symbols };
+        return unsafe { (*symbols).insert(name, tag, payload, must_use) };
+    }
+
+    fn init_builtins(self: &mut Resolver) {
+        let id_u8 = self.intern_table.intern("u8");
+        self.define(id_u8, SymbolKind.Primitive(ILPrimitive.U8), false);
+        self.define(self.intern_table.intern("u16"), SymbolKind.Primitive(ILPrimitive.U16), false);
+        self.define(self.intern_table.intern("u32"), SymbolKind.Primitive(ILPrimitive.U32), false);
+        self.define(self.intern_table.intern("u64"), SymbolKind.Primitive(ILPrimitive.U64), false);
+        self.define(self.intern_table.intern("usize"), SymbolKind.Primitive(ILPrimitive.USize), false);
+        self.define(self.intern_table.intern("i8"), SymbolKind.Primitive(ILPrimitive.I8), false);
+        self.define(self.intern_table.intern("i16"), SymbolKind.Primitive(ILPrimitive.I16), false);
+        self.define(self.intern_table.intern("i32"), SymbolKind.Primitive(ILPrimitive.I32), false);
+        self.define(self.intern_table.intern("i64"), SymbolKind.Primitive(ILPrimitive.I64), false);
+        self.define(self.intern_table.intern("isize"), SymbolKind.Primitive(ILPrimitive.ISize), false);
+        self.define(self.intern_table.intern("bool"), SymbolKind.Primitive(ILPrimitive.Bool), false);
+        self.define(self.intern_table.intern("char"), SymbolKind.Primitive(ILPrimitive.Char), false);
+        self.define(self.intern_table.intern("f32"), SymbolKind.Primitive(ILPrimitive.F32), false);
+        self.define(self.intern_table.intern("f64"), SymbolKind.Primitive(ILPrimitive.F64), false);
+    }
+
+    fn report_decl_error(self: &mut Resolver, msg: [u8], name: u32, source_file: u32, decl_idx: usize) {
+        self.had_error = true;
+        let span = self.ast.decl_spans[decl_idx];
+        must_write(1, self.intern_table.lookup(source_file));
+        must_write(1, ":");
+        write_u64(1, span.line as usize);
+        must_write(1, ":");
+        write_u64(1, span.col as usize);
+        must_write(1, ": error: ");
+        must_write(1, msg);
+        must_write(1, self.intern_table.lookup(name));
+        must_write(1, "\n");
+    }
+
+    fn register_global_decls(self: &mut Resolver) {
+        let ast: &AST = self.ast;
+        let mut i = 1 as usize;
+        while i < ast.decls.len {
+            let p_decl: &Decl = &ast.decls()[i];
+            
+            match *p_decl {
+                Decl.Fn(f) => { self.define(f.name, SymbolKind.Global(i as u32), f.must_use); },
+                Decl.Struct(s) => { self.define(s.name, SymbolKind.Global(i as u32), s.must_use); },
+                Decl.Enum(e) => { self.define(e.name, SymbolKind.Global(i as u32), e.must_use); },
+                Decl.Impl(imp) => {
+                    let mut type_name_id = 0 as u32;
+                    let p_target_ty: &Type = &ast.types[imp.target_ty as usize];
+                    match *p_target_ty {
+                        Type.Path(path) => { type_name_id = path.0; },
+                        Type.Primitive(_) => {},
+                        Type.Ptr(inner) | Type.PtrMut(inner) | Type.Ref(inner) | Type.RefMut(inner) => {
+                             let p_inner: &Type = &ast.types[inner as usize];
+                             if p_inner.get_tag() == TYPE_PATH { type_name_id = p_inner.get_Path().0; }
+                        },
+                        Type.Slice(_) | Type.SliceMut(_) | Type.Array(_) | Type.Tuple(_) | Type.Fn(_) | Type.Var(_) => {},
+                    }
+
+                    if type_name_id != 0 as u32 {
+                        let mut k = 0 as usize;
+                        while k < imp.methods.len {
+                            let mut full_name_v = ByteVec.new(self.arena);
+                            let type_name_s = self.intern_table.lookup(type_name_id);
+                            full_name_v.push_slice(type_name_s);
+                            full_name_v.push(':' as u8);
+                            full_name_v.push(':' as u8);
+                            let method_name_s = self.intern_table.lookup(imp.methods[k].name);
+                            full_name_v.push_slice(method_name_s);
+                            let full_id = self.intern_table.intern(full_name_v.as_slice());
+
+                            let packed = (i as u32 << 16) | (k as u32);
+                            self.define(full_id, SymbolKind.Method(packed), imp.methods[k].must_use);
+                            self.methods.push(MethodSymbol {
+                                type_name: type_name_id,
+                                method_name: imp.methods[k].name,
+                                packed: packed,
+                                must_use: imp.methods[k].must_use,
+                            });
+
+                            let mut legacy_name_v = ByteVec.new(self.arena);
+                            legacy_name_v.push_slice(type_name_s);
+                            legacy_name_v.push('_' as u8);
+                            legacy_name_v.push_slice(method_name_s);
+                            let legacy_id = self.intern_table.intern(legacy_name_v.as_slice());
+                            match self.lookup_current_scope_ptr(legacy_id) {
+                                Option.Some(_) => {},
+                                Option.None => {
+                                    self.define(legacy_id, SymbolKind.Method(packed), imp.methods[k].must_use);
+                                },
+                            }
+                            k = k + 1 as usize;
+                        }
+
+                        let mut jk = 0 as usize;
+                        while jk < imp.constants.len {
+                            let mut full_name_v = ByteVec.new(self.arena);
+                            let type_name_s = self.intern_table.lookup(type_name_id);
+                            full_name_v.push_slice(type_name_s);
+                            full_name_v.push('_' as u8);
+                            let const_name_s = self.intern_table.lookup(imp.constants[jk].name);
+                            full_name_v.push_slice(const_name_s);
+                            let full_id = self.intern_table.intern(full_name_v.as_slice());
+
+                            let packed = (i as u32 << 16) | (jk as u32);
+                            self.define(full_id, SymbolKind.Method(packed), false); // Constants also use packed for now or we need SYM_METHOD_CONST
+                            jk = jk + 1 as usize;
+                        }
+                    }
+                },
+                Decl.Trait(_) => {},
+                Decl.TypeAlias(ta) => { self.define(ta.name, SymbolKind.Global(i as u32), false); },
+                Decl.Const(c) => { self.define(c.name, SymbolKind.Global(i as u32), false); },
+                Decl.Static(s) => { self.define(s.name, SymbolKind.Global(i as u32), false); },
+                Decl.Import(_) => {},
+                Decl.None => {},
+            }
+            i = i + 1 as usize;
+        }
+    }
+
+    pub fn new(arena: *mut Arena, ast: &AST, module: &mut ILModule, table: &mut InternTable, file_path: [u8]) -> *mut Resolver {
+        let r = zoril_allocator_alloc(arena, sizeof(Resolver)) as *mut Resolver;
+        let type_map_len = 8192 as usize;
+        let type_map = zoril_allocator_alloc(arena, type_map_len * 4) as *mut u32;
+        let mut j = 0 as usize;
+        unsafe {
+            while j < type_map_len {
+                *((type_map as usize + j * 4) as *mut u32) = 0 as u32;
+                j = j + 1 as usize;
+            }
+        }
+
+        let primitives = zoril_allocator_alloc(arena, PRIMITIVE_TAG_COUNT * 4) as *mut u32;
+
+        unsafe {
+            *r = Resolver {
+                arena: arena,
+                ast: ast,
+                module: module,
+                intern_table: table,
+                file_path: file_path,
+                current_scope: Scope.new(arena, 0 as *mut Scope),
+                current_type_args_ptr: 0 as *mut u32,
+                current_type_args_len: 0 as usize,
+                resolve_type_depth: 0 as usize,
+                mono: 0 as *mut Monomorphizer,
+                type_map: type_map,
+                type_map_len: type_map_len,
+                primitives: primitives,
+                methods: Vec::<MethodSymbol>.new_in(arena),
+                bypass_cache: false,
+                had_error: false,
+            };
+        }
+
+        // The Resolver is fully initialised above, so this is where its arena
+        // storage becomes a reference; the rest of the constructor calls methods
+        // through it rather than auto-dereferencing the raw pointer.
+        let rr: &mut Resolver = unsafe { &mut *r };
+
+        // Pre-allocate primitives
+        let mut p = 0 as u32;
+        while p < PRIMITIVE_TAG_COUNT as u32 {
+            let id = module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Primitive(rr.map_primitive_tag(p)) , source_file: 0 as u32 });
+            unsafe { *((primitives as usize + p as usize * 4) as *mut u32) = id; }
+            p = p + 1 as u32;
+        }
+
+        rr.init_builtins();
+        rr.register_global_decls();
+
+        return r;
+    }
+
+    pub fn set_mono(self: &mut Resolver, mono: *mut Monomorphizer) {
+        self.mono = mono;
+    }
+
+    pub fn lookup_ptr(self: &Resolver, name: u32) -> Option<&Symbol> {
+        let mut s = self.current_scope;
+        unsafe {
+            while s as usize != 0 as usize {
+                let opt = (*(*s).symbols).lookup_ptr(name);
+                match opt {
+                    Option.Some(sym) => { return Option.Some(sym); },
+                    Option.None => {},
+                }
+                s = (*s).parent;
+            }
+        }
+        return Option.None;
+    }
+
+    pub fn resolve_ptr(self: &Resolver, name: u32) -> Option<&Symbol> {
+        return self.lookup_ptr(name);
+    }
+
+    pub fn lookup_current_scope_ptr(self: &Resolver, name: u32) -> Option<&Symbol> {
+        if self.current_scope as usize == 0 as usize { return Option.None; }
+        return unsafe { (*(*self.current_scope).symbols).lookup_ptr(name) };
+    }
+
+    pub fn lookup_global_ptr(self: &Resolver, name: u32) -> Option<&Symbol> {
+        let mut root = self.current_scope;
+        unsafe {
+            while (*root).parent as usize != 0 as usize {
+                root = (*root).parent;
+            }
+            return (*(*root).symbols).lookup_ptr(name);
+        }
+    }
+
+    pub fn is_ref_type(self: &mut Resolver, ty_id: TypeId) -> bool {
+        return self.is_ref_type_depth(ty_id, 0 as usize);
+    }
+
+    pub fn is_ref_type_depth(self: &mut Resolver, ty_id: TypeId, depth: usize) -> bool {
+        let ast: &AST = self.ast;
+        if ty_id == 0 as TypeId || depth > 10 as usize || ty_id as usize >= ast.types.len { return false; }
+        let p_ty: &Type = &ast.types[ty_id as usize];
+        match *p_ty {
+            Type.Ref(_) | Type.RefMut(_) => { return true; },
+            Type.Path(path) => {
+                let opt_sym = self.lookup_ptr(path.0);
+                match opt_sym {
+                    Option.Some(s) => {
+                        if s.kind_tag as u32 == SYM_GLOBAL {
+                            let p_decl: &Decl = &ast.decls()[s.kind_payload as usize];
+                            match *p_decl {
+                                Decl.TypeAlias(ta) => {
+                                    return self.is_ref_type_depth(ta.target, depth + 1 as usize);
+                                },
+                                _ => {},
+                            }
+                        }
+                    },
+                    Option.None => {},
+                }
+            },
+            _ => {},
+        }
+        return false;
+    }
+
+    pub fn is_raw_ptr_type(self: &mut Resolver, ty_id: TypeId) -> bool {
+        return self.is_raw_ptr_type_depth(ty_id, 0 as usize);
+    }
+
+    pub fn is_raw_ptr_type_depth(self: &mut Resolver, ty_id: TypeId, depth: usize) -> bool {
+        let ast: &AST = self.ast;
+        if ty_id == 0 as TypeId || depth > 10 as usize || ty_id as usize >= ast.types.len { return false; }
+        let p_ty: &Type = &ast.types[ty_id as usize];
+        match *p_ty {
+            Type.Ptr(_) | Type.PtrMut(_) => { return true; },
+            Type.Path(path) => {
+                let opt_sym = self.lookup_ptr(path.0);
+                match opt_sym {
+                    Option.Some(s) => {
+                        if s.kind_tag as u32 == SYM_GLOBAL {
+                            let p_decl: &Decl = &ast.decls()[s.kind_payload as usize];
+                            match *p_decl {
+                                Decl.TypeAlias(ta) => {
+                                    return self.is_raw_ptr_type_depth(ta.target, depth + 1 as usize);
+                                },
+                                _ => {},
+                            }
+                        }
+                    },
+                    Option.None => {},
+                }
+            },
+            _ => {},
+        }
+        return false;
+    }
+
+    // True when the declared type is a reference or pointer (`&T`, `&mut T`, `*T`,
+    // `*mut T`, or an alias of one). By-value aggregate parameters are lowered to a
+    // pointer too, so only the declared type tells a borrowing receiver from a
+    // consuming one.
+    pub fn is_ref_or_ptr_type(self: &mut Resolver, ty_id: TypeId) -> bool {
+        let ast: &AST = self.ast;
+        if ty_id == 0 as TypeId || ty_id as usize >= ast.types.len { return false; }
+        let p_ty: &Type = &ast.types[ty_id as usize];
+        match *p_ty {
+            Type.Ref(_) | Type.RefMut(_) => { return true; },
+            _ => {},
+        }
+        return self.is_raw_ptr_type(ty_id);
+    }
+
+    pub fn is_fn_type(self: &mut Resolver, ty_id: TypeId) -> bool {
+        return self.is_fn_type_depth(ty_id, 0 as usize);
+    }
+
+    pub fn is_fn_type_depth(self: &mut Resolver, ty_id: TypeId, depth: usize) -> bool {
+        let ast: &AST = self.ast;
+        if ty_id == 0 as TypeId || depth > 10 as usize || ty_id as usize >= ast.types.len { return false; }
+        let p_ty: &Type = &ast.types[ty_id as usize];
+        match *p_ty {
+            Type.Fn(_) => { return true; },
+            Type.Path(path) => {
+                let opt_sym = self.lookup_ptr(path.0);
+                match opt_sym {
+                    Option.Some(s) => {
+                        if s.kind_tag as u32 == SYM_GLOBAL {
+                            let p_decl: &Decl = &ast.decls()[s.kind_payload as usize];
+                            match *p_decl {
+                                Decl.TypeAlias(ta) => {
+                                    return self.is_fn_type_depth(ta.target, depth + 1 as usize);
+                                },
+                                _ => {},
+                            }
+                        }
+                    },
+                    Option.None => {},
+                }
+            },
+            _ => {},
+        }
+        return false;
+    }
+
+    pub fn is_enum_type(self: &mut Resolver, ty_id: TypeId) -> bool {
+        return self.is_enum_type_depth(ty_id, 0 as usize);
+    }
+
+    pub fn is_enum_type_depth(self: &mut Resolver, ty_id: TypeId, depth: usize) -> bool {
+        let ast: &AST = self.ast;
+        if ty_id == 0 as TypeId || depth > 10 as usize || ty_id as usize >= ast.types.len { return false; }
+        let p_ty: &Type = &ast.types[ty_id as usize];
+        match *p_ty {
+            Type.Path(path) => {
+                let opt_sym = self.lookup_ptr(path.0);
+                match opt_sym {
+                    Option.Some(s) => {
+                        if s.kind_tag as u32 == SYM_GLOBAL {
+                            let p_decl: &Decl = &ast.decls()[s.kind_payload as usize];
+                            match *p_decl {
+                                Decl.Enum(_) => { return true; },
+                                Decl.TypeAlias(ta) => {
+                                    return self.is_enum_type_depth(ta.target, depth + 1 as usize);
+                                },
+                                _ => {},
+                            }
+                        }
+                    },
+                    Option.None => {},
+                }
+            },
+            _ => {},
+        }
+        return false;
+    }
+
+    pub fn is_type_param(self: &mut Resolver, ty_id: TypeId) -> bool {
+        let ast: &AST = self.ast;
+        if ty_id == 0 as TypeId || ty_id as usize >= ast.types.len { return false; }
+        let p_ty: &Type = &ast.types[ty_id as usize];
+        match *p_ty {
+            Type.Var(_) => { return true; },
+            Type.Path(path) => {
+                if path.1.len > 0 as usize { return false; }
+                let name = path.0;
+                let self_id = self.intern_table.intern("Self");
+                if name == self_id { return false; }
+                let opt_sym = self.lookup_ptr(name);
+                match opt_sym {
+                    Option.Some(s) => {
+                        if s.kind_tag as u32 == SYM_TYPE {
+                            let opt_root = self.lookup_global_ptr(name);
+                            match opt_root {
+                                Option.Some(rs) => {
+                                    if rs.kind_tag as u32 == SYM_GLOBAL { return false; }
+                                },
+                                Option.None => {},
+                            }
+                            return true;
+                        }
+                    },
+                    Option.None => {},
+                }
+            },
+            _ => {},
+        }
+        return false;
+    }
+
+    // The IL type id of a primitive, by its `ILPrimitive` tag. `primitives` is a
+    // fixed 16-entry raw array owned by `Resolver`; this is the safe way in.
+    pub fn primitive_type(self: &Resolver, tag: u32) -> u32 {
+        let prims = unsafe { @slice(self.primitives, PRIMITIVE_TAG_COUNT) };
+        return prims[tag as usize];
+    }
+
+    pub fn resolve_type(self: &mut Resolver, ty_id: TypeId) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let ast: &AST = self.ast;
+        if !self.bypass_cache && ty_id as usize < self.type_map_len {
+            let cached = unsafe { *((self.type_map as usize + ty_id as usize * 4) as *mut u32) };
+            if cached != 0 as u32 {
+                // Check if the type is scope-dependent. If so, don't use cache.
+                let p_ty_check: &Type = &ast.types[ty_id as usize];
+                let tag_check = p_ty_check.get_tag();
+                if tag_check != TYPE_PATH && tag_check != TYPE_VAR {
+                    return cached;
+                }
+            }
+        }
+
+        let p_ty: &Type = &ast.types[ty_id as usize];
+        let mut res = 0 as u32;
+        match *p_ty {
+            Type.Primitive(p) => {
+                let tag = p.get_tag();
+                res = self.primitive_type(tag);
+            },
+            Type.Ptr(inner) => { let r = self.resolve_type(inner); res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Ptr(r) , source_file: 0 as u32 }); },
+            Type.PtrMut(inner) => { let r = self.resolve_type(inner); res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.PtrMut(r) , source_file: 0 as u32 }); },
+            Type.Ref(inner) => { let r = self.resolve_type(inner); res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Ptr(r) , source_file: 0 as u32 }); },
+            Type.RefMut(inner) => { let r = self.resolve_type(inner); res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.PtrMut(r) , source_file: 0 as u32 }); },
+            Type.Slice(inner) => { let r = self.resolve_type(inner); res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Slice(ILSlice { element: r, mutable: false }) , source_file: 0 as u32 }); },
+            Type.SliceMut(inner) => { let r = self.resolve_type(inner); res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Slice(ILSlice { element: r, mutable: true }) , source_file: 0 as u32 }); },
+            Type.Array(a) => { let r = self.resolve_type(a.0); res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Array(ILArray { element: r, size: a.1 as u32 }) , source_file: 0 as u32 }); },
+            Type.Tuple(types) => {
+                let resolved_ptr = zoril_allocator_alloc(self.arena, types.len * 4) as *mut u32;
+                let mut resolved = unsafe { @slice(resolved_ptr, types.len) };
+                let mut i = 0 as usize;
+                while i < types.len {
+                    resolved[i] = self.resolve_type(types[i]);
+                    i = i + 1 as usize;
+                }
+                res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Tuple(resolved) , source_file: 0 as u32 });
+            },
+            Type.Fn(f) => {
+                let params_ptr = zoril_allocator_alloc(self.arena, f.params.len * 4) as *mut u32;
+                let mut params = unsafe { @slice(params_ptr, f.params.len) };
+                let mut i = 0 as usize;
+                while i < f.params.len {
+                    params[i] = self.resolve_type(f.params[i]);
+                    i = i + 1 as usize;
+                }
+                let ret = self.resolve_type(f.ret_ty);
+                res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Fn(ILFn { params: params, ret_ty: ret, is_variadic: false }) , source_file: 0 as u32 });
+            },
+            Type.Path(path) => {
+                let opt_sym = self.lookup_ptr(path.0);
+                match opt_sym {
+                    Option.Some(s) => {
+                        let k_tag = s.kind_tag as u32;
+                        let k_payload = s.kind_payload as u32;
+                        match k_tag {
+                            SYM_PRIMITIVE => {
+                                res = self.primitive_type(k_payload);
+                            },
+                            SYM_TYPE => {
+                                if path.1.len > 0 as usize {
+                                    // This would be a generic instantiation on an already instantiated type
+                                    // which is usually an error or a nested generic.
+                                    // For now, if it's already a SYM_TYPE, we assume k_payload is the ILType ID.
+                                    res = k_payload;
+                                } else {
+                                    res = k_payload;
+                                }
+                            },
+                            SYM_GLOBAL => {
+                                let p_decl: &Decl = &ast.decls()[k_payload as usize];
+                                match *p_decl {
+                                    Decl.Struct(s) => {
+                                        let type_args = self.resolve_type_list(path.1.ptr, path.1.len);
+                                        let mono: &mut Monomorphizer = unsafe { &mut *self.mono };
+                                        res = mono.instantiate_type(k_payload, type_args);
+                                    },
+                                    Decl.Enum(e) => {
+                                        let type_args = self.resolve_type_list(path.1.ptr, path.1.len);
+                                        let mono: &mut Monomorphizer = unsafe { &mut *self.mono };
+                                        res = mono.instantiate_type(k_payload, type_args);
+                                    },
+                                    Decl.Fn(_) => { ICE("resolve_type: Path resolved to function"); },
+                                    Decl.Trait(_) => { ICE("resolve_type: Path resolved to trait"); },
+                                    Decl.Impl(_) => { ICE("resolve_type: Path resolved to impl"); },
+                                    Decl.TypeAlias(ta) => { res = self.resolve_type(ta.target); },
+                                    Decl.Const(_) => { ICE("resolve_type: Path resolved to const"); },
+                                    Decl.Static(_) => { ICE("resolve_type: Path resolved to static"); },
+                                    Decl.Import(_) => { ICE("resolve_type: Path resolved to import"); },
+                                    Decl.None => { ICE("resolve_type: Path resolved to none"); },
+                                }
+                            },
+                            _ => {}
+                        }
+                    },
+                    Option.None => {
+                        let name = self.intern_table.lookup(path.0);
+                        if is_str_eq(name, "Box") {
+                            let r = self.resolve_type(path.1[0]);
+                            res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Boxed(r) , source_file: 0 as u32 });
+                        } else if is_str_eq(name, "BoxMut") {
+                            let r = self.resolve_type(path.1[0]);
+                            res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.BoxedMut(r) , source_file: 0 as u32 });
+                        } else if is_str_eq(name, "fd") {
+                            let mut cap = FDCap.RW;
+                            if path.1.len > 0 as usize {
+                                let arg_ty_id = path.1[0];
+                                let p_arg_ty: &Type = &ast.types[arg_ty_id as usize];
+                                if p_arg_ty.get_tag() == TYPE_PATH {
+                                    let arg_path = p_arg_ty.get_Path();
+                                    let arg_name = self.intern_table.lookup(arg_path.0);
+                                    if is_str_eq(arg_name, "r") { cap = FDCap.R; }
+                                    else if is_str_eq(arg_name, "w") { cap = FDCap.W; }
+                                    else if is_str_eq(arg_name, "rw") { cap = FDCap.RW; }
+                                }
+                            }
+                            res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.FD(cap) , source_file: 0 as u32 });
+                        } else if is_str_eq(name, "ioring") {
+                            res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.IORing , source_file: 0 as u32 });
+                        }
+                    },
+                }
+            },
+            Type.Var(v) => {
+                let opt_sym = self.lookup_ptr(v);
+                match opt_sym {
+                    Option.Some(s) => {
+                        let k_tag = s.kind_tag as u32;
+                        let k_payload = s.kind_payload as u32;
+                        
+                        if k_tag == SYM_TYPE {
+                            res = k_payload;
+                        } else {
+                            res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Var(ILVar { name: v, bounds: @slice(0 as *mut u32, 0 as usize) }) , source_file: 0 as u32 });
+                        }
+                    },
+                    Option.None => {
+                        res = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Var(ILVar { name: v, bounds: @slice(0 as *mut u32, 0 as usize) }) , source_file: 0 as u32 });
+                    }
+                }
+            },
+        }
+
+        let t_tag = p_ty.get_tag();
+        if !self.bypass_cache && ty_id as usize < self.type_map_len {
+            if t_tag != TYPE_VAR && t_tag != TYPE_PTR && t_tag != TYPE_PTRMUT && t_tag != TYPE_REF && t_tag != TYPE_REFMUT && t_tag != TYPE_SLICE && t_tag != TYPE_SLICE_MUT && t_tag != TYPE_ARRAY && t_tag != TYPE_TUPLE && t_tag != TYPE_FN {
+                 unsafe { *((self.type_map as usize + ty_id as usize * 4) as *mut u32) = res; }
+            }
+        }
+        return res;
+    }
+
+    pub fn resolve_type_list(self: &mut Resolver, ptr: *TypeId, len: usize) -> [u32] {
+        if len == 0 as usize { return @slice(0 as *mut u32, 0 as usize); }
+        let arr_ptr = zoril_allocator_alloc(self.arena, len * 4) as *mut u32;
+        let src = unsafe { @slice(ptr, len) };
+        let mut arr = unsafe { @slice(arr_ptr, len) };
+        let mut i = 0 as usize;
+        while i < len {
+            arr[i] = self.resolve_type(src[i]);
+            i = i + 1 as usize;
+        }
+        return arr;
+    }
+
+    fn map_primitive(self: &Resolver, p: PrimitiveType) -> ILPrimitive {
+        match p {
+            PrimitiveType.U8 => { return ILPrimitive.U8; },
+            PrimitiveType.U16 => { return ILPrimitive.U16; },
+            PrimitiveType.U32 => { return ILPrimitive.U32; },
+            PrimitiveType.U64 => { return ILPrimitive.U64; },
+            PrimitiveType.USize => { return ILPrimitive.USize; },
+            PrimitiveType.I8 => { return ILPrimitive.I8; },
+            PrimitiveType.I16 => { return ILPrimitive.I16; },
+            PrimitiveType.I32 => { return ILPrimitive.I32; },
+            PrimitiveType.I64 => { return ILPrimitive.I64; },
+            PrimitiveType.ISize => { return ILPrimitive.ISize; },
+            PrimitiveType.Bool => { return ILPrimitive.Bool; },
+            PrimitiveType.Char => { return ILPrimitive.Char; },
+            PrimitiveType.F32 => { return ILPrimitive.F32; },
+            PrimitiveType.F64 => { return ILPrimitive.F64; },
+            PrimitiveType.Unit => { return ILPrimitive.Unit; },
+            PrimitiveType.Never => { return ILPrimitive.Never; },
+        }
+    }
+}

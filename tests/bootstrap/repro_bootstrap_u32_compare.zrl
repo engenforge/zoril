@@ -1,0 +1,22 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::{stderr, write};
+use fmt::write_u64;
+
+fn test_u32_ptr(ptr: *u32) {
+    let mut err = stderr();
+    let val = unsafe { *ptr };
+    if val == 38 as u32 {
+        write(err, "val IS 38\n");
+    } else {
+        write(err, "val IS NOT 38\n");
+        write(err, "val as u64: ");
+        let _ = write_u64(&mut err, val as u64);
+        write(err, "\n");
+    }
+}
+
+fn main() {
+    let x = 38 as u32;
+    test_u32_ptr(&x);
+}

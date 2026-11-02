@@ -1,0 +1,25 @@
+// name: A view through a &mut Vec that ends before mutation is accepted
+// expected: accept
+// Accepted twin: a view taken through a &mut parameter is legal when its borrow
+// ends before the next mutation through the same reference.
+import "vec.zrl";
+use vec::Vec;
+
+fn helper(v: &mut Vec<i32>) -> i32 {
+    let n = {
+        let r = v.get(0).unwrap();
+        *r
+    };
+    v.push(n + 1);
+    return v.len() as i32;
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(10);
+    let len = helper(&mut v);
+    if len != 2 {
+        return 1;
+    }
+    return 0;
+}

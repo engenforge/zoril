@@ -1,0 +1,17 @@
+// name: An immutable static of a non-scalar type is unchanged by the static rule
+// expected: accept
+// Only `static mut` is restricted. A `static` is fixed by its initializer, so reading one cannot
+// see a retyped value and stays safe.
+enum E {
+    N,
+    M,
+}
+
+static S: E = E.N;
+
+fn main() -> i32 {
+    match S {
+        E.N => { return 0; },
+        E.M => { return 1; }
+    }
+}

@@ -1,0 +1,3 @@
+// name: Narrowing integer cast truncates
+// expected: accept
+fn main() -> i32 { let big: i64 = 4294967296 as i64; return big as i32; }

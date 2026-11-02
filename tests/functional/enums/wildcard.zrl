@@ -1,0 +1,7 @@
+// expected exit code: 0
+#[must_use]
+fn must_use_fn() -> i32 { return 42; }
+fn main() -> i32 {
+    let _ = must_use_fn();
+    return 0;
+}

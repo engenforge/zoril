@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_box_borrow_passed_as_owned.zrl:12:12: error: type mismatch: expected `Box<i32>`, found `&i32`
+// EXPECT: note: a `Box<T>` owns what it points at, so a reference cannot stand in for one: pass an owned box (`box x`)
+// EXPECT: tests/error_reporting/err_box_borrow_passed_as_owned.zrl:12:23: error: type mismatch: expected `Box<i32>`, found `&mut i32`
+// EXPECT: note: a `Box<T>` owns what it points at, so a reference cannot stand in for one: pass an owned box (`box x`)
+
+fn take(b: Box<i32>) -> i32 { return *b; }
+
+fn main() -> i32 {
+    let x: i32 = 7;
+    let mut y: i32 = 8;
+    return take(&x) + take(&mut y);
+}

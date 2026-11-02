@@ -1,0 +1,10 @@
+// name: Read-only slice cast to a mutable slice
+// expected: compile_reject
+// `[u8] as [mut u8]` gained write access to a string literal in safe code until 2026-10-05
+// (the twin of probes 94 and 96). A slice cast may drop `mut`, never add it.
+fn main() -> i32 {
+    let s: [u8] = "abc";
+    let m = s as [mut u8];
+    m[0] = 120 as u8;
+    return 0;
+}

@@ -1,0 +1,223 @@
+// zbuild command line.
+
+import "core.zrl";
+import "clone.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "args.zrl";
+import "string.zrl";
+import "vec.zrl";
+import "version.zrl";
+use args::Args;
+use io::{eprint, print};
+use mem_raw::ArenaHeader;
+use vec::Vec;
+use version::version;
+
+#[derive(Clone)]
+pub struct Options {
+    pub entry: [u8],
+    pub output: [u8],
+    pub cache_dir: [u8],
+    pub verbose: bool,
+    pub break_cutoff: bool,
+    pub gc: bool,
+    pub compiler: [u8],
+    pub zilc: [u8],
+    pub qbe: [u8],
+    pub asm_tool: [u8],
+    pub ld: [u8],
+    pub runtime: [u8],
+    pub root: [u8],
+    pub inc_dirs: Vec<[u8]>,
+    // Link inputs reach the final link only (no compile key depends on them): the object files for
+    // the existence check, and every input as the linker's arguments, in the order given.
+    pub link_objects: Vec<[u8]>,
+    pub link_items: Vec<[u8]>,
+    // `--checked`: instrument the emitted program for memory-safety testing (see `zoril --checked`).
+    // Part of the toolchain id, so objects built in one mode are never reused in the other.
+    pub checked: bool,
+    // `--hosted`: link into a libc process through `cc` (part of the toolchain id).
+    pub hosted: bool,
+    pub cc: [u8],
+}
+
+pub fn default_options(arena: *mut ArenaHeader) -> Options {
+    return Options {
+        entry: "", output: "./a.out", cache_dir: ".zoril-cache",
+        verbose: false, break_cutoff: false, gc: false,
+        compiler: "", zilc: "", qbe: "", asm_tool: "", ld: "", runtime: "",
+        root: "",
+        inc_dirs: unsafe { Vec::<[u8]>.new_in_raw(arena) },
+        link_objects: unsafe { Vec::<[u8]>.new_in_raw(arena) },
+        link_items: unsafe { Vec::<[u8]>.new_in_raw(arena) },
+        checked: false,
+        hosted: false,
+        cc: "",
+    };
+}
+
+pub fn print_usage() {
+    print("zbuild: Incremental compilation driver for Zoril\n\n");
+    print("USAGE:\n");
+    print("    zbuild [OPTIONS] <entry.zrl>\n\n");
+    print("OPTIONS:\n");
+    print("    -h, --help               Print this help message\n");
+    print("    -V, --version            Display version and exit\n");
+    print("    -o <path>                Output binary path (default: ./a.out)\n");
+    print("    -I <dir>                 Add include directory (repeatable)\n");
+    print("    --root <dir>             Project root directory\n");
+    print("    --link-object <file>     Link this object file into the program (repeatable)\n");
+    print("    -L <dir>                 Add a library search directory (repeatable)\n");
+    print("    -l <name>                Link the library lib<name> (repeatable)\n");
+    print("    --link-arg <arg>         Pass <arg> to the linker as it is (repeatable)\n");
+    print("    --cache-dir <dir>        Cache directory (default: .zoril-cache)\n");
+    print(
+        "    --gc                     Without an entry: drop rows whose source is gone, delete unreferenced artifacts\n"
+    );
+    print("    -v, --verbose            Verbose rebuild output\n");
+    print("    --compiler <path>        Path to zoril compiler binary\n");
+    print("    --zilc <path>            Path to zilc binary\n");
+    print("    --qbe <path>             Path to qbe binary\n");
+    print("    --as <path>              Path to assembler binary\n");
+    print("    --ld <path>              Path to ld binary\n");
+    print("    --runtime <path>         Path to runtime object\n");
+    print(
+        "    --checked                Developer option: build the program instrumented for memory-safety\n"
+    );
+    print("                             testing (see zoril --checked). Not a safety mode\n");
+    print(
+        "    --hosted                 Link into a libc process: enter through main(), link with cc and\n"
+    );
+    print(
+        "                             runtime_hosted.o (see the FFI section of the getting-started guide)\n"
+    );
+    print(
+        "    --cc <path>              The C compiler driver used to link with --hosted (default: cc)\n\n"
+    );
+    print("ENVIRONMENT:\n");
+    print("    BACKEND_BIN              Default path to backend binary (default: qbe)\n");
+    print("    ASSEMBLER_BIN            Default path to assembler binary (default: as)\n");
+    print("    LINKER_BIN               Default path to linker binary (default: ld)\n");
+    print("    LINK_CC                  Default C compiler driver for --hosted (default: cc)\n");
+}
+
+fn usage_error(msg: [u8], detail: [u8]) -> i32 {
+    eprint("error: ");
+    eprint(msg);
+    eprint(detail);
+    eprint("\n\n");
+    print_usage();
+    return 1;
+}
+
+// Fills `opts`. Returns -1 to continue with the build, otherwise the process exit code
+// (0 after --help). Unknown flags and flags missing their value are errors, not ignored.
+pub fn parse_args(argc: i32, argv: **u8, opts: &mut Options) -> i32 {
+    let mut check_args = args::args();
+    let mut check_i = 1 as usize;
+    while check_i < check_args.len() {
+        let a = check_args.get(check_i).unwrap();
+        if a == "-V" || a == "--version" {
+            print("zbuild ");
+            print(version());
+            print("\n");
+            return 0;
+        }
+        check_i = check_i + 1;
+    }
+
+    let mut args = args::args();
+    let _ = args.next(); // program name
+    while args.has_next() {
+        let arg = match args.next() {
+            Option.Some(a) => a,
+            Option.None => { break; },
+        };
+        if arg == "-h" || arg == "--help" {
+            print_usage();
+            return 0;
+        } else if arg == "-v" || arg == "--verbose" {
+            opts.verbose = true;
+        } else if arg == "--gc" {
+            opts.gc = true;
+        } else if arg == "--checked" {
+            opts.checked = true;
+        } else if arg == "--hosted" {
+            opts.hosted = true;
+        } else if arg == "--test-break-cutoff" {
+            opts.break_cutoff = true; // test-only fault injection: never propagate interface changes
+        } else if arg.starts_with("-I") && arg.len > 2 {
+            opts.inc_dirs.push(arg.sub(2, arg.len - 2));
+        } else if arg.starts_with("-L") && arg.len > 2 {
+            opts.link_items.push("-L");
+            opts.link_items.push(arg.sub(2, arg.len - 2));
+        } else if arg.starts_with("-l") && arg.len > 2 {
+            opts.link_items.push("-l");
+            opts.link_items.push(arg.sub(2, arg.len - 2));
+        } else if arg == "-o"
+            || arg == "-I"
+            || arg == "--root"
+            || arg == "--cache-dir"
+            || arg == "--link-object"
+            || arg == "--link-arg"
+            || arg == "-L"
+            || arg == "-l"
+            || arg == "--compiler"
+            || arg == "--zilc"
+            || arg == "--qbe"
+            || arg == "--as"
+            || arg == "--ld"
+            || arg == "--cc"
+            || arg == "--runtime" {
+            if !args.has_next() {
+                return usage_error("missing value for ", arg);
+            }
+            let val = args.next().unwrap();
+            if arg == "-o" {
+                opts.output = val;
+            } else if arg == "-I" {
+                opts.inc_dirs.push(val);
+            } else if arg == "--link-object" {
+                opts.link_objects.push(val);
+                opts.link_items.push(val);
+            } else if arg == "--link-arg" {
+                opts.link_items.push(val);
+            } else if arg == "-L" {
+                opts.link_items.push("-L");
+                opts.link_items.push(val);
+            } else if arg == "-l" {
+                opts.link_items.push("-l");
+                opts.link_items.push(val);
+            } else if arg == "--root" {
+                opts.root = val;
+            } else if arg == "--cache-dir" {
+                opts.cache_dir = val;
+            } else if arg == "--compiler" {
+                opts.compiler = val;
+            } else if arg == "--zilc" {
+                opts.zilc = val;
+            } else if arg == "--qbe" {
+                opts.qbe = val;
+            } else if arg == "--as" {
+                opts.asm_tool = val;
+            } else if arg == "--ld" {
+                opts.ld = val;
+            } else if arg == "--cc" {
+                opts.cc = val;
+            } else {
+                opts.runtime = val;
+            }
+        } else if arg.len > 0 && arg[0] == '-' as u8 {
+            return usage_error("unknown option: ", arg);
+        } else if opts.entry.len == 0 {
+            opts.entry = arg;
+        } else {
+            return usage_error("unexpected extra argument: ", arg);
+        }
+    }
+    if opts.entry.len == 0 && !opts.gc {
+        return usage_error("no input entry file specified", "");
+    }
+    return -1 as i32;
+}

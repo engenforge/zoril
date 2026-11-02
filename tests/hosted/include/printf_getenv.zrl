@@ -1,0 +1,16 @@
+// A Zoril program linked into a libc process (--hosted): it calls printf and getenv, reads its
+// arguments, and returns through libc's exit, so buffered stdout is flushed.
+import "args.zrl";
+
+extern fn printf(fmt: *u8, ...) -> i32;
+extern fn getenv(name: *u8) -> *u8;
+
+fn main() -> i32 {
+    let a = args::args();
+    let home = unsafe { getenv("ZORIL_HOSTED_VAR".ptr) };
+    unsafe {
+        printf("args=%d var=%s\n".ptr, a.len() as i32, home);
+        printf("no newline, flushed at exit".ptr);
+    }
+    return 3;
+}

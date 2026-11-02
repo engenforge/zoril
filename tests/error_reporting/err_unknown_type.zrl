@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_unknown_type.zrl:10:18: error: unknown type `Nope`
+// EXPECT: tests/error_reporting/err_unknown_type.zrl:11:9: error: unknown type `Missing`
+// EXPECT: tests/error_reporting/err_unknown_type.zrl:12:10: error: unknown type `Gone`
+// EXPECT: tests/error_reporting/err_unknown_type.zrl:13:10: error: unknown type `Absent`
+// EXPECT: tests/error_reporting/err_unknown_type.zrl:16:20: error: unknown type `Nowhere`
+// A name in a declaration's types that names no type resolved to no type at all, silently,
+// whether or not the declaration was used: `f(1)` called `fn f(x: Missing)`. Type parameters,
+// `Self` and an impl's generic arguments are names in scope.
+struct L { next: Nope }
+fn f(x: Missing) -> i32 { return 0; }
+type A = Gone;
+const C: Absent = 0;
+struct W<T> { v: T }
+impl W<T> { fn get(self: &Self) -> T { return self.v; } }
+fn g<U>(u: U, w: W<Nowhere>) -> i32 { return 0; }
+fn main() -> i32 { return f(1); }

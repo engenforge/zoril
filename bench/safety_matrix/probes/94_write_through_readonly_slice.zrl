@@ -1,0 +1,5 @@
+// name: Write through a read-only slice
+// expected: compile_reject
+// A `[T]` is a read-only view, as a `&T` is: writing its elements needs a `[mut T]`.
+fn f(s: [u8]) { s[0] = 9 as u8; }
+fn main() -> i32 { let a: [u8; 3] = [1, 2, 3]; f(&a); return a[0] as i32; }

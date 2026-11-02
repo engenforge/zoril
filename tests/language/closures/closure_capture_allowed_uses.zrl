@@ -1,0 +1,17 @@
+// expected exit 0
+// The uses a capturing closure keeps: bound with `let`, aliased with `let`, called directly.
+fn main() -> i32 {
+    let k = 5;
+    let add_k = |x: i32| -> i32 { x + k };
+    if add_k(2) != 7 { return 1; }
+    let alias = add_k;
+    if alias(3) != 8 { return 2; }
+    let mut total = 0;
+    let mut i = 0;
+    while i < 3 {
+        total = total + add_k(i);
+        i = i + 1;
+    }
+    if total != 18 { return 3; }
+    return 0;
+}

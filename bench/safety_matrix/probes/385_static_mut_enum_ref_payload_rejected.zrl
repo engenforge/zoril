@@ -1,0 +1,6 @@
+// name: static mut holding reference inside enum payload is rejected
+// expected: compile_reject
+// Rule (d): a static mut cannot hold a reference inside an enum payload.
+enum OptRef { None, Some(&i32) }
+static mut G: OptRef = OptRef.None;
+fn main() -> i32 { return 0; }

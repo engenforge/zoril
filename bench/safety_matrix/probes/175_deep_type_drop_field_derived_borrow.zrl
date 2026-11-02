@@ -1,0 +1,38 @@
+// name: Derived borrow outliving a value whose Drop field is past the type-walk limit
+// expected: compile_reject
+// `type_has_drop` stops recursing past eight levels, and answered *false* there - "frees nothing"
+// for a type it could not finish reading. "Frees nothing" is what exempts a *derived* borrow (a
+// `Vec`'s buffer, a slice) at the local's scope end, and `type_has_drop` is the same question
+// `type_holds_reference` next to it asks, so the same limit answer was the unsafe one: with the
+// `Arena` nine struct levels down, the block's end unmapped the arena while `out` still pointed into
+// it, and the program read the freed region (139). One to eight levels are rejected both before and
+// after; the depth is the whole point. Past the limit the answer is *unknown* now and unknown reads
+// as "it does free storage", so the borrow counts and the scope-end rule rejects it.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct S1 { a: Arena }
+struct S2 { a: S1 }
+struct S3 { a: S2 }
+struct S4 { a: S3 }
+struct S5 { a: S4 }
+struct S6 { a: S5 }
+struct S7 { a: S6 }
+struct S8 { a: S7 }
+struct S9 { a: S8 }
+
+fn main() -> i32 {
+    let mut out: Option<&u64> = Option.None;
+    {
+        let h = S9 { a: S8 { a: S7 { a: S6 { a: S5 { a: S4 { a: S3 { a: S2 { a: S1 { a: Arena.new(4096).unwrap() } } } } } } } } };
+        let mut v = Vec::<u64>.new_in(&h.a.a.a.a.a.a.a.a.a);
+        v.push(42 as u64);
+        out = v.get(0 as u64);
+    }
+    return match out {
+        Option.Some(r) => *r as i32,
+        Option.None => 0,
+    };
+}

@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: because it is behind a shared reference
+struct P { x: i64 }
+impl P { fn bump(self: &mut P) { self.x = self.x + 1; } }
+fn main() {
+    let p = P { x: 1 };
+    let r: &P = &p;
+    r.bump();
+}

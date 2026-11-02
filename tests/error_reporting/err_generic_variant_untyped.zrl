@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_generic_variant_untyped.zrl:6:13: error: cannot tell which `Option` this is; write the type (`let x: Option<T> = ...`)
+// Nothing says which `Option` the `None` is, so its layout would be a guess.
+import "core.zrl";
+fn main() -> i32 {
+    let o = Option.None;
+    return 0;
+}

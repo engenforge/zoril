@@ -1,0 +1,11 @@
+// Cross-module library: stash_lib
+// Exposes a function that returns its pointer argument unchanged.
+// When compiled with --emit-interface, emits:
+//   #[summary(escape = 1, stash = 0, ret_stack = false, alloc = 0)]
+// meaning parameter 0 (bit 0 = value 1) may escape via the return value.
+
+pub struct S { pub a: i32 }
+
+pub fn stash(p: *mut S) -> *mut S {
+    return p;
+}

@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_uncalled_method_checks.zrl:11:16: error: no field 'nope' on '&S'
+// EXPECT: tests/error_reporting/err_uncalled_method_checks.zrl:11:28: error: unresolved symbol: undefined_name
+// A method nothing calls is checked like one that is called: it is part of the program, and a
+// library shipping it must not defer the error to whoever first calls the method (the build of a
+// module that did not write it). The accepted twin is
+// tests/language/structs/uncalled_method_checked.zrl.
+struct S { a: i32 }
+impl S {
+    fn never_called(self: &S) -> i32 {
+        return self.nope + undefined_name;
+    }
+}
+
+fn main() -> i32 {
+    return 0;
+}

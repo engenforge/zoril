@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_intrinsic_char_forge.zrl:6:13: error: cannot cast to char: use `unicode::char_from_u32` for a checked conversion
+// An intrinsic that makes a T from a number follows the same rule as `as`: a char holds a
+// Unicode scalar value, and @int_cast<char> of a surrogate is not one.
+fn main() -> i32 {
+    let c = @int_cast<char>(0xd800 as u32);
+    return 0;
+}

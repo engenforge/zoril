@@ -1,0 +1,15 @@
+// expected exit code: 0
+struct Inner { a: u64, b: u64 }
+struct Outer { x: u64, y: Inner, z: u64 }
+fn main() -> i32 {
+    let mut o = Outer {
+        x: 1,
+        y: Inner { a: 2, b: 3 },
+        z: 4,
+    };
+    if o.x != 1 as u64 { return 1; }
+    if o.y.a != 2 as u64 { return 2; }
+    if o.y.b != 3 as u64 { return 3; }
+    if o.z != 4 as u64 { return 4; }
+    return 0;
+}

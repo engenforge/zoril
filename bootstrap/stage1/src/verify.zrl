@@ -1,0 +1,1959 @@
+import "il_type.zrl";
+import "il_instr.zrl";
+import "il_cfg.zrl";
+import "ast.zrl";
+import "mem.zrl";
+import "io.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+
+pub enum OwnerState {
+    Uninit,
+    Owned,
+    Moved,
+    Dropped,
+}
+
+pub struct OwnerMap {
+    pub states: *mut u32, // Index is ssa ID
+    pub count: usize,
+    pub cap: usize,
+}
+
+impl OwnerMap {
+    pub fn new(arena: *mut Arena) -> OwnerMap {
+        let initial_cap = 8192 as usize;
+        let states = zoril_allocator_alloc(arena, initial_cap * 4 as usize) as *mut u32;
+        unsafe { memset(states as *mut u8, 0, (initial_cap * 4 as usize) as u64); } // Uninit = 0
+        return OwnerMap {
+            states: states,
+            count: 0 as usize,
+            cap: initial_cap,
+        };
+    }
+
+    pub fn set_state(self: &mut OwnerMap, ssa: u32, state: OwnerState, arena: *mut Arena) {
+        let idx = ssa as usize;
+        if idx >= self.cap {
+            let old_cap = self.cap;
+            let mut new_cap = old_cap * 2 as usize;
+            while idx >= new_cap { new_cap = new_cap * 2 as usize; }
+            let new_states = zoril_allocator_alloc(arena, new_cap * 4 as usize) as *mut u32;
+            unsafe {
+                memset(new_states as *mut u8, 0, (new_cap * 4 as usize) as u64);
+                memcpy(new_states as *mut u8, self.states as *u8, (old_cap * 4 as usize) as u64);
+            }
+            self.states = new_states;
+            self.cap = new_cap;
+        }
+        let mut states = unsafe { @slice(self.states, self.cap) };
+        match state {
+            OwnerState.Uninit => { states[idx] = 0 as u32; },
+            OwnerState.Owned => { states[idx] = 1 as u32; },
+            OwnerState.Moved => { states[idx] = 2 as u32; },
+            OwnerState.Dropped => { states[idx] = 3 as u32; },
+        }
+        if idx >= self.count { self.count = idx + 1 as usize; }
+    }
+
+    pub fn get_state(self: &OwnerMap, ssa: u32) -> OwnerState {
+        let idx = ssa as usize;
+        if idx >= self.cap { return OwnerState.Uninit; }
+        let states = unsafe { @slice(self.states, self.cap) };
+        let val = states[idx];
+        if val == 0 as u32 { return OwnerState.Uninit; }
+        if val == 1 as u32 { return OwnerState.Owned; }
+        if val == 2 as u32 { return OwnerState.Moved; }
+        return OwnerState.Dropped;
+    }
+}
+
+pub const ARENA_UNKNOWN: u32 = 0;
+pub const ARENA_INITIALIZED: u32 = 1;
+pub const ARENA_CLOSED: u32 = 2;
+
+pub struct ArenaInfo {
+    pub state: u32,
+    pub remaining: usize,
+}
+
+// What a function's body does with the storage of its parameters (see storage_facts).
+pub struct StorageFacts {
+    pub ret: u64,
+    pub stored: u64,
+    pub targets: u64,
+}
+
+// store_targets bit for a global, or memory of unknown origin.
+pub const STORE_INTO_GLOBAL: u32 = 63;
+pub const STORE_GLOBAL_BIT: u64 = 0x8000000000000000;
+
+pub struct Verifier {
+    pub arena: *mut Arena,
+    pub module: &mut ILModule,
+    pub intern_table: &mut InternTable,
+    pub file_path: [u8],
+    pub current_func: *mut ILFunction,
+    // Function index + 1 by interned name (0: none), built once by index_functions.
+    pub fn_by_name: [mut u32],
+    // Names looked up on every call, interned once.
+    pub sret_name: u32,
+    pub env_name: u32,
+    pub memcpy_name: u32,
+    // Scratch for storage_facts, sized to the largest function and reused: eight per-SSA arrays.
+    pub sf_words: [mut u64],
+    pub sf_slot_of: [mut u32],
+    pub sf_to_result: [mut bool],
+    pub uses: [mut u32],
+    pub arena_info: [mut ArenaInfo],
+    pub current_map: OwnerMap,
+    pub had_error: bool,
+    pub arena_init_id: u32,
+    pub alloc_id: u32,
+    pub const_values: [mut u64],
+    pub const_flags: [mut bool],
+    pub borrowed_from: [mut u32],
+    pub borrow_is_mut: [mut bool],
+    pub is_region_bound: [mut bool],
+    // True for an SSA that IS a stack slot in this frame -- an Alloc with no
+    // allocator. Distinct from is_region_bound (arena-bound) and from
+    // is_alloc_result (any Alloc). Used by the Ret outlives check.
+    pub is_stack_slot: [mut bool],
+    // True for a pointer that points INTO this frame's stack storage. Distinct
+    // from borrowed_from, which a Load also sets (:678) and therefore conflates
+    // "points into that storage" with "was read out of that storage". Outlives
+    // needs the former only: `let p = must_mmap(...); return p;` reads a pointer
+    // out of a stack slot but does not point at it.
+    pub points_to_stack: [mut bool],
+    // The value, or the memory a stack slot names, contains a pointer to this frame's
+    // stack: set by storing one into a slot (or a field or element of it), carried by
+    // move and memcpy. Copying it into memory that outlives the frame is an escape.
+    pub holds_stack_ptr: [mut bool],
+    // The 'local slot an address is derived from (field, element, offset, move,
+    // cast), or 0. Unlike borrowed_from, stores never change it.
+    pub stack_base: [mut u32],
+    pub is_alloc_result: [mut bool],
+    pub remaining_uses: [mut u32],
+    pub ssa_spans: [mut Span],
+    pub current_ssa: u32,
+}
+
+impl Verifier {
+    pub fn new(arena: *mut Arena, module: &mut ILModule, table: &mut InternTable, file_path: [u8]) -> Verifier {
+        return Verifier {
+            arena: arena,
+            module: module,
+            intern_table: table,
+            file_path: file_path,
+            current_func: 0 as *mut ILFunction,
+            fn_by_name: @slice(0 as *mut u32, 0 as usize),
+            sret_name: 0 as u32,
+            env_name: 0 as u32,
+            memcpy_name: 0 as u32,
+            sf_words: @slice(0 as *mut u64, 0 as usize),
+            sf_slot_of: @slice(0 as *mut u32, 0 as usize),
+            sf_to_result: @slice(0 as *mut bool, 0 as usize),
+            uses: @slice(0 as *mut u32, 0 as usize),
+            arena_info: @slice(0 as *mut ArenaInfo, 0 as usize),
+            current_map: OwnerMap.new(arena),
+            had_error: false,
+            arena_init_id: table.intern("arena_init"),
+            alloc_id: table.intern("zoril_allocator_alloc"),
+            const_values: @slice(0 as *mut u64, 0 as usize),
+            const_flags: @slice(0 as *mut bool, 0 as usize),
+            borrowed_from: @slice(0 as *mut u32, 0 as usize),
+            borrow_is_mut: @slice(0 as *mut bool, 0 as usize),
+            is_region_bound: @slice(0 as *mut bool, 0 as usize),
+            is_stack_slot: @slice(0 as *mut bool, 0 as usize),
+            points_to_stack: @slice(0 as *mut bool, 0 as usize),
+            holds_stack_ptr: @slice(0 as *mut bool, 0 as usize),
+            stack_base: @slice(0 as *mut u32, 0 as usize),
+            is_alloc_result: @slice(0 as *mut bool, 0 as usize),
+            remaining_uses: @slice(0 as *mut u32, 0 as usize),
+            ssa_spans: @slice(0 as *mut Span, 0 as usize),
+            current_ssa: 0 as u32,
+        };
+    }
+
+    fn has_result(self: &Verifier, ssa: SSAId) -> bool {
+        return ssa != 0 as u32 && ssa != NO_SSA;
+    }
+
+    fn has_suffix(self: &Verifier, s: [u8], suffix: [u8]) -> bool {
+        if s.len < suffix.len { return false; }
+        let mut i = 0 as usize;
+        let start = s.len - suffix.len;
+        while i < suffix.len {
+            if s[start + i] != suffix[i] { return false; }
+            i = i + 1 as usize;
+        }
+        return true;
+    }
+
+    fn has_drop_impl(self: &mut Verifier, type_name_id: u32) -> bool {
+        if type_name_id == 0 as u32 { return false; }
+        let type_str = self.intern_table.lookup(type_name_id);
+        let mut name_buf: &mut ByteVec = ByteVec.new(self.arena);
+        name_buf.push_slice(type_str);
+        name_buf.push(':' as u8);
+        name_buf.push(':' as u8);
+        name_buf.push_slice("drop");
+        let mangled = self.intern_table.intern(name_buf.as_slice());
+
+        let mut name_buf_us: &mut ByteVec = ByteVec.new(self.arena);
+        name_buf_us.push_slice(type_str);
+        name_buf_us.push('_' as u8);
+        name_buf_us.push_slice("drop");
+        let mangled_us = self.intern_table.intern(name_buf_us.as_slice());
+        
+        let mut fi = 0 as usize;
+        while fi < self.module.functions.len {
+            let p_func = &self.module.functions[fi];
+            if p_func.name == mangled || p_func.name == mangled_us {
+                return true;
+            }
+            fi = fi + 1 as usize;
+        }
+        return false;
+    }
+
+    fn is_state_owned(self: &Verifier, state: OwnerState) -> bool {
+        match state {
+            OwnerState.Owned => { return true; },
+            _ => { return false; },
+        }
+    }
+
+    fn is_state_moved(self: &Verifier, state: OwnerState) -> bool {
+        match state {
+            OwnerState.Moved => { return true; },
+            OwnerState.Dropped => { return true; },
+            _ => { return false; },
+        }
+    }
+
+    fn get_name_state(self: &Verifier, name_id: u32, before_ssa: SSAId) -> OwnerState {
+        if name_id == 0 as u32 { return OwnerState.Owned; }
+        let mut idx = before_ssa as i32;
+        while idx >= 1 as i32 {
+            let ssa = idx as u32;
+            let name = self.cur_func().get_ssa_name(ssa);
+            if name == name_id {
+                return self.current_map.get_state(ssa);
+            }
+            idx = idx - 1 as i32;
+        }
+        return OwnerState.Uninit;
+    }
+
+    fn get_ultimate_base(self: &Verifier, ssa: SSAId) -> SSAId {
+        let mut curr = ssa;
+        let mut depth = 0 as usize;
+        while curr != 0 as u32 && curr as usize < self.uses.len && depth < 100 as usize {
+            let p_base = self.borrowed_from[curr as usize];
+            if p_base == 0 as u32 { break; }
+            curr = p_base;
+            depth = depth + 1 as usize;
+        }
+        return curr;
+    }
+
+    // `#[borrows(..)]` is a claim the compiler mostly cannot check (that is why it exists),
+    // but it can catch the visible lie: returning an address computed directly from a
+    // parameter the attribute does not list (`&a.v` under `#[borrows(b)]`). Addresses are
+    // followed through field, offset, cast and move, and through the stack slot each
+    // parameter is first stored in; a pointer *loaded* through a parameter is not its
+    // address (it is the arena/buffer case the attribute is for).
+    // `#[borrows(..)]` is checked against the body where it can be: a result that points
+    // into the storage of a parameter the attribute leaves out is the visible lie.
+    fn check_borrows_claim(self: &mut Verifier, func: &ILFunction) {
+        self.storage_facts(func, true);
+    }
+
+    // For every function with a body: which parameters' own storage its result may point
+    // into (`ret_storage`), and which it writes into memory outside its frame
+    // (`stores_storage` / `store_targets`). Iterated so a wrapper inherits what it calls.
+    // The module's functions by name, so a call resolves without scanning them all.
+    fn index_functions(self: &mut Verifier) {
+        self.sret_name = self.intern_table.intern("__sret");
+        self.env_name = self.intern_table.intern("__env");
+        self.memcpy_name = self.intern_table.intern("memcpy");
+        let mut max_name = 0 as u32;
+        let mut max_ssa = 0 as usize;
+        let mut i = 0 as usize;
+        while i < self.module.functions.len {
+            if self.module.functions[i].name > max_name { max_name = self.module.functions[i].name; }
+            if self.module.functions[i].result_types_len > max_ssa { max_ssa = self.module.functions[i].result_types_len; }
+            i = i + 1 as usize;
+        }
+        unsafe {
+            self.sf_words = @slice(zoril_allocator_alloc(self.arena, (max_ssa * 8 * 8) as u64) as *mut u64, max_ssa * 8);
+            self.sf_slot_of = @slice(zoril_allocator_alloc(self.arena, (max_ssa * 4) as u64) as *mut u32, max_ssa);
+            self.sf_to_result = @slice(zoril_allocator_alloc(self.arena, max_ssa as u64) as *mut bool, max_ssa);
+        }
+        let n = max_name as usize + 1 as usize;
+        self.fn_by_name = unsafe { @slice(zoril_allocator_alloc(self.arena, (n * 4) as u64) as *mut u32, n) };
+        unsafe { memset(self.fn_by_name.ptr as *mut u8, 0, (n * 4) as u64); }
+        i = self.module.functions.len;
+        while i > 0 as usize {
+            // Walked backwards so the first function of a name wins, as in find_function_by_name.
+            i = i - 1 as usize;
+            self.fn_by_name[self.module.functions[i].name as usize] = (i + 1 as usize) as u32;
+        }
+    }
+
+    fn function_named(self: &Verifier, name_id: u32) -> *mut ILFunction {
+        if (name_id as usize) < self.fn_by_name.len {
+            let k = self.fn_by_name[name_id as usize];
+            if k == 0 as u32 { return 0 as *mut ILFunction; }
+            return &self.module.functions[k as usize - 1 as usize];
+        }
+        return self.module.find_function_by_name(name_id);
+    }
+
+    // For every function with a body: which parameters' own storage its result may point
+    // into (`ret_storage`), and which it writes outside its frame (`stores_storage` /
+    // `store_targets`). A fixpoint over the call graph: every body starts at "nothing" (started
+    // from the signature's conservative answer, recursive functions would keep each other's bits
+    // alive), and after a first pass, callees first, a function is analyzed again only when a
+    // callee's facts changed since. The masks only grow, over finitely many bits, so this ends.
+    pub fn compute_ret_storage(self: &mut Verifier) {
+        self.index_functions();
+        let nf = self.module.functions.len;
+        if nf == 0 as usize { return; }
+        let mut z = 0 as usize;
+        while z < nf {
+            let p_z = &mut self.module.functions[z];
+            if p_z.blocks_len > 0 as usize {
+                p_z.ret_storage = 0 as u64;
+                p_z.stores_storage = 0 as u64;
+                p_z.store_targets = 0 as u64;
+            }
+            z = z + 1 as usize;
+        }
+        let callees = self.callee_lists();
+        let changed_at = unsafe { @slice(zoril_allocator_alloc(self.arena, (nf * 4) as u64) as *mut u32, nf) };
+        let analyzed_at = unsafe { @slice(zoril_allocator_alloc(self.arena, (nf * 4) as u64) as *mut u32, nf) };
+        unsafe {
+            memset(changed_at.ptr as *mut u8, 0, (nf * 4) as u64);
+            memset(analyzed_at.ptr as *mut u8, 0, (nf * 4) as u64);
+        }
+        let mut epoch = 1 as u32;
+        let mut first = true;
+        let mut any = true;
+        while any {
+            any = false;
+            let mut i = nf;
+            while i > 0 as usize {
+                i = i - 1 as usize;
+                let p_func = &mut self.module.functions[i];
+                if p_func.blocks_len == 0 as usize { continue; }
+                let mut stale = first;
+                let mut k = callees.0[i] as usize;
+                while !stale && k < callees.0[i + 1 as usize] as usize {
+                    if changed_at[callees.1[k] as usize] > analyzed_at[i] { stale = true; }
+                    k = k + 1 as usize;
+                }
+                if !stale { continue; }
+                epoch = epoch + 1 as u32;
+                analyzed_at[i] = epoch;
+                let facts = self.storage_facts(p_func, false);
+                if facts.ret != p_func.ret_storage || facts.stored != p_func.stores_storage || facts.targets != p_func.store_targets {
+                    p_func.ret_storage = facts.ret;
+                    p_func.stores_storage = facts.stored;
+                    p_func.store_targets = facts.targets;
+                    epoch = epoch + 1 as u32;
+                    changed_at[i] = epoch;
+                    any = true;
+                }
+            }
+            first = false;
+        }
+    }
+
+    // Each function's direct callees, as (start offsets with one extra end entry, callee indices).
+    fn callee_lists(self: &mut Verifier) -> ([mut u32], [u32]) {
+        let nf = self.module.functions.len;
+        let starts = unsafe { @slice(zoril_allocator_alloc(self.arena, ((nf + 1 as usize) * 4) as u64) as *mut u32, nf + 1 as usize) };
+        let mut ids = Vec::<u32>.new_in(self.arena);
+        let mut i = 0 as usize;
+        while i < nf {
+            starts[i] = ids.len as u32;
+            let func = &self.module.functions[i];
+            let mut bi = 0 as usize;
+            while bi < func.blocks_len {
+                let p_block = &self.module.blocks[func.block_ids()[bi] as usize];
+                let mut j = 0 as usize;
+                while j < p_block.instructions_len {
+                    let p_instr = &self.module.instrs[p_block.instr_ids()[j] as usize];
+                    match *p_instr {
+                        ILInstr.Call(c) => {
+                            if (c.name_id as usize) < self.fn_by_name.len && self.fn_by_name[c.name_id as usize] != 0 as u32 {
+                                ids.push(self.fn_by_name[c.name_id as usize] - 1 as u32);
+                            }
+                        },
+                        _ => {},
+                    }
+                    j = j + 1 as usize;
+                }
+                bi = bi + 1 as usize;
+            }
+            i = i + 1 as usize;
+        }
+        starts[nf] = ids.len as u32;
+        return (starts, ids.as_slice());
+    }
+
+    // Two relations per address value, as parameter bit masks (hidden sret/env parameters
+    // not counted):
+    //   storage: it points into what the parameter points at -- derived from the parameter by
+    //            field/index steps with no load through it (`&self.v`, not `self.data`);
+    //   reach:   it points into memory reachable from the parameter, loads included.
+    // A store of a storage-carrying value is a write of the caller's argument's address: to
+    // the result slot it is returned, to a local slot it stays in the frame, anywhere else
+    // (memory the parameters reach, a global) it is stored away. With REPORT, a
+    // `#[borrows(..)]` result that points into an unlisted parameter is an error.
+    fn storage_facts(self: &mut Verifier, func: &ILFunction, report: bool) -> StorageFacts {
+        let n = func.result_types_len;
+        let mut facts = StorageFacts { ret: 0 as u64, stored: 0 as u64, targets: 0 as u64 };
+        if n == 0 as usize { return facts; }
+        if n > self.sf_slot_of.len { self.index_functions(); }
+        // Bits carried by the contents of the memory an address points at, when that memory
+        // is not one of this frame's slots (cmask): a slice parameter's header, whose data
+        // pointer is the caller's slice (`s.ptr`, `&s[0]`, `return s`).
+        let w = self.sf_words.ptr as *mut u64;
+        let mask = unsafe { @slice(w, n) };
+        let reach = unsafe { @slice((w as usize + n * 8) as *mut u64, n) };
+        let slot_mask = unsafe { @slice((w as usize + n * 16) as *mut u64, n) };
+        let slot_reach = unsafe { @slice((w as usize + n * 24) as *mut u64, n) };
+        let cmask = unsafe { @slice((w as usize + n * 32) as *mut u64, n) };
+        let slot_cmask = unsafe { @slice((w as usize + n * 40) as *mut u64, n) };
+        let slot_of = unsafe { @slice(self.sf_slot_of.ptr as *mut u32, n) };
+        let to_result = unsafe { @slice(self.sf_to_result.ptr as *mut bool, n) };
+        unsafe {
+            memset(w as *mut u8, 0, (n * 48) as u64);
+            memset(slot_of.ptr as *mut u8, 0, (n * 4) as u64);
+            memset(to_result.ptr as *mut u8, 0, n as u64);
+        }
+        let hidden = self.hidden_param_count(func);
+        let sret_name = self.sret_name;
+        let memcpy_name = self.memcpy_name;
+        // Two passes, so a slot stored in a later block is seen by a load in an earlier one.
+        let mut pass = 0 as usize;
+        while pass < 2 as usize {
+            let mut bi = 0 as usize;
+            while bi < func.blocks_len {
+                let p_block = &self.module.blocks[func.block_ids()[bi] as usize];
+                let mut j = 0 as usize;
+                while j < p_block.instructions_len {
+                    let p_instr = &self.module.instrs[p_block.instr_ids()[j] as usize];
+                    let span = self.module.instr_spans[p_block.instr_ids()[j] as usize];
+                    let ssa = p_block.ssa_result_ids()[j];
+                    let ok = ssa != 0 as u32 && (ssa as usize) < n;
+                    let mut from = 0 as u32;
+                    match *p_instr {
+                        ILInstr.Param(pi) => {
+                            if ok && pi as usize >= hidden && pi as usize - hidden < STORE_INTO_GLOBAL as usize {
+                                let bit = (1 as u64) << ((pi as usize - hidden) as u64);
+                                reach[ssa as usize] = bit;
+                                let pty = func.param(pi as usize).ty;
+                                if self.get_type_tag(pty) == ILTYPE_SLICE || self.points_at_slice(pty) {
+                                    cmask[ssa as usize] = bit;
+                                } else {
+                                    mask[ssa as usize] = bit;
+                                }
+                            }
+                            if ok && (pi as usize) < func.params_len && func.param(pi as usize).name == sret_name {
+                                to_result[ssa as usize] = true;
+                            }
+                        },
+                        ILInstr.Alloc(a) => {
+                            if ok && a.allocator == 0xffffffff as u32 && a.region.get_tag() == 1 as u32 { slot_of[ssa as usize] = ssa; }
+                        },
+                        ILInstr.GlobalAddr(_) => { if ok { reach[ssa as usize] = STORE_GLOBAL_BIT; } },
+                        ILInstr.FieldAddr(fa) => { from = fa.val; },
+                        ILInstr.ElemAddr(ix) => { from = ix.base; },
+                        ILInstr.Add(op) => { from = op.lhs; },
+                        ILInstr.Cast(c) => { from = c.val; },
+                        ILInstr.Move(src) => { from = src; },
+                        ILInstr.Bitcast(src) => { from = src; },
+                        ILInstr.RegionCast(rc) => { from = rc.val; },
+                        ILInstr.Borrow(b) => { from = b.val; },
+                        ILInstr.SliceConstruct(sc) => { from = sc.ptr; },
+                        ILInstr.Phi(phi) => {
+                            let mut pi = 0 as usize;
+                            while ok && pi < phi.preds.len {
+                                let pv = phi.preds[pi].val;
+                                if (pv as usize) < n {
+                                    mask[ssa as usize] = mask[ssa as usize] | mask[pv as usize];
+                                    reach[ssa as usize] = reach[ssa as usize] | reach[pv as usize];
+                                }
+                                pi = pi + 1 as usize;
+                            }
+                        },
+                        ILInstr.Store(st) => {
+                            if (st.ptr as usize) < n && (st.val as usize) < n && slot_of[st.ptr as usize] != 0 as u32 {
+                                let slot = slot_of[st.ptr as usize];
+                                slot_cmask[slot as usize] = slot_cmask[slot as usize] | cmask[st.val as usize];
+                            }
+                            if (st.ptr as usize) < n && (st.val as usize) < n {
+                                self.note_storage_write(st.ptr, mask[st.val as usize], reach[st.val as usize], slot_of, to_result, reach, slot_mask, slot_reach, &mut facts);
+                            }
+                        },
+                        ILInstr.Load(src) => {
+                            // Out of a local slot: what was stored there. Through anything else
+                            // (a parameter): what the argument references, not its storage.
+                            if ok && (src as usize) < n {
+                                let slot = slot_of[src as usize];
+                                if slot != 0 as u32 {
+                                    mask[ssa as usize] = slot_mask[slot as usize];
+                                    reach[ssa as usize] = slot_reach[slot as usize];
+                                    cmask[ssa as usize] = slot_cmask[slot as usize];
+                                } else {
+                                    mask[ssa as usize] = cmask[src as usize];
+                                    reach[ssa as usize] = reach[src as usize];
+                                }
+                            }
+                        },
+                        ILInstr.Call(c) => {
+                            if c.name_id == memcpy_name && c.args.len >= 2 as usize {
+                                let dst = c.args[0];
+                                let src = c.args[1];
+                                if (dst as usize) < n && (src as usize) < n {
+                                    let slot = slot_of[src as usize];
+                                    let m = if slot != 0 as u32 { slot_mask[slot as usize] } else { cmask[src as usize] };
+                                    let r = if slot != 0 as u32 { slot_reach[slot as usize] } else { reach[src as usize] };
+                                    self.note_storage_write(dst, m, r, slot_of, to_result, reach, slot_mask, slot_reach, &mut facts);
+                                }
+                            } else {
+                                let p_callee = self.function_named(c.name_id);
+                                let mut arg_reach = 0 as u64;
+                                let mut ai = 0 as usize;
+                                while ai < c.args.len {
+                                    if (c.args[ai] as usize) < n { arg_reach = arg_reach | reach[c.args[ai] as usize]; }
+                                    ai = ai + 1 as usize;
+                                }
+                                let mut r = 0 as u64;
+                                if p_callee != 0 as *mut ILFunction {
+                                    r = self.call_storage_mask(p_callee, c.args, mask, unsafe { (*p_callee).ret_storage }, slot_of, slot_mask, cmask);
+                                    // The callee stores our parameters' storage into the memory of
+                                    // its own: a write of ours to what we passed there.
+                                    let stored = self.call_storage_mask(p_callee, c.args, mask, unsafe { (*p_callee).stores_storage }, slot_of, slot_mask, cmask);
+                                    if stored != 0 as u64 {
+                                        let targets = unsafe { (*p_callee).store_targets };
+                                        if (targets & STORE_GLOBAL_BIT) != 0 as u64 {
+                                            facts.stored = facts.stored | stored;
+                                            facts.targets = facts.targets | STORE_GLOBAL_BIT;
+                                        }
+                                        let ch = self.hidden_param_count(unsafe { &*p_callee });
+                                        let mut ti = ch;
+                                        while ti < c.args.len {
+                                            let u = ti - ch;
+                                            if u < STORE_INTO_GLOBAL as usize && ((targets >> (u as u64)) & 1 as u64) != 0 as u64 && (c.args[ti] as usize) < n {
+                                                self.note_storage_write(c.args[ti], stored, 0 as u64, slot_of, to_result, reach, slot_mask, slot_reach, &mut facts);
+                                            }
+                                            ti = ti + 1 as usize;
+                                        }
+                                    }
+                                }
+                                if p_callee != 0 as *mut ILFunction && self.has_sret_param(p_callee) && c.args.len > 0 as usize {
+                                    let a0 = c.args[0];
+                                    if (a0 as usize) < n && slot_of[a0 as usize] != 0 as u32 {
+                                        let slot = slot_of[a0 as usize];
+                                        slot_mask[slot as usize] = slot_mask[slot as usize] | r;
+                                        slot_reach[slot as usize] = slot_reach[slot as usize] | arg_reach;
+                                    } else if (a0 as usize) < n && to_result[a0 as usize] {
+                                        facts.ret = facts.ret | r;
+                                    }
+                                } else if ok {
+                                    mask[ssa as usize] = mask[ssa as usize] | r;
+                                    reach[ssa as usize] = reach[ssa as usize] | arg_reach;
+                                }
+                            }
+                        },
+                        ILInstr.Ret(res) => {
+                            if res != 0 as u32 && (res as usize) < n {
+                                facts.ret = facts.ret | mask[res as usize];
+                                if report && pass == 1 as usize && (mask[res as usize] & !func.ret_ties) != 0 as u64 {
+                                    self.report_error("#[borrows(..)] does not list a parameter this function returns a pointer into", span);
+                                }
+                            }
+                        },
+                        _ => {},
+                    }
+                    if ok && from != 0 as u32 && (from as usize) < n {
+                        mask[ssa as usize] = mask[ssa as usize] | mask[from as usize];
+                        cmask[ssa as usize] = cmask[ssa as usize] | cmask[from as usize];
+                        reach[ssa as usize] = reach[ssa as usize] | reach[from as usize];
+                        slot_of[ssa as usize] = slot_of[from as usize];
+                        to_result[ssa as usize] = to_result[from as usize];
+                    }
+                    // An integer computed from an address (a length, a hash, a type id) is
+                    // not one: only values that can hold an address carry the relations, and
+                    // an integer only by address arithmetic (`(p as usize + off) as *T`),
+                    // never by being loaded or returned.
+                    if ok && !self.can_hold_address(func.get_ssa_type(ssa), from != 0 as u32) {
+                        mask[ssa as usize] = 0 as u64;
+                        reach[ssa as usize] = 0 as u64;
+                    }
+                    j = j + 1 as usize;
+                }
+                bi = bi + 1 as usize;
+            }
+            pass = pass + 1 as usize;
+        }
+        return facts;
+    }
+
+    // Pointers, aggregates, and pointer-sized integers (address arithmetic in `unsafe`:
+    // `(p as usize + off) as *T`).
+    fn can_hold_address(self: &Verifier, ty: u32, by_arithmetic: bool) -> bool {
+        if ty == 0 as u32 { return false; }
+        let tag = self.get_type_tag(ty);
+        if tag == ILTYPE_PRIMITIVE {
+            if !by_arithmetic { return false; }
+            let prim = self.module.types[ty as usize - 1 as usize].def.get_Primitive().get_tag();
+            return prim == 3 as u32 || prim == 4 as u32 || prim == 8 as u32 || prim == 9 as u32; // u64, usize, i64, isize
+        }
+        return tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_SLICE || tag == ILTYPE_BOXED
+            || tag == ILTYPE_BOXEDMUT || tag == ILTYPE_USER || tag == ILTYPE_TUPLE || tag == ILTYPE_ARRAY;
+    }
+
+    // A value carrying parameter-storage bits M (and reaching R) is written at DST.
+    fn note_storage_write(self: &mut Verifier, dst: SSAId, m: u64, r: u64, slot_of: [mut u32], to_result: [mut bool],
+                          reach: [mut u64], slot_mask: [mut u64], slot_reach: [mut u64], facts: &mut StorageFacts) {
+        let slot = slot_of[dst as usize];
+        if slot != 0 as u32 {
+            slot_mask[slot as usize] = slot_mask[slot as usize] | m;
+            slot_reach[slot as usize] = slot_reach[slot as usize] | r;
+            return;
+        }
+        if to_result[dst as usize] {
+            facts.ret = facts.ret | m;
+            return;
+        }
+        if m == 0 as u64 { return; }
+        facts.stored = facts.stored | m;
+        let t = reach[dst as usize];
+        // Memory of unknown origin counts as outliving every caller.
+        facts.targets = facts.targets | (if t == 0 as u64 { STORE_GLOBAL_BIT } else { t });
+    }
+
+    // Bits of this function's parameters' storage that reach a callee's parameters selected
+    // by TIES (its ret_storage or stores_storage), through the arguments passed for them.
+    // A slice argument is the address of its header (a slot, or the field holding it), so
+    // what counts is what the header holds, not where it is.
+    fn call_storage_mask(self: &mut Verifier, p_callee: *mut ILFunction, args: [SSAId], mask: [mut u64], ties: u64,
+                         slot_of: [mut u32], slot_mask: [mut u64], cmask: [mut u64]) -> u64 {
+        if ties == 0 as u64 { return 0 as u64; }
+        let hidden = self.hidden_param_count(unsafe { &*p_callee });
+        let mut r = 0 as u64;
+        let mut i = hidden;
+        while i < args.len {
+            let u = i - hidden;
+            let a = args[i];
+            if u < STORE_INTO_GLOBAL as usize && ((ties >> (u as u64)) & 1 as u64) != 0 as u64 && (a as usize) < mask.len {
+                let pty = unsafe { (*p_callee).param(i).ty };
+                if self.get_type_tag(pty) == ILTYPE_SLICE || self.points_at_slice(pty) {
+                    let slot = slot_of[a as usize];
+                    r = r | (if slot != 0 as u32 { slot_mask[slot as usize] } else { cmask[a as usize] });
+                } else {
+                    r = r | mask[a as usize];
+                }
+            }
+            i = i + 1 as usize;
+        }
+        return r;
+    }
+
+    // Leading sret/closure-env parameters, which ret_ties and ret_storage do not count.
+    fn hidden_param_count(self: &mut Verifier, func: &ILFunction) -> usize {
+        let sret_name = self.sret_name;
+        let env_name = self.env_name;
+        let mut hidden = 0 as usize;
+        while hidden < func.params_len && (func.param(hidden).name == sret_name || func.param(hidden).name == env_name) {
+            hidden = hidden + 1 as usize;
+        }
+        return hidden;
+    }
+
+    fn has_sret_param(self: &mut Verifier, p_f: *mut ILFunction) -> bool {
+        let sret_name = self.sret_name;
+        return unsafe { (*p_f).params_len > 0 as usize && (*p_f).param(0 as usize).name == sret_name };
+    }
+
+    // A raw pointer returned by a call may point into the arguments its callee's
+    // signature ties it to (`ret_ties`: `#[borrows(..)]`, or `self`, or every pointer
+    // parameter). If one of those points to this frame's stack, so may the result:
+    // `return stash(&mut s)` dangles like `return &mut s`. Raw pointers only: a returned
+    // reference is tracked by the borrow checker, by place, which knows that
+    // `v.as_slice()` points into v's buffer rather than into v's own (stack) storage.
+    // A call's result, and what the callee stores away, as they involve pointers into
+    // this frame (see storage_facts for what the callee's summary records).
+    fn tie_call_result(self: &mut Verifier, p_f: *mut ILFunction, args: [SSAId], ssa: SSAId, span: Span) {
+        self.tie_call_result_storage(p_f, args, ssa);
+        self.check_call_stores_stack(p_f, args, span);
+    }
+
+    // Whether the argument for callee parameter I carries a pointer into this frame. A
+    // pointer argument is the address itself. A slice argument arrives as the slot holding
+    // the slice (IL type Ptr<Slice<..>>), so what matters is where the slice points, not
+    // where the slot is (`""` in a temporary is not stack data).
+    fn arg_points_to_stack(self: &mut Verifier, p_f: *mut ILFunction, i: usize, arg: SSAId) -> bool {
+        let param_ty = unsafe { (*p_f).param(i).ty };
+        if self.get_type_tag(param_ty) == ILTYPE_SLICE || self.points_at_slice(param_ty) {
+            return (arg as usize) < self.uses.len && (self.points_to_stack[arg as usize] || self.holds_stack(arg));
+        }
+        return self.is_stack_addr(arg);
+    }
+
+    // A result that points into the storage of an argument on this frame's stack points to
+    // the stack too, whatever its type: `c.get()` on a local `c` returning `&c.v`, or an
+    // `Option<&i32>` / struct holding it, which arrives in the sret slot. The callee's body
+    // decided which arguments count (`ret_storage`), so `v.as_slice()` on a local Vec,
+    // which points into the Vec's buffer, does not.
+    fn tie_call_result_storage(self: &mut Verifier, p_f: *mut ILFunction, args: [SSAId], ssa: SSAId) {
+        let ties = unsafe { (*p_f).ret_storage };
+        if ties == 0 as u64 { return; }
+        let hidden = self.hidden_param_count(unsafe { &*p_f });
+        let mut i = hidden;
+        while i < args.len {
+            let u = i - hidden;
+            if u < 64 as usize && ((ties >> (u as u64)) & 1 as u64) != 0 as u64 && self.arg_points_to_stack(p_f, i, args[i]) {
+                if self.has_sret_param(p_f) && args.len > 0 as usize {
+                    self.mark_holds_stack(args[0]);
+                } else if self.has_result(ssa) && (ssa as usize) < self.uses.len {
+                    self.points_to_stack[ssa as usize] = true;
+                }
+            }
+            i = i + 1 as usize;
+        }
+    }
+
+    // The callee writes the storage of some arguments into memory its other arguments reach
+    // (`stores_storage` into `store_targets`). Passing a pointer into this frame for one of
+    // the first is a write of that pointer to each target: within the frame it taints the
+    // target's slot, outside it (a caller's memory, a global) it dangles, as when the write
+    // is in this function (note_stack_ptr_written).
+    fn check_call_stores_stack(self: &mut Verifier, p_f: *mut ILFunction, args: [SSAId], span: Span) {
+        let stored = unsafe { (*p_f).stores_storage };
+        if stored == 0 as u64 { return; }
+        let targets = unsafe { (*p_f).store_targets };
+        let hidden = self.hidden_param_count(unsafe { &*p_f });
+        let mut stack_arg = false;
+        let mut i = hidden;
+        while i < args.len {
+            let u = i - hidden;
+            if u < STORE_INTO_GLOBAL as usize && ((stored >> (u as u64)) & 1 as u64) != 0 as u64 && self.arg_points_to_stack(p_f, i, args[i]) {
+                stack_arg = true;
+            }
+            i = i + 1 as usize;
+        }
+        if !stack_arg { return; }
+        if (targets & STORE_GLOBAL_BIT) != 0 as u64 {
+            self.report_error("region escape: the callee stores a pointer to local stack storage where it outlives this function", span);
+            return;
+        }
+        // Each target in this frame now holds a stack pointer; one outside it is an error,
+        // reported once for the call.
+        let mut escapes = false;
+        i = hidden;
+        while i < args.len {
+            let u = i - hidden;
+            if u < STORE_INTO_GLOBAL as usize && ((targets >> (u as u64)) & 1 as u64) != 0 as u64 {
+                if self.is_stack_addr(args[i]) { self.mark_holds_stack(args[i]); } else { escapes = true; }
+            }
+            i = i + 1 as usize;
+        }
+        if escapes {
+            self.report_error("region escape: a pointer to local stack storage is written to memory that outlives this function", span);
+        }
+    }
+
+    fn points_at_slice(self: &mut Verifier, ty: u32) -> bool {
+        let tag = self.get_type_tag(ty);
+        if tag != ILTYPE_PTR && tag != ILTYPE_PTRMUT { return false; }
+        let inner = self.get_ptr_inner_type(ty);
+        return inner != 0 as u32 && self.get_type_tag(inner) == ILTYPE_SLICE;
+    }
+
+    // An address in this frame's stack: a slot, or a pointer derived into one.
+    fn is_stack_addr(self: &Verifier, ssa: SSAId) -> bool {
+        if ssa == 0 as u32 || ssa as usize >= self.uses.len { return false; }
+        return self.is_stack_slot[ssa as usize] || self.points_to_stack[ssa as usize];
+    }
+
+    fn holds_stack(self: &Verifier, ssa: SSAId) -> bool {
+        if ssa == 0 as u32 || ssa as usize >= self.uses.len { return false; }
+        if self.holds_stack_ptr[ssa as usize] { return true; }
+        let base = self.stack_base[ssa as usize];
+        return base != 0 as u32 && (base as usize) < self.uses.len && self.holds_stack_ptr[base as usize];
+    }
+
+    fn mark_holds_stack(self: &mut Verifier, ssa: SSAId) {
+        if ssa == 0 as u32 || ssa as usize >= self.uses.len { return; }
+        self.holds_stack_ptr[ssa as usize] = true;
+        let base = self.stack_base[ssa as usize];
+        if base != 0 as u32 && (base as usize) < self.uses.len {
+            self.holds_stack_ptr[base as usize] = true;
+        }
+    }
+
+    // Record which 'local slot an address derives from (see stack_base).
+    fn track_stack_base(self: &mut Verifier, instr: &ILInstr, ssa: SSAId) {
+        if ssa == 0 as u32 || ssa as usize >= self.uses.len { return; }
+        let mut from = 0 as u32;
+        match *instr {
+            ILInstr.Alloc(a) => {
+                if a.allocator == 0xffffffff as u32 && a.region.get_tag() == 1 as u32 {
+                    self.stack_base[ssa as usize] = ssa;
+                }
+                return;
+            },
+            ILInstr.Move(src) => { from = src; },
+            ILInstr.Bitcast(src) => { from = src; },
+            ILInstr.Cast(c) => { from = c.val; },
+            ILInstr.FieldAddr(fa) => { from = fa.val; },
+            ILInstr.ElemAddr(ix) => { from = ix.base; },
+            ILInstr.Add(op) => { from = op.lhs; },
+            _ => { return; },
+        }
+        if from != 0 as u32 && (from as usize) < self.uses.len {
+            self.stack_base[ssa as usize] = self.stack_base[from as usize];
+        }
+    }
+
+    // A pointer to this frame's stack, or a value containing one, is being written to
+    // DST. Within the frame that only taints DST's slot; anywhere else (an out-parameter,
+    // a global, the heap, the caller's return slot) it outlives the frame and dangles.
+    fn note_stack_ptr_written(self: &mut Verifier, dst: SSAId, span: Span) {
+        if self.is_stack_addr(dst) {
+            self.mark_holds_stack(dst);
+        } else {
+            self.report_error("region escape: a pointer to local stack storage is written to memory that outlives this function", span);
+        }
+    }
+
+    fn is_derived_from(self: &Verifier, child: SSAId, parent: SSAId) -> bool {
+        let mut curr = child;
+        let mut depth = 0 as usize;
+        while curr != 0 as u32 && curr as usize < self.uses.len && depth < 100 as usize {
+            if curr == parent { return true; }
+            let p_base = self.borrowed_from[curr as usize];
+            if p_base == 0 as u32 { break; }
+            curr = p_base;
+            depth = depth + 1 as usize;
+        }
+        return false;
+    }
+
+    fn report_error(self: &mut Verifier, msg: [u8], span: Span) {
+        self.had_error = true;
+        must_write(2, self.file_path);
+        must_write(2, ":");
+        write_u64(2, span.line as usize);
+        must_write(2, ":");
+        write_u64(2, span.col as usize);
+        must_write(2, ": error: ");
+        must_write(2, msg);
+        must_write(2, "\n");
+    }
+
+    fn report_warning(self: &mut Verifier, msg: [u8], span: Span) {
+        must_write(2, self.file_path);
+        must_write(2, ":");
+        write_u64(2, span.line as usize);
+        must_write(2, ":");
+        write_u64(2, span.col as usize);
+        must_write(2, ": warning: ");
+        must_write(2, msg);
+        must_write(2, "\n");
+    }
+
+    // `current_func` is set at the top of `verify_function` and read only from
+    // code reached through it; this is the single marked forge.
+    fn cur_func(self: &Verifier) -> &ILFunction {
+        return unsafe { &*self.current_func };
+    }
+
+    // The mutable half, for the SSA-name and arena-accounting write-backs.
+    fn cur_func_mut(self: &Verifier) -> &mut ILFunction {
+        return unsafe { &mut *self.current_func };
+    }
+
+    fn get_ssa_type(self: &mut Verifier, ssa: SSAId) -> u32 {
+        let f = self.cur_func();
+        if ssa == 0 as u32 || ssa as usize >= f.result_types_len { return 0 as u32; }
+        return f.result_type_ids()[ssa as usize];
+    }
+
+    fn get_type_tag(self: &Verifier, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        return p_ty.def.get_tag();
+    }
+
+    fn get_ptr_inner_type(self: &Verifier, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        match p_ty.def {
+            ILType.Ptr(inner) | ILType.PtrMut(inner) | ILType.Boxed(inner) | ILType.BoxedMut(inner) => { return inner; },
+            ILType.Slice(s) => { return s.element; },
+            _ => { return 0 as u32; },
+        }
+    }
+
+    fn is_aggregate(self: &Verifier, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        match p_ty.def {
+            ILType.Array(_) | ILType.Tuple(_) => { return true; },
+            ILType.User(u) => {
+                let p_def = &self.module.typedefs[u.id as usize];
+                let tag = p_def.get_tag();
+                return tag == 0 as u32 || tag == 1 as u32;
+            },
+            _ => { return false; },
+        }
+    }
+
+    fn is_implicit_aggregate_ptr(self: &Verifier, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        let tag = p_ty.def.get_tag();
+        if tag != ILTYPE_PTR && tag != ILTYPE_PTRMUT { return false; }
+        if p_ty.name != 0 as u32 { return false; }
+        let inner = self.get_ptr_inner_type(ty_id);
+        return self.is_aggregate(inner);
+    }
+
+    fn is_copy_type(self: &mut Verifier, ty_id: u32) -> bool {
+        return self.is_copy_type_internal(ty_id, 0 as usize);
+    }
+
+    fn is_copy_type_internal(self: &mut Verifier, ty_id: u32, depth: usize) -> bool {
+        if ty_id == 0 as u32 { return true; }
+        if depth > 10 as usize { return true; }
+        // Unnamed Ptr to aggregate = compiler-generated aggregate proxy; non-copy if inner is non-copy.
+        if self.is_implicit_aggregate_ptr(ty_id) {
+            let inner = self.get_ptr_inner_type(ty_id);
+            return self.is_copy_type_internal(inner, depth + 1 as usize);
+        }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        match p_ty.def {
+            ILType.Primitive(_) | ILType.Ptr(_) | ILType.PtrMut(_) | ILType.Slice(_) |
+            ILType.Fn(_) => { return true; },
+            ILType.FD(_) | ILType.IORing => { return false; },
+            ILType.Boxed(_) | ILType.BoxedMut(_) => { return false; },
+            ILType.Array(a) => {
+                return self.is_copy_type_internal(a.element, depth + 1 as usize);
+            },
+            ILType.Tuple(types) => {
+                let mut i = 0 as usize;
+                while i < types.len {
+                    if !self.is_copy_type_internal(types[i], depth + 1 as usize) { return false; }
+                    i = i + 1 as usize;
+                }
+                return true;
+            },
+            ILType.User(u) => {
+                if u.id == 0 as u32 { return true; }
+                if self.has_drop_impl(u.name) { return false; }
+                let p_def = &self.module.typedefs[u.id as usize];
+                match *p_def {
+                    ILTypeDef.Struct(s) => {
+                        let mut i = 0 as usize;
+                        while i < s.fields.len {
+                            if !self.is_copy_type_internal(s.fields[i].ty, depth + 1 as usize) { return false; }
+                            i = i + 1 as usize;
+                        }
+                        return true;
+                    },
+                    ILTypeDef.Enum(e) => {
+                        let mut i = 0 as usize;
+                        while i < e.variants.len {
+                            if e.variants[i].payload != 0 as u32 {
+                                if !self.is_copy_type_internal(e.variants[i].payload, depth + 1 as usize) { return false; }
+                            }
+                            i = i + 1 as usize;
+                        }
+                        return true;
+                    },
+                    ILTypeDef.Fn(_) => { return true; },
+                }
+            },
+            ILType.Var(_) => { return true; },
+        }
+    }
+
+    pub fn verify(self: &mut Verifier) -> i32 {
+        self.compute_ret_storage();
+        let mut i = 0 as usize;
+        while i < self.module.functions.len {
+            let p_func = &self.module.functions[i];
+            self.verify_function(p_func);
+            i = i + 1 as usize;
+        }
+        if self.had_error { return 1 as i32; }
+        return 0 as i32;
+    }
+
+    pub fn verify_function(self: &mut Verifier, func: &ILFunction) -> bool {
+        if func.blocks_len == 0 as usize { return true; }
+        let saved_file_path = self.file_path;
+        if func.source_file != 0 as u32 {
+            self.file_path = self.intern_table.lookup(func.source_file);
+        }
+        must_write(2, "Verifying function: ");
+        must_write(2, self.intern_table.lookup(func.name));
+        must_write(2, "\n");
+        self.current_func = func;
+        
+        // Ensure map is large enough for all SSA IDs in this function
+        let ssa_count = func.result_types_len;
+        if ssa_count >= self.current_map.cap {
+            self.current_map.set_state(ssa_count as u32, OwnerState.Uninit, self.arena);
+        }
+        // Clear previous states
+        unsafe { memset(self.current_map.states as *mut u8, 0, (self.current_map.count * 4 as usize) as u64); }
+        self.current_map.count = 0 as usize;
+        
+        let uses_len = func.result_types_len;
+        if uses_len > 0 as usize {
+            // Twelve parallel per-SSA analysis arrays, all freshly allocated here
+            // and sized by `uses_len`: this is the one place they are forged.
+            unsafe {
+            self.uses = @slice(zoril_allocator_alloc(self.arena, uses_len * sizeof(u32)) as *mut u32, uses_len);
+            self.arena_info = @slice(zoril_allocator_alloc(self.arena, uses_len * sizeof(ArenaInfo)) as *mut ArenaInfo, uses_len);
+            self.const_values = @slice(zoril_allocator_alloc(self.arena, uses_len * 8) as *mut u64, uses_len);
+            self.const_flags = @slice(zoril_allocator_alloc(self.arena, uses_len * 1) as *mut bool, uses_len);
+            self.borrowed_from = @slice(zoril_allocator_alloc(self.arena, uses_len * 4) as *mut u32, uses_len);
+            self.borrow_is_mut = @slice(zoril_allocator_alloc(self.arena, uses_len * 1) as *mut bool, uses_len);
+            self.is_region_bound = @slice(zoril_allocator_alloc(self.arena, uses_len * 1) as *mut bool, uses_len);
+            self.is_stack_slot = @slice(zoril_allocator_alloc(self.arena, uses_len * 1) as *mut bool, uses_len);
+            self.points_to_stack = @slice(zoril_allocator_alloc(self.arena, uses_len * 1) as *mut bool, uses_len);
+            self.holds_stack_ptr = @slice(zoril_allocator_alloc(self.arena, uses_len * 1) as *mut bool, uses_len);
+            self.stack_base = @slice(zoril_allocator_alloc(self.arena, uses_len * 4) as *mut u32, uses_len);
+            self.is_alloc_result = @slice(zoril_allocator_alloc(self.arena, uses_len * 1) as *mut bool, uses_len);
+            self.remaining_uses = @slice(zoril_allocator_alloc(self.arena, uses_len * 4) as *mut u32, uses_len);
+            self.ssa_spans = @slice(zoril_allocator_alloc(self.arena, uses_len * sizeof(Span)) as *mut Span, uses_len);
+            }
+            let mut k = 0 as usize;
+            while k < uses_len {
+                self.uses[k] = 0 as u32;
+                self.remaining_uses[k] = 0 as u32;
+                self.arena_info[k] = ArenaInfo { state: ARENA_UNKNOWN, remaining: 0 as usize };
+                self.const_values[k] = 0 as u64;
+                self.const_flags[k] = false;
+                self.borrowed_from[k] = 0 as u32;
+                self.borrow_is_mut[k] = false;
+                self.is_region_bound[k] = false;
+                self.is_stack_slot[k] = false;
+                self.points_to_stack[k] = false;
+                self.holds_stack_ptr[k] = false;
+                self.stack_base[k] = 0 as u32;
+                self.is_alloc_result[k] = false;
+                self.ssa_spans[k] = Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 };
+                k = k + 1 as usize;
+            }
+        }
+
+        let mut k_p = 0 as usize;
+        while k_p < func.params_len {
+            self.current_map.set_state(func.param(k_p).ssa, OwnerState.Owned, self.arena);
+            k_p = k_p + 1 as usize;
+        }
+        self.current_ssa = func.params_len as u32;
+
+        let mut i = 0 as usize;
+        while i < func.blocks_len {
+            let blocks_slice = func.block_ids();
+            let block_id = blocks_slice[i];
+            let p_block = &self.module.blocks[block_id as usize];
+            let mut j = 0 as usize;
+            while j < p_block.instructions_len {
+                let instrs_slice = p_block.instr_ids();
+                let instr_idx = instrs_slice[j];
+                let p_instr = &self.module.instrs[instr_idx as usize];
+                self.count_uses(p_instr);
+                j = j + 1 as usize;
+            }
+            i = i + 1 as usize;
+        }
+
+        if self.uses.len > 0 as usize {
+            unsafe { memcpy(self.remaining_uses.ptr as *mut u8, self.uses.ptr as *u8, (self.uses.len * 4) as u64); }
+        }
+        i = 0 as usize;
+        while i < func.blocks_len {
+            let blocks_slice = func.block_ids();
+            let block_id = blocks_slice[i];
+            let p_block = &self.module.blocks[block_id as usize];
+            let mut j = 0 as usize;
+            while j < p_block.instructions_len {
+                let instrs_slice = p_block.instr_ids();
+                let ssa_results_slice = p_block.ssa_result_ids();
+                let instr_idx = instrs_slice[j];
+                let p_instr = &self.module.instrs[instr_idx as usize];
+                let span = &self.module.instr_spans[instr_idx as usize];
+                let ssa = ssa_results_slice[j];
+                self.check_instr(p_instr, ssa, *span);
+                j = j + 1 as usize;
+            }
+            i = i + 1 as usize;
+        }
+
+        if func.has_borrows { self.check_borrows_claim(func); }
+
+        // Pass 3: Re-check loop bodies (all blocks from loop target to loop latch)
+        let should_recheck = unsafe { @slice(zoril_allocator_alloc(self.arena, func.blocks_len) as *mut bool, func.blocks_len) };
+        let mut b_idx = 0 as usize;
+        while b_idx < should_recheck.len {
+            should_recheck[b_idx] = false;
+            b_idx = b_idx + 1 as usize;
+        }
+
+        i = 0 as usize;
+        while i < func.blocks_len {
+            let blocks_slice = func.block_ids();
+            let block_id = blocks_slice[i];
+            let p_block = &self.module.blocks[block_id as usize];
+            if p_block.instructions_len == 0 as usize {
+                i = i + 1 as usize;
+                continue;
+            }
+            let last_instr_idx_pos = p_block.instructions_len - 1 as usize;
+            let last_instr_idx = p_block.instr_ids()[last_instr_idx_pos];
+            let p_last = &self.module.instrs[last_instr_idx as usize];
+            let tag = (*p_last).get_tag();
+            let mut target_idx = 0xffffffff as usize;
+
+            if tag == IL_INSTR_JMP {
+                let target = (*p_last).get_Jmp();
+                let mut k = 0 as usize;
+                while k < i {
+                    let check_id = blocks_slice[k];
+                    if check_id == target { target_idx = k; }
+                    k = k + 1 as usize;
+                }
+            } else if tag == IL_INSTR_BRANCH {
+                let br = (*p_last).get_Branch();
+                let mut k = 0 as usize;
+                while k < i {
+                    let check_id = blocks_slice[k];
+                    if check_id == br.then_block || check_id == br.else_block { target_idx = k; }
+                    k = k + 1 as usize;
+                }
+            }
+
+            if target_idx != 0xffffffff as usize {
+                let mut m = target_idx;
+                while m <= i {
+                    should_recheck[m] = true;
+                    m = m + 1 as usize;
+                }
+            }
+            i = i + 1 as usize;
+        }
+
+        // Now run the recheck on marked blocks in topological order
+        i = 0 as usize;
+        while i < func.blocks_len {
+            if should_recheck[i] {
+                let blocks_slice = func.block_ids();
+                let block_id = blocks_slice[i];
+                let p_block = &self.module.blocks[block_id as usize];
+                let mut j = 0 as usize;
+                while j < p_block.instructions_len {
+                    let instr_idx2 = p_block.instr_ids()[j];
+                    let p_instr2 = &self.module.instrs[instr_idx2 as usize];
+                    let span2 = &self.module.instr_spans[instr_idx2 as usize];
+                    let ssa2 = p_block.ssa_result_ids()[j];
+                    self.check_instr(p_instr2, ssa2, *span2);
+                    j = j + 1 as usize;
+                }
+            }
+            i = i + 1 as usize;
+        }
+
+        self.file_path = saved_file_path;
+        return true;
+    }
+
+    fn is_copy_type_ssa(self: &mut Verifier, ssa: SSAId) -> bool {
+        if ssa == 0 as u32 { return true; }
+        let ty = self.get_ssa_type(ssa);
+        if self.is_copy_type_internal(ty, 0 as usize) { return true; }
+
+        // Logically non-copy by type. But if it's a pointer/reference, it's a copyable address
+        // UNLESS it's an owned stack slot (alloc_result) — then the slot owns the value.
+        let tag = self.get_type_tag(ty);
+        if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_SLICE {
+            if ssa < self.uses.len as u32 {
+                let is_owned_slot = self.is_alloc_result[ssa as usize];
+                if is_owned_slot {
+                    let inner_ty = self.get_ptr_inner_type(ty);
+                    return self.is_copy_type_internal(inner_ty, 0 as usize);
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    fn check_instr(self: &mut Verifier, instr: &ILInstr, ssa: SSAId, span: Span) {
+        if self.has_result(ssa) {
+            self.ssa_spans[ssa as usize] = span;
+        }
+
+        // 1. Check ownership of operands
+        self.check_operands(instr, span);
+
+        self.track_stack_base(instr, ssa);
+
+        // 2. Mark moves and results
+        match *instr {
+            ILInstr.Move(src) => {
+                if !self.is_copy_type_ssa(src) {
+                    self.current_map.set_state(src, OwnerState.Moved, self.arena);
+                }
+                if self.has_result(ssa) && ssa < self.uses.len as u32 {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                    
+                    // Propagate name only if dst has no existing name (prevents overwriting lowerer-assigned name)
+                    let name = self.cur_func().get_ssa_name(src);
+                    if name != 0 as u32 && self.cur_func().get_ssa_name(ssa) == 0 as u32 {
+                        self.cur_func_mut().set_ssa_name(self.arena, ssa, name);
+                    }
+
+                    // Propagate is_region_bound
+                    let mut rb = false;
+                    if src < self.uses.len as u32 {
+                        rb = self.is_region_bound[src as usize];
+                    }
+                    self.is_region_bound[ssa as usize] = rb;
+
+                    // Propagate is_alloc_result (moved owned aggregate stays owned)
+                    let mut ar = false;
+                    if src < self.uses.len as u32 {
+                        ar = self.is_alloc_result[src as usize];
+                    }
+                    self.is_alloc_result[ssa as usize] = ar;
+
+                    // Register propagated borrow
+                    if src < self.uses.len as u32 {
+                        if self.is_stack_slot[src as usize] {
+                            self.is_stack_slot[ssa as usize] = true;
+                        }
+                        if self.points_to_stack[src as usize] {
+                            self.points_to_stack[ssa as usize] = true;
+                        }
+                        if self.holds_stack(src) {
+                            self.holds_stack_ptr[ssa as usize] = true;
+                        }
+                        let parent_borrow = self.get_ultimate_base(src);
+                        if parent_borrow != src {
+                            self.borrowed_from[ssa as usize] = parent_borrow;
+                            self.borrow_is_mut[ssa as usize] = self.borrow_is_mut[src as usize];
+                        }
+                    }
+
+                    // Propagate constant value
+                    if src < self.uses.len as u32 && self.const_flags[src as usize] {
+                        self.const_values[ssa as usize] = self.const_values[src as usize];
+                        self.const_flags[ssa as usize] = true;
+                    }
+                    
+                    // Propagate ArenaInfo
+                    if self.arena_info.len > 0 as usize && src < self.uses.len as u32 {
+                        self.arena_info[ssa as usize].state = self.arena_info[src as usize].state;
+                        self.arena_info[ssa as usize].remaining = self.arena_info[src as usize].remaining;
+                    }
+                }
+            },
+            ILInstr.Borrow(b) => {
+                if self.has_result(ssa) && ssa < self.uses.len as u32 { 
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena); 
+                    self.borrowed_from[ssa as usize] = b.val;
+                    if b.val < self.uses.len as u32 {
+                        self.points_to_stack[ssa as usize] = self.is_stack_slot[b.val as usize] || self.points_to_stack[b.val as usize];
+                    }
+                    self.borrow_is_mut[ssa as usize] = b.is_mut;
+                }
+            },
+            ILInstr.Store(s) => {
+                // Classified before the bookkeeping below, which makes the destination
+                // look derived from the stored value.
+                let dst_is_stack = self.is_stack_addr(s.ptr);
+                let s_val_ty = self.get_ssa_type(s.val);
+                if !self.is_copy_type(s_val_ty) {
+                    self.current_map.set_state(s.val, OwnerState.Moved, self.arena);
+                }
+
+                // Reset state of the base variable to Owned if stored to
+                let mut base = s.ptr;
+                if s.ptr < self.uses.len as u32 {
+                    let is_alloc = self.is_alloc_result[s.ptr as usize];
+                    if !is_alloc {
+                        let p_base = self.borrowed_from[s.ptr as usize];
+                        if p_base != 0 as u32 {
+                            base = p_base;
+                        }
+                    }
+                }
+                if base != 0 as u32 && base < self.uses.len as u32 {
+                    self.current_map.set_state(base, OwnerState.Owned, self.arena);
+                }
+
+                // Propagate is_region_bound and borrow base only when storing a pointer
+                let val_ty = self.get_ssa_type(s.val);
+                let val_tag = self.get_type_tag(val_ty);
+                // A pointer to an aggregate usually stands for the aggregate itself, but not
+                // when the destination holds a pointer: a slice's data pointer over an array.
+                let dst_inner = self.get_ptr_inner_type(self.get_ssa_type(s.ptr));
+                let dst_inner_tag = self.get_type_tag(dst_inner);
+                let into_ptr_slot = dst_inner != 0 as u32 && (dst_inner_tag == ILTYPE_PTR || dst_inner_tag == ILTYPE_PTRMUT);
+                let is_real_ptr = (val_tag == ILTYPE_PTR || val_tag == ILTYPE_PTRMUT || val_tag == ILTYPE_SLICE)
+                    && (!self.is_implicit_aggregate_ptr(val_ty) || into_ptr_slot);
+                if is_real_ptr {
+                    let mut rb = false;
+                    if s.val < self.uses.len as u32 {
+                        rb = self.is_region_bound[s.val as usize];
+                    }
+                    if s.ptr < self.uses.len as u32 {
+                        self.is_region_bound[s.ptr as usize] = rb;
+                        self.borrowed_from[s.ptr as usize] = s.val;
+                        if s.val < self.uses.len as u32 && s.ptr < self.uses.len as u32 {
+                            // A slot's own address (`let p = &mut x` stores the alloc
+                            // itself, with no Borrow) points to the stack as much as a
+                            // pointer derived into it does.
+                            if self.is_stack_addr(s.val) {
+                                self.points_to_stack[s.ptr as usize] = true;
+                            }
+                        }
+                    }
+                }
+                if (is_real_ptr && self.is_stack_addr(s.val)) || self.holds_stack(s.val) {
+                    if dst_is_stack {
+                        self.mark_holds_stack(s.ptr);
+                    } else {
+                        self.report_error("region escape: a pointer to local stack storage is written to memory that outlives this function", span);
+                    }
+                }
+
+                // Propagate ArenaInfo from value to pointer
+                if self.arena_info.len > 0 as usize && s.val < self.uses.len as u32 && s.ptr < self.uses.len as u32 {
+                    if self.arena_info[s.val as usize].state == ARENA_INITIALIZED {
+                        self.arena_info[s.ptr as usize].state = self.arena_info[s.val as usize].state;
+                        self.arena_info[s.ptr as usize].remaining = self.arena_info[s.val as usize].remaining;
+                    }
+                }
+            },
+            ILInstr.Load(src) => {
+                if self.has_result(ssa) && ssa < self.uses.len as u32 {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+
+                    // Propagate name only if dst has no existing name
+                    let name = self.cur_func().get_ssa_name(src);
+                    if name != 0 as u32 && self.cur_func().get_ssa_name(ssa) == 0 as u32 {
+                        self.cur_func_mut().set_ssa_name(self.arena, ssa, name);
+                    }
+
+                    // Propagate is_region_bound
+                    let mut rb = false;
+                    if src < self.uses.len as u32 {
+                        rb = self.is_region_bound[src as usize];
+                    }
+                    self.is_region_bound[ssa as usize] = rb;
+
+                    // Propagate borrow base
+                    let val_ty = self.get_ssa_type(ssa);
+                    let val_tag = self.get_type_tag(val_ty);
+                    let is_real_ptr = (val_tag == ILTYPE_PTR || val_tag == ILTYPE_PTRMUT || val_tag == ILTYPE_SLICE) && !self.is_implicit_aggregate_ptr(val_ty);
+                    if is_real_ptr {
+                        if src < self.uses.len as u32 {
+                            self.borrowed_from[ssa as usize] = src;
+                            // points_to_stack of the SLOT, never is_stack_slot of
+                            // it -- reading a pointer out of stack storage does
+                            // not make that pointer point at the storage.
+                            if self.is_stack_slot[src as usize] {
+                                self.points_to_stack[ssa as usize] = self.points_to_stack[src as usize];
+                            }
+                            // A pointer read out of a slot that holds a stack pointer may
+                            // be that pointer (e.g. a slice's data field). Per slot, not
+                            // per field: conservative.
+                            if self.holds_stack(src) {
+                                self.points_to_stack[ssa as usize] = true;
+                            }
+                        }
+                    }
+
+                    if !is_real_ptr && self.holds_stack(src) {
+                        self.holds_stack_ptr[ssa as usize] = true;
+                    }
+
+                    // Load from a pointer derived from a non-copy variable moves the variable
+                    let mut base = src;
+                    if src < self.uses.len as u32 {
+                        let p_base = self.borrowed_from[src as usize];
+                        if p_base != 0 as u32 {
+                            base = p_base;
+                        }
+                    }
+                    if base != 0 as u32 && base < self.uses.len as u32 {
+                        let val_ty2 = self.get_ssa_type(ssa);
+                        if self.is_aggregate(val_ty2) && !self.is_copy_type(val_ty2) {
+                            // Only move the base for owned (alloc-origin) aggregates.
+                            // Loading non-copy through a borrowed reference should NOT consume the base.
+                            let base_alloc = base < self.uses.len as u32 && self.is_alloc_result[base as usize];
+                            if base_alloc {
+                                self.current_map.set_state(base, OwnerState.Moved, self.arena);
+                            }
+                        } else if src != base {
+                            // Copy-type field load: release the FieldAddr borrow by clearing borrowed_from.
+                            // Do NOT mark src as Moved — the same FieldAddr SSA may be the Store destination
+                            // in a compound assignment like c.value += 1.
+                            if src < self.uses.len as u32 {
+                                self.borrowed_from[src as usize] = 0 as u32;
+                            }
+                        }
+                    }
+
+                    // Propagate ArenaInfo from pointer to value
+                    if self.arena_info.len > 0 as usize && src < self.uses.len as u32 {
+                        if self.arena_info[src as usize].state == ARENA_INITIALIZED {
+                            self.arena_info[ssa as usize].state = self.arena_info[src as usize].state;
+                            self.arena_info[ssa as usize].remaining = self.arena_info[src as usize].remaining;
+                        }
+                    }
+                }
+            },
+            ILInstr.Ret(res) => {
+                // Region outlives, intraprocedural (Stage 3 harvest, R5.3).
+                // Returning a pointer into this frame's own stack storage leaves
+                // the caller holding a dangling pointer.
+                //
+                // This keys on *provenance* -- walk to the ultimate base and ask
+                // whether that base is a stack slot allocated here -- not on the
+                // declared type. That distinction is the whole point: stage0-C's
+                // verifier does the type-level version and rejects
+                // stdlib/bytevec.zrl:56's `as_slice()` returning a [u8], which is
+                // why Makefile:59-77 has to pass --no-verify. A slice built from a
+                // pointer *parameter* traces back to the parameter, not to an
+                // Alloc, so it is correctly accepted here.
+                if res != 0 as u32 {
+                    if res < self.uses.len as u32 {
+                        let ret_tag = self.get_type_tag(self.get_ssa_type(res));
+                        if ret_tag == ILTYPE_PTR || ret_tag == ILTYPE_PTRMUT || ret_tag == ILTYPE_SLICE {
+                            // Two ways to return a dangling stack pointer: hand
+                            // back the slot's own address (`return &mut s` lowers
+                            // to `ret <the alloc>`, with no Borrow instruction at
+                            // all), or hand back a pointer derived into it.
+                            if self.is_stack_slot[res as usize] || self.points_to_stack[res as usize] {
+                                self.report_error("region escape: returning a pointer to local stack storage", span);
+                            }
+                        }
+                    }
+                }
+                if res != 0 as u32 {
+                    if !self.is_copy_type_ssa(res) {
+                        if res < self.uses.len as u32 {
+                            let p_base = self.borrowed_from[res as usize];
+                            if p_base != 0 as u32 {
+                                let tag = self.get_type_tag(self.get_ssa_type(res));
+                                if tag != ILTYPE_PTR && tag != ILTYPE_PTRMUT && tag != ILTYPE_SLICE {
+                                    self.report_error("cannot move out of borrow", span);
+                                }
+                            }
+                        }
+                        self.current_map.set_state(res, OwnerState.Moved, self.arena);
+                    }
+                }
+            },
+            ILInstr.Call(c) => {
+                let p_f = self.function_named(c.name_id);
+                let mut sret_offset = 0 as usize;
+                if p_f != 0 as *mut ILFunction {
+                    if self.is_aggregate((*p_f).ret_ty) {
+                        sret_offset = 1 as usize;
+                    }
+                }
+
+                let mut i = 0 as usize;
+                while i < c.args.len {
+                    let arg = c.args[i];
+                    
+                    let mut is_logical_move = true;
+                    if p_f != 0 as *mut ILFunction {
+                        let param_idx = i; // Simplified, ignoring sret for type check
+                        if param_idx < (*p_f).params_len {
+                            let param_ty = unsafe { (*p_f).param(param_idx).ty };
+                            let tag = self.get_type_tag(param_ty);
+                            if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_SLICE {
+                                is_logical_move = false;
+                            }
+                        }
+                    } else {
+                        // External function: assume pointers are not moves
+                        let tag = self.get_type_tag(self.get_ssa_type(arg));
+                        if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_SLICE {
+                            is_logical_move = false;
+                        }
+                    }
+
+                    if is_logical_move && !self.is_copy_type_ssa(arg) {
+                        // Skip move check/marking for SRET argument
+                        let is_sret_arg = (i == 0 as usize && sret_offset == 1 as usize);
+                        if !is_sret_arg {
+                            if arg < self.uses.len as u32 {
+                                let p_base = self.borrowed_from[arg as usize];
+                                if p_base != 0 as u32 {
+                                    let tag = self.get_type_tag(self.get_ssa_type(arg));
+                                    if tag != ILTYPE_PTR && tag != ILTYPE_PTRMUT && tag != ILTYPE_SLICE {
+                                        self.report_error("cannot move out of borrow", span);
+                                    }
+                                }
+                            }
+                            self.current_map.set_state(arg, OwnerState.Moved, self.arena);
+                        }
+                    }
+                    i = i + 1 as usize;
+                }
+                if p_f != 0 as *mut ILFunction {
+                    self.tie_call_result(p_f, c.args, ssa, span);
+                }
+                if self.has_result(ssa) {
+                    let uses = self.uses[ssa as usize];
+                    if uses == 0 as u32 {
+                        let p_f = self.function_named(c.name_id);
+                        if p_f as usize != 0 as usize && (*p_f).must_use {
+                            self.report_warning("unused result from #[must_use] function", span);
+                        }
+                    }
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                }
+
+                let call_name = self.intern_table.lookup(c.name_id);
+                // Aggregates are copied with memcpy, including into the caller's return
+                // slot, so this is where a struct, tuple or slice holding a stack pointer
+                // leaves the frame.
+                if is_str_eq(call_name, "memcpy") && c.args.len >= 2 as usize && self.holds_stack(c.args[1]) {
+                    self.note_stack_ptr_written(c.args[0], span);
+                }
+                let is_arena_init = is_str_eq(call_name, "arena_init") || self.has_suffix(call_name, "_arena_init");
+                let is_alloc = is_str_eq(call_name, "zoril_allocator_alloc") || self.has_suffix(call_name, "_zoril_allocator_alloc");
+
+                if is_arena_init && c.args.len >= 1 as usize {
+                    let capacity_ssa = c.args[c.args.len - 1 as usize];
+                    let is_const = self.const_flags[capacity_ssa as usize];
+                    if is_const {
+                        let cap_val = self.const_values[capacity_ssa as usize];
+                        if self.has_result(ssa) {
+                            self.arena_info[ssa as usize].state = ARENA_INITIALIZED;
+                            self.arena_info[ssa as usize].remaining = cap_val as usize;
+                        }
+                    }
+                } else if is_alloc && c.args.len >= 2 as usize {
+                    let arena_ssa = c.args[c.args.len - 2 as usize];
+                    let size_ssa = c.args[c.args.len - 1 as usize];
+                    let is_const = self.const_flags[size_ssa as usize];
+                    if is_const {
+                        let size_val = self.const_values[size_ssa as usize];
+                        self.cur_func_mut().arena_alloc_bytes = self.cur_func().arena_alloc_bytes + size_val as usize;
+                        
+                        if self.arena_info[arena_ssa as usize].state == ARENA_INITIALIZED {
+                            if size_val as usize > self.arena_info[arena_ssa as usize].remaining {
+                                self.report_error("arena capacity exceeded at compile time", span);
+                            } else {
+                                self.arena_info[arena_ssa as usize].remaining = self.arena_info[arena_ssa as usize].remaining - size_val as usize;
+                            }
+                        }
+                    }
+                } else {
+                    let p_f = self.function_named(c.name_id);
+                    if p_f as usize != 0 as usize {
+                        let alloc_bytes = (*p_f).arena_alloc_bytes;
+                        if alloc_bytes > 0 as usize && c.args.len > 0 as usize {
+                            let arena_ssa = c.args[c.args.len - 1 as usize];
+                            if self.arena_info[arena_ssa as usize].state == ARENA_INITIALIZED {
+                                if alloc_bytes > self.arena_info[arena_ssa as usize].remaining {
+                                    self.report_error("arena capacity exceeded at compile time (interprocedural)", span);
+                                } else {
+                                    self.arena_info[arena_ssa as usize].remaining = self.arena_info[arena_ssa as usize].remaining - alloc_bytes;
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            ILInstr.CallPtr(c) => {
+                let mut i = 0 as usize;
+                while i < c.args.len {
+                    let arg = c.args[i];
+                    if !self.is_copy_type_ssa(arg) {
+                        self.current_map.set_state(arg, OwnerState.Moved, self.arena);
+                    }
+                    i = i + 1 as usize;
+                }
+                if self.has_result(ssa) {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                }
+            },
+            ILInstr.Cast(c) => {
+                if self.has_result(ssa) {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+
+                    // Propagate name
+                    let name = self.cur_func().get_ssa_name(c.val);
+                    if name != 0 as u32 {
+                        self.cur_func_mut().set_ssa_name(self.arena, ssa, name);
+                    }
+
+                    // Propagate is_region_bound
+                    let rb = self.is_region_bound[c.val as usize];
+                    self.is_region_bound[ssa as usize] = rb;
+
+                    // Check region escape
+                    if rb {
+                        let target_tag = self.get_type_tag(c.target_ty);
+                        if target_tag == ILTYPE_PTR || target_tag == ILTYPE_PTRMUT {
+                            self.report_error("region escape: cannot cast region-bound pointer to raw pointer", span);
+                        }
+                    }
+
+                    // Register propagated borrow
+                    if c.val < self.uses.len as u32 {
+                        let is_stack = self.is_stack_slot[c.val as usize] || self.points_to_stack[c.val as usize];
+                        if is_stack {
+                            self.points_to_stack[ssa as usize] = true;
+                        }
+                        let has_parent = self.borrowed_from[c.val as usize] != 0 as u32;
+                        if has_parent {
+                            self.borrowed_from[ssa as usize] = c.val;
+                            self.borrow_is_mut[ssa as usize] = self.borrow_is_mut[c.val as usize];
+                        }
+                    }
+
+                    // Propagate constant value
+                    if self.const_flags[c.val as usize] {
+                        self.const_values[ssa as usize] = self.const_values[c.val as usize];
+                        self.const_flags[ssa as usize] = true;
+                    }
+                    
+                    // Propagate ArenaInfo
+                    if self.arena_info.len > 0 as usize {
+                        self.arena_info[ssa as usize].state = self.arena_info[c.val as usize].state;
+                        self.arena_info[ssa as usize].remaining = self.arena_info[c.val as usize].remaining;
+                    }
+                }
+            },
+            ILInstr.Const(c) => {
+                if self.has_result(ssa) {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                    match c.val {
+                        ConstValue.U64(v) => {
+                            self.const_values[ssa as usize] = v;
+                            self.const_flags[ssa as usize] = true;
+                        },
+                        ConstValue.I64(v) => {
+                            self.const_values[ssa as usize] = v as u64;
+                            self.const_flags[ssa as usize] = true;
+                        },
+                        ConstValue.F64(_) | ConstValue.Bool(_) => {}
+                    }
+                }
+            },
+            ILInstr.Alloc(a) => {
+                if self.has_result(ssa) {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                    if a.allocator != 0xffffffff as u32 {
+                        self.is_region_bound[ssa as usize] = true;
+                    } else if a.region.get_tag() == 1 as u32 {
+                        // An 'local alloc without an allocator is a stack slot in the
+                        // current frame, which is what the escape checks key on. An
+                        // 'heap one (`box`) is not: it outlives the frame.
+                        self.is_stack_slot[ssa as usize] = true;
+                    }
+                    self.is_alloc_result[ssa as usize] = true;
+                }
+            },
+            ILInstr.FieldAddr(fa) => {
+                let is_mut = (self.get_type_tag(self.get_ssa_type(ssa)) == ILTYPE_PTRMUT);
+                let base = self.get_ultimate_base(fa.val);
+                // Field access on a directly-owned (Alloc-origin) non-copy struct moves the struct.
+                // Borrowed aggregates (from FieldAddr/VariantMatch on references) have is_alloc_result=false.
+                let val_ty = self.get_ssa_type(fa.val);
+                let alloc_origin = fa.val < self.uses.len as u32 && self.is_alloc_result[fa.val as usize];
+                let has_user_name = self.cur_func().get_ssa_name(fa.val) != 0 as u32;
+                let inner_ty = self.get_ptr_inner_type(val_ty);
+                let is_non_copy_struct = alloc_origin && has_user_name && self.is_implicit_aggregate_ptr(val_ty) && !self.is_copy_type(inner_ty);
+                if is_non_copy_struct {
+                    self.current_map.set_state(base, OwnerState.Moved, self.arena);
+                    if self.has_result(ssa) {
+                        self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                        let rb = self.is_region_bound[fa.val as usize];
+                        self.is_region_bound[ssa as usize] = rb;
+                    }
+                } else {
+                    if self.has_result(ssa) {
+                        self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                        self.borrowed_from[ssa as usize] = fa.val;
+                        if fa.val < self.uses.len as u32 {
+                            if self.is_stack_slot[fa.val as usize] || self.points_to_stack[fa.val as usize] {
+                                self.is_stack_slot[ssa as usize] = true;
+                            }
+                        }
+                        self.borrow_is_mut[ssa as usize] = is_mut;
+
+                        // Do NOT propagate name: fa result is an intermediate pointer, not the variable.
+                        // Propagating the base name causes get_name_state to confuse the field addr's
+                        // state with the base variable's state.
+
+                        // Propagate is_region_bound
+                        let rb = self.is_region_bound[fa.val as usize];
+                        self.is_region_bound[ssa as usize] = rb;
+                    }
+                }
+            },
+            ILInstr.FDClose(fd_ssa) => {
+                self.current_map.set_state(fd_ssa, OwnerState.Moved, self.arena);
+            },
+            ILInstr.IORingClose(ring_ssa) => {
+                self.current_map.set_state(ring_ssa, OwnerState.Moved, self.arena);
+            },
+            ILInstr.EndBorrow(borrower) => {
+                if borrower != 0 as u32 {
+                    self.current_map.set_state(borrower, OwnerState.Moved, self.arena);
+                }
+            },
+            ILInstr.Release(borrower) => {
+                if borrower != 0 as u32 {
+                    self.current_map.set_state(borrower, OwnerState.Moved, self.arena);
+                }
+            },
+            ILInstr.Add(op) => {
+                if self.has_result(ssa) && ssa < self.uses.len as u32 {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                    let ssa_ty = self.get_ssa_type(ssa);
+                    let tag = self.get_type_tag(ssa_ty);
+                    let is_ptr = (tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT);
+                    if is_ptr && op.lhs < self.uses.len as u32 && (self.is_stack_slot[op.lhs as usize] || self.points_to_stack[op.lhs as usize]) {
+                        self.points_to_stack[ssa as usize] = true;
+                    }
+                }
+            },
+            ILInstr.SliceConstruct(sc) => {
+                if self.has_result(ssa) && ssa < self.uses.len as u32 {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                    if sc.ptr < self.uses.len as u32 && (self.is_stack_slot[sc.ptr as usize] || self.points_to_stack[sc.ptr as usize]) {
+                        self.points_to_stack[ssa as usize] = true;
+                    }
+                }
+            },
+            ILInstr.SliceData(s) => {
+                if self.has_result(ssa) && ssa < self.uses.len as u32 {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                    if s < self.uses.len as u32 && self.points_to_stack[s as usize] {
+                        self.points_to_stack[ssa as usize] = true;
+                    }
+                }
+            },
+            ILInstr.Bitcast(src) => {
+                if self.has_result(ssa) && ssa < self.uses.len as u32 {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                    if src < self.uses.len as u32 {
+                        if self.is_stack_slot[src as usize] {
+                            self.is_stack_slot[ssa as usize] = true;
+                        }
+                        if self.points_to_stack[src as usize] {
+                            self.points_to_stack[ssa as usize] = true;
+                        }
+                    }
+                }
+            },
+            _ => {
+                if self.has_result(ssa) { self.current_map.set_state(ssa, OwnerState.Owned, self.arena); }
+            }
+        }
+        if self.has_result(ssa) {
+            self.current_ssa = ssa;
+        }
+    }
+
+    fn dec_use(self: &mut Verifier, ssa: SSAId) {
+        if ssa == 0 as u32 || ssa as usize >= self.uses.len { return; }
+        if self.remaining_uses[ssa as usize] > 0 as u32 {
+            self.remaining_uses[ssa as usize] = self.remaining_uses[ssa as usize] - 1 as u32;
+            if self.remaining_uses[ssa as usize] == 0 as u32 {
+                let state = self.current_map.get_state(ssa);
+                if self.is_state_owned(state) {
+                    let is_borrow = self.borrowed_from[ssa as usize] != 0 as u32;
+                    let is_copy = self.is_copy_type_ssa(ssa);
+                    if !is_copy || is_borrow {
+                        self.current_map.set_state(ssa, OwnerState.Dropped, self.arena);
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_ssa_access(self: &mut Verifier, ssa: SSAId, span: Span) {
+        if ssa == 0 as u32 { return; }
+        self.dec_use(ssa);
+    }
+
+    fn check_operands(self: &mut Verifier, instr: &ILInstr, span: Span) {
+        match *instr {
+            ILInstr.Add(op) | ILInstr.Sub(op) | ILInstr.Mul(op) | ILInstr.Div(op) | ILInstr.Rem(op) |
+            ILInstr.And(op) | ILInstr.Or(op) | ILInstr.Xor(op) | ILInstr.Shl(op) | ILInstr.Shr(op) |
+            ILInstr.CmpEq(op) | ILInstr.CmpNe(op) | ILInstr.CmpLt(op) | ILInstr.CmpLe(op) |
+            ILInstr.CmpGt(op) | ILInstr.CmpGe(op) | 
+            ILInstr.WrappingAdd(op) | ILInstr.WrappingSub(op) | ILInstr.WrappingMul(op) |
+            ILInstr.SaturatingAdd(op) | 
+            ILInstr.CheckedAdd(op) | ILInstr.CheckedSub(op) | ILInstr.CheckedMul(op) => {
+                self.check_ssa_access(op.lhs, span);
+                self.check_ssa_access(op.rhs, span);
+            },
+            ILInstr.Neg(ssa) | ILInstr.Not(ssa) | ILInstr.Load(ssa) |
+            ILInstr.Ret(ssa) | ILInstr.IsSome(ssa) | ILInstr.Unwrap(ssa) |
+            ILInstr.SliceLen(ssa) | ILInstr.FDClose(ssa) | ILInstr.IORingSetup(ssa) | ILInstr.IORingClose(ssa) |
+            ILInstr.Likely(ssa) | ILInstr.Unlikely(ssa) | ILInstr.Move(ssa) | ILInstr.Drop(ssa) |
+            ILInstr.EndBorrow(ssa) | ILInstr.Release(ssa) => {
+                self.check_ssa_access(ssa, span);
+            },
+            ILInstr.Borrow(b) => { self.check_ssa_access(b.val, span); },
+            ILInstr.Store(s) => {
+                self.check_ssa_access(s.ptr, span);
+                self.check_ssa_access(s.val, span);
+            },
+            ILInstr.Alloc(a) => { if a.allocator != 0xffffffff as u32 { self.check_ssa_access(a.allocator, span); } },
+            ILInstr.BoundsCheck(b) => { self.check_ssa_access(b.idx, span); self.check_ssa_access(b.len, span); },
+            ILInstr.RegionCast(rc) => { self.check_ssa_access(rc.val, span); },
+            ILInstr.SliceLoad(i) => { self.check_ssa_access(i.base, span); self.check_ssa_access(i.idx, span); },
+            ILInstr.SliceStore(is) => { self.check_ssa_access(is.base, span); self.check_ssa_access(is.idx, span); self.check_ssa_access(is.val, span); },
+            ILInstr.SliceConstruct(sc) => { self.check_ssa_access(sc.ptr, span); self.check_ssa_access(sc.len, span); },
+            ILInstr.ArrayConstruct(ssas) => {
+                let mut i = 0 as usize;
+                while i < ssas.len { self.check_ssa_access(ssas[i], span); i = i + 1 as usize; }
+            },
+            ILInstr.ArrayLoad(i) => { self.check_ssa_access(i.base, span); self.check_ssa_access(i.idx, span); },
+            ILInstr.ArrayStore(is) => { self.check_ssa_access(is.base, span); self.check_ssa_access(is.idx, span); self.check_ssa_access(is.val, span); },
+            ILInstr.VariantMatch(vm) => { self.check_ssa_access(vm.val, span); },
+            ILInstr.SumConstruct(sc) => { if sc.payload != 0xffffffff as u32 { self.check_ssa_access(sc.payload, span); } },
+            ILInstr.Call(c) => {
+                let mut i = 0 as usize;
+                while i < c.args.len { self.check_ssa_access(c.args[i], span); i = i + 1 as usize; }
+            },
+            ILInstr.CallPtr(c) => {
+                self.check_ssa_access(c.func_ptr, span);
+                let mut i = 0 as usize;
+                while i < c.args.len { self.check_ssa_access(c.args[i], span); i = i + 1 as usize; }
+            },
+            ILInstr.Branch(b) => { self.check_ssa_access(b.cond, span); },
+            ILInstr.FieldAddr(fa) => { self.check_ssa_access(fa.val, span); },
+            ILInstr.StructConstruct(sc) => {
+                let mut i = 0 as usize;
+                while i < sc.fields.len { self.check_ssa_access(sc.fields[i], span); i = i + 1 as usize; }
+            },
+            ILInstr.TupleConstruct(ssas) => {
+                let mut i = 0 as usize;
+                while i < ssas.len { self.check_ssa_access(ssas[i], span); i = i + 1 as usize; }
+            },
+            ILInstr.Syscall(s) => {
+                let mut i = 0 as usize;
+                while i < s.args.len { self.check_ssa_access(s.args[i], span); i = i + 1 as usize; }
+            },
+            ILInstr.Phi(p) => {
+                let mut i = 0 as usize;
+                while i < p.preds.len { self.check_ssa_access(p.preds[i].val, span); i = i + 1 as usize; }
+            },
+            ILInstr.FDOpen(o) => { self.check_ssa_access(o.path, span); },
+            ILInstr.FDRead(io) => { self.check_ssa_access(io.fd, span); self.check_ssa_access(io.buf, span); },
+            ILInstr.FDWrite(io) => { self.check_ssa_access(io.fd, span); self.check_ssa_access(io.buf, span); },
+            ILInstr.IORingEnter(ie) => { self.check_ssa_access(ie.ring, span); },
+            ILInstr.Cast(c) => { self.check_ssa_access(c.val, span); },
+            ILInstr.Invalid | ILInstr.Bitcast(_) | ILInstr.ElemAddr(_) | ILInstr.SliceData(_) | ILInstr.GetEnv => {},
+            ILInstr.Jmp(_) | ILInstr.Unreachable | ILInstr.Const(_) | ILInstr.GlobalAddr(_) | ILInstr.FuncAddr(_) | ILInstr.StringConst(_) | ILInstr.Param(_) => {},
+        }
+    }
+
+    fn count_uses(self: &mut Verifier, instr: &ILInstr) {
+        match *instr {
+            ILInstr.Add(op) | ILInstr.Sub(op) | ILInstr.Mul(op) | ILInstr.Div(op) | ILInstr.Rem(op) |
+            ILInstr.And(op) | ILInstr.Or(op) | ILInstr.Xor(op) | ILInstr.Shl(op) | ILInstr.Shr(op) |
+            ILInstr.CmpEq(op) | ILInstr.CmpNe(op) | ILInstr.CmpLt(op) | ILInstr.CmpLe(op) |
+            ILInstr.CmpGt(op) | ILInstr.CmpGe(op) | 
+            ILInstr.WrappingAdd(op) | ILInstr.WrappingSub(op) | ILInstr.WrappingMul(op) |
+            ILInstr.SaturatingAdd(op) | 
+            ILInstr.CheckedAdd(op) | ILInstr.CheckedSub(op) | ILInstr.CheckedMul(op) => {
+                self.inc_use(op.lhs);
+                self.inc_use(op.rhs);
+            },
+            ILInstr.Neg(ssa) | ILInstr.Not(ssa) | ILInstr.Load(ssa) |
+            ILInstr.Ret(ssa) | ILInstr.IsSome(ssa) | ILInstr.Unwrap(ssa) |
+            ILInstr.SliceLen(ssa) | ILInstr.FDClose(ssa) | ILInstr.IORingSetup(ssa) | ILInstr.IORingClose(ssa) |
+            ILInstr.Likely(ssa) | ILInstr.Unlikely(ssa) | ILInstr.Move(ssa) | ILInstr.Drop(ssa) |
+            ILInstr.EndBorrow(ssa) | ILInstr.Release(ssa) => {
+                self.inc_use(ssa);
+            },
+            ILInstr.Borrow(b) => { self.inc_use(b.val); },
+            ILInstr.Store(s) => {
+                self.inc_use(s.ptr);
+                self.inc_use(s.val);
+            },
+            ILInstr.Alloc(a) => { if a.allocator != 0xffffffff as u32 { self.inc_use(a.allocator); } },
+            ILInstr.BoundsCheck(b) => { self.inc_use(b.idx); self.inc_use(b.len); },
+            ILInstr.RegionCast(rc) => { self.inc_use(rc.val); },
+            ILInstr.SliceLoad(i) => { self.inc_use(i.base); self.inc_use(i.idx); },
+            ILInstr.SliceStore(is) => { self.inc_use(is.base); self.inc_use(is.idx); self.inc_use(is.val); },
+            ILInstr.SliceConstruct(sc) => { self.inc_use(sc.ptr); self.inc_use(sc.len); },
+            ILInstr.ArrayConstruct(ssas) => {
+                let mut i = 0 as usize;
+                while i < ssas.len { self.inc_use(ssas[i]); i = i + 1 as usize; }
+            },
+            ILInstr.ArrayLoad(i) => { self.inc_use(i.base); self.inc_use(i.idx); },
+            ILInstr.ArrayStore(is) => { self.inc_use(is.base); self.inc_use(is.idx); self.inc_use(is.val); },
+            ILInstr.VariantMatch(vm) => { self.inc_use(vm.val); },
+            ILInstr.SumConstruct(sc) => { if sc.payload != 0xffffffff as u32 { self.inc_use(sc.payload); } },
+            ILInstr.Call(c) => {
+                let mut i = 0 as usize;
+                while i < c.args.len { self.inc_use(c.args[i]); i = i + 1 as usize; }
+            },
+            ILInstr.CallPtr(c) => {
+                self.inc_use(c.func_ptr);
+                let mut i = 0 as usize;
+                while i < c.args.len { self.inc_use(c.args[i]); i = i + 1 as usize; }
+            },
+            ILInstr.Branch(b) => { self.inc_use(b.cond); },
+            ILInstr.FieldAddr(fa) => { self.inc_use(fa.val); },
+            ILInstr.StructConstruct(sc) => {
+                let mut i = 0 as usize;
+                while i < sc.fields.len { self.inc_use(sc.fields[i]); i = i + 1 as usize; }
+            },
+            ILInstr.TupleConstruct(ssas) => {
+                let mut i = 0 as usize;
+                while i < ssas.len { self.inc_use(ssas[i]); i = i + 1 as usize; }
+            },
+            ILInstr.Syscall(s) => {
+                let mut i = 0 as usize;
+                while i < s.args.len { self.inc_use(s.args[i]); i = i + 1 as usize; }
+            },
+            ILInstr.Phi(p) => {
+                let mut i = 0 as usize;
+                while i < p.preds.len { self.inc_use(p.preds[i].val); i = i + 1 as usize; }
+            },
+            ILInstr.FDOpen(o) => { self.inc_use(o.path); },
+            ILInstr.FDRead(io) => { self.inc_use(io.fd); self.inc_use(io.buf); },
+            ILInstr.FDWrite(io) => { self.inc_use(io.fd); self.inc_use(io.buf); },
+            ILInstr.IORingEnter(ie) => { self.inc_use(ie.ring); },
+            ILInstr.Cast(c) => { self.inc_use(c.val); },
+            ILInstr.Invalid | ILInstr.Bitcast(_) | ILInstr.ElemAddr(_) | ILInstr.SliceData(_) | ILInstr.GetEnv => {},
+            ILInstr.Jmp(_) | ILInstr.Unreachable | ILInstr.Const(_) | ILInstr.GlobalAddr(_) | ILInstr.FuncAddr(_) | ILInstr.StringConst(_) | ILInstr.Param(_) => {},
+        }
+    }
+
+    fn inc_use(self: &mut Verifier, ssa: SSAId) {
+        if ssa == 0 as u32 || ssa as usize >= self.uses.len { return; }
+        self.uses[ssa as usize] = self.uses[ssa as usize] + 1 as u32;
+    }
+}

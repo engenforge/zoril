@@ -1,0 +1,19 @@
+// expected compile fail
+// EXPECT: error: cannot move borrowed value 'a'
+// The control for the borrow-scope change: a use of the borrower after the borrowed value is moved
+// keeps that borrower live, so the arena is still immovable there.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn consume(a: Arena) {}
+
+fn main() -> i32 {
+    let a = Arena.new(65536).unwrap();
+    let v = Vec::<u64>.new_in(&a);
+    let w = v;
+    let k = w.len();
+    consume(a); // @error "cannot move borrowed value 'a'"
+    return (k + w.len()) as i32;
+}

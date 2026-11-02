@@ -1,0 +1,50 @@
+import "io.zrl";
+import "fmt.zrl";
+import "ast.zrl";
+import "mem_raw.zrl";
+use ast::{AST, BinaryExpr, BinaryOp, Expr, Literal, Span};
+use io::{write, stdout};
+use fmt::write_u64;
+use mem_raw::{ArenaHeader, arena_init};
+
+struct Lowerer {
+    ast: *mut AST,
+}
+
+fn test(self: &Lowerer, expr_id: u32) {
+    let p_e = unsafe { (*self.ast).exprs.get(expr_id as u64).unwrap() };
+    match *p_e {
+        Expr.Literal(l) => {
+            write(stdout(), "Matched Literal\n");
+        },
+        Expr.Ident(id) => {
+            write(stdout(), "Matched Ident: id ");
+            let mut out = stdout();
+            let _ = write_u64(&mut out, id as u64);
+            write(stdout(), "\n");
+        },
+        Expr.Binary(b) => {
+            write(stdout(), "Matched Binary\n");
+        },
+        _ => {
+            write(stdout(), "Matched Other\n");
+        }
+    }
+}
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(1024 * 1024) };
+    let ast_ptr = AST.new(arena);
+    let ast = unsafe { &mut *ast_ptr };
+    
+    let span = Span { start: 0, end: 0, line: 0, col: 0 };
+    let eid1 = ast.alloc_expr(Expr.Literal(Literal.Int((42, 0))), span);
+    let eid2 = ast.alloc_expr(Expr.Ident(123), span);
+    let eid3 = ast.alloc_expr(Expr.Binary(BinaryExpr { op: BinaryOp.Add, lhs: eid1, rhs: eid1 }), span);
+    
+    let lowerer = Lowerer { ast: ast_ptr };
+    test(&lowerer, eid1);
+    test(&lowerer, eid2);
+    test(&lowerer, eid3);
+    return 0;
+}

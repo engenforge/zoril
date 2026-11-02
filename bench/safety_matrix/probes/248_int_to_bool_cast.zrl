@@ -1,0 +1,5 @@
+// name: A number cast to bool keeps a value other than 0 or 1
+// expected: compile_reject
+// `as bool` kept the number, and `match` on the result has two arms: the lowering reached
+// `zoril_abort` (exit 1) for any other value. `n != 0` is the spelling that always yields a bool.
+fn main() -> i32 { let b = (2 + 3) as bool; return match b { true => 1, false => 2 }; }

@@ -1,0 +1,29 @@
+// name: Store escape through method returning argument
+// expected: compile_reject
+// Rejected by the interprocedural summary pass, which every build enforces and which reads what a call returns through its aggregate result and through the memory its arguments point at.
+import "mem.zrl";
+use mem::Arena;
+import "vec.zrl";
+use vec::Vec;
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+struct MethodPass { x: i32 }
+impl MethodPass { fn forward(self: &MethodPass, v: [i32]) -> [i32] { return v; } }
+fn escape_storer(out: &mut [i32]) {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let src_val = v.as_slice();
+    let carried = src_val;
+    let m_pass = MethodPass { x: 0 };
+    let routed = m_pass.forward(carried);
+    *out = routed;
+}
+fn main() -> i32 {
+    let mut dest_val: [i32] = @slice(0 as *i32, 0);
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    let mut a_clobber = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 2; } };
+    let mut v_clobber = Vec::<i32>.new_in(&a_clobber);
+    v_clobber.push(77);
+    return dest_val[0] as i32;
+}

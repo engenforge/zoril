@@ -1,0 +1,13 @@
+// expected exit code: 0
+struct ArenaHeader { cap: u64 }
+struct Registry { data: *mut ArenaHeader, count: u64 }
+fn alloc_arena() -> *mut ArenaHeader {
+    return 0 as *mut ArenaHeader;
+}
+fn main() -> i32 {
+    let mut reg = Registry { data: 0 as *mut ArenaHeader, count: 0 as u64 };
+    let p = &mut reg;
+    (*p).data = alloc_arena();
+    (*p).count = 1 as u64;
+    if (*p).count == 1 as u64 { return 0; } else { return 1; }
+}

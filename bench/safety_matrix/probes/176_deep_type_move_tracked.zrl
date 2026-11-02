@@ -1,0 +1,32 @@
+// name: Move of a value whose type is nested past the copy-check limit
+// expected: compile_reject
+// `is_copy_type_internal` stops recursing past ten levels and answered *true* there - "`Copy`" for a
+// type it could not finish reading - so a second use of the value was not a move. The conservative
+// answer for this question is the other one ("not `Copy`", so every use is a move), and the predicate
+// has five copies: the ZIR checker's, the lowerer's `Local.is_copy` flag - the one that decides, and
+// the one this pinned - the driver's, the IL verifier's and the lowering's. This is the
+// memory-safety half of the pair §2.5 records: now that the drop walk no longer stops at a depth
+// either, a value of this type is dropped exactly once, so a second copy of it would be dropped too
+// - the same program, with only the checker's copy reverted to the fail-open answer, frees the arena
+// twice. One to ten levels are rejected both before and after; the depth is the whole point.
+import "mem.zrl";
+use mem::Arena;
+
+struct L1 { a: Arena }
+struct L2 { a: L1 }
+struct L3 { a: L2 }
+struct L4 { a: L3 }
+struct L5 { a: L4 }
+struct L6 { a: L5 }
+struct L7 { a: L6 }
+struct L8 { a: L7 }
+struct L9 { a: L8 }
+struct L10 { a: L9 }
+struct L11 { a: L10 }
+
+fn main() -> i32 {
+    let v = L11 { a: L10 { a: L9 { a: L8 { a: L7 { a: L6 { a: L5 { a: L4 { a: L3 { a: L2 { a: L1 { a: Arena.new(4096).unwrap() } } } } } } } } } } };
+    let w = v;
+    let u = v;
+    return 0;
+}

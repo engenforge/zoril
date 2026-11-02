@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: a binding in an or-pattern must have the same type in every alternative
+// The binding took the first alternative's type (&i32), so matching N(4096) dereferenced the
+// integer 4096 in safe code.
+enum E { R(&i32), N(u64) }
+fn read(e: E) -> i32 {
+    return match e {
+        E.R(x) | E.N(x) => *x,
+    };
+}
+fn main() -> i32 {
+    return read(E.N(4096 as u64));
+}

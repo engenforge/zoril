@@ -1,0 +1,62 @@
+import "io.zrl";
+use io::{stdout, write};
+
+fn write_str(s: [u8]) {
+    let out = stdout();
+    write(out, s);
+}
+
+// Simple i32 to string printer for the repro
+fn print_i32(v: i32) {
+    if v == 0 {
+        write_str("0");
+        return;
+    }
+    let mut n = v;
+    if n < 0 {
+        write_str("-");
+        n = -n;
+    }
+    let mut buf: [u8; 16] = [0 as u8; 16];
+    let mut i = 15;
+    while n > 0 {
+        buf[i] = (48 + (n % 10)) as u8;
+        n = n / 10;
+        i = i - 1;
+    }
+    let slice = unsafe { @slice(&buf[i+1], (15 - i) as u64) };
+    write_str(slice);
+}
+
+fn recursive_corruption(depth: i32, expected: i32) {
+    let local_val = expected;
+    
+    // Many live variables to force register pressure and spills
+    let a1 = 1; let a2 = 2; let a3 = 3; let a4 = 4; let a5 = 5;
+    let a6 = 6; let a7 = 7; let a8 = 8; let a9 = 9; let a10 = 10;
+    let a11 = 11; let a12 = 12; let a13 = 13; let a14 = 14; let a15 = 15;
+
+    if depth > 0 {
+        recursive_corruption(depth - 1, expected);
+    }
+
+    // Verify all variables are still correct
+    let sum = a1+a2+a3+a4+a5+a6+a7+a8+a9+a10+a11+a12+a13+a14+a15;
+    if sum != 120 { 
+        write_str("REGISTER CORRUPTION DETECTED! sum mismatch at depth ");
+        print_i32(depth);
+        write_str("\n");
+    }
+
+    if local_val != expected {
+        write_str("REGISTER CORRUPTION DETECTED! local_val changed at depth ");
+        print_i32(depth);
+        write_str("\n");
+    }
+}
+
+fn main() -> i32 {
+    recursive_corruption(5, 42);
+    write_str("Done\n");
+    return 0;
+}

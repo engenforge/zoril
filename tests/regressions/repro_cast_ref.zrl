@@ -1,0 +1,6 @@
+enum E { A, B }
+fn main() -> i32 {
+    let e = E.A;
+    let p = &e as *u32;
+    return 0;
+}

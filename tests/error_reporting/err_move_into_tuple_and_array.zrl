@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_move_into_tuple_and_array.zrl:9:13: error: use of moved value 'r'
+// EXPECT: tests/error_reporting/err_move_into_tuple_and_array.zrl:11:13: error: use of moved value 'w'
+// Tuple and array literals move their elements; using a moved value in one was not checked.
+struct R { x: i32 }
+impl Drop for R { fn drop(self: &mut R) { } }
+fn main() -> i32 {
+    let r = R { x: 1 }; let w = r;
+    let t = (r, 2);
+    let a = [w];
+    let b = [w];
+    return t.1;
+}

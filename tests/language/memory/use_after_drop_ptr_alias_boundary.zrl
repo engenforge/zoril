@@ -1,0 +1,18 @@
+// expected exit 0
+// Known boundary probe: use-after-drop through raw-pointer alias (§7.3, §8.4 limitation).
+//
+// In Zoril's ZIR borrow checker, @drop marks the named variable place as Dropped,
+// rejecting subsequent direct accesses to that variable at compile time.
+// However, dereferencing a raw-pointer alias (*p) that points to the dropped
+// storage is not tracked by the borrow checker and compiles without error.
+
+struct R {
+    id: i32,
+}
+
+fn main() -> i32 {
+    let r = R { id: 7 };
+    let p = &r as *R;
+    @drop(r);
+    unsafe { return (*p).id - 7; }
+}

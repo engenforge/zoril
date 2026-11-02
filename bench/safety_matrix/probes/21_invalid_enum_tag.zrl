@@ -1,0 +1,4 @@
+// name: Invalid enum discriminant from integer cast
+// expected: compile_reject
+enum E { A, B }
+fn main() -> i32 { let raw: i32 = 99; let e = raw as E; return match e { A => 1, B => 2 }; }

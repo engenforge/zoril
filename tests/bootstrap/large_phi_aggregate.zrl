@@ -1,0 +1,14 @@
+// expected exit code: 0
+struct S { a: u64, b: u64 }
+fn test(cond: bool, s1: S, s2: S) -> S {
+    return if cond { s1 } else { s2 };
+}
+fn main() -> i32 {
+    let s1 = S { a: 1, b: 2 };
+    let s2 = S { a: 3, b: 4 };
+    let res = test(true, s1, s2);
+    if res.a != 1 as u64 || res.b != 2 as u64 { return 1; }
+    let res2 = test(false, s1, s2);
+    if res2.a != 3 as u64 || res2.b != 4 as u64 { return 2; }
+    return 0;
+}

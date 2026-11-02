@@ -1,0 +1,21 @@
+// expected compile fail
+// Dropping a closure's owned capture inside the closure is rejected: the environment
+// owns the value across calls, so dropping it in one call would leave it dangling for the next.
+// EXPECT: tests/error_reporting/err_closure_capture_drop_vec.zrl:14:13: error: cannot move out of a closure capture
+
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(5);
+    let f = |k: i32| -> i32 {
+        if k == 0 {
+            @drop(v);
+            return 0;
+        }
+        return *v.get(0).unwrap();
+    };
+    f(0);
+    return f(1);
+}

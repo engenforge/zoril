@@ -1,0 +1,11 @@
+// name: Unit comparison is rejected
+// expected: compile_reject
+// Unit is not a number, so `u > u` is rejected by check_numeric_operands like any other
+// arithmetic or comparison on unit.
+fn main() -> i32 {
+    let u: () = ();
+    if u > u {
+        return 1;
+    }
+    return 0;
+}

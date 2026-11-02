@@ -1,0 +1,30 @@
+// expected exit 0
+// Trait names are module names: `use` brings one in, `mod::Trait` names one, and two modules
+// may each declare a trait of one name. They were one global namespace, needing no `use`.
+import "shapes_a_lib.zrl";
+import "shapes_b_lib.zrl";
+import "iter.zrl";
+import "vec.zrl";
+use shapes_a_lib::Shape;
+use iter::Iterator;
+use vec::Vec;
+
+struct Sq { s: i32 }
+impl Shape for Sq { fn area(self: &Sq) -> i32 { return self.s * self.s; } }
+impl shapes_b_lib::Shape for Sq { fn sides(self: &Sq) -> i32 { return 4; } }
+
+fn area_of<T: Shape>(t: &T) -> i32 { return t.double_area(); }
+fn sides_of<T: shapes_b_lib::Shape>(t: &T) -> i32 { return t.sides(); }
+fn count<I: iter::Iterator>(it: I) -> usize { return it.fold(0 as usize, |n: usize, x: &i32| -> usize { n + 1 }); }
+fn first<I: Iterator>(mut it: I) -> Option<I::Item> { return it.next(); }
+
+fn main() -> i32 {
+    let q = Sq { s: 3 };
+    if area_of(&q) != 18 { return 1; }
+    if sides_of(&q) != 4 { return 2; }
+    let mut v = Vec::<i32>.new();
+    v.push(5); v.push(6);
+    if count(v.iter()) != 2 { return 3; }
+    if *first(v.iter()).unwrap() != 5 { return 4; }
+    return 0;
+}

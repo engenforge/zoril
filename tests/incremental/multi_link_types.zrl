@@ -1,0 +1,21 @@
+pub struct Point {
+    pub x: i64,
+    pub y: i64,
+}
+
+pub const ORIGIN_X: i64 = 10;
+pub const ORIGIN_Y: i64 = 20;
+
+impl Point {
+    pub fn manhattan_dist(self: &Point) -> i64 {
+        let mut dx = self.x;
+        if dx < 0 { dx = -dx; }
+        let mut dy = self.y;
+        if dy < 0 { dy = -dy; }
+        return dx + dy;
+    }
+
+    pub fn translate(self: &Point, dx: i64, dy: i64) -> Point {
+        return Point { x: self.x + dx, y: self.y + dy };
+    }
+}

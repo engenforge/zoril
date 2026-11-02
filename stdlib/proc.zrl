@@ -1,0 +1,485 @@
+// Subprocess spawning and execution management (Command, Child)
+//
+//
+// High-level process execution via Command and Child. The raw process syscall wrappers (fork,
+// execve, wait4, kill, pipe2, dup2, fstat) are Linux-only and live in os/linux.zrl.
+
+import "core.zrl";
+import "mem.zrl";
+import "mem_raw.zrl";
+import "vec.zrl";
+import "io.zrl";
+use io::{Error, Fd, exit};
+use mem::{Arena, arena_raw};
+use mem_raw::{ArenaHeader, memcpy, zoril_allocator_alloc};
+use vec::Vec;
+
+// Exit status code or termination signal of a completed subprocess.
+pub enum ExitStatus {
+    Exited(i32),
+    Signaled(i32),
+}
+
+impl ExitStatus {
+    // Returns true if the subprocess exited cleanly with exit status 0.
+    pub fn is_success(self: &ExitStatus) -> bool {
+        return match *self {
+            Exited(c) => c == 0,
+            Signaled(_) => false,
+        };
+    }
+
+    // Returns the integer exit status code if the process exited normally.
+    pub fn code(self: &ExitStatus) -> Option<i32> {
+        return match *self {
+            Exited(c) => Option.Some(c),
+            Signaled(_) => Option.None,
+        };
+    }
+
+    // Returns the terminating signal number if the process was killed by a signal. Signals exist on
+    // the Unixes only, so the name says so.
+    pub fn unix_signal(self: &ExitStatus) -> Option<i32> {
+        return match *self {
+            Exited(_) => Option.None,
+            Signaled(s) => Option.Some(s),
+        };
+    }
+}
+
+// Handle representing a running or completed child process.
+pub struct Child {
+    pub pid: i64,
+}
+
+// wait4 until the child's status is observed. EINTR is retried; any other failure is an error,
+// never a zero-initialized status that would decode as Exited(0).
+fn wait_for_pid(pid: i64) -> Result<ExitStatus, Error> {
+    // SAFETY: one uninitialized `i32` slot in this frame, which wait4 fills before anything
+    // reads it.
+    let wstatus_ptr = unsafe { @alloca<i32>(1) };
+    let mut r = -4 as i64;
+    while r == -4 as i64 {
+        *wstatus_ptr = 0;
+        // SAFETY: wait4(61) writes the child's status through `wstatus_ptr`, the slot allocated
+        // just above; the pid is the caller's.
+        r = unsafe { @syscall(61, pid as u64, wstatus_ptr as u64, 0 as u64, 0 as u64) } as i64;
+    }
+    if r < 0 {
+        return Result.Err(Error.from_linux_errno((0 as i64 - r) as i32));
+    }
+    let st = *wstatus_ptr;
+    let sig = st & 0x7f;
+    if sig == 0 {
+        let c = (st >> 8) & 0xff;
+        return Result.Ok(ExitStatus.Exited(c));
+    }
+    return Result.Ok(ExitStatus.Signaled(sig));
+}
+
+impl Child {
+    // Waits for the child process to complete and returns its exit status.
+    pub fn wait(self: &mut Child) -> Result<ExitStatus, Error> {
+        return wait_for_pid(self.pid);
+    }
+
+    // Forcibly terminates the child process (SIGKILL on the Unixes).
+    pub fn kill(self: &mut Child) -> Result<(), Error> {
+        return self.unix_kill(9);
+    }
+
+    // Sends the Unix signal number sig to the child process.
+    pub fn unix_kill(self: &mut Child, sig: i32) -> Result<(), Error> {
+        // SAFETY: kill(62) takes no pointer, only the pid of the child this handle owns.
+        let res = unsafe { @syscall(62, self.pid as u64, sig as u64) } as i64;
+        if res < 0 {
+            return Result.Err(Error.from_linux_errno((0 as i64 - res) as i32));
+        }
+        return Result.Ok(());
+    }
+}
+
+// Process builder configuring program path, arguments, environment, and I/O redirection.
+pub struct Command {
+    pub program: [u8],
+    pub args: Vec<[u8]>,
+    arena: *mut ArenaHeader,
+    envp: **u8,
+    stdin_fd: Fd,
+    stdout_fd: Fd,
+    stderr_fd: Fd,
+}
+
+// Always copies: returning `s.ptr` for an already-terminated slice made the result look like it
+// could alias the argument, which the interprocedural escape analysis (rightly, conservatively)
+// refuses to let be stored into argv memory.
+// Internal: a NUL-terminated copy of `s` in the arena.
+unsafe fn to_cstr(s: [u8], arena: *mut ArenaHeader) -> *u8 {
+    let p = zoril_allocator_alloc(arena, (s.len + 1) as u64) as *mut u8;
+    memcpy(p, s.ptr, s.len);
+    *((p as usize + s.len) as *mut u8) = 0;
+    return p as *u8;
+}
+
+// The child's one failure path before `execve`: report ERRNO to the parent over WFD and exit 127,
+// so `spawn` returns the failing call's errno instead of returning a child that never ran. Never
+// returns. Every setup syscall in the child (fcntl, dup2, execve) reports through here, so the
+// three-step report appears once rather than at each site.
+fn child_fail(wfd: i32, errno: i32) -> never {
+    // SAFETY: one uninitialized `i32` slot in this frame, written just below before the write
+    // reads it.
+    let err_ptr = unsafe { @alloca<i32>(1) };
+    *err_ptr = errno;
+    // SAFETY: write(1) of those four bytes through the pipe end this child still owns.
+    let _ = unsafe { @syscall(1, wfd as u64, err_ptr as u64, 4 as u64) };
+    // SAFETY: close(3) of that pipe end, now that the errno is written.
+    let _ = unsafe { @syscall(3, wfd as u64) };
+    exit(127);
+}
+
+fn has_interior_nul(s: [u8]) -> bool {
+    let mut len = s.len;
+    if len > 0 as usize && s[len - 1 as usize] == 0 as u8 {
+        len = len - 1 as usize;
+    }
+    let mut i = 0 as usize;
+    while i < len {
+        if s[i] == 0 as u8 {
+            return true;
+        }
+        i = i + 1 as usize;
+    }
+    return false;
+}
+
+impl Command {
+    // Creates a new Command for program with arguments allocated in arena a.
+    //
+    // Safe: the returned command holds the arena (through its `[u8]` fields), so resetting or
+    // destroying the arena while the command is live is a compile error.
+    pub fn new(program: [u8], a: &Arena) -> Command {
+        // SAFETY: the raw constructor's contract is the arena pointer, and `a` is the live,
+        // borrowed arena the command is tied to.
+        let mut cmd = unsafe { Command.new_raw(program, arena_raw(a)) };
+        cmd.args.anchor = Option.Some(a);
+        return cmd;
+    }
+
+    // Creates a new Command using a raw arena header.
+    //
+    // CALLER OBLIGATION: arena must be valid and program must be non-empty.
+    //
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    pub unsafe fn new_raw(program: [u8], arena: *mut ArenaHeader) -> Command {
+        let mut args = Vec::<[u8]>.new_in_raw(arena);
+        args.push(program);
+        return Command {
+            program: program,
+            args: args,
+            arena: arena,
+            envp: 0 as **u8,
+            stdin_fd: Fd.from_unix_raw(-1),
+            stdout_fd: Fd.from_unix_raw(-1),
+            stderr_fd: Fd.from_unix_raw(-1),
+        };
+    }
+
+    // Appends an argument string to the command.
+    #[stores(val -> self)]
+    pub fn arg(self: &mut Command, val: [u8]) {
+        self.args.push(val);
+    }
+
+    // Sets the environment array pointer for the spawned process.
+    //
+    // CALLER OBLIGATION: caller must ensure envp is a valid null-terminated array of strings.
+    #[stores(envp -> self)]
+    pub unsafe fn set_envp(self: &mut Command, envp: **u8) {
+        self.envp = envp;
+    }
+
+    // Redirects child standard input to read from file descriptor fd.
+    pub fn set_stdin(self: &mut Command, fd: Fd) {
+        self.stdin_fd = fd;
+    }
+
+    // Redirects child standard output to write to file descriptor fd.
+    pub fn set_stdout(self: &mut Command, fd: Fd) {
+        self.stdout_fd = fd;
+    }
+
+    // Redirects child standard error to write to file descriptor fd.
+    pub fn set_stderr(self: &mut Command, fd: Fd) {
+        self.stderr_fd = fd;
+    }
+
+    // Spawns the configured command as an asynchronous child process.
+    pub fn spawn(self: &Command) -> Result<Child, Error> {
+        if has_interior_nul(self.program) {
+            return Result.Err(Error.from_linux_errno(22));
+        }
+        let args_slice = self.args.as_slice();
+        let mut check_i = 0 as usize;
+        while check_i < self.args.len() {
+            if has_interior_nul(args_slice[check_i]) {
+                return Result.Err(Error.from_linux_errno(22));
+            }
+            check_i = check_i + 1;
+        }
+
+        // SAFETY: one uninitialized two-descriptor slot in this frame, which pipe2 fills before
+        // it is read.
+        let p_fds = unsafe { @alloca<[i32; 2]>(1) };
+        // pipe2(fds, O_CLOEXEC = 524288)
+        // SAFETY: pipe2(293) writes the two descriptors through `p_fds`, the slot above.
+        let p_res = unsafe { @syscall(293, p_fds as u64, 524288 as u64) } as i64;
+        if p_res < 0 {
+            return Result.Err(Error.from_linux_errno((0 as i64 - p_res) as i32));
+        }
+        let rfd = p_fds[0 as usize];
+        let wfd = p_fds[1 as usize];
+
+        // Marshal argv array
+        // SAFETY: `self.arena` is live for the life of the command, and the size is the checked
+        // `(len + 1)` pointers of 8 bytes the array needs.
+        let argv_buf = unsafe {
+            zoril_allocator_alloc(self.arena, ((self.args.len() + 1) * 8) as u64)
+        } as *mut *u8;
+        let args_slice = self.args.as_slice();
+        let mut i = 0 as usize;
+        while i < self.args.len() {
+            let a = args_slice[i];
+            // SAFETY: `to_cstr` copies into `self.arena`, which belongs to this command and is
+            // live here.
+            let c_str = unsafe { to_cstr(a, self.arena) };
+            // SAFETY: `i < self.args.len()`, so slot `i` is inside the `(len + 1)`-pointer array
+            // allocated above.
+            unsafe {
+                *((argv_buf as usize + i * 8) as *mut *u8) = c_str;
+            }
+            i = i + 1;
+        }
+        // SAFETY: the last of the `len + 1` slots holds the NULL terminator execve requires.
+        unsafe {
+            *((argv_buf as usize + self.args.len() * 8) as *mut *u8) = 0 as *u8;
+        }
+
+        // Marshal program path
+        // SAFETY: as the argv strings: `to_cstr` writes into this command's own arena.
+        let prog_cstr = unsafe { to_cstr(self.program, self.arena) };
+
+        // Marshal envp
+        let actual_envp = if self.envp as usize != 0 {
+            self.envp
+        } else {
+            // SAFETY: one uninitialized slot for the empty environment's NULL terminator, which
+            // the next line writes before execve reads it.
+            let empty_env = unsafe { @alloca<[*u8; 1]>(1) };
+            empty_env[0 as usize] = 0 as *u8;
+            empty_env as **u8
+        };
+
+        // SAFETY: fork(57) takes no arguments.
+        let pid = unsafe { @syscall(57) } as i64;
+        if pid < 0 {
+            // SAFETY: close(3) on a descriptor this process owns: the fork failed, so no child
+            // holds either end of the pipe.
+            let _ = unsafe { @syscall(3, rfd as u64) };
+            // SAFETY: as above, for the write end.
+            let _ = unsafe { @syscall(3, wfd as u64) };
+            return Result.Err(Error.from_linux_errno((0 as i64 - pid) as i32));
+        }
+
+        if pid == 0 {
+            // Child process
+            // SAFETY: close(3) in the child: the read end is the parent's to close.
+            let _ = unsafe { @syscall(3, rfd as u64) };
+
+            // The error pipe's write end must not be left in a descriptor 0-2. Unlike the stdio
+            // sources below it is not a stream to preserve: fds 0-2 are inherited by the program
+            // this child becomes, so a copy there would keep the parent's read from seeing the end
+            // of the pipe. Move it above 2 and close the original slot.
+            let mut cur_wfd = wfd;
+            if cur_wfd >= 0 && cur_wfd <= 2 {
+                let old_wfd = cur_wfd;
+                let mut new_wfd = -4 as i64;
+                while new_wfd == -4 as i64 {
+                    // SAFETY: fcntl(72) with F_DUPFD_CLOEXEC (1030) duplicates wfd to >= 3.
+                    new_wfd = unsafe { @syscall(72, old_wfd as u64, 1030 as u64, 3 as u64) } as i64;
+                }
+                if new_wfd < 0 { child_fail(cur_wfd, (0 as i64 - new_wfd) as i32); }
+                // SAFETY: close(3) of the original slot, now that the copy >= 3 holds it.
+                let _ = unsafe { @syscall(3, old_wfd as u64) };
+                cur_wfd = new_wfd as i32;
+            }
+
+            let mut cur_in = self.stdin_fd.unix_raw();
+            let mut cur_out = self.stdout_fd.unix_raw();
+            let mut cur_err = self.stderr_fd.unix_raw();
+            if cur_err == 1 && cur_out >= 0 {
+                cur_err = cur_out;
+            }
+
+            // A redirection whose source is 0, 1 or 2 is moved above 2 first, so one redirection
+            // cannot overwrite another's source. The slot it came from is *not* closed: the copies
+            // are O_CLOEXEC and cannot reach the program, and the slot is either the target of its
+            // own `dup2` below or a stream the child inherits by default. Closing it broke the
+            // ordinary `set_stdout(stderr())` ("1>&2") case and any `set_stdin`/`set_stdout` pair
+            // that left the source's neighbour inherited (third-pass item 4,
+            // tests/stdlib/test_proc_spawn_inherited_stdio.zrl).
+            if cur_in >= 0 && cur_in <= 2 {
+                let old_in = cur_in;
+                let mut new_in = -4 as i64;
+                while new_in == -4 as i64 {
+                    // SAFETY: fcntl(72) with F_DUPFD_CLOEXEC (1030) duplicates stdin source to >= 3.
+                    new_in = unsafe { @syscall(72, old_in as u64, 1030 as u64, 3 as u64) } as i64;
+                }
+                if new_in < 0 { child_fail(cur_wfd, (0 as i64 - new_in) as i32); }
+                if cur_out == old_in { cur_out = new_in as i32; }
+                if cur_err == old_in { cur_err = new_in as i32; }
+                cur_in = new_in as i32;
+            }
+
+            if cur_out >= 0 && cur_out <= 2 {
+                let old_out = cur_out;
+                let mut new_out = -4 as i64;
+                while new_out == -4 as i64 {
+                    // SAFETY: fcntl(72) with F_DUPFD_CLOEXEC (1030) duplicates stdout source to >= 3.
+                    new_out = unsafe { @syscall(72, old_out as u64, 1030 as u64, 3 as u64) } as i64;
+                }
+                if new_out < 0 { child_fail(cur_wfd, (0 as i64 - new_out) as i32); }
+                if cur_err == old_out { cur_err = new_out as i32; }
+                cur_out = new_out as i32;
+            }
+
+            if cur_err >= 0 && cur_err <= 2 {
+                let old_err = cur_err;
+                let mut new_err = -4 as i64;
+                while new_err == -4 as i64 {
+                    // SAFETY: fcntl(72) with F_DUPFD_CLOEXEC (1030) duplicates stderr source to >= 3.
+                    new_err = unsafe { @syscall(72, old_err as u64, 1030 as u64, 3 as u64) } as i64;
+                }
+                if new_err < 0 { child_fail(cur_wfd, (0 as i64 - new_err) as i32); }
+                cur_err = new_err as i32;
+            }
+
+            // Redirections: perform all dup2 calls onto 0, 1, 2 before closing source descriptors.
+            if cur_in >= 0 {
+                let mut rc = -4 as i64;
+                while rc == -4 as i64 {
+                    // SAFETY: dup2(33) duplicates the caller's descriptor onto fd 0 in the child.
+                    rc = unsafe { @syscall(33, cur_in as u64, 0 as u64) } as i64;
+                }
+                if rc < 0 { child_fail(cur_wfd, (0 as i64 - rc) as i32); }
+            }
+            if cur_out >= 0 {
+                let mut rc = -4 as i64;
+                while rc == -4 as i64 {
+                    // SAFETY: dup2(33) duplicates the caller's descriptor onto fd 1 in the child.
+                    rc = unsafe { @syscall(33, cur_out as u64, 1 as u64) } as i64;
+                }
+                if rc < 0 { child_fail(cur_wfd, (0 as i64 - rc) as i32); }
+            }
+            if cur_err >= 0 {
+                let mut rc = -4 as i64;
+                while rc == -4 as i64 {
+                    // SAFETY: dup2(33) duplicates the caller's descriptor onto fd 2 in the child.
+                    rc = unsafe { @syscall(33, cur_err as u64, 2 as u64) } as i64;
+                }
+                if rc < 0 { child_fail(cur_wfd, (0 as i64 - rc) as i32); }
+            }
+
+            // Close source descriptors with raw > 2 (leaving standard streams 0, 1, 2 open),
+            // deduplicating to avoid double-close when streams share the same descriptor.
+            if cur_in > 2 {
+                // SAFETY: closing child's inherited source fd > 2 after dup2.
+                let _ = unsafe { @syscall(3, cur_in as u64) };
+            }
+            if cur_out > 2 && cur_out != cur_in {
+                // SAFETY: closing child's inherited source fd > 2 after dup2.
+                let _ = unsafe { @syscall(3, cur_out as u64) };
+            }
+            if cur_err > 2 && cur_err != cur_out && cur_err != cur_in {
+                // SAFETY: closing child's inherited source fd > 2 after dup2.
+                let _ = unsafe { @syscall(3, cur_err as u64) };
+            }
+
+            // SAFETY: execve(59) takes the NUL-terminated path, the NULL-terminated argv array
+            // marshalled above, and envp - all in this command's arena, live for the call.
+            let exec_res = unsafe {
+                @syscall(59, prog_cstr as u64, argv_buf as u64, actual_envp as u64)
+            } as i64;
+            // If execve returned, it failed.
+            child_fail(cur_wfd, (0 as i64 - exec_res) as i32);
+        }
+
+        // Parent process
+        // SAFETY: close(3) of the write end: the parent keeps only the read end.
+        let _ = unsafe { @syscall(3, wfd as u64) };
+        // SAFETY: one `i32` slot the parent reads the child's errno into.
+        let err_buf = unsafe { @alloca<i32>(1) };
+        *err_buf = 0;
+        let mut nread = -4 as i64;
+        while nread == -4 as i64 {
+            // SAFETY: read(0) writes at most the four bytes of the slot above. Retries on EINTR (-4).
+            nread = unsafe { @syscall(0, rfd as u64, err_buf as u64, 4 as u64) } as i64;
+        }
+        // SAFETY: close(3) of the read end, and of a pipe this process owns end to end.
+        let _ = unsafe { @syscall(3, rfd as u64) };
+
+        if nread == 4 {
+            // Child reported exec failure
+            let _ = wait_for_pid(pid);
+            let errno_val = *err_buf;
+            return Result.Err(Error.from_linux_errno(errno_val));
+        }
+
+        return Result.Ok(Child { pid: pid });
+    }
+
+    // Spawns the command and waits for completion, returning the process exit status.
+    pub fn status(self: &Command) -> Result<ExitStatus, Error> {
+        let child_res = self.spawn();
+        if child_res.is_err() {
+            return Result.Err(match child_res {
+                Ok(_) => Error.from_linux_errno(10),
+                Err(e) => e,
+            });
+        }
+        let mut child = child_res.ok().unwrap();
+        return child.wait();
+    }
+}
+
+// Spawns program with no arguments and default environment.
+pub fn spawn_simple(program: [u8], a: &Arena) -> Result<Child, Error> {
+    // SAFETY: `a` is the live, borrowed arena the returned child's storage lives in, which is
+    // the raw entry point's contract.
+    return unsafe { spawn_simple_raw(program, arena_raw(a)) };
+}
+
+// Spawns a program using a raw arena header.
+//
+// CALLER OBLIGATION: arena must be valid and program must be non-empty.
+//
+// INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+pub unsafe fn spawn_simple_raw(program: [u8], arena: *mut ArenaHeader) -> Result<Child, Error> {
+    let cmd = Command.new_raw(program, arena);
+    return cmd.spawn();
+}
+
+// Runs program with no arguments to completion and returns its exit status.
+pub fn run_simple(program: [u8], a: &Arena) -> Result<ExitStatus, Error> {
+    // SAFETY: as `spawn_simple`: the borrowed arena is live for the call and its results.
+    return unsafe { run_simple_raw(program, arena_raw(a)) };
+}
+
+// Runs a program to completion using a raw arena header.
+//
+// CALLER OBLIGATION: arena must be valid and program must be non-empty.
+//
+// INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+pub unsafe fn run_simple_raw(program: [u8], arena: *mut ArenaHeader) -> Result<ExitStatus, Error> {
+    let cmd = Command.new_raw(program, arena);
+    return cmd.status();
+}

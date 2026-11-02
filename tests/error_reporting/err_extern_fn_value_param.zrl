@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_extern_fn_value_param.zrl:4:26: error: an extern function cannot take or return a Zoril function value (code and environment; C passes code only): qsort_like
+// C passes a function as one code pointer; a Zoril function value is code and environment.
+extern fn qsort_like(cb: fn(i32) -> i32) -> i32;
+fn main() -> i32 { return 0; }

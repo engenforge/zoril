@@ -1,0 +1,7 @@
+// expected compile fail
+// flags: -- -another_file.zrl
+// EXPECT: zoril: error: more than one input file: tests/error_reporting/cli_end_of_options_more_than_one.zrl
+
+fn main() -> i32 {
+    return 0;
+}

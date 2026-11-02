@@ -1,0 +1,474 @@
+// The parser: loading a module and its imports (files, interfaces, the import graph).
+
+import "diag.zrl";
+import "progress.zrl";
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "os/linux.zrl" as os_linux;
+import "intern.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "ast.zrl";
+import "il_cfg.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "module_path.zrl";
+import "base.zrl";
+import "file.zrl";
+use ast::{Decl, ImportEdge};
+use file::read_file_raw;
+use il_cfg::{canonical_module_stem, extract_module_name};
+use base::{FileModule, Parser};
+use bytevec::ByteVec;
+use diag::diag_start;
+use io::{close, eprint, read};
+use os_linux::open;
+use lexer::Lexer;
+use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+use module_path::{ModuleResolution, basename, derive_module_identity, iface_relative_path, make_absolute, normalize_path, resolve_module_identity_to_path, split_include_arg};
+use progress::progress_name;
+use token::TokenKind;
+use vec::Vec;
+
+// Whether the interface SOURCE records that the module it was emitted from was compiled as
+// standard library code: `// zri-stdlib: 1`, a line only a compile that was *told* which root is
+// the standard library writes (`InterfacePrinter.source_is_stdlib`, src/main.zrl). Provenance
+// travels with the interface because it cannot be re-derived from one: the file is in an interface
+// directory and its recorded module identity (`stdlib/..`) can be claimed by a project's own
+// directory of the same name (doc/spec/modular_compilation.md).
+fn zri_declares_stdlib(source: [u8]) -> bool {
+    let marker = "// zri-stdlib: 1";
+    if source.len < marker.len { return false; }
+    // The header is the first lines of the file; nothing else may be older than it.
+    let mut line_start = 0 as usize;
+    let mut lines = 0 as usize;
+    while line_start < source.len && lines < 8 as usize {
+        let mut end = line_start;
+        while end < source.len && source[end] != 10 as u8 { end = end + 1 as usize; }
+        if end - line_start == marker.len && subslice(source, line_start, marker.len) == marker {
+            return true;
+        }
+        line_start = end + 1 as usize;
+        lines = lines + 1 as usize;
+    }
+    return false;
+}
+
+// A .zri starts with `// zri-module: <source path>`. Declarations loaded from it belong to that
+// source module, so the symbols they reference match the ones its own compilation exports.
+fn zri_recorded_module(source: [u8], path: [u8]) -> [u8] {
+    let n = path.len;
+    if n < 4 as usize
+        || path[n - 4 as usize] != '.' as u8
+        || path[n - 3 as usize] != 'z' as u8
+        || path[n - 2 as usize] != 'r' as u8
+        || path[n - 1 as usize] != 'i' as u8 {
+        return path;
+    }
+    let marker = "// zri-module: ";
+    if source.len <= marker.len || subslice(source, 0 as usize, marker.len) != marker {
+        return path;
+    }
+    let mut end = marker.len;
+    while end < source.len && source[end] != 10 as u8 { end = end + 1 as usize; }
+    return subslice(source, marker.len, end - marker.len);
+}
+
+impl Parser {
+    // The file's bytes are arena storage, not a view of the parser.
+    #[borrows()]
+    fn read_file_to_string(self: &mut Parser, path: [u8]) -> [u8] {
+        return match unsafe { read_file_raw(path, self.arena) } {
+            Ok(s) => s,
+            Err(_) => @slice(0 as *u8, 0 as usize),
+        };
+    }
+
+    // Skips one top-level item without building an AST: up to the `;` at brace depth 0, or the `}`
+    // that returns to depth 0. Only used for --emit-deps, which needs nothing but the imports.
+    fn skip_item(self: &mut Parser) {
+        let mut depth = 0 as usize;
+        while !self.is_kind(TokenKind.Eof) {
+            if self.is_kind(TokenKind.LBrace) {
+                depth = depth + 1 as usize;
+                self.next_token();
+            } else if self.is_kind(TokenKind.RBrace) {
+                self.next_token();
+                if depth > 0 as usize { depth = depth - 1 as usize; }
+                if depth == 0 as usize { return; }
+            } else if self.is_kind(TokenKind.Semi) && depth == 0 as usize {
+                self.next_token();
+                return;
+            } else {
+                self.next_token();
+            }
+        }
+    }
+
+    // Parses this file's declarations, loading each import as it is reached; returns the
+    // declarations added. With `deps_only` (--emit-deps) it reads only the imports.
+    pub fn parse_module(self: &mut Parser) -> [Decl] {
+        let start_idx = self.ast.decls.len();
+        let deps_only = unsafe { (*self.state).deps_only };
+        let fmt_only = unsafe { (*self.state).fmt_only };
+        while !self.is_kind(TokenKind.Eof) {
+            if deps_only && !self.is_kind(TokenKind.KImport) {
+                self.skip_item();
+                continue;
+            }
+            let mut decl_span = self.cur.span;
+            // A declaration read from an interface has no line of the module's source (the
+            // interface's lines are its own), so a diagnostic about it names the file alone.
+            if has_suffix(self.file_path, ".zri") {
+                decl_span.line = 0 as u32;
+                decl_span.col = 0 as u32;
+            }
+            match self.parse_declaration() {
+                Decl.None => {},
+                Decl.Import(path_id) => { if !fmt_only { self.load_import(path_id); } },
+                Decl.Struct(s) => {
+                    self.ast.alloc_decl_at(Decl.Struct(s), decl_span);
+                    if self.derive_clone_next && !fmt_only {
+                        let derived = self.derive_clone_impl(&s, decl_span);
+                        self.ast.alloc_decl_at(Decl.Impl(derived), decl_span);
+                    }
+                },
+                decl => { self.ast.alloc_decl_at(decl, decl_span); },
+            }
+            self.derive_clone_next = false;
+        }
+        self.finish_root();
+        let count = self.ast.decls.len() - start_idx;
+        return unsafe {
+            @slice(
+                (self.ast.decls.as_ptr() as usize + start_idx * sizeof(Decl)) as *mut Decl,
+                count
+            )
+        };
+    }
+
+    // The root file finishes last: when only it is left on the import stack, it moves into the
+    // loaded set.
+    fn finish_root(self: &mut Parser) {
+        let st_ptr = self.state;
+        let st = unsafe { &mut *st_ptr };
+        if st.active.len() == 1 as usize {
+            let root_id = st.active.as_slice()[0];
+            st.active.clear();
+            st.loaded.push(root_id);
+        }
+    }
+
+    // Finds and parses the file `import "PATH"` names, trying in order: (in a `.zri`) the
+    // module path; an absolute path; next to the importing file; under each include root
+    // (also without the root's own name as a prefix, and without `zoril/`). A `.zrl` may also
+    // be found as its `.zri` interface.
+    fn load_import(self: &mut Parser, path_id: u32) {
+        // Copied into the arena: the search below calls `&mut self` methods, and a slice straight
+        // from the intern table would keep the table borrowed through them (`lookup`'s result has
+        // to stay tied to its table).
+        let mut path_buf = unsafe { ByteVec.new_raw(self.arena) };
+        path_buf.push_slice(self.intern_table.lookup(path_id));
+        let path = path_buf.as_slice();
+        // A .zri names its imports by module path (relative to the project root), not relative
+        // to wherever the interface file happens to be stored.
+        if has_suffix(self.file_path, ".zri") {
+            let mr = unsafe { &*(*self.state).mr };
+            if self.try_load_file(resolve_module_identity_to_path(mr, path, self.arena)) { return; }
+        }
+        if path.len > 0 as usize && path[0] == '/' as u8 && self.try_load_file(path) { return; }
+
+        let is_zrl = has_suffix(path, ".zrl");
+        if self.try_in_dir(dirname_of(self.file_path), path, is_zrl) { return; }
+
+        for inc_id in unsafe { @slice(self.include_ids as *u32, self.include_count) } {
+            let (has_prefix, given_prefix, dir) = split_include_arg(
+                self.intern_table.lookup(*inc_id)
+            );
+            let prefix = if has_prefix { given_prefix } else { basename(dir) };
+            if self.try_in_dir(dir, path, is_zrl) { return; }
+            // `import "<prefix>/x.zrl"` under the root that `<prefix>` names.
+            if prefix.len > 0 as usize
+                && path.len > prefix.len + 1 as usize
+                && subslice(path, 0 as usize, prefix.len) == prefix
+                && path[prefix.len] == '/' as u8
+                && self.try_in_dir(dir, subslice_from(path, prefix.len + 1 as usize), false) {
+                return;
+            }
+            if path.len > 6 as usize
+                && subslice(path, 0 as usize, 6 as usize) == "zoril/"
+                && self.try_in_dir(dir, subslice_from(path, 6 as usize), false) {
+                return;
+            }
+        }
+
+        if !self.had_error {
+            self.import_error("could not find imported file: ");
+            eprint(path);
+            eprint("\n");
+        }
+    }
+
+    // DIR/REL (DIR may be empty), and, when ALSO_ZRI, the same path with `.zri` for `.zrl`.
+    fn try_in_dir(self: &mut Parser, dir: [u8], rel: [u8], also_zri: bool) -> bool {
+        let mut joined = unsafe { ByteVec.new_raw(self.arena) };
+        joined.push_slice(dir);
+        if dir.len > 0 as usize && dir[dir.len - 1 as usize] != '/' as u8 {
+            joined.push('/' as u8);
+        }
+        joined.push_slice(rel);
+        if self.try_load_file(joined.as_slice()) { return true; }
+        return also_zri && self.try_load_file(with_zri_ext(joined.as_slice(), self.arena));
+    }
+
+    // Writes "FILE:LINE:COL: error: MESSAGE" for the import being loaded, the caller adding the
+    // rest of the line, and marks the parse as failed.
+    fn import_error(self: &mut Parser, message: [u8]) {
+        diag_start(self.file_path, self.last_import_span, "error");
+        eprint(message);
+        self.had_error = true;
+    }
+
+    // Loads PATH if it exists. With an interface directory, the interface of an imported module
+    // is used in place of its source (the importer is compiled against the interface alone, so
+    // the source may be absent), or only when the source is absent when `iface_shadows` is off.
+    fn try_load_file(self: &mut Parser, path: [u8]) -> bool {
+        let norm_path = normalize_path(path, self.arena);
+        // Through a copy of the pointer: `&mut *self.state` would hold `self` borrowed.
+        let st_ptr = self.state;
+        let st = unsafe { &mut *st_ptr };
+        let mr = unsafe { &*st.mr };
+        let abs_path = make_absolute(norm_path, mr.cwd, self.arena);
+        let module_id = derive_module_identity(mr, abs_path, self.arena);
+        let path_c = c_path(path, self.arena);
+
+        if st.iface_dir.len > 0 as usize
+            && module_id.len > 0 as usize
+            && has_suffix(norm_path, ".zrl") {
+            let mut iface = unsafe { ByteVec.new_raw(self.arena) };
+            iface.push_slice(st.iface_dir);
+            iface.push('/' as u8);
+            iface.push_slice(iface_relative_path(module_id, self.arena));
+            if path_is_readable(c_path(iface.as_slice(), self.arena))
+                && (st.iface_shadows || !path_is_readable(path_c)) {
+                return self.load_file_at(iface.as_slice(), module_id, norm_path, abs_path);
+            }
+            // No interface under `--iface-dir` for this import. Falling back to its source is deliberate and
+            // silent by default; `--require-interface` makes it an error naming the path looked up, and `-v`
+            // says the same thing without failing - because a test that means to compile against an
+            // interface otherwise compiles against the source and passes.
+            if st.require_interface {
+                self.import_error("no interface for module '");
+                eprint(module_id);
+                eprint("' at ");
+                eprint(iface.as_slice());
+                eprint("\n");
+                return true;
+            }
+            if st.verbose {
+                eprint("note: no interface for module '");
+                eprint(module_id);
+                eprint("' at ");
+                eprint(iface.as_slice());
+                eprint("; reading the source\n");
+            }
+        }
+        if !path_is_readable(path_c) { return false; }
+        if module_id.len == 0 as usize {
+            self.import_error("path resolves outside every root: ");
+            eprint(norm_path);
+            eprint("\n");
+            return true;
+        }
+        return self.load_file_at(path, module_id, norm_path, abs_path);
+    }
+
+    // A name an `import` can give a module: one identifier token, so not a keyword, a number,
+    // or anything with a `-`, `.` or space. The root program is exempt: nothing names it.
+    fn is_identifier_name(self: &mut Parser, name: [u8]) -> bool {
+        let mut lx = Lexer.new(name, self.intern_table, self.arena);
+        let first = lx.next_token();
+        if first.token.kind() != TokenKind.Ident { return false; }
+        return lx.next_token().token.kind() == TokenKind.Eof;
+    }
+
+    // Parses READ_PATH, known to the import graph as module MODULE_PATH and resolved to the source
+    // file RESOLVED_FILE_PATH (DISPLAY_PATH in the progress line). True when the import is
+    // settled, error or not; false when the file cannot be read.
+    fn load_file_at(
+        self: &mut Parser,
+        read_path: [u8],
+        module_path: [u8],
+        display_path: [u8],
+        resolved_file_path: [u8]
+    ) -> bool {
+        // Through a copy of the pointer: `&mut *self.state` would hold `self` borrowed.
+        let st_ptr = self.state;
+        let st = unsafe { &mut *st_ptr };
+        let mod_id = self.intern_table.intern(module_path);
+        let file_id = self.intern_table.intern(resolved_file_path);
+
+        // A file already on the import stack is a cycle.
+        let active = st.active.as_slice();
+        for k in 0 as usize..active.len {
+            if active[k] != file_id { continue; }
+            self.import_error("circular import detected: ");
+            let names = st.active_names.as_slice();
+            for ci in k..names.len {
+                eprint(self.intern_table.lookup(names[ci]));
+                eprint(" -> ");
+            }
+            eprint(module_path);
+            eprint("\n");
+            return true;
+        }
+        if self.identity_conflict(mod_id, file_id, resolved_file_path) { return true; }
+        if !self.is_identifier_name(extract_module_name(module_path)) {
+            self.import_error("module name '");
+            eprint(extract_module_name(module_path));
+            eprint("' is not an identifier; rename the file\n");
+            return true;
+        }
+        // Already loaded (deduplicated by resolved file): still an edge.
+        for loaded in st.loaded.as_slice() {
+            if *loaded == file_id {
+                self.ast.import_edges.push(ImportEdge {
+                    from_module: self.intern_table.intern(self.module_path),
+                    to_file: file_id,
+                    to_module: mod_id,
+                    alias: self.last_import_alias,
+                    span: self.last_import_span
+                });
+                return true;
+            }
+        }
+
+        let source = self.read_file_to_string(c_path(read_path, self.arena));
+        if source.len == 0 as usize { return false; }
+        // A .zri carries the identity of the module it was emitted from.
+        let final_mod = zri_recorded_module(source, module_path);
+        let final_mod_id = self.intern_table.intern(final_mod);
+        if final_mod_id != mod_id
+            && self.identity_conflict(final_mod_id, file_id, resolved_file_path) {
+            return true;
+        }
+
+        st.file_modules.push(FileModule { file: file_id, module: final_mod_id });
+        self.ast.import_edges.push(ImportEdge {
+            from_module: self.intern_table.intern(self.module_path),
+            to_file: file_id,
+            to_module: final_mod_id,
+            alias: self.last_import_alias,
+            span: self.last_import_span
+        });
+        progress_name("Parsing file: ", display_path);
+
+        // Parse with the file on the import stack; then off the stack, into the loaded set.
+        st.active.push(file_id);
+        st.active_names.push(final_mod_id);
+        let sub_lexer = Lexer.new(source, self.intern_table, self.arena);
+        let sub_parser = Parser.new_modular(
+            sub_lexer,
+            self.ast,
+            self.intern_table,
+            read_path,
+            final_mod,
+            self.include_ids,
+            self.include_count,
+            self.state,
+            st.mr,
+            zri_declares_stdlib(source)
+        );
+        unsafe {
+            (*sub_parser).parse_module();
+            if (*sub_parser).had_error { self.had_error = true; }
+        }
+        let _ = st.active.pop();
+        let _ = st.active_names.pop();
+        st.loaded.push(file_id);
+        return true;
+    }
+
+    // Reports a second file claiming module identity MOD_ID (already given to a file other than
+    // FILE_ID), which would make two modules' symbols collide.
+    fn identity_conflict(
+        self: &mut Parser,
+        mod_id: u32,
+        file_id: u32,
+        resolved_file_path: [u8]
+    ) -> bool {
+        let st_ptr = self.state;
+        for fm in unsafe { (*st_ptr).file_modules.as_slice() } {
+            if fm.module == mod_id && fm.file != file_id {
+                self.import_error("multiple distinct files map to module identity '");
+                eprint(self.intern_table.lookup(mod_id));
+                eprint("': ");
+                eprint(self.intern_table.lookup(fm.file));
+                eprint(" and ");
+                eprint(resolved_file_path);
+                eprint("\n");
+                return true;
+            }
+        }
+        // Two identities the mangling writes alike (`_1a` and `1a`, `my-mod` and `my_mod`) would
+        // define one symbol twice, and a separate build would call one for the other. Copies in the
+        // arena: reporting needs `&mut self`, which a slice straight from the table would block.
+        let mut mine = unsafe { ByteVec.new_raw(self.arena) };
+        mine.push_slice(self.intern_table.lookup(mod_id));
+        let new_stem = canonical_module_stem(self.arena, mine.as_slice());
+        for fm in unsafe { (*st_ptr).file_modules.as_slice() } {
+            if fm.module == mod_id || fm.file == file_id { continue; }
+            let mut theirs = unsafe { ByteVec.new_raw(self.arena) };
+            theirs.push_slice(self.intern_table.lookup(fm.module));
+            if canonical_module_stem(self.arena, theirs.as_slice()) == new_stem {
+                self.import_error("modules '");
+                eprint(theirs.as_slice());
+                eprint("' and '");
+                eprint(mine.as_slice());
+                eprint("' have one symbol prefix ('");
+                eprint(new_stem);
+                eprint("'); rename one of the files\n");
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+fn has_suffix(s: [u8], suffix: [u8]) -> bool {
+    return s.len >= suffix.len && subslice_from(s, s.len - suffix.len) == suffix;
+}
+
+// The directory part of PATH with its trailing `/`, or empty.
+fn dirname_of(path: [u8]) -> [u8] {
+    let mut end = path.len;
+    while end > 0 as usize && path[end - 1 as usize] != '/' as u8 { end = end - 1 as usize; }
+    return subslice(path, 0 as usize, end);
+}
+
+// PATH with a `.zrl` ending made `.zri`.
+fn with_zri_ext(path: [u8], arena: *mut ArenaHeader) -> [u8] {
+    let mut out = unsafe { ByteVec.new_raw(arena) };
+    out.push_slice(subslice(path, 0 as usize, path.len - 1 as usize));
+    out.push('i' as u8);
+    return out.as_slice();
+}
+
+// PATH with a terminating NUL, for the system calls.
+fn c_path(path: [u8], arena: *mut ArenaHeader) -> [u8] {
+    let mut out = unsafe { ByteVec.new_raw(arena) };
+    out.push_slice(path);
+    out.push(0 as u8);
+    return out.as_slice();
+}
+
+fn path_is_readable(path_c: [u8]) -> bool {
+    let fd_res = open(path_c, 0 as u64, 0 as u64);
+    let fd = match fd_res {
+        Result.Ok(f) => f,
+        Result.Err(_) => return false,
+    };
+    let _ = close(fd);
+    return true;
+}

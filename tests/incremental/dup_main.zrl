@@ -1,0 +1,13 @@
+import "dup_mod_a.zrl";
+import "dup_mod_b.zrl";
+use dup_mod_a::run_a;
+use dup_mod_b::run_b;
+
+pub fn main() -> i64 {
+    let a = run_a();
+    let b = run_b();
+    if a + b == 42 {
+        return 0;
+    }
+    return 1;
+}

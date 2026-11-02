@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: error: cannot mutably borrow 'a' while it is already borrowed
+// An InternTable from `InternTable.new(&arena)` borrows the arena, so resetting the arena while
+// the table is live is a compile error (Stage 4 for InternTable).
+import "intern.zrl";
+import "mem.zrl";
+use intern::InternTable;
+use mem::Arena;
+
+fn main() -> i32 {
+    let mut a = Arena.new(1 << 20).unwrap();
+    let mut t = InternTable.new(&a);
+    let id = t.intern("hello");
+    a.reset(); // @error "cannot mutably borrow 'a' while it is already borrowed"
+    if t.lookup(id).len == 0 { return 1; }
+    return 0;
+}

@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_intrinsic_arguments.zrl:8:40: error: `@slice` takes 2 arguments, not 1
+// EXPECT: tests/error_reporting/err_intrinsic_arguments.zrl:9:13: error: `@likely` takes 1 argument, not 0
+// EXPECT: tests/error_reporting/err_intrinsic_arguments.zrl:10:13: error: unknown intrinsic `@nosuch`
+// Too few arguments to an intrinsic aborted the compiler with no message; an unknown
+// intrinsic compiled to nothing.
+fn main() -> i32 {
+    let p = 0 as *u8; let s = unsafe { @slice(p) };
+    let b = @likely();
+    let c = @nosuch(1);
+    return 0;
+}

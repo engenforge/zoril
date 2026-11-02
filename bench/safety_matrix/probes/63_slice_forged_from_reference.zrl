@@ -1,0 +1,10 @@
+// name: Slice forged from a reference with an unchecked length
+// expected: compile_reject
+// @slice(&mut a[0], 1000) over a three-element array: nothing checks the length, so safe code
+// could write past the array. Accepted until 2026-10-02; @slice now needs unsafe.
+fn main() -> i32 {
+    let mut a = [1, 2, 3];
+    let s: [i32] = @slice(&mut a[0], 1000 as u64);
+    s[999] = 7;
+    return 0;
+}

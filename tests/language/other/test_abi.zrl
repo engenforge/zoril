@@ -1,0 +1,99 @@
+pub struct Large {
+    pub a: u64, pub b: u64, pub c: u64, pub d: u64,
+}
+
+pub fn take_ref(l: &mut Large) -> u64 {
+    return l.a + l.b;
+}
+
+pub struct Inner {
+    pub x: u64,
+}
+
+pub struct Outer {
+    pub inner: Inner,
+}
+
+impl Outer {
+    pub fn check(self: &mut Outer, d: &mut Inner) -> u64 {
+        return self.inner.x + d.x;
+    }
+}
+
+pub struct Info {
+    pub a: u64, pub b: u64, pub c: u64, pub d: u64,
+}
+
+pub fn check_info(i: &mut Info) -> u64 {
+    return i.a;
+}
+
+pub struct State {
+    pub x: u32,
+}
+
+impl State {
+    pub fn get_x(self: &mut State) -> u32 {
+        return self.x;
+    }
+}
+
+// From repro_bootstrap_struct_assign.zrl
+struct BootstrapStructAssignS { x: u64, y: u64 }
+fn test_bootstrap_struct_assign_func(p: *mut BootstrapStructAssignS) {
+    unsafe { *p = BootstrapStructAssignS { x: 10, y: 32 }; }
+}
+
+fn main() -> i32 {
+    // repro_abi_main.zrl
+    {
+        let mut l = Large { a: 10, b: 32, c: 0, d: 0 };
+        let res = take_ref(&mut l);
+        
+        if res != 42 {
+            return 11;
+        }
+    }
+
+    // repro_assoc_abi_main.zrl
+    {
+        let mut tmp_inner = Inner { x: 10 };
+        let mut o = Outer { inner: tmp_inner };
+        let mut i = Inner { x: 32 };
+        let res = o.check(&mut i);
+        
+        if res != 42 {
+            return 12;
+        }
+    }
+
+    // repro_struct_abi_main.zrl
+    {
+        let mut i = Info { a: 42, b: 0, c: 0, d: 0 };
+        let res = check_info(&mut i);
+        if res != 42 {
+            return 13;
+        }
+    }
+
+    // repro_extra_arg_main.zrl
+    {
+        let mut s = State { x: 42 };
+        let res = s.get_x();
+        
+        if res != 42 {
+            return 14;
+        }
+    }
+
+    // From repro_bootstrap_struct_assign.zrl
+    {
+        let mut s = BootstrapStructAssignS { x: 0, y: 0 };
+        test_bootstrap_struct_assign_func(&mut s as *mut BootstrapStructAssignS);
+        if s.x != 10 || s.y != 32 {
+            return 99;
+        }
+    }
+
+    return 0;
+}

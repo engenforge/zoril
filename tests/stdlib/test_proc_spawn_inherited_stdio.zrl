@@ -1,0 +1,169 @@
+// [PASS] a redirection whose source is a standard stream leaves that stream inherited
+//
+// `set_stdout(stderr())` is the ordinary "1>&2" case, and `set_stdin(stdout())` the mirrored one:
+// the descriptor named as the *source* is moved above 2 so another redirection cannot overwrite it,
+// but the slot it came from must survive the move. Closing it left the child with a closed stream,
+// so `sh -c 'printf err 1>&2'` failed under `set_stdout(stderr())`, and a child given
+// `set_stdin(stdout())` lost its stdout (the d22dd27d regression; third-pass item 4).
+import "core.zrl";
+import "mem_raw.zrl";
+import "proc.zrl";
+import "io.zrl";
+use io::{stdout, stderr};
+use mem_raw::{ArenaHeader, arena_init};
+use proc::Command;
+
+const RDWR_FLAG: u64 = 2;
+const CREAT_FLAG: u64 = 64;
+const TRUNC_FLAG: u64 = 512;
+const NEW_FILE_MODE: u64 = 420;
+const DUP_CLOEXEC: u64 = 1030;
+const SEEK_FROM_START: u64 = 0;
+const CAP: usize = 64;
+
+fn open_read_write(path: [u8]) -> i32 {
+    // SAFETY: open(2) takes a NUL-terminated path (the literals below carry their terminator) and
+    // integers, and returns a descriptor this test owns.
+    return unsafe {
+        @syscall(2, path.ptr as u64, RDWR_FLAG | CREAT_FLAG | TRUNC_FLAG, NEW_FILE_MODE)
+    } as i32;
+}
+
+fn open_read_only(path: [u8]) -> i32 {
+    // SAFETY: open(2) with O_RDONLY on a NUL-terminated literal path, returning a descriptor this
+    // test owns. No O_TRUNC: the file holds what the child wrote.
+    return unsafe { @syscall(2, path.ptr as u64, 0 as u64, 0 as u64) } as i32;
+}
+
+fn write_fd(fd: i32, s: [u8]) {
+    // SAFETY: `s` is a live slice, written out in one call to a descriptor this test owns.
+    let _ = unsafe { @syscall(1, fd as u64, s.ptr as u64, s.len as u64) };
+}
+
+fn read_all(fd: i32, p: *mut u8, cap: usize) -> usize {
+    let mut total = 0 as usize;
+    while total < cap {
+        // SAFETY: the read fills at most `cap - total` bytes at `p + total`, inside the caller's
+        // array of `cap` bytes.
+        let n = unsafe {
+            @syscall(0, fd as u64, (p as u64) + total as u64, (cap - total) as u64)
+        } as i64;
+        if n <= 0 { break; }
+        total = total + n as usize;
+    }
+    return total;
+}
+
+fn close_fd(fd: i32) {
+    // SAFETY: close(3) of a descriptor this test opened.
+    let _ = unsafe { @syscall(3, fd as u64) };
+}
+
+fn dup_to(src: i32, dst: i32) -> i32 {
+    // SAFETY: dup2(33) of two descriptors this test owns.
+    return unsafe { @syscall(33, src as u64, dst as u64) } as i32;
+}
+
+// A copy of FD above 2 and close-on-exec: the stream's original contents, restored when the test no
+// longer needs the descriptor for itself.
+fn save_fd(fd: i32) -> i32 {
+    // SAFETY: fcntl(72) with DUP_CLOEXEC duplicates a descriptor this test owns.
+    return unsafe { @syscall(72, fd as u64, DUP_CLOEXEC, 3 as u64) } as i32;
+}
+
+fn seek_start(fd: i32) -> i64 {
+    // SAFETY: lseek(8) to offset 0 of a descriptor this test owns.
+    return unsafe { @syscall(8, fd as u64, 0 as u64, SEEK_FROM_START) } as i64;
+}
+
+fn contains(hay: [u8], needle: [u8]) -> bool {
+    if needle.len == 0 as usize || hay.len < needle.len { return false; }
+    let limit = hay.len - needle.len;
+    let mut i = 0 as usize;
+    while i <= limit {
+        let mut k = 0 as usize;
+        while k < needle.len && hay[i + k] == needle[k] { k = k + 1; }
+        if k == needle.len { return true; }
+        i = i + 1 as usize;
+    }
+    return false;
+}
+
+// `set_stdout(stderr())`: the child's redirected stdout and its inherited stderr must both reach
+// the file the parent's fd 2 points at.
+fn test_stdout_from_stderr(arena: *mut ArenaHeader) -> bool {
+    let path = "/tmp/zoril_proc_redirect_a.txt\0";
+    let file = open_read_write(path);
+    if file < 0 { return false; }
+    let saved = save_fd(2);
+    if saved < 0 {
+        close_fd(file);
+        return false;
+    }
+    if dup_to(file, 2) < 0 {
+        close_fd(file);
+        close_fd(saved);
+        return false;
+    }
+    let mut cmd = unsafe { Command.new_raw("/bin/sh", arena) };
+    cmd.arg("-c");
+    cmd.arg("printf out; printf err 1>&2");
+    cmd.set_stdout(stderr());
+    let res = cmd.status();
+    // Restore stderr before judging anything: the test's own output belongs where it was.
+    let _ = dup_to(saved, 2);
+    close_fd(saved);
+    close_fd(file);
+    if res.is_err() || !res.ok().unwrap().is_success() { return false; }
+
+    let report = open_read_only(path);
+    if report < 0 { return false; }
+    let p_buf = unsafe { @alloca<[u8; 64]>(1) } as *mut u8;
+    let n = read_all(report, p_buf, CAP);
+    close_fd(report);
+    let seen = unsafe { @slice(p_buf, n) };
+    // Both writes landed: the redirected stdout, and the child's inherited stderr for `1>&2`.
+    return contains(seen, "out") && contains(seen, "err");
+}
+
+// `set_stdin(stdout())` with stdout left inherited: the child reads fd 1 and writes fd 1.
+fn test_stdin_from_stdout(arena: *mut ArenaHeader) -> bool {
+    let path = "/tmp/zoril_proc_redirect_b.txt\0";
+    let file = open_read_write(path);
+    if file < 0 { return false; }
+    write_fd(file, "hello\n");
+    let _ = seek_start(file);
+    let saved = save_fd(1);
+    if saved < 0 {
+        close_fd(file);
+        return false;
+    }
+    if dup_to(file, 1) < 0 {
+        close_fd(file);
+        close_fd(saved);
+        return false;
+    }
+    let mut cmd = unsafe { Command.new_raw("/bin/sh", arena) };
+    cmd.arg("-c");
+    cmd.arg("read line; printf %s \"$line\"");
+    cmd.set_stdin(stdout());
+    let res = cmd.status();
+    let _ = dup_to(saved, 1);
+    close_fd(saved);
+    let _ = seek_start(file);
+    let p_buf = unsafe { @alloca<[u8; 64]>(1) } as *mut u8;
+    let n = read_all(file, p_buf, CAP);
+    close_fd(file);
+    let seen = unsafe { @slice(p_buf, n) };
+    if res.is_err() || !res.ok().unwrap().is_success() { return false; }
+    // The seed "hello\n" plus the echo "hello": one "hello" alone means the child's fd 1, which its
+    // write went to, had been closed by the redirection.
+    return n >= 11 as usize && contains(seen, "hello\nhello");
+}
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(1048576) } as *mut ArenaHeader;
+    if !test_stdout_from_stderr(arena) { return 1; }
+    if !test_stdin_from_stdout(arena) { return 2; }
+    return 0;
+}

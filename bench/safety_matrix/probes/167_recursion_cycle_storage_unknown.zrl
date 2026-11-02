@@ -1,0 +1,23 @@
+// name: Reference into a dead local's stack slot through a mutually recursive callee
+// expected: compile_reject
+// A cycle in the ZIR storage walk answers with a lower bound, so `a`'s mark for its first parameter
+// - reachable only through the recursive call - was missing, and the call looked like it derived
+// its result from what its arguments reference rather than handing back an argument's own storage.
+// The scope-end rule exempts a derived borrow for a type with no `Drop`, so `y = a(&x, &w, 1)` (which
+// recurses to `a(&w, &x, 0)` and returns `&x`) outlived `x` and read the dead slot. The walk reports
+// the cycle now, so the callee's masks are unknown and every tied argument is read as its own
+// storage (probe 168 is the same reference read through a non-recursive wrapper).
+fn a(p: &i32, q: &i32, n: i32) -> &i32 {
+    if n <= 0 { return q; }
+    return a(q, p, n - 1);
+}
+
+fn main() -> i32 {
+    let mut y: &i32 = &0;
+    let w: i32 = 3;
+    {
+        let x: i32 = 7;
+        y = a(&x, &w, 1);
+    }
+    return *y;
+}

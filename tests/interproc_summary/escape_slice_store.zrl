@@ -1,0 +1,16 @@
+// expected compile fail
+// flags: --interproc-summary
+// EXPECT: error: region escape: returning a pointer to local stack storage
+// Interprocedural summary pass test: slice/aggregate store escape
+
+fn dangle_slice_escape() -> *mut i64 {
+    let mut a = [1 as i64, 2 as i64];
+    let s: [mut i64] = &mut a;
+    return &mut s[0] as *mut i64;
+}
+
+fn main() -> i32 {
+    let p = dangle_slice_escape();
+    if p as usize == 0 as usize { return 1; }
+    return 0;
+}

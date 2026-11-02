@@ -1,0 +1,13 @@
+// expected exit 0
+// A library that implements a private trait for a public type can be imported (A7.4): under zbuild the
+// interface named the impl but not the trait ("unknown trait"), though the importer never names it.
+import "lib.zrl";
+use lib::PtV;
+
+fn main() -> i32 {
+    let v = PtV { v: 5 };
+    if lib::pt_use(&v) != 19 { return 1; }
+    if lib::pt_use_generic(&v, 1) != 5 { return 2; }
+    if lib::pt_via_bound(&v) != 5 { return 3; }
+    return 0;
+}

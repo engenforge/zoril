@@ -1,0 +1,19 @@
+// expected exit code: 0
+struct Token { tag: u32, payload: u64 }
+fn get_first(t1: *mut Token, t2: *mut Token, pick_first: bool) -> Token {
+    let tok = if pick_first {
+        unsafe { *t1 }
+    } else {
+        unsafe { *t2 }
+    };
+    return tok;
+}
+fn main() -> i32 {
+    let mut t1 = Token { tag: 1, payload: 100 };
+    let mut t2 = Token { tag: 2, payload: 200 };
+    let res = get_first(&mut t1, &mut t2, true);
+    if res.tag != 1 || res.payload != 100 { return 1; }
+    let res2 = get_first(&mut t1, &mut t2, false);
+    if res2.tag != 2 || res2.payload != 200 { return 2; }
+    return 0;
+}

@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_res_unresolved_var.zrl:4:13: error: unresolved symbol: y
+fn main() -> i32 {
+    let x = y + 1;
+    return x;
+}

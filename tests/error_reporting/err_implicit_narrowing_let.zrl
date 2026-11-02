@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: error: cannot implicitly narrow 32-bit value to 8 bits
+// surface_syntax.md 11.2.6 documents this exact wording for the `let` position:
+//
+//     let c: u8 = big;     // error: cannot implicitly narrow 32-bit value to 8 bits
+//
+// but when the check landed on 2026-09-28 only the three *call-argument* sites
+// called `report_implicit_conv_error`. `let`, assignment, `return` and
+// struct-literal fields rejected via `report_type_mismatch`, which prints raw
+// type ids ("expected type 1 (tag 0), found 3 (tag 0)") and names neither the
+// widths involved nor the `as` that fixes it. Probe 37 only asserts that the
+// program is rejected, so it could not have caught that. This pins the message.
+fn main() -> i32 {
+    let big: u32 = 300 as u32;
+    let c: u8 = big;
+    return c as i32;
+}

@@ -1,0 +1,17 @@
+// expected exit 0
+// A fixed-size array index whose index the loop guard (or an earlier check) already bounds
+// carries no second check (src/index_facts.zrl); the results are unchanged. The traps that
+// must stay are in bounds_elision_*_trap.zrl.
+fn main() -> i32 {
+    let mut a: [u32; 8] = [0; 8];
+    let mut i: usize = 0;
+    while i < 8 { a[i] = a[i] + i as u32; i = i + 1; }
+    let mut sum: u32 = 0;
+    let mut j: usize = 0;
+    while j <= 7 { sum = sum + a[j]; j = j + 1; }
+    if sum != 28 { return 1; }
+    let mut k: usize = 7;
+    while 0 < k { if k < 8 { a[k] = 1; } k = k - 1; }
+    if a[3] != 1 || a[0] != 0 { return 2; }
+    return 0;
+}

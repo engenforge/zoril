@@ -1,0 +1,15 @@
+
+enum OrBindingTest { A(i32), B(i32), C }
+
+fn test_or_binding_func(t: OrBindingTest) -> i32 {
+    return match t {
+        OrBindingTest.A(v) | OrBindingTest.B(v) => v,
+        _ => 0,
+    };
+}
+
+fn main() -> i32 {
+    if test_or_binding_func(OrBindingTest.A(42)) != 42 { return 1; }
+    if test_or_binding_func(OrBindingTest.B(100)) != 100 { return 2; }
+    return 0;
+}

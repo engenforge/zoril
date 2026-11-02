@@ -1,0 +1,24 @@
+// A --checked build keeps an arena's released space poisoned and never hands it out again, so a
+// read through a pointer into a released range finds 0xA5 (exit 165) instead of whatever the next
+// allocation put there. The same program reads 99 without --checked: that is the silent
+// use-after-reset this build mode turns into a fault.
+// flags: --checked
+// expected exit 165
+import "core.zrl";
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536 as u64).unwrap();
+    let mut v = Vec::<u64>.new_in(&a);
+    v.push(7 as u64);
+    let p = v.as_ptr() as *mut u64;
+    a.reset();
+    // Without --checked this allocation reuses the released range and writes 99 over the poison.
+    let mut z = Vec::<u64>.new_in(&a);
+    z.push(99 as u64);
+    // SAFETY: this test reads freed arena memory on purpose; a checked build poisons it.
+    return unsafe { *p } as i32;
+}

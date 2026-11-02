@@ -1,0 +1,17 @@
+// expected exit 42
+import "hashmap.zrl";
+import "mem.zrl";
+use hashmap::HashMap;
+use mem::Arena;
+
+fn main() -> i32 {
+    let a = Arena.new(1 << 20).unwrap();
+    let mut m = HashMap::<u64, u64>.new(&a);
+    let key = 123456789 as u64;
+    m.insert(key, 42 as u64);
+    let val = match m.get(&key) {
+        Some(v) => *v,
+        None => 0 as u64,
+    };
+    return val as i32;
+}

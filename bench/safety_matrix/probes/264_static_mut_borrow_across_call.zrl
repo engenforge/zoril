@@ -1,0 +1,27 @@
+// name: A payload enum static mut borrowed across a call that rewrites it
+// expected: compile_reject
+// The borrow checker does not track borrows of statics. `match &mut G` read the old payload
+// (a Box) after `set_b` rewrote G as another variant (u64), so 4096 was read as a box pointer
+// (exit 139). A non-scalar static mut is now reachable only inside `unsafe`.
+enum E {
+    N,
+    A(Box<i32>),
+    B(u64),
+}
+
+static mut G: E = E.N;
+
+fn set_b() {
+    G = E.B(4096);
+}
+
+fn main() -> i32 {
+    G = E.A(box 41);
+    match &mut G {
+        E.A(b) => {
+            set_b();
+            return **b;
+        },
+        _ => { return 1; }
+    }
+}

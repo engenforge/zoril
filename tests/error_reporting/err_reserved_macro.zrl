@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: `macro` is a reserved word, kept for a future feature
+fn macro() -> i32 {
+    return 0;
+}

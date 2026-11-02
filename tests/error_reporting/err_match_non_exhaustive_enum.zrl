@@ -1,0 +1,20 @@
+// expected compile fail
+// EXPECT: error: non-exhaustive match: missing variant 'C'
+enum Color {
+    Red,
+    Green,
+    Blue,
+    C,
+}
+
+fn test_enum(c: Color) -> i32 {
+    return match c {
+        Color.Red => 1,
+        Color.Green => 2,
+        Color.Blue => 3,
+    };
+}
+
+fn main() -> i32 {
+    return test_enum(Color.Red);
+}

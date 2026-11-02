@@ -1,0 +1,73 @@
+import "mem.zrl";
+import "proc.zrl";
+import "io.zrl";
+use mem::Arena;
+use proc::Command;
+use io::Fd;
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return 1; },
+    };
+
+    let pipe_in = unsafe { @alloca<[i32; 2]>(1) };
+    if unsafe { @syscall(293, pipe_in as u64, 0 as u64) } < 0 { return 10; }
+    let pipe_out = unsafe { @alloca<[i32; 2]>(1) };
+    if unsafe { @syscall(293, pipe_out as u64, 0 as u64) } < 0 { return 11; }
+
+    let in_read = (*pipe_in)[0];
+    let in_write = (*pipe_in)[1];
+    let out_read = (*pipe_out)[0];
+    let out_write = (*pipe_out)[1];
+
+    // Move out_write onto fd 0 so that fd 0 is a writable pipe descriptor.
+    // Save parent's current stdin (fd 0) first.
+    let saved_stdin = unsafe { @syscall(72, 0 as u64, 1030 as u64, 3 as u64) };
+    if saved_stdin < 0 { return 12; }
+    if unsafe { @syscall(33, out_write as u64, 0 as u64) } < 0 { return 13; }
+    unsafe { @syscall(3, out_write as u64) };
+
+    let mut cmd = Command.new("/bin/echo", &a);
+    cmd.arg("hello");
+    // set_stdin will dup2 in_read onto fd 0.
+    // If the child does not move source fd 0 above 2 first,
+    // set_stdout will then dup2 the newly replaced fd 0 (in_read) onto fd 1!
+    cmd.set_stdin(unsafe { Fd.from_unix_raw(in_read) });
+    cmd.set_stdout(unsafe { Fd.from_unix_raw(0) });
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => {
+            unsafe {
+                @syscall(33, saved_stdin as u64, 0 as u64);
+                @syscall(3, saved_stdin as u64);
+            };
+            return 14;
+        },
+    };
+
+    // Restore parent's fd 0 and clean up in pipes
+    unsafe {
+        @syscall(33, saved_stdin as u64, 0 as u64);
+        @syscall(3, saved_stdin as u64);
+        @syscall(3, in_read as u64);
+        @syscall(3, in_write as u64);
+    };
+
+    let status = match child.wait() {
+        Ok(st) => st,
+        Err(_) => { return 15; },
+    };
+    if !status.is_success() { return 16; }
+
+    // Read from out_read: it must have received "hello\n"
+    let buf = unsafe { @alloca<[u8; 16]>(1) };
+    let n = unsafe { @syscall(0, out_read as u64, buf as u64, 16 as u64) };
+    unsafe { @syscall(3, out_read as u64) };
+    if n <= 0 { return 17; }
+    let s = unsafe { @slice(buf as *u8, n as usize) };
+    if s != "hello\n" { return 18; }
+
+    return 0;
+}

@@ -1,0 +1,14 @@
+// Tests register allocation for scalar locals: a, b, c, d should ideally
+// live in registers rather than stack slots throughout their lifetimes.
+fn compute(a: u64, b: u64, c: u64) -> u64 {
+    let x = a + b;
+    let y = x + c;
+    let z = y * 2 as u64;
+    return z;
+}
+
+fn main() -> i32 {
+    let result = compute(1 as u64, 2 as u64, 3 as u64);
+    if result == 12 as u64 { return 0; }
+    return 1;
+}

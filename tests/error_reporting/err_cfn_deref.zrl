@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_cfn_deref.zrl:6:22: error: a C function pointer cannot be dereferenced; call it
+extern "C" fn callee(a: i32) -> i32 { return a + 1; }
+fn main() -> i32 {
+    let p: extern "C" fn(i32) -> i32 = callee;
+    let v = unsafe { *p };
+    return 0;
+}

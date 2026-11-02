@@ -1,0 +1,7 @@
+fn main() -> i32 {
+    let msg = "hello\n";
+    let p = msg.ptr;
+    let l = msg.len;
+    unsafe { @syscall(1, 1, p, l) };
+    return 0;
+}

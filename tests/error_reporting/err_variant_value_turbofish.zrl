@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_variant_value_turbofish.zrl:7:13: error: type arguments are only accepted on a call or a struct literal here; write `let v: E<T> = E.V;` or call `E.V::<T>(..)`
+
+enum O<T> { N, S(T) }
+
+fn main() -> i32 {
+    let o = O.N::<i32>;
+    let _k = o;
+    return 0;
+}

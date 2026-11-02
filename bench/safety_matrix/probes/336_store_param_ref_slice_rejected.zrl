@@ -1,0 +1,24 @@
+// name: A view of a local arena buffer stored through a slice parameter outlives the buffer
+// expected: compile_reject
+// Storing a view of a frame-owned arena buffer through a `&mut` parameter is rejected: the buffer dies with the arena.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn f(out: &mut [i32]) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(7);
+    *out = v.as_slice();
+}
+
+fn main() -> i32 {
+    let e: [i32] = @slice(0 as *i32, 0);
+    let mut s = e;
+    f(&mut s);
+    return s[0];
+}

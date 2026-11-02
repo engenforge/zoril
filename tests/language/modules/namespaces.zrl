@@ -1,0 +1,23 @@
+// expected exit 0
+// An import makes a namespace named by the file's stem, or by `as`: its public items are
+// written `geom_lib::Point`, `g::weight`, in expressions, types, patterns and struct literals,
+// or brought in bare by `use`.
+import "geom_lib.zrl";
+import "geom_lib.zrl" as g;
+use g::{SIDES, twice_hidden};
+use geom_lib::{Point, Shape};
+
+fn main() -> i32 {
+    let p = geom_lib::Point.new(1, 2);
+    let q: g::Point = g::Point::new(3, 4);
+    let r = g::Point { x: 5, y: 6 };
+    if p.sum() + q.sum() + r.sum() != 21 { return 1; }
+    let s = Shape.Dot(q);
+    let n = match s { g::Shape.Dot(pt) => pt.x, geom_lib::Shape.Empty => 0 };
+    if n != 3 { return 2; }
+    if g::weight(Shape.Empty) != 0 || geom_lib::weight(s) != 7 { return 3; }
+    if SIDES != 4 || g::SIDES != 4 { return 4; }
+    if twice_hidden() != 14 { return 5; }
+    if g::Point::ORIGIN_X != 0 { return 6; }
+    return 0;
+}

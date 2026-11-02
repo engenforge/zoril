@@ -1,0 +1,16 @@
+import "core.zrl";
+
+pub struct Big {
+    pub a: u64, pub b: u64, pub c: u64, pub d: u64,
+}
+
+pub enum LargeEnum {
+    Small(u32),
+    Huge(Big),
+}
+
+fn main() -> i32 {
+    // LargeEnum: tag(4) + pad(4) + Big(32) = 40
+    if sizeof(LargeEnum) != 40 { return 1; }
+    return 0;
+}

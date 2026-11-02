@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: array repeat of a mutable reference; each element would alias the same borrow
+// A `&mut` is linear: repeating it would give two elements the same exclusive borrow.
+fn main() -> i32 {
+    let mut x = 7;
+    let _a: [&mut u64; 2] = [&mut x; 2];
+    return 0;
+}

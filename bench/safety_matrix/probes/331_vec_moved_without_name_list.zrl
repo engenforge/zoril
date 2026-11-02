@@ -1,0 +1,17 @@
+// name: Vec is moved by virtue of its raw-pointer data field without a hardcoded name check
+// expected: compile_reject
+// Vec directly contains a raw-pointer data field and lacks `impl Copy`, so assigning or passing it moves it.
+import "vec.zrl";
+use vec::Vec;
+
+fn consume(v: Vec<i32>) -> usize {
+    return v.len();
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let v2 = v;
+    let _ = consume(v);
+    return consume(v2) as i32;
+}

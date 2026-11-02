@@ -1,0 +1,61 @@
+// expected exit 0
+// A closure captures every local of the enclosing function its body uses, wherever the use
+// is: a cast, a match, a struct literal, a tuple, a loop, a nested closure; and any number of
+// them. A use the capture collector missed read 0, and only 32 captures were kept.
+struct P { a: i64 }
+fn main() -> i32 {
+    let x = 7 as i32;
+    let y = 3 as i64;
+    let z = 5 as i64;
+    let w = 2 as i64;
+    let k = 4 as i64;
+    let in_cast = || -> i64 { x as i64 };
+    if in_cast() != 7 { return 1; }
+    let in_match = || -> i64 { match 1 { 1 => y, _ => 0 } };
+    if in_match() != 3 { return 2; }
+    let in_struct = || -> i64 { let p = P { a: z }; p.a };
+    if in_struct() != 5 { return 3; }
+    let in_tuple = || -> i64 { let t = (w, 1 as i64); t.0 };
+    if in_tuple() != 2 { return 4; }
+    let in_loop = || -> i64 { let mut s = 0 as i64; for i in 0..k { s = s + i; } s };
+    if in_loop() != 6 { return 5; }
+    let nested = || -> i64 { let g = || -> i64 { y + z }; g() };
+    if nested() != 8 { return 6; }
+    let v0 = 0 as i64;
+    let v1 = 1 as i64;
+    let v2 = 2 as i64;
+    let v3 = 3 as i64;
+    let v4 = 4 as i64;
+    let v5 = 5 as i64;
+    let v6 = 6 as i64;
+    let v7 = 7 as i64;
+    let v8 = 8 as i64;
+    let v9 = 9 as i64;
+    let v10 = 10 as i64;
+    let v11 = 11 as i64;
+    let v12 = 12 as i64;
+    let v13 = 13 as i64;
+    let v14 = 14 as i64;
+    let v15 = 15 as i64;
+    let v16 = 16 as i64;
+    let v17 = 17 as i64;
+    let v18 = 18 as i64;
+    let v19 = 19 as i64;
+    let v20 = 20 as i64;
+    let v21 = 21 as i64;
+    let v22 = 22 as i64;
+    let v23 = 23 as i64;
+    let v24 = 24 as i64;
+    let v25 = 25 as i64;
+    let v26 = 26 as i64;
+    let v27 = 27 as i64;
+    let v28 = 28 as i64;
+    let v29 = 29 as i64;
+    let v30 = 30 as i64;
+    let v31 = 31 as i64;
+    let v32 = 32 as i64;
+    let v33 = 33 as i64;
+    let many = || -> i64 { v0+v1+v2+v3+v4+v5+v6+v7+v8+v9+v10+v11+v12+v13+v14+v15+v16+v17+v18+v19+v20+v21+v22+v23+v24+v25+v26+v27+v28+v29+v30+v31+v32+v33 };
+    if many() != 561 { return 7; }
+    return 0;
+}

@@ -1,0 +1,27 @@
+// name: A view of a local arena buffer stored through a struct field parameter outlives the buffer
+// expected: compile_reject
+// Storing a view of a frame-owned arena buffer through a struct field on a `&mut` parameter is rejected.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct Holder {
+    s: [i32],
+}
+
+fn f(h: &mut Holder) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(7);
+    h.s = v.as_slice();
+}
+
+fn main() -> i32 {
+    let mut h = Holder { s: @slice(0 as *i32, 0) };
+    f(&mut h);
+    return 0;
+}

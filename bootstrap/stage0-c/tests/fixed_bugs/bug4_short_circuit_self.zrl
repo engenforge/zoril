@@ -1,0 +1,44 @@
+// expected exit 0
+// Bug #4 (aggregate case): a by-value `self` promoted to the stack inside the right-hand
+// side of && / || was only stored on that path.
+
+struct Checker {
+    value: i32,
+}
+
+impl Checker {
+    fn check_val(self: &Checker, expected: i32) -> bool {
+        return self.value == expected;
+    }
+
+    fn test_and(self: Checker) -> bool {
+        let flag = false;
+        // The RHS method call is NOT executed due to short-circuiting:
+        if flag && self.check_val(42) {
+            return false;
+        }
+        // Subsequent method call on `self` must observe valid, initialized self:
+        return self.check_val(42);
+    }
+
+    fn test_or(self: Checker) -> bool {
+        let flag = true;
+        // The RHS method call is NOT executed due to short-circuiting:
+        if flag || self.check_val(999) {
+            // Subsequent method call on `self`:
+            return self.check_val(42);
+        }
+        return false;
+    }
+}
+
+fn main() -> i32 {
+    let c = Checker { value: 42 };
+    if !c.test_and() {
+        return 1;
+    }
+    if !c.test_or() {
+        return 2;
+    }
+    return 0;
+}

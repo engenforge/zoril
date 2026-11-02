@@ -1,0 +1,24 @@
+// name: A whole heap Vec moved out through a struct field parameter is accepted
+// expected: accept
+// Moving an owning collection out to caller storage transfers ownership; its global-heap buffer is valid.
+import "vec.zrl";
+use vec::Vec;
+
+struct Holder {
+    v: Vec<i32>,
+}
+
+fn f(h: &mut Holder) {
+    let mut v = Vec::<i32>.new();
+    v.push(7);
+    h.v = v;
+}
+
+fn main() -> i32 {
+    let mut h = Holder { v: Vec::<i32>.new() };
+    f(&mut h);
+    if h.v.len() == 1 as usize {
+        return 0;
+    }
+    return 1;
+}

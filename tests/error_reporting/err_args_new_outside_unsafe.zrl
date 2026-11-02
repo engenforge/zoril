@@ -1,0 +1,18 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_args_new_outside_unsafe.zrl:15:20: error: call to unsafe function requires unsafe block
+
+// `Args.new` stores a `**u8` that the caller chooses and `Args::get` then dereferences it, so it is
+// `unsafe fn` (unsafe_policy.md §80) and a safe call is rejected. Safe code takes the process
+// arguments from `args()`, which reads the pair the runtime recorded in `_start` - see
+// tests/stdlib/test_stdlib_args_from_runtime.zrl. This is the last member of the class that
+// tests/error_reporting/err_allocator_raw_call_outside_unsafe.zrl and
+// bench/safety_matrix/probes/127_safe_fn_derefs_raw_pointer_argument.zrl left; probe
+// 160_args_raw_pointer_argument.zrl pins the same rejection from the probe side.
+import "args.zrl";
+use args::Args;
+
+fn main(argc: i32, argv: **u8) -> i32 {
+    let mut args = Args.new(argc, argv);
+    let _ = args.next();
+    return 0;
+}

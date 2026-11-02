@@ -1,0 +1,414 @@
+// Growable generic arrays (Vec) with arena and allocator support
+
+import "mem.zrl";
+import "mem_raw.zrl";
+import "core.zrl";
+use mem::{Arena, arena_raw, bounds_trap, grow_cap, size_of_n};
+use mem_raw::{ArenaHeader, memcpy, memset, zoril_allocator_alloc, zoril_allocator_free};
+
+// Growable generic array with arena allocation or global allocator backing.
+pub struct Vec<T> {
+    data: *mut T,
+    len: usize,
+    cap: usize,
+    raw: *mut ArenaHeader,
+    // Ties the collection to its arena at compile time: an `&Arena` held here is
+    // borrowed by the collection, so the borrow checker rejects destroying or
+    // resetting the arena while the collection is live. `raw` is what allocation
+    // uses; `anchor` is `None` for the global-heap `new()` and for `new_in_raw`
+    // (the `unsafe` escape hatch for raw-pointer internals).
+    pub anchor: Option<&Arena>,
+}
+
+impl<T> Vec<T> {
+    // Creates an empty Vec using the default allocator.
+    pub fn new() -> Vec<T> {
+        let a: Option<&Arena> = Option.None;
+        return Vec {
+            data: 0 as *mut T,
+            len: 0 as usize,
+            cap: 0 as usize,
+            raw: 0 as *mut ArenaHeader,
+            anchor: a,
+        };
+    }
+
+    // Creates an empty Vec allocated in arena a.
+    pub fn new_in(a: &Arena) -> Vec<T> {
+        // SAFETY: `a` is a live borrowed Arena handle.
+        let raw = unsafe { arena_raw(a) };
+        return Vec {
+            data: 0 as *mut T,
+            len: 0 as usize,
+            cap: 0 as usize,
+            raw: raw,
+            anchor: Option.Some(a),
+        };
+    }
+
+    // Creates an empty Vec using a raw arena header.
+    //
+    // CALLER OBLIGATION: arena must be valid and initialized.
+    //
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    pub unsafe fn new_in_raw(arena: *mut ArenaHeader) -> Vec<T> {
+        let a: Option<&Arena> = Option.None;
+        return Vec {
+            data: 0 as *mut T,
+            len: 0 as usize,
+            cap: 0 as usize,
+            raw: arena,
+            anchor: a,
+        };
+    }
+
+    // Creates an empty Vec with the requested element capacity using the default allocator.
+    pub fn with_capacity(cap: usize) -> Vec<T> {
+        let data = if cap > 0 as usize {
+            // SAFETY: `size_of_n` traps on overflow, and raw=0 allocates from global heap.
+            unsafe {
+                zoril_allocator_alloc(0 as *mut ArenaHeader, size_of_n(cap, sizeof(T)))
+            } as *mut T
+        } else {
+            0 as *mut T
+        };
+        let a: Option<&Arena> = Option.None;
+        return Vec {
+            data: data,
+            len: 0 as usize,
+            cap: cap,
+            raw: 0 as *mut ArenaHeader,
+            anchor: a,
+        };
+    }
+
+    // Creates an empty Vec with the requested element capacity allocated in arena a.
+    pub fn with_capacity_in(a: &Arena, cap: usize) -> Vec<T> {
+        // `size_of_n` traps instead of wrapping: a wrapped size would under-allocate while the
+        // Vec keeps believing it has `cap` slots (probe 163_vec_capacity_overflow.zrl).
+        let data = if cap > 0 as usize {
+            // SAFETY: `a` is the live borrowed arena, and `size_of_n` has just ruled out a
+            // wrapped size, so the allocation covers `cap` elements.
+            unsafe { zoril_allocator_alloc(arena_raw(a), size_of_n(cap, sizeof(T))) } as *mut T
+        } else {
+            0 as *mut T
+        };
+        // SAFETY: `a` is a live borrowed Arena handle.
+        let raw = unsafe { arena_raw(a) };
+        return Vec {
+            data: data,
+            len: 0 as usize,
+            cap: cap,
+            raw: raw,
+            anchor: Option.Some(a),
+        };
+    }
+
+    // Creates an empty Vec with capacity using a raw arena header.
+    //
+    // CALLER OBLIGATION: arena must be valid and initialized.
+    //
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    pub unsafe fn with_capacity_in_raw(arena: *mut ArenaHeader, cap: usize) -> Vec<T> {
+        let data = if cap > 0 as usize {
+            zoril_allocator_alloc(arena, size_of_n(cap, sizeof(T))) as *mut T
+        } else {
+            0 as *mut T
+        };
+        let a: Option<&Arena> = Option.None;
+        return Vec {
+            data: data,
+            len: 0 as usize,
+            cap: cap,
+            raw: arena,
+            anchor: a,
+        };
+    }
+
+    #[borrows(self, a)]
+    // Clones all elements of the vector into a new Vec allocated in arena a.
+    pub fn clone_in(self: &Vec<T>, a: &Arena) -> Vec<T> {
+        if self.len == 0 as usize { return Vec::<T>.new_in(a); }
+        let bytes = size_of_n(self.len, sizeof(T));
+        // SAFETY: `a` is the live borrowed arena and `bytes` is the checked size of `self.len`
+        // elements.
+        let new_data = unsafe { zoril_allocator_alloc(arena_raw(a), bytes) } as *mut T;
+        // SAFETY: both buffers are live for the copy - the new one was just allocated with
+        // `bytes`, and `self.data` holds `self.len` initialized elements.
+        unsafe { memcpy(new_data as *mut u8, self.data as *u8, bytes); }
+        // SAFETY: `a` is a live borrowed Arena handle.
+        let raw = unsafe { arena_raw(a) };
+        return Vec {
+            data: new_data,
+            len: self.len,
+            cap: self.len,
+            raw: raw,
+            anchor: Option.Some(a)
+        };
+    }
+
+    // Clones a vector using a raw arena header.
+    //
+    // CALLER OBLIGATION: arena must be valid and initialized.
+    //
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    pub unsafe fn clone_in_raw(self: &Vec<T>, arena: *mut ArenaHeader) -> Vec<T> {
+        if self.len == 0 as usize { return Vec::<T>.new_in_raw(arena); }
+        let bytes = size_of_n(self.len, sizeof(T));
+        let new_data = zoril_allocator_alloc(arena, bytes) as *mut T;
+        memcpy(new_data as *mut u8, self.data as *u8, bytes);
+        let a: Option<&Arena> = Option.None;
+        return Vec { data: new_data, len: self.len, cap: self.len, raw: arena, anchor: a };
+    }
+
+    // Appends an element to the end of the vector, growing capacity if needed.
+    #[stores(val -> self)]
+    pub fn push(self: &mut Vec<T>, val: T) {
+        if self.len >= self.cap {
+            let new_cap = if self.cap == 0 as usize {
+                8 as usize
+            } else {
+                grow_cap(self.cap)
+            };
+            // SAFETY: `self.raw` is the arena this Vec allocates from (0 for the global heap)
+            // and `new_cap` is the checked capacity, so the block covers `new_cap` elements.
+            let new_data = unsafe {
+                zoril_allocator_alloc(self.raw, size_of_n(new_cap, sizeof(T)))
+            } as *mut T;
+            if self.data as usize != 0 as usize && self.len > 0 as usize {
+                // SAFETY: the old buffer holds `self.len` initialized elements and the new one
+                // was just allocated with room for them.
+                unsafe { memcpy(new_data as *mut u8, self.data as *u8, self.len * sizeof(T)); }
+            }
+            self.data = new_data;
+            self.cap = new_cap;
+        }
+        // SAFETY: Vec owns its storage and has just guaranteed capacity (`len < cap`), so the
+        // slot at `len` is inside it and uninitialized - the unsafe interior of a safe API
+        // (unsafe_policy.md §2).
+        unsafe { *((self.data as usize + self.len * sizeof(T)) as *mut T) = val; }
+        self.len = self.len + 1 as usize;
+    }
+
+    // Removes and returns the last element of the vector, or None if empty.
+    pub fn pop(self: &mut Vec<T>) -> Option<T> {
+        if self.len == 0 as usize { return Option.None; }
+        self.len = self.len - 1 as usize;
+        // SAFETY: `len` was just decremented from a nonzero length, so the slot is inside the
+        // allocation and holds an initialized element.
+        return Option.Some(unsafe { *((self.data as usize + self.len * sizeof(T)) as *mut T) });
+    }
+
+    // Returns a shared reference to the element at index, or None if out of bounds.
+    pub fn get(self: &Vec<T>, index: usize) -> Option<&T> {
+        if index >= self.len {
+            return Option.None;
+        }
+        // SAFETY: bounds were just checked and the pointer is into Vec's own storage, so the
+        // reference handed out is valid for as long as the Vec is.
+        return Option.Some(unsafe { &*((self.data as usize + index * sizeof(T)) as *T) });
+    }
+
+    // Returns a mutable reference to the element at index, or None if out of bounds.
+    pub fn get_mut(self: &mut Vec<T>, index: usize) -> Option<&mut T> {
+        if index >= self.len {
+            return Option.None;
+        }
+        // SAFETY: bounds were just checked, `&mut self` is what makes the write exclusive, and
+        // the pointer is into Vec's own storage.
+        return Option.Some(unsafe { &mut *((self.data as usize + index * sizeof(T)) as *mut T) });
+    }
+
+    // Ensures the vector has at least min_len elements, growing if necessary.
+    pub fn ensure_len(self: &mut Vec<T>, min_len: usize) {
+        if min_len <= self.len { return; }
+        if min_len > self.cap {
+            let mut new_cap = if self.cap == 0 as usize {
+                8 as usize
+            } else {
+                grow_cap(self.cap)
+            };
+            while new_cap < min_len {
+                new_cap = grow_cap(new_cap);
+            }
+            // SAFETY: `self.raw` is the arena this Vec allocates from (0 for the global heap)
+            // and `new_cap` is the checked capacity, so the block covers `new_cap` elements.
+            let new_data = unsafe {
+                zoril_allocator_alloc(self.raw, size_of_n(new_cap, sizeof(T)))
+            } as *mut T;
+            if self.data as usize != 0 as usize && self.len > 0 as usize {
+                // SAFETY: the old buffer holds `self.len` initialized elements and the new one
+                // was just allocated with room for them.
+                unsafe { memcpy(new_data as *mut u8, self.data as *u8, self.len * sizeof(T)); }
+            }
+            self.data = new_data;
+            self.cap = new_cap;
+        }
+        // The tail starting at `len` is inside the allocation: the branch above grew it to at
+        // least `min_len` elements. Building the pointer needs no marker (an integer cast to a
+        // raw pointer is safe); the `memset` below is what the length argument has to justify.
+        let zero_start = (self.data as usize + self.len * sizeof(T)) as *mut u8;
+        let zero_bytes = size_of_n(min_len - self.len, sizeof(T));
+        // SAFETY: `zero_bytes` is the checked size of the `min_len - len` elements being zeroed,
+        // and `zero_start` is inside the allocation.
+        unsafe { memset(zero_start, 0, zero_bytes); }
+        self.len = min_len;
+    }
+
+    // Resizes the vector to new_len elements, padding with zero values if growing.
+    pub fn resize(self: &mut Vec<T>, new_len: usize) {
+        if new_len > self.len {
+            self.ensure_len(new_len);
+        } else {
+            self.len = new_len;
+        }
+    }
+
+    // Replaces the element at index with val, panicking if out of bounds.
+    #[stores(val -> self)]
+    pub fn set(self: &mut Vec<T>, index: usize, val: T) {
+        if index >= self.len {
+            // SAFETY: exit_group(60) with 134 is the deterministic bounds trap (no pointer).
+            unsafe { @syscall(231 as u64, 134 as u64) };
+            zoril_abort();
+        }
+        // SAFETY: the bounds check above proves the slot is inside the allocation, and
+        // `&mut self` makes the write exclusive.
+        unsafe { *((self.data as usize + index * sizeof(T)) as *mut T) = val; }
+    }
+
+    // Returns the number of elements in the vector.
+    pub fn len(self: &Vec<T>) -> usize {
+        return self.len;
+    }
+
+    // Returns the current allocated element capacity of the vector.
+    pub fn cap(self: &Vec<T>) -> usize {
+        return self.cap;
+    }
+
+    // The buffer's address, for the callers that do byte-level work on a Vec's own storage
+    // (the front end computes with raw offsets into span and comment tables). Reading it is
+    // harmless; what must not be forgeable from safe code is the fields themselves, so
+    // `data`/`len`/`cap`/`raw` are private and this is how a caller gets at the buffer.
+    pub fn as_ptr(self: &Vec<T>) -> *T {
+        return self.data as *T;
+    }
+
+    // As `as_ptr`, with the write access `&mut self` implies.
+    pub fn as_mut_ptr(self: &mut Vec<T>) -> *mut T {
+        return self.data;
+    }
+
+    // The arena this Vec allocates from (0 for the global heap), for the internals that build a
+    // scratch Vec in the same arena.
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    pub unsafe fn raw_arena(self: &Vec<T>) -> *mut ArenaHeader {
+        return self.raw;
+    }
+
+    // The one way to set the length directly (`set`/`push`/`resize` cover the rest), and it keeps
+    // the invariant the private field exists for: a length above `cap` is the forged-length fault
+    // (probe 164), so it traps. Growing is what `ensure_len` is for.
+    pub unsafe fn set_len(self: &mut Vec<T>, n: usize) {
+        if n > self.cap {
+            bounds_trap("Vec.set_len: length above capacity");
+        }
+        self.len = n;
+    }
+
+    // Removes all elements from the vector without deallocating backing storage.
+    pub fn clear(self: &mut Vec<T>) {
+        self.len = 0 as usize;
+    }
+
+    // Returns the elements as an immutable slice.
+    pub fn as_slice(self: &Vec<T>) -> [T] {
+        // SAFETY: `data`/`len` are Vec's own invariant - len elements are live at data.
+        return unsafe { @slice(self.data, self.len) };
+    }
+
+    // Returns the elements as a mutable slice.
+    pub fn as_mut_slice(self: &mut Vec<T>) -> [mut T] {
+        // SAFETY: as `as_slice` (len live elements at data); `&mut self` is what lets the caller
+        // write them.
+        return unsafe { @slice(self.data, self.len) };
+    }
+
+    // Removes and returns the element at index, shifting subsequent elements left.
+    pub fn remove(self: &mut Vec<T>, index: usize) -> T {
+        if index >= self.len {
+            bounds_trap("Vec.remove: index out of bounds");
+        }
+        // Shifting the tail down over the removed slot is raw element work on
+        // the Vec's own storage -- the unsafe interior behind a safe signature.
+        // SAFETY: `index < len` was checked above, so the element read is inside the allocation.
+        let val = unsafe { *((self.data as usize + index * sizeof(T)) as *mut T) };
+        // SAFETY: `i` runs over `index..len`, so the source and destination of each `sizeof(T)`
+        // copy are inside the allocation.
+        unsafe {
+            let mut i = index;
+            while i + 1 as usize < self.len {
+                let src = (self.data as usize + (i + 1 as usize) * sizeof(T)) as *mut T;
+                let dst = (self.data as usize + i * sizeof(T)) as *mut T;
+                memcpy(dst as *mut u8, src as *u8, sizeof(T));
+                i = i + 1 as usize;
+            }
+        }
+
+        self.len = self.len - 1 as usize;
+        return val;
+    }
+
+    // Explicitly frees the vector's backing memory buffer.
+    pub fn free(self: &mut Vec<T>) {
+        if self.raw as u64 == 0 as u64
+            && self.cap > 0 as usize
+            && (self.data as usize != 0 as usize) {
+            // SAFETY: `self.data` was allocated from the global heap with capacity `self.cap`.
+            unsafe {
+                zoril_allocator_free(
+                    0 as *mut ArenaHeader,
+                    self.data as *u8,
+                    size_of_n(self.cap, sizeof(T))
+                );
+            }
+        }
+        self.data = 0 as *mut T;
+        self.len = 0 as usize;
+        self.cap = 0 as usize;
+        self.anchor = Option.None;
+    }
+
+    // Appends all elements from a slice to the end of the vector.
+    pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]) {
+        if slice.len == 0 as usize { return; }
+        let target_len = self.len + slice.len;
+        if target_len > self.cap {
+            let mut new_cap = if self.cap == 0 as usize {
+                8 as usize
+            } else {
+                grow_cap(self.cap)
+            };
+            while new_cap < target_len {
+                new_cap = grow_cap(new_cap);
+            }
+            // SAFETY: `self.raw` is the arena this Vec allocates from (0 for the global heap)
+            // and `new_cap` is the checked capacity, so the block covers `new_cap` elements.
+            let new_data = unsafe {
+                zoril_allocator_alloc(self.raw, size_of_n(new_cap, sizeof(T)))
+            } as *mut T;
+            if self.data as usize != 0 as usize && self.len > 0 as usize {
+                // SAFETY: the old buffer holds `self.len` initialized elements and the new one
+                // was just allocated with room for them.
+                unsafe { memcpy(new_data as *mut u8, self.data as *u8, self.len * sizeof(T)); }
+            }
+            self.data = new_data;
+            self.cap = new_cap;
+        }
+        let dest = (self.data as usize + self.len * sizeof(T)) as *mut u8;
+        // SAFETY: self.cap was ensured to be at least target_len, and slice contains slice.len valid elements.
+        unsafe { memcpy(dest, slice.ptr as *u8, size_of_n(slice.len, sizeof(T))); }
+        self.len = target_len;
+    }
+}

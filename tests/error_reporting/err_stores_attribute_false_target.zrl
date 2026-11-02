@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: error: #[stores] names a target this body does not store into
+
+struct H { p: &i32 }
+
+#[stores(x -> h2)]
+fn put(h1: &mut H, h2: &mut H, x: &i32) {
+    h1.p = x;
+}
+
+fn main() -> i32 { return 0; }

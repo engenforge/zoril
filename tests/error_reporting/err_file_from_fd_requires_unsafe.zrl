@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: error: call to unsafe function requires unsafe block
+// File.from_fd is an unsafe fn because it transfers ownership of a descriptor to File.
+import "io.zrl";
+use io::{File, stdout};
+
+fn main() -> i32 {
+    let _ = File.from_fd(stdout());
+    return 0;
+}

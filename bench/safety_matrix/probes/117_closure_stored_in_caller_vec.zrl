@@ -1,0 +1,11 @@
+// name: Capturing closure stored into the caller's Vec
+// expected: compile_reject
+// Pushing the closure stores this frame's environment pointer into memory the caller owns.
+import "vec.zrl";
+use vec::Vec;
+fn add(v: &mut Vec<fn(i32) -> i32>, k: i32) { v.push(|x: i32| -> i32 { x + k }); }
+fn main() -> i32 {
+    let mut v = Vec::<fn(i32) -> i32>.new();
+    add(&mut v, 5);
+    return (*v.get(0 as usize).unwrap())(2);
+}

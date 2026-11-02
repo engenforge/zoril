@@ -1,0 +1,9 @@
+// name: Linear fd leaked inside an array
+// expected: compile_reject
+// Linear types (fd, ioring) cannot be implicitly dropped inside a fixed-size array.
+extern fn open_r(path: *u8) -> fd<r>;
+
+fn main() -> i32 {
+    let fds: [fd<r>; 1] = [unsafe { open_r("x".ptr) }];
+    return 0;
+}

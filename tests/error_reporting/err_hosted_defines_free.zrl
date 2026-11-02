@@ -1,0 +1,5 @@
+// expected compile fail
+// flags: --hosted
+// EXPECT: tests/error_reporting/err_hosted_defines_free.zrl:4:1: error: the name is reserved for the runtime and libc, so a function in a hosted program cannot be named `free`
+fn free(p: *mut u8) { }
+fn main() -> i32 { return 0; }

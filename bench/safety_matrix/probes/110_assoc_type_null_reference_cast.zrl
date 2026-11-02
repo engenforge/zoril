@@ -1,0 +1,12 @@
+// name: Integer cast to an associated type that is a reference
+// expected: compile_reject
+// `0 as T::Out` with `type Out = &i32;` would forge a null reference: the integer-to-type-parameter
+// rule has to see through the projection, since what it stands for is up to an impl.
+trait Tr { type Out; }
+struct S { v: i32 }
+impl Tr for S { type Out = &i32; }
+fn forge<T: Tr>() -> T::Out { return 0 as T::Out; }
+fn main() -> i32 {
+    let r = forge::<S>();
+    return *r;
+}

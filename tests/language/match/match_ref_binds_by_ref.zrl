@@ -1,0 +1,24 @@
+// expected exit 7
+// Match ergonomics (Rust RFC 2005): matching a REFERENCE against a
+// non-reference pattern binds the payload BY REFERENCE, not by value.
+//
+// Binding by value moved the payload out of borrowed memory, which is unsound
+// when it owns anything -- the Box here would be doubly owned -- so
+// check_zir.zrl:289 rejected it and the correct program could not be written.
+//
+// Non-generic on purpose: the generic equivalent exercises a separate
+// monomorphization path on self-recursive types.
+struct B { x: i32 }
+enum E { Nil, C((i32, Box<B>)) }
+
+fn head(e: &E) -> i32 { return match e { C(p) => p.0, Nil => 0 }; }
+fn boxed(e: &E) -> i32 { return match e { C(p) => (*p.1).x, Nil => 0 }; }
+
+fn main() -> i32 {
+    let v = E.C((7 as i32, box B { x: 3 }));
+    if head(&v) != 7 { return 1; }
+    if boxed(&v) != 3 { return 2; }
+    let n = E.Nil;
+    if head(&n) != 0 { return 3; }
+    return head(&v);
+}

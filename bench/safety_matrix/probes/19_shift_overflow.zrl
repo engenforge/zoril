@@ -1,0 +1,5 @@
+// name: Shift count >= bit width
+// expected: runtime_trap
+// A variable count outside [0, width) traps (exit 134) instead of being masked by the
+// hardware to the register width. Unchecked (a known gap) until 2026-10-02.
+fn main() -> i32 { let s: i32 = 40; let v: i32 = 1; return (v << s) - (v << s); }

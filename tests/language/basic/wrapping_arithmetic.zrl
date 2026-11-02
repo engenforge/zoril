@@ -1,0 +1,30 @@
+// Tests wrapping arithmetic operators: +%, -%, *%
+// These must produce modulo-2^N results for narrow integer types.
+
+fn main() -> i32 {
+    // u8 add wrap: 255 +% 1 = 0
+    let max_u8: u8 = 255;
+    let w1 = max_u8 +% 1u8;
+    if w1 != 0u8 { return 1; }
+
+    // u8 sub wrap: 0 -% 1 = 255
+    let min_u8: u8 = 0;
+    let w2 = min_u8 -% 1u8;
+    if w2 != 255u8 { return 2; }
+
+    // u8 mul wrap: 128 *% 2 = 0 (256 mod 256)
+    let w3 = 128u8 *% 2u8;
+    if w3 != 0u8 { return 3; }
+
+    // i8 add wrap: 127 +% 1 = -128
+    let max_i8: i8 = 127;
+    let w4 = max_i8 +% 1i8;
+    if w4 != -128i8 { return 4; }
+
+    // i8 sub wrap: -128 -% 1 = 127
+    let min_i8: i8 = -128;
+    let w5 = min_i8 -% 1i8;
+    if w5 != 127i8 { return 5; }
+
+    return 0;
+}

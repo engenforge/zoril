@@ -1,0 +1,32 @@
+// Repro for bootstrap compiler bug: miscompilation of enum variant with struct payload.
+
+struct Payload {
+    ty: u32,
+    data: [u32],
+}
+
+enum Instr {
+    Other(u64),
+    Construct(Payload),
+}
+
+fn test(p: Payload) -> Instr {
+    return Instr.Construct(p);
+}
+
+fn main() -> i32 {
+    let mut arr = [10 as u32, 20 as u32];
+    let p = Payload { ty: 42 as u32, data: unsafe { @slice(&mut arr as *mut u32, 2) } };
+    let i = test(p);
+    
+    match i {
+        Instr.Construct(p2) => {
+            if p2.ty == 42 && p2.data.len == 2 {
+                return 0;
+            }
+            return 1;
+        },
+        Instr.Other(v) => return 2,
+    }
+    return 3;
+}

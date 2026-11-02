@@ -1,0 +1,27 @@
+// name: Storing a frame-owned view into a &mut element returned by get_mut is rejected
+// expected: compile_reject
+// Storing a frame-owned arena buffer view into a &mut element accessed through get_mut on a parameter collection is rejected.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn f(out: &mut Vec<[i32]>) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; },
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(7);
+    let opt = out.get_mut(0 as usize);
+    match opt {
+        Option.Some(r) => {
+            *r = v.as_slice();
+        },
+        Option.None => {},
+    }
+}
+
+fn main() -> i32 {
+    return 0;
+}

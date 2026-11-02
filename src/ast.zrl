@@ -1,0 +1,1091 @@
+// AST (Abstract Syntax Tree) Data Structures
+// Data-oriented design using indices into arena-allocated arrays.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "vec.zrl";
+import "pair_map.zrl";
+use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+use vec::Vec;
+use pair_map::PairMap;
+
+pub const EXPR_LITERAL: u32 = 0;
+pub const EXPR_IDENT: u32 = 1;
+pub const EXPR_UNARY: u32 = 2;
+pub const EXPR_BINARY: u32 = 3;
+pub const EXPR_CALL: u32 = 4;
+pub const EXPR_GENERIC: u32 = 5;
+pub const EXPR_INTRINSIC: u32 = 6;
+pub const EXPR_BLOCK: u32 = 7;
+pub const EXPR_IF: u32 = 8;
+pub const EXPR_MATCH: u32 = 9;
+pub const EXPR_STRUCT_LITERAL: u32 = 10;
+pub const EXPR_MEMBER_ACCESS: u32 = 11;
+pub const EXPR_TUPLE_ACCESS: u32 = 12;
+pub const EXPR_INDEX: u32 = 13;
+pub const EXPR_BOXED: u32 = 14;
+pub const EXPR_CAST: u32 = 15;
+pub const EXPR_ARRAY_LITERAL: u32 = 16;
+pub const EXPR_ARRAY_REPEAT: u32 = 17;
+pub const EXPR_TUPLE_LITERAL: u32 = 18;
+pub const EXPR_CLOSURE: u32 = 19;
+pub const EXPR_TRY: u32 = 20;
+pub const EXPR_RETURN: u32 = 21;
+pub const EXPR_BREAK: u32 = 22;
+pub const EXPR_CONTINUE: u32 = 23;
+pub const EXPR_SIZEOF: u32 = 24;
+pub const EXPR_ALIGNOF: u32 = 25;
+
+pub const DECL_FN: u32 = 0;
+pub const DECL_STRUCT: u32 = 1;
+pub const DECL_ENUM: u32 = 2;
+pub const DECL_TRAIT: u32 = 3;
+pub const DECL_IMPL: u32 = 4;
+pub const DECL_TYPE_ALIAS: u32 = 5;
+pub const DECL_CONST: u32 = 6;
+pub const DECL_STATIC: u32 = 7;
+pub const DECL_IMPORT: u32 = 8;
+pub const DECL_NONE: u32 = 9;
+
+pub const LITERAL_INT: u32 = 0;
+pub const LITERAL_FLOAT: u32 = 1;
+pub const LITERAL_STRING: u32 = 2;
+pub const LITERAL_CHAR: u32 = 3;
+pub const LITERAL_BOOL: u32 = 4;
+
+pub const UNARY_NEG: u32 = 0;
+pub const UNARY_NOT: u32 = 1;
+pub const UNARY_DEREF: u32 = 2;
+pub const UNARY_REF: u32 = 3;
+pub const UNARY_REFMUT: u32 = 4;
+
+pub const BINARY_ADD: u32 = 0;
+pub const BINARY_SUB: u32 = 1;
+pub const BINARY_MUL: u32 = 2;
+pub const BINARY_DIV: u32 = 3;
+pub const BINARY_MOD: u32 = 4;
+pub const BINARY_ADDWRAP: u32 = 5;
+pub const BINARY_SUBWRAP: u32 = 6;
+pub const BINARY_MULWRAP: u32 = 7;
+pub const BINARY_EQ: u32 = 8;
+pub const BINARY_NE: u32 = 9;
+pub const BINARY_LT: u32 = 10;
+pub const BINARY_LE: u32 = 11;
+pub const BINARY_GT: u32 = 12;
+pub const BINARY_GE: u32 = 13;
+pub const BINARY_AND: u32 = 14;
+pub const BINARY_OR: u32 = 15;
+pub const BINARY_XOR: u32 = 16;
+pub const BINARY_SHL: u32 = 17;
+pub const BINARY_SHR: u32 = 18;
+// ZIR-only: the @shl_wrap / @shr_wrap intrinsics, a shift whose count is masked to the
+// operand's width instead of checked (the explicit opt-out from the shift-count check).
+pub const BINARY_SHL_MASKED: u32 = 40;
+pub const BINARY_SHR_MASKED: u32 = 41;
+pub const BINARY_ASSIGN: u32 = 19;
+pub const BINARY_ADD_ASSIGN: u32 = 20;
+pub const BINARY_SUB_ASSIGN: u32 = 21;
+pub const BINARY_MUL_ASSIGN: u32 = 22;
+pub const BINARY_DIV_ASSIGN: u32 = 23;
+pub const BINARY_MOD_ASSIGN: u32 = 24;
+pub const BINARY_ADDWRAP_ASSIGN: u32 = 25;
+pub const BINARY_SUBWRAP_ASSIGN: u32 = 26;
+pub const BINARY_MULWRAP_ASSIGN: u32 = 27;
+pub const BINARY_BITAND_ASSIGN: u32 = 28;
+pub const BINARY_BITOR_ASSIGN: u32 = 29;
+pub const BINARY_BITXOR_ASSIGN: u32 = 30;
+pub const BINARY_SHL_ASSIGN: u32 = 31;
+pub const BINARY_SHR_ASSIGN: u32 = 32;
+
+pub const PATTERN_LITERAL: u32 = 0;
+pub const PATTERN_IDENT: u32 = 1;
+pub const PATTERN_WILDCARD: u32 = 2;
+pub const PATTERN_ENUM_VARIANT: u32 = 3;
+pub const PATTERN_RANGE: u32 = 4;
+pub const PATTERN_OR: u32 = 5;
+pub const PATTERN_TUPLE: u32 = 6;
+pub const PATTERN_STRUCT: u32 = 7;
+pub const PATTERN_MUT_IDENT: u32 = 8;
+
+pub const TYPE_PRIMITIVE: u32 = 0;
+pub const TYPE_PTR: u32 = 1;
+pub const TYPE_PTRMUT: u32 = 2;
+pub const TYPE_REF: u32 = 3;
+pub const TYPE_REFMUT: u32 = 4;
+pub const TYPE_SLICE: u32 = 5;
+pub const TYPE_ARRAY: u32 = 6;
+pub const TYPE_TUPLE: u32 = 7;
+pub const TYPE_FN: u32 = 8;
+pub const TYPE_PATH: u32 = 9;
+pub const TYPE_SLICE_MUT: u32 = 10;
+
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+    pub line: u32,
+    pub col: u32,
+}
+
+// Handles into AST arenas
+pub type ExprId = u32;
+pub type TypeId = u32;
+pub type StmtId = u32;
+pub type PatternId = u32;
+pub type DeclId = u32;
+
+pub enum BinaryOp {
+    Add, Sub, Mul, Div, Mod,
+    AddWrap, SubWrap, MulWrap,
+    Eq, Ne, Lt, Le, Gt, Ge,
+    And, Or, Xor, Shl, Shr,
+    Assign,
+    AddAssign, SubAssign, MulAssign, DivAssign, ModAssign,
+    AddWrapAssign, SubWrapAssign, MulWrapAssign,
+    BitAndAssign, BitOrAssign, BitXorAssign,
+    ShlAssign, ShrAssign,
+    LAnd, LOr,
+}
+
+impl BinaryOp {
+    pub fn get_tag(self: &BinaryOp) -> u32 { return unsafe { *(self as *u32) }; }
+}
+
+pub struct BinaryExpr {
+    pub op: BinaryOp,
+    pub lhs: ExprId,
+    pub rhs: ExprId,
+}
+
+pub struct UnaryExpr {
+    pub op: UnaryOp,
+    pub expr: ExprId,
+}
+
+pub enum UnaryOp {
+    Neg, Not, Deref, Ref, RefMut,
+}
+
+impl UnaryOp {
+    pub fn get_tag(self: &UnaryOp) -> u32 { return unsafe { *(self as *u32) }; }
+}
+
+pub struct CallExpr {
+    pub callee: ExprId,
+    pub args: [ExprId],
+    pub type_args: [TypeId],
+}
+
+pub struct GenericExpr {
+    pub expr: ExprId,
+    pub type_args: [TypeId],
+}
+
+pub struct IntrinsicExpr {
+    pub name: u32,
+    pub args: [ExprId],
+    pub type_args: [TypeId],
+}
+
+pub struct BlockExpr {
+    pub stmts: [StmtId],
+    pub tail_expr: ExprId, // 0 if none
+    pub is_unsafe: bool,
+    // The closing brace's span, so a diagnostic about a local leaving scope at the end of the block
+    // can point at the `}` instead of 0:0. Recorded by the parser; a synthesized block leaves it
+    // zero, which reads as "no location" exactly as it did before this field existed.
+    pub end_span: Span,
+}
+
+pub struct IfExpr {
+    pub cond: ExprId,
+    pub then_block: ExprId,
+    pub else_block: ExprId, // 0 if none
+}
+
+pub struct MatchExpr {
+    pub expr: ExprId,
+    pub arms: [MatchArm],
+    // An `if let` or `while let`: its `_` arm is the `else` branch, not written as `_`.
+    pub desugared: bool,
+}
+
+pub struct MatchArm {
+    pub pattern: PatternId,
+    pub guard: ExprId, // 0 if none
+    pub body: ExprId,
+}
+
+pub enum Pattern {
+    Literal(Literal),
+    Ident(u32),
+    Wildcard,
+    EnumVariant(VariantPattern),
+    Range(RangePattern),
+    Or([PatternId]),
+    Tuple([PatternId]),       // (p, q, ..)
+    Struct(StructPattern),    // Name { field: p, short, .. }
+    MutIdent(u32),            // `mut name`: a binding that can be assigned
+}
+
+impl Pattern {
+    pub fn get_tag(self: &Pattern) -> u32 { return unsafe { *(self as *u32) }; }
+}
+
+pub struct VariantPattern {
+    pub type_name: u32, // 0 if unqualified
+    pub variant_name: u32,
+    // Sub-patterns for the payload: one for the payload itself, or one per element when
+    // the payload is a tuple (`V(a, b)`). Empty when the pattern names no payload.
+    pub payload: [PatternId],
+}
+
+pub struct StructPattern {
+    pub type_name: u32,
+    pub fields: [FieldPattern],
+    pub has_rest: bool, // `..`: fields not named match anything
+}
+
+pub struct FieldPattern {
+    pub name: u32,
+    pub pattern: PatternId, // `field` alone is a binding named `field`
+}
+
+pub struct RangePattern {
+    pub start: Literal,
+    pub end: Literal,
+    pub inclusive: bool,
+}
+
+pub struct StructLiteralExpr {
+    pub struct_name: u32,
+    pub type_args: [TypeId],
+    pub fields: [FieldValue],
+}
+
+pub struct FieldValue {
+    pub name: u32,
+    pub value: ExprId,
+}
+
+impl Expr {
+    pub fn get_tag(self: &Expr) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Ident(self: &Expr) -> u32 {
+        return match self { Expr.Ident(x) => *x, _ => ICE("Expr.get_Ident on another variant") };
+    }
+    pub fn get_Generic(self: &Expr) -> &GenericExpr {
+        return match self { Expr.Generic(x) => x, _ => ICE("Expr.get_Generic on another variant") };
+    }
+    pub fn get_Literal(self: &Expr) -> &Literal {
+        return match self { Expr.Literal(x) => x, _ => ICE("Expr.get_Literal on another variant") };
+    }
+    pub fn get_Binary(self: &Expr) -> &BinaryExpr {
+        return match self { Expr.Binary(x) => x, _ => ICE("Expr.get_Binary on another variant") };
+    }
+    pub fn get_Unary(self: &Expr) -> &UnaryExpr {
+        return match self { Expr.Unary(x) => x, _ => ICE("Expr.get_Unary on another variant") };
+    }
+    pub fn get_MemberAccess(self: &Expr) -> &MemberAccessExpr {
+        return match self {
+            Expr.MemberAccess(x) => x,
+            _ => ICE("Expr.get_MemberAccess on another variant")
+        };
+    }
+    pub fn get_Index(self: &Expr) -> &IndexExpr {
+        return match self { Expr.Index(x) => x, _ => ICE("Expr.get_Index on another variant") };
+    }
+    pub fn get_Cast(self: &Expr) -> &CastExpr {
+        return match self { Expr.Cast(x) => x, _ => ICE("Expr.get_Cast on another variant") };
+    }
+    pub fn get_Intrinsic(self: &Expr) -> &IntrinsicExpr {
+        return match self {
+            Expr.Intrinsic(x) => x,
+            _ => ICE("Expr.get_Intrinsic on another variant")
+        };
+    }
+    pub fn get_Block(self: &Expr) -> &BlockExpr {
+        return match self { Expr.Block(x) => x, _ => ICE("Expr.get_Block on another variant") };
+    }
+}
+
+pub struct MemberAccessExpr {
+    pub expr: ExprId,
+    pub member: u32,
+}
+
+pub struct TupleAccessExpr {
+    pub expr: ExprId,
+    pub index: u64,
+}
+
+pub struct IndexExpr {
+    pub expr: ExprId,
+    pub index: ExprId,
+}
+
+pub struct BoxExpr {
+    pub expr: ExprId,
+    pub allocator: ExprId, // 0 if default (global heap)
+}
+
+pub struct CastExpr {
+    pub expr: ExprId,
+    pub target_ty: TypeId,
+}
+
+pub struct ArrayLiteralExpr {
+    pub elements: [ExprId],
+}
+
+pub struct ArrayRepeatExpr {
+    pub value: ExprId,
+    pub len: ExprId,
+}
+
+pub struct TupleLiteralExpr {
+    pub elements: [ExprId],
+}
+
+pub struct ClosureExpr {
+    pub params: [Param],
+    pub ret_ty: TypeId,
+    pub body: ExprId,
+}
+
+pub enum Expr {
+    Literal(Literal),
+    Ident(u32),
+    Unary(UnaryExpr),
+    Binary(BinaryExpr),
+    Call(CallExpr),
+    Generic(GenericExpr),
+    Intrinsic(IntrinsicExpr),
+    Block(BlockExpr),
+    If(IfExpr),
+    Match(MatchExpr),
+    StructLiteral(StructLiteralExpr),
+    MemberAccess(MemberAccessExpr),
+    TupleAccess(TupleAccessExpr),
+    Index(IndexExpr),
+    Boxed(BoxExpr),
+    Cast(CastExpr),
+    ArrayLiteral(ArrayLiteralExpr),
+    ArrayRepeat(ArrayRepeatExpr),
+    TupleLiteral(TupleLiteralExpr),
+    Closure(ClosureExpr),
+    Try(ExprId),
+    Return(ExprId),
+    Break,
+    Continue,
+    Sizeof(TypeId),
+    Alignof(TypeId),
+}
+
+pub enum Literal {
+    Int((u64, u32)), // value, suffix index (0-15, 0xffffffff if none)
+    Float((f64, u32, u32)), // value, suffix (as Int's), the literal's source text
+    String(u32),
+    Char(u32),
+    Bool(bool),
+}
+
+impl Literal {
+    pub fn get_tag(self: &Literal) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Int(self: &Literal) -> u64 { match *self { Literal.Int(v) => v.0, _ => 0 as u64 } }
+    pub fn get_Int_full(self: &Literal) -> (u64, u32) {
+        match *self { Literal.Int(v) => v, _ => (0 as u64, 0xffffffff as u32) }
+    }
+    pub fn get_Float(self: &Literal) -> f64 { match *self { Literal.Float(v) => v.0, _ => 0.0 } }
+    pub fn get_Float_suffix(self: &Literal) -> u32 {
+        match *self { Literal.Float(v) => v.1, _ => 0xffffffff as u32 }
+    }
+    pub fn get_Float_text(self: &Literal) -> u32 {
+        match *self { Literal.Float(v) => v.2, _ => 0 as u32 }
+    }
+    pub fn get_String(self: &Literal) -> u32 {
+        return match self {
+            Literal.String(x) | Literal.Char(x) => *x,
+            _ => ICE("Literal.get_String on another variant")
+        };
+    }
+    pub fn get_Char(self: &Literal) -> u32 {
+        return match self {
+            Literal.String(x) | Literal.Char(x) => *x,
+            _ => ICE("Literal.get_Char on another variant")
+        };
+    }
+    pub fn get_Bool(self: &Literal) -> bool {
+        return match self {
+            Literal.Bool(x) => *x,
+            _ => ICE("Literal.get_Bool on another variant")
+        };
+    }
+}
+
+pub enum Type {
+    Primitive(PrimitiveType),
+    Ptr(TypeId),
+    PtrMut(TypeId),
+    Ref(TypeId),
+    RefMut(TypeId),
+    Slice(TypeId),
+    Array((TypeId, usize)),
+    Tuple([TypeId]),
+    Fn(FnType),
+    Path((u32, [TypeId])), // name, type_args
+    SliceMut(TypeId), // [mut T]
+}
+
+impl Type {
+    pub fn get_tag(self: &Type) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Primitive(self: &Type) -> PrimitiveType {
+        return match self {
+            Type.Primitive(x) => *x,
+            _ => ICE("Type.get_Primitive on another variant")
+        };
+    }
+    pub fn get_Ptr(self: &Type) -> TypeId {
+        return match self {
+            Type.Ptr(x)
+                | Type.PtrMut(x)
+                | Type.Ref(x)
+                | Type.RefMut(x)
+                | Type.Slice(x)
+                | Type.SliceMut(x) => *x,
+            _ => ICE("Type.get_Ptr on another variant")
+        };
+    }
+    pub fn get_Ref(self: &Type) -> TypeId {
+        return match self {
+            Type.Ptr(x)
+                | Type.PtrMut(x)
+                | Type.Ref(x)
+                | Type.RefMut(x)
+                | Type.Slice(x)
+                | Type.SliceMut(x) => *x,
+            _ => ICE("Type.get_Ref on another variant")
+        };
+    }
+    pub fn get_Slice(self: &Type) -> TypeId {
+        return match self {
+            Type.Ptr(x)
+                | Type.PtrMut(x)
+                | Type.Ref(x)
+                | Type.RefMut(x)
+                | Type.Slice(x)
+                | Type.SliceMut(x) => *x,
+            _ => ICE("Type.get_Slice on another variant")
+        };
+    }
+    pub fn get_Array(self: &Type) -> (TypeId, usize) {
+        return match self { Type.Array(x) => *x, _ => ICE("Type.get_Array on another variant") };
+    }
+    pub fn get_Tuple(self: &Type) -> [TypeId] {
+        return match self { Type.Tuple(x) => *x, _ => ICE("Type.get_Tuple on another variant") };
+    }
+    pub fn get_Fn(self: &Type) -> &FnType {
+        return match self { Type.Fn(x) => x, _ => ICE("Type.get_Fn on another variant") };
+    }
+    pub fn get_Path(self: &Type) -> (u32, [TypeId]) {
+        return match self { Type.Path(x) => *x, _ => ICE("Type.get_Path on another variant") };
+    }
+}
+
+pub enum PrimitiveType {
+    U8, U16, U32, U64, USize,
+    I8, I16, I32, I64, ISize,
+    F32, F64,
+    Bool, Char, Unit, Never,
+}
+
+impl PrimitiveType {
+    pub fn get_tag(self: &PrimitiveType) -> u32 { return unsafe { *(self as *u32) }; }
+}
+
+pub fn primitive_type_name(p: PrimitiveType) -> [u8] {
+    return match p {
+        PrimitiveType.U8 => "u8",
+        PrimitiveType.U16 => "u16",
+        PrimitiveType.U32 => "u32",
+        PrimitiveType.U64 => "u64",
+        PrimitiveType.USize => "usize",
+        PrimitiveType.I8 => "i8",
+        PrimitiveType.I16 => "i16",
+        PrimitiveType.I32 => "i32",
+        PrimitiveType.I64 => "i64",
+        PrimitiveType.ISize => "isize",
+        PrimitiveType.F32 => "f32",
+        PrimitiveType.F64 => "f64",
+        PrimitiveType.Bool => "bool",
+        PrimitiveType.Char => "char",
+        PrimitiveType.Unit => "unit",
+        PrimitiveType.Never => "never",
+    };
+}
+
+pub struct FnType {
+    pub params: [TypeId],
+    pub ret_ty: TypeId,
+    pub is_variadic: bool,
+    // `extern "C" fn(A) -> R`: a thin code pointer C can call, not a Zoril function value.
+    pub is_c: bool,
+}
+
+pub enum Decl {
+    Fn(FnDecl),
+    Struct(StructDecl),
+    Enum(EnumDecl),
+    Trait(TraitDecl),
+    Impl(ImplDecl),
+    TypeAlias(TypeAliasDecl),
+    Const(ConstDecl),
+    Static(StaticDecl),
+    Import(u32),
+    None,
+}
+
+pub struct TypeParam {
+    pub name: u32,
+    pub bounds: [TypeId],
+}
+
+pub struct FnDecl {
+    pub name: u32,
+    pub params: [Param],
+    pub ret_ty: TypeId,
+    pub body: ExprId, // 0 if extern
+    pub is_pub: bool,
+    pub is_extern: bool,
+    // A function with a C ABI that Zoril defines (`extern "C" fn f() { .. }`), or the interface's
+    // declaration of one (`#[export]`): an unmangled symbol, no environment, and a call needs no `unsafe`.
+    pub is_export: bool,
+    pub is_unsafe: bool,
+    pub is_variadic: bool,
+    pub must_use: bool,
+    // Read from a `.zri`: its spans are lines of the interface, not of the module's source, so a
+    // diagnostic about the body cannot name a line of the source (the importer reports none that the
+    // module's own build can report).
+    pub from_interface: bool,
+    pub type_params: [TypeParam],
+    pub doc_comment: u32, // interned multi-line comment block preceding this function
+    pub source_file: u32, // interned path of file that declared this
+    // The declaring file was loaded from a root the compiler was *told* is the standard library
+    // (`module_path::is_designated_stdlib_file`, or the provenance an interface records,
+    // `zri_declares_stdlib`). Read by the driver to decide whether this declaration may be one of
+    // the arena lifecycle primitives; never inferred from the declaration's, the file's or the
+    // directory's name (doc/spec/modular_compilation.md).
+    pub source_is_stdlib: bool,
+    pub has_summary: bool,
+    pub summary_escape: u64,
+    pub summary_stash: u64,
+    pub summary_escape_via: u64, // the two above, for what the body reads through a parameter
+    pub summary_stash_via: u64,
+    pub summary_storage: u64, // parameters whose own storage the result may point into
+    pub summary_stores: u64, // parameters whose own storage the body writes into memory outside it
+    pub summary_into: u64, // parameters whose memory receives those writes; bit 63: a global or unknown
+    // Whether an interface described the three storage masks above. An import without them is
+    // unknown to the IL verifier, which then assumes the worst (doc/SAFETY.md §4.4).
+    pub has_storage: bool,
+    pub summary_ret_stack: bool,
+    pub summary_alloc: usize,
+    // `#[borrows(p, ...)]`: the returned reference points into these parameters only
+    // (`#[borrows()]`: into none of them). Without it, Rust's elision rules decide.
+    pub has_borrows: bool,
+    pub borrows: [u32], // parameter names
+    // `#[stores(p -> q)]`: the body stores p's own storage into q's memory (`q` is `self` when
+    // the arrow is left out, and `static` for a global). Checked against the computed masks when
+    // the body is verified (src/verify.zrl); a `pub fn` that stores a reference parameter without
+    // declaring it warns, naming the line to add.
+    pub has_stores: bool,
+    pub stores_from: [u32],
+    pub stores_to: [u32],
+    pub stores_static: [bool],
+    // Half-open range of ExprIds allocated while parsing this function (its whole body).
+    pub expr_start: u32,
+    pub expr_end: u32,
+    // A trait's default method copied into an impl that does not define it: the impl's
+    // declaration (the copy's source_file stays the trait's, where its body is written).
+    // 0 for a function written where it is declared.
+    pub default_of: u32,
+}
+
+pub struct StructDecl {
+    pub name: u32,
+    pub fields: [Field],
+    pub is_pub: bool,
+    pub must_use: bool,
+    pub type_params: [TypeParam],
+    pub source_file: u32,
+}
+
+pub struct Field {
+    pub name: u32,
+    pub ty: TypeId,
+    pub is_pub: bool,
+}
+
+pub struct EnumDecl {
+    pub name: u32,
+    pub variants: [Variant],
+    pub is_pub: bool,
+    pub must_use: bool,
+    pub type_params: [TypeParam],
+    pub source_file: u32,
+}
+
+pub struct Variant {
+    pub name: u32,
+    pub payload: TypeId, // 0 if none
+    pub discriminant: u32,
+    pub has_discriminant: bool,
+}
+
+pub struct TraitDecl {
+    pub name: u32,
+    pub methods: [FnDecl],
+    pub assoc_types: [AssocType], // `type Item;`: each ty is 0
+    pub is_pub: bool,
+    pub type_params: [TypeParam],
+    pub source_file: u32,
+}
+
+pub struct ImplDecl {
+    pub trait_name: u32, // 0 if inherent
+    pub target_ty: TypeId,
+    pub methods: [FnDecl],
+    pub constants: [ConstDecl],
+    pub assoc_types: [AssocType], // `type Item = T;`
+    pub type_params: [TypeParam],
+    pub trait_type_args: [TypeId],
+    pub source_file: u32,
+}
+
+// An associated type: declared in a trait (`type Item;`), defined in an impl (`type Item = T;`)
+// and named through a type (`Self::Item`, `I::Item`).
+pub struct AssocType {
+    pub name: u32,
+    pub ty: TypeId,
+    pub span: Span,
+}
+
+pub struct TypeAliasDecl {
+    pub name: u32,
+    pub target: TypeId,
+    pub is_pub: bool,
+    pub source_file: u32,
+}
+
+pub struct ConstDecl {
+    pub name: u32,
+    pub ty: TypeId,
+    pub value: ExprId,
+    pub is_pub: bool,
+    pub source_file: u32,
+}
+
+pub struct StaticDecl {
+    pub name: u32,
+    pub is_mut: bool,
+    pub ty: TypeId,
+    pub value: ExprId,
+    pub is_pub: bool,
+    pub source_file: u32,
+}
+
+pub struct Param {
+    pub name: u32,
+    pub ty: TypeId,
+    pub is_mut: bool,
+}
+
+pub struct LetStmt {
+    // `let (a, b) = e;` and the like: the pattern, with NAME and IS_MUT unused. 0 for a
+    // plain `let [mut] name`.
+    pub pattern: PatternId,
+    pub name: u32,
+    pub ty: TypeId,
+    pub init: ExprId,
+    pub is_mut: bool,
+}
+
+pub struct WhileStmt {
+    pub cond: ExprId,
+    pub body: ExprId,
+}
+
+// `for var in start..end BODY`, or, with `end` 0, `for PATTERN in ITERABLE BODY` (`start` is
+// the iterable). The iterator form keeps its source pieces for printing and is lowered
+// through three statements the parser builds: `bind` (`let mut <var> = ITERABLE;`, `var` a
+// compiler-internal name), then `slice_loop` when the iterable is a slice or array, else
+// `iter_loop`, which calls `next()` until it returns `None`.
+pub struct ForStmt {
+    pub var: u32,
+    pub start: ExprId,
+    pub end: ExprId,
+    pub body: ExprId,
+    pub pattern: PatternId,
+    pub bind: StmtId,
+    pub slice_loop: StmtId,
+    pub iter_loop: StmtId,
+}
+
+pub enum Stmt {
+    Let(LetStmt),
+    Expr(ExprId),
+    While(WhileStmt),
+    For(ForStmt),
+    Defer(ExprId),
+    Return(ExprId),
+    Break,
+    Continue,
+}
+
+impl Decl {
+    // The interned path of the file that declared it (0 for imports and none).
+    pub fn source_file(self: &Decl) -> u32 {
+        return match *self {
+            Decl.Fn(f) => f.source_file,
+            Decl.Struct(s) => s.source_file,
+            Decl.Enum(e) => e.source_file,
+            Decl.Trait(t) => t.source_file,
+            Decl.Impl(i) => i.source_file,
+            Decl.TypeAlias(t) => t.source_file,
+            Decl.Const(c) => c.source_file,
+            Decl.Static(s) => s.source_file,
+            Decl.Import(_) | Decl.None => 0 as u32,
+        };
+    }
+
+    pub fn is_pub(self: &Decl) -> bool {
+        return match *self {
+            Decl.Fn(f) => f.is_pub,
+            Decl.Struct(s) => s.is_pub,
+            Decl.Enum(e) => e.is_pub,
+            Decl.Trait(t) => t.is_pub,
+            Decl.TypeAlias(t) => t.is_pub,
+            Decl.Const(c) => c.is_pub,
+            Decl.Static(s) => s.is_pub,
+            Decl.Impl(_) | Decl.Import(_) | Decl.None => false,
+        };
+    }
+
+    pub fn get_tag(self: &Decl) -> u32 {
+        let s = *self;
+        return match s {
+            Decl.Fn(_) => DECL_FN,
+            Decl.Struct(_) => DECL_STRUCT,
+            Decl.Enum(_) => DECL_ENUM,
+            Decl.Trait(_) => DECL_TRAIT,
+            Decl.Impl(_) => DECL_IMPL,
+            Decl.TypeAlias(_) => DECL_TYPE_ALIAS,
+            Decl.Const(_) => DECL_CONST,
+            Decl.Static(_) => DECL_STATIC,
+            Decl.Import(_) => DECL_IMPORT,
+            Decl.None => DECL_NONE,
+        };
+    }
+
+    pub fn get_Fn(self: &Decl) -> &FnDecl {
+        return match self { Decl.Fn(x) => x, _ => ICE("Decl.get_Fn on another variant") };
+    }
+    pub fn get_Struct(self: &Decl) -> &StructDecl {
+        return match self { Decl.Struct(x) => x, _ => ICE("Decl.get_Struct on another variant") };
+    }
+    pub fn get_Enum(self: &Decl) -> &EnumDecl {
+        return match self { Decl.Enum(x) => x, _ => ICE("Decl.get_Enum on another variant") };
+    }
+    pub fn get_Trait(self: &Decl) -> &TraitDecl {
+        return match self { Decl.Trait(x) => x, _ => ICE("Decl.get_Trait on another variant") };
+    }
+    pub fn get_Impl(self: &Decl) -> &ImplDecl {
+        return match self { Decl.Impl(x) => x, _ => ICE("Decl.get_Impl on another variant") };
+    }
+    pub fn get_TypeAlias(self: &Decl) -> &TypeAliasDecl {
+        return match self {
+            Decl.TypeAlias(x) => x,
+            _ => ICE("Decl.get_TypeAlias on another variant")
+        };
+    }
+    pub fn get_Const(self: &Decl) -> &ConstDecl {
+        return match self { Decl.Const(x) => x, _ => ICE("Decl.get_Const on another variant") };
+    }
+    pub fn get_Static(self: &Decl) -> &StaticDecl {
+        return match self { Decl.Static(x) => x, _ => ICE("Decl.get_Static on another variant") };
+    }
+}
+
+// One `import` resolved while parsing: `from_module` imported the file `to_file` (canonical path as
+// resolved, extension included), which belongs to module `to_module` (differs from `to_file` only
+// for a .zri, which names the source module it was emitted from). Recorded for every import,
+// including repeats, so the driver and the interface printer see the real dependency edges.
+pub struct ImportEdge {
+    pub from_module: u32,
+    pub to_file: u32,
+    pub to_module: u32,
+    pub alias: u32, // the `as` name, 0 if none (the namespace is then the file stem)
+    pub span: Span, // of the `import`
+}
+
+// `use NS::NAME;` in MODULE: the item NAME of the module imported as NS, written bare.
+pub struct UseItem {
+    pub module: u32,
+    pub ns: u32,
+    pub name: u32,
+    pub span: Span,
+}
+
+pub struct AST {
+    pub arena: *mut ArenaHeader,
+    pub import_edges: Vec<ImportEdge>,
+    pub uses: Vec<UseItem>,
+    pub module_doc: u32, // interned multi-line comment block at top of file
+
+    pub exprs: Vec<Expr>,
+    pub expr_spans: Vec<Span>,
+
+    pub types: Vec<Type>,
+    pub type_spans: Vec<Span>,
+
+    pub stmts: Vec<Stmt>,
+    pub stmt_spans: Vec<Span>,
+    pub stmt_comments: Vec<u32>, // interned literal source comment preceding the statement, 0 if none
+
+    pub patterns: Vec<Pattern>,
+    pub pattern_spans: Vec<Span>,
+
+    pub decls: Vec<Decl>,
+    pub decl_spans: Vec<Span>,
+
+    // How many pairs of parentheses enclose an expression ((PAREN_EXPR, id)) or a pattern
+    // ((PAREN_PATTERN, id)) in the source: the tree has no node for them, and the formatter
+    // writes them back.
+    pub parens: PairMap,
+}
+
+pub const PAREN_EXPR: u32 = 0;
+pub const PAREN_PATTERN: u32 = 1;
+
+impl AST {
+    // Names (identifiers and member names) appearing in the bodies of this module's public generic
+
+    // functions, generic/own-generic public methods and the default methods of public traits. Those bodies are
+    // instantiated by whoever calls them, so whatever they mention must be linkable (global linkage) and described by the
+    // module's interface. Over-approximate: a local shadowing a function name only costs an export.
+    pub fn collect_generic_body_refs(self: &AST, target_sf: u32, out: &mut Vec<u32>) {
+        let mut i = 0 as usize;
+        while i < self.decls.len() {
+            let p_decl: &Decl = &self.decls[i];
+            match *p_decl {
+                Decl.Fn(f) => {
+                    if f.source_file == target_sf && f.is_pub && f.type_params.len > 0 as usize {
+                        self.note_body_refs(&f, out);
+                    }
+                },
+                Decl.Impl(imp) => {
+                    if imp.source_file == target_sf {
+                        let generic_impl = self.impl_is_generic(&imp);
+                        let mut k = 0 as usize;
+                        while k < imp.methods.len {
+                            let m = imp.methods[k];
+                            if (m.is_pub || imp.trait_name != 0 as u32)
+                                && (generic_impl || m.type_params.len > 0 as usize) {
+                                self.note_body_refs(&m, out);
+                            }
+                            k = k + 1 as usize;
+                        }
+                    }
+                },
+                Decl.Trait(t) => {
+                    // A default method's body is instantiated where the trait is implemented or the method called,
+                    // like a generic body, so what it names is as much part of the interface as a generic function's.
+                    // A private trait's too: a public generic body that calls one is instantiated in the importer.
+                    if t.source_file == target_sf {
+                        let mut k = 0 as usize;
+                        while k < t.methods.len {
+                            let m = t.methods[k];
+                            if m.body != 0 as ExprId { self.note_body_refs(&m, out); }
+                            k = k + 1 as usize;
+                        }
+                    }
+                },
+                _ => {},
+            }
+            i = i + 1 as usize;
+        }
+        self.scan_private_generic_helpers(target_sf, out);
+    }
+
+    // A private generic function or method whose name a scanned body mentions is written into the
+    // interface (its body is instantiated in the importer), so what it names is part of the
+    // interface too: repeat until a pass finds no helper not yet scanned.
+    fn scan_private_generic_helpers(self: &AST, target_sf: u32, out: &mut Vec<u32>) {
+        let mut scanned = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+        let mut progress = true;
+        while progress {
+            progress = false;
+            let mut i = 0 as usize;
+            while i < self.decls.len() {
+                let p_decl: &Decl = &self.decls[i];
+                match *p_decl {
+                    Decl.Fn(f) => {
+                        if f.source_file == target_sf
+                            && !f.is_pub
+                            && f.type_params.len > 0 as usize {
+                            if self.take_helper(&f, out, &mut scanned) { progress = true; }
+                        }
+                    },
+                    Decl.Impl(imp) => {
+                        if imp.source_file == target_sf {
+                            let generic_impl = self.impl_is_generic(&imp);
+                            let mut k = 0 as usize;
+                            while k < imp.methods.len {
+                                let m = imp.methods[k];
+                                if !m.is_pub
+                                    && imp.trait_name == 0 as u32
+                                    && (generic_impl || m.type_params.len > 0 as usize) {
+                                    if self.take_helper(&m, out, &mut scanned) { progress = true; }
+                                }
+                                k = k + 1 as usize;
+                            }
+                        }
+                    },
+                    _ => {},
+                }
+                i = i + 1 as usize;
+            }
+        }
+    }
+
+    fn take_helper(self: &AST, f: &FnDecl, out: &mut Vec<u32>, scanned: &mut Vec<u32>) -> bool {
+        if !Self.names_contain(out, f.name) || Self.names_contain(scanned, f.expr_start as u32) {
+            return false;
+        }
+        scanned.push(f.expr_start as u32);
+        self.note_body_refs(f, out);
+        return true;
+    }
+
+    fn names_contain(names: &Vec<u32>, n: u32) -> bool {
+        let mut i = 0 as usize;
+        while i < names.len() {
+            if names.as_slice()[i] == n { return true; }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
+    // Whether IMP's methods are instantiated by whoever uses them: it declares type parameters, or its
+    // target is written with type arguments (`impl W<T>`, `impl W<i32>`).
+    pub fn impl_is_generic(self: &AST, imp: &ImplDecl) -> bool {
+        if imp.type_params.len > 0 as usize { return true; }
+        let p_tgt: &Type = &self.types[imp.target_ty as usize];
+        return p_tgt.get_tag() == TYPE_PATH && p_tgt.get_Path().1.len > 0 as usize;
+    }
+
+    fn note_body_refs(self: &AST, f: &FnDecl, out: &mut Vec<u32>) {
+        let mut e = f.expr_start as usize;
+        while e < f.expr_end as usize && e < self.exprs.len() {
+            let p: &Expr = &self.exprs[e];
+            match *p {
+                Expr.Ident(n) => { out.push(n); },
+                Expr.MemberAccess(m) => { out.push(m.member); },
+                _ => {},
+            }
+            e = e + 1 as usize;
+        }
+    }
+
+    #[stores(arena -> arena)]
+    pub fn new(arena: *mut ArenaHeader) -> *mut AST {
+        let ast = unsafe { zoril_allocator_alloc(arena, sizeof(AST)) } as *mut AST;
+
+        let mut a = AST {
+            arena: arena,
+            // Not known until parsing runs: parser.zrl sets it from the lexer's
+            // captured comment once the first blank-line reset has been seen.
+            module_doc: 0 as u32,
+            import_edges: unsafe { Vec::<ImportEdge>.new_in_raw(arena) },
+            uses: unsafe { Vec::<UseItem>.new_in_raw(arena) },
+            exprs: unsafe { Vec::<Expr>.new_in_raw(arena) },
+            expr_spans: unsafe { Vec::<Span>.new_in_raw(arena) },
+            types: unsafe { Vec::<Type>.new_in_raw(arena) },
+            type_spans: unsafe { Vec::<Span>.new_in_raw(arena) },
+            stmts: unsafe { Vec::<Stmt>.new_in_raw(arena) },
+            stmt_spans: unsafe { Vec::<Span>.new_in_raw(arena) },
+            stmt_comments: unsafe { Vec::<u32>.new_in_raw(arena) },
+            patterns: unsafe { Vec::<Pattern>.new_in_raw(arena) },
+            pattern_spans: unsafe { Vec::<Span>.new_in_raw(arena) },
+            decls: unsafe { Vec::<Decl>.new_in_raw(arena) },
+            decl_spans: unsafe { Vec::<Span>.new_in_raw(arena) },
+            parens: PairMap.new(arena),
+        };
+
+        // Push dummy items at index 0 for 1-based indexing
+        a.exprs.push(Expr.Literal(Literal.Bool(false)));
+        a.expr_spans.push(Span { start: 0, end: 0, line: 0, col: 0 });
+        a.types.push(Type.Primitive(PrimitiveType.Unit));
+        a.type_spans.push(Span { start: 0, end: 0, line: 0, col: 0 });
+        a.stmts.push(Stmt.Break);
+        a.stmt_spans.push(Span { start: 0, end: 0, line: 0, col: 0 });
+        a.stmt_comments.push(0 as u32);
+        a.patterns.push(Pattern.Wildcard);
+        a.pattern_spans.push(Span { start: 0, end: 0, line: 0, col: 0 });
+        a.decls.push(Decl.None);
+        a.decl_spans.push(Span { start: 0, end: 0, line: 0, col: 0 });
+
+        unsafe { *ast = a; }
+        return ast;
+    }
+
+    // One more pair of parentheses around the expression or pattern ID (KIND: PAREN_*).
+    pub fn add_paren(self: &mut AST, kind: u32, id: u32) {
+        self.parens.set(kind, id, self.parens.get(kind, id) + 1 as u32);
+    }
+
+    pub fn paren_count(self: &AST, kind: u32, id: u32) -> u32 {
+        return self.parens.get(kind, id);
+    }
+
+    pub fn alloc_expr(self: &mut AST, expr: Expr, span: Span) -> ExprId {
+        let id = self.exprs.len() as ExprId;
+        self.exprs.push(expr);
+        self.expr_spans.push(span);
+        return id;
+    }
+
+    pub fn alloc_type(self: &mut AST, ty: Type, span: Span) -> TypeId {
+        let id = self.types.len() as TypeId;
+        self.types.push(ty);
+        self.type_spans.push(span);
+        return id;
+    }
+
+    pub fn alloc_stmt(self: &mut AST, stmt: Stmt, span: Span, comment: u32) -> StmtId {
+        let id = self.stmts.len() as StmtId;
+        self.stmts.push(stmt);
+        self.stmt_spans.push(span);
+        self.stmt_comments.push(comment);
+        return id;
+    }
+
+    pub fn alloc_pattern(self: &mut AST, pattern: Pattern, span: Span) -> PatternId {
+        let id = self.patterns.len() as PatternId;
+        self.patterns.push(pattern);
+        self.pattern_spans.push(span);
+        return id;
+    }
+
+    pub fn alloc_decl_at(self: &mut AST, decl: Decl, span: Span) -> DeclId {
+        let id = self.decls.len() as DeclId;
+        self.decls.push(decl);
+        self.decl_spans.push(span);
+        return id;
+    }
+
+    pub fn alloc_decl(self: &mut AST, decl: Decl) -> DeclId {
+        return self.alloc_decl_at(decl, Span { start: 0, end: 0, line: 0, col: 0 });
+    }
+
+    pub fn exprs(self: &AST) -> [Expr] { return self.exprs.as_slice(); }
+    pub fn decls(self: &AST) -> [Decl] { return self.decls.as_slice(); }
+}

@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: error: cannot drop value 'x' that is not owned
+
+struct Resource { id: i32 }
+
+fn main() -> i32 {
+    let x = Resource { id: 1 };
+    @drop(x);
+    @drop(x);
+    return 0;
+}

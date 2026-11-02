@@ -1,0 +1,15 @@
+// expected exit 0
+// Calling a constructor as a path (`Foo::new()`) used to crash monomorphization (ICE).
+// It must compile, and return the constructed value.
+import "core.zrl";
+
+pub struct Foo { v: i32 }
+impl Foo {
+    pub fn new() -> Foo { return Foo { v: 7 }; }
+}
+
+fn main() -> i32 {
+    let f = Foo::new();
+    if f.v != 7 { return 1; }
+    return 0;
+}

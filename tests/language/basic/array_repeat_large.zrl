@@ -1,0 +1,14 @@
+// expected exit 26
+// `[v; n]` above a few elements is filled by a loop, not one store per element: before,
+// `[0 as u8; 2000000]` gave QBE two million instructions and failed to compile. The length
+// may be a constant as well as a literal (a `const` was an internal compiler error).
+const N: usize = 2000000;
+struct P { x: i64, y: i64 }
+fn main() -> i32 {
+    let mut a = [7 as u8; 2000000];
+    let b = [3 as u8; N];
+    let ps = [P { x: 1, y: 2 }; 100];
+    let small = [5 as u8; 4];
+    a[1999999] = a[1999999] + 1;
+    return (a[0] as i64 + a[1999999] as i64 + b[N - 1] as i64 + ps[99].x + ps[0].y + small[3] as i64) as i32;
+}

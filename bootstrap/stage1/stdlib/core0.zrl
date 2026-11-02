@@ -1,0 +1,115 @@
+// Zoril Standard Library: Core runtime functions (Zoril-0 clean subset)
+
+pub fn is_str_eq(a: [u8], b: [u8]) -> bool {
+    if a.len != b.len { return false; }
+    let mut i = 0 as u64;
+    while i < a.len {
+        if a[i] != b[i] { return false; }
+        i = i + 1 as u64;
+    }
+    return true;
+}
+
+pub fn is_mem_eq(a: *u8, b: *u8, len: u64) -> bool {
+    let mut i = 0 as u64;
+    unsafe {
+        while i < len {
+            let p_a = (a as u64 + i) as *u8;
+            let p_b = (b as u64 + i) as *u8;
+            if *p_a != *p_b { return false; }
+            i = i + 1 as u64;
+        }
+    }
+    return true;
+}
+
+// `s[start .. start + len]`, bounds-checked. Re-slicing a byte slice has no safe
+// spelling in the surface language yet (Rust writes `&s[a..b]`), so every caller
+// was doing the pointer arithmetic itself; this is the one marked site, and it
+// traps rather than reading past the end.
+pub fn subslice(s: [u8], start: usize, len: usize) -> [u8] {
+    if start > s.len || len > s.len - start {
+        ICE("subslice: range out of bounds");
+    }
+    return unsafe { @slice((s.ptr as usize + start) as *mut u8, len) };
+}
+
+// `s[start ..]`, bounds-checked.
+pub fn subslice_from(s: [u8], start: usize) -> [u8] {
+    return subslice(s, start, s.len - start);
+}
+
+pub fn is_digit(c: u8) -> bool {
+    return c >= '0' as u8 && c <= '9' as u8;
+}
+
+pub fn is_hex_digit(c: u8) -> bool {
+    if is_digit(c) { return true; }
+    if c >= 'a' as u8 && c <= 'f' as u8 { return true; }
+    if c >= 'A' as u8 && c <= 'F' as u8 { return true; }
+    return false;
+}
+
+// Converts a hex digit character to its 0-15 value. Returns 0 for non-hex
+// digits (callers are expected to have already validated via is_hex_digit).
+pub fn hex_digit_val(c: u8) -> u8 {
+    if c >= '0' as u8 && c <= '9' as u8 { return c - '0' as u8; }
+    if c >= 'a' as u8 && c <= 'f' as u8 { return c - 'a' as u8 + 10 as u8; }
+    if c >= 'A' as u8 && c <= 'F' as u8 { return c - 'A' as u8 + 10 as u8; }
+    return 0 as u8;
+}
+
+pub fn is_alpha(c: u8) -> bool {
+    if c >= 'a' as u8 && c <= 'z' as u8 { return true; }
+    if c >= 'A' as u8 && c <= 'Z' as u8 { return true; }
+    if c == '_' as u8 { return true; }
+    return false;
+}
+
+pub extern fn zoril_abort() -> never;
+
+pub fn zoril_user_panic(msg: [u8]) -> never {
+    // Syscall 1 is write
+    @syscall(1, 2, "panic: ".ptr, 7);
+    @syscall(1, 2, msg.ptr, msg.len);
+    @syscall(1, 2, "\n".ptr, 1);
+    // Syscall 60 is exit. zoril_abort() is unreachable but tells the
+    // type checker this path diverges (extern fn -> never).
+    @syscall(60, 1);
+    zoril_abort();
+}
+
+pub fn ICE(msg: [u8]) -> never {
+    @syscall(1, 2, "INTERNAL COMPILER ERROR: ".ptr, 25);
+    @syscall(1, 2, msg.ptr, msg.len);
+    @syscall(1, 2, "\n".ptr, 1);
+    @syscall(60, 134); // SIGABRT-like exit
+    zoril_abort();
+}
+
+pub fn TODO(msg: [u8]) -> never {
+    @syscall(1, 2, "TODO (unimplemented): ".ptr, 22);
+    @syscall(1, 2, msg.ptr, msg.len);
+    @syscall(1, 2, "\n".ptr, 1);
+    @syscall(60, 1);
+    zoril_abort();
+}
+
+pub fn u64_to_str(val: u64, buf: *mut u8) -> [u8] {
+    if val == 0 as u64 {
+        let p = buf as *mut u8;
+        unsafe { *p = '0' as u8; }
+        return unsafe { @slice(buf as *u8, 1 as u64) };
+    }
+    let mut i = 19 as u64;
+    let mut v = val;
+    while v > 0 as u64 {
+        let digit = (v % 10 as u64) as u8;
+        let p = (buf as u64 + i) as *mut u8;
+        unsafe { *p = digit + '0' as u8; }
+        v = v / 10 as u64;
+        i = i - 1 as u64;
+    }
+    let start = i + 1 as u64;
+    return unsafe { @slice((buf as u64 + start) as *u8, 20 as u64 - start) };
+}

@@ -1,0 +1,10 @@
+// name: System call outside unsafe (inside unsafe)
+// expected: runtime_fault
+// The escape hatch half of 129_syscall_outside_unsafe.zrl: inside `unsafe` the call is
+// unchecked, and unmapping the stack faults.
+fn main() -> i32 {
+    let x: u64 = 1;
+    let page = (&x as *u64 as u64) & !(4095 as u64);
+    let _ = unsafe { @syscall(11, page, 4096 as u64) };
+    return x as i32;
+}

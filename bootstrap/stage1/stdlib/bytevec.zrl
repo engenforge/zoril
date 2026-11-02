@@ -1,0 +1,65 @@
+import "mem.zrl";
+import "core0.zrl";
+
+pub struct ByteVec {
+    pub data: *mut u8,
+    pub len: usize,
+    pub cap: usize,
+    pub arena: *mut Arena,
+}
+
+impl ByteVec {
+    pub fn new(arena: *mut Arena) -> &mut ByteVec {
+        let v = zoril_allocator_alloc(arena, sizeof(ByteVec)) as *mut ByteVec;
+        // Initialising freshly-allocated arena storage, then handing back a reference:
+        // the canonical unsafe-inside/safe-outside constructor (unsafe_policy.md §2).
+        unsafe {
+            (*v).data = 0 as *mut u8;
+            (*v).len = 0 as usize;
+            (*v).cap = 0 as usize;
+            (*v).arena = arena;
+            return &mut *v;
+        }
+    }
+
+    pub fn push(self: *mut ByteVec, b: u8) {
+        if self.len >= self.cap {
+            let new_cap = if self.cap == 0 as usize { 8 as usize } else { self.cap * 2 as usize };
+            let new_data = zoril_allocator_alloc(self.arena, new_cap) as *mut u8;
+            if self.data as usize != 0 as usize {
+                let mut i = 0 as usize;
+                unsafe {
+                    while i < self.len {
+                        let p_src = (self.data as usize + i) as *mut u8;
+                        let p_dst = (new_data as usize + i) as *mut u8;
+                        *p_dst = *p_src;
+                        i = i + 1 as usize;
+                    }
+                }
+            }
+            self.data = new_data;
+            self.cap = new_cap;
+        }
+        let p = (self.data as usize + self.len) as *mut u8;
+        unsafe { *p = b; }
+        self.len = self.len + 1 as usize;
+    }
+
+    pub fn push_range(self: *mut ByteVec, ptr: *u8, start: usize, len: usize) {
+        let mut i = 0 as usize;
+        while i < len {
+            let p = (ptr as usize + start + i) as *mut u8;
+            self.push(unsafe { *p });
+            i = i + 1 as usize;
+        }
+    }
+
+    pub fn push_slice(self: *mut ByteVec, s: [u8]) {
+        self.push_range(s.ptr, 0 as usize, s.len);
+    }
+
+    pub fn as_slice(self: *ByteVec) -> [u8] {
+        // `data`/`len` are ByteVec's own invariant: len bytes are live at data.
+        return unsafe { @slice(self.data, self.len) };
+    }
+}

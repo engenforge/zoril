@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: cannot use 'b' while it is mutably borrowed
+// A `Box` field: `b` moves into `a`, then `**r` reads through the borrow taken from it.
+struct B { a: Box<i32>, n: i32 }
+
+fn main() -> i32 {
+    let mut b = box 5;
+    let r = &mut b;
+    let s = B { a: b, n: **r };
+    return 0;
+}

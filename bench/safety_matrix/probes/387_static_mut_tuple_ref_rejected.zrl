@@ -1,0 +1,6 @@
+// name: static mut holding reference inside tuple is rejected
+// expected: compile_reject
+// Rule (d): a static mut cannot hold a reference inside a tuple.
+enum OptTupleRef { None, Some((&i32, i32)) }
+static mut G: OptTupleRef = OptTupleRef.None;
+fn main() -> i32 { return 0; }

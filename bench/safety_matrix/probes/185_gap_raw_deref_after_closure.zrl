@@ -1,0 +1,13 @@
+// name: A raw pointer dereferenced after a closure capture (no unsafe)
+// expected: compile_reject
+// closed: the dereference check now decides from the IL type, which keeps `RawPtr`/`RawPtrMut`
+// through a closure capture - so this program is a located type error instead of a silent hole.
+fn main() -> i32 {
+    let mut x: u32 = 7;
+    let p: *mut u32 = &mut x as *mut u32;
+    let f = |v: u32| -> i32 {
+        *p = v;
+        return 0;
+    };
+    return f(9) + (x as i32 - 9);
+}

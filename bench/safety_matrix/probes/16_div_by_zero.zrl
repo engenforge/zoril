@@ -1,0 +1,3 @@
+// name: Division by zero
+// expected: runtime_fault
+fn main() -> i32 { let d: i32 = 0; return 10 / d; }

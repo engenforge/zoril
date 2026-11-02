@@ -1,0 +1,9 @@
+// name: Use after drop
+// expected: compile_reject
+struct Resource { id: i32 }
+fn main() -> i32 {
+    let x = Resource { id: 1 };
+    @drop(x);
+    let y = x;
+    return 0;
+}

@@ -1,0 +1,7 @@
+enum Bar { X(u32, u32) }
+fn test(b: Bar) -> u32 {
+    match b {
+        Bar.X(a, b) => { return a + b; }
+    }
+}
+fn main() -> i32 { return 0; }

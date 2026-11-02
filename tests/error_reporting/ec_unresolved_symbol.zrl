@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/ec_unresolved_symbol.zrl:5:13: error: unresolved symbol: nonexistent
+// Tests that an unresolved identifier is reported at the use site.
+fn main() -> i32 {
+    let x = nonexistent;  // @error "Unresolved symbol: nonexistent" :13
+    0
+}

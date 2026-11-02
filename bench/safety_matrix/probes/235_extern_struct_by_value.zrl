@@ -1,0 +1,6 @@
+// name: Struct passed by value across an extern signature
+// expected: compile_reject
+// A Zoril struct is passed by pointer, the C ABI passes it differently, so C would read the wrong bytes.
+struct Rect { w: i32, h: i32 }
+extern fn area(r: Rect) -> i32;
+fn main() -> i32 { return unsafe { area(Rect { w: 2, h: 3 }) }; }

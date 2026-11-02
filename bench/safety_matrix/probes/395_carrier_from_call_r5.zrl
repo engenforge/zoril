@@ -1,0 +1,21 @@
+// name: A carrier built by a closure call and passed on
+// expected: compile_reject
+// A by-value aggregate that a call returned holds the pointer the call was given, so passing it on
+// carries a pointer to the frame's local out of the frame: the summary pass reads what the call's
+// result carries (`returns`/`returns_via` bits) into the slot the call wrote.
+struct Carrier { v: &i32 }
+fn ex(co: Carrier) -> &i32 { return co.v; }
+fn mk(r: &i32) -> Carrier { return Carrier { v: r }; }
+
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn escape_storer(out: &mut &i32) {
+    let x = 42;
+    let f = |r: &i32| -> Carrier { return Carrier { v: r }; }; *out = ex(f(&x));
+}
+fn main() -> i32 {
+    let seed = 0;
+    let mut dest_val: &i32 = &seed;
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    return *dest_val;
+}

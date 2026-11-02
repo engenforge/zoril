@@ -1,0 +1,57 @@
+
+import "io.zrl";
+import "fmt.zrl";
+use io::{write, stdout};
+use fmt::write_u64;
+
+pub struct ILSlice { pub element: u32 }
+pub struct ILArray { pub element: u32, pub size: u32 }
+pub struct ILFn { pub params: [u32], pub ret_ty: u32, pub is_variadic: bool }
+pub struct ILUser { pub id: u32, pub type_args: [u32] }
+pub struct ILVar { pub name: u32, pub bounds: [u32] }
+
+pub enum ILPrimitive {
+    U8, U16, U32, U64, USize,
+    I8, I16, I32, I64, ISize,
+    F32, F64,
+    Bool, Char,
+    Unit, Never,
+}
+
+pub enum ILType {
+    Primitive(ILPrimitive),
+    Ptr(u32),
+    PtrMut(u32),
+    Boxed(u32),
+    BoxedMut(u32),
+    Slice(ILSlice),
+    Array(ILArray),
+    Fn(ILFn),
+    Tuple([u32]),
+    FD(u32),
+    IORing,
+    User(ILUser),
+    Var(ILVar),
+}
+
+fn main() -> i32 {
+    let t = ILType.Primitive(ILPrimitive.U64);
+    let p = &t as *u32;
+    
+    let mut out = stdout();
+    write(stdout(), "Tag: ");
+    unsafe { let _ = write_u64(&mut out, *p as u64); }
+    write(stdout(), "\n");
+
+    let p8 = (p as usize + 8) as *u32;
+    write(stdout(), "At 8: ");
+    unsafe { let _ = write_u64(&mut out, *p8 as u64); }
+    write(stdout(), "\n");
+    
+    let p4 = (p as usize + 4) as *u32;
+    write(stdout(), "At 4: ");
+    unsafe { let _ = write_u64(&mut out, *p4 as u64); }
+    write(stdout(), "\n");
+    
+    return 0;
+}

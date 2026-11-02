@@ -1,0 +1,18 @@
+// name: A closure's capture of a HashMap keeps a second copy of the header
+// expected: compile_reject
+// The same route for the third owning collection: the capture must move the map, not copy its
+// table pointer.
+import "mem.zrl";
+import "hashmap.zrl";
+use mem::Arena;
+use hashmap::HashMap;
+
+fn main() -> i32 {
+    let a = Arena.new(65536).unwrap();
+    let mut m = HashMap::<i32, i32>.new(&a);
+    m.insert(1, 7);
+    let f = || { return m.get(&1).unwrap() as i32; };
+    let seen = f();
+    m.insert(2, 8);
+    return seen + (m.get(&2).unwrap() as i32);
+}

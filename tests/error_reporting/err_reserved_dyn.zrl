@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: `dyn` is a reserved word, kept for a future feature
+fn dyn() -> i32 {
+    return 0;
+}

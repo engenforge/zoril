@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_ref_through_slice_arg.zrl:5:1: error: region escape: returning a pointer to local stack storage
+// first's result points where its slice points, and that is leak's own array.
+fn first(s: [u8]) -> &u8 { return &s[0]; }
+fn leak() -> &u8 { let a: [u8; 2] = [1, 2]; return first(&a); }
+fn main() -> i32 { return *leak() as i32; }

@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: type mismatch
+// An array value initializing a slice field was accepted but not converted: its bytes became
+// the slice header ({ptr: 10, len: 20}), and p.b[0] dereferenced address 10.
+struct P { a: u64, b: [u64] }
+fn first(p: &P) -> u64 { return p.b[0]; }
+fn main() -> i32 {
+    let data = [10 as u64, 20 as u64];
+    let p = P { a: 1, b: data };
+    return first(&p) as i32;
+}

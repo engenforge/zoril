@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: error: cannot assign to 'h' because it is behind a shared reference
+// The struct-field shape: `h.r: &P`, written through with no explicit `*`. This is the shape a
+// predicate that only looks for an explicit `Deref` projection misses -- `h.r.x` and `(*h.r).x`
+// reach the same field but are represented differently in ZIR (see
+// doc/spec/unsafe_policy.md §7).
+struct P { x: i64 }
+struct Holder { r: &P }
+fn main() {
+    let p = P { x: 1 };
+    let mut h = Holder { r: &p };
+    h.r.x = 99;
+}

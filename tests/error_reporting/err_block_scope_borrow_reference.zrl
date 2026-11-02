@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_reference.zrl:10:5: error: cannot let 'x' go out of scope while it is still borrowed
+
+// `r` outlives the block that owns `x`, so it is left pointing at `x`'s dead stack slot.
+fn main() -> i32 {
+    let mut r: &i32 = &0;
+    {
+        let x: i32 = 5;
+        r = &x;
+    }
+    return *r;
+}

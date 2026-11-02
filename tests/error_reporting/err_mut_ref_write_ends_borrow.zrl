@@ -1,0 +1,14 @@
+// expected compile fail
+// A write through a `&mut` used to end the borrow that reference itself holds, so a *second*
+// borrow of the same place was accepted while the `&mut` went on being used.
+// EXPECT: tests/error_reporting/err_mut_ref_write_ends_borrow.zrl:11:13: error: cannot borrow 'x' while it is mutably borrowed
+// EXPECT: tests/error_reporting/err_mut_ref_write_ends_borrow.zrl:9:14: note: borrow of 'x' taken here
+
+fn main() -> i32 {
+    let mut x: i32 = 3;
+    let rm = &mut x;
+    *rm = 5;
+    let q = &x;
+    *rm = 11;
+    return *q - 11;
+}

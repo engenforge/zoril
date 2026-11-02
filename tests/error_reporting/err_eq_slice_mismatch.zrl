@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: == and != on slices require two slices of the same element type
+fn main() -> i32 {
+    let a: [u32; 1] = [104 as u32];
+    let sa: [u32] = &a;
+    if sa == "h" { return 1; }
+    return 0;
+}

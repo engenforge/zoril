@@ -1,0 +1,36 @@
+// expected exit 0
+// Bug #4 (scalar case): stage0-C promoted a non-lvalue scalar to a stack slot where its
+// address was first taken. Inside the right-hand side of && / || that slot was only
+// written on one path, so later reads on the other path saw garbage.
+fn is_pos(p: &i32) -> bool { return *p > 0; }
+fn get(p: &i32) -> i32 { return *p; }
+
+fn param_and(x: i32, c: bool) -> i32 {
+    if c && is_pos(&x) { return 100; }
+    return get(&x);
+}
+
+fn param_or(x: i32, c: bool) -> i32 {
+    if c || is_pos(&x) { return get(&x); }
+    return get(&x) + 1;
+}
+
+fn main() -> i32 {
+    if param_and(42, false) != 42 { return 1; }
+    if param_and(42, true) != 100 { return 2; }
+    if param_or(42, true) != 42 { return 3; }
+    let x = 42;
+    let c = x == 0;
+    if c && is_pos(&x) { return 4; }
+    if get(&x) != 42 { return 5; }
+    let mut i = 0;
+    let mut sum = 0;
+    while i < 3 {
+        let y = i + 10;
+        if c && is_pos(&y) { return 6; }
+        sum = sum + get(&y);
+        i = i + 1;
+    }
+    if sum != 33 { return 7; }
+    return 0;
+}

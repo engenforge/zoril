@@ -1,0 +1,41 @@
+// Tests for environment-capturing closures.
+
+fn apply(f: fn(i32) -> i32, x: i32) -> i32 {
+    return f(x);
+}
+
+fn test_non_capturing() -> i32 {
+    let double = |x: i32| -> i32 { x * 2 };
+    let inc    = |x: i32| -> i32 { x + 1 };
+    let a = apply(double, 21);  // 42
+    let b = apply(inc, 41);     // 42
+    if a != 42 { return 1; }
+    if b != 42 { return 2; }
+    return 0;
+}
+
+fn test_capture_copy() -> i32 {
+    let offset = 100;
+    let add_offset = |x: i32| -> i32 { x + offset };
+    let c = add_offset(42);  // 142
+    if c != 142 { return 10; }
+    return 0;
+}
+
+fn test_capture_mutable() -> i32 {
+    let mut base = 0;
+    let get_base = |n: i32| -> i32 { base + n };
+    let d = get_base(10);  // 10
+    if d != 10 { return 20; }
+    return 0;
+}
+
+fn main() -> i32 {
+    let r1 = test_non_capturing();
+    if r1 != 0 { return r1; }
+    let r2 = test_capture_copy();
+    if r2 != 0 { return r2; }
+    let r3 = test_capture_mutable();
+    if r3 != 0 { return r3; }
+    return 0;
+}

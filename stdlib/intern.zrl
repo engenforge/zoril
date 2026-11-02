@@ -1,0 +1,218 @@
+// Arena-backed string deduplication and interning table (InternTable)
+
+import "bytevec.zrl";
+import "mem.zrl";
+import "mem_raw.zrl";
+import "core0.zrl";
+import "io.zrl";
+use bytevec::ByteVec;
+use mem::{Arena, arena_raw, grow_cap, size_of_n};
+use mem_raw::{ArenaHeader, memcpy, memset, zoril_allocator_alloc};
+
+// Storage node representing an interned string with its hash and byte slice.
+pub struct InternEntry {
+    hash: u64,
+    start: u64,
+    len: u64,
+    id: u32,
+}
+
+// Arena-backed string interning table that deduplicates strings and maps them to unique 32-bit IDs.
+pub struct InternTable {
+    entries: *mut InternEntry,
+    cap: u64,
+    count: u32,
+    data: *mut ByteVec,
+    id_to_entry: *mut *mut InternEntry,
+    id_cap: u32,
+    arena: *mut ArenaHeader,
+}
+
+impl InternTable {
+    // Constructs an empty string interning table allocated in arena a.
+    //
+    // Safe: the returned `&mut InternTable` borrows the arena, so resetting or destroying the
+    // arena while the table is live is a compile error.
+    pub fn new(a: &Arena) -> &mut InternTable {
+        // SAFETY: the constructor's contract is the arena pointer, and `a` is the live,
+        // borrowed arena that `new`'s result is tied to.
+        return unsafe { InternTable.new_raw(arena_raw(a)) };
+    }
+
+    // Constructs an intern table using a raw arena header.
+    //
+    // CALLER OBLIGATION: arena must be valid and initialized.
+    //
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    #[stores(arena -> arena)]
+    pub unsafe fn new_raw(arena: *mut ArenaHeader) -> &mut InternTable {
+        let cap = 1024 as u64;
+        let id_cap = 1024 as u32;
+        // Manufacturing the table storage and zeroing it before any reference escapes.
+        let table = zoril_allocator_alloc(arena, sizeof(InternTable)) as *mut InternTable;
+        (*table).entries = zoril_allocator_alloc(
+            arena,
+            size_of_n(cap as usize, sizeof(InternEntry)) as u64
+        ) as *mut InternEntry;
+        (*table).cap = cap;
+        (*table).count = 0 as u32;
+        (*table).data = ByteVec.new_raw(arena);
+        (*table).id_to_entry = zoril_allocator_alloc(
+            arena,
+            size_of_n(id_cap as usize, 8 as usize) as u64
+        ) as *mut *mut InternEntry;
+        (*table).id_cap = id_cap;
+        (*table).arena = arena;
+
+        memset((*table).entries as *mut u8, 0, size_of_n(cap as usize, sizeof(InternEntry)) as u64);
+        memset((*table).id_to_entry as *mut u8, 0, size_of_n(id_cap as usize, 8 as usize) as u64);
+
+        return &mut *table;
+    }
+
+    // Computes the 64-bit hash of string buffer buf.
+    pub fn hash(s: [u8]) -> u64 {
+        let h1 = 0xcbf2 as u64 << 48;
+        let h2 = 0x9ce4 as u64 << 32;
+        let h3 = 0x8422 as u64 << 16;
+        let h4 = 0x2325 as u64;
+        let mut h = h1 | h2 | h3 | h4;
+
+        let mut i = 0 as usize;
+        while i < s.len {
+            h = h ^ (s[i] as u64);
+            let p_high = 0x100 as u64 << 32;
+            let p_low = 0x1b3 as u64;
+            let prime = p_high | p_low;
+            h = h * prime;
+            i = i + 1 as usize;
+        }
+        return h;
+    }
+
+    // Interns a string slice, returning its unique 32-bit integer identifier.
+    pub fn intern(self: &mut InternTable, buf: [u8]) -> u32 {
+        if buf.len == 0 as usize {
+            return 0 as u32;
+        }
+
+        // The whole body is raw hash-table work over arena memory: open addressing over
+        // `entries`, the `id_to_entry` side table, and ByteVec-backed string storage.
+        // SAFETY: the entries table, the id_to_entry side table and the ByteVec string storage
+        // all live in `self.arena`, and every index below is bounded by `cap` (unsafe_policy.md §2).
+        unsafe {
+            if (self.count as u64) * 2 as u64 > self.cap {
+                let old_cap = self.cap;
+                let old_entries = self.entries as *mut InternEntry;
+                self.cap = grow_cap(old_cap as usize) as u64;
+                self.entries = zoril_allocator_alloc(
+                    self.arena,
+                    size_of_n(self.cap as usize, sizeof(InternEntry)) as u64
+                ) as *mut InternEntry;
+                memset(
+                    self.entries as *mut u8,
+                    0,
+                    size_of_n(self.cap as usize, sizeof(InternEntry)) as u64
+                );
+
+                let mut i = 0 as u64;
+                while i < old_cap {
+                    let p_old = (old_entries as usize
+                        + (i as usize * sizeof(InternEntry))) as *mut InternEntry;
+                    if (*p_old).id != 0 as u32 {
+                        let mut h_new = (*p_old).hash % self.cap;
+                        while true {
+                            let p_new = (self.entries as usize
+                                + (h_new as usize * sizeof(InternEntry))) as *mut InternEntry;
+                            if (*p_new).id == 0 as u32 {
+                                memcpy(p_new as *mut u8, p_old as *u8, sizeof(InternEntry));
+                                // Update pointer in id_to_entry
+                                let off_id = ((*p_new).id as u64 - 1 as u64) * 8 as u64;
+                                *((self.id_to_entry as u64
+                                    + off_id) as *mut *mut InternEntry) = p_new;
+                                break;
+                            }
+                            h_new = (h_new + 1 as u64) % self.cap;
+                        }
+                    }
+                    i = i + 1 as u64;
+                }
+            }
+
+            let h = InternTable.hash(buf);
+            let mut idx = h % self.cap;
+            while true {
+                let p = (self.entries as usize
+                    + (idx as usize * sizeof(InternEntry))) as *mut InternEntry;
+
+                if (*p).id == 0 as u32 {
+                    // Not found, insert
+                    let start = (*self.data).len();
+                    (*self.data).push_range(buf.ptr, 0 as usize, buf.len);
+
+                    (*p).hash = h;
+                    (*p).start = start as u64;
+                    (*p).len = buf.len as u64;
+                    self.count = self.count + 1 as u32;
+                    (*p).id = self.count;
+
+                    // Ensure id_to_entry is large enough
+                    if (*p).id > self.id_cap {
+                        let old_id_cap = self.id_cap;
+                        self.id_cap = old_id_cap * 2 as u32;
+                        let new_id_to_entry = zoril_allocator_alloc(
+                            self.arena,
+                            self.id_cap as u64 * 8 as u64
+                        ) as *mut *mut InternEntry;
+                        memcpy(
+                            new_id_to_entry as *mut u8,
+                            self.id_to_entry as *u8,
+                            old_id_cap as u64 * 8 as u64
+                        );
+                        memset(
+                            (new_id_to_entry as usize
+                                + (old_id_cap as usize * 8 as usize)) as *mut u8,
+                            0,
+                            (old_id_cap as u64 * 8 as u64) as u64
+                        );
+                        self.id_to_entry = new_id_to_entry;
+                    }
+
+                    let off_id = ((*p).id as u64 - 1 as u64) * 8 as u64;
+                    *((self.id_to_entry as u64 + off_id) as *mut *mut InternEntry) = p;
+
+                    return (*p).id;
+                }
+
+                if (*p).hash == h && (*p).len == buf.len as u64 {
+                    let s = (*self.data).as_slice();
+                    let existing = @slice(
+                        (s.ptr as usize + (*p).start as usize) as *u8,
+                        (*p).len as usize
+                    ) as [u8];
+                    if existing == buf {
+                        return (*p).id;
+                    }
+                }
+
+                idx = (idx + 1 as u64) % self.cap;
+            }
+            return 0 as u32; // unreachable
+        }
+    }
+
+    // Retrieves the original interned string slice corresponding to 32-bit identifier id.
+    pub fn lookup(self: &InternTable, id: u32) -> [u8] {
+        // SAFETY: `id <= self.count` is checked first, so the id_to_entry slot and the entry it
+        // points at are both inside this table's arena storage.
+        unsafe {
+            if id == 0 as u32 || id > self.count {
+                return @slice(0 as *u8, 0 as usize);
+            }
+            let off_id = (id as u64 - 1 as u64) * 8 as u64;
+            let p = *((self.id_to_entry as u64 + off_id) as *mut *mut InternEntry);
+            let s = (*self.data).as_slice();
+            return @slice((s.ptr as usize + (*p).start as usize) as *u8, (*p).len as usize);
+        }
+    }
+}

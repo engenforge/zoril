@@ -1,0 +1,18 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_uncalled_specialization_method_checks.zrl:12:16: error: no field 'nope' on '&W<i32>'
+// EXPECT: tests/error_reporting/err_uncalled_specialization_method_checks.zrl:12:28: error: unresolved symbol: undefined_name
+// A concrete specialisation's method nothing calls is checked like a plain impl's. `impl W<i32>`
+// names one type, so `Self` and the type's parameters are known with no instance to supply them;
+// the fix before this test read it as a generic impl and skipped it, because its target is written
+// with arguments. `impl<T> W<T>` and `impl W<T>` stay deferred to an instance. The accepted twin is
+// tests/language/generics/uncalled_specialization_method_checked.zrl.
+struct W<T> { v: T }
+impl W<i32> {
+    fn never_called(self: &W<i32>) -> i32 {
+        return self.nope + undefined_name;
+    }
+}
+
+fn main() -> i32 {
+    return 0;
+}

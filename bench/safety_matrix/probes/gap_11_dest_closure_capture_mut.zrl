@@ -1,0 +1,28 @@
+// name: Closure stores frame view through captured mutable reference
+// expected: known_gap
+// gap: Closure storing through captured mutable reference not recognized as escaping frame
+// observed: exit 77
+import "mem.zrl";
+use mem::Arena;
+import "vec.zrl";
+use vec::Vec;
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn escape_storer(out: &mut [i32]) {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let src_val = v.as_slice();
+    let carried = src_val;
+    let routed = carried;
+    let mut cl = || { *out = routed; };
+    cl();
+}
+fn main() -> i32 {
+    let mut dest_val: [i32] = @slice(0 as *i32, 0);
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    let mut a_clobber = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 2; } };
+    let mut v_clobber = Vec::<i32>.new_in(&a_clobber);
+    v_clobber.push(77);
+    return dest_val[0] as i32;
+}

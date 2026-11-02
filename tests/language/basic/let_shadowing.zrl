@@ -1,0 +1,79 @@
+// expected exit code: 0
+// Tests `let` shadowing (Rust semantics): a later `let` with the same name
+// rebinds it; the initializer sees the previous binding. Regression test for
+// the wrong-code bug where same-scope shadowing was silently ignored
+// (lookups kept resolving to the first binding).
+
+fn same_scope() -> i32 {
+    let x = 5;
+    let x = x + 10;
+    if x != 15 { return 1; }
+    return 0;
+}
+
+fn change_type() -> i32 {
+    let n = 200;
+    let n = n > 100;
+    if !n { return 2; }
+    return 0;
+}
+
+fn nested_block() -> i32 {
+    let x = 1;
+    {
+        let x = 2;
+        if x != 2 { return 3; }
+    }
+    if x != 1 { return 4; }
+    return 0;
+}
+
+fn triple_shadow() -> i32 {
+    let v = 1;
+    let v = v * 10;
+    let v = v + 7;
+    if v != 17 { return 5; }
+    return 0;
+}
+
+fn shadow_mut() -> i32 {
+    let mut x = 3;
+    x = x + 1;
+    let x = x * 2;
+    if x != 8 { return 6; }
+    return 0;
+}
+
+fn match_arm_shadow() -> i32 {
+    let x = 40;
+    let opt = ShadowOpt.Some(2);
+    match opt {
+        ShadowOpt.Some(x) => {
+            if x != 2 { return 7; }
+        },
+        ShadowOpt.None => { return 8; },
+    }
+    if x != 40 { return 9; }
+    return 0;
+}
+
+enum ShadowOpt<T> {
+    Some(T),
+    None,
+}
+
+fn main() -> i32 {
+    let r = same_scope();
+    if r != 0 { return r; }
+    let r = change_type();
+    if r != 0 { return r; }
+    let r = nested_block();
+    if r != 0 { return r; }
+    let r = triple_shadow();
+    if r != 0 { return r; }
+    let r = shadow_mut();
+    if r != 0 { return r; }
+    let r = match_arm_shadow();
+    if r != 0 { return r; }
+    return 0;
+}

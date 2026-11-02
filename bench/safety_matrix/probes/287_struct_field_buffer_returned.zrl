@@ -1,0 +1,20 @@
+// name: A reference into a local struct's Vec field returned from the frame
+// expected: compile_reject
+// The owned collection is reached through a field projection; the field walk finds the `Vec`, so
+// the local owns storage and the returned view cannot leave the frame.
+import "vec.zrl";
+use vec::Vec;
+
+struct Holder {
+    v: Vec<i32>,
+}
+
+fn view() -> &i32 {
+    let mut h = Holder { v: Vec::<i32>.new() };
+    h.v.push(77);
+    return h.v.get(0).unwrap();
+}
+
+fn main() -> i32 {
+    return *view();
+}

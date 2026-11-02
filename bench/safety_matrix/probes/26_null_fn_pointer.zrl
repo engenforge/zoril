@@ -1,0 +1,14 @@
+// name: Call through null function pointer
+// expected: compile_reject
+// Loading the function pointer out of the zeroed aggregate is a raw-pointer
+// deref and now requires `unsafe`. See 32_null_fn_pointer_unsafe.zrl.
+struct Vt {
+    call: fn(i64) -> i64,
+}
+
+fn main() -> i32 {
+    let buf: [u8; 16] = [0 as u8; 16];
+    let v: *Vt = &buf[0] as *Vt;
+    let f = (*v).call;
+    return f(1 as i64) as i32;
+}

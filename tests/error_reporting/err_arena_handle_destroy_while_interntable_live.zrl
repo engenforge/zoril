@@ -1,0 +1,19 @@
+// expected compile fail
+// EXPECT: error: cannot move borrowed value 'a'
+// An InternTable from `InternTable.new(&arena)` borrows the arena, so destroying the arena while
+// the table is live is a compile error (Stage 4 for InternTable).
+import "intern.zrl";
+import "mem.zrl";
+use intern::InternTable;
+use mem::Arena;
+
+fn consume(a: Arena) {}
+
+fn main() -> i32 {
+    let a = Arena.new(1 << 20).unwrap();
+    let mut t = InternTable.new(&a);
+    let id = t.intern("hello");
+    consume(a); // @error "cannot move borrowed value 'a'"
+    if t.lookup(id).len == 0 { return 1; }
+    return 0;
+}

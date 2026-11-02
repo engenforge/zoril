@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_type_contains_itself.zrl:9:1: error: `A` contains itself by value, so it has no size (put it behind a pointer or a box)
+// EXPECT: tests/error_reporting/err_type_contains_itself.zrl:10:1: error: `B` contains itself by value, so it has no size (put it behind a pointer or a box)
+// EXPECT: tests/error_reporting/err_type_contains_itself.zrl:11:1: error: `L` contains itself by value, so it has no size (put it behind a pointer or a box)
+// A struct or enum that holds itself by value, directly, through another type, a tuple or a
+// generic's argument, has no size; unused, it was accepted. Behind a box or pointer is fine.
+import "core.zrl";
+enum Wrap<T> { Just(T), Nothing }
+struct A { b: B }
+struct B { a: (i32, A) }
+struct L { v: i32, next: Wrap<L> }
+struct Fine { v: i32, next: Option<Box<Fine>>, up: *mut Fine }
+fn main() -> i32 { return 0; }

@@ -1,0 +1,8 @@
+fn takes_slice(s: [u8]) {}
+
+fn main() -> i32 {
+    let mut arr = [1 as u8, 2 as u8, 3 as u8];
+    let sm: [mut u8] = &mut arr;
+    takes_slice(sm);
+    return 0;
+}

@@ -1,0 +1,27 @@
+// From repro_slice_bug_mod.zrl
+pub enum MyEnum {
+    Variant([u8]),
+}
+pub fn make_variant() -> MyEnum {
+    return MyEnum.Variant("abc");
+}
+
+// From repro_slice_idx_mod.zrl
+pub struct Wrapper {
+    pub data: [u8],
+}
+impl Wrapper {
+    pub fn get_at(self: &Wrapper, idx: u64) -> u8 {
+        return self.data[idx];
+    }
+}
+
+// From repro_self_slice_len_mod.zrl
+pub struct Dummy {
+    pub source: [u8],
+}
+impl Dummy {
+    pub fn get_len(self: &mut Dummy) -> u64 {
+        return self.source.len;
+    }
+}

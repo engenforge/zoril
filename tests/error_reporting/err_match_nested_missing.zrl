@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_match_nested_missing.zrl:6:46: error: non-exhaustive match: missing case `Some(None)`
+// Exhaustiveness looks inside patterns: `Some(Some(_))` does not cover `Some(None)`, and the
+// error names the uncovered value.
+enum Option<T> { Some(T), None }
+fn f(o: Option<Option<bool>>) -> i32 { match o { Option.Some(Option.Some(_)) => { return 1; }, Option.None => { return 0; } } }
+fn main() -> i32 { return f(Option.None); }

@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: error: invalid assignment target
+// A call produces a value, not a place: storing into its temporary is not an assignment to
+// anything the caller named.
+fn f() -> i32 {
+    return 7;
+}
+
+fn main() -> i32 {
+    f() = 3;
+    return 0;
+}

@@ -1,0 +1,16 @@
+// Zoril Bootstrap Repro: Compiler Segmentation Fault
+// Triggers crash in zoril-c a5e6915.
+
+fn take_slice(s: [u8]) {
+    // Dummy
+}
+
+fn test_segfault() {
+    let s = "test";
+    defer take_slice(s);
+}
+
+fn main() -> i32 {
+    test_segfault();
+    return 0;
+}

@@ -1,0 +1,7 @@
+// name: Raw pointer converted to a reference
+// expected: compile_reject
+// Passing a raw pointer where a reference is expected forges the reference, as `&*p`
+// does. It was accepted in safe code, so a null `*Point` became a `&Point` and faulted.
+struct Point { x: i32, y: i32 }
+fn get_x(r: &Point) -> i32 { return r.x; }
+fn main() -> i32 { return get_x(0 as *Point); }

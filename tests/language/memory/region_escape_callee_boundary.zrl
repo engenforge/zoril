@@ -1,0 +1,23 @@
+// expected compile fail
+// EXPECT: region escape: returning a pointer to local stack storage
+// A stack pointer passed to a callee whose result is tied to that argument (by default every
+// pointer parameter) and returned. Uncaught without whole-program summaries until 2026-10-03.
+
+struct S { a: i32 }
+
+fn stash(p: *mut S) -> *mut S {
+    return p;
+}
+
+fn leak() -> *mut S {
+    let mut s = S { a: 42 as i32 };
+    return stash(&mut s);
+}
+
+fn main() -> i32 {
+    let p = leak();
+    if unsafe { (*p).a } != 42 as i32 {
+        return 1;
+    }
+    return 0;
+}

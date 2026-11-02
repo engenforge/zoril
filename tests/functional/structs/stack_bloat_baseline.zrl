@@ -1,0 +1,41 @@
+// expected exit 0
+// tests/test_stack_bloat_baseline.zrl
+// This test case serves as a baseline for stack usage and IR size
+// when accessing nested struct fields.
+
+struct Inner {
+    a: i64,
+    b: i64,
+    c: i64,
+    d: i64,
+}
+
+struct Middle {
+    x: Inner,
+    y: Inner,
+}
+
+struct Outer {
+    m1: Middle,
+    m2: Middle,
+}
+
+fn process(o: Outer) -> i64 {
+    // Each of these accesses currently triggers an IL_OP_LOAD into a new stack slot
+    // if the compiler isn't optimized to use the parent pointer directly.
+    let val = o.m1.x.a + o.m1.y.b + o.m2.x.c + o.m2.y.d;
+    return val;
+}
+
+fn main() -> i32 {
+    let i1 = Inner { a: 1, b: 2, c: 3, d: 4 };
+    let i2 = Inner { a: 10, b: 20, c: 30, d: 40 };
+    let mid = Middle { x: i1, y: i2 };
+    let out = Outer { m1: mid, m2: mid };
+    
+    let res = process(out);
+    if res == 64 {
+        return 0;
+    }
+    return 1;
+}

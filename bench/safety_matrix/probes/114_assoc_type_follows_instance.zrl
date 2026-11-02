@@ -1,0 +1,12 @@
+// name: Associated type of a generic instance with no impl
+// expected: compile_reject
+// An impl for W<i32> defines Out for W<i32> only; W<i64> must not borrow its Out.
+trait Tr { type Out; fn mk(self: &Self) -> Self::Out; }
+struct W<T> { v: T }
+impl Tr for W<i32> { type Out = i32; fn mk(self: &W<i32>) -> i32 { return self.v; } }
+fn take<T: Tr>(t: &T) -> T::Out { return t.mk(); }
+fn main() -> i32 {
+    let w = W { v: 5 as i64 };
+    let x: i64 = take(&w);
+    return x as i32;
+}

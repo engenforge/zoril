@@ -1,0 +1,6 @@
+// expected exit code: 0
+fn test_if(b: bool) -> i32 {
+    let v = if b { return 0; } else { return 1; };
+    v
+}
+fn main() -> i32 { test_if(true) }

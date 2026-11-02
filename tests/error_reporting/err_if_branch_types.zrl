@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_if_branch_types.zrl:6:32: error: this `if` branch is `Q`, but the `if` is `P`
+// Branches of different types were merged unchecked, one layout copied into the other.
+struct P { a: u64 }
+struct Q { b: u8 }
+fn f(c: bool) -> u64 { let v = if c { P { a: 1 as u64 } } else { Q { b: 2 as u8 } }; return v.a; }
+fn main() -> i32 { return f(true) as i32; }

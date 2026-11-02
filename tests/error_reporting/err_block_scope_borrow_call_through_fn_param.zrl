@@ -1,0 +1,22 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_call_through_fn_param.zrl:20:5: error: cannot let 'x' go out of scope while it is still borrowed
+
+// A callee the storage walk can never resolve from the AST: a call through a function-pointer
+// *parameter* (`cb(q)`), like a variant constructor or a closure value. The call used to
+// contribute no bits, which the caller read as "hands back nothing"; the walk reads it as the worst
+// case now and marks every argument it is handed, so `q` is the argument's own storage (probe 170,
+// mutation M99).
+fn via_fnptr(cb: fn(&i32) -> &i32, q: &i32) -> &i32 {
+    return cb(q);
+}
+
+fn cb2(p: &i32) -> &i32 { return p; }
+
+fn main() -> i32 {
+    let mut y: &i32 = &0;
+    {
+        let x: i32 = 7;
+        y = via_fnptr(cb2, &x);
+    }
+    return *y;
+}

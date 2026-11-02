@@ -1,0 +1,13 @@
+// expected exit 0
+// A raw pointer may become a C function pointer inside `unsafe` (the dlsym spelling), and a
+// function pointer casts to its own type without one. The null ones are never called.
+extern "C" fn g(x: i32) -> i32 { return x; }
+
+fn main() -> i32 {
+    let p = 0 as *mut u8;
+    let f = unsafe { p as extern "C" fn(i32) -> i32 };
+    let q = unsafe { @ptr_cast<extern "C" fn(i32) -> i32>(p) };
+    let h = g as extern "C" fn(i32) -> i32;
+    if unsafe { h(41) } != 41 { return 1; }
+    return 0;
+}

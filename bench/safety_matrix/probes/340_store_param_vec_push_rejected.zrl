@@ -1,0 +1,23 @@
+// name: A view of a local arena buffer pushed into a Vec parameter outlives the buffer
+// expected: compile_reject
+// Storing a view of a frame-owned arena buffer via `Vec::push` through a `&mut Vec` parameter is rejected.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn f(out: &mut Vec<[i32]>) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(7);
+    out.push(v.as_slice());
+}
+
+fn main() -> i32 {
+    let mut out = Vec::<[i32]>.new();
+    f(&mut out);
+    return 0;
+}

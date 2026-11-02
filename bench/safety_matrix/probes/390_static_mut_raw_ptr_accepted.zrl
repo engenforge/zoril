@@ -1,0 +1,8 @@
+// name: static mut holding raw pointer is accepted
+// expected: accept
+// A static mut holding raw pointers is the explicit escape hatch and holds no references.
+static mut G: *mut i32 = 0 as *mut i32;
+fn main() -> i32 {
+    let ok = G == 0 as *mut i32;
+    return if ok { 0 } else { 1 };
+}

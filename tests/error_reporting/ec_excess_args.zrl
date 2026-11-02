@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/ec_excess_args.zrl:6:5: error: wrong number of arguments (expected 1, got 2)
+fn foo(a: i32) {}
+
+fn main() {
+    foo(1, 2);
+}

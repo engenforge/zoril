@@ -1,0 +1,18 @@
+// Static bool initializers must be materialized in the data section.
+// stage0-C once zeroed the initializer, so `static mut X: bool = true` started
+// false. This guards the self-hosted compiler; stage0-C has its own copy in
+// tests/fixed_bugs/.
+// expected exit 0
+
+pub static mut ENABLED: bool = true;
+pub static mut DISABLED: bool = false;
+
+pub fn main() -> i32 {
+    if ENABLED { } else { return 1; }
+    if DISABLED { return 2; }
+    ENABLED = false;
+    if ENABLED { return 3; }
+    DISABLED = true;
+    if DISABLED { } else { return 4; }
+    return 0;
+}

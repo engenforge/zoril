@@ -1,0 +1,17 @@
+// expected exit 0
+// The verifier still ran use-after-move / region checks after 8b642f5 removed stage0-C's
+// language safety checks, and rejected this valid program ("use of value whose region has
+// been moved/dropped"): reading s[0] after a block that borrowed &mut s[0].
+fn test_slice(s: [mut i32]) -> i32 {
+    {
+        let p = &mut s[0];
+        *p = 100;
+    }
+    let res = s[0];
+    return res;
+}
+fn main() -> i32 {
+    let mut a = [1, 2, 3];
+    let s = @slice(&mut a[0] as *mut i32, 3 as usize) as [mut i32];
+    return test_slice(s) - 100;
+}

@@ -1,0 +1,3 @@
+// expected compile fail
+// EXPECT: unresolved symbol
+fn main() -> i32 { return undefined_name; }

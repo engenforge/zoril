@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_cfn_signature_struct.zrl:4:38: error: an extern "C" fn type cannot take or return a struct or enum by value (pass a raw pointer to it, `*mut T`)
+struct Rect { w: i32, h: i32 }
+extern fn takes_cb(cb: extern "C" fn(Rect) -> i32) -> i32;
+fn main() -> i32 { return 0; }

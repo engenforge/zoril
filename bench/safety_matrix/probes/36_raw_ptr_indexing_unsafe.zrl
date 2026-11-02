@@ -1,0 +1,10 @@
+// name: Raw-pointer indexing (inside unsafe)
+// expected: accept
+// The escape hatch half of 12_raw_ptr_indexing.zrl. Raw-pointer indexing stays
+// unchecked by design (surface_syntax.md §11.2.3); the marker scopes it.
+fn main() -> i32 {
+    let mut arr = [1 as u8, 2 as u8, 7 as u8, 9 as u8];
+    let p = &mut arr[0] as *mut u8;
+    if unsafe { p[2 as usize] } != 7 as u8 { return 1; }
+    return 0;
+}

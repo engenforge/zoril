@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: error: non-exhaustive match: missing wildcard pattern '_'
+fn test_scalar(x: i32) -> i32 {
+    return match x {
+        1 => 10,
+        2 => 20,
+    };
+}
+
+fn main() -> i32 {
+    return test_scalar(1);
+}

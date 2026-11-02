@@ -1,0 +1,10 @@
+// expected exit 0
+import "lib.zrl";
+
+fn main() -> i32 {
+    let a: Result<i32, i32> = Result.Err(1);
+    let b: Result<i32, i32> = Result.Ok(8);
+    if lib::first_ok(a, b, 3) != 8 { return 1; }
+    if lib::drain_to_zero(0 as u8, 4) != 0 { return 2; }
+    return 0;
+}

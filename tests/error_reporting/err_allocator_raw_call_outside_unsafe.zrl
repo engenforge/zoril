@@ -1,0 +1,19 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_allocator_raw_call_outside_unsafe.zrl:15:13: error: call to unsafe function requires unsafe block
+
+// An allocator primitive writes the arena header through a raw pointer it is given, so it is
+// `unsafe fn` (unsafe_policy.md §80) and a safe call is rejected. The same program inside `unsafe`
+// compiles and runs - see bench/safety_matrix/probes/127_safe_fn_derefs_raw_pointer_argument.zrl,
+// which pinned the hole this closes - and the allocator's own customers in this repository call it
+// from `unsafe` blocks or from `unsafe fn` bodies.
+import "mem_raw.zrl";
+use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+
+fn main() -> i32 {
+    let mut fake: [u64; 3] = [0, 0, 1000000];
+    let a = &mut fake as *mut ArenaHeader;
+    let p = zoril_allocator_alloc(a, 8);
+    if p as usize == 0 as usize { return 2; }
+    if fake[1] == 8 as u64 { return 0; }
+    return 1;
+}

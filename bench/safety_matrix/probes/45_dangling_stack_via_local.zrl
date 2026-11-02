@@ -1,0 +1,12 @@
+// name: Dangling stack ptr — through a local variable
+// expected: compile_reject
+// The address of a local is stored in another local and returned from there. The verifier
+// tracked stack pointers through SSA values but not through slots, so this was accepted
+// until 2026-10-02.
+fn leak() -> *mut i32 {
+    let mut x: i32 = 42;
+    let p: *mut i32 = &mut x;
+    let q = p;
+    return q;
+}
+fn main() -> i32 { let p = leak(); if p as usize == 0 as usize { return 1; } return 0; }

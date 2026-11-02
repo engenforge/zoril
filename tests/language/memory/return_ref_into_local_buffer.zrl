@@ -1,0 +1,25 @@
+// expected compile fail
+// EXPECT: tests/language/memory/return_ref_into_local_buffer.zrl:8:1: error: cannot return 'v' a reference into storage owned by this frame (a collection, a box or an arena) cannot outlive the frame
+// A reference into a local `Vec`'s storage cannot leave the frame: a reference into storage owned
+// by this frame cannot outlive the frame. A parameter's or a static arena's
+// buffer is the caller's and may escape (return_ref_into_param_arena.zrl, probes 278-283).
+import "vec.zrl";
+use vec::Vec;
+fn first(n: i32) -> Option<&i32> {
+    let mut v = Vec::<i32>.new();
+    v.push(n);
+    return v.get(0);
+}
+fn all(n: i32) -> [i32] {
+    let mut v = Vec::<i32>.new();
+    v.push(n);
+    v.push(n);
+    return v.as_slice();
+}
+fn main() -> i32 {
+    let s = all(4);
+    match first(4) {
+        Option.Some(r) => { return *r + s[0] + s[1]; },
+        Option.None => { return 0; },
+    }
+}

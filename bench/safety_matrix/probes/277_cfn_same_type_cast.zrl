@@ -1,0 +1,10 @@
+// name: A C function pointer cast to its own type
+// expected: accept
+// The rule compares the two types with `types_match` rather than their ids, so the identity cast
+// no longer reports; the call still needs `unsafe`.
+extern "C" fn g(x: i32) -> i32 { return x; }
+
+fn main() -> i32 {
+    let h = g as extern "C" fn(i32) -> i32;
+    return unsafe { h(41) } - 41;
+}

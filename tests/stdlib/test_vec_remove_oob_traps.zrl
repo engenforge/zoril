@@ -1,0 +1,17 @@
+// expected exit 134
+// An index out of bounds traps, wherever the bound is checked. The generated bounds checks, the
+// arena's capacity and `ByteVec.set_len` / `HashMap.entry_at` all exit 134
+// (`zoril_user_trap`, `doc/spec/safety_model.md` §4); `Vec.remove` panicked with 1 for the same
+// class of failure until 2026-10-12, which the survey for the mmap exit-code decision turned up.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let a: Arena = Arena.new(4096).unwrap();
+    let mut v = Vec::<u64>.new_in(&a);
+    v.push(1 as u64);
+    let x = v.remove(9 as usize);
+    return x as i32;
+}

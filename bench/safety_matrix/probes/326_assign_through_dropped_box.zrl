@@ -1,0 +1,10 @@
+// name: Assignment through dereference of a dropped Box is rejected
+// expected: compile_reject
+// `@drop(b)` frees the box; writing through it afterwards (`*b = 5`) wrote into freed storage
+// in safe code, while the read (`let x = *b;`) was already rejected as a use of a dropped value.
+fn main() -> i32 {
+    let b = box 1;
+    @drop(b);
+    *b = 5;
+    return 0;
+}

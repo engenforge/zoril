@@ -1,0 +1,13 @@
+// expected exit 0
+// Capturing closures stored in a Vec in their own frame keep their environments.
+import "vec.zrl";
+use vec::Vec;
+fn main() -> i32 {
+    let k = 5;
+    let mut v = Vec::<fn(i32) -> i32>.new();
+    v.push(|x: i32| -> i32 { x + k });
+    v.push(|x: i32| -> i32 { x * k });
+    if (*v.get(0).unwrap())(2) != 7 { return 1; }
+    if (*v.get(1).unwrap())(2) != 10 { return 2; }
+    return 0;
+}

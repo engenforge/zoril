@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_closure_param_type_unknown.zrl:5:13: error: cannot infer the type of closure parameter `x`: write `x: T`, or pass the closure where a function type is expected
+// With no function type expected, a closure parameter needs its type written.
+fn main() -> i32 {
+    let f = |x| x + 1;
+    return f(1);
+}

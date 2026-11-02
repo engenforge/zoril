@@ -1,0 +1,26 @@
+// Unicode scalar values (unicode)
+//
+//
+// A `char` holds a Unicode scalar value: nothing in U+D800..U+DFFF (the
+// surrogates) and nothing above U+10FFFF. A number may not become a `char`
+// outside `unsafe`, so a char built from a number comes from here, which checks
+// the two ranges the type excludes:
+//
+//     unicode::char_from_u32(n)   None unless n is a scalar value
+
+import "core.zrl";
+
+// A char from its Unicode scalar value, or None for a surrogate or a value above
+// U+10FFFF. This is the checked counterpart of `n as char`, the cast that only
+// `unsafe` code may write.
+pub fn char_from_u32(n: u32) -> Option<char> {
+    if n > 0x10ffff as u32 {
+        return Option.None;
+    }
+    if n >= 0xd800 as u32 && n <= 0xdfff as u32 {
+        return Option.None;
+    }
+    // SAFETY: the two ranges a char may not hold returned above, so what is left is a
+    // Unicode scalar value.
+    return Option.Some(unsafe { n as char });
+}

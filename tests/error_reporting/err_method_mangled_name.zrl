@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_method_mangled_name.zrl:6:28: error: unresolved symbol: Foo_new
+// A method is reached through its type (`Foo::new()`), not a mangled name.
+pub struct Foo { v: i32 }
+impl Foo { pub fn new() -> Foo { return Foo { v: 1 }; } }
+fn main() -> i32 { let f = Foo_new(); return f.v; }

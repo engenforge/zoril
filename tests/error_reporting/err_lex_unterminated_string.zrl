@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_lex_unterminated_string.zrl:4:13: error: invalid token (unterminated string)
+fn main() -> i32 {
+    let s = "this string never ends;
+    return 0;
+}

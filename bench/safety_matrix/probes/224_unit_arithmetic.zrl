@@ -1,0 +1,10 @@
+// name: Unit rejected as a numeric operand
+// expected: compile_reject
+// Unit is not a number: `u * x` is refused by the operator checks instead of lowering to an
+// operation whose result was then written through as an address.
+fn main() -> i32 {
+    let u: () = ();
+    let x: u64 = 1;
+    let y = u * x;
+    return 0;
+}

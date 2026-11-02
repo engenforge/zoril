@@ -1,0 +1,22 @@
+// name: A `fn` value whose callee stores nothing may still be called indirectly
+// expected: accept
+// The accepted twin of probes 293-296: `get` reads through its parameter and stores nothing, so
+// it can be a `fn` value and called through it.
+struct H {
+    p: &i32,
+}
+
+fn get(h: &H) -> i32 {
+    return *h.p;
+}
+
+fn run(h: &H) -> i32 {
+    let f: fn(&H) -> i32 = get;
+    return f(h);
+}
+
+fn main() -> i32 {
+    let x = 41;
+    let h = H { p: &x };
+    return run(&h) - 41;
+}

@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: error: cannot assign to 's' because it is borrowed
+// Reborrowing through projections (&r.b) inherits the base borrow.
+struct S { b: i32 }
+fn main() -> i32 {
+    let mut s = S { b: 1 };
+    let r = &s;
+    let x = &r.b;
+    s = S { b: 2 };
+    return *x;
+}

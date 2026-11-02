@@ -1,0 +1,58 @@
+// expected exit code: 146
+// 26: Expression-oriented design — blocks, if, and match all yield values.
+// Demonstrates: block expressions, if expressions, match expressions, implicit returns.
+
+fn abs(x: i32) -> i32 {
+    // if as an expression: yields a value without explicit return
+    return if x < 0 { 0 - x } else { x };
+}
+
+fn clamp(val: i32, lo: i32, hi: i32) -> i32 {
+    return if val < lo {
+        lo
+    } else if val > hi {
+        hi
+    } else {
+        val
+    };
+}
+
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+fn direction_offset(d: Direction) -> (i32, i32) {
+    // match as an expression
+    return match d {
+        North => (0, 1),
+        South => (0, 0 - 1),
+        East  => (1, 0),
+        West  => (0 - 1, 0),
+    };
+}
+
+fn main() -> i32 {
+    // Block expression: the last expression (without semicolon) is the value
+    let computed = {
+        let base = 100;
+        let factor = 3;
+        base * factor + 7
+    };
+
+    let a = abs(0 - 42);
+    let b = clamp(150, 0, 100);
+
+    let offset = direction_offset(Direction.East);
+    let dx = offset.0;
+
+    // Nested expression: if inside a block inside a let
+    let category = {
+        let score = computed;
+        if score > 200 { 3 } else if score > 100 { 2 } else { 1 }
+    };
+
+    return a + b + dx + category;
+}

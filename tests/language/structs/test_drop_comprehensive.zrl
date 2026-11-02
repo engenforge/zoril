@@ -1,0 +1,107 @@
+static mut DROPS: i32 = 0;
+
+struct D {
+    id: i32,
+}
+
+trait Drop {
+    fn drop(self: &mut D);
+}
+
+impl Drop for D {
+    fn drop(self: &mut D) {
+        DROPS = DROPS + 1;
+    }
+}
+
+// 1. Basic scope exit: dropped once per invocation
+fn scope() {
+    let d = D { id: 1 };
+}
+
+// 2. Moved-out binding: d is moved to take_d, so scope_move drops only once (inside take_d)
+fn take_d(d: D) {
+    // d drops here upon scope exit
+}
+
+fn scope_move() {
+    let d = D { id: 2 };
+    take_d(d);
+}
+
+// 3. Reassigned binding: old d dropped, new d dropped upon scope exit (total 2 drops)
+fn scope_reassign() {
+    let mut d = D { id: 3 };
+    d = D { id: 4 };
+}
+
+// 4. Early-return path: drops d on early return, and does not double drop
+fn scope_early_return(cond: bool) -> i32 {
+    let d = D { id: 5 };
+    if cond {
+        return 1;
+    }
+    return 0;
+}
+
+// 5. Loop-scoped binding & loop break: dropped once per iteration, and on break
+fn scope_loop() {
+    let mut i = 0;
+    while i < 5 {
+        let d = D { id: 6 };
+        if i == 3 {
+            break;
+        }
+        i = i + 1;
+    }
+}
+
+// 6. Nested block scope exit
+fn scope_nested() {
+    let d1 = D { id: 7 };
+    {
+        let d2 = D { id: 8 };
+    }
+    // d2 dropped here; d1 still alive
+    if DROPS != 1 {
+        // will drop d1 on early error return
+        return;
+    }
+}
+
+fn main() -> i32 {
+    DROPS = 0;
+    // 1. Basic scope: 2 calls -> exactly 2 drops
+    scope();
+    scope();
+    if DROPS != 2 { return 10; }
+
+    // 2. Move out: scope_move -> exactly 1 drop total (by take_d, not by scope_move)
+    DROPS = 0;
+    scope_move();
+    if DROPS != 1 { return 20; }
+
+    // 3. Reassignment: 1 drop on overwrite, 1 drop on exit -> exactly 2 drops
+    DROPS = 0;
+    scope_reassign();
+    if DROPS != 2 { return 30; }
+
+    // 4. Early return: exactly 1 drop on early return path, 1 on normal path
+    DROPS = 0;
+    let r1 = scope_early_return(true);
+    if DROPS != 1 { return 40; }
+    let r2 = scope_early_return(false);
+    if DROPS != 2 { return 41; }
+
+    // 5. Loop: iterations 0, 1, 2 (3 drops) + break iteration 3 (1 drop) -> exactly 4 drops
+    DROPS = 0;
+    scope_loop();
+    if DROPS != 4 { return 50; }
+
+    // 6. Nested block: d2 drops at block exit, d1 drops at fn exit -> exactly 2 drops
+    DROPS = 0;
+    scope_nested();
+    if DROPS != 2 { return 60; }
+
+    return 0;
+}

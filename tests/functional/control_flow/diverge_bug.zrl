@@ -1,0 +1,46 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::{close, exit, stdout, write};
+use fmt::write_u64;
+
+enum Status {
+    Ok(i32),
+    Error,
+    Fatal,
+}
+
+fn diverging_func() -> never {
+    let stdout_fd = stdout();
+    write(stdout_fd, "Diverging!\n");
+    close(stdout_fd);
+    exit(1);
+    while true {}
+}
+
+fn test_match_diverge(s: Status) -> i32 {
+    let res = match s {
+        Status.Ok(val) => {
+            val
+        },
+        Status.Error => {
+            diverging_func();
+            0
+        },
+        Status.Fatal => {
+            diverging_func();
+            1
+        }
+    };
+    return res;
+}
+
+fn main() -> i32 {
+    let s = Status.Ok(42);
+    let val = test_match_diverge(s);
+    let mut stdout_fd = stdout();
+    write(stdout_fd, "val: ");
+    let _ = write_u64(&mut stdout_fd, val as u64);
+    write(stdout_fd, "\n");
+    close(stdout_fd);
+    return 0;
+}

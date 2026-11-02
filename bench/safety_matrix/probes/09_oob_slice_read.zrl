@@ -1,0 +1,10 @@
+// name: OOB slice read
+// expected: runtime_trap
+fn read_slice(s: [u8]) -> i32 {
+    let i = 99 as usize;
+    return s[i] as i32;
+}
+fn main() -> i32 {
+    let mut data = [1 as u8, 2 as u8, 3 as u8];
+    return read_slice(&mut data);
+}

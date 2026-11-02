@@ -1,0 +1,11 @@
+// expected exit code: 0
+struct S { x: u64, y: u64 }
+fn main() -> i32 {
+    let mut s1 = S { x: 10, y: 20 };
+    let s2 = s1; // This should be a value copy (load + store)
+    s1.x = 100;
+    if s2.x != 10 { return 1; }
+    if s2.y != 20 { return 2; }
+    if s1.x != 100 { return 3; }
+    return 0;
+}

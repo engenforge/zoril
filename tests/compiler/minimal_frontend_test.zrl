@@ -1,0 +1,30 @@
+import "parser.zrl";
+import "ast.zrl";
+import "intern.zrl";
+import "io.zrl";
+import "lexer.zrl";
+import "mem_raw.zrl";
+import "parser/base.zrl";
+use ast::AST;
+use base::{LoadState, Parser};
+use intern::InternTable;
+use io::{write, stdout};
+use lexer::Lexer;
+use mem_raw::{ArenaHeader, arena_init};
+
+fn main() -> i32 {
+    let arena_box = unsafe { arena_init(1024 * 1024) };
+    let arena = arena_box as *mut ArenaHeader;
+    let mut intern_table = unsafe { InternTable.new_raw(arena) };
+    let mut ast = AST.new(arena);
+    write(stdout(), "arena ok\n");
+
+    let source1 = "fn x() {}";
+    let lex1 = Lexer.new(source1, intern_table, arena);
+    write(stdout(), "lexer ok\n");
+    let mut parser1 = unsafe { &mut *Parser.new(lex1, &mut *ast, intern_table, "t", 0 as *mut u32, 0, 0 as *mut LoadState) };
+    write(stdout(), "parser ok\n");
+    let decl = parser1.parse_declaration();
+    write(stdout(), "decl ok\n");
+    return 0;
+}

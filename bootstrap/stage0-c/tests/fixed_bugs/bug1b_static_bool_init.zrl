@@ -1,0 +1,16 @@
+// expected exit 0
+// Bug #1b: static bool initializers were emitted as `{ z 1 }` (zeroed), so
+// `static mut X: bool = true` started out false.
+
+pub static mut ENABLED: bool = true;
+pub static mut DISABLED: bool = false;
+
+pub fn main() -> i32 {
+    if ENABLED { } else { return 1; }
+    if DISABLED { return 2; }
+    ENABLED = false;
+    if ENABLED { return 3; }
+    DISABLED = true;
+    if DISABLED { } else { return 4; }
+    return 0;
+}

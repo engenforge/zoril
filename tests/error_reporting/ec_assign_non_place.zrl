@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: error: invalid assignment target
+// The left side of `=` must be a place. An arithmetic expression is a value: assigning to it
+// used to lower to a store through an address computed from that value.
+fn main() -> i32 {
+    (1 + 2) = 3;
+    return 0;
+}

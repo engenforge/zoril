@@ -1,0 +1,29 @@
+// name: Arena reset while field-assigned slice lives in local struct
+// expected: known_gap
+// gap: ZirVerifier.check_assign drops RHS borrows when assigning to struct field of local, permitting arena reset while field view is live
+// observed: exit 77
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct W {
+    s: [i32],
+}
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => {
+            return 1;
+        }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let mut w = W { s: @slice(0 as *i32, 0) };
+    w.s = v.as_slice();
+    a.reset();
+    let mut v2 = Vec::<i32>.new_in(&a);
+    v2.push(77);
+    return w.s[0];
+}

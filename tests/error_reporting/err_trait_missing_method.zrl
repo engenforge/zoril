@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_trait_missing_method.zrl:9:1: error: impl of `Shape` for `Sq` is missing method `area`
+// An impl must define every trait method that has no default body. The impl was accepted, and
+// a generic caller's `s.area()` failed to resolve far from the cause.
+trait Shape {
+    fn area(self: &Self) -> i32;
+    fn double_area(self: &Self) -> i32 { return self.area() * 2; }
+}
+impl Shape for Sq {
+    fn double_area(self: &Sq) -> i32 { return 2; }
+}
+struct Sq { s: i32 }
+fn main() -> i32 { return 0; }

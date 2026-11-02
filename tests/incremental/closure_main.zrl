@@ -1,0 +1,14 @@
+import "closure_lib.zrl";
+use closure_lib::helper_apply;
+
+pub fn main() -> i32 {
+    let double = |x: i32| -> i32 { x * 2 };
+    let r1 = helper_apply(double, 21);
+    if r1 != 42 { return 1; }
+
+    let inc = |x: i32| -> i32 { x + 1 };
+    let r2 = helper_apply(inc, 41);
+    if r2 != 42 { return 2; }
+
+    return 0;
+}

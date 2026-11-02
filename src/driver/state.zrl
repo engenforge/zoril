@@ -1,0 +1,330 @@
+import "diag.zrl";
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "ast.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "il_cfg.zrl";
+import "resolve.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "intern.zrl";
+import "bytevec.zrl";
+import "mono.zrl";
+import "builder.zrl";
+import "vec.zrl";
+import "zir_stats.zrl";
+use ast::Span;
+use builder::ILBuilder;
+use diag::diag_start;
+use il_cfg::ILModule;
+use il_instr::{BlockId, ILInstr, NO_SSA, SSAId};
+use il_type::{ILPrimitive, ILTYPE_PRIMITIVE, ILTYPE_PTR, ILTYPE_PTRMUT, ILTypeDecl, ILTypeDef, is_any_pointer_tag, is_raw_pointer_tag, is_reference_tag};
+use intern::InternTable;
+use io::eprint;
+use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
+use mono::Monomorphizer;
+use resolve::Resolver;
+use vec::Vec;
+use zir_stats::ZirStats;
+
+pub struct Driver {
+    pub arena: *mut ArenaHeader,
+    pub resolver: &mut Resolver,
+    pub module: &mut ILModule,
+    pub intern_table: &mut InternTable,
+    pub mono: &mut Monomorphizer,
+    pub builder: &mut ILBuilder,
+
+    pub had_error: bool,
+    pub sret_ssa: SSAId,
+    pub file_path: [u8],
+    pub current_fn_name: u32,
+
+    // Set by lower_fn_instance to provide the self type for bare 'self' params (ty=0)
+    pub implicit_self_ty: u32,
+    // Set by lower_fn_instance for methods: length of the owning type's name within the function name.
+    pub current_owner_len: u32,
+    // Set while a `Drop` impl's `drop` is lowered: the drop glue of an importer calls it by name, so it is linkable
+    // whether or not it is written `pub` (a trait impl's methods are public as the trait is).
+    pub lowering_drop_impl: bool,
+    // Names referenced from the bodies of this TU's public generic functions. Those bodies are
+    // instantiated in other TUs, so what they reference must be linkable (see is_local_fn).
+    pub generic_private_refs: Vec<u32>,
+
+    pub scratch_arena: *mut ArenaHeader,
+    pub compile_only: bool,
+    pub target_source_file: u32,
+    pub is_specialization: bool,
+    // `zoril --checked`: instrument the emitted program (poison a dead local's slot, trap on a
+    // double drop). Read by the ZIR-to-ZIL lowering only, never by the program being compiled.
+    pub checked: bool,
+    // `zoril --hosted`: the program shares its process with libc, so a function that would take the
+    // name of one of libc's symbols is an error.
+    pub hosted: bool,
+    // `zoril --emit-zir-stats`: count the ZIR constructs each lowered body uses and its CFG
+    // shape (scripts/check_route_coverage.sh reads the output). Off by default, so a normal
+    // compile does no counting.
+    pub collect_zir_stats: bool,
+    pub zir_stats: ZirStats,
+}
+
+impl Driver {
+    pub fn is_copy_type_internal(self: &mut Driver, type_id: u32, depth: usize) -> bool {
+        if type_id == 0 as u32 { return true; }
+        // Past the recursion limit the answer is *unknown*, and unknown reads as "not `Copy`" - the
+        // conservative side (doc/SAFETY.md §4.4).
+        let past_limit_copy = depth > 10 as usize;
+        if past_limit_copy { return false; }
+
+        if self.is_implicit_aggregate_ptr(type_id) {
+            let inner = self.get_ptr_inner_type(type_id);
+            return self.is_copy_type_internal(inner, depth + 1 as usize);
+        }
+
+        // Check if the type implements Drop
+        let drop_name_id = (*self.intern_table).intern("drop");
+        let opt_decl = self.find_method_in_impls(type_id, drop_name_id);
+        match opt_decl {
+            Some(_) => { return false; },
+            None => {}
+        }
+
+        let p_ty: ILTypeDecl = self.module.types[type_id as usize - 1 as usize];
+        match p_ty.def {
+            ILType.Primitive(_)
+                | ILType.Ptr(_)
+                | ILType.PtrMut(_)
+                | ILType.RawPtr(_)
+                | ILType.RawPtrMut(_)
+                | ILType.Slice(_)
+                | ILType.Fn(_) => { return true; },
+            ILType.FD(_) | ILType.IORing => { return false; },
+            ILType.Boxed(_) | ILType.BoxedMut(_) => { return false; },
+            ILType.Array(a) => {
+                return self.is_copy_type_internal(a.element, depth + 1 as usize);
+            },
+            ILType.Tuple(types) => {
+                let mut i = 0 as usize;
+                while i < types.len {
+                    if !self.is_copy_type_internal(types[i], depth + 1 as usize) { return false; }
+                    i = i + 1 as usize;
+                }
+                return true;
+            },
+            ILType.User(u) => {
+                if u.id == 0 as u32 { return true; }
+                if u.id as usize >= self.module.typedefs.len() { return true; }
+                let p_def: ILTypeDef = self.module.typedefs[u.id as usize];
+                match p_def {
+                    ILTypeDef.Struct(s) => {
+                        if s.is_copy_opt_out { return false; }
+                        let mut i = 0 as usize;
+                        while i < s.fields.len {
+                            if !self.is_copy_type_internal(s.fields[i].ty, depth + 1 as usize) {
+                                return false;
+                            }
+                            i = i + 1 as usize;
+                        }
+                        return true;
+                    },
+                    ILTypeDef.Enum(e) => {
+                        if e.is_copy_opt_out { return false; }
+                        let mut i = 0 as usize;
+                        while i < e.variants.len {
+                            if e.variants[i].payload != 0 as u32 {
+                                if !self.is_copy_type_internal(
+                                    e.variants[i].payload,
+                                    depth + 1 as usize
+                                ) {
+                                    return false;
+                                }
+                            }
+                            i = i + 1 as usize;
+                        }
+                        return true;
+                    },
+                    ILTypeDef.Fn(_) => { return true; },
+                }
+            },
+            ILType.Var(_) => { return false; },
+        }
+    }
+
+    // Starts an error message; the caller writes the rest, and the newline.
+    pub fn report_error(self: &mut Driver, msg: [u8], span: Span) {
+        self.had_error = true;
+        diag_start(self.file_path, span, "error");
+        eprint(msg);
+    }
+    pub fn report_error_concat(self: &mut Driver, msg1: [u8], msg2: [u8], span: Span) {
+        self.had_error = true;
+        diag_start(self.file_path, span, "error");
+        eprint(msg1);
+        eprint(msg2);
+    }
+
+    #[stores(arena -> arena, resolver -> arena, module -> arena, intern_table -> arena, mono -> arena)]
+    pub fn new(
+        arena: *mut ArenaHeader,
+        resolver: &mut Resolver,
+        module: &mut ILModule,
+        intern_table: &mut InternTable,
+        mono: &mut Monomorphizer
+    ) -> *mut Driver {
+        // SAFETY: scratch arena allocation for compiler driver analysis passes.
+        let scratch_arena = unsafe { arena_init((1024 as u64) * 1024 * 4096) };
+        let l = unsafe { zoril_allocator_alloc(arena, sizeof(Driver)) } as *mut Driver;
+        let builder = ILBuilder.new(arena, module);
+        let file_path = (*resolver).file_path;
+        unsafe {
+            *l = Driver {
+                arena: arena,
+                resolver: resolver,
+                module: module,
+                intern_table: intern_table,
+                mono: mono,
+                builder: &mut *builder,
+                had_error: false,
+                sret_ssa: NO_SSA as u32,
+                file_path: file_path,
+                current_fn_name: 0 as u32,
+                implicit_self_ty: 0 as u32,
+                current_owner_len: 0 as u32,
+                lowering_drop_impl: false,
+                generic_private_refs: unsafe { Vec::<u32>.new_in_raw(arena) },
+                scratch_arena: scratch_arena,
+                compile_only: false,
+                target_source_file: 0 as u32,
+                is_specialization: false,
+                checked: false,
+                hosted: false,
+                collect_zir_stats: false,
+                zir_stats: ZirStats.new(),
+            };
+        }
+        return l;
+    }
+
+    pub fn get_primitive_type(self: &mut Driver, p: ILPrimitive) -> u32 {
+        let tag = p.get_tag();
+        return unsafe { *((self.resolver.primitives as usize + tag as usize * 4) as *mut u32) };
+    }
+
+    pub fn emit_const_u64(self: &mut Driver, val: u64, ty: u32) -> SSAId {
+        return self.builder.emit_const_u64(val, ty);
+    }
+
+    pub fn get_ssa_type(self: &mut Driver, ssa: SSAId) -> u32 {
+        return self.builder.get_ssa_type(ssa);
+    }
+
+    pub fn new_block(self: &mut Driver) -> BlockId {
+        return self.builder.new_block();
+    }
+
+    pub fn switch_to_block(self: &mut Driver, id: BlockId) {
+        self.builder.switch_to_block(id);
+    }
+
+    pub fn emit(self: &mut Driver, instr: ILInstr) -> SSAId {
+        return self.builder.emit(instr);
+    }
+
+    pub fn types_match(self: &mut Driver, expected: u32, actual: u32) -> bool {
+        if expected == actual { return true; }
+        if expected == 0 as u32 || actual == 0 as u32 { return true; }
+
+        // Aggregate duality: S in surface vs *S in IL SSA
+        let inner_act = self.get_ptr_inner_type(actual);
+        if inner_act == expected && self.is_aggregate(expected) { return true; }
+
+        let inner_exp = self.get_ptr_inner_type(expected);
+        if inner_exp == actual && self.is_aggregate(actual) { return true; }
+
+        let p_ty_exp: &ILTypeDecl = &self.module.types[expected as usize - 1 as usize];
+        let p_ty_act: &ILTypeDecl = &self.module.types[actual as usize - 1 as usize];
+        let tag_exp = (*p_ty_exp).def.get_tag();
+        let tag_act = (*p_ty_act).def.get_tag();
+
+        // Pointer mutability duality, *inside* a class: `&T` matches `&mut T` and `*T` matches
+        // `*mut T`, but a raw pointer never matches a reference. That last part is probe 125's
+        // laundering route, and it is why this test names the two classes instead of testing the
+        // pointer tags as one group. (Boxes were never part of it here.)
+        if (is_reference_tag(tag_exp) && is_reference_tag(tag_act))
+            || (is_raw_pointer_tag(tag_exp) && is_raw_pointer_tag(tag_act)) {
+            let inner_exp = self.get_ptr_inner_type(expected);
+            let inner_act = self.get_ptr_inner_type(actual);
+            if inner_exp == inner_act { return true; }
+        }
+
+        // A reference may be used where a raw pointer is expected. That direction only *adds* the
+        // `unsafe` requirement at the use site, so it cannot launder a raw pointer into a safe one.
+        // The reverse - a `*T` where an `&T` is expected - is deliberately absent: that is probe
+        // 125's route, and the separate types exist to close it.
+        //
+        // Both mutability combinations are accepted, which is what the tree did before the types
+        // were distinct (a `*mut T` slot taking a `&T` is the one a later, deliberate step could
+        // tighten; `zilc`'s `current_func` field is the site that relies on it today).
+        if is_raw_pointer_tag(tag_exp) && is_reference_tag(tag_act) {
+            let inner_exp = self.get_ptr_inner_type(expected);
+            let inner_act = self.get_ptr_inner_type(actual);
+            if self.types_match(inner_exp, inner_act) { return true; }
+        }
+
+        // Allow same-sized numeric types (e.g. i32 vs u32) for now to reduce regressions
+        // if they are both primitives.
+        if tag_exp == ILTYPE_PRIMITIVE && tag_act == ILTYPE_PRIMITIVE {
+            if self.get_type_size(expected) == self.get_type_size(actual) { return true; }
+        }
+
+        return false;
+    }
+
+    pub fn emit_with_type(self: &mut Driver, instr: ILInstr, ty: u32) -> SSAId {
+        let ssa = self.builder.emit_with_type(instr, ty);
+        return ssa;
+    }
+
+    pub fn is_implicit_aggregate_ptr(self: &mut Driver, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        if ty_id == 0 as u32 { ICE("a type id of 0 where a type is needed"); }
+        let p_ty: &ILTypeDecl = self.builder.get_type_decl(ty_id);
+        let tag = (*p_ty).def.get_tag();
+        if !is_reference_tag(tag) { return false; }
+        if (*p_ty).name != 0 as u32 { return false; }
+        let inner = self.get_ptr_inner_type(ty_id);
+        return self.is_aggregate(inner);
+    }
+
+    pub fn get_ptr_inner_type(self: &mut Driver, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        if ty_id as usize > self.module.types.len() {
+            ICE("get_ptr_inner_type: ty_id out of bounds");
+        }
+        if ty_id == 0 as u32 { ICE("a type id of 0 where a type is needed"); }
+        let p_ty: &ILTypeDecl = self.builder.get_type_decl(ty_id);
+        match (*p_ty).def {
+            ILType.Ptr(inner) => { return inner; },
+            ILType.PtrMut(inner) => { return inner; },
+            ILType.RawPtr(inner) => { return inner; },
+            ILType.RawPtrMut(inner) => { return inner; },
+            ILType.Boxed(inner) => { return inner; },
+            ILType.BoxedMut(inner) => { return inner; },
+            ILType.Slice(s) => { return s.element; },
+            ILType.Primitive(_)
+                | ILType.Array(_)
+                | ILType.Fn(_)
+                | ILType.Tuple(_)
+                | ILType.FD(_)
+                | ILType.IORing
+                | ILType.User(_)
+                | ILType.Var(_) => { return 0 as u32; },
+        }
+    }
+
+    pub fn get_ptr_type(self: &mut Driver, inner: u32) -> u32 {
+        return self.builder.get_ptr_type(inner);
+    }
+}

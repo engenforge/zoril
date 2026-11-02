@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: cannot move out of borrow
+// Returning a non-Copy field read through a shared reference.
+struct R { v: i32 }
+impl Drop for R { fn drop(self: &mut R) { } }
+struct B { r: R }
+fn steal(b: &B) -> R { return b.r; }
+fn main() -> i32 { let b = B { r: R { v: 1 } }; let x = steal(&b); return 0; }

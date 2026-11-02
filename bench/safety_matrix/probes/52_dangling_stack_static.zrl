@@ -1,0 +1,9 @@
+// name: Dangling stack ptr — stashed in a static mut global
+// expected: compile_reject
+// A local's address is stored in a global that outlives the call.
+static mut G: *mut i32 = 0 as *mut i32;
+fn stash() {
+    let mut x: i32 = 42;
+    G = &mut x;
+}
+fn main() -> i32 { stash(); if G as usize == 0 as usize { return 1; } return 0; }

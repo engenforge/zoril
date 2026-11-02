@@ -1,0 +1,42 @@
+// expected exit code: 0
+// Tests const, static, and static mut declarations and access from multiple functions.
+
+const MAX_SIZE: i32 = 256;
+const VERSION: i32 = 1;
+const HEX_MASK: u32 = 0xFF00FF;
+
+static mut counter: i32 = 0;
+static mut last_value: i32 = 0;
+
+fn increment(value: i32) {
+    counter += 1;
+    last_value = value;
+}
+
+fn get_counter() -> i32 {
+    return counter;
+}
+
+fn test_constants() -> i32 {
+    if MAX_SIZE != 256 { return 1; }
+    if VERSION != 1 { return 2; }
+    if HEX_MASK != 0xFF00FF { return 3; }
+    return 0;
+}
+
+fn test_static_mut() -> i32 {
+    increment(10);
+    increment(20);
+    increment(30);
+
+    if get_counter() != 3 { return 1; }
+    if last_value != 30 { return 2; }
+
+    return 0;
+}
+
+fn main() -> i32 {
+    if test_constants() != 0 { return 1; }
+    if test_static_mut() != 0 { return 2; }
+    return 0;
+}

@@ -1,0 +1,57 @@
+import "core.zrl";
+import "mem_raw.zrl";
+import "vec.zrl";
+use mem_raw::arena_init;
+use vec::Vec;
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(1024 * 1024) };
+    let mut v = unsafe { Vec::<i32>.new_in_raw(arena) };
+    
+    let mut i = 0 as i32;
+    while i < 100 {
+        v.push(i);
+        i = i + 1;
+    }
+    
+    if v.len() != 100 as u64 {
+        return 1;
+    }
+    
+    i = 0;
+    while i < 100 {
+        let val = v.get(i as u64).unwrap();
+        if *val != i {
+            return 2;
+        }
+        i = i + 1;
+    }
+    
+    v.set(50 as u64, 1234);
+    let val50 = v.get(50 as u64).unwrap();
+    if *val50 != 1234 {
+        return 3;
+    }
+    
+    let slice = v.as_slice();
+    if slice.len != 100 as u64 {
+        return 4;
+    }
+    if slice[50] != 1234 {
+        return 5;
+    }
+    let mut v_growth = unsafe { Vec::<i32>.new_in_raw(arena) };
+    v_growth.ensure_len(10);
+    if v_growth.len() != 10 { return 10; }
+    if v_growth[5] != 0 { return 11; }
+    v_growth.set(5, 42);
+    if v_growth[5] != 42 { return 12; }
+    v_growth.resize(20);
+    if v_growth.len() != 20 { return 13; }
+    if v_growth[5] != 42 { return 14; }
+    if v_growth[15] != 0 { return 15; }
+    v_growth.resize(5);
+    if v_growth.len() != 5 { return 16; }
+
+    return 0;
+}

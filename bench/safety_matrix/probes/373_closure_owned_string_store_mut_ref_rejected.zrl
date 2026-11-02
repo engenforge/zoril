@@ -1,0 +1,18 @@
+// name: A view of a closure's owned String stored through a captured &mut is rejected
+// expected: compile_reject
+// A view of a closure's owned String cannot be stored through a captured &mut reference.
+import "string.zrl";
+use string::String;
+
+fn main() -> i32 {
+    let e: [u8] = @slice(0 as *u8, 0);
+    let mut s = e;
+    let out = &mut s;
+    let mut str = String::new();
+    str.push_str("hello");
+    let mut f = || {
+        *out = str.as_slice();
+    };
+    f();
+    return s.len as i32;
+}

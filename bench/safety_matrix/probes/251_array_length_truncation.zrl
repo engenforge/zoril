@@ -1,0 +1,6 @@
+// name: An array length above 32 bits truncated to its low half
+// expected: compile_reject
+// `ILArray.size` is a u32 and the declared length was narrowed into it, so `[u8; 4294967298]`
+// was an array of 2 - a miscompile, not an overrun: the type and the value disagreed with what
+// the program wrote, and every index the program believed was in range landed elsewhere.
+fn main() -> i32 { let a: [u8; 4294967298] = [0 as u8; 2]; return a[0] as i32; }

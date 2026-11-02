@@ -1,0 +1,27 @@
+// name: Same-type direct borrow misclassification allows loop reference escape
+// expected: compile_reject
+import "core.zrl";
+use core::Option;
+
+struct Link {
+    v: u64,
+    prev: Option<&Link>,
+}
+
+fn get_prev(l: &Link) -> &Link {
+    return l.prev.unwrap();
+}
+
+fn main() -> i32 {
+    let root = Link { v: 1, prev: Option.None };
+    let mut out: &Link = &root;
+    let mut i = 0 as u64;
+    while i < 2 {
+        let inner = Link { v: 7 + i * 92, prev: Option.None };
+        let outer = Link { v: 2, prev: Option.Some(&inner) };
+        if i == 0 { out = get_prev(&outer); }
+        i = i + 1;
+    }
+    // out.v reads 99 instead of 7
+    return out.v as i32;
+}

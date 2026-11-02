@@ -1,0 +1,59 @@
+# Store Grid Soundness Hole Class Report
+# Generated from base cell: arena_vec__direct__direct__deref_out__frame_ends (rejected)
+# Total classes: 52 (1-axis: 3, 2-axis: 49)
+
+# --- 1-Axis Soundness Hole Classes (single change from base escapes safety check) ---
+path=same_param: arena_vec__direct__same_param__deref_out__frame_ends
+destination=closure_capture_mut: arena_vec__direct__direct__closure_capture_mut__frame_ends
+destination=closure_owned_capture: arena_vec__direct__direct__closure_owned_capture__frame_ends
+
+# --- 2-Axis Soundness Hole Classes (pair of safe single changes that fail together) ---
+source=local_vec + carrier=struct_field: local_vec__struct_field__direct__deref_out__frame_ends
+source=local_vec + carrier=tuple_slot: local_vec__tuple_slot__direct__deref_out__frame_ends
+source=local_vec + carrier=array_slot: local_vec__array_slot__direct__deref_out__frame_ends
+source=local_vec + path=method: local_vec__direct__method__deref_out__frame_ends
+source=local_vec + path=self_method: local_vec__direct__self_method__deref_out__frame_ends
+source=local_vec + path=trait_method: local_vec__direct__trait_method__deref_out__frame_ends
+source=local_vec + destination=call_struct_mut: local_vec__direct__direct__call_struct_mut__frame_ends
+source=local_vec + destination=local_field_assigned_out: local_vec__direct__direct__local_field_assigned_out__frame_ends
+source=local_vec + destination=ten_copies: local_vec__direct__direct__ten_copies__frame_ends
+source=string + carrier=struct_field: string__struct_field__direct__deref_out__frame_ends
+source=string + carrier=tuple_slot: string__tuple_slot__direct__deref_out__frame_ends
+source=string + carrier=array_slot: string__array_slot__direct__deref_out__frame_ends
+source=string + path=method: string__direct__method__deref_out__frame_ends
+source=string + path=self_method: string__direct__self_method__deref_out__frame_ends
+source=string + path=trait_method: string__direct__trait_method__deref_out__frame_ends
+source=string + destination=call_struct_mut: string__direct__direct__call_struct_mut__frame_ends
+source=string + destination=local_field_assigned_out: string__direct__direct__local_field_assigned_out__frame_ends
+source=string + destination=ten_copies: string__direct__direct__ten_copies__frame_ends
+source=ref_local + carrier=enum_payload: ref_local__enum_payload__direct__deref_out__frame_ends
+source=ref_local + path=fn_val: ref_local__direct__fn_val__deref_out__frame_ends
+source=elem_ref + carrier=enum_payload: elem_ref__enum_payload__direct__deref_out__frame_ends
+source=elem_ref + path=fn_val: elem_ref__direct__fn_val__deref_out__frame_ends
+source=closure_local + carrier=enum_payload: closure_local__enum_payload__direct__deref_out__frame_ends
+source=closure_local + path=fn_val: closure_local__direct__fn_val__deref_out__frame_ends
+source=closure_local + path=param_65: closure_local__direct__param_65__deref_out__frame_ends
+carrier=struct_field + path=fn_val: arena_vec__struct_field__fn_val__deref_out__frame_ends
+carrier=struct_field + path=param_65: arena_vec__struct_field__param_65__deref_out__frame_ends
+carrier=tuple_slot + path=fn_val: arena_vec__tuple_slot__fn_val__deref_out__frame_ends
+carrier=tuple_slot + path=param_65: arena_vec__tuple_slot__param_65__deref_out__frame_ends
+carrier=enum_payload + path=method: arena_vec__enum_payload__method__deref_out__frame_ends
+carrier=enum_payload + path=self_method: arena_vec__enum_payload__self_method__deref_out__frame_ends
+carrier=enum_payload + path=trait_method: arena_vec__enum_payload__trait_method__deref_out__frame_ends
+carrier=enum_payload + destination=call_struct_mut: arena_vec__enum_payload__direct__call_struct_mut__frame_ends
+carrier=enum_payload + destination=local_field_assigned_out: arena_vec__enum_payload__direct__local_field_assigned_out__frame_ends
+carrier=enum_payload + destination=ten_copies: arena_vec__enum_payload__direct__ten_copies__frame_ends
+carrier=box + path=method: arena_vec__box__method__deref_out__frame_ends
+carrier=box + path=self_method: arena_vec__box__self_method__deref_out__frame_ends
+carrier=box + path=trait_method: arena_vec__box__trait_method__deref_out__frame_ends
+carrier=box + destination=call_struct_mut: arena_vec__box__direct__call_struct_mut__frame_ends
+carrier=box + destination=local_field_assigned_out: arena_vec__box__direct__local_field_assigned_out__frame_ends
+carrier=box + destination=ten_copies: arena_vec__box__direct__ten_copies__frame_ends
+carrier=array_slot + path=fn_val: arena_vec__array_slot__fn_val__deref_out__frame_ends
+carrier=array_slot + path=param_65: arena_vec__array_slot__param_65__deref_out__frame_ends
+path=fn_val + destination=call_struct_mut: arena_vec__direct__fn_val__call_struct_mut__frame_ends
+path=fn_val + destination=local_field_assigned_out: arena_vec__direct__fn_val__local_field_assigned_out__frame_ends
+path=fn_val + destination=ten_copies: arena_vec__direct__fn_val__ten_copies__frame_ends
+path=param_65 + destination=call_struct_mut: arena_vec__direct__param_65__call_struct_mut__frame_ends
+path=param_65 + destination=local_field_assigned_out: arena_vec__direct__param_65__local_field_assigned_out__frame_ends
+path=param_65 + destination=ten_copies: arena_vec__direct__param_65__ten_copies__frame_ends

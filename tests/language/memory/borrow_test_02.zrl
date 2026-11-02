@@ -1,0 +1,13 @@
+struct Resource { val: i32 }
+impl Resource {
+    fn use_me(self: &Resource) {}
+    fn use_me_mut(self: &mut Resource) {}
+}
+
+fn main() {
+    let mut r: Resource = Resource { val: 5 };
+    {
+        r.use_me();
+    }
+    r.use_me_mut(); 
+}

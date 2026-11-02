@@ -1,0 +1,14 @@
+// expected exit 7
+// A capturing closure is a function value carrying its environment, so it works anywhere a
+// `fn` value does (struct field). Until 2026-10-05 this was rejected: the environment was
+// bound to the variable statically.
+struct S { f: fn(i32) -> i32 }
+fn ok(x: i32) -> i32 { return x; }
+
+fn main() -> i32 {
+    let k = 5;
+    let mut s = S { f: ok };
+    if (s.f)(2) != 2 { return 1; }
+    s.f = |x: i32| -> i32 { x + k };
+    return (s.f)(2);
+}

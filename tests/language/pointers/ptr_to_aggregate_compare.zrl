@@ -1,0 +1,24 @@
+// expected exit 0
+// Comparing a pointer to an aggregate compares the address. It used to load through the
+// pointer first (treating it like an implicit aggregate address), so comparing a null
+// pointer dereferenced null.
+struct Counter { id: u32, hits: u64 }
+
+fn is_null(p: *Counter) -> bool { return p == 0 as *Counter; }
+fn is_set(p: *mut Counter) -> bool { return p != 0 as *mut Counter; }
+fn same(a: *Counter, b: *Counter) -> bool { return a == b; }
+
+fn main() -> i32 {
+    let mut c = Counter { id: 1, hits: 0 };
+    let d = Counter { id: 1, hits: 0 };
+    if !is_null(0 as *Counter) { return 1; }
+    if is_null(&c as *Counter) { return 2; }
+    if is_set(0 as *mut Counter) { return 3; }
+    if !is_set(&mut c as *mut Counter) { return 4; }
+    // Equal contents at different addresses are different pointers.
+    if same(&c as *Counter, &d as *Counter) { return 5; }
+    if !same(&d as *Counter, &d as *Counter) { return 6; }
+    let local: *Counter = 0 as *Counter;
+    if local != 0 as *Counter { return 7; }
+    return 0;
+}

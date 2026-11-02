@@ -1,0 +1,19 @@
+// A generic impl for a slice, whose methods name this module's private items (A7.5): the impl
+// is instantiated in the importer, so those items must be linkable and in the interface.
+static mut SL_K: i32 = 40;
+fn sl_secret() -> i32 { return SL_K; }
+trait SlPriv {
+    fn f(self: &Self) -> i32;
+}
+impl<T> SlPriv for [T] {
+    fn f(self: &[T]) -> i32 { SL_K = SL_K + 0; return sl_secret() + (self.len as i32); }
+}
+pub fn sl_run<T>(s: &[T]) -> i32 { return s.f(); }
+
+pub trait SlPub {
+    fn g(self: &Self) -> i32;
+}
+impl<T> SlPub for [T] {
+    fn g(self: &[T]) -> i32 { SL_K = SL_K + 0; return sl_secret() + (self.len as i32); }
+}
+pub fn sl_pub<T>(s: &[T]) -> i32 { return s.g(); }

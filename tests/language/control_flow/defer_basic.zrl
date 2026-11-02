@@ -1,0 +1,37 @@
+// expected exit code: 0
+// Tests defer execution order (LIFO) and basic cleanup semantics.
+
+static mut cleanup_order: i32 = 0;
+
+fn record(step: i32) {
+    cleanup_order = cleanup_order * 10 + step;
+}
+
+fn test_lifo_order() -> i32 {
+    defer record(1);
+    defer record(2);
+    defer record(3);
+    record(0);
+    return 0;
+}
+
+fn test_defer_on_early_return() -> i32 {
+    let mut acquired = false;
+    acquired = true;
+    defer {
+        acquired = false;
+    };
+    if acquired { return 42; }
+    return 0;
+}
+
+fn main() -> i32 {
+    test_lifo_order();
+    // Expected cleanup_order after LIFO: 0 → 0*10+0=0, then record(3)→3, record(2)→32, record(1)→321
+    if cleanup_order != 321 { return 1; }
+
+    let result = test_defer_on_early_return();
+    if result != 42 { return 2; }
+
+    return 0;
+}

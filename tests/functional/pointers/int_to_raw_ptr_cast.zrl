@@ -1,0 +1,24 @@
+// expected exit code: 0
+// `n as *T` forges a pointer out of an integer, as `@ptr_from_int(n)` does, and the *cast* is
+// safe: since Phase D every use of a raw pointer - a dereference, a field access, an index, a
+// method call, a conversion to a reference - needs `unsafe` from the pointer's own type, so
+// gating the creation as well would put a marker around safe code and buy nothing. A cast to a
+// reference, a slice, an aggregate or a type parameter is refused by the cast rules themselves,
+// so a raw pointer is the only pointer an integer can become.
+//
+// This file was tests/error_reporting/err_int_to_raw_ptr_cast.zrl until 2026-10-13; the
+// dereference half of the rule is pinned by tests/error_reporting/err_int_to_raw_ptr_cast_deref.zrl
+// and by probes 13_forged_pointer.zrl and 187_int_to_raw_ptr_cast_safe.zrl.
+fn next(p: *u8) -> *u8 { return (p as usize + 1) as *u8; }
+
+fn main() -> i32 {
+    let a: u8 = 1;
+    let q = next(&a as *u8);
+    if q as usize == 0 { return 1; }
+    // The pointer arithmetic is the address of `a` plus one, as written.
+    if q as usize != (&a as *u8) as usize + 1 { return 2; }
+    // A literal zero is not special any more, but it is still the null pointer.
+    let null = 0 as *mut u8;
+    if null as usize != 0 { return 3; }
+    return 0;
+}

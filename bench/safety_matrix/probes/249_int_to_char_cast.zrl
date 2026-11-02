@@ -1,0 +1,6 @@
+// name: A number cast to char makes a value no char may hold
+// expected: compile_reject
+// `as char` kept any 32-bit value, so safe code could hold a surrogate or a point above
+// U+10FFFF: invalid UTF-8 handed to anything that encodes a char, and an unhandled value in a
+// char match. `unicode::char_from_u32` is the checked conversion; `unsafe` is the escape hatch.
+fn main() -> i32 { let c = (0xd800 as u32 + 1) as char; return 0; }

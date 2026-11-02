@@ -1,0 +1,15 @@
+
+import "token.zrl";
+import "io.zrl";
+import "fmt.zrl";
+use io::{write, stdout};
+use fmt::write_u64;
+use token::Token;
+
+fn main() -> i32 {
+    let sz = sizeof(Token);
+    let mut out = stdout();
+    let _ = write_u64(&mut out, sz as u64);
+    write(stdout(), "\n");
+    return 0;
+}

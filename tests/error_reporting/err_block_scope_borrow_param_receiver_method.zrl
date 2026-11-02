@@ -1,0 +1,29 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_param_receiver_method.zrl:27:5: error: cannot let 's' go out of scope while it is still borrowed
+
+// A method whose receiver is a *parameter* (`l.grab()`): the storage walk resolved a receiver only
+// for `self`, so the call contributed no bits to `h`'s mask and `h`'s result read as a derived
+// borrow - exempt at `s`'s scope end because `Wrapper` has no `Drop`. The walk resolves a parameter
+// receiver by its declared type now (`storage_param_type`), the fix probe 169 pins.
+struct Wrapper {
+    v: i32,
+}
+
+impl Wrapper {
+    fn grab(self: &Wrapper) -> &i32 { return &self.v; }
+}
+
+fn h(l: &Wrapper, q: &i32, n: i32) -> &i32 {
+    if n <= 0 { return q; }
+    return l.grab();
+}
+
+fn main() -> i32 {
+    let mut y: &i32 = &0;
+    let w: i32 = 3;
+    {
+        let s = Wrapper { v: 5 };
+        y = h(&s, &w, 1);
+    }
+    return *y;
+}

@@ -1,0 +1,26 @@
+// Safe arena handle: create, allocate through the handle, write and read, then destroy.
+// Verifies arena_destroy no longer double-frees after the Stage 3 Drop-free change:
+// the handle's empty-body destroy relies on Drop to free exactly once.
+// expected exit 0
+
+import "mem.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+use io::exit;
+use mem::{Arena, arena_raw};
+use mem_raw::zoril_allocator_alloc;
+
+fn main() -> i32 {
+    let a = Arena.new(65536).unwrap();
+    let p = unsafe { zoril_allocator_alloc(arena_raw(&a), 8) };
+    if p as u64 == 0 {
+        exit(1);
+    }
+    unsafe {
+        (*(p as *mut u64)) = 0xDEAD_BEEF as u64;
+        if (*(p as *mut u64)) != 0xDEAD_BEEF as u64 {
+            exit(2);
+        }
+    }
+    return 0;
+}

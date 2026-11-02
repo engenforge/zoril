@@ -1,0 +1,2 @@
+pub struct Counter { pub n: i32 }
+impl Counter { fn get(self: &Counter) -> i32 { return self.n; } }

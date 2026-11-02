@@ -1,0 +1,21 @@
+// Type parameters that appear only inside a function type are inferred from
+// the function value passed for it, for generic functions and struct literals.
+// expected exit 0
+
+struct Mapper<T, U> {
+    f: fn(T) -> U,
+}
+
+fn apply<T, U>(f: fn(T) -> U, x: T) -> U { return f(x); }
+
+fn to_wide(x: i32) -> i64 { return x as i64 * 1000000000; }
+
+fn main() -> i32 {
+    let w = apply(to_wide, 5);
+    if w != 5000000000 { return 1; }
+
+    let m = Mapper { f: to_wide };
+    let g = m.f;
+    if g(3) != 3000000000 { return 2; }
+    return 0;
+}

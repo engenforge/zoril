@@ -1,0 +1,12 @@
+enum Test {
+    A(u32),
+    B,
+}
+
+fn main() -> i32 {
+    let t = Test.B;
+    match t {
+        Test.A(_) | Test.B => {}
+    }
+    return 0;
+}

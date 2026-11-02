@@ -1,0 +1,92 @@
+// expected exit 0
+import "string.zrl";
+import "vec.zrl";
+import "mem.zrl";
+
+use mem::Arena;
+use vec::Vec;
+
+struct Item<T> {
+    val: T,
+}
+
+impl [Item<u64>] {
+    pub fn sum_items(self: &[Item<u64>]) -> u64 {
+        let mut total: u64 = 0 as u64;
+        let mut i: usize = 0 as usize;
+        while i < self.len {
+            total = total + self[i].val;
+            i = i + 1 as usize;
+        }
+        return total;
+    }
+}
+
+impl [Vec<u8>] {
+    pub fn total_bytes(self: &[Vec<u8>]) -> usize {
+        let mut total: usize = 0 as usize;
+        let mut i: usize = 0 as usize;
+        while i < self.len {
+            total = total + self[i].len();
+            i = i + 1 as usize;
+        }
+        return total;
+    }
+}
+
+impl [[u8]] {
+    pub fn count_nonempty(self: &[[u8]]) -> usize {
+        let mut count: usize = 0 as usize;
+        let mut i: usize = 0 as usize;
+        while i < self.len {
+            if self[i].len > 0 as usize {
+                count = count + 1 as usize;
+            }
+            i = i + 1 as usize;
+        }
+        return count;
+    }
+}
+
+fn test_mut_slice_auto_borrow() -> bool {
+    let mut buf: [u8; 5] = [104 as u8, 101 as u8, 108 as u8, 108 as u8, 111 as u8];
+    let s: [mut u8] = &mut buf;
+    if !s.starts_with("he") { return false; }
+    if !s.ends_with("lo") { return false; }
+    let sub = s.sub(1 as usize, 3 as usize);
+    if sub.len != 3 as usize || sub[0] != 'e' as u8 { return false; }
+    s[0] = 'H' as u8;
+    return s[0] == 'H' as u8;
+}
+
+fn main() -> i32 {
+    if !test_mut_slice_auto_borrow() { return 1; }
+
+    let items: [Item<u64>; 3] = [
+        Item { val: 10 as u64 },
+        Item { val: 20 as u64 },
+        Item { val: 30 as u64 },
+    ];
+    let slice_items: [Item<u64>] = &items;
+    if slice_items.sum_items() != 60 as u64 { return 2; }
+
+    let a = Arena.new(65536).unwrap();
+    let mut v1 = Vec::<u8>.new_in(&a);
+    v1.push('a' as u8);
+    v1.push('b' as u8);
+    let mut v2 = Vec::<u8>.new_in(&a);
+    v2.push('c' as u8);
+
+    let vecs: [Vec<u8>; 2] = [v1, v2];
+    let slice_vecs: [Vec<u8>] = &vecs;
+    if slice_vecs.total_bytes() != 3 as usize { return 3; }
+
+    let s1: [u8] = "hello";
+    let s2: [u8] = "";
+    let s3: [u8] = "world";
+    let nested: [[u8]; 3] = [s1, s2, s3];
+    let slice_nested: [[u8]] = &nested;
+    if slice_nested.count_nonempty() != 2 as usize { return 4; }
+
+    return 0;
+}

@@ -1,0 +1,73 @@
+// Safe arena handle: a value an arena-taking function hands out is tied to its arena, so it
+// must be used and dropped before the arena is reset or destroyed.
+// expected exit 0
+
+import "file.zrl";
+import "mem.zrl";
+use file::{read_file, write_file};
+use mem::Arena;
+
+// The slice lives in this frame and is dropped when the function returns, releasing its borrow
+// of `a`.
+fn read_len(path: [u8], a: &Arena) -> usize {
+    return match read_file(path, a) {
+        Ok(bytes) => bytes.len,
+        Err(_) => 0,
+    };
+}
+
+fn format_temp_path(prefix: [u8], pid: u64, buf: &mut [u8; 64]) -> [u8] {
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        buf[i] = prefix[i];
+        i = i + 1;
+    }
+    let mut digits: [u8; 20] = [0 as u8; 20];
+    let mut dcount = 0 as usize;
+    let mut n = pid;
+    if n == 0 as u64 {
+        digits[0] = '0' as u8;
+        dcount = 1;
+    } else {
+        while n > 0 as u64 {
+            let rem = (n % 10 as u64) as u8;
+            digits[dcount] = '0' as u8 + rem;
+            dcount = dcount + 1;
+            n = n / 10 as u64;
+        }
+    }
+    let mut d = dcount;
+    while d > 0 {
+        d = d - 1;
+        buf[i] = digits[d];
+        i = i + 1;
+    }
+    let suffix = ".txt\0";
+    let mut s = 0 as usize;
+    while s < suffix.len {
+        buf[i] = suffix[s];
+        i = i + 1;
+        s = s + 1;
+    }
+    unsafe { return @slice(&buf[0] as *u8, i - 1); }
+}
+
+fn main() -> i32 {
+    let mut path_buf = [0 as u8; 64];
+    let pid = unsafe { @syscall(39) } as u64;
+    let path = format_temp_path("/tmp/zoril_arena_fn_tie_", pid, &mut path_buf);
+
+    if write_file(path, "hello").is_err() { return 1; }
+    let mut arena = Arena.new(65536).unwrap();
+    if read_len(path, &arena) != 5 {
+        unsafe { @syscall(87, path.ptr, 0, 0); }
+        return 2;
+    }
+    arena.reset(); // nothing read out of `arena` is live
+    if read_len(path, &arena) != 5 {
+        unsafe { @syscall(87, path.ptr, 0, 0); }
+        return 3;
+    }
+    unsafe { @syscall(87, path.ptr, 0, 0); }
+    return 0;
+}

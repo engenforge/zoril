@@ -1,0 +1,15 @@
+// expected compile fail
+// A capturing closure that escapes the block owning its environment is rejected at that block's
+// end. The environment is a compiler-generated local, and the diagnostic names the closure the user
+// wrote rather than its internal id ("variable (id: N)").
+// EXPECT: tests/error_reporting/err_closure_env_scope_end.zrl:13:5: error: cannot let 'the environment of the closure created at 11:19' go out of scope while it is still borrowed
+fn main() -> i32 {
+    let zero: u64 = 0;
+    let mut f = || -> u64 { return zero; };
+    for i in 0..2 {
+        let x: u64 = 7 + (i as u64) * 92;
+        let cur = || -> u64 { return x; };
+        if i == 0 { f = cur; }
+    }
+    return f() as i32;
+}

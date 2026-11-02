@@ -1,0 +1,17 @@
+// expected exit 0
+// A float literal is `f32` with that suffix or where an `f32` is expected, else `f64`; an
+// integer literal where a float is expected is that float. `1.5f32` used to be an `f64`.
+fn f32_id(x: f32) -> f32 { return x; }
+fn main() -> i32 {
+    let a = 1.5f32;
+    let b: f32 = f32_id(a);         // an f64 here would be an error now
+    let c: f32 = 0.25;
+    let d: f64 = 5;
+    let e = 2.5f64;
+    if sizeof(f32) != 4 { return 1; }
+    if b + c != 1.75f32 { return 2; }
+    if d / 2.0 != 2.5 || e != 2.5 { return 3; }
+    let widened: f64 = b;           // f32 -> f64 stays implicit
+    if widened != 1.5 { return 4; }
+    return 0;
+}

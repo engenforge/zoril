@@ -1,0 +1,36 @@
+unsafe fn add(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+unsafe fn deref_ptr(p: *mut i32) -> i32 {
+    // Body is an unsafe context: raw dereference permitted without unsafe block
+    return *p;
+}
+
+unsafe fn call_nested(p: *mut i32) -> i32 {
+    // Calling another unsafe fn without an unsafe block inside an unsafe context
+    return add(deref_ptr(p), 10);
+}
+
+struct Counter {
+    val: i32,
+}
+
+impl Counter {
+    unsafe fn inc(self: &mut Counter) {
+        self.val = self.val + 1;
+    }
+}
+
+fn main() -> i32 {
+    let mut x: i32 = 42;
+    let p = &mut x as *mut i32;
+    let res = unsafe { call_nested(p) };
+    if res != 52 { return 1; }
+
+    let mut c = Counter { val: 100 };
+    unsafe { c.inc(); }
+    if c.val != 101 { return 2; }
+
+    return 0;
+}

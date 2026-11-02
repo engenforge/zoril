@@ -1,0 +1,8 @@
+// expected exit 134
+// The guard bounds i only until i changes: after the increment a[i] is checked again and traps.
+fn main() -> i32 {
+    let mut a: [u8; 4] = [0; 4];
+    let mut i: usize = 0;
+    while i < 4 { a[i] = 1; i = i + 1; a[i] = 2; }
+    return 0;
+}

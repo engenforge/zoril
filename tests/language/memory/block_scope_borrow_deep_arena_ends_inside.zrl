@@ -1,0 +1,32 @@
+// The other side of probe 175: the same deeply nested value whose derived borrow ends inside the
+// block that owns it. `type_has_drop` cannot finish the walk (the `Arena` is nine levels down, past
+// its limit), so it answers "it does free storage" - which only means the borrow is not *exempt*
+// here; it is over when the block ends, and the program is accepted as before.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct S1 { a: Arena }
+struct S2 { a: S1 }
+struct S3 { a: S2 }
+struct S4 { a: S3 }
+struct S5 { a: S4 }
+struct S6 { a: S5 }
+struct S7 { a: S6 }
+struct S8 { a: S7 }
+struct S9 { a: S8 }
+
+fn main() -> i32 {
+    {
+        let h = S9 { a: S8 { a: S7 { a: S6 { a: S5 { a: S4 { a: S3 { a: S2 { a: S1 { a: Arena.new(4096).unwrap() } } } } } } } } };
+        let mut v = Vec::<u64>.new_in(&h.a.a.a.a.a.a.a.a.a);
+        v.push(42 as u64);
+        let got = match v.get(0 as u64) {
+            Option.Some(r) => *r,
+            Option.None => 0 as u64,
+        };
+        if got != 42 as u64 { return 1; }
+    }
+    return 0;
+}

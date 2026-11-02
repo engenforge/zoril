@@ -1,0 +1,81 @@
+// expected exit 0
+// A u32 field read out of an enum payload, reached each way an earlier stage0-C
+// bootstrap bug went wrong (it returned 0 instead of 42). Consolidates the former
+// repro_bootstrap_u32_{aligned,cast,cast_complex,corruption,final,no_io} variants.
+//
+// The raw-offset reads also pin the enum layout: a 4-byte tag, then the payload at its
+// own alignment (offset 4 for a payload of u32s, offset 8 once it holds a usize).
+
+pub struct Payload4 {
+    pub num: u32,
+    pub pad: u32,
+}
+
+pub struct Payload8 {
+    pub num: u32,
+    pub pad: u32,
+    pub ptr: usize,
+}
+
+pub struct Payload16 {
+    pub num: u32,
+    pub dummy: u32,
+    pub ptr: usize,
+    pub len: usize,
+}
+
+pub enum Small {
+    Target(Payload4),
+}
+
+pub enum Aligned {
+    Target(Payload8),
+    Other,
+}
+
+pub enum Wide {
+    Target(Payload16),
+}
+
+impl Small {
+    // Payload of u32s: it starts right after the 4-byte tag.
+    pub fn get_num(self: &Small) -> u32 {
+        let p = unsafe { &*((self as usize + 4) as *Payload4) };
+        return p.num;
+    }
+}
+
+impl Aligned {
+    // Payload holding a usize: aligned to 8.
+    pub fn get_num(self: &Aligned) -> u32 {
+        let p = unsafe { &*((self as usize + 8) as *Payload8) };
+        return p.num;
+    }
+}
+
+fn num_of(p: &Payload16) -> usize {
+    return p.num as usize;
+}
+
+fn main() -> i32 {
+    let s = Small.Target(Payload4 { num: 42 as u32, pad: 0 as u32 });
+    if s.get_num() != 42 as u32 { return 1; }
+
+    let a = Aligned.Target(Payload8 { num: 42 as u32, pad: 0 as u32, ptr: 0 as usize });
+    if a.get_num() != 42 as u32 { return 2; }
+
+    // Through a match binding rather than an offset.
+    let by_match = match a {
+        Aligned.Target(tp) => tp.num,
+        _ => 0 as u32,
+    };
+    if by_match != 42 as u32 { return 3; }
+
+    // Through a function parameter, with a wider payload.
+    let w = Wide.Target(Payload16 { num: 42 as u32, dummy: 0 as u32, ptr: 123 as usize, len: 456 as usize });
+    let p_ptr = unsafe { &*((&w as usize + 8) as *Payload16) };
+    if num_of(p_ptr) != 42 as usize { return 4; }
+    if p_ptr.ptr != 123 as usize || p_ptr.len != 456 as usize { return 5; }
+
+    return 0;
+}

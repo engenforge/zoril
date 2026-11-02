@@ -1,0 +1,7 @@
+fn main() -> i32 {
+    let x: usize = 42;
+    if x == 42 && true {
+        return 0;
+    }
+    return 1;
+}

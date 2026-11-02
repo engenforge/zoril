@@ -1,0 +1,21 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::{print, stdout};
+use fmt::write_u64;
+
+struct Entry {
+    hash: u64,
+    start: u64,
+    len: u64,
+    id: u32,
+}
+
+fn main() {
+    let mut e: Entry = Entry { hash: 0, start: 0, len: 0, id: 123 };
+    let p = &e as *u64;
+    let mut out = stdout();
+    unsafe { print("offset 0: "); let _ = write_u64(&mut out, *(p as *u64)); print("\n"); }
+    unsafe { print("offset 8: "); let _ = write_u64(&mut out, *((p as u64 + 8) as *u64)); print("\n"); }
+    unsafe { print("offset 16: "); let _ = write_u64(&mut out, *((p as u64 + 16) as *u64)); print("\n"); }
+    unsafe { print("offset 24: "); let _ = write_u64(&mut out, *((p as u64 + 24) as *u64)); print("\n"); }
+}

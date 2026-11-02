@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: error: cannot mutably borrow 'a' while it is already borrowed
+// A ByteVec from `ByteVec.new(&arena)` borrows the arena, so resetting the arena while the
+// ByteVec is live is a compile error (Stage 4 for ByteVec).
+import "mem.zrl";
+import "bytevec.zrl";
+use bytevec::ByteVec;
+use mem::Arena;
+
+fn main() -> i32 {
+    let mut a = Arena.new(4096).unwrap();
+    let mut bv = ByteVec.new(&a);
+    bv.push('h' as u8);
+    a.reset(); // @error "cannot mutably borrow 'a' while it is already borrowed"
+    bv.push('i' as u8);
+    return 0;
+}

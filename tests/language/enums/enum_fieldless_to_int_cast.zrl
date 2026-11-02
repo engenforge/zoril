@@ -1,0 +1,8 @@
+// A fieldless enum is its discriminant: casting it to an integer stays valid.
+enum Color { Red, Green, Blue }
+
+fn main() -> i32 {
+    let c = Color.Blue;
+    if (c as i32) == 2 { return 0; }
+    return 1;
+}

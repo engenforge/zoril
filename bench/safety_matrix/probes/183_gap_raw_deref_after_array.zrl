@@ -1,0 +1,12 @@
+// name: A raw pointer dereferenced after passing through an array (no unsafe)
+// expected: compile_reject
+// closed: the dereference check now decides from the IL type, which keeps `RawPtr`/`RawPtrMut`
+// through array indexing - so this program is a located type error instead of a silent hole.
+fn main() -> i32 {
+    let mut x: u32 = 7;
+    let a = [&mut x as *mut u32, &mut x as *mut u32];
+    let q = a[0];
+    *q = 9;
+    if x != 9 { return 1; }
+    return 0;
+}

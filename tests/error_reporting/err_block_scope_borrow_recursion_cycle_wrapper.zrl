@@ -1,0 +1,26 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_recursion_cycle_wrapper.zrl:24:5: error: cannot let 'x' go out of scope while it is still borrowed
+
+// The same recursion read through a function that is *not* recursive: `g` forwards its arguments to
+// `f`, whose own mask is a lower bound (see err_block_scope_borrow_recursion_cycle.zrl). Reading
+// that lower bound out of the callee's IL function made `g` look decided, so `g(&x, &w)` - which
+// returns `&x` - was a derived borrow again. A callee whose masks are unknown now makes the walk
+// that reads it unknown too.
+fn f(p: &i32, q: &i32, n: i32) -> &i32 {
+    if n <= 0 { return q; }
+    return f(q, p, n - 1);
+}
+
+fn g(p: &i32, q: &i32) -> &i32 {
+    return f(p, q, 1);
+}
+
+fn main() -> i32 {
+    let mut y: &i32 = &0;
+    let w: i32 = 3;
+    {
+        let x: i32 = 7;
+        y = g(&x, &w);
+    }
+    return *y;
+}

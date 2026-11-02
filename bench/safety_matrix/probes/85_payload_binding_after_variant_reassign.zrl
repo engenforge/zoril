@@ -1,0 +1,15 @@
+// name: Payload binding used after its enum is reassigned to another variant
+// expected: accept
+// Bindings copy the payload, so the old value survives the reassignment: no tag confusion.
+enum E { A(i64), B(i32) }
+fn main() -> i32 {
+    let mut e = E.A(5 as i64);
+    match e {
+        E.A(x) => {
+            e = E.B(7);
+            if x != 5 as i64 { return 2; }
+        },
+        E.B(_) => { return 1; },
+    }
+    return 0;
+}

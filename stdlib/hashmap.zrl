@@ -1,0 +1,269 @@
+// Open-addressing hash table with linear probing (HashMap)
+
+import "core.zrl";
+import "mem.zrl";
+import "mem_raw.zrl";
+import "hash_impls.zrl";
+use mem::{Arena, arena_raw, bounds_trap, grow_cap, size_of_n};
+use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+
+// Key-value pair entry stored inside the hash map table.
+pub struct Entry<K, V> {
+    pub key: K,
+    pub value: V,
+    pub occupied: bool,
+}
+
+// Open-addressing hash table with linear probing and quadratic fallback.
+pub struct HashMap<K, V> {
+    entries: *mut Entry<K, V>,
+    cap: usize,
+    count: usize,
+    raw: *mut ArenaHeader,
+    // Ties the map to its arena at compile time: an `&Arena` held here is borrowed by the
+    // map, so the borrow checker rejects destroying or resetting the arena while the map is
+    // live. `raw` is what allocation uses; `anchor` is `None` for `new_raw` (the `unsafe`
+    // escape hatch for raw-pointer internals).
+    pub anchor: Option<&Arena>,
+}
+
+impl<K: Hash + Eq, V> HashMap<K, V> {
+    // Safe: the map borrows the arena through `anchor`, so destroying or resetting the arena
+    // while the map is live is a compile error.
+    pub fn new(a: &Arena) -> HashMap<K, V> {
+        // SAFETY: the constructor's contract is the arena pointer, and `a` is the live, borrowed
+        // arena the returned map is tied to.
+        return unsafe { HashMap.alloc_in(arena_raw(a), Option.Some(a)) };
+    }
+
+    // Constructs an empty hash map allocated from a raw arena header.
+    //
+    // CALLER OBLIGATION: arena must be valid and initialized.
+    //
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    pub unsafe fn new_raw(arena: *mut ArenaHeader) -> HashMap<K, V> {
+        let none: Option<&Arena> = Option.None;
+        return HashMap.alloc_in(arena, none);
+    }
+
+    // Internal constructor allocating the hash map entry table in the specified arena.
+    //
+    // CALLER OBLIGATION: caller must ensure arena is valid and initialized.
+    //
+    // The one body both constructors share: manufacture the entry table in the arena and
+    // record the allocator and the anchor.
+    unsafe fn alloc_in(arena: *mut ArenaHeader, anchor: Option<&Arena>) -> HashMap<K, V> {
+        let initial_cap = 16 as usize;
+        let bytes = size_of_n(initial_cap, sizeof(Entry<K, V>)) as u64;
+        let ptr = zoril_allocator_alloc(arena, bytes) as *mut Entry<K, V>;
+
+        // Initialize occupied flags to false
+        let mut i = 0 as usize;
+        while i < initial_cap {
+            let p = (ptr as usize + i *% sizeof(Entry<K, V>)) as *mut Entry<K, V>;
+            (*p).occupied = false;
+            i = i + 1 as usize;
+        }
+
+        return HashMap {
+            entries: ptr,
+            cap: initial_cap,
+            count: 0 as usize,
+            raw: arena,
+            anchor: anchor,
+        };
+    }
+
+    // Inserts a key-value pair into the map, returning the previous value if key was present.
+    #[stores(key -> self, value -> self)]
+    pub fn insert(self: &mut HashMap<K, V>, key: K, value: V) {
+        if self.count *% 4 >= self.cap *% 3 {
+            self.grow();
+        }
+
+        let h = (key.hash() as usize) % self.cap;
+        let mut idx = h;
+
+        // SAFETY: open addressing over the raw entry table, which lives in `self.raw`'s arena;
+        // every index is taken modulo `cap`, so the slot is inside it (unsafe_policy.md §2),
+        // exactly as InternTable and SymbolTable are.
+        unsafe {
+            while self.entries[idx].occupied {
+                if self.entries[idx].key.eq(&key) {
+                    self.entries[idx].value = value;
+                    return;
+                }
+                idx = (idx + 1 as usize) % self.cap;
+            }
+
+            self.entries[idx].key = key;
+            self.entries[idx].value = value;
+            self.entries[idx].occupied = true;
+        }
+        self.count = self.count + 1 as usize;
+    }
+
+    // Internal rehash resizing the map table to double capacity.
+    fn grow(self: &mut HashMap<K, V>) {
+        let old_cap = self.cap;
+        let old_entries = self.entries;
+
+        // `grow_cap`/`size_of_n` trap instead of wrapping: `*%` here under-allocated the entry
+        // table while `cap` kept the large value, so every later probe wrote past it.
+        let new_cap = grow_cap(old_cap);
+        let bytes = size_of_n(new_cap, sizeof(Entry<K, V>)) as u64;
+        // SAFETY: `self.raw` is the arena this map allocates from (0 for the global heap) and
+        // `bytes` is the checked size of the new table.
+        let new_ptr = unsafe { zoril_allocator_alloc(self.raw, bytes) } as *mut Entry<K, V>;
+
+        let mut i = 0 as usize;
+        // SAFETY: the table was just allocated with `bytes`, which covers `new_cap` entries.
+        unsafe {
+            while i < new_cap {
+                let p = (new_ptr as usize + i *% sizeof(Entry<K, V>)) as *mut Entry<K, V>;
+                (*p).occupied = false;
+                i = i + 1 as usize;
+            }
+        }
+
+        let mut old_idx = 0 as usize;
+        while old_idx < old_cap {
+            // SAFETY: `old_entries` is the table this map allocated with `old_cap` entries, and
+            // the loop keeps `old_idx < old_cap`.
+            unsafe {
+                if old_entries[old_idx].occupied {
+                    let h = (old_entries[old_idx].key.hash() as usize) % new_cap;
+                    let mut idx = h;
+                    while new_ptr[idx].occupied {
+                        idx = (idx + 1 as usize) % new_cap;
+                    }
+                    new_ptr[idx] = old_entries[old_idx];
+                }
+            }
+            old_idx = old_idx + 1 as usize;
+        }
+
+        self.entries = new_ptr;
+        self.cap = new_cap;
+    }
+
+    // The number of live entries, and the size of the entry table the iterator walks.
+    pub fn len(self: &HashMap<K, V>) -> usize {
+        return self.count;
+    }
+
+    // Returns the current number of allocated buckets in the hash table.
+    pub fn cap(self: &HashMap<K, V>) -> usize {
+        return self.cap;
+    }
+
+    // The entry table's slot at INDEX, for the iterator in iter.zrl. The table lives in the
+    // map's arena, so a slot reference is valid as long as the map is; `occupied` says whether
+    // its key and value are live. An index at or above `cap` is the iterator's own bug, so it
+    // traps rather than reading outside the table.
+    pub fn entry_at(self: &HashMap<K, V>, index: usize) -> &Entry<K, V> {
+        if index >= self.cap {
+            bounds_trap("HashMap.entry_at: index out of bounds");
+        }
+        // SAFETY: the index was checked against `cap` above, so the slot is inside the map's own
+        // entry table.
+        return unsafe { &self.entries[index] };
+    }
+
+    // Returns an immutable reference to the value associated with key, or None if absent.
+    pub fn get(self: &HashMap<K, V>, key: &K) -> Option<&V> {
+        let h = (key.hash() as usize) % self.cap;
+        let mut idx = h;
+        let start_idx = idx;
+
+        // SAFETY: the table lives in the map's arena, every index is taken modulo `cap`, and
+        // `start_idx` ends the probe, so each read is inside it.
+        unsafe {
+            while self.entries[idx].occupied {
+                if self.entries[idx].key.eq(key) {
+                    return Option.Some(&self.entries[idx].value);
+                }
+                idx = (idx + 1 as usize) % self.cap;
+                if idx == start_idx {
+                    return Option.None;
+                }
+            }
+        }
+
+        return Option.None;
+    }
+
+    // Returns a mutable reference to the value associated with key, or None if absent.
+    pub fn get_mut(self: &mut HashMap<K, V>, key: &K) -> Option<&mut V> {
+        let h = (key.hash() as usize) % self.cap;
+        let mut idx = h;
+        let start_idx = idx;
+
+        // SAFETY: the table lives in the map's arena, every index is taken modulo `cap`, and
+        // `start_idx` ends the probe, so each read is inside it.
+        unsafe {
+            while self.entries[idx].occupied {
+                if self.entries[idx].key.eq(key) {
+                    return Option.Some(&mut self.entries[idx].value);
+                }
+                idx = (idx + 1 as usize) % self.cap;
+                if idx == start_idx {
+                    return Option.None;
+                }
+            }
+        }
+
+        return Option.None;
+    }
+
+    // Returns true if the map contains an entry for key.
+    pub fn contains_key(self: &HashMap<K, V>, key: &K) -> bool {
+        return self.get(key).is_some();
+    }
+
+    // Removes key and returns its value if present.
+    // Uses backward-shift deletion to preserve open-addressing probe chains.
+    pub fn remove(self: &mut HashMap<K, V>, key: &K) -> Option<V> {
+        let h = (key.hash() as usize) % self.cap;
+        let mut idx = h;
+        let start_idx = idx;
+
+        // SAFETY: the table lives in the map's arena, every index is taken modulo `cap`, and
+        // entries are moved within the allocated buffer.
+        unsafe {
+            while self.entries[idx].occupied {
+                if self.entries[idx].key.eq(key) {
+                    let old_val = self.entries[idx].value;
+                    self.count = self.count - 1 as usize;
+
+                    // Backward-shift deletion along the collision chain.
+                    let mut prev_j = idx;
+                    let mut j = idx;
+                    while true {
+                        self.entries[prev_j].occupied = false;
+                        while true {
+                            j = (j + 1 as usize) % self.cap;
+                            if !self.entries[j].occupied {
+                                return Option.Some(old_val);
+                            }
+                            let k = (self.entries[j].key.hash() as usize) % self.cap;
+                            let dist_to_prev = (prev_j + self.cap - k) % self.cap;
+                            let dist_to_cur = (j + self.cap - k) % self.cap;
+                            if dist_to_prev < dist_to_cur {
+                                break;
+                            }
+                        }
+                        self.entries[prev_j] = self.entries[j];
+                        prev_j = j;
+                    }
+                    return Option.Some(old_val);
+                }
+                idx = (idx + 1 as usize) % self.cap;
+                if idx == start_idx {
+                    return Option.None;
+                }
+            }
+        }
+        return Option.None;
+    }
+}

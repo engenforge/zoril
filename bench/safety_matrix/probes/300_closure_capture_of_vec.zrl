@@ -1,0 +1,15 @@
+// name: A closure's capture of a Vec keeps a second copy of the header
+// expected: compile_reject
+// The closure's copy of the Vec header shared the outer `v`'s buffer; the two could free it
+// independently. The capture moves the Vec into the environment (probe 298 is the String twin).
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(7);
+    let f = || { return v.get(0).unwrap() as i32; };
+    let seen = f();
+    v.push(8);
+    return seen + (v.len() as i32);
+}

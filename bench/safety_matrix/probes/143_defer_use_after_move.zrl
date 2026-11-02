@@ -1,0 +1,20 @@
+// name: Defer statement using a moved value
+// expected: compile_reject
+// A defer statement cannot use a value that has already been moved.
+struct Resource {
+    val: i64,
+}
+
+impl Drop for Resource {
+    pub fn drop(self: Resource) {}
+}
+
+fn consume(r: Resource) {}
+fn use_res(r: Resource) {}
+
+fn main() -> i32 {
+    let r = Resource { val: 42 };
+    defer use_res(r);
+    consume(r);
+    return 0;
+}

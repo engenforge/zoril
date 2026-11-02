@@ -1,0 +1,21 @@
+// expected exit code: 0
+import "io.zrl";
+enum Token {
+    KFn, KStruct, KEnum, KTrait, KImpl, KLet, KMut, KIf, KElse, KMatch,
+}
+impl Token {
+    pub fn get_raw_tag(self: &Token) -> u32 {
+        let ptr_val = (self as u64);
+        let p = ptr_val as *mut u32;
+        unsafe { return *p; }
+    }
+}
+fn main() -> i32 {
+    let tok = Token.KIf;
+    let tag = tok.get_raw_tag();
+    if tag == 7 as u32 {
+        return 0;
+    } else {
+        return 1;
+    }
+}

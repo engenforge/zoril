@@ -1,0 +1,30 @@
+// name: Arena memory used after the arena is reset
+// expected: compile_reject
+// Every value an arena hands out through safe code borrows it: the collections take `&Arena`
+// and so do the arena-taking functions (`read_file`, `str_split`, `list_dir`, ...), so a reset
+// while such a value is live is a compile error. The `unsafe` `_raw` entry points
+// take a raw pointer and are the documented escape hatch, unchecked by design.
+import "mem.zrl";
+import "file.zrl";
+use file::{read_file, write_file};
+use mem::Arena;
+
+fn main() -> i32 {
+    let _ = write_file("/tmp/zoril_probe128_a.txt", "aaaa");
+    let _ = write_file("/tmp/zoril_probe128_b.txt", "bbbb");
+    let mut a = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return 1; },
+    };
+    let first = match read_file("/tmp/zoril_probe128_a.txt", &a) {
+        Ok(bytes) => bytes,
+        Err(_) => { return 4; },
+    };
+    a.reset(); // rejected: `first` borrows `a`
+    let second = match read_file("/tmp/zoril_probe128_b.txt", &a) {
+        Ok(bytes) => bytes,
+        Err(_) => { return 5; },
+    };
+    if first == second && first != "aaaa" { return 0; }
+    return 1;
+}

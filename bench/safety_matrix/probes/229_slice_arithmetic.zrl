@@ -1,0 +1,10 @@
+// name: Slice operand in arithmetic is rejected
+// expected: compile_reject
+// A slice is a data pointer and a length, not a number: the operator allowlist refuses it, so
+// neither `1 + s` nor `s + 1` can add the data pointer to an integer.
+fn main() -> i32 {
+    let a: [u64; 1] = [7];
+    let s: [u64] = &a;
+    let y: u64 = 1 + s;
+    return y as i32;
+}

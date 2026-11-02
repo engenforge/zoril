@@ -1,0 +1,17 @@
+// Tests register allocation across a loop: the loop counter and accumulator
+// should stay in registers through multiple iterations.
+fn sum_to(n: u64) -> u64 {
+    let mut acc = 0 as u64;
+    let mut i = 0 as u64;
+    while i < n {
+        acc = acc + i;
+        i = i + 1 as u64;
+    }
+    return acc;
+}
+
+fn main() -> i32 {
+    let result = sum_to(10 as u64);
+    if result == 45 as u64 { return 0; }
+    return 1;
+}

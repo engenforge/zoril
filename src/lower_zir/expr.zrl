@@ -1,0 +1,3680 @@
+import "diag.zrl";
+import "zir.zrl";
+import "ast.zrl";
+import "resolve.zrl";
+import "intern.zrl";
+import "mono.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "fmt.zrl";
+import "str.zrl";
+import "decl.zrl";
+import "il_cfg.zrl";
+import "token.zrl";
+import "utils.zrl";
+use mono::INFER_RESULT;
+use diag::{LINT_REDUNDANT_CAST, diag_start, lint_enabled};
+use ast::{ArrayLiteralExpr, ArrayRepeatExpr, BINARY_ADD_ASSIGN, BINARY_ASSIGN, BINARY_SHL, BINARY_SHL_MASKED, BINARY_SHR, BINARY_SHR_ASSIGN, BINARY_SHR_MASKED, BinaryExpr, BlockExpr, BoxExpr, CallExpr, CastExpr, ClosureExpr, DECL_STRUCT, Decl, EXPR_GENERIC, EXPR_IDENT, EXPR_INDEX, EXPR_LITERAL, Expr, ExprId, FnDecl, IfExpr, IndexExpr, IntrinsicExpr, LITERAL_BOOL, LITERAL_CHAR, LITERAL_FLOAT, LITERAL_INT, LITERAL_STRING, Literal, MemberAccessExpr, Span, StructLiteralExpr, TYPE_PTR, TYPE_REFMUT, TYPE_SLICE, TupleLiteralExpr, TypeParam, UNARY_NEG, UNARY_REF, UnaryExpr};
+use bytevec::ByteVec;
+use decl::ZirLowerer;
+use il_cfg::ILFunction;
+use il_type::{is_raw_pointer_tag, ILArray, ILPRIM_F32, ILPRIM_F64, ILPrimitive, ILSlice, ILTYPE_ARRAY, ILTYPE_BOXED, ILTYPE_BOXEDMUT, ILTYPE_FN, ILTYPE_PTR, ILTYPE_PTRMUT, ILTYPE_SLICE, ILTYPE_TUPLE, ILTYPE_USER, ILType, ILTypeDecl, ILTypeDef, ILVariant, IL_TYPEDEF_ENUM, is_any_pointer_tag, is_mut_pointer_tag};
+use io::{eprint, stderr};
+use fmt::write_u64;
+use mem_raw::{memcpy, zoril_allocator_alloc};
+use resolve::Symbol;
+use str::utf8_valid;
+use token::NO_SUFFIX;
+use utils::ShiftConst;
+use vec::Vec;
+use zir::{LOCAL_KIND_LETMUT, LOCAL_KIND_TMP, Place, Projection, ZirRvalue, ZirStmt, ZirTerminator};
+
+// What a call's callee name resolves to (direct_callee).
+enum CalleeLookup {
+    Found(u32),   // the function to call directly
+    Rejected,     // an error was reported (private, unsatisfied bounds)
+    NotDirect,    // not a direct call: call through the callee's value
+}
+
+impl ZirLowerer {
+
+    // `Expr.StructLiteral`.
+    pub fn lower_struct_literal_expr(
+        self: &mut ZirLowerer,
+        s: &StructLiteralExpr,
+        span: Span
+    ) -> Place {
+        let (named_ty, generic_decl) = self.struct_literal_type(s, span);
+        // The values first: a generic literal's type arguments are inferred from them. With
+        // the struct known, each gets its field's type as expected type (`b: 1` on a `u8`).
+        let mut vals = unsafe { Vec::<Place>.with_capacity_in_raw(self.arena, s.fields.len) };
+        let mut value_exprs = unsafe {
+            Vec::<ExprId>.with_capacity_in_raw(self.arena, s.fields.len)
+        };
+        for f in s.fields { value_exprs.push(f.value); }
+        for fi in 0 as usize..s.fields.len {
+            vals.push(
+                self.lower_operand(
+                    value_exprs.as_slice(),
+                    fi,
+                    self.struct_field_expected_ty(generic_decl, named_ty, s.fields[fi].name)
+                )
+            );
+        }
+        let mut ty = named_ty;
+        if generic_decl != 0 as u32 {
+            let inferred = self.infer_generic_type_args_for_struct(
+                generic_decl,
+                s.fields,
+                vals.as_mut_ptr(),
+                s.fields.len
+            );
+            ty = self.mono.instantiate_type(generic_decl, inferred);
+        }
+        let p_def = if ty != 0 as u32 { self.struct_def(ty) } else { 0 as *mut ILTypeDef };
+        if p_def as usize == 0 as usize {
+            if ty != 0 as u32 {
+                self.report_error_with_symbol("not a struct: ", s.struct_name, span);
+            }
+            return self.no_place();
+        }
+        let fields = unsafe { (*p_def).get_Struct().fields };
+        let n = fields.len;
+
+        let args = unsafe {
+            @slice(zoril_allocator_alloc(self.arena, n * sizeof(Place)) as *mut Place, n)
+        };
+        let given = unsafe { @slice(zoril_allocator_alloc(self.arena, n) as *mut bool, n) };
+        for k in 0 as usize..n { args[k] = self.no_place(); given[k] = false; }
+        for ai in 0 as usize..s.fields.len {
+            let name = s.fields[ai].name;
+            let idx = self.get_field_index(ty, name);
+            if idx == 0xffffffff as u32 || idx as usize >= n {
+                self.report_error_with_symbol(
+                    "struct literal names no field of the struct: ",
+                    name,
+                    span
+                );
+                continue;
+            }
+            if given[idx as usize] {
+                self.report_error_with_symbol("struct literal gives a field twice: ", name, span);
+                continue;
+            }
+            given[idx as usize] = true;
+            self.check_field_visible(ty, name, span);
+            self.check_raw_into_ref(&vals.as_slice()[ai], self.get_field_type(ty, idx), span);
+            args[idx as usize] = self.struct_field_value(
+                vals.as_slice()[ai],
+                self.get_field_type(ty, idx),
+                span
+            );
+        }
+        for k in 0 as usize..n {
+            if !given[k] {
+                self.report_error_with_symbol(
+                    "struct literal is missing field: ",
+                    fields[k].name,
+                    span
+                );
+            }
+        }
+        let tmp = self.define_local(0 as *mut Symbol, ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.StructLiteral(ty, args), span));
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // The type a struct literal names, or for a generic struct written without type arguments
+    // 0 and its declaration (the arguments are inferred from the values).
+    fn struct_literal_type(self: &mut ZirLowerer, s: &StructLiteralExpr, span: Span) -> (u32, u32) {
+        let sym = match self.resolver.resolve_ptr(s.struct_name) {
+            Option.Some(sym) => sym,
+            Option.None => {
+                self.report_error_with_symbol("unresolved symbol: ", s.struct_name, span);
+                self.note_name_hint(s.struct_name, span);
+                return (0 as u32, 0 as u32);
+            },
+        };
+        let mut decl_id = match sym.kind {
+            SymbolKind.Type(ty) => { return (ty, 0 as u32); },
+            SymbolKind.Global(d) => d,
+            _ => {
+                self.report_error_with_symbol("not a struct: ", s.struct_name, span);
+                return (0 as u32, 0 as u32);
+            },
+        };
+        if let Decl.TypeAlias(ta) = self.resolver.ast.decls[decl_id as usize] {
+            let target = self.resolver.resolve_type(ta.target);
+            if target != 0 as u32 {
+                if let ILType.User(u) = self.get_type_decl(target).def {
+                    decl_id = self.mono.get_typedef_origin(u.id);
+                }
+            }
+        }
+        if s.type_args.len > 0 as usize {
+            return (
+                self.mono.instantiate_type(decl_id, self.resolver.resolve_type_list(s.type_args)),
+                0 as u32
+            );
+        }
+        return (0 as u32, decl_id);
+    }
+
+    // VAL as the value of a field of type FIELD_TY: an array reference becomes a slice, and a
+    // value of another type converts implicitly (or is an error), as for `let` and arguments.
+    // A non-Copy value is moved into the struct.
+    fn struct_field_value(self: &mut ZirLowerer, val: Place, field_ty: u32, span: Span) -> Place {
+        if field_ty == 0 as u32 || val.base == 0 as u32 { return val; }
+        let val_src_ty = self.get_place_type(&val);
+        let mut v = self.coerce_array_ref_to_slice(val, val_src_ty, field_ty, span);
+        let val_ty = self.get_place_type(&v);
+        if val_ty != 0 as u32 && !self.types_match(field_ty, val_ty) {
+            if self.implicit_conv_ok(field_ty, val_ty) {
+                v = self.emit_cast(v, field_ty, span);
+            } else {
+                self.report_conv_or_type_mismatch(field_ty, val_ty, span);
+            }
+        }
+        if !self.is_copy_type(field_ty) { self.consume_place_if_move(&v); }
+        return v;
+    }
+
+    // A Place is a base local and an arena projection list: no result points into the lowerer, so
+    // a caller may hold one across further `&mut self` calls.
+    #[borrows()]
+    pub fn lower_expr(self: &mut ZirLowerer, expr_id: ExprId, expected_ty: u32) -> Place {
+        let place = self.lower_expr_internal(expr_id, expected_ty);
+        // Span of the expression just lowered, for diagnostics raised while consuming its value.
+        self.cur_span = self.get_expr_span(expr_id);
+        return place;
+    }
+
+    // `Expr.If`. Walks the chain of `else if`s iteratively rather than recursing into
+    // lower_expr once per branch: generated code can chain thousands of them, which
+    // overflowed the stack.
+    // An `if .. else if .. else ..` chain as its conditions and bodies, in order (into CONDS
+    // and THENS), and its final else body, 0 for none.
+    fn flatten_if_chain(
+        self: &mut ZirLowerer,
+        i: &IfExpr,
+        conds: &mut Vec<ExprId>,
+        thens: &mut Vec<ExprId>
+    ) -> ExprId {
+        let mut link = *i;
+        loop {
+            conds.push(link.cond);
+            thens.push(link.then_block);
+            if link.else_block == 0 as ExprId { return 0 as ExprId; }
+            match self.resolver.ast.exprs[link.else_block as usize] {
+                Expr.If(next) => { link = next; },
+                _ => { return link.else_block; },
+            }
+        }
+        return 0 as ExprId;
+    }
+
+    pub fn lower_if_expr(self: &mut ZirLowerer, i: &IfExpr, expected_ty: u32, span: Span) -> Place {
+        let mut conds = unsafe { Vec::<ExprId>.new_in_raw(self.arena) };
+        let mut thens = unsafe { Vec::<ExprId>.new_in_raw(self.arena) };
+        let final_else = self.flatten_if_chain(i, &mut conds, &mut thens);
+        let n = conds.len();
+
+        // Emit one (cond, then) link at a time, each link's else-block
+        // being where the next condition is checked (or, on the last link,
+        // where the chain's trailing else - if any - is lowered).
+        let mut then_ends = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+        let mut then_vals = unsafe { Vec::<Place>.new_in_raw(self.arena) };
+        // With no expected type, the first branch's type is the later branches' expected one,
+        // and a branch that is a bare path (`Option.None`) waits until that type is known, so
+        // `if c { Option.None } else { lookup() }` knows which `Option` the `None` is. Each
+        // body has a block of its own, so lowering one later changes nothing else.
+        let mut branch_ty = expected_ty;
+        let mut deferred = unsafe { Vec::<usize>.new_in_raw(self.arena) }; // branch indices; N is the else
+        let mut k = 0 as usize;
+        while k < n {
+            let then_block_id = self.new_block("if_then");
+            let next_else_block_id = self.new_block("if_else");
+            self.lower_branch_on(conds[k], then_block_id, next_else_block_id);
+
+            self.switch_to_block(then_block_id);
+            if expected_ty == 0 as u32 && self.is_bare_path(thens[k]) {
+                deferred.push(k);
+                then_vals.push(Place {
+                    base: 0,
+                    projections: @slice(0 as *mut Projection, 0 as usize)
+                });
+            } else {
+                let then_val = self.lower_expr(thens[k], branch_ty);
+                branch_ty = self.adopt_branch_type(branch_ty, &then_val);
+                then_vals.push(then_val);
+            }
+            then_ends.push(self.current_block_idx as u32);
+
+            self.switch_to_block(next_else_block_id);
+            k = k + 1 as usize;
+        }
+        // Positioned in the last link's else-block: lower the chain's
+        // trailing else-body, if the chain has one.
+        let mut else_val = Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+        if final_else != 0 as u32 {
+            if expected_ty == 0 as u32 && self.is_bare_path(final_else) {
+                deferred.push(n);
+            } else {
+                else_val = self.lower_expr(final_else, branch_ty);
+                branch_ty = self.adopt_branch_type(branch_ty, &else_val);
+            }
+        }
+        let mut else_end = self.current_block_idx as u32;
+        for d in deferred.as_slice() {
+            self.switch_to_block(if *d == n { else_end } else { then_ends[*d] });
+            let body = if *d == n { final_else } else { thens[*d] };
+            let val = self.lower_expr(body, branch_ty);
+            branch_ty = self.adopt_branch_type(branch_ty, &val);
+            if *d == n {
+                else_val = val;
+                else_end = self.current_block_idx as u32;
+            } else {
+                then_vals.set(*d, val);
+                then_ends.set(*d, self.current_block_idx as u32);
+            }
+        }
+
+        let exit_block_id = self.new_block("if_exit");
+        self.switch_to_block(exit_block_id);
+        // The trailing else, or with none the last condition's false edge, joins as one more
+        // branch.
+        then_ends.push(else_end);
+        then_vals.push(else_val);
+        thens.push(final_else);
+        // Without an else the `if` has no value.
+        let mut ty = 0 as u32;
+        if final_else != 0 as u32 {
+            ty = branch_ty;
+            if ty == 0 as u32 {
+                for v in then_vals.as_slice() { if ty == 0 as u32 { ty = self.get_place_type(v); } }
+                if ty != 0 as u32 { self.check_type_known(ty, span); }
+            }
+        }
+        let result = if ty != 0 as u32 && !self.is_unit_type(ty) {
+            Place {
+                base: self.define_local(0 as *mut Symbol, ty, LOCAL_KIND_TMP),
+                projections: @slice(0 as *mut Projection, 0 as usize)
+            }
+        } else {
+            self.no_place()
+        };
+        if !self.join_branches(
+            then_ends.as_slice(),
+            then_vals.as_slice(),
+            thens.as_slice(),
+            result,
+            ty,
+            exit_block_id,
+            span
+        ) {
+            self.terminate(ZirTerminator.Unreachable);
+        }
+        return result;
+    }
+
+    // Ends each branch still running (ENDS, the blocks they end in; 0xffffffff for none) with
+    // a jump to EXIT, first assigning its value (VALS, from BODIES) to RESULT as TY when RESULT
+    // is a place. Whether any branch reaches the exit.
+    fn join_branches(
+        self: &mut ZirLowerer,
+        ends: [u32],
+        vals: [Place],
+        bodies: [ExprId],
+        result: Place,
+        ty: u32,
+        exit: u32,
+        span: Span
+    ) -> bool {
+        let mut any_alive = false;
+        for k in 0 as usize..ends.len {
+            if ends[k] == 0xffffffff as u32 { continue; }
+            let saved = self.current_block_idx as u32;
+            self.switch_to_block(ends[k]);
+            if !self.blocks[self.current_block_idx].is_terminated {
+                any_alive = true;
+                if result.base != 0 as u32 {
+                    if vals[k].base == 0 as u32 {
+                        if !self.had_error {
+                            self.report_prefix(self.get_expr_span(bodies[k]));
+                            eprint("this `if` branch produces no value, but `");
+                            eprint(self.mono.type_display(ty));
+                            eprint("` was expected\n");
+                        }
+                    } else {
+                        let v = self.branch_value_as(
+                            vals[k],
+                            ty,
+                            self.get_expr_span(bodies[k]),
+                            "if"
+                        );
+                        self.emit(ZirStmt.Assign(result, ZirRvalue.Use(v), span));
+                    }
+                }
+                self.terminate(ZirTerminator.Jmp(exit));
+            }
+            self.switch_to_block(saved);
+        }
+        return any_alive;
+    }
+
+    // `@str("...")` builds a Str (str.zrl) from a string literal whose UTF-8
+    // validity is checked here, at compile time, so no run-time check is needed.
+    fn lower_str_intrinsic(self: &mut ZirLowerer, i: &IntrinsicExpr, span: Span) -> Place {
+        let none = Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+        // The two branches are a reference to an expression and a null raw pointer, so the type is
+        // written out and the reference cast: since Phase D `&T` and `*T` are distinct, an `if` does
+        // not unify them on its own, and `&T as *T` is the conversion that stays allowed.
+        let p_arg: *mut Expr = if i.args.len == 1 as usize {
+            self.get_expr(i.args[0]) as *mut Expr
+        } else {
+            0 as *mut Expr
+        };
+        let is_literal = p_arg as usize != 0 as usize
+            && unsafe { (*p_arg).get_tag() } == EXPR_LITERAL
+            && unsafe { (*p_arg).get_Literal().get_tag() } == LITERAL_STRING;
+        if !is_literal {
+            self.report_error("@str expects one string literal", span);
+            return none;
+        }
+        let bytes = self.intern_table.lookup(unsafe { (*p_arg).get_Literal().get_String() });
+        if !utf8_valid(bytes) {
+            self.report_error("@str literal is not valid UTF-8", span);
+            return none;
+        }
+        let str_ty = self.lookup_struct_type(self.intern_table.intern("Str"));
+        if str_ty == 0 as u32 {
+            self.report_error("@str needs the Str type: import \"str.zrl\"", span);
+            return none;
+        }
+        let lit_place = self.lower_expr(i.args[0], 0 as u32);
+        let args = unsafe { zoril_allocator_alloc(self.arena, sizeof(Place)) } as *mut Place;
+        unsafe { *args = lit_place; }
+        let tmp = self.define_local(0 as *mut Symbol, str_ty, LOCAL_KIND_TMP);
+        self.emit(
+            ZirStmt.Let(
+                tmp,
+                ZirRvalue.StructLiteral(str_ty, unsafe { @slice(args, 1 as usize) }),
+                span
+            )
+        );
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // The IL type of the non-generic struct named name, or 0 when none is in scope.
+    fn lookup_struct_type(self: &mut ZirLowerer, name: u32) -> u32 {
+        match self.resolver.resolve_ptr(name) {
+            Some(sym) => {
+                if let Option.Some(decl_id) = sym.global_decl() {
+                    if self.resolver.ast.decls[decl_id as usize].get_tag() == DECL_STRUCT {
+                        return self.mono.instantiate_type(
+                            decl_id,
+                            @slice(0 as *mut u32, 0 as usize)
+                        );
+                    }
+                }
+            },
+            None => {},
+        }
+        return 0 as u32;
+    }
+
+    pub fn lower_intrinsic(
+        self: &mut ZirLowerer,
+        i: &IntrinsicExpr,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        // A local copy, so the name outlives the table borrow: `lookup`'s result is tied to the
+        // table (and through it its arena), and the dispatch below calls `&mut self`.
+        let mut name_buf = unsafe { ByteVec.new_raw(self.arena) };
+        name_buf.push_slice(self.intern_table.lookup(i.name));
+        let name_str = name_buf.as_slice();
+        let (min_args, max_args) = intrinsic_arg_range(name_str);
+        if max_args < 0 as i64 {
+            self.report_prefix(span);
+            eprint("unknown intrinsic `@");
+            eprint(name_str);
+            eprint("`\n");
+            return self.no_place();
+        }
+        if (i.args.len as i64) < min_args || (i.args.len as i64) > max_args {
+            self.report_prefix(span);
+            eprint("`@");
+            eprint(name_str);
+            eprint("` takes ");
+            let mut err = stderr();
+            let _ = write_u64(&mut err, min_args as u64);
+            if max_args != min_args {
+                eprint(" to ");
+                let _ = write_u64(&mut err, max_args as u64);
+            }
+            eprint(if max_args == 1 as i64 { " argument, not " } else { " arguments, not " });
+            let _ = write_u64(&mut err, i.args.len as u64);
+            eprint("\n");
+            return self.no_place();
+        }
+        if name_str == "syscall" { return self.lower_syscall_intrinsic(i, span); }
+        if name_str == "shl_wrap" || name_str == "shr_wrap" {
+            return self.lower_shift_wrap_intrinsic(i, name_str, span);
+        }
+        if name_str == "slice" { return self.lower_slice_intrinsic(i, expected_ty, span); }
+        if name_str == "str" {
+            return self.lower_str_intrinsic(i, span);
+        }
+        if name_str == "saturating_add" { return self.lower_saturating_add_intrinsic(i, span); }
+        if name_str == "region_cast" {
+            return self.lower_expr(i.args[0], 0 as u32);
+        }
+        if name_str == "ptr_cast" || name_str == "int_cast" {
+            return self.lower_ptr_cast_intrinsic(i, span);
+        }
+        if name_str == "ptr_from_int" { return self.lower_ptr_from_int_intrinsic(i, span); }
+        if name_str == "likely" || name_str == "unlikely" {
+            return self.lower_expr(i.args[0], 0 as u32);
+        }
+        if name_str == "drop" { return self.lower_drop_intrinsic(i, span); }
+        if name_str == "alloca" { return self.lower_alloca_intrinsic(i, span); }
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_syscall_intrinsic(self: &mut ZirLowerer, i: &IntrinsicExpr, span: Span) -> Place {
+        // The kernel takes addresses as plain integers: read, mmap, munmap and the rest
+        // write or unmap whatever memory they are given.
+        let syscall_marked = self.unsafe_depth > 0 as u32;
+        if !syscall_marked { self.report_error("@syscall requires unsafe block", span); }
+        let nargs = i.args.len;
+        let mut args = unsafe {
+            zoril_allocator_alloc(self.arena, nargs * sizeof(Place))
+        } as *mut Place;
+        let mut j = 0 as usize;
+        while j < nargs {
+            let p_arg = (args as usize + j * sizeof(Place)) as *mut Place;
+            unsafe { *p_arg = self.lower_expr(i.args[j], 0 as u32); }
+            j = j + 1 as usize;
+        }
+        let res_ty = self.get_primitive_type(ILPrimitive.I64);
+        let tmp = self.define_local(0 as *mut Symbol, res_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.Syscall(unsafe { @slice(args, nargs) }), span));
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_shift_wrap_intrinsic(
+        self: &mut ZirLowerer,
+        i: &IntrinsicExpr,
+        name_str: [u8],
+        span: Span
+    ) -> Place {
+        // The explicit opt-out from the shift-count check: the count is masked to the
+        // operand's width (`@shl_wrap(x, 33)` on a u32 shifts by 1) and never traps.
+        let val_place = self.lower_expr(i.args[0], 0 as u32);
+        let val_ty = self.get_place_type(&val_place);
+        let cnt_place = self.lower_expr(i.args[1], val_ty);
+        if self.integer_bit_width(val_ty) == 0 as u64 {
+            self.report_error("@shl_wrap and @shr_wrap need an integer value", span);
+        }
+        let op = if name_str == "shl_wrap" { BINARY_SHL_MASKED } else { BINARY_SHR_MASKED };
+        let tmp = self.define_local(0 as *mut Symbol, val_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.BinaryOp(op, val_place, cnt_place), span));
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_slice_intrinsic(
+        self: &mut ZirLowerer,
+        i: &IntrinsicExpr,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        let ptr_place = self.lower_expr(i.args[0], 0 as u32);
+        let len_place = self.lower_expr(i.args[1], 0 as u32);
+        self.check_slice_forge_is_marked(&ptr_place, i.args[1], span);
+        let ptr_ty = self.get_place_type(&ptr_place);
+        let inner_ty = self.get_ptr_inner_type(ptr_ty);
+        // A slice over a `*mut T` / `&mut T` may write; over a `*T` / `&T` it may not.
+        // An empty one (literal length 0) has nothing to write: it is `[T]` unless the
+        // context asks for a `[mut T]`.
+        let mut mutable = ptr_ty != 0 as u32
+            && is_mut_pointer_tag(self.get_type_decl(ptr_ty).def.get_tag());
+        if self.expr_is_literal_zero(i.args[1]) {
+            mutable = expected_ty != 0 as u32
+                && self.get_type_decl(expected_ty).def.get_tag() == ILTYPE_SLICE
+                && self.get_type_decl(expected_ty).def.get_Slice().mutable;
+        }
+        let slice_ty = self.module.alloc_type(ILTypeDecl {
+            id: 0,
+            name: 0,
+            def: ILType.Slice(ILSlice { element: inner_ty, mutable: mutable }),
+            source_file: 0 as u32
+        });
+        let usize_ty = self.get_usize_type();
+        let tmp_len = self.define_local(0 as *mut Symbol, usize_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp_len, ZirRvalue.Cast(len_place, usize_ty), span));
+        let len_cast_place = Place {
+            base: tmp_len,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+        let mut sl_args = unsafe {
+            zoril_allocator_alloc(self.arena, 2 as usize * sizeof(Place))
+        } as *mut Place;
+        unsafe {
+            *sl_args = ptr_place;
+            *((sl_args as usize + sizeof(Place)) as *mut Place) = len_cast_place;
+        }
+        let tmp = self.define_local(0 as *mut Symbol, slice_ty, LOCAL_KIND_TMP);
+        self.emit(
+            ZirStmt.Let(
+                tmp,
+                ZirRvalue.StructLiteral(slice_ty, unsafe { @slice(sl_args, 2 as usize) }),
+                span
+            )
+        );
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_saturating_add_intrinsic(
+        self: &mut ZirLowerer,
+        i: &IntrinsicExpr,
+        span: Span
+    ) -> Place {
+        let lhs_place = self.lower_expr(i.args[0], 0 as u32);
+        let rhs_place = self.lower_expr(i.args[1], 0 as u32);
+        let res_ty = self.get_place_type(&lhs_place);
+        let mut intr_args = unsafe {
+            zoril_allocator_alloc(self.arena, 2 as usize * sizeof(Place))
+        } as *mut Place;
+        unsafe {
+            *intr_args = lhs_place;
+            *((intr_args as usize + sizeof(Place)) as *mut Place) = rhs_place;
+        }
+        let tmp = self.define_local(0 as *mut Symbol, res_ty, LOCAL_KIND_TMP);
+        self.emit(
+            ZirStmt.Let(
+                tmp,
+                ZirRvalue.Intrinsic(i.name, unsafe { @slice(intr_args, 2 as usize) }),
+                span
+            )
+        );
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_ptr_cast_intrinsic(self: &mut ZirLowerer, i: &IntrinsicExpr, span: Span) -> Place {
+        if i.type_args.len == 0 as usize || i.args.len == 0 as usize {
+            return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        if self.resolver.is_enum_type(i.type_args[0]) {
+            self.report_error(
+                "cannot cast to enum type: enum discriminants must be constructed via variant constructors",
+                span
+            );
+            return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        let target_ty = self.resolver.resolve_type(i.type_args[0]);
+        self.check_ptr_forge_is_marked(target_ty, span);
+        let val_place = self.lower_expr(i.args[0], 0 as u32);
+        // `@int_cast<bool>` and `@int_cast<char>` are `as` under another name: the same values a
+        // cast may not make.
+        if self.check_scalar_forge(self.get_place_type(&val_place), target_ty, span) {
+            return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        let tmp = self.define_local(0 as *mut Symbol, target_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.Cast(val_place, target_ty), span));
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_ptr_from_int_intrinsic(self: &mut ZirLowerer, i: &IntrinsicExpr, span: Span) -> Place {
+        if i.args.len == 0 as usize {
+            return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        let target_ty = if i.type_args.len > 0 as usize {
+            self.resolver.resolve_type(i.type_args[0])
+        } else {
+            self.get_ptr_mut_type(self.get_primitive_type(ILPrimitive.U8))
+        };
+        self.check_ptr_forge_is_marked(target_ty, span);
+        let val_place = self.lower_expr(i.args[0], 0 as u32);
+        if self.check_scalar_forge(self.get_place_type(&val_place), target_ty, span) {
+            return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        let tmp = self.define_local(0 as *mut Symbol, target_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.PtrFromInt(val_place, target_ty), span));
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_drop_intrinsic(self: &mut ZirLowerer, i: &IntrinsicExpr, span: Span) -> Place {
+        // Explicit drop: evaluate, invoke destructor, and remove from scope cleanup.
+        {
+            let val_place = self.lower_expr(i.args[0], 0 as u32);
+            if val_place.base != 0 as u32 {
+                if val_place.projections.len > 0 as usize {
+                    let mut is_unsafe_raw_ptr_deref = false;
+                    if self.unsafe_depth > 0 as u32
+                        && val_place.projections.len == 1 as usize
+                        && val_place.base as usize <= self.locals.len() {
+                        if let Projection.Deref = val_place.projections[0] {
+                            let base_ty = self.locals[val_place.base as usize - 1 as usize].ty;
+                            if is_raw_pointer_tag(self.get_type_tag(base_ty)) {
+                                is_unsafe_raw_ptr_deref = true;
+                            }
+                        }
+                    }
+                    if !is_unsafe_raw_ptr_deref {
+                        self.report_error(
+                            "@drop requires an owned local variable, not a projected place",
+                            span
+                        );
+                        return Place {
+                            base: 0,
+                            projections: @slice(0 as *mut Projection, 0 as usize)
+                        };
+                    }
+                    self.emit(ZirStmt.Drop(val_place, span));
+                    return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+                }
+                // Tell the checker this drop is the user's: unlike a scope-exit drop, it
+                // must find the value definitely live. Otherwise `if c { sink(r); }
+                // @drop(r);` drops `r` twice. ZIL lowering ignores the marker.
+                let mut marked = unsafe { Vec::<Place>.new_in_raw(self.arena) };
+                marked.push(val_place);
+                self.emit(
+                    ZirStmt.Intrinsic(
+                        self.intern_table.intern("explicit_drop"),
+                        marked.as_slice(),
+                        span
+                    )
+                );
+                // Emit the Drop ZirStmt (calls destructor if applicable)
+                self.emit(ZirStmt.Drop(val_place, span));
+                // A flagged local is dead from here on this path only: clear its flag. Other
+                // locals are removed from scope cleanup (all paths), as before.
+                let mut di = 0 as usize;
+                if self.drop_flag_of(val_place.base) != 0 as u32 {
+                    self.set_drop_flag(val_place.base, 0 as u64, span);
+                    di = self.scope_locals.len();
+                }
+                self.set_local_consumed(val_place.base, true);
+                while di < self.scope_locals.len() {
+                    let lvec: &mut Vec<u32> = &mut self.scope_locals[di];
+                    let mut li = 0 as usize;
+                    while li < (*lvec).len() {
+                        if (*lvec)[li] == val_place.base {
+                            (*lvec).set(li, 0 as u32); // mark as consumed
+                        }
+                        li = li + 1 as usize;
+                    }
+                    di = di + 1 as usize;
+                }
+            }
+        }
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_alloca_intrinsic(self: &mut ZirLowerer, i: &IntrinsicExpr, span: Span) -> Place {
+        // The slot is not initialized: an `@alloca<&T>(1)` read through is a wild pointer.
+        let alloca_marked = self.unsafe_depth > 0 as u32;
+        if !alloca_marked {
+            self.report_error("@alloca requires unsafe block: the memory is not initialized", span);
+        }
+        if i.type_args.len == 0 as usize {
+            return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        if i.args.len > 0 as usize {
+            let mut count_ok = false;
+            let p_arg_expr = self.get_expr(i.args[0]);
+            match *p_arg_expr {
+                Expr.Literal(lit) => {
+                    if lit.get_tag() == LITERAL_INT && lit.get_Int() == 1 as u64 {
+                        count_ok = true;
+                    }
+                },
+                _ => {},
+            }
+            if !count_ok {
+                self.report_error(
+                    "@alloca<T>(count): only a literal count of 1 is supported; use an array type (e.g. @alloca<[T; N]>(1)) for fixed-size buffers",
+                    span
+                );
+            }
+        }
+        let ty = self.resolver.resolve_type(i.type_args[0]);
+        let ptr_ty = self.get_ptr_mut_type(ty);
+        let t_local = self.define_local(0 as *mut Symbol, ty, LOCAL_KIND_LETMUT);
+        self.exempt_from_drop(t_local);
+        let ptr_local = self.define_local(0 as *mut Symbol, ptr_ty, LOCAL_KIND_TMP);
+        let t_place = Place {
+            base: t_local,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+        self.emit(ZirStmt.Let(t_local, ZirRvalue.Const(0 as u64, ty), span));
+        self.emit(ZirStmt.Let(ptr_local, ZirRvalue.RefMut(t_place, 1 as u32), span));
+        return Place { base: ptr_local, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_array_literal(
+        self: &mut ZirLowerer,
+        al: &ArrayLiteralExpr,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        let mut args = unsafe {
+            zoril_allocator_alloc(self.arena, al.elements.len * sizeof(Place))
+        } as *mut Place;
+        let mut elem_ty = 0 as u32;
+        if expected_ty != 0 as u32 {
+            let p_target_ty: &ILTypeDecl = self.get_type_decl(expected_ty);
+            if p_target_ty.def.get_tag() == ILTYPE_ARRAY {
+                elem_ty = p_target_ty.def.get_Array().element;
+            }
+        }
+
+        let mut i = 0 as usize;
+        while i < al.elements.len {
+            let p_arg = (args as usize + i * sizeof(Place)) as *mut Place;
+            unsafe { *p_arg = self.lower_operand(al.elements, i, elem_ty); }
+            if elem_ty == 0 as u32 {
+                elem_ty = unsafe { self.get_place_type(&*p_arg) };
+            } else {
+                // The element has the array's element type, or converts to it, or is an error.
+                unsafe { *p_arg = self.convert_value_to(*p_arg, elem_ty, span); }
+            }
+            // The element moves into the array (and is dropped by the array's drop glue).
+            let el_ty = unsafe { self.get_place_type(&*p_arg) };
+            if el_ty != 0 as u32 && !self.is_copy_type(el_ty) {
+                self.consume_place_if_move(unsafe { &*p_arg });
+            }
+            i = i + 1 as usize;
+        }
+
+        let resolved_ty = self.module.alloc_type(ILTypeDecl {
+            id: 0,
+            name: 0,
+            def: ILType.Array(ILArray { element: elem_ty, size: al.elements.len as u32 }),
+            source_file: 0 as u32
+        });
+        let tmp = self.define_local(0 as *mut Symbol, resolved_ty, LOCAL_KIND_TMP);
+        self.emit(
+            ZirStmt.Let(
+                tmp,
+                ZirRvalue.Array(elem_ty, unsafe { @slice(args, al.elements.len) }),
+                span
+            )
+        );
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // `[v; n]` up to this many elements is one store per element; above, a loop. Small
+    // buffers initialized on every call (sha256's `[0 as u32; 64]` per block) are faster
+    // straight-line: at 16, sha's instruction count rose 3%.
+    const ARRAY_REPEAT_UNROLL_MAX: usize = 64 as usize;
+
+    fn lower_array_repeat(
+        self: &mut ZirLowerer,
+        r: &ArrayRepeatExpr,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        let mut elem_ty = 0 as u32;
+        if expected_ty != 0 as u32 {
+            let p_target_ty: &ILTypeDecl = self.get_type_decl(expected_ty);
+            if p_target_ty.def.get_tag() == ILTYPE_ARRAY {
+                elem_ty = p_target_ty.def.get_Array().element;
+            }
+        }
+        let mut val_place = self.lower_expr(r.value, elem_ty);
+        if elem_ty == 0 as u32 {
+            elem_ty = self.get_place_type(&val_place);
+        } else {
+            val_place = self.convert_value_to(val_place, elem_ty, span);
+        }
+
+        // The length is a literal or a constant (`const N: usize = ..`).
+        let mut count = 0 as usize;
+        let len_place = self.lower_expr(r.len, self.get_usize_type());
+        let mut len_const = ShiftConst { value: 0 as u64, negative: false };
+        if len_place.projections.len == 0 as usize
+            && self.const_temp_value(len_place.base, &mut len_const as *mut ShiftConst, 0 as usize)
+            && !len_const.negative {
+            count = len_const.value as usize;
+        } else {
+            self.report_error(
+                "the length of an array repeat `[v; n]` must be a constant",
+                self.get_expr_span(r.len)
+            );
+        }
+        // ArrayRepeat carries the count in 32 bits: a longer one used to build an array of its low
+        // half (`[v; 4294967298]` was two elements) while the program said otherwise.
+        if count > 0xffffffff as usize {
+            self.report_error(
+                "array repeat count does not fit: at most 4294967295 elements",
+                self.get_expr_span(r.len)
+            );
+            count = 0 as usize;
+        }
+
+        // `[v; n]` copies v n times; a value that needs dropping would then be dropped n times.
+        if count > 1 as usize && elem_ty != 0 as u32 && self.type_needs_drop(elem_ty) {
+            self.report_error(
+                "array repeat expression requires an element that does not need dropping; build the array element by element",
+                span
+            );
+        }
+        // A mutable reference is linear even though the Copy test treats pointer tags as Copy:
+        // two elements would alias one borrow. The unrolled path below would report this as a
+        // use after move, but the loop path (`ArrayRepeat`, above 64) would not, so reject the
+        // repeat itself and let both paths give the same reason.
+        if count > 1 as usize
+            && elem_ty != 0 as u32
+            && self.get_type_decl(elem_ty).def.get_tag() == ILTYPE_PTRMUT {
+            self.report_error(
+                "array repeat of a mutable reference; each element would alias the same borrow",
+                span
+            );
+        }
+        if elem_ty != 0 as u32 && !self.is_copy_type(elem_ty) {
+            self.consume_place_if_move(&val_place);
+        }
+        // Above a handful of elements, one value and a loop (lower_zir_to_zil) rather than
+        // one store per element: `[0; 1000000]` was a million instructions.
+        if count > ZirLowerer.ARRAY_REPEAT_UNROLL_MAX {
+            let rep_ty = self.module.alloc_type(ILTypeDecl {
+                id: 0,
+                name: 0,
+                def: ILType.Array(ILArray { element: elem_ty, size: count as u32 }),
+                source_file: 0 as u32
+            });
+            let rep_tmp = self.define_local(0 as *mut Symbol, rep_ty, LOCAL_KIND_TMP);
+            self.emit(
+                ZirStmt.Let(rep_tmp, ZirRvalue.ArrayRepeat(val_place, elem_ty, count as u32), span)
+            );
+            return Place { base: rep_tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        let mut args = unsafe {
+            zoril_allocator_alloc(self.arena, count * sizeof(Place))
+        } as *mut Place;
+        let mut k = 0 as usize;
+        while k < count {
+            let p_arg = (args as usize + k * sizeof(Place)) as *mut Place;
+            unsafe { *p_arg = val_place; }
+            k = k + 1 as usize;
+        }
+
+        let resolved_ty = self.module.alloc_type(ILTypeDecl {
+            id: 0,
+            name: 0,
+            def: ILType.Array(ILArray { element: elem_ty, size: count as u32 }),
+            source_file: 0 as u32
+        });
+        let tmp = self.define_local(0 as *mut Symbol, resolved_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.Array(elem_ty, unsafe { @slice(args, count) }), span));
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    #[borrows()]
+    pub fn lower_expr_internal(self: &mut ZirLowerer, expr_id: ExprId, expected_ty: u32) -> Place {
+        let expr_val: Expr = self.resolver.ast.exprs[expr_id as usize];
+        let span = self.get_expr_span(expr_id);
+
+        match expr_val {
+            Expr.Intrinsic(i) => {
+                return self.lower_intrinsic(&i, expected_ty, span);
+            },
+            Expr.Literal(lit) => { return self.lower_literal_expr(lit, expected_ty, span); },
+            Expr.Ident(id) => { return self.lower_ident_expr(id, expected_ty, span); },
+            Expr.StructLiteral(s) => { return self.lower_struct_literal_expr(&s, span); },
+            Expr.TupleLiteral(tl) => {
+                return self.lower_tuple_literal_expr(tl, expected_ty, span);
+            },
+            Expr.ArrayLiteral(al) => {
+                return self.lower_array_literal(&al, expected_ty, span);
+            },
+            Expr.ArrayRepeat(r) => {
+                return self.lower_array_repeat(&r, expected_ty, span);
+            },
+            Expr.Unary(u) => { return self.lower_unary_expr(u, expected_ty, span); },
+            Expr.Binary(b) => { return self.lower_binary_expr(b, expected_ty, span); },
+            Expr.Call(c) => { return self.lower_call_expr(c, expected_ty, span); },
+            Expr.MemberAccess(m) => { return self.lower_member_access_expr(m, expected_ty, span); },
+            Expr.TupleAccess(t) => {
+                let inner_place = self.lower_expr(t.expr, 0 as u32);
+                self.check_raw_deref_is_marked(&inner_place, span);
+                return self.append_projection(&inner_place, Projection.TupleIndex(t.index as u32));
+            },
+            Expr.Index(idx_expr) => { return self.lower_index_expr(idx_expr, span); },
+            Expr.Cast(c) => { return self.lower_cast_expr(c, expected_ty, span); },
+            Expr.If(i) => {
+                return self.lower_if_expr(&i, expected_ty, span);
+            },
+            Expr.Match(m) => {
+                return self.lower_match(&m, expected_ty);
+            },
+            Expr.Try(try_expr_id) => { return self.lower_try_expr(try_expr_id, span); },
+            Expr.Block(b) => {
+                return self.lower_block(&b, expected_ty);
+            },
+            // `break` / `continue` as expressions (a match arm `_ => break`): the same jump as
+            // the statements. Before, they lowered to nothing, and such a loop never ended.
+            Expr.Break => {
+                self.lower_loop_jump(true, span);
+                return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+            },
+            Expr.Continue => {
+                self.lower_loop_jump(false, span);
+                return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+            },
+            Expr.Return(inner_id) => { return self.lower_return_expr(inner_id, span); },
+            Expr.Closure(c) => { return self.lower_closure_expr(c, expected_ty, span); },
+            Expr.Sizeof(ty_id) => {
+                let actual_ty = self.resolver.resolve_type(ty_id);
+                let usize_ty = self.get_usize_type();
+                let tmp = self.define_local(0 as *mut Symbol, usize_ty, LOCAL_KIND_TMP);
+                self.emit(ZirStmt.Let(tmp, ZirRvalue.Sizeof(actual_ty), span));
+                return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+            },
+            Expr.Alignof(ty_id) => {
+                let actual_ty = self.resolver.resolve_type(ty_id);
+                let sz = self.get_type_align(actual_ty);
+                let usize_ty = self.get_usize_type();
+                let tmp = self.define_local(0 as *mut Symbol, usize_ty, LOCAL_KIND_TMP);
+                self.emit(ZirStmt.Let(tmp, ZirRvalue.Const(sz, usize_ty), span));
+                return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+            },
+            Expr.Boxed(b) => { return self.lower_boxed_expr(b, span); },
+            Expr.Generic(g) => {
+                // `T::<A>` as a value: what it names was looked for as a type (lower_expr_as_type).
+                if let Expr.Ident(id) = self.resolver.ast.exprs[g.expr as usize] {
+                    // Once, though a method call lowers its receiver twice.
+                    if self.resolver.resolve_ptr(id).is_none()
+                        && self.resolver.reported_types.get(0xffffffff as u32, g.expr) == 0 as u32 {
+                        self.resolver.reported_types.set(0xffffffff as u32, g.expr, 1 as u32);
+                        self.report_error_with_symbol("unresolved symbol: ", id, span);
+                        self.note_name_hint(id, span);
+                    }
+                }
+                // `O.N::<i32>` names a variant's value with type arguments, which nothing lowers (the value was
+                // never stored): accept a call, or give the type on the binding.
+                if let Expr.MemberAccess(_) = self.resolver.ast.exprs[g.expr as usize] {
+                    self.report_error(
+                        "type arguments are only accepted on a call or a struct literal here; write `let v: E<T> = E.V;` or call `E.V::<T>(..)`",
+                        span
+                    );
+                }
+                return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+            }
+        }
+    }
+
+    fn lower_literal_expr(
+        self: &mut ZirLowerer,
+        lit: Literal,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        let tag = lit.get_tag();
+        if tag == LITERAL_STRING {
+            let id = lit.get_String();
+            let u8_ty = self.get_primitive_type(ILPrimitive.U8);
+            let slice_ty = self.module.alloc_type(ILTypeDecl {
+                id: 0,
+                name: 0,
+                def: ILType.Slice(ILSlice { element: u8_ty, mutable: false }),
+                source_file: 0 as u32
+            });
+            let tmp = self.define_local(0 as *mut Symbol, slice_ty, LOCAL_KIND_TMP);
+            self.emit(ZirStmt.Let(tmp, ZirRvalue.StringConst(id), span));
+            return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+
+        if tag == LITERAL_FLOAT {
+            return self.lower_float_literal(
+                lit.get_Float(),
+                lit.get_Float_suffix(),
+                expected_ty,
+                span
+            );
+        }
+        // An integer literal where a float is expected is that float: `let x: f64 = 5;`.
+        if tag == LITERAL_INT
+            && lit.get_Int_full().1 == NO_SUFFIX
+            && self.is_float_type(expected_ty) {
+            return self.lower_float_literal(lit.get_Int() as f64, NO_SUFFIX, expected_ty, span);
+        }
+        let val_u64 = match tag {
+            LITERAL_INT => lit.get_Int(),
+            LITERAL_BOOL => if lit.get_Bool() { 1 as u64 } else { 0 as u64 },
+            LITERAL_CHAR => lit.get_Char() as u64,
+            _ => 0 as u64,
+        };
+
+        let ty = match tag {
+            LITERAL_INT => {
+                let v = lit.get_Int_full();
+                if v.1 != 0xffffffff as u32 {
+                    self.get_primitive_type(self.resolver.map_primitive_tag(v.1))
+                } else if expected_ty != 0 as u32 && self.is_integer_primitive_type(expected_ty) {
+                    expected_ty
+                } else if v.0 > 9223372036854775807 as u64
+                    && !(self.literal_negated && v.0 == 9223372036854775808 as u64) {
+                    // Too big for an i64 (`0xffffffffffffffff as u64`): a u64.
+                    self.get_primitive_type(ILPrimitive.U64)
+                } else if v.0 > 2147483647 as u64 {
+                    self.get_primitive_type(ILPrimitive.I64)
+                } else {
+                    self.get_primitive_type(ILPrimitive.I32)
+                }
+            },
+            LITERAL_BOOL => self.get_primitive_type(ILPrimitive.Bool),
+            LITERAL_CHAR => self.get_primitive_type(ILPrimitive.U8),
+            _ => 0 as u32,
+        };
+
+        if tag == LITERAL_INT {
+            let negated = self.literal_negated;
+            self.literal_negated = false;
+            if !self.int_fits(val_u64, negated, ty) {
+                self.report_int_range(val_u64, negated, ty, span);
+            }
+        }
+        let tmp = self.define_local(0 as *mut Symbol, ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.Const(val_u64, ty), span));
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_ident_expr(self: &mut ZirLowerer, id: u32, expected_ty: u32, span: Span) -> Place {
+        let sym = match self.resolver.resolve_ptr(id) {
+            Option.Some(sym) => sym,
+            Option.None => {
+                self.report_error_with_symbol("unresolved symbol: ", id, span);
+                self.note_name_hint(id, span);
+                return self.no_place();
+            },
+        };
+        let local_id = self.get_local_by_symbol_ref(sym);
+        if local_id != 0 as u32 {
+            return Place { base: local_id, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        // A local of the enclosing function, in a closure body: every one used is captured
+        // (collect_free_idents_expr), so one that is not was missed there.
+        if sym.is_local_or_param() {
+            ICE("a closure uses a local of its enclosing function that was not captured");
+        }
+        return match sym.kind {
+            SymbolKind.Global(d) => self.lower_global_ident(d, id, expected_ty, span),
+            SymbolKind.AssocConst(packed) => {
+                let imp = match self.resolver.ast.decls[(packed >> 16) as usize] {
+                    Decl.Impl(i) => i,
+                    _ => { return self.no_place(); },
+                };
+                let c = &imp.constants[(packed & 0xffff as u32) as usize];
+                let c_sf = if c.source_file != 0 as u32 { c.source_file } else { imp.source_file };
+                // An associated constant is as visible as a method is; an impl of a trait is
+                // public, as the trait is.
+                if imp.trait_name == 0 as u32
+                    && !self.check_private_visible(
+                        c.is_pub,
+                        c_sf,
+                        c.name,
+                        "cannot access private associated constant: ",
+                        span
+                    ) {
+                    return self.no_place();
+                }
+                self.lower_expr(imp.constants[(packed & 0xffff as u32) as usize].value, expected_ty)
+            },
+            SymbolKind.Method(packed) => {
+                // A method used as a value.
+                let imp = match self.resolver.ast.decls[(packed >> 16) as usize] {
+                    Decl.Impl(i) => i,
+                    _ => { return self.no_place(); },
+                };
+                let f = &imp.methods[(packed & 0xffff as u32) as usize];
+                let f_sf = if f.source_file != 0 as u32 { f.source_file } else { imp.source_file };
+                if !self.check_method_visible(f.is_pub, f_sf, f.name, span) {
+                    return self.no_place();
+                }
+                let self_ty = self.resolver.resolve_type(imp.target_ty);
+                self.fn_value(
+                    self.mono.instantiate_method(
+                        f,
+                        @slice(0 as *mut u32, 0 as usize),
+                        0 as u32,
+                        f.name,
+                        &imp,
+                        self_ty
+                    ),
+                    span
+                )
+            },
+            SymbolKind.Function(f) => {
+                let p_func: ILFunction = self.module.functions[f as usize];
+                if self.private_elsewhere(p_func.is_pub, p_func.source_file, id, span) {
+                    self.no_place()
+                } else {
+                    self.fn_value(f, span)
+                }
+            },
+            _ => self.no_place(),
+        };
+    }
+
+    // A top-level constant, static or function named as a value.
+    fn lower_global_ident(
+        self: &mut ZirLowerer,
+        d: u32,
+        id: u32,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        match self.resolver.ast.decls[d as usize] {
+            // A constant's declared type is its type wherever nothing else is expected, not
+            // its initializer's (`const W: u64 = 4;` is not an i32).
+            Decl.Const(c) => {
+                let want = if expected_ty != 0 as u32 {
+                    expected_ty
+                } else {
+                    self.resolver.resolve_type(c.ty)
+                };
+                return self.lower_expr(c.value, want);
+            },
+            Decl.Static(st) => {
+                for gi in 0 as usize..self.module.globals.len() {
+                    if self.module.globals[gi].name == st.name
+                        && self.module.globals[gi].source_file == st.source_file {
+                        let ty = self.module.globals[gi].ty;
+                        // Rule (d): a scalar `static mut` stays readable, writable and borrowable
+                        // in safe code; any other type is a place a write can retype, so a borrow
+                        // of it can outlive the write. Reaching one needs `unsafe`.
+                        if st.is_mut
+                            && self.unsafe_depth == 0 as u32
+                            && !self.is_scalar_static_mut_type(ty) {
+                            self.report_error(
+                                "a `static mut` of a non-scalar type is accessed only in `unsafe`: a borrow of it can outlive a write",
+                                span
+                            );
+                            return self.no_place();
+                        }
+                        let ptr_ty = if st.is_mut {
+                            self.get_ptr_mut_type(ty)
+                        } else {
+                            self.get_ptr_type(ty)
+                        };
+                        let tmp = self.define_local(0 as *mut Symbol, ptr_ty, LOCAL_KIND_TMP);
+                        self.emit(ZirStmt.Let(tmp, ZirRvalue.GlobalAddr(gi as u32), span));
+                        let projs = unsafe {
+                            zoril_allocator_alloc(self.arena, sizeof(Projection))
+                        } as *mut Projection;
+                        unsafe {
+                            *projs = Projection.Deref;
+                            return Place { base: tmp, projections: @slice(projs, 1 as usize) };
+                        }
+                    }
+                }
+            },
+            Decl.Fn(ff) => {
+                if self.private_elsewhere(ff.is_pub, ff.source_file, id, span) {
+                    return self.no_place();
+                }
+                return self.fn_value(
+                    self.mono.instantiate_function(d, @slice(0 as *mut u32, 0 as usize)),
+                    span
+                );
+            },
+            _ => {},
+        }
+        return self.no_place();
+    }
+
+    // Whether a function that is not IS_PUB, from SOURCE_FILE, is named from another module:
+    // an error, reported.
+    fn private_elsewhere(
+        self: &mut ZirLowerer,
+        is_pub: bool,
+        source_file: u32,
+        id: u32,
+        span: Span
+    ) -> bool {
+        let cur = self.current_source_file;
+        if is_pub || source_file == 0 as u32 || cur == 0 as u32 || source_file == cur {
+            return false;
+        }
+        self.report_error_with_symbol("cannot access private function: ", id, span);
+        return true;
+    }
+
+    // Function FUNC_IDX as a value: its code, with no environment.
+    fn fn_value(self: &mut ZirLowerer, func_idx: u32, span: Span) -> Place {
+        let p_func: ILFunction = self.module.functions[func_idx as usize];
+        let fn_ty = self.get_fn_type(&p_func);
+        let tmp = self.define_local(0 as *mut Symbol, fn_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.FuncAddr(func_idx, 0 as u32), span));
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_tuple_literal_expr(
+        self: &mut ZirLowerer,
+        tl: TupleLiteralExpr,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        let mut args = unsafe {
+            zoril_allocator_alloc(self.arena, tl.elements.len * sizeof(Place))
+        } as *mut Place;
+        let mut types = unsafe {
+            zoril_allocator_alloc(self.persistent_arena, tl.elements.len * 4)
+        } as *mut u32;
+
+        let mut target_tuple_types: *u32 = 0 as *u32;
+        if expected_ty != 0 as u32 {
+            let p_target_ty: &ILTypeDecl = self.get_type_decl(expected_ty);
+            if p_target_ty.def.get_tag() == ILTYPE_TUPLE {
+                let t = p_target_ty.def.get_Tuple();
+                if t.len == tl.elements.len {
+                    target_tuple_types = t.ptr;
+                }
+            }
+        }
+
+        let mut i = 0 as usize;
+        while i < tl.elements.len {
+            let p_arg = (args as usize + i * sizeof(Place)) as *mut Place;
+            let mut elem_target = 0 as u32;
+            unsafe {
+                if target_tuple_types as usize != 0 as usize {
+                    elem_target = *((target_tuple_types as usize + i * 4) as *mut u32);
+                };
+                *p_arg = self.lower_operand(tl.elements, i, elem_target);
+                let elem_ty = self.get_place_type(&*p_arg);
+                *((types as usize + i * 4) as *mut u32) = elem_ty;
+                if elem_ty != 0 as u32 && !self.is_copy_type(elem_ty) {
+                    self.consume_place_if_move(&*p_arg);
+                }
+            }
+            i = i + 1 as usize;
+        }
+
+        let resolved_ty = self.module.alloc_type(ILTypeDecl {
+            id: 0,
+            name: 0,
+            def: ILType.Tuple(unsafe { @slice(types, tl.elements.len) }),
+            source_file: 0 as u32
+        });
+        let tmp = self.define_local(0 as *mut Symbol, resolved_ty, LOCAL_KIND_TMP);
+        self.emit(
+            ZirStmt.Let(tmp, ZirRvalue.Tuple(unsafe { @slice(args, tl.elements.len) }), span)
+        );
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_unary_expr(
+        self: &mut ZirLowerer,
+        u: UnaryExpr,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        match u.op {
+            UnaryOp.Ref | UnaryOp.RefMut => {
+                let is_mut_ref = u.op.get_tag() != UNARY_REF;
+                // `&expr[i]` and `&mut expr[i]` are ordinary borrows of an indexed place: the
+                // index goes through Projection.Index, so the borrow, mutability and bounds
+                // checks see the array or slice it points into (Unified Solution A).
+                let inner_place = self.lower_expr(u.expr, 0 as u32);
+                let inner_ty = self.get_place_type(&inner_place);
+                let ptr_ty = if is_mut_ref {
+                    self.get_ptr_mut_type(inner_ty)
+                } else {
+                    self.get_ptr_type(inner_ty)
+                };
+                let reg = self.next_region_id;
+                self.next_region_id = self.next_region_id + 1 as u32;
+                let tmp = self.define_local(0 as *mut Symbol, ptr_ty, LOCAL_KIND_TMP);
+                if !is_mut_ref {
+                    self.emit(ZirStmt.Let(tmp, ZirRvalue.Ref(inner_place, reg), span));
+                } else {
+                    self.emit(ZirStmt.Let(tmp, ZirRvalue.RefMut(inner_place, reg), span));
+                }
+                return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+            },
+            UnaryOp.Deref => {
+                let mut inner_place = self.lower_expr(u.expr, 0 as u32);
+                if self.place_is_raw_ptr(&inner_place) && self.unsafe_depth == 0 as u32 {
+                    self.report_error("dereference of raw pointer requires unsafe block", span);
+                }
+                // Only an address can be followed: `*a` on an integer read whatever it named.
+                let inner_ty = self.get_place_type(&inner_place);
+                let inner_tag = self.get_type_tag(inner_ty);
+                // A C function pointer is a code address, not a pointer to a function value: there is
+                // nothing to read through it, and the value read would be code taken as data.
+                if inner_ty != 0 as u32 && is_raw_pointer_tag(inner_tag) {
+                    let pointee = self.get_ptr_inner_type(inner_ty);
+                    if pointee != 0 as u32
+                        && self.is_fn_type(pointee)
+                        && self.get_type_decl(pointee).def.get_Fn().c_abi {
+                        self.report_error(
+                            "a C function pointer cannot be dereferenced; call it",
+                            span
+                        );
+                    }
+                }
+                if inner_ty != 0 as u32
+                    && !is_any_pointer_tag(inner_tag)
+                    && inner_tag != ILTYPE_BOXED
+                    && inner_tag != ILTYPE_BOXEDMUT {
+                    self.report_prefix(span);
+                    eprint("cannot dereference a value of type `");
+                    eprint(self.mono.type_display(inner_ty));
+                    eprint("`: only references, raw pointers and boxes can be\n");
+                    self.had_error = true;
+                    return self.no_place();
+                }
+                // Append Deref projection
+                let mut new_projs = unsafe {
+                    zoril_allocator_alloc(
+                        self.arena,
+                        (inner_place.projections.len + 1 as usize) * sizeof(Projection)
+                    )
+                } as *mut Projection;
+                unsafe {
+                    if inner_place.projections.len > 0 as usize {
+                        memcpy(
+                            new_projs as *mut u8,
+                            inner_place.projections.ptr as *u8,
+                            inner_place.projections.len * sizeof(Projection)
+                        );
+                    }
+                    let p_last = (new_projs as usize
+                        + inner_place.projections.len * sizeof(Projection)) as *mut Projection;
+                    *p_last = Projection.Deref;
+                    inner_place.projections = @slice(
+                        new_projs,
+                        inner_place.projections.len + 1 as usize
+                    );
+                }
+                return inner_place;
+            },
+            UnaryOp.Neg | UnaryOp.Not => {
+                // Propagate the expected type into the operand. `-N` is unary
+                // minus over the literal `N`, so dropping it here typed
+                // `let x: i32 = -2147483648;` as i64 -- the magnitude does not
+                // fit in i32 even though the negated value does -- and the
+                // narrowing check then rejected i32::MIN spelled literally.
+                if u.op.get_tag() == UNARY_NEG {
+                    if let Expr.Literal(lit) = self.resolver.ast.exprs[u.expr as usize] {
+                        self.literal_negated = lit.get_tag() == LITERAL_INT;
+                    }
+                }
+                let inner_place = self.lower_expr(u.expr, expected_ty);
+                self.literal_negated = false;
+                let operand_ty = self.get_place_type(&inner_place);
+                self.check_unary_numeric_operand(u.op.get_tag(), operand_ty, u.expr, span);
+                let tmp = self.define_local(0 as *mut Symbol, operand_ty, LOCAL_KIND_TMP);
+                self.emit(ZirStmt.Let(tmp, ZirRvalue.UnaryOp(u.op.get_tag(), inner_place), span));
+                return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+            }
+        }
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // Two numeric operands of different types meet at the wider, by the rule for implicit
+    // conversions (surface_syntax.md §11.2.6): `u8 + u32` is a `u32`. A pair that would lose
+    // information either way (an integer and a float, a signed and an unsigned of one width)
+    // is an error. A shift's count is not of the shifted type and is left alone.
+    // The result is a pair of arena Places, like lower_expr's.
+    #[borrows()]
+    fn unify_numeric_operands(
+        self: &mut ZirLowerer,
+        op: u32,
+        lhs: Place,
+        rhs: Place,
+        span: Span
+    ) -> (Place, Place) {
+        if op == BINARY_SHL || op == BINARY_SHR { return (lhs, rhs); }
+        let lt = self.get_place_type(&lhs);
+        let rt = self.get_place_type(&rhs);
+        if !self.is_numeric_type(lt) || !self.is_numeric_type(rt) || self.types_match(lt, rt) {
+            return (lhs, rhs);
+        }
+        if self.implicit_conv_ok(lt, rt) { return (lhs, self.emit_cast(rhs, lt, span)); }
+        if self.implicit_conv_ok(rt, lt) { return (self.emit_cast(lhs, rt, span), rhs); }
+        self.report_prefix(span);
+        eprint("operands `");
+        eprint(self.mono.type_display(lt));
+        eprint("` and `");
+        eprint(self.mono.type_display(rt));
+        eprint("` do not convert to one type without losing information (write `as`)\n");
+        return (lhs, rhs);
+    }
+
+    // A compound assignment's right side, converted to the target's type as an assignment's
+    // is: implicitly when nothing is lost, else an error. A shift count is left alone.
+    #[borrows()]
+    fn convert_compound_rhs(
+        self: &mut ZirLowerer,
+        op: u32,
+        target_ty: u32,
+        rhs: Place,
+        span: Span
+    ) -> Place {
+        if op == BINARY_SHL || op == BINARY_SHR { return rhs; }
+        let rt = self.get_place_type(&rhs);
+        if !self.is_numeric_type(target_ty)
+            || !self.is_numeric_type(rt)
+            || self.types_match(target_ty, rt) {
+            return rhs;
+        }
+        if self.implicit_conv_ok(target_ty, rt) { return self.emit_cast(rhs, target_ty, span); }
+        self.report_conv_or_type_mismatch(target_ty, rt, span);
+        return rhs;
+    }
+
+    fn is_numeric_type(self: &mut ZirLowerer, ty: u32) -> bool {
+        return ty != 0 as u32
+            && (self.int_prim_bits(ty) != 0 as u32 || self.float_prim_bits(ty) != 0 as u32);
+    }
+
+    fn lower_binary_expr(
+        self: &mut ZirLowerer,
+        b: BinaryExpr,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        let op_tag = b.op.get_tag();
+        if op_tag == BINARY_ASSIGN { return self.lower_assign(b, span); }
+        if op_tag >= BINARY_ADD_ASSIGN && op_tag <= BINARY_SHR_ASSIGN {
+            return self.lower_compound_assign(b, op_tag, span);
+        }
+        match b.op {
+            BinaryOp.LAnd => { return self.lower_logical(b, true, span); },
+            BinaryOp.LOr => { return self.lower_logical(b, false, span); },
+            _ => {},
+        }
+        return self.lower_arith(b, op_tag, expected_ty, span);
+    }
+
+    // `lhs = rhs`.
+    fn lower_assign(self: &mut ZirLowerer, b: BinaryExpr, span: Span) -> Place {
+        if !self.check_assignment_target(b.lhs, span) { return self.no_place(); }
+        let lhs_place = self.lower_expr(b.lhs, 0 as u32);
+        let lhs_ty = self.get_place_type(&lhs_place);
+        let mut rhs_place = self.lower_expr(b.rhs, lhs_ty);
+        // The guard that stood here, `place_rawness_known(&lhs_place)`, admitted only a local or a
+        // struct field: it was about when the raw-ness *flag* could be trusted, since `[*mut T]` and
+        // `[&T]` erased to one element type. Route 1 gave the element type the distinction, so the
+        // type answers for every place shape and the guard is gone. Measured: removing it moves no
+        // test, which is why the predicate went with it.
+        if rhs_place.base != 0 as u32 {
+            self.check_raw_into_ref(&rhs_place, lhs_ty, span);
+        }
+        // Assignment was not type-checked at all: `let x: T = e` and `f(e)` and
+        // `return e` each verified the types, but `x = e` verified nothing, so a
+        // slice (two words) could be stored into a `*mut T` field (one word) with
+        // no diagnostic. Same rule as the `let` path in lower_zir/stmt.zrl,
+        // including its implicit numeric conversion, so widening still works.
+        if lhs_ty != 0 as u32 && rhs_place.base != 0 as u32 {
+            let rhs_src_ty = self.get_place_type(&rhs_place);
+            rhs_place = self.coerce_array_ref_to_slice(rhs_place, rhs_src_ty, lhs_ty, span);
+            let rhs_ty = self.get_place_type(&rhs_place);
+            if rhs_ty != 0 as u32 && !self.types_match(lhs_ty, rhs_ty) {
+                if !self.implicit_conv_ok(lhs_ty, rhs_ty) {
+                    self.report_conv_or_type_mismatch(lhs_ty, rhs_ty, span);
+                } else {
+                    rhs_place = self.emit_cast(rhs_place, lhs_ty, span);
+                }
+            }
+        }
+        self.handle_assign_drop_and_move(lhs_place, lhs_ty, &rhs_place, span);
+        self.emit(ZirStmt.Assign(lhs_place, ZirRvalue.Use(rhs_place), span));
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // `lhs OP= rhs`: no value.
+    fn lower_compound_assign(
+        self: &mut ZirLowerer,
+        b: BinaryExpr,
+        op_tag: u32,
+        span: Span
+    ) -> Place {
+        if !self.check_assignment_target(b.lhs, span) { return self.no_place(); }
+        let mut base_op = 0 as u32;
+        if op_tag <= 27 as u32 {
+            base_op = op_tag - 20 as u32;
+        } else {
+            base_op = op_tag - 14 as u32;
+        }
+        let lhs_place = self.lower_expr(b.lhs, 0 as u32);
+        let lhs_ty = self.get_place_type(&lhs_place);
+        let rhs_hint = if self.is_numeric_type(lhs_ty) { lhs_ty } else { 0 as u32 };
+        let rhs_lowered = self.lower_expr(b.rhs, rhs_hint);
+        let rhs_place = self.convert_compound_rhs(base_op, lhs_ty, rhs_lowered, span);
+        let rhs_ty = self.get_place_type(&rhs_place);
+        self.check_numeric_operands(base_op, lhs_ty, rhs_ty, span);
+        self.check_bool_operands(base_op, lhs_ty, rhs_ty, span);
+        self.check_shift_count(base_op, lhs_ty, &rhs_place, span);
+        self.check_aggregate_scalar_operands(lhs_ty, rhs_ty, span);
+        let tmp = self.define_local(0 as *mut Symbol, lhs_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.BinaryOp(base_op, lhs_place, rhs_place), span));
+        let tmp_place = Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+        self.emit(ZirStmt.Assign(lhs_place, ZirRvalue.Use(tmp_place), span));
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // `&&` (IS_AND) or `||`, short-circuiting.
+    // A branch on condition COND to THEN_BLOCK or ELSE_BLOCK. `&&`, `||` and `!` become
+    // branches of their own, so no bool is built for them: each comparison branches straight
+    // to where its outcome leads.
+    pub fn lower_branch_on(self: &mut ZirLowerer, cond: ExprId, then_block: u32, else_block: u32) {
+        self.lower_branch_on_operand(cond, then_block, else_block, false);
+    }
+
+    // IN_LOGICAL: COND is an operand of `&&` or `||`, whose message a non-bool one gets.
+    fn lower_branch_on_operand(
+        self: &mut ZirLowerer,
+        cond: ExprId,
+        then_block: u32,
+        else_block: u32,
+        in_logical: bool
+    ) {
+        match self.resolver.ast.exprs[cond as usize] {
+            Expr.Binary(b) => {
+                let is_and = match b.op { BinaryOp.LAnd => true, _ => false };
+                let is_or = match b.op { BinaryOp.LOr => true, _ => false };
+                if is_and || is_or {
+                    let rhs_block = self.new_block("logic_rhs");
+                    if is_and {
+                        self.lower_branch_on_operand(b.lhs, rhs_block, else_block, true);
+                    } else {
+                        self.lower_branch_on_operand(b.lhs, then_block, rhs_block, true);
+                    }
+                    self.switch_to_block(rhs_block);
+                    self.lower_branch_on_operand(b.rhs, then_block, else_block, true);
+                    return;
+                }
+            },
+            Expr.Unary(u) => {
+                if let UnaryOp.Not = u.op {
+                    self.lower_branch_on_operand(u.expr, else_block, then_block, in_logical);
+                    return;
+                }
+            },
+            _ => {},
+        }
+        let cond_place = self.lower_expr(cond, 0 as u32);
+        let cond_ty = self.get_place_type(&cond_place);
+        if in_logical && cond_ty != 0 as u32 && !self.is_bool_type(cond_ty) {
+            self.report_error("logical operator requires bool operands", self.get_expr_span(cond));
+        } else {
+            self.check_condition(cond, &cond_place);
+        }
+        self.terminate(ZirTerminator.Branch(cond_place, then_block, else_block));
+    }
+
+    fn lower_logical(self: &mut ZirLowerer, b: BinaryExpr, is_and: bool, span: Span) -> Place {
+        let bool_ty = self.get_primitive_type(ILPrimitive.Bool);
+        let result_tmp = self.define_local(0 as *mut Symbol, bool_ty, LOCAL_KIND_TMP);
+        let result_place = Place {
+            base: result_tmp,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+
+        let lhs_place = self.lower_expr(b.lhs, bool_ty);
+        let lhs_lty = self.get_place_type(&lhs_place);
+        if lhs_lty != 0 as u32 && !self.is_bool_type(lhs_lty) {
+            self.report_error("logical operator requires bool operands", span);
+        }
+        self.emit(ZirStmt.Assign(result_place, ZirRvalue.Use(lhs_place), span));
+
+        let second_block = self.new_block("logic_rhs");
+        let join_block = self.new_block("logic_join");
+
+        if is_and {
+            self.terminate(ZirTerminator.Branch(lhs_place, second_block, join_block));
+        } else {
+            self.terminate(ZirTerminator.Branch(lhs_place, join_block, second_block));
+        }
+
+        self.switch_to_block(second_block);
+        let rhs_place = self.lower_expr(b.rhs, bool_ty);
+        let rhs_lty = self.get_place_type(&rhs_place);
+        if rhs_lty != 0 as u32 && !self.is_bool_type(rhs_lty) {
+            self.report_error("logical operator requires bool operands", span);
+        }
+        self.emit(ZirStmt.Assign(result_place, ZirRvalue.Use(rhs_place), span));
+        self.terminate(ZirTerminator.Jmp(join_block));
+
+        self.switch_to_block(join_block);
+        return result_place;
+    }
+
+    // An arithmetic, bitwise, shift or comparison operator.
+    // Whether expression E's type is still open: an unsuffixed integer literal, a negation of
+    // one, or arithmetic made only of such operands (for a shift, its shifted operand). It
+    // takes the integer type its context expects (`let s: u64 = 1 << 40`).
+    fn is_open_int_expr(self: &mut ZirLowerer, e: ExprId, depth: usize) -> bool {
+        if e == 0 as ExprId || depth > 32 as usize { return false; }
+        return match self.resolver.ast.exprs[e as usize] {
+            Expr.Literal(lit) => match lit {
+                Literal.Int(v) => v.1 == 0xffffffff as u32,
+                _ => false,
+            },
+            Expr.Unary(u) => u.op.get_tag() == UNARY_NEG
+                && self.is_open_int_expr(u.expr, depth + 1 as usize),
+            Expr.Binary(bin) => {
+                let t = bin.op.get_tag();
+                if t == BINARY_SHL || t == BINARY_SHR {
+                    self.is_open_int_expr(bin.lhs, depth + 1 as usize)
+                } else if t <= 7 as u32 || (t >= 14 as u32 && t <= 16 as u32) {
+                    self.is_open_int_expr(bin.lhs, depth + 1 as usize)
+                        && self.is_open_int_expr(bin.rhs, depth + 1 as usize)
+                } else {
+                    false
+                }
+            },
+            _ => false,
+        };
+    }
+
+    // `lhs OP rhs`. An operand whose type is open (is_open_int_expr) takes the other operand's
+    // type, or with both open the integer type the context expects (EXPECTED_TY, which a
+    // comparison does not pass on); otherwise the left decides the right's. A literal has no
+    // effects, so lowering the right side first when only the left is open changes nothing
+    // but its type. A shift's count only takes the shifted operand's type when it is open.
+    fn lower_arith(
+        self: &mut ZirLowerer,
+        b: BinaryExpr,
+        op_tag: u32,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        let is_shift = op_tag == BINARY_SHL || op_tag == BINARY_SHR;
+        let is_cmp = op_tag >= 8 as u32 && op_tag <= 13 as u32;
+        let operand_expected = if !is_cmp && self.int_prim_bits(expected_ty) != 0 as u32 {
+            expected_ty
+        } else {
+            0 as u32
+        };
+        let lhs_open = self.is_open_int_expr(b.lhs, 0 as usize);
+        let mut lhs_first = self.no_place();
+        let mut rhs_first = self.no_place();
+        if lhs_open && !is_shift && !self.is_open_int_expr(b.rhs, 0 as usize) {
+            rhs_first = self.lower_expr(b.rhs, 0 as u32);
+            // A literal takes the other operand's type only when that type is a number. Letting
+            // it take a slice, function value or reference was the conversion behind `1 + s`,
+            // `1 + f` and `r == 3`.
+            let hint = self.get_place_type(&rhs_first);
+            lhs_first = self.lower_expr(
+                b.lhs,
+                if self.is_numeric_type(hint) { hint } else { 0 as u32 }
+            );
+        } else {
+            lhs_first = self.lower_expr(b.lhs, if lhs_open { operand_expected } else { 0 as u32 });
+            let hint = self.get_place_type(&lhs_first);
+            rhs_first = self.lower_expr(
+                b.rhs,
+                if self.is_numeric_type(hint) { hint } else { 0 as u32 }
+            );
+        }
+        let (lhs_place, rhs_place) = self.unify_numeric_operands(
+            op_tag,
+            lhs_first,
+            rhs_first,
+            span
+        );
+        let lhs_ty = self.get_place_type(&lhs_place);
+        let rhs_ty = self.get_place_type(&rhs_place);
+        // A unit-valued block/if/call has type 0, which is this lowering's unit; any other
+        // expression with no type is an internal error, and nothing is checked against it.
+        if self.check_operand_type_resolved(lhs_ty, b.lhs)
+            && self.check_operand_type_resolved(rhs_ty, b.rhs) {
+            self.check_numeric_operands(op_tag, lhs_ty, rhs_ty, span);
+            self.check_bool_operands(op_tag, lhs_ty, rhs_ty, span);
+            self.check_shift_count(op_tag, lhs_ty, &rhs_place, span);
+            self.check_aggregate_scalar_operands(lhs_ty, rhs_ty, span);
+            self.check_equality_operands(op_tag, lhs_ty, rhs_ty, span);
+        }
+        let bool_ty = self.get_primitive_type(ILPrimitive.Bool);
+        // Comparison ops (8-13) produce bool; arithmetic/bitwise produce lhs type
+        let res_ty = if op_tag >= 8 as u32 && op_tag <= 13 as u32 { bool_ty } else { lhs_ty };
+        let tmp = self.define_local(0 as *mut Symbol, res_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.BinaryOp(op_tag, lhs_place, rhs_place), span));
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // `f(args)`, `T::<A>(args)`, `T.f(args)`, `E.V(args)` or `x.m(args)`.
+    fn lower_call_expr(self: &mut ZirLowerer, c: CallExpr, expected_ty: u32, span: Span) -> Place {
+        let mut callee_expr_id = c.callee;
+        let mut type_args = c.type_args;
+        if let Expr.Generic(g) = self.resolver.ast.exprs[callee_expr_id as usize] {
+            callee_expr_id = g.expr;
+            type_args = g.type_args;
+        }
+        let resolved_type_args = self.resolver.resolve_type_list(type_args);
+        if let Expr.MemberAccess(m) = self.resolver.ast.exprs[callee_expr_id as usize] {
+            if let Option.Some(result) = self.lower_member_call(
+                m,
+                c.args,
+                resolved_type_args,
+                expected_ty,
+                span
+            ) {
+                return result;
+            }
+            // No method by that name: the member is a value (a function pointer in a field).
+        }
+        return self.lower_plain_call(callee_expr_id, c.args, resolved_type_args, expected_ty, span);
+    }
+
+    // `T.f(args)` / `E.V(args)` when M's base names a type, else `x.m(args)`; None when there
+    // is no such method or variant.
+    fn lower_member_call(
+        self: &mut ZirLowerer,
+        m: MemberAccessExpr,
+        args: [ExprId],
+        type_args: [u32],
+        expected_ty: u32,
+        span: Span
+    ) -> Option<Place> {
+        let mut resolved_ty = self.lower_expr_as_type(m.expr);
+        if resolved_ty == 0 as u32 { return self.lower_method_call(m, args, type_args, span); }
+        resolved_ty = self.instance_from_expected(resolved_ty, expected_ty);
+        let type_name_id = self.get_type_decl(resolved_ty).name;
+        if type_name_id == 0 as u32 { return Option.None; }
+        if let Option.Some(decl_idx) = self.find_method_in_impls(resolved_ty, m.member) {
+            return self.lower_static_method_call(
+                decl_idx,
+                resolved_ty,
+                m.member,
+                args,
+                type_args,
+                span
+            );
+        }
+        return self.lower_variant_constructor_call(
+            resolved_ty,
+            m.member,
+            args,
+            type_args,
+            expected_ty,
+            span
+        );
+    }
+
+    // A generic struct or enum TY named without type arguments (`Vec` in `Vec.new()`): the
+    // instance of it the context expects (EXPECTED_TY, `Vec<u32>`), else TY itself.
+    fn instance_from_expected(self: &mut ZirLowerer, ty: u32, expected_ty: u32) -> u32 {
+        if expected_ty == 0 as u32 || ty == expected_ty { return ty; }
+        let u = match self.get_type_decl(ty).def { ILType.User(u) => u, _ => { return ty; } };
+        let e = match self.get_type_decl(expected_ty).def {
+            ILType.User(e) => e,
+            _ => { return ty; }
+        };
+        if u.type_args.len > 0 as usize || e.type_args.len == 0 as usize { return ty; }
+        let origin = self.mono.get_typedef_origin(u.id);
+        if origin == 0 as u32 || origin != self.mono.get_typedef_origin(e.id) { return ty; }
+        return expected_ty;
+    }
+
+    // `T.f(args)`: the impl's method F with no receiver.
+    fn lower_static_method_call(
+        self: &mut ZirLowerer,
+        decl_idx: u32,
+        resolved_ty: u32,
+        member: u32,
+        args: [ExprId],
+        type_args: [u32],
+        span: Span
+    ) -> Option<Place> {
+        let imp = match self.resolver.ast.decls[decl_idx as usize] {
+            Decl.Impl(i) => i,
+            _ => { return Option.None; },
+        };
+        for jk in 0 as usize..imp.methods.len {
+            if imp.methods[jk].name != member { continue; }
+            let m_fn = &imp.methods[jk];
+            let sf = if m_fn.source_file != 0 as u32 { m_fn.source_file } else { imp.source_file };
+            if !self.check_method_visible(m_fn.is_pub, sf, member, span) {
+                return Option.Some(self.no_place());
+            }
+            let type_name = self.get_type_decl(resolved_ty).name;
+            let func_idx = self.mono.instantiate_method(
+                m_fn,
+                type_args,
+                type_name,
+                member,
+                &imp,
+                resolved_ty
+            );
+            let param_base = self.call_param_base(func_idx, span);
+            self.check_arg_count(func_idx, param_base, args.len, false, span);
+            let mut lowered = unsafe { Vec::<Place>.with_capacity_in_raw(self.arena, args.len) };
+            for ai in 0 as usize..args.len {
+                let param_ty = self.call_param_type(func_idx, param_base + ai);
+                let arg = self.lower_operand(args, ai, param_ty);
+                self.check_raw_arg_is_marked(func_idx, param_base + ai, &arg, span);
+                lowered.push(
+                    if param_ty != 0 as u32 {
+                        self.check_arg_against(arg, param_ty, span)
+                    } else {
+                        arg
+                    }
+                );
+            }
+            return Option.Some(self.emit_direct_call(func_idx, lowered.as_slice(), span));
+        }
+        return Option.None;
+    }
+
+    // `E.V(args)`: an enum value, its payload the argument or a tuple of the arguments. A
+    // generic enum named without type arguments takes them from the expected type, else from
+    // the payload.
+    fn lower_variant_constructor_call(
+        self: &mut ZirLowerer,
+        resolved_ty: u32,
+        member: u32,
+        args: [ExprId],
+        type_args: [u32],
+        expected_ty: u32,
+        span: Span
+    ) -> Option<Place> {
+        let resolved_def: ILType = self.module.types[resolved_ty as usize - 1 as usize].def;
+        let u = match resolved_def {
+            ILType.User(u) => u,
+            _ => { return Option.None; }
+        };
+        let p_def: &ILTypeDef = &self.module.typedefs[u.id as usize];
+        if p_def.get_tag() != IL_TYPEDEF_ENUM { return Option.None; }
+        let e = p_def.get_Enum();
+        for v_idx in 0 as usize..e.variants.len {
+            if e.variants[v_idx].name != member { continue; }
+            let mut payload_place = self.no_place();
+            let mut elems = unsafe {
+                Vec::<Place>.with_capacity_in_raw(self.arena, args.len + 1 as usize)
+            };
+            if args.len > 1 as usize {
+                // Several arguments make a tuple payload.
+                let variant_payload_ty = e.variants[v_idx].payload;
+                for ai in 0 as usize..args.len {
+                    elems.push(
+                        self.lower_operand(
+                            args,
+                            ai,
+                            self.get_tuple_elem_type(variant_payload_ty, ai as u32)
+                        )
+                    );
+                }
+                let tmp_payload = self.define_local(
+                    0 as *mut Symbol,
+                    variant_payload_ty,
+                    LOCAL_KIND_TMP
+                );
+                self.emit(ZirStmt.Let(tmp_payload, ZirRvalue.Tuple(elems.as_slice()), span));
+                payload_place = Place {
+                    base: tmp_payload,
+                    projections: @slice(0 as *mut Projection, 0 as usize)
+                };
+            } else if args.len == 1 as usize {
+                payload_place = self.lower_expr(
+                    args[0],
+                    self.get_variant_payload_type(expected_ty, v_idx as u32)
+                );
+            }
+
+            let mut actual_enum_ty = resolved_ty;
+            if u.type_args.len == 0 as usize {
+                let u_orig = self.mono.get_typedef_origin(u.id);
+                let inferred = if type_args.len > 0 as usize {
+                    type_args
+                } else {
+                    self.enum_type_args_from_context(u_orig, member, expected_ty, payload_place)
+                };
+                actual_enum_ty = self.mono.instantiate_type(u_orig, inferred);
+            }
+
+            if args.len > 0 as usize {
+                let payload_ty = self.get_variant_payload_type(actual_enum_ty, v_idx as u32);
+                if args.len > 1 as usize {
+                    // The tuple takes the instantiated payload type, and each argument has the
+                    // type of its slot.
+                    for ai in 0 as usize..elems.len() {
+                        let slot_ty = self.get_tuple_elem_type(payload_ty, ai as u32);
+                        let given_ty = self.get_place_type(&elems[ai]);
+                        if slot_ty != 0 as u32
+                            && given_ty != 0 as u32
+                            && !self.types_match(slot_ty, given_ty) {
+                            self.report_type_mismatch(slot_ty, given_ty, span);
+                        }
+                    }
+                    self.locals[payload_place.base as usize - 1 as usize].ty = payload_ty;
+                } else {
+                    // The payload converts to the variant's type as an argument does, or is
+                    // reported: `Opt<&i32>` from `Opt.Some(8 as usize)` is a mismatch.
+                    if payload_ty != 0 as u32 {
+                        payload_place = self.convert_value_to(payload_place, payload_ty, span);
+                    }
+                }
+            }
+            let tmp = self.define_local(0 as *mut Symbol, actual_enum_ty, LOCAL_KIND_TMP);
+            self.emit(
+                ZirStmt.Let(
+                    tmp,
+                    ZirRvalue.EnumVariant(actual_enum_ty, v_idx as u32, payload_place),
+                    span
+                )
+            );
+            self.consume_place_if_move(&payload_place);
+            return Option.Some(Place {
+                base: tmp,
+                projections: @slice(0 as *mut Projection, 0 as usize)
+            });
+        }
+        return Option.None;
+    }
+
+    // The type arguments of generic enum U_ORIG for a variant built with no explicit ones: the
+    // expected type's, when it is an instance of U_ORIG, else inferred from the payload.
+    #[borrows()]
+    fn enum_type_args_from_context(
+        self: &mut ZirLowerer,
+        u_orig: u32,
+        member: u32,
+        expected_ty: u32,
+        payload_place: Place
+    ) -> [u32] {
+        if expected_ty != 0 as u32 {
+            if let ILType.User(exp_user) = self.get_type_decl(expected_ty).def {
+                if self.mono.get_typedef_origin(exp_user.id) == u_orig {
+                    return exp_user.type_args;
+                }
+            }
+        }
+        return self.infer_generic_type_args_for_enum_variant(u_orig, member, payload_place);
+    }
+
+    fn is_slice_mut_to_shared_slice(self: &mut ZirLowerer, current_ty: u32, inner_ty: u32) -> bool {
+        if current_ty == 0 as u32 || inner_ty == 0 as u32 { return false; }
+        let curr_def: ILType = self.module.types[current_ty as usize - 1 as usize].def;
+        let inner_def: ILType = self.module.types[inner_ty as usize - 1 as usize].def;
+        if curr_def.get_tag() == ILTYPE_SLICE && inner_def.get_tag() == ILTYPE_SLICE {
+            let sl_curr = curr_def.get_Slice();
+            let sl_inner = inner_def.get_Slice();
+            if sl_curr.mutable && !sl_inner.mutable {
+                return self.types_match(sl_inner.element, sl_curr.element);
+            }
+        }
+        return false;
+    }
+
+    // `x.m(args)`: the receiver is looked through pointers and boxes to the type with method M,
+    // then passed as the method's `self` wants it (by reference, by value or dereferenced).
+    fn lower_method_call(
+        self: &mut ZirLowerer,
+        m: MemberAccessExpr,
+        args: [ExprId],
+        type_args: [u32],
+        span: Span
+    ) -> Option<Place> {
+        let receiver_place = self.lower_expr(m.expr, 0 as u32);
+        let mut lookup_ty = self.get_place_type(&receiver_place);
+        let mut lookup_place = receiver_place;
+        let mut peeled_deref = false;
+        let mut peeled_place = self.no_place();
+        loop {
+            if lookup_ty == 0 as u32 { break; }
+            let ty_tag = self.get_type_decl(lookup_ty).def.get_tag();
+            // Any address-like receiver is looked through, including a raw pointer: the deref below
+            // checks that it is inside `unsafe`, which is where `borrow_mut(p: *mut T).method()` is
+            // written. A raw tag is not a reference, so this list has to name it (Phase D step 2).
+            if !is_any_pointer_tag(ty_tag) && ty_tag != ILTYPE_BOXED && ty_tag != ILTYPE_BOXEDMUT {
+                break;
+            }
+            let inner = self.get_ptr_inner_type(lookup_ty);
+            if inner == 0 as u32 { break; }
+            let inner_tag = self.get_type_decl(inner).def.get_tag();
+            if inner_tag == ILTYPE_USER || inner_tag == ILTYPE_TUPLE || inner_tag == ILTYPE_SLICE {
+                lookup_ty = inner;
+                break;
+            }
+            peeled_place = lookup_place;
+            peeled_deref = true;
+            self.check_raw_deref_is_marked(&lookup_place, span);
+            lookup_place = self.append_deref(&lookup_place);
+            lookup_ty = inner;
+        }
+        let decl_idx = match self.find_method_in_impls(lookup_ty, m.member) {
+            Option.Some(d) => d,
+            Option.None => {
+                if self.skipped_other_instance {
+                    self.report_prefix(span);
+                    eprint("`");
+                    eprint(self.mono.type_display(lookup_ty));
+                    eprint("` has no method `");
+                    eprint(self.intern_table.lookup(m.member));
+                    eprint("`: the impl that has one is for another instance of the type\n");
+                    self.had_error = true;
+                    return Option.Some(self.no_place());
+                }
+                return Option.None;
+            }
+        };
+        let imp = match self.resolver.ast.decls[decl_idx as usize] {
+            Decl.Impl(i) => i,
+            _ => { return Option.None; },
+        };
+        for jk in 0 as usize..imp.methods.len {
+            if imp.methods[jk].name != m.member { continue; }
+            let m_decl = &imp.methods[jk];
+            // A receiver taken by value moves before the arguments run, as it is written.
+            let mut current_place = lookup_place;
+            let current_ty = lookup_ty;
+            if !(m_decl.params.len > 0 as usize
+                && self.resolver.is_ref_or_ptr_type(m_decl.params[0].ty))
+                && self.get_place_type(&current_place) == current_ty {
+                let later = self.operands_observe_from(args, 0 as usize);
+                current_place = self.pin_moved_operand(current_place, later);
+            }
+            let m_sf = if m_decl.source_file != 0 as u32 {
+                m_decl.source_file
+            } else {
+                imp.source_file
+            };
+            if !self.check_method_visible(m_decl.is_pub, m_sf, m.member, span) {
+                return Option.Some(self.no_place());
+            }
+            // A generic method called with no `::<..>` has its arguments lowered first and its
+            // type arguments read off them, as a generic function does.
+            let infers = type_args.len == 0 as usize && m_decl.type_params.len > 0 as usize;
+            let mut early_args = unsafe { Vec::<Place>.with_capacity_in_raw(self.arena, args.len) };
+            let mut method_type_args = type_args;
+            if infers {
+                // A closure argument with untyped parameters waits for the others: its
+                // parameter's type, resolved with the type arguments they decide, types it, and
+                // its result then decides the rest (`it.map(|x| *x * 2)` gives U).
+                let mut deferred = false;
+                for ai in 0 as usize..args.len {
+                    if self.is_untyped_closure(args[ai]) {
+                        early_args.push(self.no_place());
+                        deferred = true;
+                    } else {
+                        early_args.push(self.lower_operand(args, ai, 0 as u32));
+                    }
+                }
+                if deferred {
+                    let partial = self.read_method_type_args(m_decl, early_args.as_slice());
+                    for ai in 0 as usize..args.len {
+                        if early_args.as_slice()[ai].base != 0 as u32
+                            || ai + 1 as usize >= m_decl.params.len {
+                            continue;
+                        }
+                        let expected = self.mono.resolve_method_type(
+                            m_decl,
+                            imp,
+                            current_ty,
+                            partial,
+                            m_decl.params[ai + 1 as usize].ty
+                        );
+                        early_args.set(ai, self.lower_expr(args[ai], expected));
+                    }
+                }
+                method_type_args = self.infer_method_type_args(m_decl, early_args.as_slice(), span);
+                if method_type_args.len == 0 as usize { return Option.Some(self.no_place()); }
+            }
+            let mut impl_self_ty = current_ty;
+            let p_target = &self.resolver.ast.types[imp.target_ty as usize];
+            let t_tag = p_target.get_tag();
+            let is_immutable_slice_impl = (t_tag == TYPE_SLICE
+                || (t_tag >= TYPE_PTR
+                    && t_tag <= TYPE_REFMUT
+                    && self.resolver.ast.types[p_target.get_Ptr() as usize].get_tag()
+                        == TYPE_SLICE));
+            if is_immutable_slice_impl {
+                if let ILType.Slice(sl) = self.get_type_decl(current_ty).def {
+                    if sl.mutable {
+                        impl_self_ty = self.get_slice_type(sl.element);
+                    }
+                }
+            }
+            let impl_name = self.get_type_decl(impl_self_ty).name;
+            let func_idx = self.mono.instantiate_method(
+                m_decl,
+                method_type_args,
+                impl_name,
+                m.member,
+                imp,
+                impl_self_ty
+            );
+            let recv_index = self.call_param_base(func_idx, span);
+            self.check_arg_count(func_idx, recv_index, args.len, true, span);
+            let recv_param = self.module.functions[func_idx as usize].param(recv_index);
+            let expected_recv_ty = recv_param.ty;
+
+            // `q.method()` with `q: *mut P` and `self: &P` auto-derefs a raw pointer with no
+            // `Deref` node to catch (the IL erases `&T` and `*T` to the same `Ptr` tag), so it is
+            // flagged here when the receiver is raw and the callee's `self` is not. A method that
+            // declares `self: *mut T` dereferences nothing at the call; the explicit `(*q).m()`
+            // form is caught by the deref check already.
+            if !peeled_deref
+                && !is_raw_pointer_tag(self.get_type_tag(recv_param.ty))
+                && self.place_is_raw_ptr(&current_place)
+                && self.unsafe_depth == 0 as u32 {
+                self.report_error("dereference of raw pointer requires unsafe block", span);
+            }
+
+            // Autoref follows the exact pointer relationship, not `types_match`, which accepts an
+            // aggregate `T` where `&T` is expected and would move a non-Copy receiver
+            // (tests/language/memory/method_autoref_no_move.zrl). A raw-pointer receiver keeps its
+            // pointer place, `current_ty` naming the pointee, and is passed through unchanged.
+            let mut receiver_final_place = current_place;
+            let recv_by_ref = m_decl.params.len > 0 as usize
+                && self.resolver.is_ref_or_ptr_type(m_decl.params[0].ty);
+            let inner_recv_ty = self.get_ptr_inner_type(expected_recv_ty);
+            let wants_ref = recv_by_ref
+                && !peeled_deref
+                && self.get_place_type(&current_place) == current_ty
+                && (inner_recv_ty == current_ty
+                    || self.is_slice_mut_to_shared_slice(current_ty, inner_recv_ty));
+            if !wants_ref && !self.types_match(expected_recv_ty, current_ty) {
+                if inner_recv_ty == current_ty
+                    || self.is_slice_mut_to_shared_slice(current_ty, inner_recv_ty) {
+                    if peeled_deref { receiver_final_place = peeled_place; }
+                } else if self.get_ptr_inner_type(current_ty) == expected_recv_ty {
+                    self.check_raw_deref_is_marked(&current_place, span);
+                    receiver_final_place = self.append_deref(&current_place);
+                }
+            }
+
+            let mut final_args = unsafe {
+                Vec::<Place>.with_capacity_in_raw(self.arena, args.len + 1 as usize)
+            };
+            final_args.push(receiver_final_place);
+            for ai in 0 as usize..args.len {
+                let param_ty = self.call_param_type(func_idx, recv_index + 1 as usize + ai);
+                let arg = if infers {
+                    early_args.as_slice()[ai]
+                } else {
+                    self.lower_operand(args, ai, param_ty)
+                };
+                self.check_raw_arg_is_marked(func_idx, recv_index + 1 as usize + ai, &arg, span);
+                final_args.push(
+                    if param_ty != 0 as u32 {
+                        self.check_arg_against(arg, param_ty, span)
+                    } else {
+                        arg
+                    }
+                );
+            }
+            // The receiver borrow is taken only now, after the arguments are evaluated (a
+            // two-phase borrow), so `self.define(self.table.intern(..))` is accepted.
+            if wants_ref {
+                final_args.set(
+                    0 as usize,
+                    self.emit_receiver_ref(current_place, current_ty, expected_recv_ty, false, span)
+                );
+            } else if recv_by_ref
+                && self.is_ref_type(expected_recv_ty)
+                && self.is_ref_type(self.get_place_type(&current_place)) {
+                // The receiver is already `&T`/`&mut T` (`v.get(0)` on `v: &mut Vec`): the call
+                // must hold `*v` borrowed, or a later `v.free()` does not conflict with the view
+                // (task 2i).
+                final_args.set(
+                    0 as usize,
+                    self.emit_receiver_ref(current_place, current_ty, expected_recv_ty, true, span)
+                );
+            } else if !recv_by_ref {
+                self.consume_arg_if_move(expected_recv_ty, &receiver_final_place);
+            }
+            return Option.Some(self.emit_direct_call(func_idx, final_args.as_slice(), span));
+        }
+        return Option.None;
+    }
+
+    // `f(args)`: a function, method or generic instance named by the callee, or else a call
+    // through the callee's value, a function pointer.
+    fn lower_plain_call(
+        self: &mut ZirLowerer,
+        callee_expr_id: ExprId,
+        args: [ExprId],
+        type_args: [u32],
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        let callee_name = match self.resolver.ast.exprs[callee_expr_id as usize] {
+            Expr.Ident(id) => id,
+            _ => 0 as u32
+        };
+        // A callee that is a value (a local or parameter, a field, a call's result) is evaluated
+        // first, and its parameter types are the arguments' expected types: `f(2)` with
+        // `f: fn(u8) -> u8` passes a u8, `apply(|x| x + 1)` types the closure.
+        if self.callee_is_value(callee_expr_id) {
+            let callee_place = self.lower_expr(callee_expr_id, 0 as u32);
+            let fn_ty = self.callee_fn_type(self.get_place_type(&callee_place));
+            let mut value_args = unsafe { Vec::<Place>.with_capacity_in_raw(self.arena, args.len) };
+            for ai in 0 as usize..args.len {
+                let mut expected = 0 as u32;
+                if fn_ty != 0 as u32 {
+                    let sig = self.get_type_decl(fn_ty).def.get_Fn();
+                    if ai < sig.params.len { expected = sig.params[ai]; }
+                }
+                value_args.push(self.lower_operand(args, ai, expected));
+            }
+            return self.emit_pointer_call_to(
+                callee_place,
+                callee_expr_id,
+                value_args.as_slice(),
+                span
+            );
+        }
+        // Resolving the callee first gives the arguments their parameters' types as expected
+        // types (a generic function is instantiated only once its arguments are known).
+        let mut pre_resolved = 0xffffffff as u32;
+        if callee_name != 0 as u32 {
+            match self.direct_callee(
+                callee_name,
+                span,
+                false,
+                type_args,
+                @slice(0 as *mut Place, 0 as usize),
+                0 as u32
+            ) {
+                CalleeLookup.Found(f) => { pre_resolved = f; },
+                CalleeLookup.Rejected => { return self.no_place(); },
+                CalleeLookup.NotDirect => {},
+            }
+        }
+        let mut lowered = unsafe { Vec::<Place>.with_capacity_in_raw(self.arena, args.len) };
+        for ai in 0 as usize..args.len {
+            let mut arg_expected = 0 as u32;
+            if pre_resolved != 0xffffffff as u32 {
+                let pt = self.call_param_type(
+                    pre_resolved,
+                    self.call_param_base_quiet(pre_resolved) + ai
+                );
+                if pt != 0 as u32 {
+                    // A parameter passed as a pointer to an aggregate expects the aggregate.
+                    let inner_pt = self.get_ptr_inner_type(pt);
+                    arg_expected = if inner_pt != 0 as u32 && self.is_aggregate(inner_pt) {
+                        inner_pt
+                    } else {
+                        pt
+                    };
+                }
+            }
+            lowered.push(self.lower_operand(args, ai, arg_expected));
+        }
+        if callee_name != 0 as u32 {
+            match self.direct_callee(
+                callee_name,
+                span,
+                true,
+                type_args,
+                lowered.as_slice(),
+                expected_ty
+            ) {
+                CalleeLookup.Found(func_idx) => {
+                    let param_base = self.call_param_base(func_idx, span);
+                    self.check_arg_count(func_idx, param_base, args.len, false, span);
+                    let params_len = self.module.functions[func_idx as usize].params_len;
+                    for ai in 0 as usize..args.len {
+                        if param_base + ai >= params_len { break; }
+                        let param_ty = self.call_param_type(func_idx, param_base + ai);
+                        self.check_raw_arg_is_marked(
+                            func_idx,
+                            param_base + ai,
+                            &lowered.as_slice()[ai],
+                            span
+                        );
+                        lowered.set(
+                            ai,
+                            self.check_arg_against(lowered.as_slice()[ai], param_ty, span)
+                        );
+                    }
+                    return self.emit_direct_call(func_idx, lowered.as_slice(), span);
+                },
+                CalleeLookup.Rejected => { return self.no_place(); },
+                CalleeLookup.NotDirect => {},
+            }
+        }
+        return self.emit_pointer_call(callee_expr_id, lowered.as_slice(), span);
+    }
+
+    // Whether calling CALLEE calls a value rather than a function by name: any expression but a
+    // name, and a name of a local or parameter.
+    fn callee_is_value(self: &mut ZirLowerer, callee: ExprId) -> bool {
+        if let Expr.Ident(name) = self.resolver.ast.exprs[callee as usize] {
+            if let Option.Some(sym) = self.resolver.resolve_ptr(name) {
+                return match sym.kind {
+                    SymbolKind.Local(_) | SymbolKind.Param(_) => true,
+                    _ => false
+                };
+            }
+            return false;
+        }
+        return true;
+    }
+
+    // The function NAME calls directly: a lowered function, a function declaration
+    // (instantiated, generic ones only when FINAL, with TYPE_ARGS or inferred from ARGS), or a
+    // method by its path. Rejected when it is private to another module (reported).
+    fn direct_callee(
+        self: &mut ZirLowerer,
+        name: u32,
+        span: Span,
+        is_final: bool,
+        type_args: [u32],
+        args: [Place],
+        expected_ret: u32
+    ) -> CalleeLookup {
+        let sym = match self.resolver.resolve_ptr(name) {
+            Option.Some(s) => s,
+            Option.None => { return CalleeLookup.NotDirect; }
+        };
+        match sym.kind {
+            SymbolKind.Function(func_idx) => {
+                let p_func: ILFunction = self.module.functions[func_idx as usize];
+                if !self.check_fn_visible(p_func.is_pub, p_func.source_file, name, span) {
+                    return CalleeLookup.Rejected;
+                }
+                return CalleeLookup.Found(func_idx);
+            },
+            SymbolKind.Global(decl_id) => {
+                if let Decl.Fn(ff) = self.resolver.ast.decls[decl_id as usize] {
+                    if !self.check_fn_visible(ff.is_pub, ff.source_file, name, span) {
+                        return CalleeLookup.Rejected;
+                    }
+                    if !is_final {
+                        if ff.type_params.len != 0 as usize { return CalleeLookup.NotDirect; }
+                        return CalleeLookup.Found(
+                            self.mono.instantiate_function(
+                                decl_id,
+                                @slice(0 as *mut u32, 0 as usize)
+                            )
+                        );
+                    }
+                } else if !is_final {
+                    return CalleeLookup.NotDirect;
+                }
+                // Lowered as a direct call even when the global is not a function (reported later).
+                let mut effective_type_args = type_args;
+                if effective_type_args.len == 0 as usize {
+                    effective_type_args = self.infer_generic_type_args_for_fn(
+                        decl_id,
+                        args.ptr as *mut Place,
+                        args.len,
+                        expected_ret
+                    );
+                }
+                if !self.check_fn_type_arg_bounds(decl_id, effective_type_args, span) {
+                    return CalleeLookup.Rejected;
+                }
+                return CalleeLookup.Found(
+                    self.mono.instantiate_function(decl_id, effective_type_args)
+                );
+            },
+            SymbolKind.Method(packed) => {
+                let imp = match self.resolver.ast.decls[(packed >> 16) as usize] {
+                    Decl.Impl(i) => i,
+                    _ => { return CalleeLookup.NotDirect; },
+                };
+                let f = &imp.methods[(packed & 0xffff as u32) as usize];
+                let f_sf = if f.source_file != 0 as u32 { f.source_file } else { imp.source_file };
+                // `T::m(..)` and `T.m(..)` are the same method reached the same way; a private one
+                // is no more nameable through the path than through a receiver.
+                if !self.check_method_visible(f.is_pub, f_sf, f.name, span) {
+                    return CalleeLookup.Rejected;
+                }
+                if !is_final && f.type_params.len != 0 as usize { return CalleeLookup.NotDirect; }
+                let self_ty = self.resolver.resolve_type(imp.target_ty);
+                let method_type_args = if is_final {
+                    type_args
+                } else {
+                    @slice(0 as *mut u32, 0 as usize)
+                };
+                return CalleeLookup.Found(
+                    self.mono.instantiate_method(
+                        f,
+                        method_type_args,
+                        0 as u32,
+                        f.name,
+                        imp,
+                        self_ty
+                    )
+                );
+            },
+            _ => { return CalleeLookup.NotDirect; },
+        }
+    }
+
+    // A call through CALLEE's value, which must be a function or a pointer to one.
+    fn emit_pointer_call(
+        self: &mut ZirLowerer,
+        callee_expr_id: ExprId,
+        args: [Place],
+        span: Span
+    ) -> Place {
+        let callee_place = self.lower_expr(callee_expr_id, 0 as u32);
+        return self.emit_pointer_call_to(callee_place, callee_expr_id, args, span);
+    }
+
+    // The function type a callee of type TY is (TY itself, or what TY points to); 0 for none.
+    fn callee_fn_type(self: &mut ZirLowerer, ty: u32) -> u32 {
+        if ty == 0 as u32 { return 0 as u32; }
+        if self.is_fn_type(ty) { return ty; }
+        let inner = self.get_ptr_inner_type(ty);
+        return if inner != 0 as u32 && self.is_fn_type(inner) { inner } else { 0 as u32 };
+    }
+
+    // A call through CALLEE_PLACE, the value of CALLEE_EXPR_ID, with ARGS.
+    fn emit_pointer_call_to(
+        self: &mut ZirLowerer,
+        callee_place: Place,
+        callee_expr_id: ExprId,
+        args: [Place],
+        span: Span
+    ) -> Place {
+        let fn_ptr_ty = self.get_place_type(&callee_place);
+        let mut fn_ty = 0 as u32;
+        if fn_ptr_ty != 0 as u32 {
+            let tag = self.get_type_decl(fn_ptr_ty).def.get_tag();
+            if tag == ILTYPE_FN {
+                fn_ty = fn_ptr_ty;
+            } else if is_any_pointer_tag(tag) {
+                let inner = self.get_ptr_inner_type(fn_ptr_ty);
+                if inner != 0 as u32 && self.get_type_decl(inner).def.get_tag() == ILTYPE_FN {
+                    fn_ty = inner;
+                    // A C function pointer is code the checker never saw: calling one is unchecked.
+                    if self.get_type_decl(inner).def.get_Fn().c_abi
+                        && self.unsafe_depth == 0 as u32 {
+                        self.report_error(
+                            "call through a C function pointer requires unsafe block",
+                            span
+                        );
+                    }
+                }
+            }
+        }
+        if fn_ty == 0 as u32 {
+            // An unresolved name was reported where it was lowered, a value of no known type
+            // (its definition failed) where that failed.
+            if callee_place.base == 0 as u32 || (fn_ptr_ty == 0 as u32 && self.had_error) {
+                return self.no_place();
+            }
+            self.report_error("Failed to resolve callee", self.get_expr_span(callee_expr_id));
+            return self.no_place();
+        }
+        let fn_def: ILType = self.module.types[fn_ty as usize - 1 as usize].def;
+        let sig = fn_def.get_Fn();
+        // The arguments were lowered before the callee, so with no expected types: they are
+        // checked (and converted) against its parameters here, as a direct call's are.
+        if if sig.is_variadic { args.len < sig.params.len } else { args.len != sig.params.len } {
+            self.report_error_with_args(
+                "wrong number of arguments (expected ",
+                sig.params.len,
+                args.len,
+                span
+            );
+        }
+        let mut checked = unsafe { Vec::<Place>.with_capacity_in_raw(self.arena, args.len) };
+        for ai in 0 as usize..args.len {
+            checked.push(
+                if ai < sig.params.len {
+                    self.check_arg_against(args[ai], sig.params[ai], span)
+                } else {
+                    args[ai]
+                }
+            );
+        }
+        let ret_ty = sig.ret_ty;
+        let tmp = self.define_local(0 as *mut Symbol, ret_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.CallPtr(callee_place, checked.as_slice()), span));
+        if self.is_never_type(ret_ty) { self.terminate(ZirTerminator.Unreachable); }
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // Calls FUNC_IDX with ARGS; a call returning `!` ends the block.
+    fn emit_direct_call(self: &mut ZirLowerer, func_idx: u32, args: [Place], span: Span) -> Place {
+        let p_func: ILFunction = self.module.functions[func_idx as usize];
+        let ret_ty = self.get_zil_effective_ret_ty(&p_func);
+        let tmp = self.define_local(0 as *mut Symbol, ret_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.Call(func_idx, args), span));
+        if self.is_never_type(ret_ty) { self.terminate(ZirTerminator.Unreachable); }
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // ARG passed to a parameter of type PARAM_TY: converted where an implicit conversion is
+    // allowed (or an array passed as a slice), a mismatch reported, and a moved value consumed.
+    fn check_arg_against(self: &mut ZirLowerer, arg: Place, param_ty: u32, span: Span) -> Place {
+        let converted = self.convert_value_to(arg, param_ty, span);
+        let result = self.reborrow_arg(converted, param_ty, span);
+        self.consume_arg_if_move(param_ty, &result);
+        return result;
+    }
+
+    // A `&mut T` place handed to a reference parameter is passed as `&mut *a` (or `&*a`): the
+    // callee then holds the referent borrowed, so a later mutation through `a` conflicts while
+    // that borrow is live (task 2i). A reference built for this call (`f(&mut x)`) is already such
+    // a borrow and is passed as it is, which is why a temporary source is skipped.
+    #[borrows()]
+    fn reborrow_arg(self: &mut ZirLowerer, arg: Place, param_ty: u32, span: Span) -> Place {
+        if arg.base == 0 as u32 || param_ty == 0 as u32 { return arg; }
+        if arg.base as usize > self.locals.len() { return arg; }
+        if self.locals[arg.base as usize - 1 as usize].kind == LOCAL_KIND_TMP { return arg; }
+        let arg_ty = self.get_place_type(&arg);
+        if !self.is_ref_type(arg_ty) || !self.is_ref_type(param_ty) { return arg; }
+        if self.get_type_tag(arg_ty) != ILTYPE_PTRMUT { return arg; }
+        if !self.types_match(param_ty, arg_ty) { return arg; }
+        let target = self.append_deref(&arg);
+        let reg = self.next_region_id;
+        self.next_region_id = self.next_region_id + 1 as u32;
+        let tmp = self.define_local(0 as *mut Symbol, param_ty, LOCAL_KIND_TMP);
+        if is_mut_pointer_tag(self.get_type_tag(param_ty)) {
+            self.emit(ZirStmt.Let(tmp, ZirRvalue.RefMut(target, reg), span));
+        } else {
+            self.emit(ZirStmt.Let(tmp, ZirRvalue.Ref(target, reg), span));
+        }
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // VALUE where a value of type PARAM_TY is wanted: converted where an implicit conversion is
+    // allowed (or an array given as a slice), else a mismatch is reported. Every site that puts
+    // one value into the type another expression expects goes through here - an argument, an
+    // array element, an enum payload - so none of them can turn an integer into a reference with
+    // a cast nobody wrote.
+    // The result is a Place of arena data, like lower_expr's.
+    #[borrows()]
+    fn convert_value_to(self: &mut ZirLowerer, arg: Place, param_ty: u32, span: Span) -> Place {
+        // A `&[T; N]` where a slice is expected (a `fn` type's parameter) is that slice.
+        let mut result = self.coerce_array_ref_to_slice(
+            arg,
+            self.get_place_type(&arg),
+            param_ty,
+            span
+        );
+        let arg_ty = self.get_place_type(&result);
+        if arg_ty != 0 as u32 && param_ty != 0 as u32 && !self.types_match(param_ty, arg_ty) {
+            if self.implicit_conv_ok(param_ty, arg_ty) {
+                result = self.emit_cast(result, param_ty, span);
+            } else if self.is_primitive_type(arg_ty) && self.is_primitive_type(param_ty) {
+                // Reported once: this is the type mismatch, named.
+                self.report_implicit_conv_error(param_ty, arg_ty, span);
+                return result;
+            } else {
+                self.maybe_coerce_array_to_slice(&mut result, arg_ty, param_ty, span);
+            }
+        }
+        let final_ty = self.get_place_type(&result);
+        if final_ty != 0 as u32 && param_ty != 0 as u32 && !self.types_match(param_ty, final_ty) {
+            self.report_type_mismatch(param_ty, final_ty, span);
+        }
+        return result;
+    }
+
+    // Reports a call of FUNC_IDX with GIVEN arguments when it takes another number (at least
+    // that many when variadic). PARAM_BASE is where its source parameters start; HAS_RECEIVER:
+    // the first of them is `self`, not counted.
+    fn check_arg_count(
+        self: &mut ZirLowerer,
+        func_idx: u32,
+        param_base: usize,
+        given: usize,
+        has_receiver: bool,
+        span: Span
+    ) {
+        let p_func: &ILFunction = &self.module.functions[func_idx as usize];
+        let mut expected = if p_func.params_len >= param_base {
+            p_func.params_len - param_base
+        } else {
+            0 as usize
+        };
+        if has_receiver {
+            expected = if expected > 0 as usize { expected - 1 as usize } else { 0 as usize };
+        }
+        let wrong = if p_func.is_variadic { given < expected } else { given != expected };
+        if wrong {
+            self.report_error_with_args(
+                "wrong number of arguments (expected ",
+                expected,
+                given,
+                span
+            );
+        }
+    }
+
+    // Where FUNC_IDX's source parameters start among its lowered ones (after the return slot);
+    // checks that an extern callee is called in `unsafe`.
+    fn call_param_base(self: &mut ZirLowerer, func_idx: u32, span: Span) -> usize {
+        let p_func: ILFunction = self.module.functions[func_idx as usize];
+        self.check_extern_call_is_marked(p_func.is_extern && !p_func.is_export, p_func.name, span);
+        self.check_unsafe_call_is_marked(
+            p_func.is_unsafe,
+            p_func.is_extern && !p_func.is_export,
+            p_func.name,
+            span
+        );
+        return self.call_param_base_quiet(func_idx);
+    }
+
+    // A closure's environment parameter is its last, so only the result pointer precedes the
+    // source parameters.
+    fn call_param_base_quiet(self: &mut ZirLowerer, func_idx: u32) -> usize {
+        let p_func: ILFunction = self.module.functions[func_idx as usize];
+        return self.get_zil_sret_offset(&p_func);
+    }
+
+    // The type of FUNC_IDX's lowered parameter INDEX, or 0 past the last.
+    fn call_param_type(self: &mut ZirLowerer, func_idx: u32, index: usize) -> u32 {
+        let p_func: &ILFunction = &self.module.functions[func_idx as usize];
+        if index >= p_func.params_len { return 0 as u32; }
+        return p_func.param(index).ty;
+    }
+
+    // Whether code in this module may call a function that is IS_PUB in SOURCE_FILE; reports it
+    // (as NAME) when not.
+    fn check_fn_visible(
+        self: &mut ZirLowerer,
+        is_pub: bool,
+        source_file: u32,
+        name: u32,
+        span: Span
+    ) -> bool {
+        let cur_sf = self.current_source_file;
+        if is_pub || source_file == 0 as u32 || cur_sf == 0 as u32 || source_file == cur_sf {
+            return true;
+        }
+        self.report_error_with_symbol("cannot access private function: ", name, span);
+        return false;
+    }
+
+    // Whether code in this module may name the method NAME of an impl declared in SOURCE_FILE: a
+    // non-`pub` method of an inherent impl is reachable from the module that declares it only, as a
+    // private field is (surface_syntax.md §11.1.2). A trait impl's methods are public - as the
+    // trait's are, and `expand_trait_impls` sets the flag on them - so nothing extra is needed
+    // there. Reports it when not, naming the module that owns the method, and says false.
+    fn check_method_visible(
+        self: &mut ZirLowerer,
+        is_pub: bool,
+        source_file: u32,
+        name: u32,
+        span: Span
+    ) -> bool {
+        return self.check_private_visible(
+            is_pub,
+            source_file,
+            name,
+            "cannot access private method: ",
+            span
+        );
+    }
+
+    // The check above, for a name that is not a method (an associated constant), with its own
+    // first line.
+    fn check_private_visible(
+        self: &mut ZirLowerer,
+        is_pub: bool,
+        source_file: u32,
+        name: u32,
+        what: [u8],
+        span: Span
+    ) -> bool {
+        let cur_sf = self.current_source_file;
+        if is_pub || source_file == 0 as u32 || cur_sf == 0 as u32 || source_file == cur_sf {
+            return true;
+        }
+        self.report_error_with_symbol(what, name, span);
+        diag_start(
+            if self.file_path.len > 0 as usize { self.file_path } else { self.resolver.file_path },
+            span,
+            "note"
+        );
+        eprint("`");
+        eprint(self.intern_table.lookup(name));
+        eprint("` is private to ");
+        eprint(self.intern_table.lookup(source_file));
+        eprint("\n");
+        return false;
+    }
+
+    #[borrows()]
+    pub fn no_place(self: &ZirLowerer) -> Place {
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_member_access_expr(
+        self: &mut ZirLowerer,
+        m: MemberAccessExpr,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        let base_expr: Expr = self.resolver.ast.exprs[m.expr as usize];
+        if base_expr.get_tag() == EXPR_IDENT || base_expr.get_tag() == EXPR_GENERIC {
+            // For Generic expressions (e.g., Option::<i32>), use lower_expr_as_type
+            // to get the resolved type, then look for enum variants
+            if base_expr.get_tag() == EXPR_GENERIC {
+                let resolved_ty = self.lower_expr_as_type(m.expr);
+                let pl = self.try_lower_enum_variant_member(
+                    resolved_ty,
+                    m.member,
+                    expected_ty,
+                    span
+                );
+                if pl.base != 0 as u32 {
+                    return pl;
+                }
+            }
+            let id = if base_expr.get_tag() == EXPR_IDENT {
+                base_expr.get_Ident()
+            } else {
+                // For Generic, get the inner ident for impl constant lookup
+                let g = base_expr.get_Generic();
+                let inner_expr: Expr = self.resolver.ast.exprs[g.expr as usize];
+                if inner_expr.get_tag() == EXPR_IDENT {
+                    inner_expr.get_Ident()
+                } else {
+                    0 as u32
+                }
+            };
+            let opt_sym: Option<Symbol> = if id != 0 as u32 {
+                match self.resolver.resolve_ptr(id) {
+                    Option.Some(s) => Option.Some(*s),
+                    Option.None => Option.None,
+                }
+            } else {
+                Option.None
+            };
+            match opt_sym {
+                Some(sym) => {
+                    if let SymbolKind.Global(_)
+                        | SymbolKind.Type(_)
+                        | SymbolKind.Primitive(_) = sym.kind {
+                        let resolved_ty = self.resolve_sym_type(&sym);
+                        let pl = self.try_lower_enum_variant_member(
+                            resolved_ty,
+                            m.member,
+                            expected_ty,
+                            span
+                        );
+                        if pl.base != 0 as u32 {
+                            return pl;
+                        }
+                        let pl2 = self.try_lower_impl_constant(id, m.member, expected_ty, span);
+                        if let Option.Some(pl_const) = pl2 { return pl_const; }
+                        // `K.Nope` on a type: there is no value to take a field of.
+                        if self.sym_names_type(&sym) {
+                            self.report_prefix(span);
+                            eprint("no variant or associated constant `");
+                            eprint(self.intern_table.lookup(m.member));
+                            eprint("` in `");
+                            eprint(self.mono.type_display(resolved_ty));
+                            eprint("`\n");
+                            return Place {
+                                base: 0,
+                                projections: @slice(0 as *mut Projection, 0 as usize)
+                            };
+                        }
+                    }
+                },
+                None => {}
+            }
+        }
+
+        let inner_place = self.lower_expr(m.expr, 0 as u32);
+        let array_len = self.array_len_of(self.get_place_type(&inner_place), m.member);
+        if array_len != 0xffffffff as u32 {
+            let usize_ty = self.get_usize_type();
+            let tmp = self.define_local(0 as *mut Symbol, usize_ty, LOCAL_KIND_TMP);
+            self.emit(ZirStmt.Let(tmp, ZirRvalue.Const(array_len as u64, usize_ty), span));
+            return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        let member_base_ty = self.get_place_type(&inner_place);
+        self.check_field_visible(member_base_ty, m.member, span);
+        self.check_field_exists(member_base_ty, m.member, span);
+        self.check_raw_deref_is_marked(&inner_place, span);
+        return self.append_projection(&inner_place, Projection.Field(m.member));
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_index_expr(self: &mut ZirLowerer, idx_expr: IndexExpr, span: Span) -> Place {
+        let mut base_place = self.lower_expr(idx_expr.expr, 0 as u32);
+        // `p[i]` on a raw pointer is unchecked arithmetic plus a load, the same
+        // operation as `*(p + i)`. The compound-assignment path already gated
+        // this; plain reads and plain `p[i] = v` writes both come through here
+        // and were escaping the check entirely.
+        let base_is_raw = self.place_is_raw_ptr(&base_place);
+        if base_is_raw && self.unsafe_depth == 0 as u32 {
+            self.report_error("indexing raw pointer requires unsafe block", span);
+        }
+        // A reference is not a raw pointer: it indexes what it refers to. Indexing it
+        // as a pointer stepped past the referenced value in safe code.
+        let base_ty = self.get_place_type(&base_place);
+        let base_tag = if base_ty != 0 as u32 {
+            self.get_type_decl(base_ty).def.get_tag()
+        } else {
+            0xffffffff as u32
+        };
+        let pointee = if is_any_pointer_tag(base_tag) {
+            self.get_ptr_inner_type(base_ty)
+        } else {
+            0 as u32
+        };
+        if !base_is_raw && pointee != 0 as u32 {
+            let pointee_tag = self.get_type_decl(pointee).def.get_tag();
+            if self.is_vec_type(pointee) {
+                base_place = self.append_projection(&base_place, Projection.Deref);
+            } else if pointee_tag != ILTYPE_ARRAY && pointee_tag != ILTYPE_SLICE {
+                self.report_prefix(span);
+                eprint("cannot index `");
+                eprint(self.mono.type_display(base_ty));
+                eprint(
+                    "`: only arrays, slices, `Vec`s and raw pointers (in `unsafe`) can be indexed\n"
+                );
+                self.had_error = true;
+            }
+        }
+        let idx_place = self.lower_expr(idx_expr.index, 0 as u32);
+
+        let mut idx_local_id = 0 as u32;
+        if idx_place.projections.len == 0 as usize {
+            idx_local_id = idx_place.base;
+        } else {
+            let idx_ty = self.get_place_type(&idx_place);
+            idx_local_id = self.define_local(0 as *mut Symbol, idx_ty, LOCAL_KIND_TMP);
+            self.emit(ZirStmt.Let(idx_local_id, ZirRvalue.Use(idx_place), span));
+        }
+        self.check_const_array_index(&base_place, idx_local_id, span);
+
+        return self.append_projection(&base_place, Projection.Index(idx_local_id));
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_cast_expr(self: &mut ZirLowerer, c: CastExpr, expected_ty: u32, span: Span) -> Place {
+        let inner_place = self.lower_expr(c.expr, 0 as u32);
+        let target_ty = self.resolver.resolve_type(c.target_ty);
+        if lint_enabled(LINT_REDUNDANT_CAST)
+            && expected_ty != 0 as u32
+            && target_ty == expected_ty {
+            self.lint_redundant_cast(c.expr, target_ty);
+        }
+        self.check_cast_validity(&c, &inner_place, target_ty, span);
+        // No marker is required for `n as *T`: every *use* of a raw pointer is gated on its own
+        // type (doc/spec/unsafe_policy.md §1), so gating the creation would add a marker to safe
+        // code and buy nothing - and it would leave a fixed hardware address with no spelling in a
+        // constant initializer, which has nowhere to put `unsafe`. The targets that do need the
+        // marker - a reference, a slice, an aggregate, a type parameter - are refused by
+        // check_cast_validity just above. `ptr_forge_needs_unsafe` is the same decision for the
+        // two intrinsic routes.
+        let tmp = self.define_local(0 as *mut Symbol, target_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.Cast(inner_place, target_ty), span));
+        self.consume_place_if_move(&inner_place);
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // The `redundant-cast` lint: `N as T` (N an unsuffixed integer literal that fits T, an
+    // integer type) where the context already expects a T, so `N` alone is lowered as a T:
+    // dropping the cast changes nothing. Reported at the literal, for tools that remove it.
+    fn lint_redundant_cast(self: &mut ZirLowerer, lit_expr: ExprId, ty: u32) {
+        if let Expr.Literal(lit) = self.resolver.ast.exprs[lit_expr as usize] {
+            if let Literal.Int(v) = lit {
+                if v.1 != 0xffffffff as u32
+                    || self.int_prim_bits(ty) == 0 as u32
+                    || !self.int_fits(v.0, false, ty) {
+                    return;
+                }
+                diag_start(self.file_path, self.get_expr_span(lit_expr), "warning");
+                eprint("redundant cast: the literal is a `");
+                eprint(self.mono.type_display(ty));
+                eprint("` here already (redundant-cast)\n");
+            }
+        }
+    }
+
+    fn lower_try_expr(self: &mut ZirLowerer, try_expr_id: ExprId, span: Span) -> Place {
+        let val_place = self.lower_expr(try_expr_id, 0 as u32);
+        let enum_ty = self.get_place_type(&val_place);
+
+        let ok_name = self.intern_table.intern("Ok");
+        let some_name = self.intern_table.intern("Some");
+        let success_v_idx = match self.get_variant_index(enum_ty, ok_name) {
+            Some(idx) => idx,
+            None => match self.get_variant_index(enum_ty, some_name) {
+                Some(idx) => idx,
+                None => 0xffffffff as u32,
+            }
+        };
+
+        let bool_ty = self.get_primitive_type(ILPrimitive.Bool);
+        let cond_tmp = self.define_local(0 as *mut Symbol, bool_ty, LOCAL_KIND_TMP);
+        self.emit(
+            ZirStmt.Let(cond_tmp, ZirRvalue.VariantCheck(val_place, enum_ty, success_v_idx), span)
+        );
+        let cond_place = Place {
+            base: cond_tmp,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+
+        let success_block = self.new_block("try_ok");
+        let error_block = self.new_block("try_err");
+        self.terminate(ZirTerminator.Branch(cond_place, success_block, error_block));
+
+        self.switch_to_block(error_block);
+        self.emit_scope_cleanup(0 as usize, span, 0 as u32, true);
+        self.terminate(ZirTerminator.Ret(val_place));
+
+        self.switch_to_block(success_block);
+        let payload_ty = self.get_variant_payload_type(enum_ty, success_v_idx);
+        if payload_ty != 0 as u32 && payload_ty != 0xffffffff as u32 {
+            let payload_ptr_ty = self.get_ptr_type(payload_ty);
+            let payload_tmp = self.define_local(0 as *mut Symbol, payload_ptr_ty, LOCAL_KIND_TMP);
+            self.emit(
+                ZirStmt.Let(
+                    payload_tmp,
+                    ZirRvalue.EnumPayload(val_place, enum_ty, success_v_idx),
+                    span
+                )
+            );
+            let payload_base = Place {
+                base: payload_tmp,
+                projections: @slice(0 as *mut Projection, 0 as usize)
+            };
+            return self.append_deref(&payload_base);
+        }
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_return_expr(self: &mut ZirLowerer, inner_id: ExprId, span: Span) -> Place {
+        let mut ret_place = if inner_id != 0 as ExprId {
+            self.lower_expr(inner_id, self.current_ret_ty)
+        } else {
+            if self.is_void_main {
+                let i32_ty = self.get_primitive_type(ILPrimitive.I32);
+                let zero_local = self.define_local(0 as *mut Symbol, i32_ty, LOCAL_KIND_TMP);
+                self.emit(ZirStmt.Let(zero_local, ZirRvalue.Const(0 as u64, i32_ty), span));
+                Place { base: zero_local, projections: @slice(0 as *mut Projection, 0 as usize) }
+            } else {
+                Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) }
+            }
+        };
+        if ret_place.base != 0 as u32 {
+            self.check_raw_into_ref(&ret_place, self.current_ret_ty, span);
+        }
+        if self.current_ret_ty != 0 as u32 && ret_place.base != 0 as u32 {
+            let actual_ty = self.get_place_type(&ret_place);
+            if actual_ty != 0 as u32 && !self.types_match(self.current_ret_ty, actual_ty) {
+                if self.is_bool_type(actual_ty) != self.is_bool_type(self.current_ret_ty) {
+                    self.report_error(
+                        "cannot implicitly convert between bool and non-bool (use `as`)",
+                        span
+                    );
+                }
+                let tmp_cast = self.define_local(
+                    0 as *mut Symbol,
+                    self.current_ret_ty,
+                    LOCAL_KIND_TMP
+                );
+                self.emit(
+                    ZirStmt.Let(tmp_cast, ZirRvalue.Cast(ret_place, self.current_ret_ty), span)
+                );
+                ret_place = Place {
+                    base: tmp_cast,
+                    projections: @slice(0 as *mut Projection, 0 as usize)
+                };
+            }
+        }
+        self.emit_scope_cleanup(0 as usize, span, ret_place.base, true);
+        self.terminate(ZirTerminator.Ret(ret_place));
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    fn lower_closure_expr(
+        self: &mut ZirLowerer,
+        c: ClosureExpr,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        // `_closure_N`, unique within this TU (a closure is local to the TU lowering it).
+        let mut name = unsafe { ByteVec.new_raw(self.arena) };
+        name.push_slice("_closure_");
+        name.push_slice(unsafe {
+            u64_to_str(
+                self.mono.closure_count as u64,
+                zoril_allocator_alloc(self.arena, 20 as usize) as *mut u8
+            )
+        });
+        self.mono.closure_count = self.mono.closure_count + 1 as u32;
+        let c_name = self.intern_table.intern(name.as_slice());
+        if !self.infer_closure_sig(&c, c_name, expected_ty, span) { return self.no_place(); }
+
+        // The captures: the enclosing function's locals the body uses, copied into a tuple
+        // the closure receives as its environment.
+        let mut captures = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+        self.collect_free_idents_expr(c.body, c.params, &mut captures);
+        let env_ptr = if captures.len() > 0 as usize {
+            self.build_closure_env(captures.as_slice(), span)
+        } else {
+            0 as u32
+        };
+
+        let f = FnDecl {
+            name: c_name,
+            params: c.params,
+            ret_ty: c.ret_ty,
+            body: c.body,
+            // A closure's record is synthesized here, never read from an interface.
+            has_storage: false,
+            type_params: @slice(0 as *mut TypeParam, 0 as usize),
+            is_pub: false,
+            is_extern: false,
+            is_export: false,
+            is_unsafe: false,
+            is_variadic: false,
+            must_use: false,
+            from_interface: false,
+            // A closure has no doc comment of its own, but its source file is meaningful: it is
+            // written inline in its enclosing function's file (self.file_path; empty interns to 0,
+            // which reads as "unknown").
+            doc_comment: 0 as u32,
+            source_file: self.intern_table.intern(self.file_path),
+            // A closure literal is never an arena lifecycle primitive: those are top-level items of
+            // the standard library, not bodies written inline.
+            source_is_stdlib: false,
+            has_summary: false,
+            summary_escape: 0 as u64,
+            summary_stash: 0 as u64,
+            summary_escape_via: 0 as u64,
+            summary_stash_via: 0 as u64,
+            summary_storage: 0 as u64,
+            summary_stores: 0 as u64,
+            summary_into: 0 as u64,
+            summary_ret_stack: false,
+            summary_alloc: 0 as usize,
+            has_borrows: false,
+            borrows: @slice(0 as *mut u32, 0 as usize),
+            has_stores: false,
+            stores_from: @slice(0 as *mut u32, 0 as usize),
+            stores_to: @slice(0 as *mut u32, 0 as usize),
+            stores_static: @slice(0 as *mut bool, 0 as usize),
+            expr_start: 0 as u32,
+            expr_end: 0 as u32,
+            default_of: 0 as u32,
+        };
+        let func_idx = self.mono.lower_closure_fn(&f, c_name);
+        if env_ptr != 0 as u32 { self.mono.register_zir_closure_env(func_idx, env_ptr); }
+
+        // The closure as a value: its code and, when it captures, its environment.
+        let p_func: ILFunction = self.module.functions[func_idx as usize];
+        let fn_ty = self.get_fn_type(&p_func);
+        let tmp = self.define_local(0 as *mut Symbol, fn_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.FuncAddr(func_idx, env_ptr), span));
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // The types closure C (lowered as NAME) leaves unwritten, from the function type its
+    // context expects (EXPECTED_TY, or a pointer to one) when it has as many parameters:
+    // each untyped parameter's, and with no `-> R` the result (else the body's type). Recorded for the closure's own
+    // lowering (Monomorphizer.set_closure_sig). False, reported, when a parameter's type has
+    // no source.
+    fn infer_closure_sig(
+        self: &mut ZirLowerer,
+        c: &ClosureExpr,
+        name: u32,
+        expected_ty: u32,
+        span: Span
+    ) -> bool {
+        let mut fn_ty = 0 as u32;
+        if self.is_fn_type(expected_ty) {
+            fn_ty = expected_ty;
+        } else if expected_ty != 0 as u32 && self.is_fn_type(self.get_ptr_inner_type(expected_ty)) {
+            fn_ty = self.get_ptr_inner_type(expected_ty);
+        }
+        let mut sig_params = @slice(0 as *mut u32, 0 as usize);
+        let mut sig_ret = 0 as u32;
+        if fn_ty != 0 as u32 {
+            let s = self.get_type_decl(fn_ty).def.get_Fn();
+            if s.params.len == c.params.len {
+                sig_params = s.params;
+                sig_ret = s.ret_ty;
+            } else {
+                fn_ty = 0 as u32;
+            }
+        }
+        let mut params = unsafe {
+            Vec::<u32>.with_capacity_in_raw(self.persistent_arena, c.params.len)
+        };
+        for i in 0 as usize..c.params.len {
+            if c.params[i].ty != 0 as u32 {
+                params.push(0 as u32);
+            } else if fn_ty != 0 as u32 {
+                params.push(sig_params[i]);
+            } else {
+                self.report_prefix(span);
+                eprint("cannot infer the type of closure parameter `");
+                eprint(self.intern_table.lookup(c.params[i].name));
+                eprint("`: write `");
+                eprint(self.intern_table.lookup(c.params[i].name));
+                eprint(": T`, or pass the closure where a function type is expected\n");
+                self.had_error = true;
+                return false;
+            }
+        }
+        // With no `-> R`, the expected result, or when that is unknown or unit, the body's.
+        let mut ret = 0 as u32;
+        if c.ret_ty == 0 as u32 {
+            ret = if sig_ret != 0 as u32 && !self.is_unit_type(sig_ret) {
+                sig_ret
+            } else {
+                INFER_RESULT
+            };
+        }
+        self.mono.set_closure_sig(name, params.as_slice(), ret);
+        return true;
+    }
+
+    // The environment of a closure capturing CAPTURES (names of this function's locals): a
+    // tuple of their values and a local pointing at it, which is returned. The closure's own
+    // lowering reads the names and types from the monomorphizer's pending captures.
+    fn build_closure_env(self: &mut ZirLowerer, captures: [u32], span: Span) -> u32 {
+        let n = captures.len;
+        let cap_tys = unsafe { zoril_allocator_alloc(self.arena, n * 4) } as *mut u32;
+        let tuple_tys = unsafe {
+            @slice(zoril_allocator_alloc(self.persistent_arena, n * 4) as *mut u32, n)
+        };
+        let vals = unsafe {
+            @slice(zoril_allocator_alloc(self.arena, n * sizeof(Place)) as *mut Place, n)
+        };
+        for k in 0 as usize..n {
+            let mut local_id = 0 as u32;
+            if let Option.Some(sym) = self.resolver.resolve_ptr(captures[k]) {
+                local_id = self.get_local_by_symbol_ref(sym);
+            }
+            let ty = self.locals[local_id as usize - 1 as usize].ty;
+            unsafe { *((cap_tys as usize + k * 4) as *mut u32) = ty; }
+            tuple_tys[k] = ty;
+            vals[k] = Place {
+                base: local_id,
+                projections: @slice(0 as *mut Projection, 0 as usize)
+            };
+        }
+        let env_ty = self.module.alloc_type(ILTypeDecl {
+            id: 0 as u32,
+            name: 0 as u32,
+            def: ILType.Tuple(tuple_tys),
+            source_file: 0 as u32
+        });
+        let env_ptr_ty = self.get_ptr_type(env_ty);
+        let env = self.define_local(0 as *mut Symbol, env_ty, LOCAL_KIND_TMP);
+        // Name it in diagnostics by the closure it belongs to, not by its internal id.
+        self.locals[env as usize - 1 as usize].closure_span = span;
+        self.emit(ZirStmt.Let(env, ZirRvalue.Tuple(vals), span));
+        // The environment is the value's owner from here on: each capture was copied into the
+        // tuple, so the original must not be dropped as well (Unified Solution D). A non-`Copy`
+        // capture therefore moves into the closure; the copy in `env` is dropped exactly once.
+        // An owning collection is a move even though its fields are all `Copy` - the buffer
+        // behind them is not - so the outer binding becomes unusable and the environment is the
+        // only owner (probe 298).
+        for k in 0 as usize..n {
+            let owns = self.type_owns_storage(tuple_tys[k], 0 as usize);
+            if owns && self.drop_flag_of(vals[k].base) == 0 as u32 {
+                self.set_local_consumed(vals[k].base, true);
+            } else {
+                self.consume_place_if_move(&vals[k]);
+            }
+        }
+        // Recorded so a block whose *tail* is this closure can extend the environment's storage
+        // to the enclosing scope; the depth says which scope it was created in.
+        self.tail_envs.push(env);
+        self.tail_env_depths.push(self.scope_locals.len() as u32);
+        let env_ptr = self.define_local(0 as *mut Symbol, env_ptr_ty, LOCAL_KIND_TMP);
+        self.emit(
+            ZirStmt.Let(
+                env_ptr,
+                ZirRvalue.Ref(
+                    Place { base: env, projections: @slice(0 as *mut Projection, 0 as usize) },
+                    0 as u32
+                ),
+                span
+            )
+        );
+        self.mono.pending_cap_names = captures.ptr as *mut u32;
+        self.mono.pending_cap_tys = cap_tys;
+        self.mono.pending_cap_len = n;
+        self.mono.pending_cap_env_ty = env_ptr_ty;
+        return env_ptr;
+    }
+
+    fn lower_boxed_expr(self: &mut ZirLowerer, b: BoxExpr, span: Span) -> Place {
+        let val_place = self.lower_expr(b.expr, 0 as u32);
+        let mut ty = self.get_place_type(&val_place);
+        let is_agg = self.is_implicit_aggregate_ptr(ty);
+        if ty != 0 as u32 {
+            let p_ty: &ILTypeDecl = self.get_type_decl(ty);
+            let tag = p_ty.def.get_tag();
+            if is_agg && is_any_pointer_tag(tag) {
+                ty = self.get_ptr_inner_type(ty);
+            }
+        }
+        let target_ty = self.module.alloc_type(ILTypeDecl {
+            id: 0 as u32,
+            name: 0 as u32,
+            def: ILType.BoxedMut(ty),
+            source_file: 0 as u32
+        });
+        let tmp = self.define_local(0 as *mut Symbol, target_ty, LOCAL_KIND_TMP);
+        // `box(allocator) expr` is not implemented, and until it is the compiler must not
+        // pretend: the value used to be boxed into the frame's own region with the allocator
+        // operand dropped on the floor (the IL's `alloc` with an allocator never reaches an
+        // arena-aware allocator in this toolchain - the emitted call goes to the runtime's
+        // mmap stub, which ignores it). A value that must live in an arena is built with that
+        // arena's own constructors instead.
+        if b.allocator != 0 as ExprId {
+            self.report_error(
+                "arena allocation with box(allocator) is not implemented; use Vec, String or HashMap with new_in(&arena)",
+                span
+            );
+        }
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.Boxed(val_place), span));
+        self.consume_place_if_move(&val_place);
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    pub fn lower_block(self: &mut ZirLowerer, b: &BlockExpr, expected_ty: u32) -> Place {
+        self.push_scope();
+
+        // `unsafe { … }` raises the ambient depth for everything lowered inside it, including
+        // nested blocks and the tail expression. Depth, not a flag, because blocks nest: an inner
+        // plain `{ … }` inside an `unsafe` block stays unsafe, and only the matching decrement
+        // restores the outer state. The enumerated checks (raw-pointer deref/index, @ptr_cast /
+        // @int_cast / @ptr_from_int, extern calls) consult this and stay silent while it is > 0 --
+        // they do not switch off any other verification, per doc/spec/unsafe_policy.md §2.
+        if b.is_unsafe {
+            self.unsafe_depth = self.unsafe_depth + 1 as u32;
+        }
+
+        let stmts = b.stmts;
+        let mut i = 0 as usize;
+        while i < stmts.len {
+            if self.blocks[self.current_block_idx].is_terminated { break; }
+            self.lower_stmt(stmts[i]);
+            i = i + 1 as usize;
+        }
+
+        let mut res = Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+        let tail_env_mark = self.tail_envs.len();
+        if !self.blocks[self.current_block_idx].is_terminated && b.tail_expr != 0 as ExprId {
+            res = self.lower_expr(b.tail_expr, expected_ty);
+        }
+
+        // A closure built by the tail expression is the block's value: its environment must
+        // outlive the block, as `pop_scope_exclude` already lets the value itself do. Its
+        // storage moves to the enclosing scope; an environment built anywhere else in the
+        // block still ends here (a closure escaping a loop body through an outer variable is
+        // then rejected, probe 214).
+        let block_depth = self.scope_locals.len() as u32;
+        let mut te = tail_env_mark;
+        while te < self.tail_envs.len() {
+            if self.tail_env_depths[te] == block_depth {
+                let env_local = self.tail_envs[te];
+                self.promote_local_to_parent_scope(env_local);
+            }
+            te = te + 1 as usize;
+        }
+
+        if b.is_unsafe { self.unsafe_depth = self.unsafe_depth - 1 as u32; }
+
+        // The closing brace's span, recorded by the parser: a diagnostic about a local leaving scope
+        // here points at the `}`, not at the block's start (which would blame its first line). A
+        // synthesized block has no brace and carries a zero span, which reads as "no location".
+        self.pop_scope_exclude(b.end_span, res.base, false);
+
+        return res;
+    }
+
+    fn try_lower_enum_variant_member(
+        self: &mut ZirLowerer,
+        resolved_ty: u32,
+        member_name: u32,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        if resolved_ty == 0 as u32 {
+            return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        let p_ty: &ILTypeDecl = self.get_type_decl(resolved_ty);
+        match p_ty.def {
+            ILType.User(u) => {
+                let p_def: &ILTypeDef = &self.module.typedefs[u.id as usize];
+                if p_def.get_tag() == IL_TYPEDEF_ENUM {
+                    let e = p_def.get_Enum();
+                    let mut v_idx = 0 as usize;
+                    while v_idx < e.variants.len {
+                        let p_var: &ILVariant = &e.variants[v_idx];
+                        if p_var.name == member_name {
+                            let mut actual_enum_ty = resolved_ty;
+                            if u.type_args.len == 0 as usize {
+                                let res_orig = self.mono.get_typedef_origin(u.id);
+                                // Try expected_ty first (most specific context)
+                                if expected_ty != 0 as u32 {
+                                    let p_exp_ty: &ILTypeDecl = self.get_type_decl(expected_ty);
+                                    if p_exp_ty.def.get_tag() == ILTYPE_USER {
+                                        let exp_u_id = p_exp_ty.def.get_User().id;
+                                        let exp_orig = self.mono.get_typedef_origin(exp_u_id);
+                                        if res_orig == exp_orig && res_orig != 0 as u32 {
+                                            actual_enum_ty = expected_ty;
+                                        }
+                                    }
+                                }
+                                // Fall back to return type
+                                if actual_enum_ty == resolved_ty
+                                    && self.current_ret_ty != 0 as u32 {
+                                    let p_ret_ty: &ILTypeDecl = self.get_type_decl(
+                                        self.current_ret_ty
+                                    );
+                                    if p_ret_ty.def.get_tag() == ILTYPE_USER {
+                                        let ret_u_id = p_ret_ty.def.get_User().id;
+                                        let ret_orig = self.mono.get_typedef_origin(ret_u_id);
+                                        if res_orig == ret_orig && res_orig != 0 as u32 {
+                                            actual_enum_ty = self.current_ret_ty;
+                                        }
+                                    }
+                                }
+                            }
+                            let tmp = self.define_local(
+                                0 as *mut Symbol,
+                                actual_enum_ty,
+                                LOCAL_KIND_TMP
+                            );
+                            let payload_place = Place {
+                                base: 0,
+                                projections: @slice(0 as *mut Projection, 0 as usize)
+                            };
+                            self.emit(
+                                ZirStmt.Let(
+                                    tmp,
+                                    ZirRvalue.EnumVariant(
+                                        actual_enum_ty,
+                                        v_idx as u32,
+                                        payload_place
+                                    ),
+                                    span
+                                )
+                            );
+                            return Place {
+                                base: tmp,
+                                projections: @slice(0 as *mut Projection, 0 as usize)
+                            };
+                        }
+                        v_idx = v_idx + 1 as usize;
+                    }
+                }
+            },
+            _ => {},
+        }
+        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // The type's associated constant MEMBER_NAME, or None when the type has no such constant.
+    // Some holds the value's place; an error has been reported when a constant of another module
+    // that is not `pub` was named, and the place is then empty - there is nothing to lower.
+    fn try_lower_impl_constant(
+        self: &mut ZirLowerer,
+        id: u32,
+        member_name: u32,
+        expected_ty: u32,
+        span: Span
+    ) -> Option<Place> {
+        if id == 0 as u32 { return Option.None; }
+        let type_name_s = self.intern_table.lookup(id);
+        let member_name_s = self.intern_table.lookup(member_name);
+        let mut full_name_v = unsafe { ByteVec.new_raw(self.arena) };
+        full_name_v.push_slice(type_name_s);
+        full_name_v.push_slice("::");
+        full_name_v.push_slice(member_name_s);
+        let full_id = self.intern_table.intern(full_name_v.as_slice());
+        let opt_impl_sym = self.resolver.resolve_ptr(full_id);
+        match opt_impl_sym {
+            Some(impl_sym) => {
+                if let SymbolKind.Global(ik_payload) = impl_sym.kind {
+                    let idecl: Decl = self.resolver.ast.decls[ik_payload as usize];
+                    match idecl {
+                        Decl.Impl(imp) => {
+                            let mut ci = 0 as usize;
+                            while ci < imp.constants.len {
+                                if imp.constants[ci].name == member_name {
+                                    let c = &imp.constants[ci];
+                                    let c_sf = if c.source_file != 0 as u32 {
+                                        c.source_file
+                                    } else {
+                                        imp.source_file
+                                    };
+                                    if imp.trait_name == 0 as u32
+                                        && !self.check_private_visible(
+                                            c.is_pub,
+                                            c_sf,
+                                            c.name,
+                                            "cannot access private associated constant: ",
+                                            span
+                                        ) {
+                                        return Option.Some(self.no_place());
+                                    }
+                                    return Option.Some(
+                                        self.lower_expr(imp.constants[ci].value, 0 as u32)
+                                    );
+                                }
+                                ci = ci + 1 as usize;
+                            }
+                        },
+                        Decl.Const(c) => {
+                            // A const's DECLARED type is the truth about its type;
+                            // lowering only its initializer meant `const W: u64 = 4;`
+                            // produced an i32 (the literal's default) wherever the
+                            // caller had no expectation, so `let x = W;` inferred i32.
+                            let mut want = expected_ty;
+                            if want == 0 as u32 { want = self.resolver.resolve_type(c.ty); }
+                            return Option.Some(self.lower_expr(c.value, want));
+                        },
+                        _ => {}
+                    }
+                } else if let SymbolKind.AssocConst(ik_payload) = impl_sym.kind {
+                    let impl_decl_id = ik_payload >> 16;
+                    let item_idx = ik_payload & 0xffff as u32;
+                    let imp = match self.resolver.ast.decls[impl_decl_id as usize] {
+                        Decl.Impl(i) => i,
+                        _ => { return Option.None; },
+                    };
+                    if item_idx as usize < imp.constants.len {
+                        let c = &imp.constants[item_idx as usize];
+                        let c_sf = if c.source_file != 0 as u32 {
+                            c.source_file
+                        } else {
+                            imp.source_file
+                        };
+                        // `T.CONST` reads what `T::CONST` does, so the same visibility rule
+                        // applies (surface_syntax.md §11.1.2).
+                        if imp.trait_name == 0 as u32
+                            && !self.check_private_visible(
+                                c.is_pub,
+                                c_sf,
+                                c.name,
+                                "cannot access private associated constant: ",
+                                span
+                            ) {
+                            return Option.Some(self.no_place());
+                        }
+                        return Option.Some(self.lower_expr(c.value, expected_ty));
+                    }
+                }
+            },
+            None => {}
+        }
+        return Option.None;
+    }
+
+    // The size of the fixed array TY (or the array TY refers to) when MEMBER is `len`, else
+    // 0xffffffff: an array's `len` is a constant, not a field.
+    fn array_len_of(self: &mut ZirLowerer, ty: u32, member: u32) -> u32 {
+        if ty == 0 as u32 || member != self.intern_table.intern("len") { return 0xffffffff as u32; }
+        let mut arr_ty = ty;
+        let tag = self.get_type_decl(ty).def.get_tag();
+        if is_any_pointer_tag(tag) { arr_ty = self.get_ptr_inner_type(ty); }
+        if arr_ty == 0 as u32 { return 0xffffffff as u32; }
+        let p_arr = self.get_type_decl(arr_ty);
+        if p_arr.def.get_tag() != ILTYPE_ARRAY { return 0xffffffff as u32; }
+        return p_arr.def.get_Array().size;
+    }
+
+    // One branch's VALUE (at SPAN) as the type TY of the `if` or `match` (WHAT) it ends: a
+    // primitive converts implicitly where a `let` would let it; any other difference is an
+    // error. (Merging two `Option` instances unchecked copied one layout into the other.)
+    #[borrows()]
+    pub fn branch_value_as(
+        self: &mut ZirLowerer,
+        value: Place,
+        ty: u32,
+        span: Span,
+        what: [u8]
+    ) -> Place {
+        let value_ty = self.get_place_type(&value);
+        if value_ty == ty || value_ty == 0 as u32 || ty == 0 as u32 { return value; }
+        if self.is_primitive_type(value_ty) && self.is_primitive_type(ty) {
+            if !self.implicit_conv_ok(ty, value_ty) {
+                self.report_conv_or_type_mismatch(ty, value_ty, span);
+                return value;
+            }
+            return self.emit_cast(value, ty, span);
+        }
+        // The same leeway a `let` gives: `&[T; N]` to `[T]`, a value and a reference to it.
+        let coerced = self.coerce_array_ref_to_slice(value, value_ty, ty, span);
+        if self.types_match(ty, self.get_place_type(&coerced)) { return coerced; }
+        self.report_prefix(span);
+        eprint("this `");
+        eprint(what);
+        eprint("` branch is `");
+        eprint(self.mono.type_display(value_ty));
+        eprint("`, but the `");
+        eprint(what);
+        eprint("` is `");
+        eprint(self.mono.type_display(ty));
+        eprint("`\n");
+        self.had_error = true;
+        return value;
+    }
+
+    // The type an `if`'s later branches expect: CURRENT, else the type of the branch just
+    // lowered (VALUE) when it has a usable one.
+    fn adopt_branch_type(self: &mut ZirLowerer, current: u32, value: &Place) -> u32 {
+        if current != 0 as u32 || self.blocks[self.current_block_idx].is_terminated {
+            return current;
+        }
+        let ty = self.get_place_type(value);
+        if ty == 0 as u32 || self.is_uninstantiated_generic(ty) { return 0 as u32; }
+        return ty;
+    }
+
+    // Whether the branch body EXPR is a bare path (`Option.None`, `x`, `s.f`), possibly
+    // inside a block with no statements: a value whose type may have to come from elsewhere.
+    fn is_bare_path(self: &mut ZirLowerer, expr: ExprId) -> bool {
+        let expr_val: Expr = self.resolver.ast.exprs[expr as usize];
+        match expr_val {
+            Expr.Block(b) => {
+                return b.stmts.len == 0 as usize
+                    && b.tail_expr != 0 as ExprId
+                    && self.is_bare_path(b.tail_expr);
+            },
+            Expr.MemberAccess(m) => { return self.is_bare_path(m.expr); },
+            Expr.Ident(_) => { return true; },
+            _ => { return false; },
+        }
+    }
+
+    // Whether TY is a generic enum named without type arguments (`Option`): the type a
+    // nullary variant like `Option.None` gets when nothing says which `Option` it is.
+    pub fn is_uninstantiated_generic(self: &mut ZirLowerer, ty: u32) -> bool {
+        let p_ty = self.get_type_decl(ty);
+        if p_ty.def.get_tag() != ILTYPE_USER || p_ty.def.get_User().type_args.len != 0 as usize {
+            return false;
+        }
+        match self.resolver.resolve_ptr(p_ty.name) {
+            Some(sym) => {
+                let decl_id = match sym.global_decl() {
+                    Option.Some(d) => d,
+                    Option.None => { return false; }
+                };
+                match self.resolver.ast.decls[decl_id as usize] {
+                    Decl.Enum(e) => { return e.type_params.len > 0 as usize; },
+                    _ => { return false; },
+                }
+            },
+            None => { return false; },
+        }
+    }
+
+    // Reports a value whose type is a generic enum with no type arguments (`Option.None` with
+    // nothing to say which `Option`) about to become the type of a binding or expression: its
+    // layout would be a guess.
+    pub fn check_type_known(self: &mut ZirLowerer, ty: u32, span: Span) {
+        if ty == 0 as u32 || !self.is_uninstantiated_generic(ty) { return; }
+        let ty_name = self.get_type_decl(ty).name;
+        let mut name_buf = unsafe { ByteVec.new_raw(self.arena) };
+        name_buf.push_slice(self.intern_table.lookup(ty_name));
+        let name = name_buf.as_slice();
+        self.report_prefix(span);
+        eprint("cannot tell which `");
+        eprint(name);
+        eprint("` this is; write the type (`let x: ");
+        eprint(name);
+        eprint("<T> = ...`)\n");
+        self.had_error = true;
+    }
+
+    // A float literal: `f32` with that suffix or where an `f32` is expected, else `f64`. The
+    // constant is the f64 value, converted when the literal is an `f32`.
+    fn lower_float_literal(
+        self: &mut ZirLowerer,
+        value: f64,
+        suffix: u32,
+        expected_ty: u32,
+        span: Span
+    ) -> Place {
+        let f64_ty = self.get_primitive_type(ILPrimitive.F64);
+        let f32_ty = self.get_primitive_type(ILPrimitive.F32);
+        let mut ty = f64_ty;
+        if suffix == ILPRIM_F32 || (suffix == NO_SUFFIX && expected_ty == f32_ty) {
+            ty = f32_ty;
+        } else if suffix != NO_SUFFIX && suffix != ILPRIM_F64 {
+            self.report_error("a float literal's suffix is `f32` or `f64`", span);
+        }
+        let bits = unsafe { *((&value as usize) as *u64) };
+        let tmp = self.define_local(0 as *mut Symbol, f64_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.Const(bits, f64_ty), span));
+        let place = Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+        if ty == f64_ty { return place; }
+        return self.emit_cast(place, f32_ty, span);
+    }
+}
+
+// The number of arguments intrinsic NAME takes, at least and at most; a negative maximum for
+// a name that is not an intrinsic. (`@str` checks its own argument, a string literal.)
+fn intrinsic_arg_range(name: [u8]) -> (i64, i64) {
+    if name == "syscall" { return (1 as i64, 7 as i64); }
+    if name == "alloca" { return (0 as i64, 1 as i64); }
+    if name == "str" { return (0 as i64, 0x7fffffff as i64); }
+    if name == "slice" || name == "saturating_add" || name == "shl_wrap" || name == "shr_wrap" {
+        return (2 as i64, 2 as i64);
+    }
+    if name == "region_cast"
+        || name == "ptr_cast"
+        || name == "int_cast"
+        || name == "ptr_from_int"
+        || name == "likely"
+        || name == "unlikely"
+        || name == "drop" {
+        return (1 as i64, 1 as i64);
+    }
+    return (0 as i64, -1 as i64);
+}

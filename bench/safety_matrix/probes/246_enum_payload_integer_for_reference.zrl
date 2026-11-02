@@ -1,0 +1,9 @@
+// name: An integer given as the payload of an enum that holds a reference
+// expected: compile_reject
+// The variant constructor converted a payload of another type with a cast nobody wrote. It converts
+// where an argument would, and is a type mismatch where it would not.
+enum Opt<T> { Some(T), None }
+fn main() -> i32 {
+    let o: Opt<&i32> = Opt.Some(8 as usize);
+    match o { Opt.Some(r) => { return *r; }, Opt.None => { return 0; } }
+}

@@ -1,0 +1,19 @@
+// Safe arena handle dropped at the end of its scope frees the arena (no leak, no
+// double free). Complements test_stdlib_arena_handle.zrl, which destroys explicitly.
+// expected exit 0
+
+import "mem.zrl";
+import "mem_raw.zrl";
+use mem::{Arena, arena_raw};
+use mem_raw::zoril_allocator_alloc;
+
+fn main() -> i32 {
+    {
+        let a = Arena.new(65536).unwrap();
+        let p = unsafe { zoril_allocator_alloc(arena_raw(&a), 8) };
+        if p as u64 == 0 {
+            return 1;
+        }
+    }
+    return 0;
+}

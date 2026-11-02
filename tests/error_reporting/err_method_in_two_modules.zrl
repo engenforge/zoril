@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_method_in_two_modules.zrl:8:1: error: `Counter::get` is defined twice; the other is at tests/error_reporting/method_twice_lib.zrl
+// A second `Counter::get` in another module was dropped, so the call went to the
+// first. A method is the type's, wherever its impl is.
+// Another module's impl of a same-named type is a different method: see same_name_in_two_modules.
+import "method_twice_lib.zrl";
+use method_twice_lib::Counter;
+impl Counter { fn get(self: &Counter) -> i32 { return 0 - self.n; } }
+fn main() -> i32 { let c = Counter { n: 2 }; return c.get(); }

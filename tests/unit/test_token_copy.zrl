@@ -1,0 +1,46 @@
+import "core.zrl";
+import "mem.zrl";
+
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+    pub line: u32,
+    pub col: u32,
+}
+
+pub enum Token {
+    Semi,
+}
+
+pub struct TokenWithSpan {
+    pub token: Token,
+    pub span: Span,
+}
+
+pub struct Lexer {
+    pub line: u32,
+}
+
+impl Lexer {
+    pub fn next_token(self: &mut Lexer) -> TokenWithSpan {
+        return TokenWithSpan {
+            token: Token.Semi,
+            span: Span { start: 1, end: 2, line: self.line, col: 100 },
+        };
+    }
+}
+
+pub struct Parser {
+    pub peek: TokenWithSpan,
+}
+
+fn main() -> i32 {
+    let mut lexer = Lexer { line: 42 };
+    let mut parser = Parser { peek: TokenWithSpan { token: Token.Semi, span: Span { start: 0, end: 0, line: 0, col: 0 } } };
+    parser.peek = lexer.next_token();
+    
+    if parser.peek.span.line != 42 {
+        return parser.peek.span.line as i32;
+    }
+    return 0;
+}

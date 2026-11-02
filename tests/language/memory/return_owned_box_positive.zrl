@@ -1,0 +1,39 @@
+// Returning a Box itself by value, or returning a reference into a Box passed by reference,
+// remains legal and valid.
+struct S {
+    b: Box<i32>,
+}
+
+fn make_box() -> Box<i32> {
+    let b = box 42;
+    return b;
+}
+
+fn pass_through(b: Box<i32>) -> Box<i32> {
+    return b;
+}
+
+fn read_box_ref(b: &Box<i32>) -> &i32 {
+    return &**b;
+}
+
+fn read_struct_box_ref(s: &S) -> &i32 {
+    return &*s.b;
+}
+
+fn main() -> i32 {
+    let b1 = make_box();
+    if *b1 != 42 { return 1; }
+
+    let b2 = pass_through(b1);
+    if *b2 != 42 { return 2; }
+
+    let r1 = read_box_ref(&b2);
+    if *r1 != 42 { return 3; }
+
+    let s = S { b: box 99 };
+    let r2 = read_struct_box_ref(&s);
+    if *r2 != 99 { return 4; }
+
+    return 0;
+}

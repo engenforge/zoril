@@ -1,0 +1,61 @@
+// Regression tests for Task 1001 (Constant dependencies and cross-module constants)
+// and Never type integrity.
+
+import "helpers/const_helper.zrl";
+use const_helper::{S, X};
+
+// 1. Cross-module constants
+fn test_cross_module_const() -> i32 {
+    if X != 100 { return 1; }
+    if S.Y != 200 { return 2; }
+    return 0;
+}
+
+// 2. Never type integrity (Never as function argument)
+fn die() -> never {
+    unsafe {
+        @syscall(60, 1);
+    }                           // exit(1)
+    loop {}
+}
+
+fn consume_never(n: never) -> i32 {
+    // This code should be unreachable, but it should compile.
+    return 42;
+}
+
+fn test_never_arg(c: bool) -> i32 {
+    if c {
+        return 100;
+    } else {
+        return consume_never(die());
+    }
+}
+
+// 3. Never in a nested match
+fn test_nested_match_never(c1: i32, c2: i32) -> i32 {
+    return match c1 {
+        1 => match c2 {
+            1 => 10,
+            2 => die(),
+            _ => 20,
+        },
+        _ => 30,
+    };
+}
+
+fn main() -> i32 {
+    if test_cross_module_const() != 0 { return 1; }
+
+    // We can't actually call die() because it exits,
+    // but we can test never coercion in branches.
+    if test_never_arg(true) != 100 {
+        return 2;
+    }
+
+    if test_nested_match_never(1, 1) != 10 { return 3; }
+    if test_nested_match_never(1, 3) != 20 { return 4; }
+    if test_nested_match_never(2, 0) != 30 { return 5; }
+
+    return 0;
+}

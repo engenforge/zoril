@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_assoc_type_missing.zrl:8:1: error: impl of `Make` for `Num` is missing associated type `Out`
+// An impl must define each associated type its trait declares.
+trait Make {
+    type Out;
+    fn make(self: &Self) -> Self::Out;
+}
+impl Make for Num {
+    fn make(self: &Num) -> i64 { return 1 as i64; }
+}
+struct Num { v: i32 }
+fn main() -> i32 { return 0; }

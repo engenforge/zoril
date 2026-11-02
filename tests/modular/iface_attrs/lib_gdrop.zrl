@@ -1,0 +1,12 @@
+// A generic `Drop` impl whose `drop` names this module's private items (A7.6): `drop` is
+// instantiated in the importer, so those items must be linkable and in the interface.
+static mut GD_DROPS: i32 = 0;
+fn gd_bump() { GD_DROPS = GD_DROPS + 1; }
+pub struct GdGuard<T> { pub v: T }
+impl<T> Drop for GdGuard<T> {
+    fn drop(self: &mut GdGuard<T>) {
+        GD_DROPS = GD_DROPS + 0;
+        gd_bump();
+    }
+}
+pub fn gd_count() -> i32 { return GD_DROPS; }

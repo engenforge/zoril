@@ -1,0 +1,33 @@
+// expected exit 44
+import "hashmap.zrl";
+import "mem.zrl";
+use hashmap::HashMap;
+use mem::Arena;
+
+fn main() -> i32 {
+    let arena = Arena.new(4096 as u64).unwrap();
+    let mut map = HashMap::<i32, i32>.new(&arena);
+
+    map.insert(1, 100);
+    map.insert(2, 200);
+
+    let k1 = 1;
+    let v1 = match map.get(&k1) {
+        Some(v) => *v,
+        None => 0,
+    };
+
+    let k2 = 2;
+    let v2 = match map.get(&k2) {
+        Some(v) => *v,
+        None => 0,
+    };
+
+    let k3 = 3;
+    let v3 = match map.get(&k3) {
+        Some(v) => *v,
+        None => 0,
+    };
+
+    return v1 + v2 + v3; // 100 + 200 + 0 = 300, exit code = 44
+}

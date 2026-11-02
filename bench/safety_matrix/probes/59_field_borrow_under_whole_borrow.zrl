@@ -1,0 +1,12 @@
+// name: Mutable borrow of a field while the whole struct is mutably borrowed
+// expected: compile_reject
+
+struct P { a: i32, b: i32 }
+fn main() -> i32 {
+    let mut p = P { a: 1, b: 2 };
+    let whole = &mut p;
+    let fa = &mut p.a;
+    *fa = 5;
+    whole.a = 6;
+    return 0;
+}

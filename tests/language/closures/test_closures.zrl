@@ -1,0 +1,12 @@
+fn apply(f: fn(i32) -> i32, x: i32) -> i32 {
+    return f(x);
+}
+
+fn main() -> i32 {
+    let f = |x: i32| -> i32 { return x * 2; };
+    let a = f(21);
+    let b = apply(|x: i32| -> i32 { return x + 1; }, 41);
+    if a != 42 { return 1; }
+    if b != 42 { return 2; }
+    return 0;
+}

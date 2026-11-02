@@ -1,0 +1,21 @@
+// name: Element reference stored out via by-value struct
+// expected: compile_reject
+// Rejected by the interprocedural summary pass, which every build now enforces.
+struct Carrier { v: &i32 }
+fn extract_carrier_val(co: Carrier) -> &i32 { return co.v; }
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn escape_storer(out: &mut &i32) {
+    let mut arr = [42, 0];
+    let src_val = &arr[0];
+    let carrier_obj = Carrier { v: src_val };
+    let carried = extract_carrier_val(carrier_obj);
+    let routed = carried;
+    *out = routed;
+}
+fn main() -> i32 {
+    let mut seed = 0;
+    let mut dest_val: &i32 = &seed;
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    return *dest_val;
+}

@@ -1,0 +1,4 @@
+// A trait of one name in each of two modules (with shapes_a_lib.zrl).
+pub trait Shape {
+    fn sides(self: &Self) -> i32;
+}

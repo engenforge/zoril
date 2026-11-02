@@ -1,0 +1,206 @@
+// expected exit code: 0
+// ZIL Round-trip test:
+// 1. Parse a ZIL file -> Module 1
+// 2. Print Module 1 -> Temp File 1
+// 3. Parse Temp File 1 -> Module 2
+// 4. Print Module 2 -> Temp File 2
+// 5. Compare Temp File 1 and Temp File 2 (Byte-for-byte)
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "intern.zrl";
+import "il_instr.zrl";
+import "il_type.zrl";
+import "il_cfg.zrl";
+import "zil_parse.zrl";
+import "zil_print.zrl";
+import "io.zrl";
+import "os/linux.zrl" as os_linux;
+import "fmt.zrl";
+use il_cfg::ILModule;
+use intern::InternTable;
+use io::{close, eprint, read, write, stdout};
+use os_linux::open;
+use fmt::write_u64;
+use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
+use zil_parse::ZilParser;
+use zil_print::ZilPrinter;
+
+fn make_temp_path(prefix: [u8], pid: u64, arena: *mut ArenaHeader) -> [u8] {
+    let p = unsafe { zoril_allocator_alloc(arena, 64 as u64) } as *mut u8;
+    let mut slice = unsafe { @slice(p, 64 as usize) };
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        slice[i] = prefix[i];
+        i = i + 1;
+    }
+    let mut digits: [u8; 20] = [0 as u8; 20];
+    let mut dcount = 0 as usize;
+    let mut n = pid;
+    if n == 0 as u64 {
+        digits[0] = '0' as u8;
+        dcount = 1;
+    } else {
+        while n > 0 as u64 {
+            let rem = (n % 10 as u64) as u8;
+            digits[dcount] = '0' as u8 + rem;
+            dcount = dcount + 1;
+            n = n / 10 as u64;
+        }
+    }
+    let mut d = dcount;
+    while d > 0 {
+        d = d - 1;
+        slice[i] = digits[d];
+        i = i + 1;
+    }
+    let suffix = ".zil\0";
+    let mut s = 0 as usize;
+    while s < suffix.len {
+        slice[i] = suffix[s];
+        i = i + 1;
+        s = s + 1;
+    }
+    unsafe { return @slice(p as *u8, i - 1); }
+}
+
+fn read_file_local(path: [u8], arena: *mut ArenaHeader) -> [u8] {
+    let fd_res = open(path, 0, 0);
+    let fd = match fd_res {
+        Result.Ok(f) => f,
+        Result.Err(_) => return @slice(0 as *u8, 0 as usize),
+    };
+    defer { let _ = close(fd); };
+    let buf_size = 1024 * 512;
+    let buf = unsafe { zoril_allocator_alloc(arena, buf_size as u64) } as *mut u8;
+    let mut slice = unsafe { @slice(buf, buf_size) };
+    let n = read(fd, slice).expect("read failed");
+    unsafe { return @slice(buf as *u8, n as usize); }
+}
+
+fn compare_files(path1: [u8], path2: [u8], arena: *mut ArenaHeader) -> bool {
+    let s1 = read_file_local(path1, arena);
+    let s2 = read_file_local(path2, arena);
+    if s1.len != s2.len {
+        write(stdout(), "Length mismatch: ");
+        let mut out = stdout();
+        let _ = write_u64(&mut out, s1.len as u64);
+        write(stdout(), " vs ");
+        let _ = write_u64(&mut out, s2.len as u64);
+        write(stdout(), "\n");
+        return false;
+    }
+    let mut i = 0 as usize;
+    while i < s1.len {
+        if s1[i] != s2[i] {
+            write(stdout(), "Byte mismatch at offset ");
+            let mut out = stdout();
+            let _ = write_u64(&mut out, i as u64);
+            write(stdout(), "\n");
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn round_trip(path: [u8], arena: *mut ArenaHeader, table: &mut InternTable) -> bool {
+    let source1 = read_file_local(path, arena);
+    if source1.len == 0 {
+        write(stdout(), "Could not read source: ");
+        write(stdout(), path);
+        write(stdout(), "\n");
+        return false;
+    }
+
+    // Phase 1: Parse original
+    let module1 = unsafe { &mut *ILModule.new(arena, 0) };
+    let mut parser1 = ZilParser.new(source1, module1, table);
+    parser1.parse_module();
+
+    let pid = unsafe { @syscall(39) } as u64;
+    let temp1 = make_temp_path("build/roundtrip1_", pid, arena);
+    let temp2 = make_temp_path("build/roundtrip2_", pid, arena);
+
+    // Phase 2: Print to temp1
+    let fd1_res = open(temp1, 577, 420); // O_WRONLY|O_CREAT|O_TRUNC
+    let fd1 = match fd1_res {
+        Result.Ok(f) => f,
+        Result.Err(_) => {
+            eprint("Could not open temp1\n");
+            return false;
+        },
+    };
+    {
+        let mut printer1 = ZilPrinter.new(module1, table, fd1);
+        printer1.emit_module();
+        let _ = close(fd1);
+    }
+
+    // Phase 3: Parse temp1
+    let source2 = read_file_local(temp1, arena);
+    let module2 = unsafe { &mut *ILModule.new(arena, 0) };
+    let mut parser2 = ZilParser.new(source2, module2, table);
+    parser2.parse_module();
+
+    // Phase 4: Print to temp2
+    let fd2_res = open(temp2, 577, 420);
+    let fd2 = match fd2_res {
+        Result.Ok(f) => f,
+        Result.Err(_) => {
+            eprint("Could not open temp2\n");
+            unsafe { @syscall(87, temp1.ptr, 0, 0); }
+            return false;
+        },
+    };
+    {
+        let mut printer2 = ZilPrinter.new(module2, table, fd2);
+        printer2.emit_module();
+        let _ = close(fd2);
+    }
+
+    // Phase 5: Compare
+    let ok = compare_files(temp1, temp2, arena);
+    unsafe {
+        @syscall(87, temp1.ptr, 0, 0);
+        @syscall(87, temp2.ptr, 0, 0);
+    }
+    if !ok {
+        write(stdout(), "Round-trip failed for: ");
+        write(stdout(), path);
+        write(stdout(), "\n");
+    }
+    return ok;
+}
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init((1024 as u64) * 1024 * 256) };
+    let mut table = unsafe { InternTable.new_raw(arena) };
+
+    if !round_trip("corpus/zil/01_arithmetic.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/02_comparison.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/03_bitwise.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/04_memory.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/05_ownership_move.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/06_ownership_drop.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/07_branching.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/08_calls.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/09_phi.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/10_globals.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/11_structs.zil", arena, table) { return 2; }
+    if !round_trip("corpus/zil/12_enums_sum.zil", arena, table) { return 3; }
+    if !round_trip("corpus/zil/13_slices.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/14_bounds_checks.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/15_io_syscall.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/16_async.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/17_overflow.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/18_func_ptr.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/19_fd_io.zil", arena, table) { return 4; }
+    if !round_trip("corpus/zil/20_variadic.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/24_tuples.zil", arena, table) { return 5; }
+    if !round_trip("corpus/zil/22_region_cast.zil", arena, table) { return 1; }
+    if !round_trip("corpus/zil/23_array_construct.zil", arena, table) { return 1; }
+
+    write(stdout(), "ZIL Round-trip tests passed\n");
+    return 0;
+}

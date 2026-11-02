@@ -1,0 +1,8 @@
+// name: Raw pointer converted to a reference (inside unsafe)
+// expected: compile_reject
+// The escape hatch half of 123_raw_pointer_to_reference.zrl: since Phase D the conversion is a
+// *type* error even inside `unsafe` - a `*T` becomes a `&T` only by writing `&*p`, and a reference
+// made from a null pointer that way still faults when read.
+struct Point { x: i32, y: i32 }
+fn get_x(r: &Point) -> i32 { return r.x; }
+fn main() -> i32 { return unsafe { get_x(0 as *Point) }; }

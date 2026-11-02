@@ -1,0 +1,10 @@
+// expected compile success
+// An fd closed on every path is not a leak (counterpart of safety probe 78).
+extern fn open_w(path: *u8) -> fd<w>;
+extern fn close_w(f: fd<w>);
+fn main() -> i32 {
+    let f = unsafe { open_w("x".ptr) };
+    let c = 1;
+    if c == 1 { unsafe { close_w(f); } } else { unsafe { close_w(f); } }
+    return 0;
+}

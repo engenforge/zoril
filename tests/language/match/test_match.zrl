@@ -1,0 +1,294 @@
+import "io.zrl";
+use io::{write, stdout};
+
+// --- Single module tests ---
+
+// From repro_match_bare.zrl and repro_match_qual.zrl
+enum BareMyEnum { Variant(u32) }
+fn test_match_bare() -> i32 {
+    let e = BareMyEnum.Variant(10u32);
+    match e {
+        BareMyEnum.Variant(v) => { if v == 10u32 { return 0; } }
+    };
+    return 1;
+}
+
+// From repro_match_binding.zrl
+enum BindingToken { String(u32), Other }
+fn get_binding_id(t: BindingToken) -> u32 {
+    let mut id_out = 0 as u32;
+    match t {
+        BindingToken.String(id) => { id_out = id; },
+        BindingToken.Other => {}
+    }
+    return id_out;
+}
+fn test_match_binding() -> i32 {
+    if get_binding_id(BindingToken.String(42)) != 42 { return 1; }
+    return 0;
+}
+
+// From repro_match_large_enum.zrl and repro_match_large_wildcard.zrl
+pub enum LargeToken {
+    K1, K2, K3, K4, K5, K6, K7, K8, K9, K10,
+    K11, K12, K13, K14, K15, K16, K17, K18, K19, K20,
+    K21, K22, K23, K24, K25,
+    Ident(u32),
+    Int(u64),
+    Float(f64),
+    Char(u32),
+    String(u32),
+    Bool(bool),
+    Plus, Minus, Star, Slash, Percent,
+    PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual,
+    PlusPercent, MinusPercent, StarPercent,
+    Equal, EqualEqual, BangEqual,
+    Less, Greater, LessEqual, GreaterEqual,
+    Amp, Pipe, Caret, Bang,
+    AmpAmp, PipePipe,
+    AmpEqual, PipeEqual, CaretEqual,
+    LessLess, GreaterGreater,
+    LessLessEqual, GreaterGreaterEqual,
+    Dot, Comma, Colon, Semi, Arrow,
+    LParen, RParen, LBrace, RBrace, LBracket, RBracket,
+    Question, Underscore, At, DoubleColon,
+    Eof,
+    Invalid(u32),
+}
+fn test_match_large() -> i32 {
+    let t = LargeToken.K1;
+    let res1 = match t {
+        LargeToken.Eof => 1,
+        LargeToken.K1 => 0,
+        _ => 99,
+    };
+    if res1 != 0 { return 1; }
+    
+    let res2 = match t {
+        LargeToken.Eof => 1,
+        _ => 0,
+    };
+    if res2 != 0 { return 2; }
+    return 0;
+}
+
+// From repro_match_method_call_2.zrl
+struct MatchAST { count: u32 }
+impl MatchAST {
+    fn alloc(self: &mut MatchAST) -> u32 {
+        self.count = self.count + 1;
+        return self.count;
+    }
+}
+struct MatchParser {
+    ast: *mut MatchAST,
+}
+enum MatchKind { A, B }
+impl MatchParser {
+    fn test(self: &mut MatchParser, k: MatchKind, b: bool) -> u32 {
+        return match k {
+            MatchKind.A => {
+                if b {
+                    return unsafe { (*self.ast).alloc() };
+                };
+                unsafe { (*self.ast).alloc() }
+            },
+            MatchKind.B => 0,
+        };
+    }
+}
+fn test_match_method_call() -> i32 {
+    let mut ast = MatchAST { count: 0 };
+    let mut p = MatchParser { ast: &mut ast as *mut MatchAST };
+    if p.test(MatchKind.A, true) != 1 { return 1; }
+    if p.test(MatchKind.A, false) != 2 { return 2; }
+    return 0;
+}
+
+/*
+// From repro_match_or.zrl
+enum OrTest { A, B, C }
+fn test_or_func(t: OrTest) -> i32 {
+    return match t {
+        OrTest.A | OrTest.B => 1,
+        OrTest.C => 2,
+        _ => 0,
+    };
+}
+fn test_match_or() -> i32 {
+    if test_or_func(OrTest.A) != 1 { return 1; }
+    if test_or_func(OrTest.B) != 1 { return 2; }
+    if test_or_func(OrTest.C) != 2 { return 3; }
+    return 0;
+}
+
+// From repro_match_or_binding.zrl
+enum OrBindingTest { A(i32), B(i32), C }
+fn test_or_binding_func(t: OrBindingTest) -> i32 {
+    return match t {
+        OrBindingTest.A(v) | OrBindingTest.B(v) => v,
+        _ => 0,
+    };
+}
+fn test_match_or_binding() -> i32 {
+    if test_or_binding_func(OrBindingTest.A(42)) != 42 { return 1; }
+    if test_or_binding_func(OrBindingTest.B(100)) != 100 { return 2; }
+    return 0;
+}
+*/
+
+// From repro_match_u64.zrl
+enum TestEnumU64 { A(u32), B(u64) }
+fn test_match_u64() -> i32 {
+    let t = TestEnumU64.B(42 as u64);
+    match t {
+        TestEnumU64.B(v) => { if v == 42 { return 0; } },
+        _ => { return 99; },
+    };
+    return 1;
+}
+
+// From test_enum_match_fixed.zrl
+enum MatchColor { Red, Green, Blue, Custom(u32) }
+fn color_value(c: MatchColor) -> u32 {
+    return match c {
+        MatchColor.Red => 0xFF_00_00,
+        MatchColor.Green => 0x00_FF_00,
+        MatchColor.Blue => 0x00_00_FF,
+        MatchColor.Custom(v) => v,
+    };
+}
+fn test_match_color() -> i32 {
+    let c = MatchColor.Custom(0xAB_CD_EF);
+    let val = color_value(c);
+    if val != 0xAB_CD_EF { return 1; }
+    return 0;
+}
+
+// From test_enum_match_simple.zrl
+enum MatchFoo { A, B(i32) }
+fn bar_foo(f: MatchFoo) -> i32 {
+    return match f {
+        MatchFoo.A => 0,
+        MatchFoo.B(v) => v,
+    };
+}
+fn test_match_foo() -> i32 {
+    let x = MatchFoo.A;
+    if bar_foo(x) != 0 { return 1; }
+    let y = MatchFoo.B(42);
+    if bar_foo(y) != 42 { return 2; }
+    return 0;
+}
+
+// From test_match_simple.zrl
+enum MatchOption<T> { None, Some(T) }
+fn test_match_option() -> i32 {
+    let o: MatchOption<i32> = MatchOption.Some(42);
+    let v: i32 = match o {
+        MatchOption.Some(x) => x,
+        MatchOption.None => 0,
+    };
+    if v != 42 { return 1; }
+    return 0;
+}
+
+// From repro_bootstrap_match_large.zrl
+enum BootstrapMatchLargeEnum {
+    V0, V1, V2, V3, V4, V5, V6, V7, V8, V9,
+    V10, V11, V12, V13, V14, V15, V16, V17, V18, V19,
+    Payload(u64),
+}
+fn test_bootstrap_match_large_func(e: BootstrapMatchLargeEnum) -> u64 {
+    let res = match e {
+        BootstrapMatchLargeEnum.Payload(v) => v,
+        _ => 0,
+    };
+    return res;
+}
+fn test_bootstrap_match_large() -> i32 {
+    let r = test_bootstrap_match_large_func(BootstrapMatchLargeEnum.Payload(42));
+    if r == 42 {
+        return 0;
+    }
+    return 1;
+}
+
+// From repro_bootstrap_match_payload.zrl
+enum BootstrapMatchPayloadEnum { A(u64), B(u64) }
+struct BootstrapMatchPayloadStruct { e: BootstrapMatchPayloadEnum }
+fn test_bootstrap_match_payload_func(s: &BootstrapMatchPayloadStruct) -> u64 {
+    let res = match s.e {
+        BootstrapMatchPayloadEnum.A(v) => v,
+        BootstrapMatchPayloadEnum.B(v) => v,
+    };
+    return res;
+}
+fn test_bootstrap_match_payload() -> i32 {
+    let s = BootstrapMatchPayloadStruct { e: BootstrapMatchPayloadEnum.A(42) };
+    let r = test_bootstrap_match_payload_func(&s);
+    if r == 42 {
+        return 0;
+    }
+    return 1;
+}
+
+// From repro_bootstrap_match_ptr.zrl
+enum BootstrapMatchPtrEnum { A(u64), B(u64) }
+fn test_bootstrap_match_ptr_func(p: *mut BootstrapMatchPtrEnum) -> u64 {
+    return match unsafe { *p } {
+        BootstrapMatchPtrEnum.A(v) => v,
+        BootstrapMatchPtrEnum.B(v) => v,
+    };
+}
+fn test_bootstrap_match_ptr() -> i32 {
+    let mut e = BootstrapMatchPtrEnum.A(42 as u64);
+    if test_bootstrap_match_ptr_func(&mut e as *mut BootstrapMatchPtrEnum) == 42 {
+        return 0;
+    }
+    return 1;
+}
+
+// --- Multi module tests ---
+
+import "test_match_helpers.zrl";
+use io::write;
+use test_match_helpers::{Lex, OuterEnum};
+
+fn test_match_keyword_cross_mod() -> i32 {
+    let mut l = Lex { dummy: 0 };
+    let t = l.next();
+    match t {
+        Token.KFn => { return 0; },
+        _ => { return 1; },
+    };
+}
+
+fn test_match_mod_cross_mod() -> i32 {
+    let e = OuterEnum.Variant(10u32);
+    match e {
+        OuterEnum.Variant(v) => { if v == 10u32 { return 0; } }
+    };
+    return 1;
+}
+
+fn main() -> i32 {
+    if test_match_bare() != 0 { return 1; }
+    if test_match_binding() != 0 { return 2; }
+    if test_match_large() != 0 { return 3; }
+    if test_match_method_call() != 0 { return 4; }
+    // if test_match_or() != 0 { return 5; }
+    // if test_match_or_binding() != 0 { return 6; }
+    if test_match_u64() != 0 { return 7; }
+    if test_match_color() != 0 { return 8; }
+    if test_match_foo() != 0 { return 9; }
+    if test_match_option() != 0 { return 10; }
+    if test_match_keyword_cross_mod() != 0 { return 11; }
+    if test_match_mod_cross_mod() != 0 { return 12; }
+    if test_bootstrap_match_large() != 0 { return 13; }
+    if test_bootstrap_match_payload() != 0 { return 14; }
+    if test_bootstrap_match_ptr() != 0 { return 15; }
+    
+    write(stdout(), "All match tests passed\n");
+    return 0;
+}

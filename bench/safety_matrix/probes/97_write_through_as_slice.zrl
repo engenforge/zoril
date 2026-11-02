@@ -1,0 +1,12 @@
+// name: Write through Vec.as_slice
+// expected: compile_reject
+// as_slice takes `&self` and gives a read-only `[T]`; writing needs as_mut_slice.
+import "vec.zrl";
+use vec::Vec;
+fn main() -> i32 {
+    let mut v = Vec::<u8>.new();
+    v.push(1 as u8);
+    let s = v.as_slice();
+    s[0] = 5 as u8;
+    return 0;
+}

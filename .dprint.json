@@ -1,0 +1,19 @@
+{
+  "markdown": {
+    "textWrap": "never",
+    "unorderedListKind": "dashes",
+    "emphasisKind": "underscores",
+    "strongKind": "asterisks"
+  },
+  "includes": ["**/*.md"],
+  "excludes": [
+    "build/**",
+    "doc/archive/**",
+    "doc/tasks/**",
+    "stage0-C/doc/**",
+    "**/node_modules/**"
+  ],
+  "plugins": [
+    "https://plugins.dprint.dev/markdown-0.20.0.wasm"
+  ]
+}

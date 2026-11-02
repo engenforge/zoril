@@ -1,0 +1,17 @@
+pub enum Region {
+    Static,
+    Local,
+    Heap,
+    Custom([u8]),
+}
+
+pub struct AllocInstr {
+    pub region: Region,
+    pub ty: u32,
+    pub allocator: u32,
+}
+
+pub fn main() -> i32 {
+    let a = AllocInstr { region: Region.Local, ty: 1, allocator: 0 };
+    return 0;
+}

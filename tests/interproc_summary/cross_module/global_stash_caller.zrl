@@ -1,0 +1,20 @@
+// expected compile fail
+// flags: --interproc-summary
+// EXPECT: error: region escape: the callee stores a pointer to local stack storage where it outlives this function
+// (the IL verifier reports this call now: the callee's storage masks are unknown, so it assumes the
+// worst, and it runs before the summary pass that used to be the one to report it)
+// Cross-module test: callee stashes argument into global memory.
+// global_stash_lib.zri specifies stash=1 (parameter 0, bit 0, stashed into global). A plain
+// function has no environment parameter since 2026-10-05, so its first parameter is bit 0.
+import "global_stash_lib.zrl";
+use global_stash_lib::stash_global;
+
+fn test_stash() {
+    let mut x: i32 = 42;
+    stash_global(&mut x);
+}
+
+fn main() -> i32 {
+    test_stash();
+    return 0;
+}

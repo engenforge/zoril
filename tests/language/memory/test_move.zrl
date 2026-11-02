@@ -1,0 +1,22 @@
+import "io.zrl";
+use io::print;
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn consume_point(p: Point) {
+    print("Consumed point\n");
+}
+
+fn test_move() {
+    let p1 = Point { x: 1, y: 2 };
+    consume_point(p1);
+    // p1 is moved here.
+    let x = p1.x; // Error: use of moved value
+}
+
+fn main() {
+    test_move();
+}

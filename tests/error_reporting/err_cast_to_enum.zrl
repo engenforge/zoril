@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: cannot cast to enum type: enum discriminants must be constructed via variant constructors
+enum Color { Red, Green, Blue }
+fn main() -> i32 {
+    let raw: i32 = 99;
+    let c = raw as Color;
+    return 0;
+}

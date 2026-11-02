@@ -1,0 +1,34 @@
+// Repro for bootstrap compiler bug: enum comparison failure (Bug 002 regression).
+
+enum E { A, B, C }
+
+fn test(e: E) -> i32 {
+    return match e {
+        E.A => 1,
+        E.B => 2,
+        E.C => 3,
+    };
+}
+
+fn main() -> i32 {
+    if test(E.B) != 2 {
+        return 1;
+    }
+    let a = E.A;
+    let b = E.B;
+    let b2 = E.B;
+    if a == b {
+        return 2;
+    }
+    if !(b == b2) {
+        return 3;
+    }
+    if a != a {
+        return 4;
+    }
+    if !(a != b) {
+        return 5;
+    }
+    return 0;
+}
+

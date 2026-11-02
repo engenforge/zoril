@@ -1,0 +1,12 @@
+// name: Generic impl with a recursive trait bound resolves through two levels
+// expected: accept
+trait Wrap { fn get(self: &Self) -> i32; }
+struct W<T> { v: T }
+impl<T: Wrap> Wrap for W<T> { fn get(self: &W<T>) -> i32 { return self.v.get() + 1; } }
+impl Wrap for i32 { fn get(self: &i32) -> i32 { return *self; } }
+fn use_it<T: Wrap>(t: &T) -> i32 { return t.get(); }
+fn main() -> i32 {
+    let w = W { v: W { v: 5 } };
+    if use_it(&w) != 7 { return 1; }
+    return 0;
+}

@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: error: passing a raw pointer where a reference is expected requires an `unsafe` block and an explicit `&*p`
+struct Point { x: i32, y: i32 }
+struct Origin {}
+impl Origin {
+    fn dist(self: &Origin, p: &Point) -> i32 { return p.x + p.y; }
+}
+fn main() -> i32 { let o = Origin {}; return o.dist(0 as *Point); }

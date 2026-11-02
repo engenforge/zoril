@@ -1,0 +1,11 @@
+// name: Assignment through dereference of a moved &mut reference is rejected
+// expected: compile_reject
+// Assigning through a dereference of a moved &mut reference (`*a = 5`) is rejected as
+// use of a moved value.
+fn main() -> i32 {
+    let mut x = 0;
+    let a = &mut x;
+    let b = a;
+    *a = 5;
+    return *b;
+}

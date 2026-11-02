@@ -1,0 +1,48 @@
+fn test_char() -> i32 {
+    let c: u8 = 'A';
+    if c != 65 { return 1; }
+    return 0;
+}
+
+fn test_char_no_type() -> i32 {
+    let newline = '\n';
+    if newline != 10 { return 1; }
+    return 0;
+}
+
+fn test_string() -> i32 {
+    let s = "Hello";
+    return 0;
+}
+
+// `==` on slices compares contents (it once compared descriptors, so "hello" == "hello"
+// was false).
+fn test_string_eq() -> i32 {
+    let s1 = "hello";
+    let s2 = "world";
+    let s3 = "hello";
+    if s1 == s2 { return 1; }
+    if !(s1 == s3) { return 2; }
+    return 0;
+}
+
+fn test_underscore() -> i32 {
+    let a: u32 = 1_000_000;
+    if a != 1000000 { return 1; }
+    return 0;
+}
+
+fn test_unit() -> i32 {
+    let u: () = ();
+    return 0;
+}
+
+fn main() -> i32 {
+    if test_char() != 0 { return 1; }
+    if test_char_no_type() != 0 { return 2; }
+    if test_string() != 0 { return 3; }
+    if test_string_eq() != 0 { return 4; }
+    if test_underscore() != 0 { return 5; }
+    if test_unit() != 0 { return 6; }
+    return 0;
+}

@@ -1,0 +1,43 @@
+// name: Let pattern destructuring does not consume source, causing double drop
+// expected: accept
+// The value owns a heap block, which is what makes a second release of it dangerous rather than
+// merely wrong: both copies free the same address. A release build unmaps the range twice and
+// `munmap` reports no error for a range nobody maps; the checked build marks the block it released
+// and traps on the second release (exit 134), which is the heap half of this row.
+import "mem_raw.zrl";
+use mem_raw::{heap_alloc, heap_free};
+
+static mut DROPS: i32 = 0;
+
+struct D {
+    x: u64,
+    block: *mut u8,
+}
+
+trait Drop {
+    fn drop(self: &mut D);
+}
+
+impl Drop for D {
+    fn drop(self: &mut D) {
+        DROPS = DROPS + 1;
+        // SAFETY: `block` is the 16-byte block `run` allocated for this value; two live copies of
+        // the value are exactly the double release this probe is about.
+        unsafe { heap_free(self.block, 16 as u64); }
+    }
+}
+
+fn run() -> u64 {
+    // SAFETY: a 16-byte block from the global heap, released by this value's `Drop`.
+    let block = unsafe { heap_alloc(16 as u64) };
+    let pair: (D, u64) = (D { x: 7, block: block }, 2);
+    let (d2, _) = pair;
+    return d2.x;
+}
+
+fn main() -> i32 {
+    let _ = run();
+    // Two drops of one value, and with them two releases of one block: `let (d2, _)` binds a copy
+    // and `pair` is never consumed.
+    return DROPS - 1;
+}

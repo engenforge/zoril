@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: error: cannot implicitly narrow 64-bit value to 16 bits
+// The `return` position reported `type mismatch: expected (unknown) for function
+// return` -- `report_return_type_mismatch` looks the expected type up by name and
+// a primitive has none, so the one thing the message was supposed to say came out
+// as "(unknown)". See err_implicit_narrowing_let.zrl for the sibling case.
+fn narrow(x: u64) -> u16 {
+    return x;
+}
+
+fn main() -> i32 {
+    return narrow(70000 as u64) as i32;
+}

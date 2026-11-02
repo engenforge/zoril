@@ -1,0 +1,12 @@
+// name: Reference into a local returned as an associated type
+// expected: compile_reject
+// The result type is written `T::Out`, not as a reference; it resolves to &i32 per instance, and
+// the escape check sees the instance's types.
+trait Keep { type Out; fn keep(self: &Self) -> Self::Out; }
+struct S { v: i32 }
+impl Keep for S { type Out = &i32; fn keep(self: &S) -> &i32 { return &self.v; } }
+fn escape<T: Keep>(t: T) -> T::Out { return t.keep(); }
+fn main() -> i32 {
+    let r = escape(S { v: 5 });
+    return *r;
+}

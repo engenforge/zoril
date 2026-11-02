@@ -1,0 +1,45 @@
+import "core.zrl";
+
+pub enum LargeEnum {
+    V0, V1, V2, V3, V4, V5, V6, V7, V8, V9,
+    V10, V11, V12, V13, V14, V15, V16, V17, V18, V19,
+    V20, V21, V22, V23, V24, V25,
+}
+
+fn test_match(e: LargeEnum) -> i32 {
+    match e {
+        LargeEnum.V0 => return 0,
+        LargeEnum.V1 => return 1,
+        LargeEnum.V2 => return 2,
+        LargeEnum.V3 => return 3,
+        LargeEnum.V4 => return 4,
+        LargeEnum.V5 => return 5,
+        LargeEnum.V6 => return 6,
+        LargeEnum.V7 => return 7,
+        LargeEnum.V8 => return 8,
+        LargeEnum.V9 => return 9,
+        LargeEnum.V10 => return 10,
+        LargeEnum.V11 => return 11,
+        LargeEnum.V12 => return 12,
+        LargeEnum.V13 => return 13,
+        LargeEnum.V14 => return 14,
+        LargeEnum.V15 => return 15,
+        LargeEnum.V16 => return 16,
+        LargeEnum.V17 => return 17,
+        LargeEnum.V18 => return 18,
+        LargeEnum.V19 => return 19,
+        LargeEnum.V20 => return 20,
+        LargeEnum.V21 => return 21,
+        LargeEnum.V22 => return 22,
+        LargeEnum.V23 => return 23,
+        LargeEnum.V24 => return 24,
+        LargeEnum.V25 => return 25,
+    }
+}
+
+fn main() -> i32 {
+    if test_match(LargeEnum.V25) != 25 {
+        return 100;
+    }
+    return 0;
+}

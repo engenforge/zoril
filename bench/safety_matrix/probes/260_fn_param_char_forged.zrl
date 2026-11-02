@@ -1,0 +1,14 @@
+// name: A char written as a number through a function parameter
+// expected: compile_reject
+// The callee promises `&mut u32`; passing `&mut char` for it must not match, or the callee
+// writes a value no char may hold. Function parameters compare in the opposite direction from
+// results, so this is the same invariant check seen through a call.
+fn put(p: &mut u32) {
+    *p = 0xd800 as u32;
+}
+
+fn main() -> i32 {
+    let mut c: char = 'a';
+    put(&mut c);
+    return 0;
+}

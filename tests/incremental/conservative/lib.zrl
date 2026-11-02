@@ -1,0 +1,2 @@
+pub struct S { pub a: i32 }
+pub fn take(p: *mut S) { }

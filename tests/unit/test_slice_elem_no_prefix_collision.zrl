@@ -1,0 +1,22 @@
+struct Foo {
+    x: i32,
+}
+
+struct Foo_Bar {
+    y: i64,
+}
+
+impl [Foo] {
+    pub fn foo_len(self: &[Foo]) -> usize {
+        return self.len;
+    }
+}
+
+fn main() -> i32 {
+    let arr: [Foo; 1] = [Foo { x: 1 }];
+    let s: [Foo] = &arr;
+    if s.foo_len() == 1 as usize {
+        return 0;
+    }
+    return 1;
+}

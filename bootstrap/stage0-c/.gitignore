@@ -1,0 +1,25 @@
+# Build artifacts
+build/
+*_bin
+*.o
+*.a
+*.so
+tests/**/*.out
+*.s
+!lib/rt/*.s
+*.ssa
+*.d
+
+# Editor/OS files
+.DS_Store
+*~
+*.swp
+vgcore.*
+temp/
+
+# AI tool data
+.claude/
+.agent-data/
+fuzz_data/
+chat.txt
+.antigravitycli/

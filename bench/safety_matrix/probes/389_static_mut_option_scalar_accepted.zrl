@@ -1,0 +1,15 @@
+// name: static mut holding Option of scalar is accepted
+// expected: accept
+// A static mut of an enum with scalar payloads holds no references and is permitted.
+enum Option<T> { None, Some(T) }
+static mut G: Option<i32> = Option.None;
+fn main() -> i32 {
+    let mut res = 0;
+    unsafe {
+        match G {
+            Option.None => { res = 0; },
+            Option.Some(x) => { res = x; },
+        }
+    }
+    return res;
+}

@@ -1,0 +1,31 @@
+// name: Storing a copied scalar element through reference copy_into is accepted
+// expected: accept
+// Storing a scalar element copied from a local collection through a reference callee is accepted.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn copy_into(dst: &mut i32, src: &i32) {
+    *dst = *src;
+}
+
+fn f(out: &mut i32) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(77);
+    let val = *v.get(0).unwrap();
+    copy_into(out, &val);
+}
+
+fn main() -> i32 {
+    let mut out = 0;
+    f(&mut out);
+    if out == 77 {
+        return 0;
+    }
+    return 1;
+}

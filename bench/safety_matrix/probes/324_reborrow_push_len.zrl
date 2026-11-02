@@ -1,0 +1,23 @@
+// name: v.push(v.len()) through a &mut Vec is accepted
+// expected: accept
+// Accepted twin: taking an immutable reference or scalar value (v.len()) as an argument
+// to a mutating call (v.push) on the same &mut parameter is sound because the read
+// completes before the method body mutates self.
+import "vec.zrl";
+use vec::Vec;
+
+fn helper(v: &mut Vec<usize>) {
+    v.push(v.len());
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<usize>.new();
+    helper(&mut v);
+    if v.len() != 1 {
+        return 1;
+    }
+    if *v.get(0).unwrap() != 0 {
+        return 2;
+    }
+    return 0;
+}

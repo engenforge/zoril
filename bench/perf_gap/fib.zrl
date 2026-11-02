@@ -1,0 +1,12 @@
+// Calls: naive recursive Fibonacci.
+const SCALE: i32 = 38; // gate: 24
+fn fib(n: i32) -> i32 {
+    if n <= 1 { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+fn main() -> i32 {
+    let mut sum: i32 = 0;
+    let mut i: i32 = 0;
+    while i < 3 { sum = sum + fib(SCALE); i = i + 1; }
+    return sum % 251;
+}

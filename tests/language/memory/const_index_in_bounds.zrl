@@ -1,0 +1,10 @@
+// expected exit 10
+// Constant indices inside a fixed-size array compile and read what they index, including the
+// last element; slices and Vecs keep their run-time check (their length is not a constant).
+fn first(s: [u8]) -> u8 { return s[0]; }
+fn main() -> i32 {
+    let mut data = [1 as u8, 2, 7];
+    data[0] = 1;
+    let r = &data;
+    return (data[0] + r[2] + first(&data) + data[2 as usize] - 6) as i32;
+}

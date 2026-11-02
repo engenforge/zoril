@@ -1,0 +1,19 @@
+// expected exit 10
+// `break` and `continue` are expressions, so they can be a match arm. They lowered to
+// nothing there, and this loop never ended.
+enum Option<T> { Some(T), None }
+fn next(i: i32) -> Option<i32> { if i < 5 { return Option.Some(i); } return Option.None; }
+fn main() -> i32 {
+    let mut i = 0;
+    let mut s = 0;
+    loop {
+        match next(i) {
+            Option.Some(3) => { i = i + 1; continue; },
+            Option.Some(v) => { s = s + v; i = i + 1; },
+            _ => break,
+        }
+    }
+    let mut j = 0;
+    while j < 10 { j = j + 1; let _ = match j { 4 => continue, _ => 0 }; s = s + 0; }
+    return s + 3;
+}

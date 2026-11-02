@@ -1,0 +1,10 @@
+// name: Uninitialized stack slot from @alloca outside unsafe (inside unsafe)
+// expected: runtime_fault
+// The escape hatch half of 131_alloca_outside_unsafe.zrl: inside `unsafe` the slot is
+// still uninitialized, and following the stale value it holds faults.
+fn junk() -> u64 { let a: [u64; 8] = [12345; 8]; return a[3]; }
+fn read_through() -> u64 {
+    let r = unsafe { @alloca<&u64>(1) };
+    return **r;
+}
+fn main() -> i32 { let _ = junk(); return read_through() as i32; }

@@ -1,0 +1,19 @@
+enum List<T> {
+    Nil,
+    Cons((T, Box<List<T>>)),
+}
+
+fn head(list: &List<i32>) -> i32 {
+    return match list {
+        Cons(pair) => pair.0,
+        Nil => 0,
+    };
+}
+
+fn main() -> i32 {
+    // Must invoke head and assert its result to ensure match ergonomics
+    // regression remains caught.
+    let n = List.Cons((7, box List.Nil));
+    if head(&n) != 7 { return 1; }
+    return 0;
+}

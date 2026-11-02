@@ -1,0 +1,6 @@
+pub struct S { pub a: i32 }
+
+// Returns its argument: the summary must say parameter 0 escapes through the return value.
+pub fn stash(p: *mut S) -> *mut S {
+    return p;
+}

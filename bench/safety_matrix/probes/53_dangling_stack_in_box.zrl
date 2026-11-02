@@ -1,0 +1,10 @@
+// name: Dangling stack ptr — stashed in a heap box
+// expected: compile_reject
+// A local's address is stored in a heap allocation that is returned.
+struct H { p: *mut i32 }
+fn leak() -> Box<H> {
+    let mut x: i32 = 42;
+    let b = box H { p: &mut x };
+    return b;
+}
+fn main() -> i32 { let b = leak(); if (*b).p as usize == 0 as usize { return 1; } return 0; }

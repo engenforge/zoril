@@ -1,0 +1,19 @@
+// expected exit 0
+// Indexing through a reference indexes what it refers to: an array, a slice or a `Vec`.
+// Through `&Vec<T>` it used to step over whole `Vec` headers.
+import "vec.zrl";
+use vec::Vec;
+fn third(v: &Vec<u32>) -> u32 { return v[2]; }
+fn bump(v: &mut Vec<u32>) { v[0] = v[0] + 1; }
+fn second(a: &[u32; 3]) -> u32 { return a[1]; }
+fn main() -> i32 {
+    let mut v = Vec::<u32>.new();
+    v.push(1);
+    v.push(2);
+    v.push(30);
+    bump(&mut v);
+    if third(&v) != 30 || v[0] != 2 { return 1; }
+    let a = [7 as u32, 8, 9];
+    if second(&a) != 8 { return 2; }
+    return 0;
+}

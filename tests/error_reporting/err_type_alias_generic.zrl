@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_type_alias_generic.zrl:4:10: error: a type alias cannot have type parameters
+// They were accepted and dropped, leaving `T` unresolved where the alias was used.
+type Pair<T> = (T, T);
+fn main() -> i32 { return 0; }

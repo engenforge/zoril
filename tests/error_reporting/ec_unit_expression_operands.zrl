@@ -1,0 +1,28 @@
+// expected compile fail
+// EXPECT: error: arithmetic operator not supported on unit operands
+// A unit-valued expression is not a number. These four shapes used to reach the IL verifier,
+// which reported a compiler bug instead of the operand error.
+fn g() { }
+
+fn block_operand(x: u64) {
+    let y = { } * x;
+}
+
+fn call_operand(x: u64) {
+    let y = g() * x;
+}
+
+fn if_operand(c: bool, x: u64) {
+    let y = (if c { } else { }) * x;
+}
+
+fn plus_operand() {
+    let y = { } + 1;
+}
+
+fn main() -> i32 {
+    if false {
+        return 1;
+    }
+    return 0;
+}

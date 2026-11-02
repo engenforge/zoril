@@ -1,0 +1,17 @@
+// expected exit code: 0
+struct Test {
+    a: u64,
+    s: [u8],
+    b: u64,
+}
+fn main() -> i32 {
+    let mut t = Test { a: 1 as u64, s: "abc", b: 2 as u64 };
+    if t.a != 1 { return 1; }
+    if t.s.len != 3 { return 2; }
+    if t.b != 2 { return 3; }
+    t.s = "hello world";
+    if t.s.len != 11 { return 4; }
+    if t.a != 1 { return 5; }
+    if t.b != 2 { return 6; }
+    return 0;
+}

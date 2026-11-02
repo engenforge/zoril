@@ -1,0 +1,5 @@
+pub struct P { pub x: i64 }
+impl P {
+    pub fn get(self: &P) -> i64 { return self.x; }
+}
+pub fn parse() -> i64 { return 1; }

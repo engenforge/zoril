@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/ec_type_mismatch_names.zrl:9:27: error: type mismatch: expected `Option<&i32>`, found `(i32, [bool; 2])`
+// Type-mismatch errors spell both types as the source would.
+enum Option<T> { Some(T), None }
+fn main() -> i32 {
+    let n = 1;
+    let r: Option<&i32> = Option.Some(&n);
+    let t: (i32, [bool; 2]) = (n, [true, false]);
+    let o: Option<&i32> = t;
+    return 0;
+}

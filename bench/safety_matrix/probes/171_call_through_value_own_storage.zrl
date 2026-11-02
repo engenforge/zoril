@@ -1,0 +1,18 @@
+// name: Reference into a dead local's stack slot through a call through a function value
+// expected: compile_reject
+// A call through a value (`let f = cb; f(&x)`) has no summary to consult, so the borrow its result
+// inherits was recorded as *derived* - and a derived borrow is exempt at a scope end for a local
+// without `Drop`. The result may point into any argument's own storage (the worst case the storage
+// walk applies to the same callee), so it is recorded as the argument's own storage now. Before the
+// change the call compiled and `y` read the dead slot (7).
+fn cb(p: &i32) -> &i32 { return p; }
+
+fn main() -> i32 {
+    let mut y: &i32 = &0;
+    {
+        let x: i32 = 7;
+        let f = cb;
+        y = f(&x);
+    }
+    return *y;
+}

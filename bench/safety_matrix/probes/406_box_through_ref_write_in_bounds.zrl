@@ -1,0 +1,24 @@
+// name: A write through a reference to a Box lands in the boxed value
+// expected: accept
+// `p.y = v` with `p: &mut Box<Point>` stores into the Point the Box owns. It once took the field
+// offset from the stack slot that holds the Box's pointer, so the store landed 8 bytes past that slot:
+// an out-of-bounds stack write in safe code (a neighbouring local was overwritten, or the frame faulted).
+// The canaries around the Box are intact and the Box's own value changed; exit 0.
+struct Point { x: i64, y: i64 }
+
+fn set(p: &mut Box<Point>, v: i64) {
+    p.y = v;
+    p.x += 1;
+}
+
+fn main() -> i32 {
+    let before: i64 = 7777;
+    let mut b = box Point { x: 20, y: 22 };
+    let after: i64 = 8888;
+    set(&mut b, 99 as i64);
+    if b.y != 99 { return 1; }
+    if b.x != 21 { return 2; }
+    if before != 7777 { return 3; }
+    if after != 8888 { return 4; }
+    return 0;
+}

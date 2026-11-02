@@ -1,0 +1,513 @@
+// Exhaustiveness of `match`, with nested patterns.
+//
+// The arms are a matrix: one row per arm (arms with a guard do not count), one column per
+// value still to be examined. `exh_missing` looks for a value that no row matches, the
+// usefulness algorithm of Maranget ("Warnings for pattern matching", 2007) specialised to a
+// wildcard query: when the first column's type has a finite set of constructors (an enum's
+// variants, `true` / `false`, the one constructor of a tuple or struct) and every one of them
+// appears, each constructor is examined in turn, with the matrix specialised to it (rows that
+// start with that constructor keep its sub-patterns, wildcard rows grow wildcards); otherwise
+// only the rows starting with a wildcard can cover what is absent. Integers, chars and slices
+// have no finite constructor set, so they are covered only by a wildcard or a binding. Patterns
+// see through references, as matching does.
+//
+// What is found is returned as a witness, one pattern text per column, for the diagnostic:
+// "non-exhaustive match: missing case `Some(false)`".
+
+import "zir.zrl";
+import "ast.zrl";
+import "resolve.zrl";
+import "intern.zrl";
+import "mono.zrl";
+import "il_type.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "core.zrl";
+import "mem.zrl";
+import "io.zrl";
+
+// A wildcard the algorithm itself introduces (no AST pattern behind it).
+const EXH_WILD: u32 = 0xffffffff;
+
+// What the first pattern of a row is, for its column's type.
+const EXH_KIND_WILD: u32 = 0;      // `_` or a binding
+const EXH_KIND_CTOR: u32 = 1;      // a constructor: variant, bool literal, tuple or struct pattern
+const EXH_KIND_OTHER: u32 = 2;     // a literal, range or constant: covers no constructor
+
+// The constructors of a type, as far as exhaustiveness is concerned.
+const EXH_TYPE_ENUM: u32 = 0;
+const EXH_TYPE_BOOL: u32 = 1;
+const EXH_TYPE_TUPLE: u32 = 2;
+const EXH_TYPE_STRUCT: u32 = 3;
+const EXH_TYPE_OPEN: u32 = 4;      // no finite set: integers, chars, slices, ...
+
+impl ZirLowerer {
+
+    // The type a pattern sees: references are looked through.
+    fn exh_base_type(self: &mut ZirLowerer, ty: u32) -> u32 {
+        let mut t = ty;
+        let mut depth = 0 as usize;
+        while t != 0 as u32 && depth < 8 as usize {
+            let tag = self.get_type_tag(t);
+            if tag != ILTYPE_PTR && tag != ILTYPE_PTRMUT && tag != ILTYPE_BOXED && tag != ILTYPE_BOXEDMUT { break; }
+            t = self.get_ptr_inner_type(t);
+            depth = depth + 1 as usize;
+        }
+        return t;
+    }
+
+    fn exh_type_kind(self: &mut ZirLowerer, ty: u32) -> u32 {
+        if ty == 0 as u32 { return EXH_TYPE_OPEN; }
+        if self.is_bool_type(ty) { return EXH_TYPE_BOOL; }
+        let tag = self.get_type_tag(ty);
+        if tag == ILTYPE_TUPLE { return EXH_TYPE_TUPLE; }
+        if tag == ILTYPE_USER {
+            let id = self.get_type_decl(ty).def.get_User().id;
+            if (id as usize) < self.module.typedefs.len {
+                let d_tag = self.module.typedefs[id as usize].get_tag();
+                if d_tag == IL_TYPEDEF_ENUM { return EXH_TYPE_ENUM; }
+                if d_tag == IL_TYPEDEF_STRUCT { return EXH_TYPE_STRUCT; }
+            }
+        }
+        return EXH_TYPE_OPEN;
+    }
+
+    // How many constructors the type has (0 for an open type).
+    fn exh_ctor_count(self: &mut ZirLowerer, ty: u32, kind: u32) -> usize {
+        if kind == EXH_TYPE_BOOL { return 2 as usize; }
+        if kind == EXH_TYPE_TUPLE || kind == EXH_TYPE_STRUCT { return 1 as usize; }
+        if kind == EXH_TYPE_ENUM {
+            let id = self.get_type_decl(ty).def.get_User().id;
+            return self.module.typedefs[id as usize].get_Enum().variants.len;
+        }
+        return 0 as usize;
+    }
+
+    // The types of constructor C's fields: a variant's payload (its elements, when it is a
+    // tuple), a tuple's elements, a struct's fields.
+    fn exh_ctor_field_types(self: &mut ZirLowerer, ty: u32, kind: u32, c: usize) -> [mut u32] {
+        if kind == EXH_TYPE_ENUM {
+            let payload = self.get_variant_payload_type(ty, c as u32);
+            if payload == 0 as u32 { return self.alloc_u32s(0 as usize); }
+            if self.get_type_tag(payload) == ILTYPE_TUPLE {
+                return self.exh_tuple_elem_types(payload);
+            }
+            let one = self.alloc_u32s(1 as usize);
+            one[0] = payload;
+            return one;
+        }
+        if kind == EXH_TYPE_TUPLE { return self.exh_tuple_elem_types(ty); }
+        if kind == EXH_TYPE_STRUCT {
+            let n = self.struct_field_count(ty);
+            let out = self.alloc_u32s(n);
+            let mut i = 0 as usize;
+            while i < n {
+                out[i] = self.get_field_type(ty, i as u32);
+                i = i + 1 as usize;
+            }
+            return out;
+        }
+        return self.alloc_u32s(0 as usize);
+    }
+
+    fn exh_tuple_elem_types(self: &mut ZirLowerer, ty: u32) -> [mut u32] {
+        let n = self.tuple_arity(ty);
+        let out = self.alloc_u32s(n);
+        let mut i = 0 as usize;
+        while i < n {
+            out[i] = self.get_tuple_elem_type(ty, i as u32);
+            i = i + 1 as usize;
+        }
+        return out;
+    }
+
+    // Classify pattern P for a column of type TY (TY already looked through). For a
+    // constructor, CTOR receives its index (variant index, 1 for `true`, 0 otherwise).
+    fn exh_classify(self: &mut ZirLowerer, p: u32, ty: u32, kind: u32, ctor: &mut usize) -> u32 {
+        if p == EXH_WILD || p as usize >= self.resolver.ast.patterns.len { return EXH_KIND_WILD; }
+        let p_pat = &self.resolver.ast.patterns[p as usize];
+        match *p_pat {
+            Pattern.Wildcard | Pattern.MutIdent(_) => { return EXH_KIND_WILD; },
+            Pattern.Ident(name) => {
+                if kind == EXH_TYPE_ENUM {
+                    match self.get_variant_index(ty, name) {
+                        Some(v) => { *ctor = v as usize; return EXH_KIND_CTOR; },
+                        None => {},
+                    }
+                }
+                if self.is_const_ident(name) { return EXH_KIND_OTHER; }
+                return EXH_KIND_WILD;
+            },
+            Pattern.EnumVariant(vp) => {
+                if kind != EXH_TYPE_ENUM { return EXH_KIND_OTHER; }
+                match self.get_variant_index(ty, vp.variant_name) {
+                    Some(v) => { *ctor = v as usize; return EXH_KIND_CTOR; },
+                    None => { return EXH_KIND_OTHER; },
+                }
+            },
+            Pattern.Literal(lit) => {
+                if kind == EXH_TYPE_BOOL && lit.get_tag() == LITERAL_BOOL {
+                    *ctor = if lit.get_Bool() { 1 as usize } else { 0 as usize };
+                    return EXH_KIND_CTOR;
+                }
+                return EXH_KIND_OTHER;
+            },
+            Pattern.Tuple(_) => {
+                if kind == EXH_TYPE_TUPLE { *ctor = 0 as usize; return EXH_KIND_CTOR; }
+                return EXH_KIND_OTHER;
+            },
+            Pattern.Struct(_) => {
+                if kind == EXH_TYPE_STRUCT { *ctor = 0 as usize; return EXH_KIND_CTOR; }
+                return EXH_KIND_OTHER;
+            },
+            _ => { return EXH_KIND_OTHER; },
+        }
+    }
+
+    // The sub-patterns of constructor pattern P, one per field of the constructor (ARITY), or
+    // an empty slice when they cannot be lined up (then the row is left out, which can only
+    // report a case as missing, never miss one).
+    fn exh_sub_patterns(self: &mut ZirLowerer, p: u32, ty: u32, kind: u32, arity: usize, ok: &mut bool) -> [mut u32] {
+        let out = self.alloc_u32s(arity);
+        let mut i = 0 as usize;
+        while i < arity { out[i] = EXH_WILD; i = i + 1 as usize; }
+        *ok = true;
+        let p_pat = &self.resolver.ast.patterns[p as usize];
+        match *p_pat {
+            Pattern.EnumVariant(vp) => {
+                if vp.payload.len == 0 as usize { return out; }
+                if vp.payload.len == arity {
+                    let mut k = 0 as usize;
+                    while k < arity { out[k] = vp.payload[k]; k = k + 1 as usize; }
+                    return out;
+                }
+                // `V(t)` for a tuple payload: t stands for the whole tuple.
+                if vp.payload.len == 1 as usize {
+                    let p0 = vp.payload[0];
+                    let p0_pat = &self.resolver.ast.patterns[p0 as usize];
+                    match *p0_pat {
+                        Pattern.Tuple(elems) => {
+                            if elems.len == arity {
+                                let mut k = 0 as usize;
+                                while k < arity { out[k] = elems[k]; k = k + 1 as usize; }
+                                return out;
+                            }
+                        },
+                        _ => {
+                            let mut c = 0 as usize;
+                            if self.exh_classify(p0, 0 as u32, EXH_TYPE_OPEN, &mut c) == EXH_KIND_WILD { return out; }
+                        },
+                    }
+                }
+                *ok = false;
+                return out;
+            },
+            Pattern.Tuple(elems) => {
+                if elems.len != arity { *ok = false; return out; }
+                let mut k = 0 as usize;
+                while k < arity { out[k] = elems[k]; k = k + 1 as usize; }
+                return out;
+            },
+            Pattern.Struct(sp) => {
+                let mut k = 0 as usize;
+                while k < sp.fields.len {
+                    let idx = self.get_field_index(ty, sp.fields[k].name);
+                    if idx == 0xffffffff as u32 || idx as usize >= arity { *ok = false; return out; }
+                    out[idx as usize] = sp.fields[k].pattern;
+                    k = k + 1 as usize;
+                }
+                return out;
+            },
+            _ => { return out; }, // a unit variant named by an identifier, or a bool literal
+        }
+    }
+
+    // Rows whose first pattern is an or-pattern become one row per alternative.
+    fn exh_expand_or(self: &mut ZirLowerer, rows: &Vec<[mut u32]>) -> Vec<[mut u32]> {
+        let mut out = Vec::<[mut u32]>.new_in(self.arena);
+        let mut r = 0 as usize;
+        while r < rows.len {
+            let row = rows.as_slice()[r];
+            let p = row[0];
+            let mut is_or = false;
+            if p != EXH_WILD && (p as usize) < self.resolver.ast.patterns.len {
+                let p_pat = &self.resolver.ast.patterns[p as usize];
+                match *p_pat {
+                    Pattern.Or(alts) => {
+                        is_or = true;
+                        let mut a = 0 as usize;
+                        while a < alts.len {
+                            let copy = self.alloc_u32s(row.len);
+                            let mut k = 0 as usize;
+                            while k < row.len { copy[k] = row[k]; k = k + 1 as usize; }
+                            copy[0] = alts[a];
+                            out.push(copy);
+                            a = a + 1 as usize;
+                        }
+                    },
+                    _ => {},
+                }
+            }
+            if !is_or { out.push(row); }
+            r = r + 1 as usize;
+        }
+        // Alternatives can themselves be or-patterns.
+        if out.len != rows.len {
+            let mut again = false;
+            let mut i = 0 as usize;
+            while i < out.len {
+                let p = out.as_slice()[i][0];
+                if p != EXH_WILD && (p as usize) < self.resolver.ast.patterns.len && self.resolver.ast.patterns[p as usize].get_tag() == PATTERN_OR { again = true; }
+                i = i + 1 as usize;
+            }
+            if again { return self.exh_expand_or(&out); }
+        }
+        return out;
+    }
+
+    // The matrix specialised to constructor C (with ARITY fields): rows starting with C keep
+    // its sub-patterns, wildcard rows get ARITY wildcards, other rows go.
+    fn exh_specialize(self: &mut ZirLowerer, rows: &Vec<[mut u32]>, ty: u32, kind: u32, c: usize, arity: usize) -> Vec<[mut u32]> {
+        let mut out = Vec::<[mut u32]>.new_in(self.arena);
+        let mut r = 0 as usize;
+        while r < rows.len {
+            let row = rows.as_slice()[r];
+            let mut hc = 0 as usize;
+            let k = self.exh_classify(row[0], ty, kind, &mut hc);
+            let mut head = self.alloc_u32s(0 as usize);
+            let mut keep = false;
+            if k == EXH_KIND_WILD {
+                head = self.alloc_u32s(arity);
+                let mut i = 0 as usize;
+                while i < arity { head[i] = EXH_WILD; i = i + 1 as usize; }
+                keep = true;
+            } else if k == EXH_KIND_CTOR && hc == c {
+                let mut ok = true;
+                head = self.exh_sub_patterns(row[0], ty, kind, arity, &mut ok);
+                keep = ok;
+            }
+            if keep {
+                let nr = self.alloc_u32s(arity + row.len - 1 as usize);
+                let mut i = 0 as usize;
+                while i < arity { nr[i] = head[i]; i = i + 1 as usize; }
+                let mut j = 1 as usize;
+                while j < row.len { nr[arity + j - 1 as usize] = row[j]; j = j + 1 as usize; }
+                out.push(nr);
+            }
+            r = r + 1 as usize;
+        }
+        return out;
+    }
+
+    // Rows starting with a wildcard, without it.
+    fn exh_default(self: &mut ZirLowerer, rows: &Vec<[mut u32]>, ty: u32, kind: u32) -> Vec<[mut u32]> {
+        let mut out = Vec::<[mut u32]>.new_in(self.arena);
+        let mut r = 0 as usize;
+        while r < rows.len {
+            let row = rows.as_slice()[r];
+            let mut hc = 0 as usize;
+            if self.exh_classify(row[0], ty, kind, &mut hc) == EXH_KIND_WILD {
+                let nr = self.alloc_u32s(row.len - 1 as usize);
+                let mut j = 1 as usize;
+                while j < row.len { nr[j - 1 as usize] = row[j]; j = j + 1 as usize; }
+                out.push(nr);
+            }
+            r = r + 1 as usize;
+        }
+        return out;
+    }
+
+    // Is some value of types TYS matched by no row? If so, WITNESS receives one pattern text
+    // per column describing such a value.
+    fn exh_missing(self: &mut ZirLowerer, rows_in: &Vec<[mut u32]>, tys: [mut u32], witness: &mut Vec<[u8]>, depth: usize) -> bool {
+        if tys.len == 0 as usize { return rows_in.len == 0 as usize; }
+        // Very deep or wide types: give up quietly rather than report something unsure.
+        if depth > 32 as usize { return false; }
+        let rows = self.exh_expand_or(rows_in);
+        let ty = self.exh_base_type(tys[0]);
+        let kind = self.exh_type_kind(ty);
+        let rest = unsafe { @slice((tys.ptr as usize + 4) as *mut u32, tys.len - 1 as usize) };
+        let n_ctors = self.exh_ctor_count(ty, kind);
+
+        let mut complete = n_ctors > 0 as usize;
+        let mut absent = 0 as usize;
+        if kind == EXH_TYPE_ENUM || kind == EXH_TYPE_BOOL {
+            let seen = self.alloc_u32s(n_ctors);
+            let mut i = 0 as usize;
+            while i < n_ctors { seen[i] = 0 as u32; i = i + 1 as usize; }
+            let mut r = 0 as usize;
+            while r < rows.len {
+                let mut hc = 0 as usize;
+                if self.exh_classify(rows.as_slice()[r][0], ty, kind, &mut hc) == EXH_KIND_CTOR && hc < n_ctors { seen[hc] = 1 as u32; }
+                r = r + 1 as usize;
+            }
+            i = 0 as usize;
+            while i < n_ctors {
+                if seen[i] == 0 as u32 { complete = false; absent = i; break; }
+                i = i + 1 as usize;
+            }
+        }
+
+        if complete {
+            let mut c = 0 as usize;
+            while c < n_ctors {
+                let ftys = self.exh_ctor_field_types(ty, kind, c);
+                let arity = ftys.len;
+                let spec = self.exh_specialize(&rows, ty, kind, c, arity);
+                let sub_tys = self.alloc_u32s(arity + rest.len);
+                let mut i = 0 as usize;
+                while i < arity { sub_tys[i] = ftys[i]; i = i + 1 as usize; }
+                while i < arity + rest.len { sub_tys[i] = rest[i - arity]; i = i + 1 as usize; }
+                let mut w = Vec::<[u8]>.new_in(self.arena);
+                if self.exh_missing(&spec, sub_tys, &mut w, depth + 1 as usize) {
+                    witness.push(self.exh_render(ty, kind, c, w.as_slice(), arity));
+                    let mut j = arity;
+                    while j < w.len { witness.push(w.as_slice()[j]); j = j + 1 as usize; }
+                    return true;
+                }
+                c = c + 1 as usize;
+            }
+            return false;
+        }
+
+        let def = self.exh_default(&rows, ty, kind);
+        let mut w = Vec::<[u8]>.new_in(self.arena);
+        if self.exh_missing(&def, rest, &mut w, depth + 1 as usize) {
+            if n_ctors > 0 as usize {
+                let arity = self.exh_ctor_field_types(ty, kind, absent).len;
+                let wilds = Vec::<[u8]>.new_in(self.arena);
+                witness.push(self.exh_render(ty, kind, absent, wilds.as_slice(), arity));
+            } else {
+                witness.push("_");
+            }
+            let mut j = 0 as usize;
+            while j < w.len { witness.push(w.as_slice()[j]); j = j + 1 as usize; }
+            return true;
+        }
+        return false;
+    }
+
+    // Constructor C of TY applied to ARGS (the first ARITY witness columns; missing ones are `_`).
+    fn exh_render(self: &mut ZirLowerer, ty: u32, kind: u32, c: usize, args: [[u8]], arity: usize) -> [u8] {
+        let mut out = ByteVec.new(self.arena);
+        if kind == EXH_TYPE_BOOL {
+            out.push_slice(if c == 1 as usize { "true" } else { "false" });
+            return out.as_slice();
+        }
+        if kind == EXH_TYPE_ENUM {
+            let id = self.get_type_decl(ty).def.get_User().id;
+            out.push_slice(self.intern_table.lookup(self.module.typedefs[id as usize].get_Enum().variants[c].name));
+            if arity == 0 as usize { return out.as_slice(); }
+            out.push('(' as u8);
+        } else if kind == EXH_TYPE_STRUCT {
+            let all_wild = self.exh_all_wild(args, arity);
+            out.push_slice(self.mono.type_display(ty));
+            if all_wild { out.push_slice(" { .. }"); return out.as_slice(); }
+            out.push_slice(" { ");
+            let id = self.get_type_decl(ty).def.get_User().id;
+            let fields = self.module.typedefs[id as usize].get_Struct().fields;
+            let mut i = 0 as usize;
+            while i < arity {
+                if i > 0 as usize { out.push_slice(", "); }
+                out.push_slice(self.intern_table.lookup(fields[i].name));
+                out.push_slice(": ");
+                out.push_slice(if i < args.len { args[i] } else { "_" });
+                i = i + 1 as usize;
+            }
+            out.push_slice(" }");
+            return out.as_slice();
+        } else {
+            out.push('(' as u8);
+        }
+        let mut i = 0 as usize;
+        while i < arity {
+            if i > 0 as usize { out.push_slice(", "); }
+            out.push_slice(if i < args.len { args[i] } else { "_" });
+            i = i + 1 as usize;
+        }
+        out.push(')' as u8);
+        return out.as_slice();
+    }
+
+    fn exh_all_wild(self: &ZirLowerer, args: [[u8]], arity: usize) -> bool {
+        let mut i = 0 as usize;
+        while i < arity && i < args.len {
+            if !is_str_eq(args[i], "_") { return false; }
+            i = i + 1 as usize;
+        }
+        return true;
+    }
+
+    // Report what the arms of M do not cover. For an enum, each uncovered variant is named
+    // ("missing variant 'V'" when no arm mentions it, else the missing case inside it); for
+    // `bool` the missing value; for an open type the missing `_`; otherwise a missing case.
+    pub fn check_match_exhaustiveness(self: &mut ZirLowerer, m: &MatchExpr, scrut_ty: u32, span: Span) {
+        if scrut_ty == 0 as u32 { return; }
+        let ty = self.exh_base_type(scrut_ty);
+        if ty == 0 as u32 || self.is_never_type(ty) { return; }
+        let mut rows = Vec::<[mut u32]>.new_in(self.arena);
+        let mut a = 0 as usize;
+        while a < m.arms.len {
+            if m.arms[a].guard == 0 as u32 {
+                let row = self.alloc_u32s(1 as usize);
+                row[0] = m.arms[a].pattern;
+                rows.push(row);
+            }
+            a = a + 1 as usize;
+        }
+        let kind = self.exh_type_kind(ty);
+        if kind == EXH_TYPE_ENUM || kind == EXH_TYPE_BOOL {
+            let expanded = self.exh_expand_or(&rows);
+            let n = self.exh_ctor_count(ty, kind);
+            let mut c = 0 as usize;
+            while c < n {
+                let ftys = self.exh_ctor_field_types(ty, kind, c);
+                let spec = self.exh_specialize(&expanded, ty, kind, c, ftys.len);
+                let mut w = Vec::<[u8]>.new_in(self.arena);
+                if self.exh_missing(&spec, ftys, &mut w, 0 as usize) {
+                    if kind == EXH_TYPE_BOOL {
+                        self.report_missing_case(if c == 1 as usize { "true" } else { "false" }, span);
+                    } else if spec.len == 0 as usize {
+                        let id = self.get_type_decl(ty).def.get_User().id;
+                        self.report_missing_variant(self.module.typedefs[id as usize].get_Enum().variants[c].name, span);
+                    } else {
+                        self.report_missing_pattern(self.exh_render(ty, kind, c, w.as_slice(), ftys.len), span);
+                    }
+                }
+                c = c + 1 as usize;
+            }
+            return;
+        }
+        let tys = self.alloc_u32s(1 as usize);
+        tys[0] = scrut_ty;
+        let mut w = Vec::<[u8]>.new_in(self.arena);
+        if self.exh_missing(&rows, tys, &mut w, 0 as usize) {
+            if kind == EXH_TYPE_OPEN {
+                self.report_missing_wildcard(span);
+            } else {
+                self.report_missing_pattern(w.as_slice()[0], span);
+            }
+        }
+    }
+
+    fn report_missing_pattern(self: &mut ZirLowerer, pat: [u8], span: Span) {
+        self.report_prefix(span);
+        must_write(2, "non-exhaustive match: missing case `");
+        must_write(2, pat);
+        must_write(2, "`\n");
+    }
+
+    // A value of type TY that the single pattern PAT does not match, or an empty slice when
+    // PAT matches every value (it is irrefutable).
+    pub fn pattern_missing_case(self: &mut ZirLowerer, pat: PatternId, ty: u32) -> [u8] {
+        let mut rows = Vec::<[mut u32]>.new_in(self.arena);
+        let row = self.alloc_u32s(1 as usize);
+        row[0] = pat;
+        rows.push(row);
+        let tys = self.alloc_u32s(1 as usize);
+        tys[0] = ty;
+        let mut w = Vec::<[u8]>.new_in(self.arena);
+        if self.exh_missing(&rows, tys, &mut w, 0 as usize) { return w.as_slice()[0]; }
+        return "";
+    }
+}

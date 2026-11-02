@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: error: the closure holds a copy of 'n'; assigning to it changes only the copy; capture a '&mut' reference instead
+
+fn main() -> i32 {
+    let mut n = 1;
+    let f = || { n = n + 1; };
+    f();
+    return n;
+}

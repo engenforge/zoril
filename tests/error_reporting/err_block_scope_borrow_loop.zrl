@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_loop.zrl:12:5: error: cannot let 'x' go out of scope while it is still borrowed
+
+// A loop-body local goes out of scope on every iteration, so `r` is stale from the first.
+fn main() -> i32 {
+    let mut r: &i32 = &0;
+    let mut i = 0;
+    while i < 3 {
+        let x: i32 = 5;
+        r = &x;
+        i = i + 1;
+    }
+    return *r;
+}

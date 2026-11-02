@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: cannot cast a struct or payload-carrying enum value to a scalar type
+import "core.zrl";
+
+pub fn main() -> i32 {
+    let o: Option<i32> = Option.Some(3 as i32);
+    return (o as u64) as i32;
+}

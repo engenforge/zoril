@@ -1,0 +1,18 @@
+// name: Move of a non-Copy field out through a shared reference
+// expected: compile_reject
+// The callee would own a value its caller also owns and drops. Accepted until 2026-10-02:
+// the checker skipped the last local of every function (an off-by-one on 1-based ids).
+static mut DROPS: i32 = 0;
+struct R { v: i32 }
+impl Drop for R { fn drop(self: &mut R) { DROPS = DROPS + 1; } }
+struct B { r: R }
+fn steal(b: &B) -> R { return (*b).r; }
+fn run() {
+    let b = B { r: R { v: 1 } };
+    let x = steal(&b);
+}
+fn main() -> i32 {
+    run();
+    if DROPS != 1 { return 10 + DROPS; }
+    return 0;
+}

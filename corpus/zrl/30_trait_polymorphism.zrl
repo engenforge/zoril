@@ -1,0 +1,68 @@
+// expected exit code: 253
+// 30: Multiple traits on a single type with generic constraint composition.
+// Demonstrates: multiple impl blocks, trait bounds, method dispatch across traits.
+
+trait Hashable {
+    fn hash(self: &Self) -> u32;
+}
+
+trait Printable {
+    fn code(self: &Self) -> i32;
+}
+
+struct UserId {
+    id: u32,
+    group: u32,
+}
+
+struct DeviceId {
+    major: u32,
+    minor: u32,
+}
+
+impl Hashable for UserId {
+    fn hash(self: &UserId) -> u32 {
+        // Simple hash: XOR with rotation
+        return self.id ^ (self.group << 16) ^ (self.group >> 16);
+    }
+}
+
+impl Printable for UserId {
+    fn code(self: &UserId) -> i32 {
+        return self.id as i32;
+    }
+}
+
+impl Hashable for DeviceId {
+    fn hash(self: &DeviceId) -> u32 {
+        return self.major * 31 + self.minor;
+    }
+}
+
+impl Printable for DeviceId {
+    fn code(self: &DeviceId) -> i32 {
+        return (self.major * 256 + self.minor) as i32;
+    }
+}
+
+fn hash_combine<T: Hashable>(a: &T, b: &T) -> u32 {
+    let ha = a.hash();
+    let hb = b.hash();
+    return ha ^ (hb << 7) ^ (hb >> 25);
+}
+
+fn identify<T: Printable>(item: &T) -> i32 {
+    return item.code();
+}
+
+fn main() -> i32 {
+    let u1 = UserId { id: 1000, group: 42 };
+    let u2 = UserId { id: 1001, group: 42 };
+    let d1 = DeviceId { major: 8, minor: 1 };
+
+    let user_hash = hash_combine(&u1, &u2);
+    let dev_code = identify(&d1);
+    let user_code = identify(&u1);
+
+    return (user_hash % 100) as i32 + dev_code + user_code;
+}

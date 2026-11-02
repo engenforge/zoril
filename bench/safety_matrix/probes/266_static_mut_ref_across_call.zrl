@@ -1,0 +1,24 @@
+// name: A shared borrow of a non-scalar static mut held across a call that writes it
+// expected: compile_reject
+// `let r = &G;` then a call that assigns `G` left `r` naming the old variant; reading its payload
+// after the write reads the new layout. The borrow is not tracked across the call, so the access
+// itself needs `unsafe`.
+enum E {
+    N,
+    B(u64),
+}
+
+static mut G: E = E.N;
+
+fn write_it() {
+    G = E.B(41);
+}
+
+fn main() -> i32 {
+    let r = &G;
+    write_it();
+    match r {
+        E.B(v) => { return *v as i32; },
+        _ => { return 1; }
+    }
+}

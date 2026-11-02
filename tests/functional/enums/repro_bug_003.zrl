@@ -1,0 +1,86 @@
+// Bug 003: Enum Payload Field Corruption (Sub-word alignment issue)
+//
+// Reproduces the exact ILInstr pattern: a u32 field inside a struct that is
+// a variant payload of a large enum with several 8-byte-aligned slice variants.
+// The getters use manual pointer arithmetic (self as usize + 8) assuming
+// payload_offset = 8.  Payload must be at offset 8 because slice-bearing
+// variants force max_variant_align = 8.  If the compiler placed payloads at
+// offset 4 (tag-only alignment) the getter would read from the wrong address
+// and return 0 instead of the stored SSA-ID value.
+
+// ---- types mimicking il_instr.zrl ----
+
+pub struct SyscallInstr {
+    pub num: u32,      // was the bug-trigger: u32 field at offset 0
+    pub args: [u32],   // slice forces SyscallInstr.align = 8
+}
+
+pub struct CallInstr {
+    pub func_id: u32,
+    pub args: [u32],   // slice
+}
+
+pub struct SliceConstructInstr {
+    pub ptr: u32,
+    pub len: u32,
+}
+
+// This enum must have at least one slice-bearing variant so that
+// max_variant_align = 8 and payload_offset = align_to(4, 8) = 8.
+pub enum ILInstr {
+    // Simple u32 payload variants
+    Neg(u32),
+    Load(u32),
+    Store(u32),
+    Ret(u32),
+    Param(u32),
+
+    // Struct payload, align = 4 (all u32)
+    SliceConstruct(SliceConstructInstr),
+
+    // Struct payload with slice => align = 8  <-- forces payload_offset = 8
+    Call(CallInstr),
+    Syscall(SyscallInstr),
+}
+
+impl ILInstr {
+    pub fn get_Neg(self: &ILInstr) -> u32 {
+        unsafe { return *((self as usize + 8) as *u32); }
+    }
+    pub fn get_Syscall(self: &ILInstr) -> &SyscallInstr {
+        unsafe { return &*((self as usize + 8) as *SyscallInstr); }
+    }
+}
+
+fn main() -> i32 {
+    // ---- Test 1: simple u32 payload ----
+    let mut neg_instr = ILInstr.Neg(99 as u32);
+    let v_neg = neg_instr.get_Neg();
+    if v_neg != 99 as u32 {
+        unsafe { @syscall(60, 1) };
+    }
+
+    // ---- Test 2: u32 first field in struct with slice second field ----
+    let mut args_buf = [0 as u32];
+    let payload = SyscallInstr {
+        num: 42 as u32,
+        args: &args_buf,
+    };
+    let mut sys_instr = ILInstr.Syscall(payload);
+    let num_val = sys_instr.get_Syscall().num;
+    if num_val != 42 as u32 {
+        unsafe { @syscall(60, 2) };
+    }
+
+    // ---- Test 3: verify via match expression ----
+    let match_val = match sys_instr {
+        ILInstr.Syscall(si) => si.num,
+        _ => 0 as u32,
+    };
+    if match_val != 42 as u32 {
+        unsafe { @syscall(60, 3) };
+    }
+
+    unsafe { @syscall(60, 0) };
+    return 0;
+}

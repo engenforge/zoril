@@ -1,0 +1,2788 @@
+// Recursive Descent Parser for Zoril v1.1
+// Translates a stream of tokens into an Abstract Syntax Tree (AST).
+
+import "core.zrl";
+import "mem.zrl";
+import "io.zrl";
+import "intern.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "ast.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "module_path.zrl";
+
+pub struct Parser {
+    pub lexer: &mut Lexer,
+    pub cur: TokenWithSpan,
+    pub peek: TokenWithSpan,
+    // Shadow cur/peek: the literal comment (if any) in effect when each
+    // token was lexed, captured via Lexer.last_lexed_comment at the moment
+    // of production - cannot be read off the lexer's pending_block field
+    // directly at the point a statement is parsed, since the one-token
+    // lookahead means the lexer has already moved past (and cleared) it.
+    pub cur_comment: u32,
+    pub peek_comment: u32,
+    pub arena: *mut Arena,
+    pub ast: &mut AST,
+    pub intern_table: &mut InternTable,
+    pub file_path: [u8],
+    // Identity recorded as `source_file` on declarations and used for symbol mangling. Equals
+    // file_path except for a .zri, which names the source module it was emitted from.
+    pub module_path: [u8],
+    pub last_error_pos: u32,
+    pub had_error: bool,
+    pub last_import_span: Span,
+    // The names this file's imports are known by (the `as` name, else the file stem).
+    // Backported for module namespaces: `ns::item` reads as `item` and a `use` is skipped,
+    // every module's public items being in scope here already.
+    pub namespaces: Vec<u32>,
+    // Set by parse_declaration for a `#[derive(Clone)]` struct; parse_module then
+    // appends the synthesized impl right after the struct.
+    pub derive_clone_next: bool,
+
+    pub state: *mut LoadState,
+    
+    pub include_ids: *mut u32,
+    pub include_count: usize,
+    pub mr: *mut ModuleResolution,
+}
+
+pub struct TypeParams {
+    pub ptr: *mut TypeParam,
+    pub len: usize,
+}
+
+pub struct Attribute {
+    pub has_borrows: bool,
+    pub borrows: [u32],
+    pub must_use: bool,
+    pub derive_clone: bool,
+    pub doc_comment: u32,
+    pub has_summary: bool,
+    pub summary_escape: u64,
+    pub summary_stash: u64,
+    pub summary_storage: u64,
+    pub summary_stores: u64,
+    pub summary_into: u64,
+    pub summary_ret_stack: bool,
+    pub summary_alloc: usize,
+}
+
+// A .zri starts with `// zri-module: <source path>`. Declarations loaded from it belong to that
+// source module, so the symbols they reference match the ones its own compilation exports.
+fn zri_recorded_module(source: [u8], path: [u8]) -> [u8] {
+    let n = path.len;
+    if n < 4 as usize || path[n - 4 as usize] != '.' as u8 || path[n - 3 as usize] != 'z' as u8 || path[n - 2 as usize] != 'r' as u8 || path[n - 1 as usize] != 'i' as u8 {
+        return path;
+    }
+    let marker = "// zri-module: ";
+    if source.len <= marker.len || !is_str_eq(subslice(source, 0 as usize, marker.len), marker) { return path; }
+    let mut end = marker.len;
+    while end < source.len && source[end] != 10 as u8 { end = end + 1 as usize; }
+    return subslice(source, marker.len, end - marker.len);
+}
+
+pub struct FileModule {
+    pub file: u32,
+    pub module: u32,
+}
+
+// Import-resolution state shared by the root parser and every sub-parser it spawns.
+pub struct LoadState {
+    pub loaded: Vec<u32>,              // resolved file ids already parsed (or probed)
+    pub active: Vec<u32>,              // import stack (file ids), for cycle detection
+    pub active_names: Vec<u32>,        // import stack (module identities), for cycle printing
+    pub file_modules: Vec<FileModule>, // module identity of each loaded file
+    pub iface_dir: [u8],               // interfaces of imported modules are looked up here
+    pub iface_shadows: bool,           // true: an interface wins over its source; false: only used if the source is absent
+    pub deps_only: bool,               // --emit-deps: read only `import` declarations, skip every other item unparsed
+    pub mr: *mut ModuleResolution,
+}
+
+impl Parser {
+
+    const INITIAL_DECL_CAP: usize = 1024 as usize;
+    const INITIAL_PARAM_CAP: usize = 64 as usize;
+    const INITIAL_TYPE_ARG_CAP: usize = Parser.INITIAL_FIELD_CAP;
+    const INITIAL_FIELD_CAP: usize = 64 as usize;
+    const INITIAL_VARIANT_CAP: usize = 64 as usize;
+    const INITIAL_METHOD_CAP: usize = 64 as usize;
+    const INITIAL_ARM_CAP: usize = 64 as usize;
+
+
+    // The parser owns its lexer: it is moved into the AST's arena, next to the parser, so
+    // neither points into the caller's frame.
+    pub fn new(lexer: Lexer, ast: &mut AST, table: &mut InternTable, file_path: [u8], include_ids: *mut u32, include_count: usize, state: *mut LoadState) -> *mut Parser {
+        return Parser.new_modular(lexer, ast, table, file_path, "", include_ids, include_count, state, 0 as *mut ModuleResolution);
+    }
+
+    pub fn new_modular(lexer: Lexer, ast: &mut AST, table: &mut InternTable, file_path: [u8], module_path: [u8], include_ids: *mut u32, include_count: usize, state: *mut LoadState, mr_in: *mut ModuleResolution) -> *mut Parser {
+        unsafe {
+            let mut mr = mr_in;
+            let arena = (*ast).arena;
+            let p = zoril_allocator_alloc(arena, sizeof(Parser)) as *mut Parser;
+            let owned_lexer = zoril_allocator_alloc(arena, sizeof(Lexer)) as *mut Lexer;
+            *owned_lexer = lexer;
+            let norm_path = normalize_path(file_path, arena);
+            if mr as usize == 0 as usize {
+                let default_mr = zoril_allocator_alloc(arena, sizeof(ModuleResolution)) as *mut ModuleResolution;
+                let inc_vec = Vec::<u32>.new_in(arena);
+                *default_mr = module_resolution_new(file_path, "", &inc_vec, table, arena);
+                mr = default_mr;
+            }
+            let mut mod_path = module_path;
+            if mod_path.len == 0 as usize {
+                let abs_path = make_absolute(norm_path, (*mr).cwd, arena);
+                let derived = derive_module_identity(&*mr, abs_path, arena);
+                if derived.len > 0 as usize {
+                    mod_path = derived;
+                } else {
+                    mod_path = norm_path;
+                }
+            }
+            *p = Parser {
+                lexer: &mut *owned_lexer,
+                cur: TokenWithSpan { token: Token.Eof, span: Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 } },
+                peek: TokenWithSpan { token: Token.Eof, span: Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 } },
+                cur_comment: 0 as u32,
+                peek_comment: 0 as u32,
+                arena: arena,
+                ast: ast,
+                intern_table: table,
+                file_path: norm_path,
+                module_path: mod_path,
+                last_error_pos: 0 as u32,
+                had_error: false,
+                last_import_span: Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 },
+                namespaces: Vec::<u32>.new_in(arena),
+                derive_clone_next: false,
+
+                state: state,
+
+                include_ids: include_ids,
+                include_count: include_count,
+                mr: mr,
+            };
+            if p.state as usize == 0 as usize {
+                let st = zoril_allocator_alloc(arena, sizeof(LoadState)) as *mut LoadState;
+                *st = LoadState {
+                    loaded: Vec::<u32>.new_in(arena),
+                    active: Vec::<u32>.new_in(arena),
+                    active_names: Vec::<u32>.new_in(arena),
+                    file_modules: Vec::<FileModule>.new_in(arena),
+                    iface_dir: "",
+                    iface_shadows: true,
+                    deps_only: false,
+                    mr: mr,
+                };
+                let root_file_abs = make_absolute(norm_path, (*mr).cwd, arena);
+                let root_file_id = table.intern(root_file_abs);
+                let root_mod_id = table.intern(mod_path);
+                (*st).loaded.push(root_file_id);
+                (*st).active.push(root_file_id);
+                (*st).active_names.push(root_mod_id);
+                (*st).file_modules.push(FileModule { file: root_file_id, module: root_mod_id });
+                (*p).state = st;
+            }
+            (*p).next_token();
+            // module_doc was captured at the first blank-line reset in the lexer (before any token).
+            if (*(*p).ast).module_doc == 0 as u32 {
+                (*(*p).ast).module_doc = (*(*p).lexer).module_doc;
+            }
+            (*p).next_token();
+            return p;
+        }
+    }
+
+    fn report_error(self: &mut Parser, msg: [u8], span: Span) {
+        if span.start <= self.last_error_pos && self.last_error_pos != 0 as u32 {
+            return;
+        }
+        self.had_error = true;
+        self.last_error_pos = span.start;
+        must_write(1, self.file_path);
+        must_write(1, ":");
+        write_u64(1, span.line as usize);
+        must_write(1, ":");
+        write_u64(1, span.col as usize);
+        must_write(1, ": error: ");
+        must_write(1, msg);
+        must_write(1, "\n");
+    }
+
+    fn report_expected(self: &mut Parser, expected: TokenKind) {
+        if self.cur.span.start <= self.last_error_pos && self.last_error_pos != 0 as u32 {
+            return;
+        }
+        self.had_error = true;
+        self.last_error_pos = self.cur.span.start;
+        
+        must_write(1, self.file_path);
+        must_write(1, ":");
+        write_u64(1, self.cur.span.line as usize);
+        must_write(1, ":");
+        write_u64(1, self.cur.span.col as usize);
+        must_write(1, ": error: expected ");
+        must_write(1, self.token_kind_str(expected));
+        must_write(1, ", but found ");
+        must_write(1, self.token_kind_str(self.cur.token.kind()));
+        must_write(1, "\n");
+    }
+
+    fn next_token(self: &mut Parser) {
+        self.shift_token();
+        while self.at_namespace() && self.peek.token.kind() == TokenKind.DoubleColon {
+            self.shift_token();
+            self.shift_token();
+        }
+    }
+
+    fn shift_token(self: &mut Parser) {
+        self.cur = self.peek;
+        self.cur_comment = self.peek_comment;
+        self.peek = self.lexer.next_token();
+        self.peek_comment = self.lexer.last_lexed_comment;
+    }
+
+    fn at_namespace(self: &Parser) -> bool {
+        if self.cur.token.kind() != TokenKind.Ident { return false; }
+        let id = self.cur.token.get_ident_id();
+        let names = self.namespaces.as_slice();
+        let mut i = 0 as usize;
+        while i < names.len {
+            if names[i] == id { return true; }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
+    // The file stem of import path PATH: `a/util.zrl` is `util`.
+    fn import_stem(self: &mut Parser, path: [u8]) -> u32 {
+        let mut start = 0 as usize;
+        let mut i = 0 as usize;
+        while i < path.len {
+            if path[i] == '/' as u8 { start = i + 1 as usize; }
+            i = i + 1 as usize;
+        }
+        let mut end = path.len;
+        if end >= start + 4 as usize && path[end - 4 as usize] == '.' as u8 && path[end - 3 as usize] == 'z' as u8 && path[end - 2 as usize] == 'r' as u8 && path[end - 1 as usize] == 'l' as u8 {
+            end = end - 4 as usize;
+        }
+        return self.intern_table.intern(subslice(path, start, end - start));
+    }
+
+    fn expect(self: &mut Parser, kind: Token) {
+        if self.cur.token.kind() == kind.kind() {
+            self.next_token();
+        } else {
+            self.report_expected(kind.kind());
+            self.next_token(); // PROGRESS
+        }
+    }
+
+    fn token_kind_str(self: &Parser, kind: TokenKind) -> [u8] {
+        match kind {
+            TokenKind.KFn => { return "fn"; },
+            TokenKind.KStruct => { return "struct"; },
+            TokenKind.KEnum => { return "enum"; },
+            TokenKind.KTrait => { return "trait"; },
+            TokenKind.KImpl => { return "impl"; },
+            TokenKind.KLet => { return "let"; },
+            TokenKind.KMut => { return "mut"; },
+            TokenKind.KIf => { return "if"; },
+            TokenKind.KElse => { return "else"; },
+            TokenKind.KMatch => { return "match"; },
+            TokenKind.KWhile => { return "while"; },
+            TokenKind.KFor => { return "for"; },
+            TokenKind.KIn => { return "in"; },
+            TokenKind.KReturn => { return "return"; },
+            TokenKind.KBreak => { return "break"; },
+            TokenKind.KContinue => { return "continue"; },
+            TokenKind.KDefer => { return "defer"; },
+            TokenKind.KType => { return "type"; },
+            TokenKind.KPub => { return "pub"; },
+            TokenKind.KExtern => { return "extern"; },
+            TokenKind.KBox => { return "box"; },
+            TokenKind.KTry => { return "try"; },
+            TokenKind.KSizeof => { return "sizeof"; },
+            TokenKind.KAlignof => { return "alignof"; },
+            TokenKind.KAs => { return "as"; },
+            TokenKind.KConst => { return "const"; },
+            TokenKind.KStatic => { return "static"; },
+            TokenKind.KImport => { return "import"; },
+            TokenKind.Ident => { return "identifier"; },
+            TokenKind.Int => { return "integer literal"; },
+            TokenKind.Float => { return "float literal"; },
+            TokenKind.Char => { return "char literal"; },
+            TokenKind.String => { return "string literal"; },
+            TokenKind.Bool => { return "boolean literal"; },
+            TokenKind.Plus => { return "+"; },
+            TokenKind.Minus => { return "-"; },
+            TokenKind.Star => { return "*"; },
+            TokenKind.Slash => { return "/"; },
+            TokenKind.Percent => { return "%"; },
+            TokenKind.Equal => { return "="; },
+            TokenKind.EqualEqual => { return "=="; },
+            TokenKind.BangEqual => { return "!="; },
+            TokenKind.Less => { return "<"; },
+            TokenKind.Greater => { return ">"; },
+            TokenKind.LessEqual => { return "<="; },
+            TokenKind.GreaterEqual => { return ">="; },
+            TokenKind.Amp => { return "&"; },
+            TokenKind.Pipe => { return "|"; },
+            TokenKind.Caret => { return "^"; },
+            TokenKind.Bang => { return "!"; },
+            TokenKind.AmpAmp => { return "&&"; },
+            TokenKind.PipePipe => { return "||"; },
+            TokenKind.Dot => { return "."; },
+            TokenKind.DotDot => { return ".."; },
+            TokenKind.DotDotDot => { return "..."; },
+            TokenKind.Comma => { return ","; },
+            TokenKind.Colon => { return ":"; },
+            TokenKind.Semi => { return ";"; },
+            TokenKind.Arrow => { return "->"; },
+            TokenKind.FatArrow => { return "=>"; },
+            TokenKind.LParen => { return "("; },
+            TokenKind.RParen => { return ")"; },
+            TokenKind.LBrace => { return "{"; },
+            TokenKind.RBrace => { return "}"; },
+            TokenKind.LBracket => { return "["; },
+            TokenKind.RBracket => { return "]"; },
+            TokenKind.Question => { return "?"; },
+            TokenKind.Underscore => { return "_"; },
+            TokenKind.At => { return "@"; },
+            TokenKind.DoubleColon => { return "::"; },
+            TokenKind.Hash => { return "#"; },
+            TokenKind.Eof => { return "EOF"; },
+            TokenKind.Invalid => { return "invalid token (unterminated string)"; },
+            TokenKind.KLoop => { return "loop"; },
+            TokenKind.KUnsafe => { return "unsafe"; },
+            _ => { return "unknown token"; }
+        }
+    }
+
+    fn is_kind(self: &Parser, kind: TokenKind) -> bool {
+        return self.cur.token.kind() == kind;
+    }
+
+    fn peek_is_kind(self: &Parser, kind: TokenKind) -> bool {
+        return self.peek.token.kind() == kind;
+    }
+
+    fn parse_attributes(self: &mut Parser) -> Attribute {
+        // Read cur_comment, not the lexer's pending_block directly: by the
+        // time self.cur is this declaration's decl-start keyword, the same
+        // next_token() call that produced it has usually already lexed one
+        // more token (self.peek) past it. If that next token isn't itself
+        // a decl-start token (e.g. a bare "fn foo" with no preceding "pub"
+        // chain long enough to outrun the lookahead), pending_block has
+        // already been cleared - cur_comment was captured at the right
+        // moment regardless, same fix as parse_block's statement comments.
+        let mut attr = Attribute {
+            has_borrows: false,
+            borrows: @slice(0 as *mut u32, 0 as usize),
+            must_use: false,
+            derive_clone: false,
+            doc_comment: self.cur_comment,
+            has_summary: false,
+            summary_escape: 0 as u64,
+            summary_stash: 0 as u64,
+            summary_storage: 0 as u64,
+            summary_stores: 0 as u64,
+            summary_into: 0 as u64,
+            summary_ret_stack: false,
+            summary_alloc: 0 as usize,
+        };
+        self.lexer.pending_block = 0 as u32;
+        while self.is_kind(TokenKind.Hash) {
+            self.next_token();
+            self.expect(Token.LBracket);
+            let name_id = self.cur.token.get_ident_id();
+            self.expect(Token.Ident(0 as u32));
+            
+            let name = unsafe { (*self.lexer.intern_table).lookup(name_id) };
+            if is_str_eq(name, "must_use") {
+                attr.must_use = true;
+            } else if is_str_eq(name, "derive") {
+                self.expect(Token.LParen);
+                while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+                    let trait_id = self.cur.token.get_ident_id();
+                    let trait_span = self.cur.span;
+                    self.expect(Token.Ident(0 as u32));
+                    if is_str_eq(unsafe { (*self.lexer.intern_table).lookup(trait_id) }, "Clone") {
+                        attr.derive_clone = true;
+                    } else {
+                        self.report_error("only Clone can be derived", trait_span);
+                    }
+                    if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+                }
+                self.expect(Token.RParen);
+            } else if is_str_eq(name, "borrows") {
+                // #[borrows(a, b)] / #[borrows()]: parameter names, checked against the
+                // function's parameters when it is lowered.
+                attr.has_borrows = true;
+                let mut names = Vec::<u32>.new_in(self.arena);
+                self.expect(Token.LParen);
+                while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+                    names.push(self.cur.token.get_ident_id());
+                    self.expect(Token.Ident(0 as u32));
+                    if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+                }
+                self.expect(Token.RParen);
+                attr.borrows = names.as_slice();
+            } else if is_str_eq(name, "stores") {
+                // #[stores(p -> q, r -> static)]: the store contract the current compiler checks
+                // against the body. Stage 1 only has to parse it, because the stdlib modules it
+                // compiles to build src/ carry the attribute (stage1/README.md, the backport).
+                self.expect(Token.LParen);
+                while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+                    self.next_token();
+                }
+                self.expect(Token.RParen);
+            } else if is_str_eq(name, "summary") {
+                attr.has_summary = true;
+                if self.is_kind(TokenKind.LParen) {
+                    self.next_token();
+                    while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+                        let key_id = self.cur.token.get_ident_id();
+                        self.expect(Token.Ident(0 as u32));
+                        let key = unsafe { (*self.lexer.intern_table).lookup(key_id) };
+                        self.expect(Token.Equal);
+                        if is_str_eq(key, "escape") {
+                            attr.summary_escape = self.cur.token.get_int_val();
+                            self.expect(Token.Int((0 as u64, 0 as u32)));
+                        } else if is_str_eq(key, "stash") {
+                            attr.summary_stash = self.cur.token.get_int_val();
+                            self.expect(Token.Int((0 as u64, 0 as u32)));
+                        } else if is_str_eq(key, "stores") {
+                            attr.summary_stores = self.cur.token.get_int_val();
+                            self.expect(Token.Int((0 as u64, 0 as u32)));
+                        } else if is_str_eq(key, "into") {
+                            attr.summary_into = self.cur.token.get_int_val();
+                            self.expect(Token.Int((0 as u64, 0 as u32)));
+                        } else if is_str_eq(key, "storage") {
+                            attr.summary_storage = self.cur.token.get_int_val();
+                            self.expect(Token.Int((0 as u64, 0 as u32)));
+                        } else if is_str_eq(key, "ret_stack") {
+                            attr.summary_ret_stack = self.cur.token.get_bool_val();
+                            self.expect(Token.Bool(false));
+                        } else if is_str_eq(key, "alloc") {
+                            attr.summary_alloc = self.cur.token.get_int_val() as usize;
+                            self.expect(Token.Int((0 as u64, 0 as u32)));
+                        } else {
+                            self.next_token();
+                        }
+                        if self.is_kind(TokenKind.Comma) {
+                            self.next_token();
+                        }
+                    }
+                    self.expect(Token.RParen);
+                }
+            }
+            
+            self.expect(Token.RBracket);
+        }
+        return attr;
+    }
+
+    fn read_file_to_string(self: &mut Parser, path: [u8]) -> [u8] {
+        let fd = open(path, 0 as u64, 0 as u64); // O_RDONLY
+        if fd < 0 as i64 {
+            return @slice(0 as *u8, 0 as usize);
+        }
+        defer must_close(fd as u64);
+
+        // lseek(fd, 0, SEEK_END)
+        let size = @syscall(8, fd as u64, 0 as u64, 2 as u64) as i64;
+        // lseek(fd, 0, SEEK_SET)
+        @syscall(8, fd as u64, 0 as u64, 0 as u64);
+
+        if size <= 0 as i64 {
+            return @slice(0 as *u8, 0 as usize);
+        }
+
+        let mut buf = zoril_allocator_alloc(self.arena, size as u64) as *mut u8;
+        let n = unsafe { read(fd as u64, @slice(buf, size as u64)) };
+
+        if n < 0 as i64 {
+            return @slice(0 as *u8, 0 as usize);
+        }
+        return unsafe { @slice(buf as *u8, n as usize) };
+    }
+
+    // Skips one top-level item without building an AST: up to the `;` at brace depth 0, or the `}`
+    // that returns to depth 0. Only used for --emit-deps, which needs nothing but the imports.
+    fn skip_item(self: &mut Parser) {
+        let mut depth = 0 as usize;
+        while !self.is_kind(TokenKind.Eof) {
+            if self.is_kind(TokenKind.LBrace) {
+                depth = depth + 1 as usize;
+                self.next_token();
+            } else if self.is_kind(TokenKind.RBrace) {
+                self.next_token();
+                if depth > 0 as usize { depth = depth - 1 as usize; }
+                if depth == 0 as usize { return; }
+            } else if self.is_kind(TokenKind.Semi) && depth == 0 as usize {
+                self.next_token();
+                return;
+            } else {
+                self.next_token();
+            }
+        }
+    }
+
+    pub fn parse_module(self: &mut Parser) -> [Decl] {
+        let start_idx = self.ast.decls.len;
+        let deps_only = unsafe { (*self.state).deps_only };
+        if deps_only {
+            while !self.is_kind(TokenKind.Eof) {
+                if self.is_kind(TokenKind.KImport) {
+                    let decl = self.parse_declaration();
+                    if decl.get_tag() == 8 as u32 { self.load_import(decl.get_Import()); }
+                } else {
+                    self.skip_item();
+                }
+            }
+            unsafe {
+                let st = &mut *self.state;
+                if st.active.len == 1 as usize {
+                    let root_id = st.active.as_slice()[0];
+                    st.active.clear();
+                    st.loaded.push(root_id);
+                }
+            }
+            return unsafe { @slice(self.ast.decls.data as *mut Decl, 0 as usize) };
+        }
+
+        while !self.is_kind(TokenKind.Eof) {
+            let decl_span = self.cur.span;
+            let decl = self.parse_declaration();
+            let d_tag = decl.get_tag();
+            if d_tag == 9 as u32 { // DECL_NONE
+                // Skip
+            } else if d_tag == 8 as u32 { // DECL_IMPORT
+                let path_id = decl.get_Import();
+                self.load_import(path_id);
+            } else {
+                self.ast.alloc_decl_at(decl, decl_span);
+                if self.derive_clone_next && d_tag == DECL_STRUCT {
+                    let derived = self.derive_clone_impl(decl.get_Struct(), decl_span);
+                    self.ast.alloc_decl_at(Decl.Impl(derived), decl_span);
+                }
+                self.derive_clone_next = false;
+            }
+        }
+        
+        let count = self.ast.decls.len - start_idx;
+
+        unsafe {
+            // The root file finishes last: it is the only entry left on the import stack.
+            let st = &mut *self.state;
+            if st.active.len == 1 as usize {
+                let root_id = st.active.as_slice()[0];
+                st.active.clear();
+                st.loaded.push(root_id);
+            }
+        }
+
+        return unsafe { @slice((self.ast.decls.data as usize + start_idx as usize * sizeof(Decl)) as *mut Decl, count) };
+    }
+
+    fn get_primitive_type(self: &Parser, id: u32) -> PrimitiveType {
+        let name = unsafe { (*self.lexer.intern_table).lookup(id) };
+        if is_str_eq(name, "i8") { return PrimitiveType.I8; }
+        if is_str_eq(name, "i16") { return PrimitiveType.I16; }
+        if is_str_eq(name, "i32") { return PrimitiveType.I32; }
+        if is_str_eq(name, "i64") { return PrimitiveType.I64; }
+        if is_str_eq(name, "u8") { return PrimitiveType.U8; }
+        if is_str_eq(name, "u16") { return PrimitiveType.U16; }
+        if is_str_eq(name, "u32") { return PrimitiveType.U32; }
+        if is_str_eq(name, "u64") { return PrimitiveType.U64; }
+        if is_str_eq(name, "f32") { return PrimitiveType.F32; }
+        if is_str_eq(name, "f64") { return PrimitiveType.F64; }
+        if is_str_eq(name, "bool") { return PrimitiveType.Bool; }
+        if is_str_eq(name, "char") { return PrimitiveType.Char; }
+        if is_str_eq(name, "unit") { return PrimitiveType.Unit; }
+        if is_str_eq(name, "never") { return PrimitiveType.Never; }
+        return PrimitiveType.Unit;
+    }
+
+    pub fn parse_type(self: &mut Parser) -> TypeId {
+        let span = self.cur.span;
+        // `&&T` lexes as one `&&` token: a reference to a reference.
+        if self.is_kind(TokenKind.AmpAmp) {
+            self.next_token();
+            let mut inner = 0 as TypeId;
+            if self.is_kind(TokenKind.KMut) {
+                self.next_token();
+                let target = self.parse_type();
+                inner = self.ast.alloc_type(Type.RefMut(target), span);
+            } else {
+                let target = self.parse_type();
+                inner = self.ast.alloc_type(Type.Ref(target), span);
+            }
+            return self.ast.alloc_type(Type.Ref(inner), span);
+        }
+        if self.is_kind(TokenKind.Amp) {
+            self.next_token();
+            if self.is_kind(TokenKind.KMut) {
+                self.next_token();
+                let inner = self.parse_type();
+                return self.ast.alloc_type(Type.RefMut(inner), span);
+            } else {
+                let inner = self.parse_type();
+                return self.ast.alloc_type(Type.Ref(inner), span);
+            }
+        }
+
+        if self.is_kind(TokenKind.Star) {
+            self.next_token();
+            if self.is_kind(TokenKind.KMut) {
+                self.next_token();
+                let inner = self.parse_type();
+                return self.ast.alloc_type(Type.PtrMut(inner), span);
+            } else {
+                let inner = self.parse_type();
+                return self.ast.alloc_type(Type.Ptr(inner), span);
+            }
+        }
+
+        if self.is_kind(TokenKind.LBracket) {
+            self.next_token();
+            if self.is_kind(TokenKind.KMut) {
+                self.next_token();
+                let elem = self.parse_type();
+                self.expect(Token.RBracket);
+                return self.ast.alloc_type(Type.SliceMut(elem), span);
+            }
+            let inner = self.parse_type();
+            if self.is_kind(TokenKind.Semi) {
+                self.next_token();
+                let lit = self.cur.token.get_int_val();
+                self.expect(Token.Int(0 as usize, 0xffffffff as u32));
+                self.expect(Token.RBracket);
+                return self.ast.alloc_type(Type.Array((inner, lit)), span);
+            }
+            self.expect(Token.RBracket);
+            return self.ast.alloc_type(Type.Slice(inner), span);
+        }
+
+        if self.is_kind(TokenKind.LParen) {
+            self.next_token();
+            let mut types = Vec::<TypeId>.new_in(self.arena);
+            while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+                types.push(self.parse_type());
+                if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+            }
+            self.expect(Token.RParen);
+            if self.is_kind(TokenKind.Arrow) {
+                self.next_token();
+                let ret_ty = self.parse_type();
+                return self.ast.alloc_type(Type.Fn(FnType { params: types.as_slice(), ret_ty: ret_ty, is_variadic: false }), span);
+            }
+            return self.ast.alloc_type(Type.Tuple(types.as_slice()), span);
+        }
+
+        if self.is_kind(TokenKind.KFn) {
+            self.next_token();
+            self.expect(Token.LParen);
+            let mut types = Vec::<TypeId>.new_in(self.arena);
+            while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+                types.push(self.parse_type());
+                if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+            }
+            self.expect(Token.RParen);
+            
+            let mut ret_ty = 0 as TypeId; // Unit by default
+            if self.is_kind(TokenKind.Arrow) {
+                self.next_token();
+                ret_ty = self.parse_type();
+            }
+            return self.ast.alloc_type(Type.Fn(FnType { params: types.as_slice(), ret_ty: ret_ty, is_variadic: false }), span);
+        }
+
+        if self.is_kind(TokenKind.Ident) {
+            let id = self.cur.token.get_ident_id();
+            self.next_token();
+
+            // Handle Primitives
+            let name = unsafe { (*self.lexer.intern_table).lookup(id) };
+            let mut is_prim = true;
+            let mut prim = PrimitiveType.Unit;
+            if is_str_eq(name, "i8") { prim = PrimitiveType.I8; }
+            else if is_str_eq(name, "i16") { prim = PrimitiveType.I16; }
+            else if is_str_eq(name, "i32") { prim = PrimitiveType.I32; }
+            else if is_str_eq(name, "i64") { prim = PrimitiveType.I64; }
+            else if is_str_eq(name, "isize") { prim = PrimitiveType.ISize; }
+            else if is_str_eq(name, "u8") { prim = PrimitiveType.U8; }
+            else if is_str_eq(name, "u16") { prim = PrimitiveType.U16; }
+            else if is_str_eq(name, "u32") { prim = PrimitiveType.U32; }
+            else if is_str_eq(name, "u64") { prim = PrimitiveType.U64; }
+            else if is_str_eq(name, "usize") { prim = PrimitiveType.USize; }
+            else if is_str_eq(name, "f32") { prim = PrimitiveType.F32; }
+            else if is_str_eq(name, "f64") { prim = PrimitiveType.F64; }
+            else if is_str_eq(name, "bool") { prim = PrimitiveType.Bool; }
+            else if is_str_eq(name, "char") { prim = PrimitiveType.Char; }
+            else if is_str_eq(name, "unit") { prim = PrimitiveType.Unit; }
+            else if is_str_eq(name, "never") { prim = PrimitiveType.Never; }
+            else { is_prim = false; }
+
+            if is_prim {
+                return self.ast.alloc_type(Type.Primitive(prim), span);
+            }
+
+            let mut type_args = Vec::<TypeId>.new_in(self.arena);
+            if self.is_kind(TokenKind.Less) {
+                self.next_token();
+                while !self.is_kind(TokenKind.Greater) && !self.is_kind(TokenKind.GreaterGreater) && !self.is_kind(TokenKind.Eof) {
+                    type_args.push(self.parse_type());
+                    if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+                }
+                if self.is_kind(TokenKind.GreaterGreater) {
+                     // We don't advance yet because the outer level still needs one >
+                     // Wait! If we are in Box<List<T>>, the first > is for List<T>.
+                     // Then the second > is for Box<...>.
+                     // We should probably split it.
+                     self.cur.token = Token.Greater; // Change >> to >
+                } else {
+                    self.expect(Token.Greater);
+                }
+            }
+            return self.ast.alloc_type(Type.Path((id, type_args.as_slice())), span);
+        }
+
+        return 0 as TypeId;
+    }
+
+    fn parse_type_params(self: &mut Parser) -> TypeParams {
+        if !self.is_kind(TokenKind.Less) {
+            return TypeParams { ptr: 0 as *mut TypeParam, len: 0 as usize };
+        }
+        self.next_token();
+        
+        let mut params = Vec::<TypeParam>.new_in(self.arena);
+        
+        while !self.is_kind(TokenKind.Greater) && !self.is_kind(TokenKind.Eof) {
+            let name = self.cur.token.get_ident_id();
+            self.expect(Token.Ident(0 as u32));
+            
+            let mut bounds = Vec::<TypeId>.new_in(self.arena);
+            if self.is_kind(TokenKind.Colon) {
+                self.next_token();
+                while true {
+                    bounds.push(self.parse_type());
+                    if self.is_kind(TokenKind.Plus) {
+                        self.next_token();
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            params.push(TypeParam { name: name, bounds: bounds.as_slice() });
+            
+            if self.is_kind(TokenKind.Comma) {
+                self.next_token();
+            } else {
+                break;
+            }
+        }
+        self.expect(Token.Greater);
+        return TypeParams { ptr: params.data, len: params.len };
+    }
+
+    fn parse_fn_decl(self: &mut Parser, is_pub: bool, is_extern: bool, is_unsafe: bool, attr: &Attribute) -> FnDecl {
+        let span = self.cur.span;
+        let expr_start = self.ast.exprs.len as u32;
+        self.expect(Token.KFn);
+        let mut name = self.cur.token.get_ident_id();
+        self.expect(Token.Ident(0 as u32));
+        if self.is_kind(TokenKind.DoubleColon) {
+            self.report_error("qualified function name: define methods inside an `impl` block", self.cur.span);
+        }
+        while self.is_kind(TokenKind.DoubleColon) {
+            self.next_token();
+            let member_id = self.cur.token.get_ident_id();
+            self.expect(Token.Ident(0 as u32));
+            let prefix_s = self.intern_table.lookup(name);
+            let member_s = self.intern_table.lookup(member_id);
+            let mut full_name_v = ByteVec.new(self.arena);
+            full_name_v.push_slice(prefix_s);
+            full_name_v.push(':' as u8);
+            full_name_v.push(':' as u8);
+            full_name_v.push_slice(member_s);
+            name = self.intern_table.intern(full_name_v.as_slice());
+        }
+
+        let tp = self.parse_type_params();
+
+        self.expect(Token.LParen);
+        let mut params = Vec::<Param>.new_in(self.arena);
+        let mut is_variadic = false;
+        while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+            if self.is_kind(TokenKind.DotDotDot) {
+                self.next_token();
+                is_variadic = true;
+                break;
+            }
+            let mut p_mut = false;
+            if self.is_kind(TokenKind.KMut) {
+                self.next_token();
+                p_mut = true;
+            }
+            let p_name = self.cur.token.get_ident_id();
+            self.expect(Token.Ident(0 as u32));
+            let p_name_str = unsafe { (*self.lexer.intern_table).lookup(p_name) };
+            let mut p_ty = 0 as TypeId;
+            if is_str_eq(p_name_str, "self") && !self.is_kind(TokenKind.Colon) {
+                // bare `self` parameter — type is inferred from the impl context
+            } else {
+                self.expect(Token.Colon);
+                p_ty = self.parse_type();
+            }
+
+            params.push(Param { name: p_name, ty: p_ty, is_mut: p_mut });
+
+            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+        }
+        self.expect(Token.RParen);
+
+        let mut ret_ty = 0 as TypeId;
+        if self.is_kind(TokenKind.Arrow) {
+            self.next_token();
+            ret_ty = self.parse_type();
+        }
+
+        let mut body = 0 as ExprId;
+        if self.is_kind(TokenKind.LBrace) {
+            // Backport: an `unsafe fn` body is an unsafe context, reusing the existing
+            // `unsafe { }` block machinery (lower_block raises unsafe_depth for is_unsafe
+            // blocks). stage1 does not need its own is_unsafe FnDecl field for this.
+            let mut b = self.parse_block();
+            b.is_unsafe = is_unsafe;
+            body = self.ast.alloc_expr(Expr.Block(b), span);
+        } else {
+            self.expect(Token.Semi);
+        }
+
+        return FnDecl {
+            name: name,
+            params: params.as_slice(),
+            ret_ty: ret_ty,
+            body: body,
+            is_pub: is_pub,
+            is_extern: is_extern,
+            is_variadic: is_variadic,
+            must_use: attr.must_use,
+            type_params: unsafe { @slice(tp.ptr, tp.len) },
+            doc_comment: attr.doc_comment,
+            source_file: self.intern_table.intern(self.module_path),
+            has_summary: attr.has_summary,
+            summary_escape: attr.summary_escape,
+            summary_stash: attr.summary_stash,
+            summary_storage: attr.summary_storage,
+            summary_stores: attr.summary_stores,
+            summary_into: attr.summary_into,
+            summary_ret_stack: attr.summary_ret_stack,
+            summary_alloc: attr.summary_alloc,
+            has_borrows: attr.has_borrows,
+            borrows: attr.borrows,
+            expr_start: expr_start,
+            expr_end: self.ast.exprs.len as u32,
+        };
+    }
+
+    // `#[derive(Clone)] struct S<T..> { f: F, .. }` becomes
+    //     impl<T..: Clone> Clone for S<T..> {
+    //         fn clone(self: &S<T..>) -> S<T..> { return S { f: self.f.clone(), .. }; }
+    //     }
+    // built as the parser would have built it from that source.
+    fn derive_clone_impl(self: &mut Parser, s: &StructDecl, span: Span) -> ImplDecl {
+        let clone_id = self.intern_table.intern("Clone");
+        let clone_method_id = self.intern_table.intern("clone");
+        let self_id = self.intern_table.intern("self");
+        let no_types = @slice(0 as *TypeId, 0 as usize); // read-only, so freely reused
+        let clone_bound = self.ast.alloc_type(Type.Path((clone_id, no_types)), span);
+
+        let mut impl_params = Vec::<TypeParam>.new_in(self.arena);
+        let mut target_args = Vec::<TypeId>.new_in(self.arena);
+        let mut bounds = Vec::<TypeId>.new_in(self.arena);
+        bounds.push(clone_bound);
+        let mut ti = 0 as usize;
+        while ti < s.type_params.len {
+            let tp_name = s.type_params[ti].name;
+            impl_params.push(TypeParam { name: tp_name, bounds: bounds.as_slice() });
+            target_args.push(self.ast.alloc_type(Type.Path((tp_name, no_types)), span));
+            ti = ti + 1 as usize;
+        }
+        let target_ty = self.ast.alloc_type(Type.Path((s.name, target_args.as_slice())), span);
+        let self_ty = self.ast.alloc_type(Type.Ref(target_ty), span);
+
+        let expr_start = self.ast.exprs.len as u32;
+        let mut fields = Vec::<FieldValue>.new_in(self.arena);
+        let no_args = @slice(0 as *ExprId, 0 as usize);
+        let mut fi = 0 as usize;
+        while fi < s.fields.len {
+            let self_expr = self.ast.alloc_expr(Expr.Ident(self_id), span);
+            let field_expr = self.ast.alloc_expr(Expr.MemberAccess(MemberAccessExpr { expr: self_expr, member: s.fields[fi].name }), span);
+            let method_expr = self.ast.alloc_expr(Expr.MemberAccess(MemberAccessExpr { expr: field_expr, member: clone_method_id }), span);
+            let call_expr = self.ast.alloc_expr(Expr.Call(CallExpr { callee: method_expr, args: no_args, type_args: no_types }), span);
+            fields.push(FieldValue { name: s.fields[fi].name, value: call_expr });
+            fi = fi + 1 as usize;
+        }
+        let literal = self.ast.alloc_expr(Expr.StructLiteral(StructLiteralExpr { struct_name: s.name, type_args: target_args.as_slice(), fields: fields.as_slice() }), span);
+        let ret_stmt = self.ast.alloc_stmt(Stmt.Return(literal), span, 0 as u32);
+        let mut stmts = Vec::<StmtId>.new_in(self.arena);
+        stmts.push(ret_stmt);
+        let body = self.ast.alloc_expr(Expr.Block(BlockExpr { stmts: stmts.as_slice(), tail_expr: 0 as ExprId, is_unsafe: false }), span);
+
+        let mut params = Vec::<Param>.new_in(self.arena);
+        params.push(Param { name: self_id, ty: self_ty, is_mut: false });
+        let file_id = self.intern_table.intern(self.module_path);
+        let mut methods = Vec::<FnDecl>.new_in(self.arena);
+        methods.push(FnDecl {
+            name: clone_method_id,
+            params: params.as_slice(),
+            ret_ty: target_ty,
+            body: body,
+            is_pub: true,
+            is_extern: false,
+            is_variadic: false,
+            must_use: false,
+            type_params: @slice(0 as *mut TypeParam, 0 as usize),
+            doc_comment: 0 as u32,
+            source_file: file_id,
+            has_summary: false,
+            summary_escape: 0 as u64,
+            summary_stash: 0 as u64,
+            summary_storage: 0 as u64,
+            summary_stores: 0 as u64,
+            summary_into: 0 as u64,
+            summary_ret_stack: false,
+            summary_alloc: 0 as usize,
+            has_borrows: false,
+            borrows: @slice(0 as *mut u32, 0 as usize),
+            expr_start: expr_start,
+            expr_end: self.ast.exprs.len as u32,
+        });
+        return ImplDecl {
+            trait_name: clone_id,
+            target_ty: target_ty,
+            methods: methods.as_slice(),
+            constants: @slice(0 as *mut ConstDecl, 0 as usize),
+            type_params: impl_params.as_slice(),
+            trait_type_args: no_types,
+            source_file: file_id,
+        };
+    }
+
+    fn parse_struct_decl(self: &mut Parser, is_pub: bool, must_use: bool) -> StructDecl {
+        self.expect(Token.KStruct);
+        let name = self.cur.token.get_ident_id();
+        self.expect(Token.Ident(0 as u32));
+
+        let tp = self.parse_type_params();
+
+        self.expect(Token.LBrace);
+        let mut fields = Vec::<Field>.new_in(self.arena);
+        while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+            let mut f_pub = false;
+            if self.is_kind(TokenKind.KPub) {
+                self.next_token();
+                f_pub = true;
+            }
+            let f_name = self.cur.token.get_ident_id();
+            self.expect(Token.Ident(0 as u32));
+            self.expect(Token.Colon);
+            let f_ty = self.parse_type();
+
+            fields.push(Field { name: f_name, ty: f_ty, is_pub: f_pub });
+
+            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+        }
+        self.expect(Token.RBrace);
+
+        let file_id = self.intern_table.intern(self.module_path);
+        return StructDecl {
+            name: name,
+            fields: fields.as_slice(),
+            is_pub: is_pub,
+            must_use: must_use,
+            type_params: unsafe { @slice(tp.ptr, tp.len) },
+            source_file: file_id,
+        };
+    }
+
+    fn parse_enum_decl(self: &mut Parser, is_pub: bool, must_use: bool) -> EnumDecl {
+        let span = self.cur.span;
+        self.expect(Token.KEnum);
+        let name = self.cur.token.get_ident_id();
+        self.expect(Token.Ident(0 as u32));
+
+        let tp = self.parse_type_params();
+
+        self.expect(Token.LBrace);
+        let mut variants = Vec::<Variant>.new_in(self.arena);
+        while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+            let v_name = self.cur.token.get_ident_id();
+            self.expect(Token.Ident(0 as u32));
+            
+            let mut v_payload = 0 as TypeId;
+            if self.is_kind(TokenKind.LParen) {
+                self.next_token();
+                let mut types = Vec::<TypeId>.new_in(self.arena);
+                while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+                    types.push(self.parse_type());
+                    if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+                }
+                self.expect(Token.RParen);
+                
+                if types.len() == 1 as usize {
+                    v_payload = types[0];
+                } else if types.len() > 1 as usize {
+                    v_payload = self.ast.alloc_type(Type.Tuple(types.as_slice()), span);
+                }
+            }
+            
+            let mut v_disc = 0 as u32;
+            let mut has_disc = false;
+            if self.is_kind(TokenKind.Equal) {
+                self.next_token();
+                if self.is_kind(TokenKind.Int) {
+                    v_disc = self.cur.token.get_int_val() as u32;
+                    has_disc = true;
+                    self.next_token();
+                } else {
+                    self.report_error("Expected integer literal for enum discriminant", self.cur.span);
+                }
+            }
+            
+            variants.push(Variant { 
+                name: v_name, 
+                payload: v_payload,
+                discriminant: v_disc,
+                has_discriminant: has_disc
+            });
+
+            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+        }
+        self.expect(Token.RBrace);
+
+        let file_id = self.intern_table.intern(self.module_path);
+        return EnumDecl {
+            name: name,
+            variants: variants.as_slice(),
+            is_pub: is_pub,
+            must_use: must_use,
+            type_params: unsafe { @slice(tp.ptr, tp.len) },
+            source_file: file_id,
+        };
+    }
+
+    fn parse_trait_decl(self: &mut Parser, is_pub: bool) -> TraitDecl {
+        self.expect(Token.KTrait);
+        let name = self.cur.token.get_ident_id();
+        self.expect(Token.Ident(0 as u32));
+
+        let tp = self.parse_type_params();
+
+        self.expect(Token.LBrace);
+        let mut methods = Vec::<FnDecl>.new_in(self.arena);
+        while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+            let attr = self.parse_attributes();
+            let mut m_pub = false;
+            if self.is_kind(TokenKind.KPub) {
+                self.next_token();
+                m_pub = true;
+            }
+            // Backport: `unsafe fn` trait method signatures.
+            let mut m_unsafe = false;
+            if self.is_kind(TokenKind.KUnsafe) {
+                self.next_token();
+                m_unsafe = true;
+            }
+            let m = self.parse_fn_decl(m_pub, false, m_unsafe, &attr);
+            methods.push(m);
+        }
+        self.expect(Token.RBrace);
+
+        let file_id = self.intern_table.intern(self.module_path);
+        return TraitDecl {
+            name: name,
+            methods: methods.as_slice(),
+            is_pub: is_pub,
+            type_params: unsafe { @slice(tp.ptr, tp.len) },
+            source_file: file_id,
+        };
+    }
+
+    fn parse_impl_decl(self: &mut Parser) -> ImplDecl {
+        self.expect(Token.KImpl);
+        let tp = self.parse_type_params();
+
+        let mut first_ty = self.parse_type();
+        let mut trait_name = 0 as u32;
+        let mut target_ty = first_ty;
+
+        let mut trait_type_args_ptr = 0 as *mut TypeId;
+        let mut trait_type_args_len = 0 as usize;
+        if self.is_kind(TokenKind.KFor) {
+            self.next_token();
+            // Extact trait name from the first type (which must be a path)
+            let p_ty: &Type = &self.ast.types[first_ty as usize];
+            if p_ty.get_tag() == TYPE_PATH {
+                let path = p_ty.get_Path();
+                trait_name = path.0;
+                trait_type_args_ptr = path.1.ptr;
+                trait_type_args_len = path.1.len;
+            } else {
+                self.report_error("expected trait name before 'for'", self.cur.span);
+            }
+            target_ty = self.parse_type();
+        }
+
+        self.expect(Token.LBrace);        let mut methods = Vec::<FnDecl>.new_in(self.arena);
+        let mut constants = Vec::<ConstDecl>.new_in(self.arena);
+        while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+            let attr = self.parse_attributes();
+            let mut m_pub = false;
+            if self.is_kind(TokenKind.KPub) {
+                self.next_token();
+                m_pub = true;
+            }
+            // Backport: `unsafe fn` methods (e.g. `pub unsafe fn` in impl blocks).
+            let mut m_unsafe = false;
+            if self.is_kind(TokenKind.KUnsafe) {
+                self.next_token();
+                m_unsafe = true;
+            }
+            if self.is_kind(TokenKind.KConst) {
+                let c = self.parse_const_decl(m_pub);
+                constants.push(c);
+            } else {
+                let m = self.parse_fn_decl(m_pub, false, m_unsafe, &attr);
+                methods.push(m);
+            }
+        }
+        self.expect(Token.RBrace);
+
+        let file_id = self.intern_table.intern(self.module_path);
+        return ImplDecl {
+            trait_name: trait_name,
+            target_ty: target_ty,
+            methods: methods.as_slice(),
+            constants: constants.as_slice(),
+            type_params: unsafe { @slice(tp.ptr, tp.len) },
+            trait_type_args: unsafe { @slice(trait_type_args_ptr, trait_type_args_len) },
+            source_file: file_id,
+        };
+    }
+
+    fn parse_type_alias_decl(self: &mut Parser, is_pub: bool) -> TypeAliasDecl {
+        self.expect(Token.KType);
+        let name = self.cur.token.get_ident_id();
+        self.expect(Token.Ident(0 as u32));
+
+        let tp = self.parse_type_params();
+
+        self.expect(Token.Equal);
+        let target = self.parse_type();
+        self.expect(Token.Semi);
+
+        let file_id = self.intern_table.intern(self.module_path);
+        return TypeAliasDecl {
+            name: name,
+            target: target,
+            is_pub: is_pub,
+            source_file: file_id,
+        };
+    }
+
+    fn parse_const_decl(self: &mut Parser, is_pub: bool) -> ConstDecl {
+        self.expect(Token.KConst);
+        let name = self.cur.token.get_ident_id();
+        self.expect(Token.Ident(0 as u32));
+        self.expect(Token.Colon);
+        let ty = self.parse_type();
+        self.expect(Token.Equal);
+        let value = self.parse_expr(0);
+        self.expect(Token.Semi);
+        let file_id = self.intern_table.intern(self.module_path);
+        return ConstDecl { name: name, ty: ty, value: value, is_pub: is_pub, source_file: file_id };
+    }
+
+    fn parse_static_decl(self: &mut Parser, is_pub: bool) -> StaticDecl {
+        self.expect(Token.KStatic);
+        let mut is_mut = false;
+        if self.is_kind(TokenKind.KMut) {
+            self.next_token();
+            is_mut = true;
+        }
+        let name = self.cur.token.get_ident_id();
+        self.expect(Token.Ident(0 as u32));
+        self.expect(Token.Colon);
+        let ty = self.parse_type();
+        self.expect(Token.Equal);
+        let value = self.parse_expr(0);
+        self.expect(Token.Semi);
+        let file_id = self.intern_table.intern(self.module_path);
+        return StaticDecl { name: name, ty: ty, value: value, is_pub: is_pub, is_mut: is_mut, source_file: file_id };
+    }
+
+    fn parse_declaration(self: &mut Parser) -> Decl {
+        let attr = self.parse_attributes();
+        
+        let mut is_pub = false;
+        if self.is_kind(TokenKind.KPub) {
+            self.next_token();
+            is_pub = true;
+        }
+
+        // Backport: `unsafe fn` / `pub unsafe fn` / `extern unsafe fn`. stage1 need not
+        // enforce `unsafe`; it parses it and treats the declaration as a plain fn whose
+        // body is an unsafe context (marked on the body block in parse_fn_decl), so
+        // stdlib's raw-pointer operations inside `unsafe fn` are allowed without blocks.
+        let mut is_unsafe = false;
+        if self.is_kind(TokenKind.KUnsafe) {
+            self.next_token();
+            is_unsafe = true;
+        }
+
+        if self.is_kind(TokenKind.KImport) {
+            self.last_import_span = self.cur.span;
+            self.next_token();
+            let path_id = self.cur.token.get_string_id();
+            self.expect(Token.String(0 as u32));
+            if self.is_kind(TokenKind.KAs) {
+                self.next_token();
+                self.namespaces.push(self.cur.token.get_ident_id());
+                self.expect(Token.Ident(0 as u32));
+            } else {
+                let stem = self.import_stem(self.intern_table.lookup(path_id));
+                self.namespaces.push(stem);
+            }
+            self.expect(Token.Semi);
+            return Decl.Import(path_id);
+        }
+
+        if self.is_kind(TokenKind.Ident) && self.intern_table.lookup(self.cur.token.get_ident_id()) == "use" {
+            while !self.is_kind(TokenKind.Semi) && !self.is_kind(TokenKind.Eof) { self.next_token(); }
+            self.expect(Token.Semi);
+            return Decl.None;
+        }
+
+        if self.is_kind(TokenKind.KConst) {
+            return Decl.Const(self.parse_const_decl(is_pub));
+        }
+
+        if self.is_kind(TokenKind.KStatic) {
+            return Decl.Static(self.parse_static_decl(is_pub));
+        }
+
+        if self.is_kind(TokenKind.KFn) {
+            return Decl.Fn(self.parse_fn_decl(is_pub, false, is_unsafe, &attr));
+        }
+        if self.is_kind(TokenKind.KExtern) {
+            self.next_token();
+            if self.is_kind(TokenKind.String) {
+                self.next_token();
+            }
+            if self.is_kind(TokenKind.KFn) {
+                return Decl.Fn(self.parse_fn_decl(is_pub, true, is_unsafe, &attr));
+            }
+            self.report_error("expected fn after extern", self.cur.span);
+        }
+        if self.is_kind(TokenKind.KStruct) {
+            self.derive_clone_next = attr.derive_clone;
+            return Decl.Struct(self.parse_struct_decl(is_pub, attr.must_use));
+        }
+        if attr.derive_clone {
+            self.report_error("derive(Clone) applies only to structs", self.cur.span);
+        }
+        if self.is_kind(TokenKind.KEnum) {
+            return Decl.Enum(self.parse_enum_decl(is_pub, attr.must_use));
+        }
+        if self.is_kind(TokenKind.KTrait) {
+            return Decl.Trait(self.parse_trait_decl(is_pub));
+        }
+        if self.is_kind(TokenKind.KImpl) {
+            return Decl.Impl(self.parse_impl_decl());
+        }
+        if self.is_kind(TokenKind.KType) {
+            return Decl.TypeAlias(self.parse_type_alias_decl(is_pub));
+        }
+        
+        if !self.is_kind(TokenKind.Eof) {
+            self.report_error("expected declaration (fn, struct, enum, etc.)", self.cur.span);
+            self.next_token();
+        }
+        return Decl.None;
+    }
+
+    fn parse_if(self: &mut Parser) -> ExprId {
+        let span = self.cur.span;
+        self.expect(Token.KIf);
+        if self.is_kind(TokenKind.KLet) {
+            return self.parse_if_let(span);
+        }
+        let cond = self.parse_expr_full(0 as u32, false);
+        let then_b = self.parse_block();
+        let then_block = self.ast.alloc_expr(Expr.Block(then_b), span);
+
+        let mut else_block = 0 as ExprId;
+        if self.is_kind(TokenKind.KElse) {
+            self.next_token();
+            if self.is_kind(TokenKind.KIf) {
+                else_block = self.parse_if();
+            } else {
+                let else_b = self.parse_block();
+                else_block = self.ast.alloc_expr(Expr.Block(else_b), span);
+            }
+        }
+        return self.ast.alloc_expr(Expr.If(IfExpr { cond: cond, then_block: then_block, else_block: else_block }), span);
+    }
+
+    // `if let PAT = EXPR { A } else { B }` is `match EXPR { PAT => { A }, _ => { B } }`: the
+    // match machinery gives it the same bindings, borrows and moves. `if` already consumed.
+    fn parse_if_let(self: &mut Parser, span: Span) -> ExprId {
+        self.expect(Token.KLet);
+        let pattern = self.parse_pattern();
+        self.expect(Token.Equal);
+        let scrut = self.parse_expr_full(0 as u32, false);
+        let then_b = self.parse_block();
+        let then_block = self.ast.alloc_expr(Expr.Block(then_b), span);
+        let mut else_block = 0 as ExprId;
+        if self.is_kind(TokenKind.KElse) {
+            self.next_token();
+            if self.is_kind(TokenKind.KIf) {
+                else_block = self.parse_if();
+            } else {
+                let else_b = self.parse_block();
+                else_block = self.ast.alloc_expr(Expr.Block(else_b), span);
+            }
+        } else {
+            else_block = self.empty_block_expr(span);
+        }
+        return self.two_arm_match(scrut, pattern, then_block, else_block, span);
+    }
+
+    // `match SCRUT { PAT => YES, _ => NO }`.
+    fn two_arm_match(self: &mut Parser, scrut: ExprId, pattern: PatternId, yes: ExprId, no: ExprId, span: Span) -> ExprId {
+        let mut arms = Vec::<MatchArm>.new_in(self.arena);
+        arms.push(MatchArm { pattern: pattern, guard: 0 as ExprId, body: yes });
+        let wild = self.ast.alloc_pattern(Pattern.Wildcard, span);
+        arms.push(MatchArm { pattern: wild, guard: 0 as ExprId, body: no });
+        return self.ast.alloc_expr(Expr.Match(MatchExpr { expr: scrut, arms: arms.as_slice() }), span);
+    }
+
+    fn empty_block_expr(self: &mut Parser, span: Span) -> ExprId {
+        return self.ast.alloc_expr(Expr.Block(BlockExpr { stmts: @slice(0 as *mut StmtId, 0 as usize), tail_expr: 0 as ExprId, is_unsafe: false }), span);
+    }
+
+    fn parse_match(self: &mut Parser) -> ExprId {
+        let span = self.cur.span;
+        self.expect(Token.KMatch);
+        let expr = self.parse_expr_full(0, false); // Don't allow struct literal in match expr
+        self.expect(Token.LBrace);
+        
+        let mut arms = Vec::<MatchArm>.new_in(self.arena);
+        
+        while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+            let pattern = self.parse_pattern();
+            if pattern == 0 as u32 {
+                self.report_error("expected pattern", self.cur.span);
+                self.next_token();
+                continue;
+            }
+            let mut guard = 0 as ExprId;
+            if self.is_kind(TokenKind.KIf) {
+                self.next_token();
+                guard = self.parse_expr_full(0 as u32, false);
+            }
+            self.expect(Token.FatArrow);
+            let body = self.parse_expr_full(0, false);
+            
+            arms.push(MatchArm {
+                pattern: pattern,
+                guard: guard,
+                body: body,
+            });
+            
+            if self.is_kind(TokenKind.Comma) { self.next_token(); }
+        }
+        self.expect(Token.RBrace);
+        let arms_slice = arms.as_slice();
+        return self.ast.alloc_expr(Expr.Match(MatchExpr { expr: expr, arms: arms_slice }), span);
+    }
+
+    fn parse_pattern(self: &mut Parser) -> PatternId {
+        let span = self.cur.span;
+        let mut first = self.parse_pattern_single();
+        if !self.is_kind(TokenKind.Pipe) { return first; }
+
+        let mut patterns = Vec::<PatternId>.new_in(self.arena);
+        patterns.push(first);
+
+        while self.is_kind(TokenKind.Pipe) {
+            self.next_token();
+            let next = self.parse_pattern_single();
+            patterns.push(next);
+        }
+
+        return self.ast.alloc_pattern(Pattern.Or(patterns.as_slice()), span);
+    }
+
+    // `(p, q, ..)` after a variant name: its payload patterns.
+    fn parse_pattern_list(self: &mut Parser) -> [PatternId] {
+        self.expect(Token.LParen);
+        let mut pats = Vec::<PatternId>.new_in(self.arena);
+        while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+            pats.push(self.parse_pattern());
+            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+        }
+        self.expect(Token.RParen);
+        return pats.as_slice();
+    }
+
+    // `Name { field: p, short, .. }`, with the opening brace current.
+    fn parse_struct_pattern(self: &mut Parser, type_name: u32, span: Span) -> PatternId {
+        self.expect(Token.LBrace);
+        let mut fields = Vec::<FieldPattern>.new_in(self.arena);
+        let mut has_rest = false;
+        while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+            if self.is_kind(TokenKind.DotDot) {
+                self.next_token();
+                has_rest = true;
+                break;
+            }
+            let fspan = self.cur.span;
+            let shorthand_mut = self.is_kind(TokenKind.KMut);
+            if shorthand_mut { self.next_token(); }
+            let fname = self.cur.token.get_ident_id();
+            self.expect(Token.Ident(0 as u32));
+            let mut fpat = 0 as PatternId;
+            if shorthand_mut {
+                fpat = self.ast.alloc_pattern(Pattern.MutIdent(fname), fspan);
+            } else if self.is_kind(TokenKind.Colon) {
+                self.next_token();
+                fpat = self.parse_pattern();
+            } else {
+                fpat = self.ast.alloc_pattern(Pattern.Ident(fname), fspan);
+            }
+            fields.push(FieldPattern { name: fname, pattern: fpat });
+            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+        }
+        self.expect(Token.RBrace);
+        return self.ast.alloc_pattern(Pattern.Struct(StructPattern { type_name: type_name, fields: fields.as_slice(), has_rest: has_rest }), span);
+    }
+
+    fn parse_pattern_single(self: &mut Parser) -> PatternId {
+        let span = self.cur.span;
+        if self.is_kind(TokenKind.Int) {
+            let val = self.cur.token.get_int_val();
+            let suffix = self.cur.token.get_int_suffix();
+            self.next_token();
+            
+            if self.is_kind(TokenKind.DotDot) {
+                self.next_token();
+                let mut inclusive = false;
+                if self.is_kind(TokenKind.Equal) {
+                    self.next_token();
+                    inclusive = true;
+                }
+                if self.is_kind(TokenKind.Int) {
+                    let end_val = self.cur.token.get_int_val();
+                    self.next_token();
+                    return self.ast.alloc_pattern(Pattern.Range(RangePattern { start: Literal.Int(val, 0xffffffff as u32), end: Literal.Int(end_val, 0xffffffff as u32), inclusive: inclusive }), span);
+                } else {
+                    self.report_error("expected integer literal for range pattern end", span);
+                    return 0 as u32;
+                }
+            }
+            
+            return self.ast.alloc_pattern(Pattern.Literal(Literal.Int(val, 0xffffffff as u32)), span);
+        }
+        if self.is_kind(TokenKind.Bool) {
+            let val = self.cur.token.get_bool_val();
+            self.next_token();
+            return self.ast.alloc_pattern(Pattern.Literal(Literal.Bool(val)), span);
+        }
+        if self.is_kind(TokenKind.Char) {
+            let val = self.cur.token.get_char_val();
+            self.next_token();
+            
+            if self.is_kind(TokenKind.DotDot) {
+                self.next_token();
+                let mut inclusive = false;
+                if self.is_kind(TokenKind.Equal) {
+                    self.next_token();
+                    inclusive = true;
+                }
+                if self.is_kind(TokenKind.Char) {
+                    let end_val = self.cur.token.get_char_val();
+                    self.next_token();
+                    return self.ast.alloc_pattern(Pattern.Range(RangePattern { start: Literal.Char(val), end: Literal.Char(end_val), inclusive: inclusive }), span);
+                } else {
+                    self.report_error("expected char literal for range pattern end", span);
+                    return 0 as u32;
+                }
+            }
+            
+            return self.ast.alloc_pattern(Pattern.Literal(Literal.Char(val)), span);
+        }
+        if self.is_kind(TokenKind.Underscore) {
+            self.next_token();
+            return self.ast.alloc_pattern(Pattern.Wildcard, span);
+        }
+        if self.is_kind(TokenKind.KMut) {
+            self.next_token();
+            let mname = self.cur.token.get_ident_id();
+            self.expect(Token.Ident(0 as u32));
+            return self.ast.alloc_pattern(Pattern.MutIdent(mname), span);
+        }
+        // `(p, q)` is a tuple pattern; `(p)` only groups, as `(p,)` is the one-element tuple.
+        if self.is_kind(TokenKind.LParen) {
+            self.next_token();
+            let mut elems = Vec::<PatternId>.new_in(self.arena);
+            let mut trailing_comma = false;
+            while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+                elems.push(self.parse_pattern());
+                trailing_comma = false;
+                if self.is_kind(TokenKind.Comma) { self.next_token(); trailing_comma = true; } else { break; }
+            }
+            self.expect(Token.RParen);
+            if elems.len == 1 as usize && !trailing_comma { return elems.as_slice()[0]; }
+            return self.ast.alloc_pattern(Pattern.Tuple(elems.as_slice()), span);
+        }
+        if self.is_kind(TokenKind.Ident) {
+            let id = self.cur.token.get_ident_id();
+            self.next_token();
+            
+            if self.is_kind(TokenKind.Dot) {
+                self.next_token();
+                let variant = self.cur.token.get_ident_id();
+                self.expect(Token.Ident(0 as u32));
+                let payload = if self.is_kind(TokenKind.LParen) { self.parse_pattern_list() } else { @slice(0 as *mut PatternId, 0 as usize) };
+                return self.ast.alloc_pattern(Pattern.EnumVariant(VariantPattern {
+                    type_name: id,
+                    variant_name: variant,
+                    payload: payload,
+                }), span);
+            }
+
+            if self.is_kind(TokenKind.LParen) {
+                let payload = self.parse_pattern_list();
+                return self.ast.alloc_pattern(Pattern.EnumVariant(VariantPattern {
+                    type_name: 0 as u32,
+                    variant_name: id,
+                    payload: payload,
+                }), span);
+            }
+
+            if self.is_kind(TokenKind.LBrace) {
+                return self.parse_struct_pattern(id, span);
+            }
+            
+            return self.ast.alloc_pattern(Pattern.Ident(id), span);
+        }
+        return 0 as PatternId;
+    }
+
+    fn parse_while(self: &mut Parser) -> Stmt {
+        let span = self.cur.span;
+        self.expect(Token.KWhile);
+        if self.is_kind(TokenKind.KLet) {
+            // `while let PAT = EXPR { BODY }` is `loop { match EXPR { PAT => { BODY }, _ => break } }`:
+            // EXPR is evaluated again on every iteration, `continue` included.
+            self.next_token();
+            let pattern = self.parse_pattern();
+            self.expect(Token.Equal);
+            let scrut = self.parse_expr_full(0 as u32, false);
+            let body_b = self.parse_block();
+            let body = self.ast.alloc_expr(Expr.Block(body_b), span);
+            let brk = self.ast.alloc_expr(Expr.Break, span);
+            let m = self.two_arm_match(scrut, pattern, body, brk, span);
+            let stmt = self.ast.alloc_stmt(Stmt.Expr(m), span, 0 as u32);
+            let mut stmts = Vec::<StmtId>.new_in(self.arena);
+            stmts.push(stmt);
+            let loop_body = self.ast.alloc_expr(Expr.Block(BlockExpr { stmts: stmts.as_slice(), tail_expr: 0 as ExprId, is_unsafe: false }), span);
+            let true_lit = self.ast.alloc_expr(Expr.Literal(Literal.Bool(true)), span);
+            return Stmt.While(WhileStmt { cond: true_lit, body: loop_body });
+        }
+        let cond = self.parse_expr_full(0 as u32, false);
+        let body_b = self.parse_block();
+        let body = self.ast.alloc_expr(Expr.Block(body_b), span);
+        return Stmt.While(WhileStmt { cond: cond, body: body });
+    }
+
+    fn parse_loop(self: &mut Parser) -> Stmt {
+        let span = self.cur.span;
+        self.expect(Token.KLoop);
+        let body_b = self.parse_block();
+        let body = self.ast.alloc_expr(Expr.Block(body_b), span);
+        let true_lit = self.ast.alloc_expr(Expr.Literal(Literal.Bool(true)), span);
+        return Stmt.While(WhileStmt { cond: true_lit, body: body });
+    }
+
+    fn parse_for(self: &mut Parser) -> Stmt {
+        let span = self.cur.span;
+        self.expect(Token.KFor);
+        let mut var_id = 0 as u32;
+        let mut pattern = 0 as PatternId;
+        if self.is_kind(TokenKind.Ident) && self.peek_is_kind(TokenKind.KIn) {
+            var_id = self.cur.token.get_ident_id();
+            self.next_token();
+        } else {
+            pattern = self.parse_pattern();
+        }
+        self.expect(Token.KIn);
+        let start = self.parse_expr_full(0 as u32, false);
+        if self.is_kind(TokenKind.DotDot) {
+            self.next_token();
+            let end = self.parse_expr_full(0 as u32, false);
+            if var_id == 0 as u32 { self.report_error("a range `for` binds a single name", span); }
+            let body_b = self.parse_block();
+            let body = self.ast.alloc_expr(Expr.Block(body_b), span);
+            return Stmt.For(ForStmt { var: var_id, start: start, end: end, body: body, pattern: 0 as PatternId, bind: 0 as StmtId, slice_loop: 0 as StmtId, iter_loop: 0 as StmtId });
+        }
+        if pattern == 0 as PatternId { pattern = self.ast.alloc_pattern(Pattern.Ident(var_id), span); }
+        let body_b = self.parse_block();
+        let body = self.ast.alloc_expr(Expr.Block(body_b), span);
+        return self.iterator_for(pattern, start, body, span);
+    }
+
+    // The iterator form of `for` (see `ForStmt`). Its hidden names are compiler-internal
+    // (`__`, like `__env`); a nested `for` shadows the outer loop's.
+    fn iterator_for(self: &mut Parser, pattern: PatternId, iterable: ExprId, body: ExprId, span: Span) -> Stmt {
+        let src_id = self.intern_table.intern("__for_iterable");
+        let idx_id = self.intern_table.intern("__for_index");
+        let elem_id = self.intern_table.intern("__for_element");
+        let no_ty = 0 as TypeId;
+        let bind = self.ast.alloc_stmt(Stmt.Let(LetStmt { pattern: 0 as PatternId, name: src_id, ty: no_ty, init: iterable, is_mut: true }), span, 0 as u32);
+        let body_stmt = self.ast.alloc_stmt(Stmt.Expr(body), span, 0 as u32);
+
+        // { let mut <i> = 0usize; while <i> < <s>.len { let PAT = &<s>[<i>]; <i> = <i> + 1usize; BODY } }
+        let zero = self.ast.alloc_expr(Expr.Literal(Literal.Int((0 as u64, 4 as u32))), span);
+        let idx_let = self.ast.alloc_stmt(Stmt.Let(LetStmt { pattern: 0 as PatternId, name: idx_id, ty: no_ty, init: zero, is_mut: true }), span, 0 as u32);
+        let len = self.ast.alloc_expr(Expr.MemberAccess(MemberAccessExpr { expr: self.ast.alloc_expr(Expr.Ident(src_id), span), member: self.intern_table.intern("len") }), span);
+        let cond = self.ast.alloc_expr(Expr.Binary(BinaryExpr { op: BinaryOp.Lt, lhs: self.ast.alloc_expr(Expr.Ident(idx_id), span), rhs: len }), span);
+        let elem = self.ast.alloc_expr(Expr.Index(IndexExpr { expr: self.ast.alloc_expr(Expr.Ident(src_id), span), index: self.ast.alloc_expr(Expr.Ident(idx_id), span) }), span);
+        let elem_ref = self.ast.alloc_expr(Expr.Unary(UnaryExpr { op: UnaryOp.Ref, expr: elem }), span);
+        let elem_let = self.ast.alloc_stmt(Stmt.Let(LetStmt { pattern: pattern, name: 0 as u32, ty: no_ty, init: elem_ref, is_mut: false }), span, 0 as u32);
+        let one = self.ast.alloc_expr(Expr.Literal(Literal.Int((1 as u64, 4 as u32))), span);
+        let next_idx = self.ast.alloc_expr(Expr.Binary(BinaryExpr { op: BinaryOp.Add, lhs: self.ast.alloc_expr(Expr.Ident(idx_id), span), rhs: one }), span);
+        let step = self.ast.alloc_expr(Expr.Binary(BinaryExpr { op: BinaryOp.Assign, lhs: self.ast.alloc_expr(Expr.Ident(idx_id), span), rhs: next_idx }), span);
+        let step_stmt = self.ast.alloc_stmt(Stmt.Expr(step), span, 0 as u32);
+        let mut slice_body = Vec::<StmtId>.new_in(self.arena);
+        slice_body.push(elem_let);
+        slice_body.push(step_stmt);
+        slice_body.push(body_stmt);
+        let slice_while = self.ast.alloc_stmt(Stmt.While(WhileStmt { cond: cond, body: self.block_of(slice_body.as_slice(), span) }), span, 0 as u32);
+        let mut slice_outer = Vec::<StmtId>.new_in(self.arena);
+        slice_outer.push(idx_let);
+        slice_outer.push(slice_while);
+        let slice_loop = self.ast.alloc_stmt(Stmt.Expr(self.block_of(slice_outer.as_slice(), span)), span, 0 as u32);
+
+        // while true { match <s>.next() { Option.Some(<e>) => { let PAT = <e>; BODY }, _ => break } }
+        let next_fn = self.ast.alloc_expr(Expr.MemberAccess(MemberAccessExpr { expr: self.ast.alloc_expr(Expr.Ident(src_id), span), member: self.intern_table.intern("next") }), span);
+        let next_call = self.ast.alloc_expr(Expr.Call(CallExpr { callee: next_fn, args: @slice(0 as *ExprId, 0 as usize), type_args: @slice(0 as *TypeId, 0 as usize) }), span);
+        let mut payload = Vec::<PatternId>.new_in(self.arena);
+        payload.push(self.ast.alloc_pattern(Pattern.Ident(elem_id), span));
+        let some = self.ast.alloc_pattern(Pattern.EnumVariant(VariantPattern { type_name: self.intern_table.intern("Option"), variant_name: self.intern_table.intern("Some"), payload: payload.as_slice() }), span);
+        let item_let = self.ast.alloc_stmt(Stmt.Let(LetStmt { pattern: pattern, name: 0 as u32, ty: no_ty, init: self.ast.alloc_expr(Expr.Ident(elem_id), span), is_mut: false }), span, 0 as u32);
+        let mut arm_body = Vec::<StmtId>.new_in(self.arena);
+        arm_body.push(item_let);
+        arm_body.push(body_stmt);
+        let brk = self.ast.alloc_expr(Expr.Break, span);
+        let m = self.two_arm_match(next_call, some, self.block_of(arm_body.as_slice(), span), brk, span);
+        let mut loop_body = Vec::<StmtId>.new_in(self.arena);
+        loop_body.push(self.ast.alloc_stmt(Stmt.Expr(m), span, 0 as u32));
+        let true_lit = self.ast.alloc_expr(Expr.Literal(Literal.Bool(true)), span);
+        let iter_loop = self.ast.alloc_stmt(Stmt.While(WhileStmt { cond: true_lit, body: self.block_of(loop_body.as_slice(), span) }), span, 0 as u32);
+
+        return Stmt.For(ForStmt { var: src_id, start: iterable, end: 0 as ExprId, body: body, pattern: pattern, bind: bind, slice_loop: slice_loop, iter_loop: iter_loop });
+    }
+
+    fn block_of(self: &mut Parser, stmts: [StmtId], span: Span) -> ExprId {
+        return self.ast.alloc_expr(Expr.Block(BlockExpr { stmts: stmts, tail_expr: 0 as ExprId, is_unsafe: false }), span);
+    }
+
+    fn parse_closure(self: &mut Parser) -> ExprId {
+        let span = self.cur.span;
+        self.expect(Token.Pipe);
+        
+        let mut params = Vec::<Param>.new_in(self.arena);
+        
+        while !self.is_kind(TokenKind.Pipe) && !self.is_kind(TokenKind.Eof) {
+            let p_name = self.cur.token.get_ident_id();
+            self.expect(Token.Ident(0 as u32));
+            self.expect(Token.Colon);
+            let p_ty = self.parse_type();
+            
+            params.push(Param { name: p_name, ty: p_ty, is_mut: false });
+            
+            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+        }
+        self.expect(Token.Pipe);
+        
+        let mut ret_ty = 0 as TypeId;
+        if self.is_kind(TokenKind.Arrow) {
+            self.next_token();
+            ret_ty = self.parse_type();
+        }
+        
+        let body_b = self.parse_block();
+        let body = self.ast.alloc_expr(Expr.Block(body_b), span);
+        
+        return self.ast.alloc_expr(Expr.Closure(ClosureExpr {
+            params: params.as_slice(),
+            ret_ty: ret_ty,
+            body: body
+        }), span);
+    }
+
+    pub fn parse_block(self: &mut Parser) -> BlockExpr {
+        let span = self.cur.span;
+        self.expect(Token.LBrace);
+        let mut stmts = Vec::<StmtId>.new_in(self.arena);
+        let mut tail_expr = 0 as ExprId;
+
+        while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+            let s_span = self.cur.span;
+            // The literal "// ..." comment block immediately preceding
+            // this statement, captured by next_token() at the moment
+            // self.cur was lexed (see cur_comment's declaration above for
+            // why reading the lexer's pending_block directly here wouldn't
+            // work - it's already been cleared by the one-token lookahead).
+            let s_comment = self.cur_comment;
+            if self.is_kind(TokenKind.KLet) {
+                let s = self.parse_let_stmt();
+                stmts.push(self.ast.alloc_stmt(s, s_span, s_comment));
+            } else if self.is_kind(TokenKind.KReturn) {
+                let s = self.parse_return_stmt();
+                stmts.push(self.ast.alloc_stmt(s, s_span, s_comment));
+            } else if self.is_kind(TokenKind.KBreak) {
+                self.next_token();
+                self.expect(Token.Semi);
+                stmts.push(self.ast.alloc_stmt(Stmt.Break, s_span, s_comment));
+            } else if self.is_kind(TokenKind.KContinue) {
+                self.next_token();
+                self.expect(Token.Semi);
+                stmts.push(self.ast.alloc_stmt(Stmt.Continue, s_span, s_comment));
+            } else if self.is_kind(TokenKind.KDefer) {
+                self.next_token();
+                let e = self.parse_expr(0);
+                self.expect(Token.Semi);
+                stmts.push(self.ast.alloc_stmt(Stmt.Defer(e), s_span, s_comment));
+            } else if self.is_kind(TokenKind.KIf) {
+                let e = self.parse_if();
+                if self.is_kind(TokenKind.Semi) {
+                    self.next_token();
+                    stmts.push(self.ast.alloc_stmt(Stmt.Expr(e), s_span, s_comment));
+                } else if !self.is_kind(TokenKind.RBrace) {
+                    stmts.push(self.ast.alloc_stmt(Stmt.Expr(e), s_span, s_comment));
+                } else {
+                    tail_expr = e;
+                    break;
+                }
+            } else if self.is_kind(TokenKind.KWhile) {
+                // Parse while directly as a statement to prevent the Pratt parser from
+                // treating the following `(` as a call on the while-block expression.
+                let s = self.parse_while();
+                stmts.push(self.ast.alloc_stmt(s, s_span, s_comment));
+            } else if self.is_kind(TokenKind.KLoop) {
+                let s = self.parse_loop();
+                stmts.push(self.ast.alloc_stmt(s, s_span, s_comment));
+            } else if self.is_kind(TokenKind.KFor) {
+                let s = self.parse_for();
+                stmts.push(self.ast.alloc_stmt(s, s_span, s_comment));
+            } else if self.is_kind(TokenKind.KMatch) {
+                let e = self.parse_match();
+                if self.is_kind(TokenKind.Semi) {
+                    self.next_token();
+                    stmts.push(self.ast.alloc_stmt(Stmt.Expr(e), s_span, s_comment));
+                } else if !self.is_kind(TokenKind.RBrace) {
+                    stmts.push(self.ast.alloc_stmt(Stmt.Expr(e), s_span, s_comment));
+                } else {
+                    tail_expr = e;
+                    break;
+                }
+            } else {
+                let is_control_flow = self.is_control_flow_kind(self.cur.token.kind());
+                let e = self.parse_expr(0);
+                if self.is_kind(TokenKind.Semi) {
+                    self.next_token();
+                    stmts.push(self.ast.alloc_stmt(Stmt.Expr(e), s_span, s_comment));
+                } else if is_control_flow && !self.is_kind(TokenKind.RBrace) {
+                    stmts.push(self.ast.alloc_stmt(Stmt.Expr(e), s_span, s_comment));
+                } else {
+                    tail_expr = e;
+                    break;
+                }
+            }
+        }
+        self.expect(Token.RBrace);
+        return BlockExpr { stmts: stmts.as_slice(), tail_expr: tail_expr, is_unsafe: false };
+    }
+
+    fn parse_let_stmt(self: &mut Parser) -> Stmt {
+        self.expect(Token.KLet);
+        // A destructuring `let`: `let (a, b) = ..`, `let P { x, y } = ..`, `let V(x) = ..`.
+        if self.is_kind(TokenKind.LParen) || (self.is_kind(TokenKind.Ident)
+            && (self.peek_is_kind(TokenKind.LBrace) || self.peek_is_kind(TokenKind.LParen) || self.peek_is_kind(TokenKind.Dot))) {
+            let pattern = self.parse_pattern();
+            let mut pty = 0 as TypeId;
+            if self.is_kind(TokenKind.Colon) {
+                self.next_token();
+                pty = self.parse_type();
+            }
+            self.expect(Token.Equal);
+            let pinit = self.parse_expr(0);
+            self.expect(Token.Semi);
+            return Stmt.Let(LetStmt { pattern: pattern, name: 0 as u32, ty: pty, init: pinit, is_mut: false });
+        }
+        let mut is_mut = false;
+        if self.is_kind(TokenKind.KMut) {
+            self.next_token();
+            is_mut = true;
+        }
+        
+        let mut name = 0 as u32;
+        if self.is_kind(TokenKind.Ident) {
+            name = self.cur.token.get_ident_id();
+            self.next_token();
+        } else if self.is_kind(TokenKind.Underscore) {
+            self.next_token();
+        } else {
+            self.report_expected(TokenKind.Ident);
+            self.next_token();
+        }
+        
+        let mut ty = 0 as TypeId;
+        if self.is_kind(TokenKind.Colon) {
+            self.next_token();
+            ty = self.parse_type();
+        }
+        
+        self.expect(Token.Equal);
+        let init = self.parse_expr(0);
+        self.expect(Token.Semi);
+        
+        return Stmt.Let(LetStmt { pattern: 0 as PatternId, name: name, ty: ty, init: init, is_mut: is_mut });
+    }
+
+    fn parse_return_stmt(self: &mut Parser) -> Stmt {
+        self.expect(Token.KReturn);
+        let mut e = 0 as ExprId;
+        if !self.is_kind(TokenKind.Semi) {
+            e = self.parse_expr(0);
+        }
+        self.expect(Token.Semi);
+        return Stmt.Return(e);
+    }
+
+    fn is_control_flow_kind(self: &Parser, kind: TokenKind) -> bool {
+        match kind {
+            TokenKind.KIf | TokenKind.KWhile | TokenKind.KFor | TokenKind.KLoop | TokenKind.KMatch | TokenKind.LBrace | TokenKind.KUnsafe => { return true; },
+            _ => { return false; }
+        }
+    }
+
+    fn parse_intrinsic(self: &mut Parser) -> ExprId {
+        let span = self.cur.span;
+        self.expect(Token.At);
+        let name_id = self.cur.token.get_ident_id();
+        self.expect(Token.Ident(0 as u32));
+
+        // Optional type argument list: @intrinsic<T1, T2, ...>(args)
+        let mut type_args = Vec::<TypeId>.new_in(self.arena);
+        if self.is_kind(TokenKind.Less) {
+            self.next_token();
+            while !self.is_kind(TokenKind.Greater) && !self.is_kind(TokenKind.Eof) {
+                type_args.push(self.parse_type());
+                if self.is_kind(TokenKind.Comma) { self.next_token(); }
+            }
+            self.expect(Token.Greater);
+        }
+
+        self.expect(Token.LParen);
+
+        let mut args = Vec::<ExprId>.new_in(self.arena);
+
+        while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+            args.push(self.parse_expr(0));
+            if self.is_kind(TokenKind.Comma) { self.next_token(); }
+        }
+        self.expect(Token.RParen);
+
+        return self.ast.alloc_expr(Expr.Intrinsic(IntrinsicExpr {
+            name: name_id,
+            args: args.as_slice(),
+            type_args: type_args.as_slice()
+        }), span);
+    }
+
+    pub fn parse_expr(self: &mut Parser, prec: i32) -> ExprId {
+        return self.parse_expr_full(prec, true);
+    }
+
+    pub fn parse_expr_full(self: &mut Parser, prec: i32, allow_struct: bool) -> ExprId {
+        let mut lhs = self.parse_primary_full(allow_struct);
+
+        while prec < self.get_precedence(&self.cur.token, allow_struct) {
+            let kind = self.cur.token.kind();
+            if kind == TokenKind.Eof { break; }
+
+            // Explicitly break if we see an LBRACE and don't allow structs.
+            // This is safer than relying on precedence alone.
+            if !allow_struct && kind == TokenKind.LBrace { break; }
+
+            // Don't apply `(`, `[` as postfix after if/match/block expressions.
+            // `if { ... }(next_stmt_starting_with_paren)` would be misinterpreted
+            // as a function call. Parenthesized forms still work: `(if { ... })(args)`.
+            if kind == TokenKind.LParen || kind == TokenKind.LBracket {
+                let p_lhs: &Expr = &self.ast.exprs[lhs as usize];
+                let lhs_tag = p_lhs.get_tag();
+                if lhs_tag == EXPR_IF || lhs_tag == EXPR_MATCH || lhs_tag == EXPR_BLOCK { break; }
+            }
+
+            self.next_token();
+            lhs = self.parse_infix_full(lhs, kind, allow_struct);
+        }
+
+        return lhs;
+    }
+    fn parse_primary(self: &mut Parser) -> ExprId {
+        return self.parse_primary_full(true);
+    }
+
+    fn parse_primary_full(self: &mut Parser, allow_struct: bool) -> ExprId {
+        let span = self.cur.span;
+
+        if self.is_kind(TokenKind.Star) {
+            self.next_token();
+            let e = self.parse_expr_full(95, allow_struct); // Higher precedence for unary
+            return self.ast.alloc_expr(Expr.Unary(UnaryExpr { op: UnaryOp.Deref, expr: e }), span);
+        }
+
+        // `&&x` lexes as one `&&` token: a reference to a reference.
+        if self.is_kind(TokenKind.AmpAmp) {
+            self.next_token();
+            let mut op = UnaryOp.Ref;
+            if self.is_kind(TokenKind.KMut) {
+                self.next_token();
+                op = UnaryOp.RefMut;
+            }
+            let e = self.parse_expr_full(95, allow_struct);
+            let inner = self.ast.alloc_expr(Expr.Unary(UnaryExpr { op: op, expr: e }), span);
+            return self.ast.alloc_expr(Expr.Unary(UnaryExpr { op: UnaryOp.Ref, expr: inner }), span);
+        }
+
+        if self.is_kind(TokenKind.Amp) {
+            self.next_token();
+            if self.is_kind(TokenKind.KMut) {
+                self.next_token();
+                let e = self.parse_expr_full(95, allow_struct);
+                return self.ast.alloc_expr(Expr.Unary(UnaryExpr { op: UnaryOp.RefMut, expr: e }), span);
+            } else {
+                let e = self.parse_expr_full(95, allow_struct);
+                return self.ast.alloc_expr(Expr.Unary(UnaryExpr { op: UnaryOp.Ref, expr: e }), span);
+            }
+        }
+
+        if self.is_kind(TokenKind.Minus) {
+            self.next_token();
+            let e = self.parse_expr_full(95, allow_struct);
+            return self.ast.alloc_expr(Expr.Unary(UnaryExpr { op: UnaryOp.Neg, expr: e }), span);
+        }
+
+        if self.is_kind(TokenKind.Bang) {
+            self.next_token();
+            let e = self.parse_expr_full(95, allow_struct);
+            return self.ast.alloc_expr(Expr.Unary(UnaryExpr { op: UnaryOp.Not, expr: e }), span);
+        }
+
+        if self.is_kind(TokenKind.At) {
+            return self.parse_intrinsic();
+        }
+
+        if self.is_kind(TokenKind.KIf) {
+            return self.parse_if();
+        }
+
+        if self.is_kind(TokenKind.KBox) {
+            self.next_token();
+            let mut allocator = 0 as ExprId;
+            if self.is_kind(TokenKind.LParen) {
+                self.next_token();
+                allocator = self.parse_expr(0);
+                self.expect(Token.RParen);
+            }
+            let e = self.parse_expr_full(95, allow_struct);
+            return self.ast.alloc_expr(Expr.Boxed(BoxExpr { expr: e, allocator: allocator }), span);
+        }
+
+        if self.is_kind(TokenKind.KWhile) {
+            let s = self.parse_while();
+            let s_id = self.ast.alloc_stmt(s, span, 0 as u32);
+            let mut stmts = Vec::<StmtId>.new_in(self.arena);
+            stmts.push(s_id);
+            return self.ast.alloc_expr(Expr.Block(BlockExpr { stmts: stmts.as_slice(), tail_expr: 0 as ExprId, is_unsafe: false }), span);
+        }
+
+        if self.is_kind(TokenKind.KLoop) {
+            let s = self.parse_loop();
+            let s_id = self.ast.alloc_stmt(s, span, 0 as u32);
+            let mut stmts = Vec::<StmtId>.new_in(self.arena);
+            stmts.push(s_id);
+            return self.ast.alloc_expr(Expr.Block(BlockExpr { stmts: stmts.as_slice(), tail_expr: 0 as ExprId, is_unsafe: false }), span);
+        }
+
+        if self.is_kind(TokenKind.KFor) {
+            let s = self.parse_for();
+            let s_id = self.ast.alloc_stmt(s, span, 0 as u32);
+            let mut stmts = Vec::<StmtId>.new_in(self.arena);
+            stmts.push(s_id);
+            return self.ast.alloc_expr(Expr.Block(BlockExpr { stmts: stmts.as_slice(), tail_expr: 0 as ExprId, is_unsafe: false }), span);
+        }
+
+        if self.is_kind(TokenKind.KMatch) {
+            return self.parse_match();
+        }
+
+        if self.is_kind(TokenKind.KReturn) {
+            self.next_token();
+            let e = self.parse_expr_full(0, allow_struct);
+            return self.ast.alloc_expr(Expr.Return(e), span);
+        }
+
+        if self.is_kind(TokenKind.KBreak) {
+            self.next_token();
+            return self.ast.alloc_expr(Expr.Break, span);
+        }
+
+        if self.is_kind(TokenKind.KContinue) {
+            self.next_token();
+            return self.ast.alloc_expr(Expr.Continue, span);
+        }
+
+        if self.is_kind(TokenKind.KTry) {
+            self.next_token();
+            let e = self.parse_expr_full(95, allow_struct);
+            return self.ast.alloc_expr(Expr.Try(e), span);
+        }
+
+        if self.is_kind(TokenKind.KSizeof) {
+            self.next_token();
+            self.expect(Token.LParen);
+            let ty = self.parse_type();
+            self.expect(Token.RParen);
+            return self.ast.alloc_expr(Expr.Sizeof(ty), span);
+        }
+
+        if self.is_kind(TokenKind.KAlignof) {
+            self.next_token();
+            self.expect(Token.LParen);
+            let ty = self.parse_type();
+            self.expect(Token.RParen);
+            return self.ast.alloc_expr(Expr.Alignof(ty), span);
+        }
+
+        if self.is_kind(TokenKind.KUnsafe) {
+            self.next_token();
+            let mut b = self.parse_block();
+            b.is_unsafe = true;
+            return self.ast.alloc_expr(Expr.Block(b), span);
+        }
+
+        if self.is_kind(TokenKind.LBrace) {
+            let b = self.parse_block();
+            return self.ast.alloc_expr(Expr.Block(b), span);
+        }
+
+        if self.is_kind(TokenKind.Int) {
+            let val = self.cur.token.get_int_val();
+            let suffix = self.cur.token.get_int_suffix();
+            self.next_token();
+            return self.ast.alloc_expr(Expr.Literal(Literal.Int((val, suffix))), span);
+        }
+
+        if self.is_kind(TokenKind.LBracket) {
+            self.next_token();
+            let first = self.parse_expr(0);
+            if self.is_kind(TokenKind.Semi) {
+                self.next_token();
+                let len_expr = self.parse_expr(0);
+                self.expect(Token.RBracket);
+                return self.ast.alloc_expr(Expr.ArrayRepeat(ArrayRepeatExpr { value: first, len: len_expr }), span);
+            } else {
+                let mut exprs = Vec::<ExprId>.new_in(self.arena);
+                exprs.push(first);
+                while self.is_kind(TokenKind.Comma) {
+                    self.next_token();
+                    if self.is_kind(TokenKind.RBracket) { break; }
+                    exprs.push(self.parse_expr(0));
+                }
+                self.expect(Token.RBracket);
+                return self.ast.alloc_expr(Expr.ArrayLiteral(ArrayLiteralExpr { elements: exprs.as_slice() }), span);
+            }
+        }
+
+        if self.is_kind(TokenKind.Pipe) {
+            return self.parse_closure();
+        }
+
+
+        if self.is_kind(TokenKind.Ident) {
+            let id = self.cur.token.get_ident_id();
+            self.next_token();
+
+            if self.is_kind(TokenKind.DoubleColon) {
+                self.next_token();
+                if self.is_kind(TokenKind.Less) {
+                    self.next_token();
+                    let mut type_args = Vec::<TypeId>.new_in(self.arena);
+                    while !self.is_kind(TokenKind.Greater) && !self.is_kind(TokenKind.Eof) {
+                        type_args.push(self.parse_type());
+                        if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+                    }
+                    self.expect(Token.Greater);
+                    
+                    let type_args_slice = type_args.as_slice();
+                    let generic_id = self.ast.alloc_expr(Expr.Generic(GenericExpr { expr: self.ast.alloc_expr(Expr.Ident(id), span), type_args: type_args_slice }), span);
+
+                    if allow_struct && self.is_kind(TokenKind.LBrace) {
+                        self.next_token();
+                        let mut fields = Vec::<FieldValue>.new_in(self.arena);
+                        while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+                            let f_name = self.cur.token.get_ident_id();
+                            self.expect(Token.Ident(0 as u32));
+                            self.expect(Token.Colon);
+                            let f_val = self.parse_expr(0);
+
+                            fields.push(FieldValue { name: f_name, value: f_val });
+
+                            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+                        }
+                        self.expect(Token.RBrace);
+                        
+                        let fields_slice = fields.as_slice();
+                        return self.ast.alloc_expr(Expr.StructLiteral(StructLiteralExpr { struct_name: id, type_args: type_args_slice, fields: fields_slice }), span);
+                    }
+
+                    return generic_id;
+                }
+                
+                let member_id = self.cur.token.get_ident_id();
+                self.expect(Token.Ident(0 as u32));
+                
+                let type_name_s = self.intern_table.lookup(id);
+                let method_name_s = self.intern_table.lookup(member_id);
+                
+                let mut full_name_v = ByteVec.new(self.arena);
+                full_name_v.push_slice(type_name_s);
+                full_name_v.push(':' as u8);
+                full_name_v.push(':' as u8);
+                full_name_v.push_slice(method_name_s);
+                
+                let full_id = self.intern_table.intern(full_name_v.as_slice());
+                return self.ast.alloc_expr(Expr.Ident(full_id), span);
+            }
+
+            if allow_struct && self.is_kind(TokenKind.Less) {
+                // Save parser/lexer state for backtracking.
+                // Only commit to Ident<TypeArgs> if '>' is followed by '{' (generic struct literal).
+                let saved_cur = self.cur;
+                let saved_peek = self.peek;
+                let saved_lex_pos = self.lexer.pos;
+                let saved_lex_line = self.lexer.line;
+                let saved_lex_col = self.lexer.col;
+
+                self.next_token();
+                let mut type_args = Vec::<TypeId>.new_in(self.arena);
+                while !self.is_kind(TokenKind.Greater) && !self.is_kind(TokenKind.Eof) {
+                    type_args.push(self.parse_type());
+                    if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+                }
+
+                if self.is_kind(TokenKind.Greater) {
+                    self.next_token(); // consume '>'
+                    let type_args_slice = type_args.as_slice();
+
+                    if self.is_kind(TokenKind.LBrace) {
+                        self.next_token();
+                        let mut fields = Vec::<FieldValue>.new_in(self.arena);
+                        while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+                            let f_name = self.cur.token.get_ident_id();
+                            self.expect(Token.Ident(0 as u32));
+                            self.expect(Token.Colon);
+                            let f_val = self.parse_expr(0);
+                            fields.push(FieldValue { name: f_name, value: f_val });
+                            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+                        }
+                        self.expect(Token.RBrace);
+                        let fields_slice = fields.as_slice();
+                        let sl_id = self.ast.alloc_expr(Expr.StructLiteral(StructLiteralExpr { struct_name: id, type_args: type_args_slice, fields: fields_slice }), span);
+                        let p_sl = (self.ast.exprs.data as usize + sl_id as usize * sizeof(Expr)) as *mut Expr;
+                        unsafe {
+                            match *p_sl {
+                                Expr.StructLiteral(s) => {
+                                    (*p_sl) = Expr.StructLiteral(StructLiteralExpr { struct_name: id, type_args: type_args_slice, fields: fields_slice });
+                                },
+                                _ => { ICE("parser: alloc_expr returned non-StructLiteral"); }
+                            }
+                        }
+                        return sl_id;
+                    }
+                    // Found '>' but no '{': not a generic struct literal.
+                    // Fall through to restore state and treat '<' as comparison.
+                }
+                // Did not find '>' (or found '>' without '{'): restore state so '<' is parsed as comparison.
+                self.cur = saved_cur;
+                self.peek = saved_peek;
+                self.lexer.pos = saved_lex_pos;
+                self.lexer.line = saved_lex_line;
+                self.lexer.col = saved_lex_col;
+            }
+
+            if allow_struct && self.is_kind(TokenKind.LBrace) {
+                self.next_token();
+                let mut fields = Vec::<FieldValue>.new_in(self.arena);
+                while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+                    let f_name = self.cur.token.get_ident_id();
+                    self.expect(Token.Ident(0 as u32));
+                    self.expect(Token.Colon);
+                    let f_val = self.parse_expr(0);
+
+                    fields.push(FieldValue { name: f_name, value: f_val });
+
+                    if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+                }
+                self.expect(Token.RBrace);
+                let fields_slice = fields.as_slice();
+                return self.ast.alloc_expr(Expr.StructLiteral(StructLiteralExpr { struct_name: id, type_args: @slice(0 as *mut TypeId, 0 as usize), fields: fields_slice }), span);
+            }
+            
+            return self.ast.alloc_expr(Expr.Ident(id), span);
+        }
+        if self.is_kind(TokenKind.String) {
+            let id = self.cur.token.get_string_id();
+            self.next_token();
+            return self.ast.alloc_expr(Expr.Literal(Literal.String(id)), span);
+        }
+
+        if self.is_kind(TokenKind.Float) {
+            let val = self.cur.token.get_float_val();
+            let suffix = self.cur.token.get_float_suffix();
+            self.next_token();
+            return self.ast.alloc_expr(Expr.Literal(Literal.Float(val)), span);
+        }
+
+        if self.is_kind(TokenKind.Char) {
+            let val = self.cur.token.get_char_val();
+            self.next_token();
+            return self.ast.alloc_expr(Expr.Literal(Literal.Char(val)), span);
+        }
+
+        if self.is_kind(TokenKind.Bool) {
+            let val = self.cur.token.get_bool_val();
+            self.next_token();
+            return self.ast.alloc_expr(Expr.Literal(Literal.Bool(val)), span);
+        }
+
+        if self.is_kind(TokenKind.LParen) {
+            self.next_token();
+            if self.is_kind(TokenKind.RParen) {
+                self.next_token();
+                return self.ast.alloc_expr(Expr.TupleLiteral(TupleLiteralExpr { elements: @slice(0 as *mut ExprId, 0 as usize) }), span);
+            }
+            
+            let first = self.parse_expr(0);
+            if self.is_kind(TokenKind.Comma) {
+                let mut exprs = Vec::<ExprId>.new_in(self.arena);
+                exprs.push(first);
+                
+                while self.is_kind(TokenKind.Comma) {
+                    self.next_token();
+                    if self.is_kind(TokenKind.RParen) { break; }
+                    exprs.push(self.parse_expr(0));
+                }
+                self.expect(Token.RParen);
+                return self.ast.alloc_expr(Expr.TupleLiteral(TupleLiteralExpr { elements: exprs.as_slice() }), span);
+            } else {
+                self.expect(Token.RParen);
+                return first;
+            }
+        }
+
+        let kind = self.cur.token.kind();
+        if kind == TokenKind.Invalid {
+            self.report_error(self.token_kind_str(kind), span);
+            self.next_token();
+            return 0 as ExprId;
+        }
+
+        let mut msg = ByteVec.new(self.arena);
+        msg.push_slice("unexpected token in expression: ");
+        let tag_name = self.token_kind_str(kind);
+        msg.push_slice(tag_name);
+        self.report_error(msg.as_slice(), span);
+        self.next_token();
+        return 0 as ExprId;
+    }
+
+    fn parse_infix(self: &mut Parser, lhs: ExprId, kind: TokenKind) -> ExprId {
+        return self.parse_infix_full(lhs, kind, true);
+    }
+
+    fn parse_infix_full(self: &mut Parser, lhs: ExprId, kind: TokenKind, allow_struct: bool) -> ExprId {
+        let span = unsafe { *( (self.ast.expr_spans.data as usize + lhs as usize * sizeof(Span)) as *mut Span ) };
+        match kind {
+            TokenKind.Dot => {
+                if self.is_kind(TokenKind.Int) {
+                    let index = self.cur.token.get_int_val();
+                    self.next_token();
+                    return self.ast.alloc_expr(Expr.TupleAccess(TupleAccessExpr { expr: lhs, index: index }), span);
+                }
+                let member = self.cur.token.get_ident_id();
+                self.expect(Token.Ident(0 as u32));
+                return self.ast.alloc_expr(Expr.MemberAccess(MemberAccessExpr { expr: lhs, member: member }), span);
+            },
+            TokenKind.KAs => {
+                let target = self.parse_type();
+                return self.ast.alloc_expr(Expr.Cast(CastExpr { expr: lhs, target_ty: target }), span);
+            },
+            TokenKind.LBracket => {
+                let index = self.parse_expr(0);
+                self.expect(Token.RBracket);
+                return self.ast.alloc_expr(Expr.Index(IndexExpr { expr: lhs, index: index }), span);
+            },
+            TokenKind.Question => {
+                return self.ast.alloc_expr(Expr.Try(lhs), span);
+            },
+            TokenKind.LParen => {
+                let mut args = Vec::<ExprId>.new_in(self.arena);
+                while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+                    args.push(self.parse_expr(0));
+                    if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+                }
+                self.expect(Token.RParen);
+
+                let mut callee = lhs;
+                let mut type_args = @slice(0 as *mut TypeId, 0 as usize);
+                let p_lhs: &Expr = &self.ast.exprs[lhs as usize];
+                let lhs_tag = p_lhs.get_tag();
+                if lhs_tag == EXPR_GENERIC { // Generic
+                    let g = p_lhs.get_Generic();
+                    callee = g.expr;
+                    type_args = g.type_args;
+                }
+
+                return self.ast.alloc_expr(Expr.Call(CallExpr { 
+                    callee: callee, 
+                    args: args.as_slice(), 
+                    type_args: type_args
+                }), span);
+            },
+            TokenKind.DoubleColon => {
+                self.expect(Token.Less);
+                let mut types = Vec::<TypeId>.new_in(self.arena);
+                while !self.is_kind(TokenKind.Greater) && !self.is_kind(TokenKind.Eof) {
+                    types.push(self.parse_type());
+                    if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+                }
+                self.expect(Token.Greater);
+                return self.ast.alloc_expr(Expr.Generic(GenericExpr { expr: lhs, type_args: types.as_slice() }), span);
+            },
+            _ => {
+                let op = self.get_binary_op(kind);
+                let rhs = self.parse_expr_full(self.get_precedence_from_kind(kind), allow_struct);
+                // Comparisons are non-associative: `a < b < c` is rejected
+                // rather than parsed as `(a < b) < c`. Parenthesized
+                // groupings like `(a < b) == (c < d)` are unaffected since
+                // the paren restarts at parse_primary.
+                if self.is_comparison_kind(kind) && self.is_comparison_kind(self.cur.token.kind()) {
+                    self.report_error("comparison operators cannot be chained; use `a < b && b < c`", self.cur.span);
+                }
+                return self.ast.alloc_expr(Expr.Binary(BinaryExpr { lhs: lhs, rhs: rhs, op: op }), span);
+            }
+        }
+    }
+
+    fn is_comparison_kind(self: &Parser, t: TokenKind) -> bool {
+        return t == TokenKind.EqualEqual || t == TokenKind.BangEqual || t == TokenKind.Less || t == TokenKind.Greater || t == TokenKind.LessEqual || t == TokenKind.GreaterEqual;
+    }
+
+    fn get_precedence(self: &Parser, kind: &Token, allow_struct: bool) -> i32 {
+        let k = kind.kind();
+        if k == TokenKind.LBrace {
+            return 0;
+        }
+        return self.get_precedence_from_kind(k);
+    }
+
+    fn get_precedence_from_kind(self: &Parser, t: TokenKind) -> i32 {
+        if t == TokenKind.Dot || t == TokenKind.Question || t == TokenKind.LParen || t == TokenKind.LBracket || t == TokenKind.DoubleColon { return 100; }
+        if t == TokenKind.KAs { return 90; }
+        if t == TokenKind.Star || t == TokenKind.Slash || t == TokenKind.Percent || t == TokenKind.StarPercent { return 40; }
+        if t == TokenKind.Plus || t == TokenKind.Minus || t == TokenKind.PlusPercent || t == TokenKind.MinusPercent { return 30; }
+        if t == TokenKind.LessLess || t == TokenKind.GreaterGreater { return 25; }
+        // Rust-style ordering: bitwise & ^ | bind tighter than comparisons
+        // (flipped from the original C-style table on 2026-07-11).
+        if t == TokenKind.Amp { return 18; }
+        if t == TokenKind.Caret { return 16; }
+        if t == TokenKind.Pipe { return 14; }
+        if t == TokenKind.EqualEqual || t == TokenKind.BangEqual || t == TokenKind.Less || t == TokenKind.Greater || t == TokenKind.LessEqual || t == TokenKind.GreaterEqual { return 12; }
+        if t == TokenKind.AmpAmp { return 5; }
+        if t == TokenKind.PipePipe { return 2; }
+        if t == TokenKind.Equal || t == TokenKind.PlusEqual || t == TokenKind.MinusEqual || t == TokenKind.StarEqual || t == TokenKind.SlashEqual || t == TokenKind.PercentEqual || t == TokenKind.PlusPercentEqual || t == TokenKind.MinusPercentEqual || t == TokenKind.StarPercentEqual || t == TokenKind.AmpEqual || t == TokenKind.PipeEqual || t == TokenKind.CaretEqual || t == TokenKind.LessLessEqual || t == TokenKind.GreaterGreaterEqual { return 1; }
+        return -1;
+    }
+
+    fn get_binary_op(self: &Parser, t: TokenKind) -> BinaryOp {
+        if t == TokenKind.Plus { return BinaryOp.Add; }
+        if t == TokenKind.Minus { return BinaryOp.Sub; }
+        if t == TokenKind.Star { return BinaryOp.Mul; }
+        if t == TokenKind.Slash { return BinaryOp.Div; }
+        if t == TokenKind.Percent { return BinaryOp.Mod; }
+        if t == TokenKind.PlusEqual { return BinaryOp.AddAssign; }
+        if t == TokenKind.MinusEqual { return BinaryOp.SubAssign; }
+        if t == TokenKind.StarEqual { return BinaryOp.MulAssign; }
+        if t == TokenKind.SlashEqual { return BinaryOp.DivAssign; }
+        if t == TokenKind.PercentEqual { return BinaryOp.ModAssign; }
+        if t == TokenKind.PlusPercent { return BinaryOp.AddWrap; }
+        if t == TokenKind.MinusPercent { return BinaryOp.SubWrap; }
+        if t == TokenKind.StarPercent { return BinaryOp.MulWrap; }
+        if t == TokenKind.PlusPercentEqual { return BinaryOp.AddWrapAssign; }
+        if t == TokenKind.MinusPercentEqual { return BinaryOp.SubWrapAssign; }
+        if t == TokenKind.StarPercentEqual { return BinaryOp.MulWrapAssign; }
+        if t == TokenKind.EqualEqual { return BinaryOp.Eq; }
+        if t == TokenKind.BangEqual { return BinaryOp.Ne; }
+        if t == TokenKind.Less { return BinaryOp.Lt; }
+        if t == TokenKind.Greater { return BinaryOp.Gt; }
+        if t == TokenKind.LessEqual { return BinaryOp.Le; }
+        if t == TokenKind.GreaterEqual { return BinaryOp.Ge; }
+        if t == TokenKind.Equal { return BinaryOp.Assign; }
+        if t == TokenKind.AmpAmp { return BinaryOp.LAnd; }
+        if t == TokenKind.PipePipe { return BinaryOp.LOr; }
+        if t == TokenKind.Amp { return BinaryOp.And; }
+        if t == TokenKind.Pipe { return BinaryOp.Or; }
+        if t == TokenKind.Caret { return BinaryOp.Xor; }
+        if t == TokenKind.AmpEqual { return BinaryOp.BitAndAssign; }
+        if t == TokenKind.PipeEqual { return BinaryOp.BitOrAssign; }
+        if t == TokenKind.CaretEqual { return BinaryOp.BitXorAssign; }
+        if t == TokenKind.LessLess { return BinaryOp.Shl; }
+        if t == TokenKind.GreaterGreater { return BinaryOp.Shr; }
+        if t == TokenKind.LessLessEqual { return BinaryOp.ShlAssign; }
+        if t == TokenKind.GreaterGreaterEqual { return BinaryOp.ShrAssign; }
+        return BinaryOp.Add;
+    }
+
+    fn load_import(self: &mut Parser, path_id: u32) {
+        let path_str = self.intern_table.lookup(path_id);
+
+        // A .zri names its imports by canonical module path (relative to the project root),
+        // not relative to wherever the interface file happens to be stored.
+        if self.file_path.len >= 4 as usize && is_str_eq(subslice_from(self.file_path, self.file_path.len - 4 as usize), ".zri") {
+            let st_ptr = self.state;
+            let st = unsafe { &*st_ptr };
+            let mr = unsafe { &*st.mr };
+            let abs_cand = resolve_module_identity_to_path(mr, path_str, self.arena);
+            let mut canon = ByteVec.new(self.arena);
+            canon.push_slice(abs_cand);
+            canon.push(0 as u8);
+            if self.try_load_file(canon.as_slice()) { return; }
+        }
+
+        if path_str.len > 0 as usize && path_str[0] == '/' as u8 {
+            let mut abs_p = ByteVec.new(self.arena);
+            abs_p.push_slice(path_str);
+            abs_p.push(0 as u8);
+            if self.try_load_file(abs_p.as_slice()) { return; }
+        }
+
+        // 1. Try relative to current file
+        let mut rel_path = ByteVec.new(self.arena);
+        let mut last_slash = -1 as i64;
+        let mut i = 0 as usize;
+        while i < self.file_path.len {
+            if self.file_path[i] == '/' as u8 { last_slash = i as i64; }
+            i = i + 1 as usize;
+        }
+        if last_slash != -1 as i64 {
+            rel_path.push_range(self.file_path.ptr, 0 as usize, (last_slash + 1 as i64) as usize);
+        }
+        rel_path.push_slice(path_str);
+        rel_path.push(0 as u8);
+        if self.try_load_file(rel_path.as_slice()) { return; }
+
+        let mut is_zrl = false;
+        if path_str.len >= 4 as usize {
+            if path_str[path_str.len - 4 as usize] == '.' as u8 {
+                if path_str[path_str.len - 3 as usize] == 'z' as u8 {
+                    if path_str[path_str.len - 2 as usize] == 'r' as u8 {
+                        if path_str[path_str.len - 1 as usize] == 'l' as u8 {
+                            is_zrl = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if is_zrl {
+            let mut rel_zri = ByteVec.new(self.arena);
+            if last_slash != -1 as i64 {
+                rel_zri.push_range(self.file_path.ptr, 0 as usize, (last_slash + 1 as i64) as usize);
+            }
+            rel_zri.push_range(path_str.ptr, 0 as usize, path_str.len - 1 as usize);
+            rel_zri.push('i' as u8);
+            rel_zri.push(0 as u8);
+            if self.try_load_file(rel_zri.as_slice()) { return; }
+        }
+
+        // 2. Try include paths
+        let mut k = 0 as usize;
+        while k < self.include_count {
+            let p_id = (self.include_ids as usize + k * 4) as *mut u32;
+            let inc_path_id = unsafe { *p_id };
+            let inc_path_str = self.intern_table.lookup(inc_path_id);
+            let split = split_include_arg(inc_path_str);
+            let inc_dir_str = split.2;
+            let inc_prefix = if split.0 { split.1 } else { basename(inc_dir_str) };
+
+            // Try original path
+            let mut inc_path = ByteVec.new(self.arena);
+            inc_path.push_slice(inc_dir_str);
+            if inc_dir_str.len > 0 as usize && inc_dir_str[inc_dir_str.len - 1 as usize] != '/' as u8 {
+                inc_path.push('/' as u8);
+            }
+            inc_path.push_slice(path_str);
+            inc_path.push(0 as u8);
+            if self.try_load_file(inc_path.as_slice()) { return; }
+
+            if is_zrl {
+                let mut inc_zri = ByteVec.new(self.arena);
+                inc_zri.push_slice(inc_dir_str);
+                if inc_dir_str.len > 0 as usize && inc_dir_str[inc_dir_str.len - 1 as usize] != '/' as u8 {
+                    inc_zri.push('/' as u8);
+                }
+                inc_zri.push_range(path_str.ptr, 0 as usize, path_str.len - 1 as usize);
+                inc_zri.push('i' as u8);
+                inc_zri.push(0 as u8);
+                if self.try_load_file(inc_zri.as_slice()) { return; }
+            }
+
+            // Try stripping prefix if path starts with `<prefix>/`
+            if inc_prefix.len > 0 as usize && path_str.len > inc_prefix.len + 1 as usize {
+                if is_str_eq(subslice(path_str, 0 as usize, inc_prefix.len), inc_prefix) && path_str[inc_prefix.len] == '/' as u8 {
+                    let stripped = subslice_from(path_str, inc_prefix.len + 1 as usize);
+                    let mut stripped_path = ByteVec.new(self.arena);
+                    stripped_path.push_slice(inc_dir_str);
+                    if inc_dir_str.len > 0 as usize && inc_dir_str[inc_dir_str.len - 1 as usize] != '/' as u8 {
+                        stripped_path.push('/' as u8);
+                    }
+                    stripped_path.push_slice(stripped);
+                    stripped_path.push(0 as u8);
+                    if self.try_load_file(stripped_path.as_slice()) { return; }
+                }
+            }
+
+            // Try stripping "zoril/" prefix if present
+            if path_str.len > 6 as usize && path_str[0] == 'z' as u8 && path_str[1] == 'o' as u8 && path_str[2] == 'r' as u8 && path_str[3] == 'i' as u8 && path_str[4] == 'l' as u8 && path_str[5] == '/' as u8 {
+                let mut stripped_path = ByteVec.new(self.arena);
+                stripped_path.push_slice(inc_dir_str);
+                if inc_dir_str.len > 0 as usize && inc_dir_str[inc_dir_str.len - 1 as usize] != '/' as u8 {
+                    stripped_path.push('/' as u8);
+                }
+                stripped_path.push_range((path_str.ptr as usize + 6 as usize) as *u8, 0 as usize, path_str.len - 6 as usize);
+                stripped_path.push(0 as u8);
+                if self.try_load_file(stripped_path.as_slice()) { return; }
+            }
+
+            k = k + 1 as usize;
+        }
+
+        if !self.had_error {
+            must_write(2, self.file_path);
+            must_write(2, ":");
+            write_u64(2, self.last_import_span.line as usize);
+            must_write(2, ":");
+            write_u64(2, self.last_import_span.col as usize);
+            must_write(2, ": error: could not find imported file: ");
+            must_write(2, path_str);
+            must_write(2, "\n");
+            self.had_error = true;
+        }
+    }
+    fn path_is_readable(self: &Parser, path_with_null: [u8]) -> bool {
+        let fd = open(path_with_null, 0 as u64, 0 as u64);
+        if fd < 0 as i64 { return false; }
+        must_close(fd as u64);
+        return true;
+    }
+
+    fn try_load_file(self: &mut Parser, path_with_null: [u8]) -> bool {
+        let raw_path = unsafe { @slice(path_with_null.ptr, path_with_null.len - 1 as u64) };
+        let norm_path = normalize_path(raw_path, self.arena);
+        let st_ptr = self.state;
+        let st = unsafe { &mut *st_ptr };
+        let mr = unsafe { &*st.mr };
+        let abs_path = make_absolute(norm_path, mr.cwd, self.arena);
+        let mod_id_str = derive_module_identity(mr, abs_path, self.arena);
+
+        // With an interface directory, the interface of an imported module is used in place of its
+        // source (the importer is compiled against the interface alone, so the source may be
+        // absent), or only when the source is absent when `iface_shadows` is off.
+        if st.iface_dir.len > 0 as usize && mod_id_str.len > 0 as usize && norm_path.len >= 4 as usize && is_str_eq(subslice_from(norm_path, norm_path.len - 4 as usize), ".zrl") {
+            let mut ip = ByteVec.new(self.arena);
+            ip.push_slice(st.iface_dir);
+            ip.push('/' as u8);
+            ip.push_slice(iface_relative_path(mod_id_str, self.arena));
+            ip.push(0 as u8);
+            let have_iface = self.path_is_readable(ip.as_slice());
+            if have_iface && (st.iface_shadows || !self.path_is_readable(path_with_null)) {
+                return self.load_file_at(ip.as_slice(), mod_id_str, norm_path, abs_path);
+            }
+        }
+
+        if self.path_is_readable(path_with_null) {
+            if mod_id_str.len == 0 as usize {
+                must_write(2, self.file_path);
+                must_write(2, ":");
+                write_u64(2, self.last_import_span.line as usize);
+                must_write(2, ":");
+                write_u64(2, self.last_import_span.col as usize);
+                must_write(2, ": error: path resolves outside every root: ");
+                must_write(2, norm_path);
+                must_write(2, "\n");
+                self.had_error = true;
+                return true;
+            }
+            return self.load_file_at(path_with_null, mod_id_str, norm_path, abs_path);
+        }
+        return false;
+    }
+
+    // Load `read_path_with_null`, known to the import graph by canonical module identity `key_module_path`,
+    // and resolved to source file path `resolved_file_path`.
+    fn load_file_at(self: &mut Parser, read_path_with_null: [u8], key_module_path: [u8], display_path: [u8], resolved_file_path: [u8]) -> bool {
+        let st_ptr = self.state;
+        let st = unsafe { &mut *st_ptr };
+        let mod_id = self.intern_table.intern(key_module_path) as u32;
+        let file_id = self.intern_table.intern(resolved_file_path) as u32;
+
+        // 1. A file already on the import stack is a cycle.
+        let mut k = 0 as usize;
+        while k < st.active.len {
+            if st.active.as_slice()[k] == file_id {
+                must_write(2, self.file_path);
+                must_write(2, ":");
+                write_u64(2, self.last_import_span.line as usize);
+                must_write(2, ":");
+                write_u64(2, self.last_import_span.col as usize);
+                must_write(2, ": error: circular import detected: ");
+                let mut ci = k;
+                while ci < st.active_names.len {
+                    must_write(2, self.intern_table.lookup(st.active_names.as_slice()[ci]));
+                    must_write(2, " -> ");
+                    ci = ci + 1 as usize;
+                }
+                must_write(2, key_module_path);
+                must_write(2, "\n");
+                self.had_error = true;
+                return true;
+            }
+            k = k + 1 as usize;
+        }
+
+        // 2. Check for conflicting distinct files mapping to the same module identity
+        k = 0 as usize;
+        while k < st.file_modules.len {
+            let fm = st.file_modules.as_slice()[k];
+            if fm.module == mod_id && fm.file != file_id {
+                must_write(2, self.file_path);
+                must_write(2, ":");
+                write_u64(2, self.last_import_span.line as usize);
+                must_write(2, ":");
+                write_u64(2, self.last_import_span.col as usize);
+                must_write(2, ": error: multiple distinct files map to module identity '");
+                must_write(2, key_module_path);
+                must_write(2, "': ");
+                must_write(2, self.intern_table.lookup(fm.file));
+                must_write(2, " and ");
+                must_write(2, resolved_file_path);
+                must_write(2, "\n");
+                self.had_error = true;
+                return true;
+            }
+            k = k + 1 as usize;
+        }
+
+        // 3. Already loaded (deduplicated by resolved file): still an edge.
+        k = 0 as usize;
+        while k < st.loaded.len {
+            if st.loaded.as_slice()[k] == file_id {
+                self.ast.import_edges.push(ImportEdge { from_module: self.intern_table.intern(self.module_path), to_file: file_id, to_module: mod_id });
+                return true;
+            }
+            k = k + 1 as usize;
+        }
+
+        let source = self.read_file_to_string(read_path_with_null);
+        if source.len == 0 as usize { return false; }
+
+        let read_path = unsafe { @slice(read_path_with_null.ptr, read_path_with_null.len - 1 as u64) };
+        let final_mod = zri_recorded_module(source, key_module_path);
+        let final_mod_id = self.intern_table.intern(final_mod) as u32;
+
+        if final_mod_id != mod_id {
+            k = 0 as usize;
+            while k < st.file_modules.len {
+                let fm = st.file_modules.as_slice()[k];
+                if fm.module == final_mod_id && fm.file != file_id {
+                    must_write(2, self.file_path);
+                    must_write(2, ":");
+                    write_u64(2, self.last_import_span.line as usize);
+                    must_write(2, ":");
+                    write_u64(2, self.last_import_span.col as usize);
+                    must_write(2, ": error: multiple distinct files map to module identity '");
+                    must_write(2, final_mod);
+                    must_write(2, "': ");
+                    must_write(2, self.intern_table.lookup(fm.file));
+                    must_write(2, " and ");
+                    must_write(2, resolved_file_path);
+                    must_write(2, "\n");
+                    self.had_error = true;
+                    return true;
+                }
+                k = k + 1 as usize;
+            }
+        }
+
+        st.file_modules.push(FileModule { file: file_id, module: final_mod_id });
+        self.ast.import_edges.push(ImportEdge { from_module: self.intern_table.intern(self.module_path), to_file: file_id, to_module: final_mod_id });
+
+        must_write(2, "Parsing file: ");
+        must_write(2, display_path);
+        must_write(2, "\n");
+
+        // 4. Parse with the file on the import stack.
+        st.active.push(file_id);
+        st.active_names.push(final_mod_id);
+        let sub_lexer = Lexer.new(source, self.intern_table, self.arena);
+        let sub_parser = Parser.new_modular(sub_lexer, self.ast, self.intern_table, read_path, final_mod, self.include_ids, self.include_count, self.state, st.mr);
+        unsafe {
+            (*sub_parser).parse_module();
+            if (*sub_parser).had_error {
+                self.had_error = true;
+            }
+        }
+
+        // 5. Done: off the stack, into the loaded set.
+        let _ = st.active.pop();
+        let _ = st.active_names.pop();
+        st.loaded.push(file_id);
+        return true;
+    }
+}

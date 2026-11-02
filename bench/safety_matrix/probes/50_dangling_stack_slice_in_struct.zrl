@@ -1,0 +1,9 @@
+// name: Dangling stack ptr — slice of a local array inside a returned struct
+// expected: compile_reject
+// The slice over a local array is a field of the returned struct.
+struct V { s: [i32] }
+fn leak() -> V {
+    let mut a = [1, 2, 3];
+    return V { s: @slice(&mut a[0], 3 as u64) };
+}
+fn main() -> i32 { let v = leak(); if v.s.len != 3 as usize { return 1; } return 0; }

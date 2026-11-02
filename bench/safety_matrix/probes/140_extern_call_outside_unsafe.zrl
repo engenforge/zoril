@@ -1,0 +1,9 @@
+// name: Extern function call outside unsafe
+// expected: compile_reject
+// Calling an extern function is unchecked, and reachable only through unsafe.
+extern fn puts(s: *u8) -> i32;
+
+fn main() -> i32 {
+    puts(0 as *u8);
+    return 0;
+}

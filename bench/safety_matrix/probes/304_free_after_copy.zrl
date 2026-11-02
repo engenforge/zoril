@@ -1,0 +1,19 @@
+// name: Freeing a Vec the caller copied leaves the copy reading freed memory
+// expected: compile_reject
+// Confirmed without `@drop` (Claude, 2026-10-22): the copy was a second header over one buffer, so
+// `v.free()` released it under `w` and the next allocation reused it (the checked build read the
+// poison). The assignment now moves `v`, so `w` is the only owner.
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1234);
+    let mut w = v;
+    v.free();
+    let mut other = Vec::<i32>.new();
+    other.push(7);
+    other.push(8);
+    other.push(9);
+    return *w.get(0).unwrap() & 255;
+}

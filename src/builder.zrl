@@ -1,0 +1,395 @@
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "ast.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "il_cfg.zrl";
+import "vec.zrl";
+use ast::Span;
+use il_cfg::{BasicBlock, ILModule};
+use il_instr::{BlockId, BranchInstr, CastInstr, ConstInstr, ConstValue, FieldAddrInstr, ILBinaryOp, ILInstr, IL_INSTR_BRANCH, IL_INSTR_JMP, IL_INSTR_RET, IL_INSTR_UNREACHABLE, NO_BLOCK, NO_FUNC, NO_SSA, SSAId, SyscallInstr};
+use il_type::{ILSlice, ILTYPE_RAWPTR, ILTYPE_RAWPTRMUT, ILType, ILTypeDecl};
+use mem_raw::{ArenaHeader, memcpy, zoril_allocator_alloc};
+
+pub struct ILBuilder {
+    pub arena: *mut ArenaHeader,
+    pub module: &mut ILModule,
+    pub current_func_idx: u32,
+    pub current_block_idx: BlockId,
+    pub entry_block_idx: BlockId,
+    pub next_ssa_id: SSAId,
+    pub current_span: Span,
+    pub current_comment: u32,
+}
+
+impl ILBuilder {
+    #[stores(arena -> arena, module -> arena)]
+    pub fn new(arena: *mut ArenaHeader, module: &mut ILModule) -> *mut ILBuilder {
+        let b = unsafe { zoril_allocator_alloc(arena, sizeof(ILBuilder)) } as *mut ILBuilder;
+        unsafe {
+            *b = ILBuilder {
+                arena: arena,
+                module: module,
+                current_func_idx: NO_FUNC,
+                current_block_idx: NO_BLOCK,
+                entry_block_idx: NO_BLOCK,
+                next_ssa_id: 1 as SSAId,
+                current_span: Span {
+                    start: 0 as u32,
+                    end: 0 as u32,
+                    line: 0 as u32,
+                    col: 0 as u32
+                },
+                current_comment: 0 as u32,
+            };
+        }
+        return b;
+    }
+
+    pub fn set_span(self: &mut ILBuilder, span: Span) {
+        self.current_span = span;
+    }
+
+    pub fn set_comment(self: &mut ILBuilder, comment: u32) {
+        self.current_comment = comment;
+    }
+
+    pub fn next_id(self: &mut ILBuilder) -> SSAId {
+        let id = self.next_ssa_id;
+        self.next_ssa_id = self.next_ssa_id + 1 as SSAId;
+        self.set_ssa_type(id, 0 as u32);
+        return id;
+    }
+
+    pub fn get_type_decl(self: &ILBuilder, ty_id: u32) -> &ILTypeDecl {
+        if ty_id == 0 as u32 {
+            ICE("ILBuilder.get_type_decl: ty_id is 0");
+        }
+        if ty_id as usize > self.module.types.len() {
+            ICE("ILBuilder.get_type_decl: ty_id out of bounds");
+        }
+        return &self.module.types[ty_id as usize - 1 as usize];
+    }
+
+    pub fn set_ssa_type(self: &mut ILBuilder, ssa: SSAId, ty: u32) {
+        if self.current_func_idx == NO_FUNC { return; }
+        let p_func = &mut self.module.functions[self.current_func_idx as usize];
+        p_func.set_ssa_type(self.arena, ssa, ty);
+    }
+
+    pub fn set_ssa_name(self: &mut ILBuilder, ssa: SSAId, name: u32) {
+        if self.current_func_idx == NO_FUNC { return; }
+        let p_func = &mut self.module.functions[self.current_func_idx as usize];
+        p_func.set_ssa_name(self.arena, ssa, name);
+    }
+
+    pub fn get_ssa_type(self: &ILBuilder, ssa: SSAId) -> u32 {
+        if self.current_func_idx == NO_FUNC { return 0 as u32; }
+        let p_func = &self.module.functions[self.current_func_idx as usize];
+        return p_func.get_ssa_type(ssa);
+    }
+
+    pub fn get_ssa_name(self: &ILBuilder, ssa: SSAId) -> u32 {
+        if self.current_func_idx == NO_FUNC { return 0 as u32; }
+        let p_func = &self.module.functions[self.current_func_idx as usize];
+        return p_func.get_ssa_name(ssa);
+    }
+
+    pub fn set_block_name(self: &mut ILBuilder, id: BlockId, name: u32) {
+        let p_block = &mut self.module.blocks[id as usize];
+        p_block.name = name;
+    }
+
+    pub fn new_block(self: &mut ILBuilder) -> BlockId {
+        let id = self.module.alloc_block(BasicBlock.new(self.arena, 0 as u32));
+        if self.current_func_idx == NO_FUNC { return id; }
+
+        let p_func = &mut self.module.functions[self.current_func_idx as usize];
+        let sz = 4 as usize;
+        if p_func.blocks_len >= p_func.blocks_cap {
+            let new_cap = if p_func.blocks_cap == 0 as usize {
+                16 as usize
+            } else {
+                p_func.blocks_cap * 2 as usize
+            };
+            let mut new_blocks = unsafe {
+                zoril_allocator_alloc(self.arena, new_cap * sz)
+            } as *mut u32;
+            if p_func.blocks as usize != 0 as usize {
+                unsafe {
+                    memcpy(
+                        new_blocks as *mut u8,
+                        p_func.blocks as *u8,
+                        (p_func.blocks_len * sz) as u64
+                    );
+                }
+            }
+            p_func.blocks = new_blocks;
+            p_func.blocks_cap = new_cap;
+        }
+        let off = p_func.blocks_len * sz;
+        unsafe { *((p_func.blocks as usize + off) as *mut u32) = id; }
+        p_func.blocks_len = p_func.blocks_len + 1 as usize;
+        return id;
+    }
+
+    pub fn switch_to_block(self: &mut ILBuilder, id: BlockId) {
+        self.current_block_idx = id;
+    }
+
+    pub fn add_instr_to_current_block(self: &mut ILBuilder, instr_idx: u32, ssa: SSAId) {
+        if self.current_func_idx == NO_FUNC { return; }
+        if self.current_block_idx == NO_BLOCK { return; }
+        let p_block = &mut self.module.blocks[self.current_block_idx as usize];
+        let sz_u32 = 4 as usize;
+        if p_block.instructions_len >= p_block.instructions_cap {
+            let new_cap = if p_block.instructions_cap == 0 as usize {
+                16 as usize
+            } else {
+                p_block.instructions_cap * 2 as usize
+            };
+            let mut new_instrs = unsafe {
+                zoril_allocator_alloc(self.arena, new_cap * sz_u32)
+            } as *mut u32;
+            if p_block.instructions as usize != 0 as usize {
+                unsafe {
+                    memcpy(
+                        new_instrs as *mut u8,
+                        p_block.instructions as *u8,
+                        (p_block.instructions_len * sz_u32) as u64
+                    );
+                }
+            }
+            p_block.instructions = new_instrs;
+            let mut new_ssa = unsafe {
+                zoril_allocator_alloc(self.arena, new_cap * sz_u32)
+            } as *mut SSAId;
+            if p_block.ssa_results as usize != 0 as usize {
+                unsafe {
+                    memcpy(
+                        new_ssa as *mut u8,
+                        p_block.ssa_results as *u8,
+                        (p_block.instructions_len * sz_u32) as u64
+                    );
+                }
+            }
+            p_block.ssa_results = new_ssa;
+            p_block.instructions_cap = new_cap;
+        }
+        let off_i = p_block.instructions_len * sz_u32;
+        unsafe { *((p_block.instructions as usize + off_i) as *mut u32) = instr_idx; }
+        let off_s = p_block.instructions_len * sz_u32;
+        unsafe { *((p_block.ssa_results as usize + off_s) as *mut SSAId) = ssa; }
+        p_block.instructions_len = p_block.instructions_len + 1 as usize;
+    }
+
+    pub fn emit_with_type(self: &mut ILBuilder, instr: ILInstr, ty: u32) -> SSAId {
+        let ssa = self.next_id();
+        self.set_ssa_type(ssa, ty);
+        let span = self.current_span;
+        let comment = self.current_comment;
+        let idx = self.module.alloc_instr(instr, span, comment);
+        self.add_instr_to_current_block(idx, ssa);
+        return ssa;
+    }
+
+    pub fn emit(self: &mut ILBuilder, instr: ILInstr) -> SSAId {
+        return self.emit_with_type(instr, 0 as u32);
+    }
+
+    pub fn emit_const_u64(self: &mut ILBuilder, val: u64, ty: u32) -> SSAId {
+        let mut c = ConstInstr { ty: ty, val: ConstValue.U64(val) };
+        return self.emit_with_type(ILInstr.Const(c), ty);
+    }
+
+    // Runtime bounds check for slice indexing: emit `if idx < slice.len { continue } else {
+    // exit(134) }`. 134 is 128 + SIGABRT, the code the stdlib's arena-overflow path uses. The trap
+    // is a raw exit syscall rather than `zoril_user_panic`, so a program that never imports stdlib
+    // still traps.
+    //
+    // Type ids are passed in because ILBuilder has no primitive-type lookup of its own.
+    // `slice_ssa` must be the address of the {ptr, len} pair; a raw pointer base must NOT call
+    // this, since a pointer carries no length to check against.
+    pub fn emit_slice_bounds_check(
+        self: &mut ILBuilder,
+        slice_ssa: SSAId,
+        idx_ssa: SSAId,
+        usize_ty: u32,
+        bool_ty: u32,
+        u64_ty: u32,
+        i64_ty: u32
+    ) {
+        // slice.len is field 1 of the {ptr, len} pair.
+        let len_addr_ty = self.get_ptr_type(usize_ty);
+        let len_addr = self.emit_with_type(
+            ILInstr.FieldAddr(FieldAddrInstr { val: slice_ssa, field_idx: 1 as u32 }),
+            len_addr_ty
+        );
+        let len_ssa = self.emit_with_type(ILInstr.Load(len_addr), usize_ty);
+        self.emit_bounds_check_against(idx_ssa, len_ssa, usize_ty, bool_ty, u64_ty, i64_ty);
+    }
+
+    // Same check for a fixed-size array. The bound is the `size` field of
+    // ILArray, known at compile time, so no load is needed -- otherwise this is
+    // identical to the slice case, which is why both share the tail below.
+    //
+    // A constant out-of-range index could be rejected at compile time rather
+    // than trapped at run time; that refinement needs const-tracking on the
+    // index SSA and is recorded as follow-up work, not done here.
+    pub fn emit_array_bounds_check(
+        self: &mut ILBuilder,
+        idx_ssa: SSAId,
+        len: u64,
+        usize_ty: u32,
+        bool_ty: u32,
+        u64_ty: u32,
+        i64_ty: u32
+    ) {
+        let len_ssa = self.emit_const_u64(len, usize_ty);
+        self.emit_bounds_check_against(idx_ssa, len_ssa, usize_ty, bool_ty, u64_ty, i64_ty);
+    }
+
+    // Shared tail of both bounds checks: compare, branch, trap.
+    pub fn emit_bounds_check_against(
+        self: &mut ILBuilder,
+        idx_ssa: SSAId,
+        len_ssa: SSAId,
+        usize_ty: u32,
+        bool_ty: u32,
+        u64_ty: u32,
+        i64_ty: u32
+    ) {
+        // Unsigned comparison, so a negative index that wrapped on the cast to
+        // usize lands above any real length and is caught here too.
+        let idx_u = self.emit_cast(idx_ssa, usize_ty);
+        let in_bounds = self.emit_with_type(
+            ILInstr.CmpLt(ILBinaryOp { lhs: idx_u, rhs: len_ssa }),
+            bool_ty
+        );
+
+        let ok_block = self.new_block();
+        let trap_block = self.new_block();
+        self.emit(
+            ILInstr.Branch(BranchInstr {
+                cond: in_bounds,
+                then_block: ok_block,
+                else_block: trap_block
+            })
+        );
+
+        self.switch_to_block(trap_block);
+        let num_ssa = self.emit_const_u64(60 as u64, u64_ty);
+        let code_ssa = self.emit_const_u64(134 as u64, u64_ty);
+        let arg_buf_ptr = unsafe { zoril_allocator_alloc(self.arena, sizeof(SSAId)) } as *mut SSAId;
+        let mut arg_buf = unsafe { @slice(arg_buf_ptr, 1 as usize) };
+        arg_buf[0] = code_ssa;
+        self.emit_with_type(ILInstr.Syscall(SyscallInstr { num: num_ssa, args: arg_buf }), i64_ty);
+        // exit() does not return. Ending the trap here, rather than jumping on to the
+        // in-bounds block, keeps every check from being a join that holds values live
+        // across it.
+        self.emit(ILInstr.Unreachable);
+
+        self.switch_to_block(ok_block);
+    }
+
+    pub fn emit_const_f64(self: &mut ILBuilder, bits: u64, ty: u32) -> SSAId {
+        let mut c = ConstInstr { ty: ty, val: ConstValue.F64(bits) };
+        return self.emit_with_type(ILInstr.Const(c), ty);
+    }
+
+    pub fn emit_cast(self: &mut ILBuilder, val: SSAId, target_ty: u32) -> SSAId {
+        if val == NO_SSA { return NO_SSA; }
+        let current_ty = self.get_ssa_type(val);
+        if current_ty == target_ty { return val; }
+        return self.emit_with_type(
+            ILInstr.Cast(CastInstr { val: val, target_ty: target_ty }),
+            target_ty
+        );
+    }
+
+    pub fn is_terminated(self: &ILBuilder) -> bool {
+        if self.current_func_idx == NO_FUNC { return true; }
+        if self.current_block_idx == NO_BLOCK { return true; }
+        let p_block = &self.module.blocks[self.current_block_idx as usize];
+        if p_block.instructions_len == 0 as usize { return false; }
+        let last_instr_idx = p_block.instr_ids()[p_block.instructions_len - 1 as usize];
+        let last_instr = &self.module.instrs[last_instr_idx as usize];
+        let tag = last_instr.get_tag();
+        return tag == IL_INSTR_BRANCH
+            || tag == IL_INSTR_JMP
+            || tag == IL_INSTR_RET
+            || tag == IL_INSTR_UNREACHABLE;
+    }
+
+    // Type allocation helpers
+    pub fn get_ptr_type(self: &mut ILBuilder, inner: u32) -> u32 {
+        let mut i = 0 as usize;
+        while i < self.module.types.len() {
+            let p_t = &self.module.types[i];
+            match p_t.def {
+                ILType.Ptr(ptr_inner) => {
+                    if ptr_inner == inner { return p_t.id; }
+                },
+                _ => {},
+            }
+            i = i + 1 as usize;
+        }
+        return self.module.alloc_type(ILTypeDecl {
+            id: 0,
+            name: 0,
+            def: ILType.Ptr(inner),
+            source_file: 0 as u32
+        });
+    }
+
+    pub fn get_raw_ptr_type(self: &mut ILBuilder, inner: u32) -> u32 {
+        let mut i = 0 as usize;
+        while i < self.module.types.len() {
+            let p_t = &self.module.types[i];
+            match p_t.def {
+                ILType.RawPtr(ptr_inner) => { if ptr_inner == inner { return p_t.id; } },
+                _ => {},
+            }
+            i = i + 1 as usize;
+        }
+        return self.module.alloc_type(ILTypeDecl {
+            id: 0, name: 0, def: ILType.RawPtr(inner), source_file: 0 as u32
+        });
+    }
+
+    pub fn get_raw_ptr_mut_type(self: &mut ILBuilder, inner: u32) -> u32 {
+        let mut i = 0 as usize;
+        while i < self.module.types.len() {
+            let p_t = &self.module.types[i];
+            match p_t.def {
+                ILType.RawPtrMut(ptr_inner) => { if ptr_inner == inner { return p_t.id; } },
+                _ => {},
+            }
+            i = i + 1 as usize;
+        }
+        return self.module.alloc_type(ILTypeDecl {
+            id: 0, name: 0, def: ILType.RawPtrMut(inner), source_file: 0 as u32
+        });
+    }
+
+    pub fn get_slice_type(self: &mut ILBuilder, elem: u32) -> u32 {
+        let mut i = 0 as usize;
+        while i < self.module.types.len() {
+            let p_t = &self.module.types[i];
+            match p_t.def {
+                ILType.Slice(sl) => {
+                    if sl.element == elem && !sl.mutable { return p_t.id; }
+                },
+                _ => {},
+            }
+            i = i + 1 as usize;
+        }
+        return self.module.alloc_type(ILTypeDecl {
+            id: 0,
+            name: 0,
+            def: ILType.Slice(ILSlice { element: elem, mutable: false }),
+            source_file: 0 as u32
+        });
+    }
+}

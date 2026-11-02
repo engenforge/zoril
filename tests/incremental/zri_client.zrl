@@ -1,0 +1,12 @@
+import "zri_math.zri";
+use zri_math::{Vec2, identity, length_sq};
+
+pub fn main() -> i32 {
+    let v = Vec2 { x: 3, y: 4 };
+    let sq = length_sq(&v);
+    let id_val = identity::<i64>(sq);
+    if id_val == 25 {
+        return 0;
+    }
+    return 1;
+}

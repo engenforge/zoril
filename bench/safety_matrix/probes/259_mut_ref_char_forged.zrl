@@ -1,0 +1,11 @@
+// name: A char written as a number through a &mut reference
+// expected: compile_reject
+// `types_match_invariant` compared the target of a mutable handle by float-ness, bool-ness and
+// size only, so `&mut u32` stood for `&mut char` and the store left a surrogate in the char.
+// The char-ness is compared now, as the shared-handle matcher already did.
+fn main() -> i32 {
+    let mut c: char = 'a';
+    let p: &mut u32 = &mut c;
+    *p = 0xd800 as u32;
+    return 0;
+}

@@ -1,0 +1,21 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_self_field.zrl:19:5: error: cannot let 'x' go out of scope while it is still borrowed
+
+// `v_ref` returns `&self.v`, an address into the receiver's own storage, so `r` points into `x` and
+// `x` must not end its scope while `r` is live - even though `S` frees nothing on drop.
+struct S {
+    v: i32,
+}
+
+impl S {
+    fn v_ref(self: &S) -> &i32 { return &self.v; }
+}
+
+fn main() -> i32 {
+    let mut r: &i32 = &0;
+    {
+        let x = S { v: 5 };
+        r = x.v_ref();
+    }
+    return *r;
+}

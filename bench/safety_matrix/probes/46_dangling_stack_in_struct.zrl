@@ -1,0 +1,9 @@
+// name: Dangling stack ptr — wrapped in a returned struct
+// expected: compile_reject
+// A struct holding a local's address is returned (copied into the caller's return slot).
+struct W { p: *mut i32 }
+fn leak() -> W {
+    let mut x: i32 = 42;
+    return W { p: &mut x };
+}
+fn main() -> i32 { let w = leak(); if w.p as usize == 0 as usize { return 1; } return 0; }

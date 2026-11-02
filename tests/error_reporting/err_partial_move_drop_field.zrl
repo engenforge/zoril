@@ -1,0 +1,24 @@
+// expected compile fail
+// EXPECT: cannot move a field that needs dropping out of a value (partial moves are not tracked)
+// `w`'s drop glue would drop `w.d` again after `d` is dropped.
+static mut DROPS: i32 = 0;
+
+struct D { x: i64 }
+
+trait Drop {
+    fn drop(self: &mut D);
+}
+
+impl Drop for D {
+    fn drop(self: &mut D) {
+        DROPS = DROPS + 1;
+    }
+}
+
+struct W { a: i64, d: D }
+
+fn main() -> i32 {
+    let w = W { a: 1, d: D { x: 1 } };
+    let d = w.d;
+    return 0;
+}

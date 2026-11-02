@@ -1,0 +1,19 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_arena_mark_reassign_early.zrl:17:5: error: cannot mutably borrow 'a' while it is already borrowed
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return 1; },
+    };
+    let m_early = a.mark();
+    let mut v = Vec::<u64>.new_in(&a);
+    let mut m = a.mark();
+    m = m_early;
+    a.reset_to(m);
+    return v.len() as i32;
+}

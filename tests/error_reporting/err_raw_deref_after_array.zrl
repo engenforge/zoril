@@ -1,0 +1,12 @@
+// expected compile fail
+// A raw pointer laundered through array indexing, written through: the element keeps the raw IL
+// type, so the store needs `unsafe`.
+// EXPECT: tests/error_reporting/err_raw_deref_after_array.zrl:10:5: error: dereference of raw pointer requires unsafe block
+
+fn main() -> i32 {
+    let mut x: u32 = 7;
+    let a = [&mut x as *mut u32, &mut x as *mut u32];
+    let q = a[0];
+    *q = 9;
+    return 0;
+}

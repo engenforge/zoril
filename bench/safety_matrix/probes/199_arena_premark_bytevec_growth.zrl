@@ -1,0 +1,17 @@
+// name: ByteVec pre-mark growth rejected on Arena.reset_to
+// expected: compile_reject
+// Growing a ByteVec allocated in an arena before a mark updates its epoch,
+// preventing it from surviving an Arena.reset_to.
+import "mem.zrl";
+import "bytevec.zrl";
+use mem::Arena;
+use bytevec::ByteVec;
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536 as u64).unwrap();
+    let bv = ByteVec.new(&a);
+    let m = a.mark();
+    bv.push(42);
+    a.reset_to(m);
+    return bv.len() as i32;
+}

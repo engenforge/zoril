@@ -1,0 +1,24 @@
+// name: Reference to a local carrier taken out of an enum payload in a match arm and stored out
+// expected: known_gap
+// gap: The summary pass does not follow a pointer into the frame through an enum payload bound in a match arm
+// observed: exit 77
+struct Carrier { v: &i32 }
+enum Opt { None, Some(&Carrier) }
+fn ex_ref(co: &Carrier) -> &i32 { return co.v; }
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn escape_storer(out: &mut &i32) {
+    let x = 42;
+    let c = Carrier { v: &x };
+    let o = Opt.Some(&c);
+    match o {
+        Opt.Some(r) => { *out = ex_ref(r); },
+        Opt.None => {},
+    }
+}
+fn main() -> i32 {
+    let seed = 0;
+    let mut dest_val: &i32 = &seed;
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    return *dest_val;
+}

@@ -1,0 +1,66 @@
+// Eq: one equality trait serves primitives, Option, user types, generic
+// helpers, and HashMap keys (Hash no longer carries its own eq).
+// expected exit 0
+
+import "cmp.zrl";
+import "hashmap.zrl";
+import "mem.zrl";
+use cmp::contains;
+use hashmap::HashMap;
+use mem::Arena;
+
+struct Point { x: i32, y: i32 }
+
+impl Eq for Point {
+    fn eq(self: &Point, other: &Point) -> bool {
+        return self.x == other.x && self.y == other.y;
+    }
+}
+
+impl Hash for Point {
+    fn hash(self: &Point) -> u64 {
+        return (self.x as u64) *% 31 +% (self.y as u64);
+    }
+}
+
+fn all_equal<T: Eq>(a: &T, b: &T, c: &T) -> bool {
+    return a.eq(b) && b.eq(c);
+}
+
+fn main() -> i32 {
+    let one = 1;
+    let also_one = 1;
+    let two = 2;
+    if !all_equal(&one, &also_one, &one) { return 1; }
+    if all_equal(&one, &also_one, &two) { return 2; }
+
+    let yes = true;
+    let no = false;
+    if yes.eq(&no) { return 3; }
+    let big = 5000000000 as u64;
+    if !big.eq(&big) { return 4; }
+
+    let some3 = Option.Some(3);
+    let other3 = Option.Some(3);
+    let some4 = Option.Some(4);
+    let none = Option::<i32>.None;
+    if !some3.eq(&other3) { return 5; }
+    if some3.eq(&some4) || some3.eq(&none) || !none.eq(&none) { return 6; }
+
+    let points = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }];
+    if !contains(&points, &Point { x: 3, y: 4 }) { return 7; }
+    if contains(&points, &Point { x: 4, y: 3 }) { return 8; }
+
+    let arena = Arena.new(65536).unwrap();
+    let mut seen = HashMap::<Point, i32>.new(&arena);
+    seen.insert(Point { x: 1, y: 2 }, 10);
+    seen.insert(Point { x: 1, y: 2 }, 20);
+    if seen.len() != 1 { return 9; }
+    let pt = Point { x: 1, y: 2 };
+    let found = match seen.get(&pt) {
+        Some(v) => *v,
+        None => { return 10; },
+    };
+    if found != 20 { return 11; }
+    return 0;
+}

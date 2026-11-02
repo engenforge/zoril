@@ -1,0 +1,14 @@
+// name: A raw pointer dereferenced after a generic struct's field (no unsafe)
+// expected: compile_reject
+// closed: the dereference check now decides from the IL type, which keeps `RawPtr`/`RawPtrMut`
+// through a generic struct's field - so this program is a located type error instead of a silent hole.
+struct Holder<T> { v: T, tag: i32 }
+
+fn main() -> i32 {
+    let mut x: u32 = 7;
+    let h = Holder { v: &mut x as *mut u32, tag: 1 };
+    let q = h.v;
+    *q = 9;
+    if x != 9 { return 1; }
+    return 0;
+}

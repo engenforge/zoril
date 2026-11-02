@@ -1,0 +1,14 @@
+// expected exit 42
+// A reference to a temporary value points at memory holding it. Before, a non-aggregate
+// temporary had no slot and the reference was the value itself: `*&(a + 22)` read address
+// 42 and `&(&x)` lost a level of indirection, both crashing in safe code.
+fn deref2(h: &&i32) -> i32 { return **h; }
+fn main() -> i32 {
+    let a = 20;
+    let r = &(a + 22);
+    let x = 40;
+    let t = &(&x);
+    if **t != 40 { return 1; }
+    if deref2(&(&x)) != 40 { return 2; }
+    return *r;
+}

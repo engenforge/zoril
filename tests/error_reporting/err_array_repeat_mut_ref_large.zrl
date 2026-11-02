@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: array repeat of a mutable reference; each element would alias the same borrow
+// Above the unroll limit the repeat lowers to `ArrayRepeat` (a loop), which reads its operand;
+// the rejection must not depend on the unrolled path's move check.
+fn main() -> i32 {
+    let mut x = 7;
+    let _a: [&mut u64; 65] = [&mut x; 65];
+    return 0;
+}

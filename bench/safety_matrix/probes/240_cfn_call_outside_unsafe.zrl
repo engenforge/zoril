@@ -1,0 +1,5 @@
+// name: Call through a C function pointer outside unsafe
+// expected: compile_reject
+// The code a C pointer names was never seen by the checker, so calling it is unchecked.
+extern "C" fn callee(a: i32) -> i32 { return a + 1; }
+fn main() -> i32 { let f: extern "C" fn(i32) -> i32 = callee; return f(1); }

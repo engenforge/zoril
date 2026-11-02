@@ -1,0 +1,10 @@
+// expected exit 0
+// A pub fn returning the result of a u32 comparison.
+pub fn foo(a: u32, b: u32) -> bool {
+    let c = a < b;
+    return c;
+}
+pub fn main() -> i32 {
+    if foo(1, 2) { return 0; }
+    return 1;
+}

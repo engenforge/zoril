@@ -1,0 +1,23 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_forwarding_method.zrl:21:5: error: cannot let 'x' go out of scope while it is still borrowed
+
+// A forwarding method: `v_ref2` hands back what `self.v_ref()` hands back, and `v_ref` returns
+// `&self.v` - an address into the receiver's own storage. The receiver is the callee's first
+// parameter, so the summary follows the method call to `v_ref` and marks `self`.
+struct S {
+    v: i32,
+}
+
+impl S {
+    fn v_ref(self: &S) -> &i32 { return &self.v; }
+    fn v_ref2(self: &S) -> &i32 { return self.v_ref(); }
+}
+
+fn main() -> i32 {
+    let mut r: &i32 = &0;
+    {
+        let x = S { v: 5 };
+        r = x.v_ref2();
+    }
+    return *r;
+}

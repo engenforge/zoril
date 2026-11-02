@@ -1,0 +1,4 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_extern_array_param.zrl:3:26: error: an extern function cannot take or return an array (pass a raw pointer to its first element): takes_array
+extern fn takes_array(a: [i32; 4]) -> i32;
+fn main() -> i32 { return 0; }

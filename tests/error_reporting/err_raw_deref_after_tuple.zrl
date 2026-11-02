@@ -1,0 +1,12 @@
+// expected compile fail
+// The tuple-null exploit from the review, as a located error: a raw pointer laundered through a
+// tuple is still raw, so indexing through it needs `unsafe` (before the fix this read the byte at
+// 0x401000 in safe code).
+// EXPECT: tests/error_reporting/err_raw_deref_after_tuple.zrl:11:13: error: dereference of raw pointer requires unsafe block
+
+fn main() -> i32 {
+    let p = 0 as *mut [u8; 2147483647];
+    let t = (p, 1);
+    let a = t.0;
+    return (*a)[0x401000] as i32;
+}

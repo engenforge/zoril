@@ -1,0 +1,37 @@
+import "vec.zrl";
+import "mem_raw.zrl";
+use mem_raw::arena_init;
+use vec::Vec;
+
+pub fn main() -> i32 {
+    let arena = unsafe { arena_init(65536) };
+    let mut v = unsafe { Vec::<i32>.new_in_raw(arena) };
+    v.push(10);
+    v.push(20);
+
+    // Test get out of bounds
+    match v.get(5) {
+        Some(_) => { return 1; },
+        None => {},
+    }
+
+    // Test get in bounds
+    match v.get(0) {
+        Some(val) => {
+            if *val != 10 { return 2; }
+        },
+        None => { return 3; },
+    }
+
+    // Test unwrap
+    let r = v.get(1).unwrap();
+    if *r != 20 { return 4; }
+
+    // Test get_mut in bounds
+    let rm = v.get_mut(0).unwrap();
+    *rm = 42;
+
+    if *v.get(0).unwrap() != 42 { return 5; }
+
+    return 0;
+}

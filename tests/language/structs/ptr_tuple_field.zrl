@@ -1,0 +1,17 @@
+// expected exit 0
+// Field access through a pointer auto-derefs. `p.a` on a *mut S has always
+// worked; `p.0` on a *mut (A, B) did not -- the TupleIndex projection applied
+// FieldAddr to the POINTER instead of the tuple and read the pointer's own
+// bytes. Both forms are pinned here so they cannot diverge again.
+struct S { a: i32, b: i32 }
+fn f_struct(p: *mut S) -> i32 { return unsafe { p.a }; }
+fn f_tuple(p: *mut (i32, i32)) -> i32 { return unsafe { p.0 }; }
+fn f_tuple_snd(p: *mut (i32, i32)) -> i32 { return unsafe { p.1 }; }
+fn main() -> i32 {
+    let mut s = S { a: 7, b: 9 };
+    let mut t = (7 as i32, 9 as i32);
+    if f_struct(&mut s) != 7 { return 1; }
+    if f_tuple(&mut t) != 7 { return 2; }
+    if f_tuple_snd(&mut t) != 9 { return 3; }
+    return 0;
+}

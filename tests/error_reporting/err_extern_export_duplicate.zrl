@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_extern_export_duplicate.zrl:4:12: error: two exported extern "C" functions share one symbol; it is already defined in tests/error_reporting/include/export_dup_helper.zrl: shared_symbol
+import "include/export_dup_helper.zrl";
+extern "C" fn shared_symbol(a: i32) -> i32 { return a + 2; }
+fn main() -> i32 { return 0; }

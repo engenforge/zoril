@@ -1,0 +1,17 @@
+// A field read or write through a reference to a Box reaches the boxed value, not the Box's own slot.
+import "core.zrl";
+
+struct Point { x: i64, y: i64 }
+
+fn read(o: &Option<Box<Point>>) -> i64 {
+    return match o {
+        Option.Some(b) => b.x + b.y,
+        Option.None => 0,
+    };
+}
+
+fn main() -> i32 {
+    let o = Option.Some(box Point { x: 20, y: 22 });
+    if read(&o) != 42 { return 1; }
+    return 0;
+}

@@ -1,0 +1,6 @@
+// expected exit 5
+// A callee may store a pointer to a local into memory of the same frame: put writes &x into
+// h, and both live in main.
+struct H { r: &i32 }
+fn put(h: &mut H, p: &i32) { h.r = p; }
+fn main() -> i32 { let x = 5; let y = 1; let mut h = H { r: &y }; put(&mut h, &x); return *h.r; }

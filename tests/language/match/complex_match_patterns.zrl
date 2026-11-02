@@ -1,0 +1,21 @@
+// expected exit code: 0
+import "io.zrl";
+use io::{close, stdout, write};
+enum Expr { Literal(u64), Ident(u32), Binary(BinaryExpr), Other(OtherExpr) }
+struct BinaryExpr { op: u32, lhs: u32, rhs: u32 }
+struct OtherExpr { a: u64, b: u64, c: u64, d: u64, e: u64 }
+fn test_match_ptr(p_e: *mut Expr) {
+    let mut stdout_fd = stdout();
+    match unsafe { *p_e } {
+        Expr.Literal(l) => { write(stdout_fd,"Literal\n"); },
+        Expr.Ident(id) => { write(stdout_fd,"Ident\n"); },
+        Expr.Binary(b) => { write(stdout_fd,"Binary\n"); },
+        Expr.Other(o) => { write(stdout_fd,"Other\n"); }
+    }
+    close(stdout_fd);
+}
+fn main() -> i32 {
+    let mut e1 = Expr.Literal(42 as u64);
+    test_match_ptr(&mut e1);
+    return 0;
+}

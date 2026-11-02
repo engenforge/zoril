@@ -1,0 +1,11 @@
+// name: Direct construction of Fd with private raw field in safe code
+// expected: compile_reject
+// The Fd type encapsulates raw operating-system file descriptors behind
+// a private inner `raw` field. Safe code cannot forge an arbitrary Fd directly.
+import "io.zrl";
+use io::Fd;
+
+fn main() -> i32 {
+    let _ = Fd { raw: 42 };
+    return 0;
+}

@@ -1,0 +1,9 @@
+// name: Option<&T> into a local's storage returned through a method call
+// expected: compile_reject
+// The result arrives in the caller's return slot rather than as a pointer; the slot then
+// holds a pointer into c, which dies with leak's frame.
+enum Option<T> { Some(T), None }
+struct C { v: i32 }
+impl C { fn get(self: &C) -> Option<&i32> { return Option.Some(&self.v); } }
+fn leak() -> Option<&i32> { let c = C { v: 7 }; return c.get(); }
+fn main() -> i32 { match leak() { Option.Some(r) => { return *r; }, Option.None => { return 0; } } }

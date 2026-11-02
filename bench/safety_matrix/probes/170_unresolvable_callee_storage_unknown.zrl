@@ -1,0 +1,22 @@
+// name: Reference into a dead local's stack slot through a call the storage walk cannot resolve
+// expected: compile_reject
+// The other half of probe 169: a callee the walk can never resolve from the AST - here a call
+// through a function-pointer *parameter* (`cb(q)`), like a variant constructor or a closure value.
+// Such a call used to contribute no bits at all, which the caller read as "hands back nothing"; the
+// walk now reads it as the worst case and marks every argument it is handed, so `via_fnptr`'s mask
+// marks `q` and the borrowed storage is applied without the `Drop` exemption. Before the change the
+// call compiled and `y` read the dead slot (7).
+fn via_fnptr(cb: fn(&i32) -> &i32, q: &i32) -> &i32 {
+    return cb(q);
+}
+
+fn cb2(p: &i32) -> &i32 { return p; }
+
+fn main() -> i32 {
+    let mut y: &i32 = &0;
+    {
+        let x: i32 = 7;
+        y = via_fnptr(cb2, &x);
+    }
+    return *y;
+}

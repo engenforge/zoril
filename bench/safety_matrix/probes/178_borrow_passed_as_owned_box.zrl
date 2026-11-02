@@ -1,0 +1,11 @@
+// name: A borrow passed where an owned Box is expected
+// expected: compile_reject
+// The callee owns its parameter and drops what the box points at, so a reference is not a stand-in:
+// while the matcher treated the pointer and box tags as one class, `take(&x)` was accepted and the
+// callee freed memory the caller still owned (with an arena, that trapped in `munmap_or_trap`).
+fn take(b: Box<i32>) -> i32 { return *b; }
+
+fn main() -> i32 {
+    let x: i32 = 7;
+    return take(&x);
+}

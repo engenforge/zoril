@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_trait_impl_extra_method.zrl:8:5: error: method `perimeter` is not a member of trait `Shape`
+// A trait impl defines the trait's methods only; another method goes in an inherent impl.
+trait Shape {
+    fn area(self: &Self) -> i32;
+}
+impl Shape for Sq {
+    fn perimeter(self: &Sq) -> i32 { return 4 * self.s; }
+    fn area(self: &Sq) -> i32 { return self.s * self.s; }
+}
+struct Sq { s: i32 }
+fn main() -> i32 { return 0; }

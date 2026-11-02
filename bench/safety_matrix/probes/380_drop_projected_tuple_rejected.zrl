@@ -1,0 +1,8 @@
+// name: @drop of a projected tuple element is rejected
+// expected: compile_reject
+// @drop requires an owned local variable binding; partial drop of a tuple element is not permitted.
+fn main() -> i32 {
+    let t = (1, 2);
+    @drop(t.0);
+    return 0;
+}

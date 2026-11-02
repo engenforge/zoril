@@ -1,0 +1,9 @@
+// name: Uninitialized stack slot from @alloca outside unsafe
+// expected: compile_reject
+// `@alloca<T>(1)` returns a `&mut T` to a slot nothing has written. For a reference type,
+// reading through it follows a wild pointer; it needed no `unsafe`.
+fn read_through() -> u64 {
+    let r = @alloca<&u64>(1);
+    return **r;
+}
+fn main() -> i32 { return read_through() as i32; }

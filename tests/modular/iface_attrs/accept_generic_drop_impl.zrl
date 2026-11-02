@@ -1,0 +1,10 @@
+// expected exit 0
+import "lib_gdrop.zrl";
+use lib_gdrop::GdGuard;
+
+fn main() -> i32 {
+    {
+        let _g = GdGuard::<i32> { v: 7 };
+    }
+    return lib_gdrop::gd_count() - 1;
+}

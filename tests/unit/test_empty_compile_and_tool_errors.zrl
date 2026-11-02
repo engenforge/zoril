@@ -1,0 +1,126 @@
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "file.zrl";
+import "proc.zrl";
+import "string.zrl";
+use file::{read_file, read_file_raw};
+use io::{File, eprintln};
+use mem_raw::{ArenaHeader, arena_init};
+use proc::Command;
+
+fn format_temp_path(prefix: [u8], pid: u64, buf: &mut [u8; 64]) -> [u8] {
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        buf[i] = prefix[i];
+        i = i + 1;
+    }
+    let mut digits: [u8; 20] = [0 as u8; 20];
+    let mut dcount = 0 as usize;
+    let mut n = pid;
+    if n == 0 as u64 {
+        digits[0] = '0' as u8;
+        dcount = 1;
+    } else {
+        while n > 0 as u64 {
+            let rem = (n % 10 as u64) as u8;
+            digits[dcount] = '0' as u8 + rem;
+            dcount = dcount + 1;
+            n = n / 10 as u64;
+        }
+    }
+    let mut d = dcount;
+    while d > 0 {
+        d = d - 1;
+        buf[i] = digits[d];
+        i = i + 1;
+    }
+    let suffix = ".tmp\0";
+    let mut s = 0 as usize;
+    while s < suffix.len {
+        buf[i] = suffix[s];
+        i = i + 1;
+        s = s + 1;
+    }
+    unsafe { return @slice(&buf[0] as *u8, i - 1); }
+}
+
+fn test_empty_file_compiles(arena: *mut ArenaHeader, pid: u64) -> bool {
+    let mut buf1 = [0 as u8; 64];
+    let mut buf2 = [0 as u8; 64];
+    let empty_zrl = format_temp_path("/tmp/test_empty_", pid, &mut buf1);
+    let empty_zil = format_temp_path("/tmp/test_empty_out_", pid, &mut buf2);
+
+    // Create 0-byte file
+    {
+        let mut f = match File.create(empty_zrl) {
+            Ok(file) => file,
+            Err(_) => return false,
+        };
+        let _ = f.close();
+    }
+
+    let mut cmd = unsafe { Command.new_raw("./build/zoril", arena) };
+    cmd.arg("-c");
+    cmd.arg(empty_zrl);
+    cmd.arg("-o");
+    cmd.arg(empty_zil);
+
+    let status_res = cmd.status();
+    let _ = unsafe { @syscall(87, empty_zrl.ptr, 0, 0) };
+    let _ = unsafe { @syscall(87, empty_zil.ptr, 0, 0) };
+
+    match status_res {
+        Ok(st) => return st.is_success(),
+        Err(_) => return false,
+    }
+}
+
+fn check_tool_error_msg(tool: [u8], arena: *mut ArenaHeader, pid: u64) -> bool {
+    let mut buf = [0 as u8; 64];
+    let err_file = format_temp_path("/tmp/test_tool_err_", pid, &mut buf);
+
+    let mut err_file_res = match File.create(err_file) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+
+    let mut cmd = unsafe { Command.new_raw(tool, arena) };
+    cmd.arg("/path/to/definitely/nonexistent_file_xyz_12345.zrl");
+    cmd.set_stderr(err_file_res.fd());
+
+    let status_res = cmd.status();
+    let _ = err_file_res.close();
+
+    let mut success = false;
+    if let Ok(st) = status_res {
+        if !st.is_success() {
+            let res = unsafe { read_file_raw(err_file, arena) };
+            if let Ok(content) = res {
+                if content.contains("No such file or directory")
+                    || content.contains("no such file or directory") {
+                    success = true;
+                }
+            }
+        }
+    }
+
+    let _ = unsafe { @syscall(87, err_file.ptr, 0, 0) };
+    return success;
+}
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(1024 * 1024 * 64) };
+    let pid = unsafe { @syscall(39) } as u64;
+
+    if !test_empty_file_compiles(arena, pid) {
+        return 1;
+    }
+    if !check_tool_error_msg("./build/zoril", arena, pid + 1 as u64) {
+        return 2;
+    }
+    if !check_tool_error_msg("./build/zilc", arena, pid + 2 as u64) {
+        return 3;
+    }
+    return 0;
+}

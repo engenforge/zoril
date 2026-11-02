@@ -1,0 +1,63 @@
+import "ast.zrl";
+import "io.zrl";
+import "fmt.zrl";
+import "mem_raw.zrl";
+use ast::{AST, ConstDecl, Decl, FnDecl, ImplDecl, Param, Span, TypeParam};
+use io::{write, stdout};
+use fmt::write_u64;
+use mem_raw::{ArenaHeader, arena_init};
+
+fn find_impl(ast: *mut AST) -> i32 {
+    let mut i = 0 as usize;
+    while i < unsafe { (*ast).decls.len } {
+        let p_decl = unsafe { ((*ast).decls.data as usize + i * sizeof(Decl)) as *mut Decl };
+        match unsafe { *p_decl } {
+            Decl.Impl(imp) => {
+                return 42;
+            },
+            _ => {},
+        }
+        i = i + 1 as usize;
+    }
+    return -1;
+}
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(1024 * 1024) };
+    let mut ast = AST.new(arena);
+    
+    let span = Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 };
+    let imp = ImplDecl {
+        trait_name: 0 as u32,
+        target_ty: 0 as u32,
+        methods: @slice(0 as *FnDecl, 0 as usize),
+        constants: @slice(0 as *ConstDecl, 0 as usize),
+        type_params: @slice(0 as *TypeParam, 0 as usize),
+    };
+    
+    let f = FnDecl { 
+        name: 1, 
+        type_params: @slice(0 as *TypeParam, 0 as usize), 
+        params: @slice(0 as *Param, 0 as usize), 
+        ret_ty: 0, body: 0, is_pub: true, 
+        is_extern: false, is_variadic: false, must_use: false,
+        span: span 
+    };
+    
+    ast.alloc_decl(Decl.Fn(f));
+    ast.alloc_decl(Decl.Impl(imp));
+    
+    let result = find_impl(ast);
+    write(stdout(), "Result: ");
+    let mut out = stdout();
+    let _ = write_u64(&mut out, result as u64);
+    write(stdout(), "\n");
+    
+    if result != 42 {
+        write(stdout(), "REPRODUCED! find_impl failed\n");
+    } else {
+        write(stdout(), "Match OK\n");
+    }
+    
+    return 0;
+}

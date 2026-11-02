@@ -1,0 +1,17 @@
+// Module math with public struct, private helper, public function, and generic function
+pub struct Vec2 {
+    pub x: i64,
+    pub y: i64,
+}
+
+fn private_dot(a: &Vec2, b: &Vec2) -> i64 {
+    return a.x * b.x + a.y * b.y;
+}
+
+pub fn length_sq(v: &Vec2) -> i64 {
+    return private_dot(v, v);
+}
+
+pub fn identity<T>(x: T) -> T {
+    return x;
+}

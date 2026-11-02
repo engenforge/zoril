@@ -1,0 +1,20 @@
+// expected exit 0
+// A function taking an aggregate fits a declared `fn` type of its signature. Its type was built
+// from the ABI's parameters, where an aggregate is passed by pointer, so `fn(u32, [u32])` and
+// `add`'s `fn(u32, &[u32])` did not match; and `&args` was not coerced to the slice.
+struct P { a: i64, b: i64 }
+struct Ops {
+    count: fn(u32, [u32]) -> u32,
+    sum: fn(P) -> i64,
+}
+fn add_len(d: u32, xs: [u32]) -> u32 { return d + xs.len as u32; }
+fn sum_p(p: P) -> i64 { return p.a + p.b; }
+fn main() -> i32 {
+    let ops = Ops { count: add_len, sum: sum_p };
+    let args = [1 as u32, 2, 3];
+    if (ops.count)(40 as u32, &args) != 43 { return 1; }
+    if (ops.sum)(P { a: 5, b: 7 }) != 12 { return 2; }
+    let f: fn(u32, [u32]) -> u32 = add_len;
+    if f(1 as u32, &args) != 4 { return 3; }
+    return 0;
+}

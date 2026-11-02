@@ -1,0 +1,155 @@
+import "core.zrl";
+import "mem.zrl";
+import "io.zrl";
+import "intern.zrl";
+import "il_instr.zrl";
+import "il_type.zrl";
+import "il_cfg.zrl";
+import "zil_parse.zrl";
+import "qbe.zrl";
+
+// Loops over read(), growing the buffer as needed, rather than a single
+// fixed-size read - a single must_read() call into a fixed buffer silently
+// truncates any input larger than the buffer, since read() isn't guaranteed
+// to fill it in one call: this prevents dropping the tail of large
+// multi-megabyte ZIL inputs (such as the self-hosted compiler).
+fn read_stdin(arena: *mut Arena) -> [u8] {
+    let mut cap = 1024 as u64 * 1024 * 64;
+    let mut buf = zoril_allocator_alloc(arena, cap) as *mut u8;
+    let mut total = 0 as usize;
+    // Growing a raw read buffer and handing back the filled prefix is this
+    // function's unsafe interior: the doubling copy, the tail view read() fills,
+    // and the final slice are all raw storage work behind a safe `[u8]` result.
+    unsafe {
+        while true {
+            if total >= cap as usize {
+                let new_cap = cap * 2;
+                let new_buf = zoril_allocator_alloc(arena, new_cap) as *mut u8;
+                memcpy(new_buf, buf as *u8, total as u64);
+                buf = new_buf;
+                cap = new_cap;
+            }
+            let mut s = @slice((buf as usize + total) as *mut u8, cap as usize - total);
+            let n = read(0 as u64, s);
+            if n <= 0 as i64 { break; }
+            total = total + n as usize;
+        }
+        return @slice(buf as *u8, total);
+    }
+}
+
+fn read_file(path: [u8], arena: *mut Arena) -> [u8] {
+    let fd = open(path, 0, 0);
+    if fd < 0 {
+        must_write(2, "error: cannot open input file\n");
+        return @slice(0 as *u8, 0 as usize);
+    }
+    defer must_close(fd as u64);
+    let mut cap = 1024 as u64 * 1024 * 64;
+    let mut buf = zoril_allocator_alloc(arena, cap) as *mut u8;
+    let mut total = 0 as usize;
+    // Growing a raw read buffer and handing back the filled prefix is this
+    // function's unsafe interior: the doubling copy, the tail view read() fills,
+    // and the final slice are all raw storage work behind a safe `[u8]` result.
+    unsafe {
+        while true {
+            if total >= cap as usize {
+                let new_cap = cap * 2;
+                let new_buf = zoril_allocator_alloc(arena, new_cap) as *mut u8;
+                memcpy(new_buf, buf as *u8, total as u64);
+                buf = new_buf;
+                cap = new_cap;
+            }
+            let mut s = @slice((buf as usize + total) as *mut u8, cap as usize - total);
+            let n = read(fd as u64, s);
+            if n <= 0 as i64 { break; }
+            total = total + n as usize;
+        }
+        return @slice(buf as *u8, total);
+    }
+}
+
+fn str_has_prefix(s: [u8], prefix: [u8]) -> bool {
+    if s.len < prefix.len { return false; }
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        if s[i] != prefix[i] { return false; }
+        i = i + 1 as usize;
+    }
+    return true;
+}
+
+fn str_after_prefix(s: [u8], prefix_len: usize) -> [u8] {
+    if s.len < prefix_len { return unsafe { @slice(0 as *u8, 0 as usize) }; }
+    return unsafe { @slice((s.ptr as usize + prefix_len) as *u8, s.len - prefix_len) };
+}
+
+fn main(argc: i32, argv: **u8) -> i32 {
+    let arena = arena_init(1024 as u64 * 1024 * 1024); // 1GB - was 256MB, overflowed compiling the full self-hosted compiler's ZIL
+
+    let mut in_path = unsafe { @slice(0 as *u8, 0 as usize) };
+    let mut out_path = unsafe { @slice(0 as *u8, 0 as usize) };
+    let mut cli_module = unsafe { @slice(0 as *u8, 0 as usize) };
+
+    let mut i = 1 as i32;
+    while i < argc {
+        let arg = arg_to_slice(argv, i);
+        if is_str_eq(arg, "-m") || is_str_eq(arg, "--module") {
+            if i + 1 as i32 < argc {
+                i = i + 1 as i32;
+                cli_module = arg_to_slice(argv, i);
+            }
+        } else if str_has_prefix(arg, "--module=") {
+            cli_module = str_after_prefix(arg, 9 as usize);
+        } else if arg.len > 0 as usize && arg[0] == '-' as u8 {
+            // ignore other flags
+        } else {
+            if in_path.len == 0 as usize {
+                in_path = arg;
+            } else if out_path.len == 0 as usize {
+                out_path = arg;
+            }
+        }
+        i = i + 1 as i32;
+    }
+
+    let source = if in_path.len > 0 as usize {
+        read_file(in_path, arena)
+    } else {
+        read_stdin(arena)
+    };
+
+    if source.len == 0 as usize {
+        must_write(2, "error: empty input\n");
+        return 1;
+    }
+
+    let mut out_fd = 1 as u32;
+    let mut opened_file = false;
+    if out_path.len > 0 as usize {
+        let fd = open(out_path, 577, 420); // O_WRONLY|O_CREAT|O_TRUNC, 0644
+        if fd < 0 {
+            must_write(2, "error: cannot open output file\n");
+            return 1;
+        }
+        out_fd = fd as u32;
+        opened_file = true;
+    }
+
+    let mut table = InternTable.new(arena);
+    let module = ILModule.new(arena, 0 as usize);
+
+    let mut parser = ZilParser.new(source, module, table);
+    parser.parse_module();
+
+    let mut qbe = QBEEmitter.new(arena, module, table, out_fd);
+    qbe.module_doc = parser.module_doc;
+    qbe.module_name = if cli_module.len > 0 as usize { cli_module } else { parser.module_name };
+    qbe.emit_module();
+
+    if opened_file {
+        must_close(out_fd as u64);
+    }
+
+    return 0;
+}

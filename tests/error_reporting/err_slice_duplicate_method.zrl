@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: error: `Su8::duplicate_m` is defined twice
+impl [u8] {
+    pub fn duplicate_m(self: &[u8]) -> usize {
+        return self.len;
+    }
+    pub fn duplicate_m(self: &[u8]) -> usize {
+        return self.len * 2 as usize;
+    }
+}
+
+fn main() -> i32 {
+    return 0;
+}

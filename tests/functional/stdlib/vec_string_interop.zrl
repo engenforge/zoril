@@ -1,0 +1,16 @@
+// expected exit 5
+import "string.zrl";
+use string::String;
+
+fn main() -> i32 {
+    let mut s = String.new();
+    s.push_u8('H');
+    s.push_u8('e');
+    s.push_u8('l');
+    s.push_u8('l');
+    s.push_u8('o');
+    
+    let len = s.len();
+    
+    return len as i32;
+}

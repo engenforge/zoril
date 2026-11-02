@@ -1,0 +1,6 @@
+enum Decl { Fn(u32), Import(u32) }
+fn main() -> i32 {
+    let mut arr = [Decl.Fn(0), Decl.Fn(0)];
+    let d = arr[0]; // SEGFAULT
+    return 0;
+}

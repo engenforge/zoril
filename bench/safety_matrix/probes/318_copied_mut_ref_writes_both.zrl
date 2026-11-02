@@ -1,0 +1,12 @@
+// name: A &mut reference is moved, not copied, so two cannot alias the same location
+// expected: compile_reject
+// A mutable reference &mut T is non-Copy. Assigning `let b = a;` moves `a` into `b`,
+// so subsequent access through `a` is rejected as use of a moved value.
+fn main() -> i32 {
+    let mut x = 0;
+    let a = &mut x;
+    let b = a;
+    *a = 1;
+    *b = 2;
+    return x;
+}

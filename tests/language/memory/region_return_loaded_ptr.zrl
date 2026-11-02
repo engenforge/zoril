@@ -1,0 +1,14 @@
+// expected exit 0
+// Returning a pointer that was READ OUT OF a local slot must be accepted. The
+// local holds the pointer; it is not what the pointer points at. Conflating the
+// two is what made the first version of this check reject the whole stdlib
+// allocator (zoril_allocator_alloc, mmap_or_trap, zoril_allocator_realloc).
+fn get_ptr(src: *mut u8) -> *mut u8 {
+    let p = src;
+    return p;
+}
+fn main() -> i32 {
+    let mut buf = [5 as u8];
+    let q = get_ptr(&mut buf[0]);
+    return (unsafe { *q } as i32) - 5;
+}

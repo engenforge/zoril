@@ -1,0 +1,14 @@
+struct Test {}
+
+impl Test {
+    const B: usize = Test.A;
+    const A: usize = 64 as usize;
+}
+
+fn main() -> i32 {
+    if Test.B == 64 as usize {
+        return 0;
+    } else {
+        return 1;
+    }
+}

@@ -1,0 +1,16 @@
+// name: Reference into a field of a by-value parameter box dropped at return
+// expected: compile_reject
+// A reference into a Box held in a field of a by-value parameter that the function drops at return cannot be returned.
+struct S {
+    b: Box<i32>,
+}
+
+fn get(s: S) -> &i32 {
+    return &*s.b;
+}
+
+fn main() -> i32 {
+    let s = S { b: box 5 };
+    let r = get(s);
+    return *r;
+}

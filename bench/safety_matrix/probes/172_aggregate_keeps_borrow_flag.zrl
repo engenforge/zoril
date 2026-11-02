@@ -1,0 +1,20 @@
+// name: Reference into a dead local held by a struct literal built from it
+// expected: compile_reject
+// A value built from an operand holds what the operand holds, but the construction cases recorded
+// the inherited borrow as *derived* - so `Holder { r: &x }` (a fresh, non-derived borrow of `x`)
+// became exempt at `x`'s scope end, and `y = h.r` outlived `x`, reading its dead slot (7). The copy
+// keeps the flag of the borrow it copies now, so a field holding `&x` is the local's own storage
+// while a field holding what a call derived (`r.get(0)`) is still exempt.
+struct Holder {
+    r: &i32,
+}
+
+fn main() -> i32 {
+    let mut y: &i32 = &0;
+    {
+        let x: i32 = 7;
+        let h = Holder { r: &x };
+        y = h.r;
+    }
+    return *y;
+}

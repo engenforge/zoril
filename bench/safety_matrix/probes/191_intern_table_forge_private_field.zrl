@@ -1,0 +1,15 @@
+// name: InternTable fields are private and cannot be forged or mutated directly
+// expected: compile_reject
+// InternTable encapsulates raw pointers and capacity invariants.
+// Its fields are private, preventing safe code from corrupting table internals.
+import "mem.zrl";
+import "intern.zrl";
+use mem::Arena;
+use intern::InternTable;
+
+fn main() -> i32 {
+    let a = Arena.new(65536 as u64).unwrap();
+    let t = InternTable.new(&a);
+    t.cap = 1000000000 as u64;
+    return 0;
+}

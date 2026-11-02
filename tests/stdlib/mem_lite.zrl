@@ -1,0 +1,55 @@
+// expected compile success
+// Generic-free mem_lite for testing
+
+pub struct ArenaHeader {
+    pub start: *mut u8,
+    pub offset: u64,
+    pub capacity: u64,
+}
+
+pub fn zoril_asan_panic() {
+    unsafe { @syscall(1, 2, "ASAN violation\n".ptr, 15) };
+    unsafe { @syscall(60, 134) };
+}
+
+fn asan_set_shadow(addr: u64, size: u64, val: u8) {
+    let mut i = 0 as u64;
+    while i < size {
+        let shadow_addr = 2147450880 as u64 +% ((addr +% i) >> 3);
+        unsafe { *((shadow_addr) as *mut u8) = val; }
+        i = i + 1; // Correct: set each byte in shadow memory if mapped 1:8?
+        // Wait, if it's 1:8 mapping, then each byte in shadow memory maps 8 bytes in user memory.
+        // So shadow_addr = shadow_base + user_addr / 8.
+        // If we want to poison 'size' bytes of user memory starting at 'addr',
+        // we need to set 'size / 8' bytes of shadow memory.
+    }
+}
+
+// Fixed asan_set_shadow
+fn asan_set_shadow_fixed(addr: u64, size: u64, val: u8) {
+    let shadow_base = 2147450880 as u64;
+    let start_idx = addr >> 3;
+    let end_idx = (addr + size + 7) >> 3;
+    let mut i = start_idx;
+    while i < end_idx {
+        unsafe { *((shadow_base + i) as *mut u8) = val; }
+        i = i + 1;
+    }
+}
+
+pub fn zoril_allocator_alloc(arena: *mut ArenaHeader, size: u64) -> *mut u8 {
+    let redzone_size = 16 as u64;
+    let total_size = size + (redzone_size * 2);
+    let mut aligned_offset = unsafe { ((*arena).offset + 7) & 18446744073709551608 };
+
+    let base_ptr = unsafe { ((*arena).start as u64 + aligned_offset) as *mut u8 };
+    let user_ptr = (base_ptr as u64 + redzone_size) as *mut u8;
+
+    // Shadow memory poisoning
+    asan_set_shadow_fixed(base_ptr as u64, redzone_size, 0xFF);
+    asan_set_shadow_fixed(user_ptr as u64, size, 0x00);
+    asan_set_shadow_fixed(user_ptr as u64 + size, redzone_size, 0xFF);
+
+    unsafe { (*arena).offset = aligned_offset + total_size; }
+    return user_ptr;
+}

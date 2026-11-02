@@ -1,0 +1,2131 @@
+// Textual ZIL parser/reader: builds an in-memory ILModule from ZIL source text
+// per the grammar in doc/spec/intermediate_language.md (v0.2.0), mirroring
+// stage0-C/src/il_read.c (il_read_module).
+//
+// This is the input-side counterpart to zil_print.zrl. As that file's header
+// notes, the in-memory ILModule is shared with the QBE backend and is a
+// strict superset of the spec'd ZIL instruction set (it carries extra opcodes
+// with no textual ZIL equivalent, and represents some spec opcodes in a
+// lowered, value-producing form). The parser only needs to *accept* the
+// grammar the printer actually emits -- see the spec's S1 notes on
+// divergences from a "clean room" ZIL design -- not the full historical
+// surface described elsewhere in the spec.
+//
+// Region annotations (`'name`) are parsed and discarded: the in-memory
+// ILType variants for Ptr/PtrMut/Slice carry no region (regions are erased
+// after verification -- see zil_print.zrl's header note), so there is
+// nowhere to record one.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "bytevec.zrl";
+import "il_instr.zrl";
+import "il_type.zrl";
+import "il_cfg.zrl";
+import "intern.zrl";
+import "lexer.zrl";
+import "vec.zrl";
+import "io.zrl";
+import "fmt.zrl";
+import "ast.zrl";
+use ast::Span;
+use bytevec::ByteVec;
+use il_cfg::{BasicBlock, ILFunction, ILGlobal, ILModule, ILParam, il_module_set_typedef};
+use il_instr::{AllocInstr, BorrowInstr, BoundsCheckInstr, BranchInstr, CALL_BY_NAME, CallInstr, CallPtrInstr, CastInstr, ConstInstr, ConstValue, FDIOInstr, FDOpenInstr, FieldAddrInstr, ILBinaryOp, ILInstr, IORingEnterInstr, IndexInstr, IndexStoreInstr, NO_BLOCK, NO_SSA, PhiInstr, PhiPred, RegionCastInstr, SSAId, SliceConstructInstr, StoreInstr, StructConstructInstr, SumConstructInstr, SyscallInstr, VariantMatchInstr};
+use il_type::{FDCap, ILArray, ILEnum, ILField, ILFn, ILPRIM_BOOL, ILPRIM_F32, ILPRIM_F64, ILPrimitive, ILSlice, ILStruct, ILType, ILTypeDecl, ILTypeDef, ILUser, ILVar, ILVariant, Region};
+use intern::InternTable;
+use io::{Fd, eprint, exit, stderr, write};
+use fmt::write_u64;
+use mem_raw::{memcpy, zoril_allocator_alloc};
+use vec::Vec;
+
+pub struct ZilParser {
+    pub source: [u8],
+    pub pos: u64,
+    pub line: u32,
+    pub col: u32,
+    pub module: &mut ILModule,
+    pub intern_table: &mut InternTable,
+    pub current_func: *mut ILFunction,
+    // current_func's id: the pointer is into module.functions, which a call to a function
+    // not defined yet grows (get_or_create_function), so it is re-derived from this after.
+    pub current_func_id: u32,
+    pub block_map_local: Vec<u32>,
+    pub block_map_global: Vec<u32>,
+    pub max_ssa: u32,
+    pub pending_comment: u32, // last // comment seen; consumed by next alloc_instr
+    pub pending_comment_line: u32,
+    pub module_doc: u32,  // interned "# Role:...\n# Algorithm:..." block from leading // comments
+    pub pending_block: u32, // accumulated multi-line comment block from last skip_trivia
+    pub module_name: [u8],
+}
+
+impl ZilParser {
+    pub fn new(source: [u8], module: &mut ILModule, table: &mut InternTable) -> ZilParser {
+        return ZilParser {
+            source: source,
+            pos: 0 as u64,
+            line: 1 as u32,
+            col: 1 as u32,
+            module: module,
+            intern_table: table,
+            current_func: 0 as *mut ILFunction,
+            current_func_id: 0 as u32,
+            block_map_local: unsafe { Vec::<u32>.with_capacity_in_raw(module.arena, 16 as usize) },
+            block_map_global: unsafe { Vec::<u32>.with_capacity_in_raw(module.arena, 16 as usize) },
+            max_ssa: 0 as u32,
+            pending_comment: 0 as u32,
+            pending_comment_line: 0 as u32,
+            module_doc: 0 as u32,
+            pending_block: 0 as u32,
+            module_name: unsafe { @slice(0 as *u8, 0 as usize) },
+        };
+    }
+
+    // Scans leading // comment lines that are NOT source-line annotations (// N: ...)
+    // and builds a "# Role:...\n# Algorithm:..." block, setting self.module_doc.
+    // Called once at the start of parse_module to capture file-level doc headers.
+    fn scan_module_doc(self: &mut ZilParser) {
+        let arena = self.module.arena;
+        let buf = unsafe { zoril_allocator_alloc(arena, 2048 as u64) } as *mut u8;
+        let mut buf_len = 0 as usize;
+        let s_len = self.source.len;
+        let mut p = self.pos;
+        let mut l = self.line;
+        let mut c_col = self.col;
+
+        while p < s_len {
+            let c = self.source[p as usize];
+            if c == ' ' as u8 || c == '\t' as u8 || c == '\r' as u8 || c == '\n' as u8 {
+                if c == '\n' as u8 {
+                    l = l + 1 as u32;
+                    c_col = 1 as u32;
+                } else {
+                    c_col = c_col + 1 as u32;
+                }
+                p = p + 1 as u64;
+            } else if c == '/' as u8
+                && p + 1 as u64 < s_len
+                && self.source[p as usize + 1 as usize] == '/' as u8 {
+                // Peek past '//' and optional ' ' to check for digit prefix (source-line annotation).
+                let mut tp = p + 2 as u64;
+                if tp < s_len && self.source[tp as usize] == ' ' as u8 {
+                    tp = tp + 1 as u64;
+                }
+                let mut kp = tp;
+                while kp < s_len {
+                    let kc = self.source[kp as usize];
+                    if kc >= '0' as u8 && kc <= '9' as u8 { kp = kp + 1 as u64; } else { break; }
+                }
+                if kp > tp
+                    && kp + 1 as u64 < s_len
+                    && self.source[kp as usize] == ':' as u8
+                    && self.source[kp as usize + 1 as usize] == ' ' as u8 {
+                    break; // Source-line annotation: stop accumulating module doc.
+                }
+                // Doc comment line — consume '//' and optional space.
+                p = p + 2 as u64;
+                c_col = c_col + 2 as u32;
+                if p < s_len && self.source[p as usize] == ' ' as u8 {
+                    p = p + 1 as u64;
+                    c_col = c_col + 1 as u32;
+                }
+                // Scan to end of line.
+                let text_start = p;
+                while p < s_len && self.source[p as usize] != '\n' as u8 {
+                    p = p + 1 as u64;
+                    c_col = c_col + 1 as u32;
+                }
+                let text_len = (p - text_start) as usize;
+                // Normalize: ensure each stored line starts with '# ' so the QBE
+                // emitter can use an empty prefix.  Zoril-generated ZIL already has
+                // '# ' in the text (e.g. '# Role: …'); hand-written ZIL has bare
+                // text (e.g. 'expected exit code: 30') and needs the prefix added.
+                let needs_hash = text_len == 0 as usize
+                    || self.source[text_start as usize] != '#' as u8;
+                let extra = if needs_hash { 2 as usize } else { 0 as usize };
+                if buf_len + text_len + extra + 1 as usize < 2048 as usize {
+                    let mut doc = unsafe { @slice(buf, 2048 as usize) };
+                    if needs_hash {
+                        doc[buf_len] = '#' as u8;
+                        doc[buf_len + 1 as usize] = ' ' as u8;
+                        buf_len = buf_len + 2 as usize;
+                    }
+                    let mut ti = 0 as usize;
+                    while ti < text_len {
+                        doc[buf_len] = self.source[text_start as usize + ti];
+                        buf_len = buf_len + 1 as usize;
+                        ti = ti + 1 as usize;
+                    }
+                    doc[buf_len] = '\n' as u8;
+                    buf_len = buf_len + 1 as usize;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if buf_len > 0 as usize {
+            // Strip trailing '\n'.
+            let doc = unsafe { @slice(buf, 2048 as usize) };
+            if doc[buf_len - 1 as usize] == '\n' as u8 {
+                buf_len = buf_len - 1 as usize;
+            }
+            self.pos = p;
+            self.line = l;
+            self.col = c_col;
+            let s = subslice(doc, 0 as usize, buf_len);
+            self.module.module_doc = self.intern_table.intern(s);
+        }
+    }
+
+    // `current_func` is set while a function body is being parsed; these are the
+    // two marked forges for it.
+    fn cur_func(self: &ZilParser) -> &ILFunction {
+        return unsafe { &*self.current_func };
+    }
+
+    fn cur_func_mut(self: &ZilParser) -> &mut ILFunction {
+        return unsafe { &mut *self.current_func };
+    }
+
+    fn peek(self: &ZilParser) -> u8 {
+        let p = self.pos;
+        if p >= self.source.len { return 0 as u8; }
+        return self.source[p as usize];
+    }
+
+    fn peek_at(self: &ZilParser, offset: u64) -> u8 {
+        let p = self.pos + offset;
+        if p >= self.source.len { return 0 as u8; }
+        return self.source[p as usize];
+    }
+
+    fn advance(self: &mut ZilParser) -> u8 {
+        let p = self.pos;
+        if p >= self.source.len { return 0 as u8; }
+        let c = self.source[p as usize];
+        self.pos = p + 1 as u64;
+        if c == '\n' as u8 {
+            self.line = self.line + 1 as u32;
+            self.col = 1 as u32;
+        } else {
+            self.col = self.col + 1 as u32;
+        }
+        return c;
+    }
+
+    // Skips whitespace and `//` line comments, capturing each comment's text
+    // into self.pending_comment (overwriting any prior pending comment if
+    // multiple comment lines appear in sequence). The pending comment is
+    // consumed by parse_instruction_into_block and attached to the next
+    // instruction via alloc_instr, implementing lossless comment-threading.
+    fn skip_trivia(self: &mut ZilParser) {
+        let mut p = self.pos;
+        let mut l = self.line;
+        let mut c_col = self.col;
+        let s_len = self.source.len;
+        let mut newlines = 0 as u32;
+
+        while p < s_len {
+            let c = self.source[p as usize];
+            if c == ' ' as u8 || c == '\t' as u8 || c == '\r' as u8 || c == '\n' as u8 {
+                if c == '\n' as u8 {
+                    l = l + 1 as u32;
+                    c_col = 1 as u32;
+                    newlines = newlines + 1;
+                    if newlines >= 2 {
+                        self.pending_block = 0 as u32;
+                    }
+                } else {
+                    c_col = c_col + 1 as u32;
+                }
+                p = p + 1 as u64;
+            } else if c == '/' as u8
+                && p + 1 as u64 < s_len
+                && self.source[p as usize + 1] == '/' as u8 {
+                newlines = 0;
+                self.pending_comment_line = 0 as u32;
+                // Skip '//'
+                p = p + 2 as u64;
+                c_col = c_col + 2 as u32;
+                // Skip one optional space after '//' to align with how zil_print.zrl emits them
+                if p < s_len && self.source[p as usize] == ' ' as u8 {
+                    p = p + 1 as u64;
+                    c_col = c_col + 1 as u32;
+                }
+                // Capture rest of line as the pending comment for the next instruction
+                let comment_start = p;
+                let mut is_digit_prefix = false;
+                let mut prefix_val = 0 as u64;
+                let mut kp = p;
+                while kp < s_len {
+                    let kc = self.source[kp as usize];
+                    if kc >= '0' as u8 && kc <= '9' as u8 {
+                        prefix_val = prefix_val * 10 as u64 + (kc - '0' as u8) as u64;
+                        kp = kp + 1 as u64;
+                    } else {
+                        break;
+                    }
+                }
+                if kp > p
+                    && kp + 1 as u64 < s_len
+                    && self.source[kp as usize] == ':' as u8
+                    && self.source[kp as usize + 1] == ' ' as u8 {
+                    l = prefix_val as u32;
+                    self.pending_comment_line = l;
+                    p = kp + 2 as u64;
+                    c_col = c_col + (p - comment_start) as u32;
+                }
+
+                let comment_text_start = p;
+                while p < s_len && self.source[p as usize] != '\n' as u8 {
+                    p = p + 1 as u64;
+                    c_col = c_col + 1 as u32;
+                }
+                let comment_len = p - comment_text_start;
+                if comment_len > 0 as u64 {
+                    // Flush position state before calling intern (which may allocate)
+                    self.pos = p;
+                    self.line = l;
+                    self.col = c_col;
+                    let cs = subslice(self.source, comment_text_start as usize, comment_len);
+                    let interned = self.intern_table.intern(cs);
+
+                    if self.pending_comment_line != 0 as u32 {
+                        self.pending_comment = interned;
+                    } else {
+                        // Multi-line block accumulation
+                        let mut bv = if self.pending_block == 0 as u32 {
+                            unsafe { ByteVec.new_raw(self.module.arena) }
+                        } else {
+                            let mut b = unsafe { ByteVec.new_raw(self.module.arena) };
+                            (*b).push_slice(self.intern_table.lookup(self.pending_block));
+                            (*b).push('\n' as u8);
+                            b
+                        };
+                        (*bv).push_slice(cs);
+                        self.pending_block = self.intern_table.intern((*bv).as_slice());
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+        self.pos = p;
+        self.line = l;
+        self.col = c_col;
+    }
+
+    // Tries to consume an exact literal at the current position (after
+    // skipping leading trivia). Consumes and returns true on a match;
+    // leaves the position untouched on a mismatch.
+    fn match_lit(self: &mut ZilParser, lit: [u8]) -> bool {
+        self.skip_trivia();
+        let p = self.pos;
+        let s_len = self.source.len;
+        let l_len = lit.len;
+
+        if p + l_len > s_len { return false; }
+
+        let mut i = 0 as u64;
+        while i < l_len {
+            if self.source[p as usize + i as usize] != lit[i as usize] { return false; }
+            i = i + 1 as u64;
+        }
+
+        // Match: advance position
+        let mut j = 0 as u64;
+        while j < l_len {
+            self.advance();
+            j = j + 1 as u64;
+        }
+        return true;
+    }
+
+    fn parse_uint(self: &mut ZilParser) -> u64 {
+        self.skip_trivia();
+        let mut v = 0 as u64;
+        while is_digit(self.peek()) {
+            let c = self.advance();
+            v = v * 10 as u64 + (c - '0' as u8) as u64;
+        }
+        return v;
+    }
+
+    // Parses an identifier (`[A-Za-z_][A-Za-z0-9_]*`) and interns it.
+    // Returns 0 if no identifier is present.
+    fn parse_ident(self: &mut ZilParser) -> u32 {
+        self.skip_trivia();
+        let start = self.pos;
+        if is_alpha(self.peek()) || self.peek() == '_' as u8 {
+            self.advance();
+            while is_alpha(self.peek())
+                || is_digit(self.peek())
+                || self.peek() == '_' as u8
+                || (self.peek() == ':' as u8 && self.peek_at(1) == ':' as u8)
+                || self.peek() == '.' as u8
+                || self.peek() == '/' as u8 {
+                if self.peek() == ':' as u8 {
+                    self.advance();
+                    self.advance();
+                } else {
+                    self.advance();
+                }
+            }
+        }
+        let len = (self.pos - start) as usize;
+        if len == 0 as usize { return 0 as u32; }
+        return self.intern_table.intern(subslice(self.source, start as usize, len));
+    }
+
+    // region = "'" name -- consumed and discarded; see the file header note
+    // on why the in-memory representation has nowhere to record this.
+    fn skip_region(self: &mut ZilParser) {
+        self.skip_trivia();
+        if self.peek() == '\'' as u8 {
+            self.advance();
+            self.parse_ident();
+        }
+    }
+
+    // A plain id: the caller may hold it across its own calls.
+    #[borrows()]
+    fn intern_type(self: &mut ZilParser, def: ILType) -> u32 {
+        return self.module.alloc_type(ILTypeDecl {
+            id: 0 as u32,
+            name: 0 as u32,
+            def: def,
+            source_file: 0 as u32
+        });
+    }
+
+    // type = primitive | ptr_type | box_type | slice_type | array_type
+    //      | fn_type | tuple_type | fd_type | "async_context"
+    //      | user_type | var_type
+    pub fn parse_type(self: &mut ZilParser) -> u32 {
+        self.skip_trivia();
+
+        if self.match_lit("u8") { return self.intern_type(ILType.Primitive(ILPrimitive.U8)); }
+        if self.match_lit("u16") { return self.intern_type(ILType.Primitive(ILPrimitive.U16)); }
+        if self.match_lit("u32") { return self.intern_type(ILType.Primitive(ILPrimitive.U32)); }
+        if self.match_lit("u64") { return self.intern_type(ILType.Primitive(ILPrimitive.U64)); }
+        if self.match_lit("usize") { return self.intern_type(ILType.Primitive(ILPrimitive.USize)); }
+        if self.match_lit("i8") { return self.intern_type(ILType.Primitive(ILPrimitive.I8)); }
+        if self.match_lit("i16") { return self.intern_type(ILType.Primitive(ILPrimitive.I16)); }
+        if self.match_lit("i32") { return self.intern_type(ILType.Primitive(ILPrimitive.I32)); }
+        if self.match_lit("i64") { return self.intern_type(ILType.Primitive(ILPrimitive.I64)); }
+        if self.match_lit("isize") { return self.intern_type(ILType.Primitive(ILPrimitive.ISize)); }
+        if self.match_lit("f32") { return self.intern_type(ILType.Primitive(ILPrimitive.F32)); }
+        if self.match_lit("f64") { return self.intern_type(ILType.Primitive(ILPrimitive.F64)); }
+        if self.match_lit("bool") { return self.intern_type(ILType.Primitive(ILPrimitive.Bool)); }
+        if self.match_lit("char") { return self.intern_type(ILType.Primitive(ILPrimitive.Char)); }
+        if self.match_lit("unit") { return self.intern_type(ILType.Primitive(ILPrimitive.Unit)); }
+        if self.match_lit("never") { return self.intern_type(ILType.Primitive(ILPrimitive.Never)); }
+
+        if self.match_lit("PtrMut") {
+            self.match_lit("<");
+            let inner = self.parse_type();
+            if self.match_lit(",") { self.skip_region(); }
+            self.match_lit(">");
+            return self.intern_type(ILType.PtrMut(inner));
+        }
+        if self.match_lit("Ptr") {
+            self.match_lit("<");
+            let inner = self.parse_type();
+            if self.match_lit(",") { self.skip_region(); }
+            self.match_lit(">");
+            return self.intern_type(ILType.Ptr(inner));
+        }
+
+        // Phase D's raw pointers: the IL text distinguishes them from the reference pair, and zilc
+        // keeps the distinction in its IL (both still lower to QBE's `l` in tools/zilc/src/qbe.zrl).
+        if self.match_lit("RawPtrMut") {
+            self.match_lit("<");
+            let inner = self.parse_type();
+            if self.match_lit(",") { self.skip_region(); }
+            self.match_lit(">");
+            return self.intern_type(ILType.RawPtrMut(inner));
+        }
+        if self.match_lit("RawPtr") {
+            self.match_lit("<");
+            let inner = self.parse_type();
+            if self.match_lit(",") { self.skip_region(); }
+            self.match_lit(">");
+            return self.intern_type(ILType.RawPtr(inner));
+        }
+        if self.match_lit("BoxMut") {
+            self.match_lit("<");
+            let inner = self.parse_type();
+            self.match_lit(">");
+            return self.intern_type(ILType.BoxedMut(inner));
+        }
+        if self.match_lit("Box") {
+            self.match_lit("<");
+            let inner = self.parse_type();
+            self.match_lit(">");
+            return self.intern_type(ILType.Boxed(inner));
+        }
+        if self.match_lit("SliceMut") || self.match_lit("Slice") {
+            self.match_lit("<");
+            let elem = self.parse_type();
+            if self.match_lit(",") { self.skip_region(); }
+            self.match_lit(">");
+            return self.intern_type(ILType.Slice(ILSlice { element: elem, mutable: false }));
+        }
+        if self.match_lit("[") {
+            let elem = self.parse_type();
+            let mut size = 0 as u32;
+            if self.match_lit(";") {
+                size = self.parse_uint() as u32;
+            }
+            self.match_lit("]");
+            return self.intern_type(ILType.Array(ILArray { element: elem, size: size }));
+        }
+        if self.match_lit("fn") {
+            self.match_lit("(");
+            let mut params = unsafe {
+                Vec::<u32>.with_capacity_in_raw(self.module.arena, 8 as usize)
+            };
+            let mut is_variadic = false;
+            while self.peek() != ')' as u8 && self.peek() != 0 as u8 {
+                if self.match_lit("...") {
+                    is_variadic = true;
+                    break;
+                }
+                let p = self.parse_type();
+                params.push(p);
+                if !self.match_lit(",") { break; }
+            }
+            self.match_lit(")");
+            self.match_lit("->");
+            let ret = self.parse_type();
+            return self.intern_type(
+                ILType.Fn(ILFn {
+                    params: params.as_slice(),
+                    ret_ty: ret,
+                    is_variadic: is_variadic,
+                    c_abi: false,
+                })
+            );
+        }
+        if self.match_lit("fd") {
+            self.match_lit("<");
+            let mut cap = FDCap.RW;
+            if self.match_lit("rw") {
+                cap = FDCap.RW;
+            } else if self.match_lit("r") {
+                cap = FDCap.R;
+            } else if self.match_lit("w") {
+                cap = FDCap.W;
+            }
+            self.match_lit(">");
+            return self.intern_type(ILType.FD(cap));
+        }
+        if self.match_lit("async_context") {
+            return self.intern_type(ILType.IORing);
+        }
+        if self.peek() == '(' as u8 {
+            self.advance();
+            let mut elems = unsafe {
+                Vec::<u32>.with_capacity_in_raw(self.module.arena, 8 as usize)
+            };
+            while self.peek() != ')' as u8 && self.peek() != 0 as u8 {
+                let e = self.parse_type();
+                elems.push(e);
+                if !self.match_lit(",") { break; }
+            }
+            self.match_lit(")");
+            return self.intern_type(ILType.Tuple(elems.as_slice()));
+        }
+
+        // user_type = "T" integer [ "<" type_list ">" ]
+        if self.peek() == 'T' as u8 && is_digit(self.peek_at(1 as u64)) {
+            self.advance();
+            let id = self.parse_uint() as u32;
+            let mut type_args = unsafe {
+                Vec::<u32>.with_capacity_in_raw(self.module.arena, 0 as usize)
+            };
+            if self.match_lit("<") {
+                while self.peek() != '>' as u8 && self.peek() != 0 as u8 {
+                    let a = self.parse_type();
+                    type_args.push(a);
+                    if !self.match_lit(",") { break; }
+                }
+                self.match_lit(">");
+            }
+            return self.intern_type(
+                ILType.User(ILUser { id: id, name: 0 as u32, type_args: type_args.as_slice() })
+            );
+        }
+
+        // var_type = name
+        let name = self.parse_ident();
+        // A name that takes type arguments is a type CONSTRUCTOR, and every constructor this
+        // dialect has is spelled above. Reaching here with a `<` next means the ZIL was written
+        // by a compiler newer than this zilc (a type spelling added after it was built). Reading
+        // it as a var type would leave `<...>` behind for the caller to read as garbage, so name
+        // it and stop. 2026-10-13: the fresh-checkout bootstrap fed src/'s ZIL (Phase D's
+        // `RawPtr<T>`/`RawPtrMut<T>`) to the frozen zilc-stage1, which read the name as a var
+        // type and then spun in `parse_module` until the build's timeout, reporting nothing.
+        self.skip_trivia();
+        if self.peek() == '<' as u8 {
+            eprint("zilc: line ");
+            let mut err = stderr();
+            let _ = write_u64(&mut err, self.line as u64);
+            eprint(": unknown type name `");
+            eprint(self.intern_table.lookup(name));
+            eprint("`: written by a compiler newer than this zilc\n");
+            exit(1);
+        }
+        return self.intern_type(
+            ILType.Var(ILVar { name: name, bounds: @slice(0 as *mut u32, 0 as usize) })
+        );
+    }
+
+    // --- ID Map Helpers ---
+
+    fn get_global_block_id(self: &mut ZilParser, local_id: u32) -> u32 {
+        let mut i = 0 as usize;
+        while i < self.block_map_local.len() {
+            if self.block_map_local[i] == local_id {
+                return self.block_map_global[i];
+            }
+            i = i + 1 as usize;
+        }
+
+        let global_id = self.module.alloc_block(BasicBlock.new(self.module.arena, 0 as u32));
+        self.block_map_local.push(local_id);
+        self.block_map_global.push(global_id);
+        return global_id;
+    }
+
+    fn get_or_create_function(self: &mut ZilParser, id: u32) -> *mut ILFunction {
+        while self.module.functions.len() <= id as usize {
+            let next_id = self.module.functions.len() as u32;
+            let f = ILFunction {
+                id: next_id,
+                name: 0 as u32,
+                params: 0 as *mut ILParam,
+                params_len: 0 as usize,
+                ret_ty: 0 as u32,
+                result_types: 0 as *mut u32,
+                result_types_len: 0 as usize,
+                result_types_cap: 0 as usize,
+                ssa_names: 0 as *mut u32,
+                blocks: 0 as *mut u32,
+                blocks_len: 0 as usize,
+                blocks_cap: 0 as usize,
+                is_variadic: false,
+                is_extern: false,
+                is_export: false,
+                is_unsafe: false,
+                is_local: false,
+                is_pub: false,
+                must_use: false,
+                arena_alloc_bytes: 0 as usize,
+                doc_comment: 0 as u32,
+                // ZIL text (unlike the surface language) carries no source-file
+                // attribution to reconstruct here -- this placeholder entry is
+                // filled in as parsing proceeds, and no field this parser sets
+                // records original-source location at all.
+                source_file: 0 as u32,
+                owner_len: 0 as u32,
+                has_summary: false,
+                summary_escape: 0 as u64,
+                summary_stash: 0 as u64,
+                summary_escape_via: 0 as u64,
+                summary_stash_via: 0 as u64,
+                summary_storage: 0 as u64,
+                summary_ret_stack: false,
+                ret_ties: 0 as u64,
+                ret_storage: 0 as u64,
+                stores_storage: 0 as u64,
+                store_targets: 0 as u64,
+                has_stores_declared: false,
+                stores_declared_from: 0 as u64,
+                stores_declared_to: 0 as u64,
+                decl_span: Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 },
+                is_stdlib: false,
+                is_generic: false,
+                from_interface: false,
+                // ZIL text carries no summaries; zilc does not consult the masks, and `false` is
+                // the state that would be conservative if it ever did.
+                storage_known: false,
+                has_borrows: false,
+                // ZIL is post-borrow-checking: the arena lifecycle attributes decided their
+                // exemption in the front end and nothing here reads them.
+                arena_mark: false,
+                arena_reset_to: false,
+                arena_reset: false,
+                arena_init_result: false,
+                allocator_free: false,
+                buffer_external: false,
+                buffer_anchored: false,
+            };
+            self.module.functions.push(f);
+        }
+        if self.current_func as usize != 0 as usize {
+            self.current_func = &self.module.functions[self.current_func_id as usize];
+        }
+        return &self.module.functions[id as usize];
+    }
+
+    fn get_or_create_global(self: &mut ZilParser, id: u32) -> *mut ILGlobal {
+        while self.module.globals.len() <= id as usize {
+            let next_id = self.module.globals.len() as u32;
+            let g = ILGlobal {
+                id: next_id,
+                name: 0 as u32,
+                ty: 0 as u32,
+                init_data_ptr: 0 as *mut u8,
+                init_data_len: 0 as usize,
+                is_pub: false,
+                is_extern: false,
+                is_mut: false,
+                source_file: 0 as u32, // ZIL text carries no source-file attribution; see get_or_create_function
+            };
+            self.module.globals.push(g);
+        }
+        return &self.module.globals[id as usize];
+    }
+
+    fn get_or_create_typedef(self: &mut ZilParser, id: u32) -> u32 {
+        while self.module.typedefs.len() <= id as usize {
+            let empty_def = ILTypeDef.Struct(ILStruct {
+                fields: @slice(0 as *mut ILField, 0 as usize),
+                is_copy_opt_out: false,
+            });
+            self.module.typedefs.push(empty_def);
+        }
+        return id;
+    }
+
+    // --- Parser Helpers ---
+
+    fn parse_ssa_id_with_name(self: &mut ZilParser, func: *mut ILFunction) -> u32 {
+        self.skip_trivia();
+        let skip_v = (self.peek() == 'v' as u8);
+        if skip_v { self.advance(); }
+
+        let start = self.pos;
+        while is_alpha(self.peek()) || is_digit(self.peek()) || self.peek() == '_' as u8 {
+            self.advance();
+        }
+        let end_pos = self.pos;
+        if end_pos == start { return 0xffffffff as u32; }
+
+        let mut underscore_pos = 0xffffffff as u64;
+        let mut check_pos = end_pos - 1 as u64;
+        while check_pos >= start {
+            if self.source[check_pos] == '_' as u8 { underscore_pos = check_pos; break; }
+            check_pos = check_pos - 1 as u64;
+        }
+
+        let mut id_start = start;
+        if underscore_pos != 0xffffffff as u64 { id_start = underscore_pos + 1 as u64; }
+
+        let mut id = 0 as u32;
+        let mut p = id_start;
+        let mut has_digit = false;
+        while p < end_pos {
+            if !is_digit(self.source[p]) { has_digit = false; break; }
+            id = id * 10 as u32 + (self.source[p] - '0' as u8) as u32;
+            p = p + 1 as u64;
+            has_digit = true;
+        }
+
+        if has_digit {
+            if id > self.max_ssa { self.max_ssa = id; }
+            if func as usize != 0 as usize {
+                if id_start > start {
+                    // There was something before the ID (likely <name>_)
+                    let name_len = (id_start - 1 as u64 - start) as usize;
+                    if name_len > 0 as usize {
+                        let name_slice = subslice(self.source, start as usize, name_len);
+                        let name_id = self.intern_table.intern(name_slice);
+                        unsafe { &mut *func }.set_ssa_name(self.module.arena, id, name_id);
+                    }
+                }
+            }
+            return id;
+        }
+        return 0xffffffff as u32;
+    }
+
+    fn parse_block_id(self: &mut ZilParser) -> u32 {
+        self.skip_trivia();
+        if self.peek() == '@' as u8 {
+            self.advance();
+        }
+        let start = self.pos;
+        let mut has_ident = false;
+        if is_alpha(self.peek()) || self.peek() == '_' as u8 {
+            has_ident = true;
+            self.advance();
+            while is_alpha(self.peek()) || is_digit(self.peek()) || self.peek() == '_' as u8 {
+                self.advance();
+            }
+        }
+        if has_ident {
+            let end_pos = self.pos;
+            let mut check_pos = end_pos - 1 as u64;
+            let mut underscore_pos = 0 as u64;
+            while check_pos >= start {
+                if self.source[check_pos] == '_' as u8 {
+                    underscore_pos = check_pos;
+                    break;
+                }
+                check_pos = check_pos - 1 as u64;
+            }
+            if underscore_pos > 0 as u64 {
+                let mut p = underscore_pos + 1 as u64;
+                let mut all_digits = true;
+                while p < end_pos {
+                    if !is_digit(self.source[p]) {
+                        all_digits = false;
+                        break;
+                    }
+                    p = p + 1 as u64;
+                }
+                if all_digits && p > underscore_pos + 1 as u64 {
+                    let mut id = 0 as u32;
+                    let mut p = underscore_pos + 1 as u64;
+                    while p < end_pos {
+                        id = id * 10 as u32 + (self.source[p] - '0' as u8) as u32;
+                        p = p + 1 as u64;
+                    }
+                    return id;
+                }
+            }
+            let len = (end_pos - start) as usize;
+            if len > 1 as usize
+                && (self.source[start] == 'b' as u8 || self.source[start] == 'l' as u8) {
+                let mut p = start + 1 as u64;
+                let mut all_digits = true;
+                while p < end_pos {
+                    if !is_digit(self.source[p]) {
+                        all_digits = false;
+                        break;
+                    }
+                    p = p + 1 as u64;
+                }
+                if all_digits {
+                    let mut id = 0 as u32;
+                    let mut p = start + 1 as u64;
+                    while p < end_pos {
+                        id = id * 10 as u32 + (self.source[p] - '0' as u8) as u32;
+                        p = p + 1 as u64;
+                    }
+                    return id;
+                }
+            }
+        }
+        return self.parse_uint() as u32;
+    }
+
+    // A plain value: the caller may hold it across its own calls.
+    #[borrows()]
+    fn parse_region(self: &mut ZilParser) -> Region {
+        self.skip_trivia();
+        if self.peek() == '\'' as u8 {
+            self.advance();
+        }
+        let start = self.pos;
+        while is_alpha(self.peek()) || is_digit(self.peek()) || self.peek() == '_' as u8 {
+            self.advance();
+        }
+        let len = (self.pos - start) as usize;
+        if len == 0 as usize { return Region.Static; }
+        let rname = subslice(self.source, start as usize, len);
+        if rname == "static" { return Region.Static; }
+        if rname == "local" { return Region.Local; }
+        if rname == "heap" { return Region.Heap; }
+        return Region.Custom(rname);
+    }
+
+    fn parse_type_id(self: &mut ZilParser) -> u32 {
+        self.skip_trivia();
+        if self.peek() == 'T' as u8 {
+            self.advance();
+        }
+        return self.parse_uint() as u32;
+    }
+
+    // The list is built in the module's arena, so the caller may keep it while parsing on.
+    #[borrows()]
+    fn parse_ssa_list(self: &mut ZilParser) -> [u32] {
+        let mut list = unsafe { Vec::<u32>.with_capacity_in_raw(self.module.arena, 8 as usize) };
+        while true {
+            self.skip_trivia();
+            if self.peek() == 'v' as u8 {
+                let ssa = self.parse_ssa_id_with_name(self.current_func);
+                list.push(ssa);
+                if self.match_lit(",") {
+                    continue;
+                }
+            }
+            break;
+        }
+        return list.as_slice();
+    }
+
+    fn parse_binary_op(self: &mut ZilParser) -> ILBinaryOp {
+        let lhs = self.parse_ssa_id_with_name(self.current_func);
+        self.match_lit(",");
+        let rhs = self.parse_ssa_id_with_name(self.current_func);
+        return ILBinaryOp { lhs: lhs, rhs: rhs };
+    }
+
+    fn parse_index_op(self: &mut ZilParser) -> IndexInstr {
+        let base = self.parse_ssa_id_with_name(self.current_func);
+        self.match_lit(",");
+        let idx = self.parse_ssa_id_with_name(self.current_func);
+        return IndexInstr { base: base, idx: idx };
+    }
+
+    fn parse_index_store_op(self: &mut ZilParser) -> IndexStoreInstr {
+        let base = self.parse_ssa_id_with_name(self.current_func);
+        self.match_lit(",");
+        let idx = self.parse_ssa_id_with_name(self.current_func);
+        self.match_lit(",");
+        let val = self.parse_ssa_id_with_name(self.current_func);
+        return IndexStoreInstr { base: base, idx: idx, val: val };
+    }
+
+    fn is_float_type(self: &ZilParser, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 || ty_id as usize > self.module.types.len() { return false; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        match (*p_ty).def {
+            ILType.Primitive(p) => {
+                let tag = p.get_tag();
+                return tag == ILPRIM_F32 || tag == ILPRIM_F64;
+            },
+            _ => false,
+        }
+    }
+
+    fn is_bool_type(self: &ZilParser, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 || ty_id as usize > self.module.types.len() { return false; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        match (*p_ty).def {
+            ILType.Primitive(p) => {
+                let tag = p.get_tag();
+                return tag == ILPRIM_BOOL;
+            },
+            _ => false,
+        }
+    }
+
+    fn f64_from_bits(b: u64) -> f64 {
+        return unsafe { *((&b as usize) as *f64) };
+    }
+
+    fn parse_float(self: &mut ZilParser) -> f64 {
+        self.skip_trivia();
+        let mut is_neg = false;
+        if self.peek() == '-' as u8 {
+            is_neg = true;
+            self.advance();
+        }
+        let mut val = self.parse_uint() as f64;
+        if self.peek() == '.' as u8 {
+            self.advance();
+            let mut frac = ZilParser.f64_from_bits(0 as u64);
+            let mut div = ZilParser.f64_from_bits(4621819117588971520 as u64);
+            while is_digit(self.peek()) {
+                let c = self.advance();
+                frac = frac + ((c - '0' as u8) as f64) / div;
+                div = div * ZilParser.f64_from_bits(4621819117588971520 as u64);
+            }
+            val = val + frac;
+        }
+        if is_neg {
+            val = ZilParser.f64_from_bits(0 as u64) - val;
+        }
+        return val;
+    }
+
+    fn parse_int(self: &mut ZilParser) -> i64 {
+        self.skip_trivia();
+        let mut is_neg = false;
+        if self.peek() == '-' as u8 {
+            is_neg = true;
+            self.advance();
+        }
+        let val = self.parse_uint() as i64;
+        if is_neg {
+            return 0 as i64 - val;
+        }
+        return val;
+    }
+
+    fn parse_bool(self: &mut ZilParser) -> bool {
+        if self.match_lit("true") { return true; }
+        if self.match_lit("false") { return false; }
+        if self.match_lit("1") { return true; }
+        if self.match_lit("0") { return false; }
+        return false;
+    }
+
+    // The bytes are arena data, so the caller may keep them while parsing on.
+    #[borrows()]
+    fn parse_string_literal(self: &mut ZilParser) -> [u8] {
+        self.skip_trivia();
+        let mut list = unsafe { Vec::<u8>.with_capacity_in_raw(self.module.arena, 32 as usize) };
+        if self.peek() == '"' as u8 {
+            self.advance();
+            while self.peek() != '"' as u8 && self.peek() != 0 as u8 {
+                let c = self.advance();
+                if c == '\\' as u8 {
+                    let next = self.advance();
+                    if next == 'n' as u8 {
+                        list.push('\n' as u8);
+                    } else if next == 'r' as u8 {
+                        list.push('\r' as u8);
+                    } else if next == 't' as u8 {
+                        list.push('\t' as u8);
+                    } else if next == '0' as u8 {
+                        list.push(0 as u8);
+                    } else if next == '\\' as u8 {
+                        list.push('\\' as u8);
+                    } else if next == '"' as u8 {
+                        list.push('"' as u8);
+                    } else if next == '\'' as u8 {
+                        list.push('\'' as u8);
+                    } else if next == 'x' as u8 {
+                        let h1 = self.advance();
+                        let h2 = self.advance();
+                        let val = (hex_digit_val(h1) << 4 as u8) | hex_digit_val(h2);
+                        list.push(val);
+                    } else {
+                        list.push(next);
+                    }
+                } else {
+                    list.push(c);
+                }
+            }
+            if self.peek() == '"' as u8 {
+                self.advance();
+            }
+        }
+        return list.as_slice();
+    }
+
+    // The list is arena data, so the caller may keep it while parsing on.
+    #[borrows()]
+    fn parse_phi_preds(self: &mut ZilParser) -> [PhiPred] {
+        let mut preds = unsafe {
+            Vec::<PhiPred>.with_capacity_in_raw(self.module.arena, 4 as usize)
+        };
+        self.match_lit("[");
+        while self.peek() != ']' as u8 && self.peek() != 0 as u8 {
+            let block = self.get_global_block_id(self.parse_block_id());
+            self.match_lit(":");
+            let val = self.parse_ssa_id_with_name(self.current_func);
+            preds.push(PhiPred { block: block, val: val });
+            if !self.match_lit(",") {
+                break;
+            }
+        }
+        self.match_lit("]");
+        return preds.as_slice();
+    }
+
+    fn add_instr_to_block_direct(self: &mut ZilParser, block_id: u32, instr_idx: u32, ssa: u32) {
+        let p_block = &mut self.module.blocks[block_id as usize];
+        let sz_u32 = 4 as usize;
+        if p_block.instructions_len >= p_block.instructions_cap {
+            let new_cap = if p_block.instructions_cap == 0 as usize {
+                16 as usize
+            } else {
+                p_block.instructions_cap * 2 as usize
+            };
+            let mut new_instrs = unsafe {
+                zoril_allocator_alloc(self.module.arena, new_cap * sz_u32)
+            } as *mut u32;
+            if p_block.instructions as usize != 0 as usize {
+                unsafe {
+                    memcpy(
+                        new_instrs as *mut u8,
+                        p_block.instructions as *u8,
+                        (p_block.instructions_len * sz_u32) as u64
+                    );
+                }
+            }
+            p_block.instructions = new_instrs;
+            let mut new_ssa = unsafe {
+                zoril_allocator_alloc(self.module.arena, new_cap * sz_u32)
+            } as *mut SSAId;
+            if p_block.ssa_results as usize != 0 as usize {
+                unsafe {
+                    memcpy(
+                        new_ssa as *mut u8,
+                        p_block.ssa_results as *u8,
+                        (p_block.instructions_len * sz_u32) as u64
+                    );
+                }
+            }
+            p_block.ssa_results = new_ssa;
+            p_block.instructions_cap = new_cap;
+        }
+        let off_i = p_block.instructions_len * sz_u32;
+        let p_instrs = (p_block.instructions as usize + off_i) as *mut u32;
+        unsafe { *p_instrs = instr_idx; }
+        let off_s = p_block.instructions_len * sz_u32;
+        let p_ssa = (p_block.ssa_results as usize + off_s) as *mut SSAId;
+        unsafe { *p_ssa = ssa; }
+        p_block.instructions_len = p_block.instructions_len + 1 as usize;
+    }
+
+    // --- Parser Top-Level Constructs ---
+
+    fn parse_type_def(self: &mut ZilParser) {
+        self.match_lit("type");
+        let id = self.parse_type_id();
+        self.match_lit(":");
+        if self.match_lit("struct") {
+            self.match_lit("{");
+            let mut fields = unsafe {
+                Vec::<ILField>.with_capacity_in_raw(self.module.arena, 8 as usize)
+            };
+            while self.peek() != '}' as u8 && self.peek() != 0 as u8 {
+                let name = self.parse_ident();
+                self.match_lit(":");
+                let ty = self.parse_type();
+                fields.push(ILField {
+                    name: name,
+                    ty: ty,
+                });
+                if !self.match_lit(",") {
+                    break;
+                }
+            }
+            self.match_lit("}");
+            let def = ILTypeDef.Struct(ILStruct {
+                fields: fields.as_slice(),
+                is_copy_opt_out: false,
+            });
+            self.get_or_create_typedef(id);
+            il_module_set_typedef(self.module, id, def);
+        } else if self.match_lit("sum") {
+            self.match_lit("{");
+            let mut variants = unsafe {
+                Vec::<ILVariant>.with_capacity_in_raw(self.module.arena, 8 as usize)
+            };
+            let mut variant_idx = 0 as u32;
+            while self.peek() != '}' as u8 && self.peek() != 0 as u8 {
+                let name = self.parse_ident();
+                let mut discriminant = variant_idx;
+                if self.match_lit("=") {
+                    discriminant = self.parse_uint() as u32;
+                }
+                self.match_lit(":");
+                let mut payload = 0 as u32;
+                if self.match_lit("unit") {
+                    payload = 0 as u32;
+                } else {
+                    payload = self.parse_type();
+                }
+                variants.push(ILVariant {
+                    name: name,
+                    payload: payload,
+                    discriminant: discriminant,
+                });
+                variant_idx = variant_idx + 1 as u32;
+                if !self.match_lit(",") {
+                    break;
+                }
+            }
+            self.match_lit("}");
+            let def = ILTypeDef.Enum(ILEnum {
+                variants: variants.as_slice(),
+                is_copy_opt_out: false,
+            });
+            self.get_or_create_typedef(id);
+            il_module_set_typedef(self.module, id, def);
+        }
+    }
+
+    // The declaration under the cursor is `extern global ...` (the other `extern` is a function).
+    fn at_extern_global(self: &ZilParser) -> bool {
+        let lit = "extern global";
+        if self.pos + lit.len as u64 > self.source.len as u64 { return false; }
+        let mut i = 0 as usize;
+        while i < lit.len {
+            if self.source[self.pos as usize + i] != lit[i] { return false; }
+            i = i + 1 as usize;
+        }
+        return true;
+    }
+
+    fn parse_global(self: &mut ZilParser) {
+        let mut is_const = false;
+        if self.match_lit("const") {
+            is_const = true;
+        }
+        let is_extern = self.match_lit("extern");
+        self.match_lit("global");
+        self.skip_trivia();
+        if self.peek() == 'g' as u8 {
+            self.advance();
+        }
+        let id = self.parse_uint() as u32;
+        self.match_lit(":");
+        let ty = self.parse_type();
+
+        self.skip_trivia();
+        let mut name = 0 as u32;
+        if self.peek() != '=' as u8 {
+            name = self.parse_ident();
+        }
+
+        if is_extern {
+            let p_ext = self.get_or_create_global(id);
+            unsafe {
+                (*p_ext).name = name;
+                (*p_ext).ty = ty;
+                (*p_ext).is_mut = true;
+                (*p_ext).is_extern = true;
+            }
+            return;
+        }
+        self.match_lit("=");
+        self.match_lit("{");
+        let mut data = unsafe { Vec::<u8>.with_capacity_in_raw(self.module.arena, 128 as usize) };
+        while self.peek() != '}' as u8 && self.peek() != 0 as u8 {
+            let b = self.parse_uint() as u8;
+            data.push(b);
+            if !self.match_lit(",") {
+                break;
+            }
+        }
+        self.match_lit("}");
+
+        // The entry lives in the module's function/global table, in arena storage that
+        // outlives this parse; nothing else holds it while it is filled in.
+        // A raw pointer, re-fetched where needed: interning the name and allocating its data are
+        // `&mut self` calls.
+        let p_glob = self.get_or_create_global(id);
+        unsafe {
+            (*p_glob).name = name;
+            (*p_glob).ty = ty;
+            (*p_glob).is_mut = !is_const;
+        }
+
+        if unsafe { (*p_glob).name } == 0 as u32 {
+            let mut buf = [0 as u8; 16];
+            let mut p = 16 as usize;
+            let mut temp = id;
+            if temp == 0 as u32 {
+                p = p - 1;
+                buf[p] = '0' as u8;
+            } else {
+                while temp > 0 as u32 {
+                    p = p - 1;
+                    buf[p] = ('0' as u8 + (temp % 10 as u32) as u8);
+                    temp = temp / 10 as u32;
+                }
+            }
+            p = p - 1;
+            buf[p] = 'g' as u8;
+            let name_slice = unsafe { @slice(((&buf[p]) as *u8) as *mut u8, 16 as usize - p) };
+            let interned = self.intern_table.intern(name_slice);
+            unsafe { (*p_glob).name = interned; }
+        }
+
+        if data.len() > 0 as usize {
+            let size = data.len();
+            let ptr = unsafe { zoril_allocator_alloc(self.module.arena, size as u64) } as *mut u8;
+            unsafe { memcpy(ptr, data.as_slice().ptr, size as u64); }
+            unsafe {
+                (*p_glob).init_data_ptr = ptr;
+                (*p_glob).init_data_len = size;
+            }
+        }
+    }
+
+    fn parse_function(self: &mut ZilParser, is_local_arg: bool) {
+        self.max_ssa = 0 as u32;
+        let mut is_local = is_local_arg;
+        if !is_local {
+            is_local = self.match_lit("local");
+        }
+        let is_extern = self.match_lit("extern");
+        let is_export = !is_extern && self.match_lit("export");
+        self.match_lit("f");
+        let id = self.parse_uint() as u32;
+        // SAFETY: Progress fd 3 is inherited by convention when invoked by zbuild;
+        // write failure or invalid fd is silently ignored.
+        let _ = write(unsafe { Fd.from_unix_raw(3) }, "\n");
+        self.match_lit(":");
+        let ret_ty = self.parse_type();
+
+        self.skip_trivia();
+        let mut name = 0 as u32;
+        if self.peek() != '(' as u8 {
+            name = self.parse_ident();
+        }
+
+        let mut params = unsafe {
+            Vec::<ILParam>.with_capacity_in_raw(self.module.arena, 8 as usize)
+        };
+        let mut is_variadic = false;
+
+        self.match_lit("(");
+        let mut ssa_counter = 1 as u32;
+        let needs_env = self.needs_env_ptr(name);
+
+        let start_pos = self.pos;
+        self.skip_trivia();
+        let first_ident = self.parse_ident();
+        let has_explicit_sret = (first_ident != 0 as u32
+            && self.intern_table.lookup(first_ident) == "__sret");
+        self.pos = start_pos;
+
+        let is_sret = self.requires_pass_by_ref(ret_ty);
+        if is_sret && !has_explicit_sret {
+            let sret_name = self.intern_table.intern("__sret");
+            let sret_ty = self.intern_type(ILType.Ptr(ret_ty));
+            params.push(ILParam {
+                name: sret_name,
+                ty: sret_ty,
+                ssa: ssa_counter,
+                by_ref: false,
+            });
+            ssa_counter = ssa_counter + 1 as u32;
+        }
+
+        let mut first = true;
+        while self.peek() != ')' as u8 && self.peek() != 0 as u8 {
+            if self.match_lit("...") {
+                is_variadic = true;
+                break;
+            }
+
+            // Check for name:
+            let mut p_name = 0 as u32;
+            let start = self.pos;
+            let ident = self.parse_ident();
+            if self.match_lit(":") {
+                p_name = ident;
+            } else {
+                // backtrack
+                self.pos = start;
+            }
+
+            let p_ty = self.parse_type();
+
+            if first && needs_env {
+                let is_explicit_env = (p_name != 0 as u32
+                    && self.intern_table.lookup(p_name) == "__env");
+                if !is_explicit_env {
+                    // Omitted env: insert it implicitly
+                    let env_name = self.intern_table.intern("__env");
+                    let env_ty = self.intern_type(
+                        ILType.Ptr(self.intern_type(ILType.Primitive(ILPrimitive.Unit)))
+                    );
+                    params.push(ILParam {
+                        name: env_name,
+                        ty: env_ty,
+                        ssa: ssa_counter,
+                        by_ref: false,
+                    });
+                    ssa_counter = ssa_counter + 1 as u32;
+                }
+            }
+            first = false;
+
+            let ssa = ssa_counter;
+            ssa_counter = ssa_counter + 1 as u32;
+            params.push(ILParam {
+                name: p_name,
+                ty: p_ty,
+                ssa: ssa,
+                by_ref: false,
+            });
+            if !self.match_lit(",") {
+                break;
+            }
+        }
+
+        if first && needs_env {
+            // Empty parameters list but needs env: insert it
+            let env_name = self.intern_table.intern("__env");
+            let env_ty = self.intern_type(
+                ILType.Ptr(self.intern_type(ILType.Primitive(ILPrimitive.Unit)))
+            );
+            params.push(ILParam {
+                name: env_name,
+                ty: env_ty,
+                ssa: ssa_counter,
+                by_ref: false,
+            });
+        }
+
+        self.match_lit(")");
+        self.max_ssa = ssa_counter - 1 as u32;
+
+        let func_doc = self.pending_block;
+        self.pending_block = 0 as u32;
+
+        // The entry lives in the module's function/global table, in arena storage that
+        // outlives this parse; nothing else holds it while it is filled in.
+        // A raw pointer, not `&mut`: interning the name and allocating the parameter copy below are
+        // `&mut self` calls, and `current_func` stores this pointer anyway.
+        let p_func = self.get_or_create_function(id);
+        unsafe {
+            (*p_func).name = name;
+            (*p_func).ret_ty = ret_ty;
+            (*p_func).is_variadic = is_variadic;
+            (*p_func).is_extern = is_extern;
+            (*p_func).is_export = is_export;
+            (*p_func).is_local = is_local;
+            (*p_func).doc_comment = func_doc;
+        }
+
+        if unsafe { (*p_func).name } == 0 as u32 {
+            let mut buf = [0 as u8; 16];
+            let mut p = 16 as usize;
+            let mut temp = id;
+            if temp == 0 as u32 {
+                p = p - 1;
+                buf[p] = '0' as u8;
+            } else {
+                while temp > 0 as u32 {
+                    p = p - 1;
+                    buf[p] = ('0' as u8 + (temp % 10 as u32) as u8);
+                    temp = temp / 10 as u32;
+                }
+            }
+            p = p - 1;
+            buf[p] = 'f' as u8;
+            let name_slice = unsafe { @slice(((&buf[p]) as *u8) as *mut u8, 16 as usize - p) };
+            let interned = self.intern_table.intern(name_slice);
+            unsafe { (*p_func).name = interned; }
+        }
+
+        if params.len() > 0 as usize {
+            let p_size = params.len() * sizeof(ILParam);
+            let p_ptr = unsafe {
+                zoril_allocator_alloc(self.module.arena, p_size as u64)
+            } as *mut ILParam;
+            unsafe {
+                memcpy(p_ptr as *mut u8, params.as_slice().ptr as *u8, p_size as u64);
+                (*p_func).params = p_ptr;
+                (*p_func).params_len = params.len();
+            }
+        }
+
+        let mut idx = 0 as usize;
+        while idx < params.len() {
+            let p_ssa = params.as_slice()[idx].ssa;
+            let p_ty = params.as_slice()[idx].ty;
+            let p_name = params.as_slice()[idx].name;
+            unsafe {
+                (*p_func).set_ssa_type(self.module.arena, p_ssa, p_ty);
+                if p_name != 0 as u32 {
+                    (*p_func).set_ssa_name(self.module.arena, p_ssa, p_name);
+                }
+            }
+            idx = idx + 1 as usize;
+        }
+
+        self.current_func = p_func;
+        self.current_func_id = id;
+
+        if is_extern {
+            self.current_func = 0 as *mut ILFunction;
+            return;
+        }
+
+        self.block_map_local.clear();
+        self.block_map_global.clear();
+
+        let mut ssa_counter = self.max_ssa + 1 as u32;
+        let mut blocks = unsafe { Vec::<u32>.with_capacity_in_raw(self.module.arena, 16 as usize) };
+
+        self.match_lit("{");
+        let mut current_block_id = NO_BLOCK;
+        while true {
+            self.skip_trivia();
+            let c = self.peek();
+            if c == '}' as u8 || c == 0 as u8 {
+                break;
+            }
+            if c == '@' as u8 {
+                let bid = self.parse_block_id();
+                self.match_lit(":");
+                current_block_id = self.get_global_block_id(bid);
+                blocks.push(current_block_id);
+            } else if current_block_id != NO_BLOCK {
+                ssa_counter = self.parse_instruction_into_block(current_block_id, ssa_counter);
+            } else {
+                self.advance();
+            }
+        }
+        self.match_lit("}");
+
+        // The body's calls may have grown module.functions: p_func can be stale.
+        let p_func = &mut self.module.functions[id as usize];
+        if blocks.len() > 0 as usize {
+            let b_size = blocks.len() * 4 as usize;
+            let b_ptr = unsafe {
+                zoril_allocator_alloc(self.module.arena, b_size as u64)
+            } as *mut u32;
+            unsafe { memcpy(b_ptr as *mut u8, blocks.as_slice().ptr as *u8, b_size as u64); }
+            (*p_func).blocks = b_ptr;
+            (*p_func).blocks_len = blocks.len();
+            (*p_func).blocks_cap = blocks.len();
+        }
+
+        self.current_func = 0 as *mut ILFunction;
+    }
+
+    fn parse_instruction_into_block(
+        self: &mut ZilParser,
+        block_id: u32,
+        mut ssa_counter: u32
+    ) -> u32 {
+        self.skip_trivia();
+        if self.peek() == 0 as u8 || self.peek() == '}' as u8 || self.peek() == '@' as u8 {
+            return ssa_counter;
+        }
+
+        let start_pos = self.pos;
+        let start_line = self.line;
+        let start_col = self.col;
+
+        let mut ssa = NO_SSA;
+        let mut result_type = 0 as u32;
+
+        if self.peek() == 'v' as u8 || self.peek() == '%' as u8 {
+            let peek_ssa = self.parse_ssa_id_with_name(self.current_func);
+            self.skip_trivia();
+            if self.match_lit(":") {
+                let ty = self.parse_type();
+                if self.match_lit("=") {
+                    ssa = peek_ssa;
+                    result_type = ty;
+                    self.cur_func_mut().set_ssa_type(self.module.arena, ssa, result_type);
+                } else {
+                    self.pos = start_pos;
+                    self.line = start_line;
+                    self.col = start_col;
+                }
+            } else {
+                self.pos = start_pos;
+                self.line = start_line;
+                self.col = start_col;
+            }
+        }
+
+        /*
+        if ssa == NO_SSA {
+            ssa = ssa_counter;
+            ssa_counter = ssa_counter + 1 as u32;
+        }
+        */
+
+        let op_name = self.parse_ident();
+        if op_name == 0 as u32 {
+            self.advance();
+            return ssa_counter;
+        }
+
+        // Copied out of the intern table: the arms below call `&mut self`.
+        let mut op_buf = unsafe { ByteVec.new_raw(self.module.arena) };
+        op_buf.push_slice(self.intern_table.lookup(op_name));
+        let op_str = op_buf.as_slice();
+        let mut instr_opt: Option<ILInstr> = Option.None;
+
+        if op_str == "add" {
+            instr_opt = Option.Some(ILInstr.Add(self.parse_binary_op()));
+        } else if op_str == "sub" {
+            instr_opt = Option.Some(ILInstr.Sub(self.parse_binary_op()));
+        } else if op_str == "mul" {
+            instr_opt = Option.Some(ILInstr.Mul(self.parse_binary_op()));
+        } else if op_str == "div" {
+            instr_opt = Option.Some(ILInstr.Div(self.parse_binary_op()));
+        } else if op_str == "rem" {
+            instr_opt = Option.Some(ILInstr.Rem(self.parse_binary_op()));
+        } else if op_str == "neg" {
+            instr_opt = Option.Some(ILInstr.Neg(self.parse_ssa_id_with_name(self.current_func)));
+        } else if op_str == "not" {
+            instr_opt = Option.Some(ILInstr.Not(self.parse_ssa_id_with_name(self.current_func)));
+        } else if op_str == "and" {
+            instr_opt = Option.Some(ILInstr.And(self.parse_binary_op()));
+        } else if op_str == "or" {
+            instr_opt = Option.Some(ILInstr.Or(self.parse_binary_op()));
+        } else if op_str == "xor" {
+            instr_opt = Option.Some(ILInstr.Xor(self.parse_binary_op()));
+        } else if op_str == "shl" {
+            instr_opt = Option.Some(ILInstr.Shl(self.parse_binary_op()));
+        } else if op_str == "shr" {
+            instr_opt = Option.Some(ILInstr.Shr(self.parse_binary_op()));
+        } else if op_str == "cmp_lt" || op_str == "lt" {
+            instr_opt = Option.Some(ILInstr.CmpLt(self.parse_binary_op()));
+        } else if op_str == "cmp_le" || op_str == "le" {
+            instr_opt = Option.Some(ILInstr.CmpLe(self.parse_binary_op()));
+        } else if op_str == "cmp_gt" || op_str == "gt" {
+            instr_opt = Option.Some(ILInstr.CmpGt(self.parse_binary_op()));
+        } else if op_str == "cmp_ge" || op_str == "ge" {
+            instr_opt = Option.Some(ILInstr.CmpGe(self.parse_binary_op()));
+        } else if op_str == "cmp_eq" || op_str == "eq" {
+            instr_opt = Option.Some(ILInstr.CmpEq(self.parse_binary_op()));
+        } else if op_str == "cmp_ne" || op_str == "ne" {
+            instr_opt = Option.Some(ILInstr.CmpNe(self.parse_binary_op()));
+        } else if op_str == "wrapping_add" {
+            instr_opt = Option.Some(ILInstr.WrappingAdd(self.parse_binary_op()));
+        } else if op_str == "wrapping_sub" {
+            instr_opt = Option.Some(ILInstr.WrappingSub(self.parse_binary_op()));
+        } else if op_str == "wrapping_mul" {
+            instr_opt = Option.Some(ILInstr.WrappingMul(self.parse_binary_op()));
+        } else if op_str == "saturating_add" {
+            instr_opt = Option.Some(ILInstr.SaturatingAdd(self.parse_binary_op()));
+        } else if op_str == "checked_add" {
+            instr_opt = Option.Some(ILInstr.CheckedAdd(self.parse_binary_op()));
+        } else if op_str == "checked_sub" {
+            instr_opt = Option.Some(ILInstr.CheckedSub(self.parse_binary_op()));
+        } else if op_str == "checked_mul" {
+            instr_opt = Option.Some(ILInstr.CheckedMul(self.parse_binary_op()));
+        } else if op_str == "alloc" {
+            let region = self.parse_region();
+            self.match_lit(",");
+            let ty = self.parse_type();
+            let mut allocator = NO_SSA;
+            if self.match_lit(",") {
+                allocator = self.parse_ssa_id_with_name(self.current_func);
+            }
+            instr_opt = Option.Some(
+                ILInstr.Alloc(AllocInstr { region: region, ty: ty, allocator: allocator })
+            );
+        } else if op_str == "load" {
+            instr_opt = Option.Some(ILInstr.Load(self.parse_ssa_id_with_name(self.current_func)));
+        } else if op_str == "store" {
+            let ptr = self.parse_ssa_id_with_name(self.current_func);
+            self.match_lit(",");
+            let val = self.parse_ssa_id_with_name(self.current_func);
+            instr_opt = Option.Some(ILInstr.Store(StoreInstr { ptr: ptr, val: val }));
+        } else if op_str == "drop" {
+            instr_opt = Option.Some(ILInstr.Drop(self.parse_ssa_id_with_name(self.current_func)));
+        } else if op_str == "bounds_check" {
+            let idx = self.parse_ssa_id_with_name(self.current_func);
+            self.match_lit(",");
+            let len = self.parse_ssa_id_with_name(self.current_func);
+            instr_opt = Option.Some(ILInstr.BoundsCheck(BoundsCheckInstr { idx: idx, len: len }));
+        } else if op_str == "move" || op_str == "copy" {
+            instr_opt = Option.Some(ILInstr.Move(self.parse_ssa_id_with_name(self.current_func)));
+        } else if op_str == "borrow" {
+            instr_opt = Option.Some(
+                ILInstr.Borrow(BorrowInstr {
+                    val: self.parse_ssa_id_with_name(self.current_func),
+                    is_mut: false
+                })
+            );
+        } else if op_str == "borrow_mut" {
+            instr_opt = Option.Some(
+                ILInstr.Borrow(BorrowInstr {
+                    val: self.parse_ssa_id_with_name(self.current_func),
+                    is_mut: true
+                })
+            );
+        } else if op_str == "region_cast" {
+            let region = self.parse_region();
+            self.match_lit(",");
+            let val = self.parse_ssa_id_with_name(self.current_func);
+            instr_opt = Option.Some(
+                ILInstr.RegionCast(RegionCastInstr { val: val, region: region })
+            );
+        } else if op_str == "slice_load" {
+            instr_opt = Option.Some(ILInstr.SliceLoad(self.parse_index_op()));
+        } else if op_str == "slice_store" {
+            instr_opt = Option.Some(ILInstr.SliceStore(self.parse_index_store_op()));
+        } else if op_str == "slice_len" {
+            instr_opt = Option.Some(
+                ILInstr.SliceLen(self.parse_ssa_id_with_name(self.current_func))
+            );
+        } else if op_str == "slice_construct" {
+            let ptr = self.parse_ssa_id_with_name(self.current_func);
+            self.match_lit(",");
+            let len = self.parse_ssa_id_with_name(self.current_func);
+            instr_opt = Option.Some(
+                ILInstr.SliceConstruct(SliceConstructInstr { ptr: ptr, len: len })
+            );
+        } else if op_str == "array_construct" {
+            instr_opt = Option.Some(ILInstr.ArrayConstruct(self.parse_ssa_list()));
+        } else if op_str == "array_load" {
+            instr_opt = Option.Some(ILInstr.ArrayLoad(self.parse_index_op()));
+        } else if op_str == "array_store" {
+            instr_opt = Option.Some(ILInstr.ArrayStore(self.parse_index_store_op()));
+        } else if op_str == "is_some" {
+            instr_opt = Option.Some(ILInstr.IsSome(self.parse_ssa_id_with_name(self.current_func)));
+        } else if op_str == "unwrap" {
+            instr_opt = Option.Some(ILInstr.Unwrap(self.parse_ssa_id_with_name(self.current_func)));
+        } else if op_str == "variant_match" {
+            let val = self.parse_ssa_id_with_name(self.current_func);
+            self.match_lit(",");
+            let type_id = self.parse_type();
+            self.match_lit(",");
+            let variant_idx = self.parse_uint() as u32;
+            instr_opt = Option.Some(
+                ILInstr.VariantMatch(VariantMatchInstr {
+                    val: val,
+                    type_id: type_id,
+                    variant_idx: variant_idx
+                })
+            );
+        } else if op_str == "sum_construct" {
+            let type_id = self.parse_type();
+            self.match_lit(",");
+            let variant_idx = self.parse_uint() as u32;
+            self.match_lit(",");
+            let payload = self.parse_ssa_id_with_name(self.current_func);
+            instr_opt = Option.Some(
+                ILInstr.SumConstruct(SumConstructInstr {
+                    type_id: type_id,
+                    variant_idx: variant_idx,
+                    payload: payload
+                })
+            );
+        } else if op_str == "call" {
+            self.skip_trivia();
+            let mut name_id = 0 as u32;
+            let mut is_extern = false;
+            if self.peek() == 'f' as u8 && is_digit(self.peek_at(1 as u64)) {
+                self.advance();
+                let fid = self.parse_uint() as u32;
+                // The entry lives in the module's function/global table, in arena storage that
+                // outlives this parse; nothing else holds it while it is filled in.
+                // A raw pointer, re-used rather than held as `&mut`: interning the name below is a
+                // `&mut self` call.
+                let p_f = self.get_or_create_function(fid);
+
+                if unsafe { (*p_f).name } == 0 as u32 {
+                    let mut buf = [0 as u8; 16];
+                    let mut p = 16 as usize;
+                    let mut temp = fid;
+                    if temp == 0 as u32 {
+                        p = p - 1;
+                        buf[p] = '0' as u8;
+                    } else {
+                        while temp > 0 as u32 {
+                            p = p - 1;
+                            buf[p] = ('0' as u8 + (temp % 10 as u32) as u8);
+                            temp = temp / 10 as u32;
+                        }
+                    }
+                    p = p - 1;
+                    buf[p] = 'f' as u8;
+                    let name_slice = unsafe {
+                        @slice(((&buf[p]) as *u8) as *mut u8, 16 as usize - p)
+                    };
+                    let interned = self.intern_table.intern(name_slice);
+                    unsafe { (*p_f).name = interned; }
+                }
+                name_id = unsafe { (*p_f).name };
+                is_extern = unsafe { (*p_f).has_c_symbol() };
+            } else {
+                name_id = self.parse_ident();
+                let p_f = self.module.find_function_by_name(name_id);
+                if p_f as usize != 0 as usize {
+                    is_extern = unsafe { (*p_f).has_c_symbol() }; // non-null: an entry of the table
+                } else {
+                    is_extern = true;
+                }
+            }
+            self.match_lit("(");
+            let mut args = self.parse_ssa_list();
+            self.match_lit(")");
+
+            if self.needs_env_ptr(name_id) {
+                let mut caller_env = 0xffffffff as u32;
+                let mut pi = 0 as usize;
+                while pi < self.cur_func().params_len {
+                    // Copied out: the name check below interns, which is a `&mut self` call.
+                    let p = *self.cur_func().param(pi);
+                    if p.name == self.intern_table.intern("__env") {
+                        caller_env = p.ssa;
+                        break;
+                    }
+                    pi = pi + 1 as usize;
+                }
+                if caller_env == 0xffffffff as u32 {
+                    let ptr_unit = self.intern_type(
+                        ILType.Ptr(self.intern_type(ILType.Primitive(ILPrimitive.Unit)))
+                    );
+                    let const_instr = ILInstr.Const(ConstInstr {
+                        val: ConstValue.U64(0 as u64),
+                        ty: ptr_unit
+                    });
+                    let const_span = Span {
+                        start: 0 as u32,
+                        end: 0 as u32,
+                        line: start_line,
+                        col: start_col
+                    };                                                                                          // ZIL text has no byte offsets
+                    let const_idx = self.module.alloc_instr(const_instr, const_span, 0 as u32);
+                    let const_ssa = self.cur_func().result_types_len as u32;
+                    self.cur_func_mut().set_ssa_type(self.module.arena, const_ssa, ptr_unit);
+                    self.add_instr_to_block_direct(block_id, const_idx, const_ssa);
+                    caller_env = const_ssa;
+                }
+
+                let mut new_args = unsafe {
+                    Vec::<u32>.with_capacity_in_raw(self.module.arena, args.len + 1 as usize)
+                };
+                new_args.push(caller_env);
+                let mut ai = 0 as usize;
+                while ai < args.len {
+                    new_args.push(args[ai]);
+                    ai = ai + 1 as usize;
+                }
+                args = new_args.as_slice();
+            }
+
+            instr_opt = Option.Some(
+                ILInstr.Call(CallInstr {
+                    args: args,
+                    name_id: name_id,
+                    is_extern: is_extern,
+                    func_idx: CALL_BY_NAME
+                })
+            );
+        } else if op_str == "call_ptr" {
+            let func_ptr = self.parse_ssa_id_with_name(self.current_func);
+            self.match_lit("(");
+            let args = self.parse_ssa_list();
+            self.match_lit(")");
+            instr_opt = Option.Some(
+                ILInstr.CallPtr(CallPtrInstr { args: args, func_ptr: func_ptr })
+            );
+        } else if op_str == "branch" {
+            let cond = self.parse_ssa_id_with_name(self.current_func);
+            self.match_lit(",");
+            let then_block = self.get_global_block_id(self.parse_block_id());
+            self.match_lit(",");
+            let else_block = self.get_global_block_id(self.parse_block_id());
+            instr_opt = Option.Some(
+                ILInstr.Branch(BranchInstr {
+                    cond: cond,
+                    then_block: then_block,
+                    else_block: else_block
+                })
+            );
+        } else if op_str == "jump" {
+            instr_opt = Option.Some(ILInstr.Jmp(self.get_global_block_id(self.parse_block_id())));
+        } else if op_str == "const" {
+            let const_val = if self.is_float_type(result_type) {
+                ConstValue.F64(self.parse_uint())
+            } else if self.is_bool_type(result_type) {
+                ConstValue.Bool(if self.parse_bool() { 1 as u64 } else { 0 as u64 })
+            } else {
+                ConstValue.U64(self.parse_int() as u64)
+            };
+            instr_opt = Option.Some(ILInstr.Const(ConstInstr { val: const_val, ty: result_type }));
+        } else if op_str == "global_addr" {
+            self.skip_trivia();
+            if self.peek() == 'g' as u8 {
+                self.advance();
+            }
+            let gid = self.parse_uint() as u32;
+            // The entry lives in the module's function/global table, in arena storage that
+            // outlives this parse; nothing else holds it while it is filled in.
+            // A raw pointer, not `&mut`: interning the name below is a `&mut self` call.
+            let p_g = self.get_or_create_global(gid);
+            if unsafe { (*p_g).name } == 0 as u32 {
+                let mut buf = [0 as u8; 16];
+                let mut p = 16 as usize;
+                let mut temp = gid;
+                if temp == 0 as u32 {
+                    p = p - 1;
+                    buf[p] = '0' as u8;
+                } else {
+                    while temp > 0 as u32 {
+                        p = p - 1;
+                        buf[p] = ('0' as u8 + (temp % 10 as u32) as u8);
+                        temp = temp / 10 as u32;
+                    }
+                }
+                p = p - 1;
+                buf[p] = 'g' as u8;
+                let name_slice = unsafe { @slice(((&buf[p]) as *u8) as *mut u8, 16 as usize - p) };
+                let interned = self.intern_table.intern(name_slice);
+                unsafe { (*p_g).name = interned; }
+            }
+            instr_opt = Option.Some(ILInstr.GlobalAddr(gid));
+        } else if op_str == "func_addr" {
+            self.skip_trivia();
+            if self.peek() == 'f' as u8 {
+                self.advance();
+            }
+            let fid = self.parse_uint() as u32;
+            // The entry lives in the module's function/global table, in arena storage that
+            // outlives this parse; nothing else holds it while it is filled in.
+            // A raw pointer, not `&mut`: interning the name below is a `&mut self` call.
+            let p_f = self.get_or_create_function(fid);
+            if unsafe { (*p_f).name } == 0 as u32 {
+                let mut buf = [0 as u8; 16];
+                let mut p = 16 as usize;
+                let mut temp = fid;
+                if temp == 0 as u32 {
+                    p = p - 1;
+                    buf[p] = '0' as u8;
+                } else {
+                    while temp > 0 as u32 {
+                        p = p - 1;
+                        buf[p] = ('0' as u8 + (temp % 10 as u32) as u8);
+                        temp = temp / 10 as u32;
+                    }
+                }
+                p = p - 1;
+                buf[p] = 'f' as u8;
+                let name_slice = unsafe { @slice(((&buf[p]) as *u8) as *mut u8, 16 as usize - p) };
+                let interned = self.intern_table.intern(name_slice);
+                unsafe { (*p_f).name = interned; }
+            }
+            instr_opt = Option.Some(ILInstr.FuncAddr(fid));
+        } else if op_str == "field_addr" {
+            let val = self.parse_ssa_id_with_name(self.current_func);
+            self.match_lit(",");
+            let field_idx = self.parse_uint() as u32;
+            instr_opt = Option.Some(
+                ILInstr.FieldAddr(FieldAddrInstr { val: val, field_idx: field_idx })
+            );
+        } else if op_str == "struct_construct" {
+            let ty = self.parse_type();
+            let mut fields = @slice(0 as *mut u32, 0 as usize);
+            if self.match_lit(",") {
+                fields = self.parse_ssa_list();
+            }
+            instr_opt = Option.Some(
+                ILInstr.StructConstruct(StructConstructInstr { ty: ty, fields: fields })
+            );
+        } else if op_str == "tuple_construct" {
+            instr_opt = Option.Some(ILInstr.TupleConstruct(self.parse_ssa_list()));
+        } else if op_str == "string_const" {
+            instr_opt = Option.Some(ILInstr.StringConst(self.parse_string_literal()));
+            let u8_ty = self.intern_type(ILType.Primitive(ILPrimitive.U8));
+            result_type = self.intern_type(
+                ILType.Slice(ILSlice { element: u8_ty, mutable: false })
+            );
+        } else if op_str == "syscall" {
+            let num = self.parse_ssa_id_with_name(self.current_func);
+            let mut args = @slice(0 as *mut u32, 0 as usize);
+            if self.match_lit(",") {
+                args = self.parse_ssa_list();
+            }
+            instr_opt = Option.Some(ILInstr.Syscall(SyscallInstr { num: num, args: args }));
+        } else if op_str == "phi" {
+            instr_opt = Option.Some(ILInstr.Phi(PhiInstr { preds: self.parse_phi_preds() }));
+        } else if op_str == "unreachable" {
+            instr_opt = Option.Some(ILInstr.Unreachable);
+        } else if op_str == "ret" {
+            let mut val = NO_SSA;
+            self.skip_trivia();
+            if self.peek() == 'v' as u8 {
+                val = self.parse_ssa_id_with_name(self.current_func);
+            }
+            instr_opt = Option.Some(ILInstr.Ret(val));
+        } else if op_str == "fd_open" {
+            let path = self.parse_ssa_id_with_name(self.current_func);
+            self.match_lit(",");
+            let flags = self.parse_uint();
+            self.match_lit(",");
+            let mode = self.parse_uint();
+            instr_opt = Option.Some(
+                ILInstr.FDOpen(FDOpenInstr { path: path, flags: flags, mode: mode })
+            );
+        } else if op_str == "fd_close" {
+            instr_opt = Option.Some(
+                ILInstr.FDClose(self.parse_ssa_id_with_name(self.current_func))
+            );
+        } else if op_str == "fd_read" {
+            let fd = self.parse_ssa_id_with_name(self.current_func);
+            self.match_lit(",");
+            let buf = self.parse_ssa_id_with_name(self.current_func);
+            self.match_lit(",");
+            let count = self.parse_ssa_id_with_name(self.current_func);
+            instr_opt = Option.Some(ILInstr.FDRead(FDIOInstr { fd: fd, buf: buf, count: count }));
+        } else if op_str == "fd_write" {
+            let fd = self.parse_ssa_id_with_name(self.current_func);
+            self.match_lit(",");
+            let buf = self.parse_ssa_id_with_name(self.current_func);
+            self.match_lit(",");
+            let count = self.parse_ssa_id_with_name(self.current_func);
+            instr_opt = Option.Some(ILInstr.FDWrite(FDIOInstr { fd: fd, buf: buf, count: count }));
+        } else if op_str == "async_setup" {
+            instr_opt = Option.Some(
+                ILInstr.IORingSetup(self.parse_ssa_id_with_name(self.current_func))
+            );
+        } else if op_str == "async_enter" {
+            let ring = self.parse_ssa_id_with_name(self.current_func);
+            self.match_lit(",");
+            let to_submit = self.parse_uint() as u32;
+            self.match_lit(",");
+            let min_complete = self.parse_uint() as u32;
+            instr_opt = Option.Some(
+                ILInstr.IORingEnter(IORingEnterInstr {
+                    ring: ring,
+                    to_submit: to_submit,
+                    min_complete: min_complete
+                })
+            );
+        } else if op_str == "async_close" {
+            instr_opt = Option.Some(
+                ILInstr.IORingClose(self.parse_ssa_id_with_name(self.current_func))
+            );
+        } else if op_str == "param" {
+            let param_idx = self.parse_uint() as u32;
+            if (param_idx as usize) < self.cur_func().params_len {
+                let p_param = self.cur_func_mut().param_mut(param_idx as usize);
+                let old_ssa = p_param.ssa;
+                p_param.ssa = ssa;
+                if old_ssa != ssa {
+                    let pname = p_param.name;
+                    if pname != 0 as u32 {
+                        if self.cur_func().get_ssa_name(old_ssa) == pname {
+                            self.cur_func_mut().set_ssa_name(self.module.arena, old_ssa, 0 as u32);
+                        }
+                        self.cur_func_mut().set_ssa_name(self.module.arena, ssa, pname);
+                    }
+                }
+            }
+            instr_opt = Option.Some(ILInstr.Param(param_idx));
+        } else if op_str == "likely" {
+            instr_opt = Option.Some(ILInstr.Likely(self.parse_ssa_id_with_name(self.current_func)));
+        } else if op_str == "unlikely" {
+            instr_opt = Option.Some(
+                ILInstr.Unlikely(self.parse_ssa_id_with_name(self.current_func))
+            );
+        } else if op_str == "cast" || op_str == "bitcast" {
+            let val = self.parse_ssa_id_with_name(self.current_func);
+            instr_opt = Option.Some(ILInstr.Cast(CastInstr { val: val, target_ty: result_type }));
+        } else if op_str == "get_env" || op_str == "getenv" {
+            instr_opt = Option.Some(ILInstr.GetEnv);
+        } else if op_str == "end_borrow" {
+            instr_opt = Option.Some(
+                ILInstr.EndBorrow(self.parse_ssa_id_with_name(self.current_func))
+            );
+        } else if op_str == "release" {
+            instr_opt = Option.Some(
+                ILInstr.Release(self.parse_ssa_id_with_name(self.current_func))
+            );
+        }
+
+        match instr_opt {
+            Option.Some(instr) => {
+                let mut span_line = start_line;
+                if self.pending_comment_line != 0 as u32 {
+                    span_line = self.pending_comment_line;
+                    self.pending_comment_line = 0 as u32;
+                }
+                let span = Span { start: 0 as u32, end: 0 as u32, line: span_line, col: start_col }; // ZIL text has no byte offsets
+                let comment = self.pending_comment;
+                self.pending_comment = 0 as u32;
+                let instr_idx = self.module.alloc_instr(instr, span, comment);
+                self.add_instr_to_block_direct(block_id, instr_idx, ssa);
+            },
+            Option.None => {
+                // Never skip what is not understood: a dropped instruction is a silent miscompile.
+                eprint("zilc: line ");
+                let mut err = stderr();
+                let _ = write_u64(&mut err, start_line as u64);
+                eprint(": unknown instruction `");
+                eprint(op_str);
+                eprint("`\n");
+                exit(1);
+            }
+        }
+        return ssa_counter;
+    }
+
+    fn is_aggregate(self: &ZilParser, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        match (*p_ty).def {
+            ILType.Slice(_) | ILType.Array(_) | ILType.Tuple(_) => { return true; },
+            ILType.User(u) => {
+                let p_def = &self.module.typedefs[u.id as usize];
+                let tag = (*p_def).get_tag();
+                return tag == 0 as u32 || tag == 1 as u32; // Struct or Enum
+            },
+            _ => { return false; },
+        }
+    }
+
+    fn requires_pass_by_ref(self: &ZilParser, ty_id: u32) -> bool {
+        return self.is_aggregate(ty_id);
+    }
+
+    fn needs_env_ptr(self: &mut ZilParser, name: u32) -> bool {
+        if name == 0 as u32 { return false; }
+        let name_slice = self.intern_table.lookup(name);
+        if name_slice.len >= 13 as usize {
+            // Check if starts with __z_closure
+            let prefix = "__z_closure";
+            let mut i = 0 as usize;
+            let mut match_prefix = true;
+            while i < 11 as usize {
+                if name_slice[i] != prefix[i] { match_prefix = false; break; }
+                i = i + 1 as usize;
+            }
+            if match_prefix { return true; }
+        }
+        return false;
+    }
+
+    pub fn parse_module(self: &mut ZilParser) {
+        self.scan_module_doc();
+        while true {
+            self.skip_trivia();
+            if self.peek() == 0 as u8 {
+                break;
+            }
+            // The dispatch below must consume something. It does not when a byte looks like the
+            // start of a declaration and the declaration does not follow: the leftovers of a type
+            // spelling this zilc does not know used to re-enter the `t` branch forever, burning the
+            // build's whole timeout with no message (2026-10-13). A dropped declaration would be a
+            // silent miscompile, so say which byte is stuck and stop.
+            let start = self.pos;
+            let c = self.peek();
+            if c == 'm' as u8 {
+                if self.match_lit("module") {
+                    self.skip_trivia();
+                    let m_id = self.parse_ident();
+                    if m_id != 0 as u32 {
+                        self.module_name = self.intern_table.lookup(m_id);
+                    }
+                    if self.peek() == ';' as u8 { self.advance(); }
+                    continue;
+                }
+                self.advance();
+            } else if c == 't' as u8 {
+                self.parse_type_def();
+            } else if c == 'g' as u8 || c == 'c' as u8 {
+                self.parse_global();
+            } else if c == 'e' as u8 && self.at_extern_global() {
+                self.parse_global();
+            } else if c == 'f' as u8 || c == 'e' as u8 {
+                self.parse_function(false);
+            } else if c == 'l' as u8 {
+                if self.match_lit("local") {
+                    self.parse_function(true);
+                } else {
+                    self.advance();
+                }
+            } else {
+                self.advance();
+            }
+            if self.pos == start {
+                eprint("zilc: line ");
+                let mut err = stderr();
+                let _ = write_u64(&mut err, self.line as u64);
+                eprint(": cannot read `");
+                eprint(subslice(self.source, start as usize, 1 as usize));
+                eprint("`: not a declaration this zilc knows\n");
+                exit(1);
+            }
+        }
+    }
+}

@@ -1,0 +1,3 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_pattern_tuple_arity.zrl:3:46: error: this tuple pattern has 3 elements, but the value is `(i32, i32)`
+fn main() -> i32 { let t = (1, 2); match t { (a, b, c) => { return a; } } }

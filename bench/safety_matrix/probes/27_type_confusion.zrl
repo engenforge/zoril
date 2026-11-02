@@ -1,0 +1,7 @@
+// name: Type confusion via raw pointer cast
+// expected: compile_reject
+// Type punning through a raw-pointer cast is still unchecked by design, but
+// only reachable through the marker. See 35_type_confusion_unsafe.zrl.
+struct A { x: i64 }
+struct B { y: *mut i64 }
+fn main() -> i32 { let a = A { x: 4096 as i64 }; let p = (&a as *A) as *B; let q = (*p).y; if q as i64 == 0 as i64 { return 1; } return 0; }

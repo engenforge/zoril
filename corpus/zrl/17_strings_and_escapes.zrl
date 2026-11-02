@@ -1,0 +1,54 @@
+// expected exit code: 72
+// 17: String literals, escape sequences, and byte-level string operations.
+// Demonstrates: string escapes, .ptr, .len, character literals, null terminator.
+
+fn sys_write(fd: u64, buf: &[u8], len: u64) -> i64 {
+    return unsafe { @syscall(1, fd, buf.ptr, len) };
+}
+
+fn string_length(s: &[u8]) -> u64 {
+    return s.len as u64;
+}
+
+fn first_byte(s: &[u8]) -> u8 {
+    return s[0];
+}
+
+fn contains_newline(s: &[u8]) -> bool {
+    let nl: u8 = '\n';
+    for i in 0..s.len {
+        if s[i] == nl {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn main() -> i32 {
+    // All escape sequences
+    let with_newline = "line1\nline2\n";
+    let with_tab = "col1\tcol2";
+    let with_null = "before\0after";
+    let with_cr = "windows\r\n";
+    let with_backslash = "path\\to\\file";
+    let with_quotes = "she said \"hello\"";
+    let with_hex = "\x48\x65\x6C\x6C\x6F";  // "Hello"
+
+    // Raw strings (r"...") do not interpret escapes and support multiline
+    let raw_path = r"C:\path\to\file";
+    let raw_multiline = r"line1
+line2";
+
+    if raw_path[2] != '\\' as u8 { return 1; }
+    if raw_multiline.len != 11 as u64 {
+        return 2;
+    }                                               // "line1\nline2" (assuming \n is 1 byte)
+
+    let len = string_length(with_newline);
+    let first = first_byte(with_hex);  // 'H' = 0x48 = 72
+    let has_nl = contains_newline(with_newline);
+
+    sys_write(1, with_newline, len);
+
+    return first as i32;
+}

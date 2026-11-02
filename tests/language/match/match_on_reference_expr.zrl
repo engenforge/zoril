@@ -1,0 +1,14 @@
+// expected exit 0
+// Matching on `&o` (a reference made in the scrutinee itself, held in a temporary) read the
+// enum's bytes as a pointer and crashed. A reference parameter always worked.
+import "core.zrl";
+struct P { x: i32, y: i32 }
+fn main() -> i32 {
+    let o = Option.Some(9);
+    let a = match &o { Option.Some(v) => *v, Option.None => 0 };
+    let q = Option.Some(P { x: 4, y: 1 });
+    let b = match &q { Option.Some(p) => p.x, Option.None => 0 };
+    let c = match &q { Option.Some(P { y, .. }) => *y, Option.None => 0 };
+    if a != 9 || b != 4 || c != 1 { return 1; }
+    return 0;
+}

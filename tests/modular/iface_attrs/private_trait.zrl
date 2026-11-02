@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: private
+// The interface carries a private trait so its impls can be read (A7.4); naming it is still refused.
+import "lib.zrl";
+use lib::{PtV, PtReq};
+
+fn main() -> i32 {
+    let v = PtV { v: 5 };
+    return v.q();
+}

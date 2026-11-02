@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: cannot cast integer to reference type: references cannot be null
+fn main() -> i32 {
+    let r: &i32 = 0 as &i32;
+    return 0;
+}

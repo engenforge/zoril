@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: error: two exported extern "C" functions share one symbol; it is already defined in tests/error_reporting/include/export_sib_a.zrl: dup_sym
+// Two modules that do not import each other each export `dup_sym`; the program that imports both is
+// where the two meet, and a separate build must say so as a whole-program build does, not leave it to ld.
+import "include/export_sib_a.zrl";
+import "include/export_sib_b.zrl";
+fn main() -> i32 { return export_sib_a::from_a() + export_sib_b::from_b(); }

@@ -1,0 +1,17 @@
+// expected exit 0
+// An impl's methods and constants were numbered alike under one symbol kind, so `T::m` used
+// as a value, in an impl whose constant 0 is `C`, named `C` ("Failed to resolve callee").
+struct T { v: i32 }
+impl T {
+    const C: i32 = 5;
+    const D: i32 = 6;
+    fn m() -> i32 { return 7; }
+    fn n() -> i32 { return 8; }
+}
+fn main() -> i32 {
+    let f = T::m;
+    let g = T::n;
+    if f() != 7 || g() != 8 { return 1; }
+    if T.C != 5 || T.D != 6 { return 2; }
+    return 0;
+}

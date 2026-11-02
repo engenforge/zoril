@@ -1,0 +1,9 @@
+// expected exit 134
+// Out-of-bounds slice index must trap, not read past the end.
+// 134 = 128 + SIGABRT, matching stdlib's arena-overflow path.
+// Out-of-bounds slice read traps deterministically.
+fn main() -> i32 {
+    let mut arr = [1 as u8, 2, 7];
+    let s: [u8] = &mut arr;
+    return s[99 as usize] as i32;
+}

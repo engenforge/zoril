@@ -1,0 +1,56 @@
+// A borrow may end at its last use, and a borrower declared inside the block that owns the
+// value is fine: neither outlives the value's scope.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    // The borrower's last use is inside the block.
+    let mut r: &i32 = &0;
+    {
+        let x: i32 = 5;
+        r = &x;
+        if *r != 5 { return 1; }
+    }
+
+    // The borrower is declared in the same block as the value.
+    {
+        let y: i32 = 7;
+        let q: &i32 = &y;
+        if *q != 7 { return 2; }
+    }
+
+    // The borrower is declared in an inner block, the value outside it.
+    let z: i32 = 9;
+    {
+        let p: &i32 = &z;
+        if *p != 9 { return 3; }
+    }
+
+    // A collection used only inside the block that owns its arena is fine.
+    let mut total = 0 as u64;
+    {
+        let a = Arena.new(65536).unwrap();
+        let mut v = Vec::<u64>.new_in(&a);
+        v.push(4);
+        total = *v.get(0).unwrap();
+    }
+    if total != 4 { return 4; }
+
+    // `as_slice()` hands back a slice of the buffer the Vec allocated, not a pointer into the Vec's
+    // own storage, so the Vec may end its scope while the slice is live: the buffer belongs to the
+    // arena. (The call returns a slice, not a pointer to the argument, so it is not a borrow of the
+    // Vec's storage - the difference the summary and the result type are read for.)
+    let keep = Arena.new(65536).unwrap();
+    let mut k = Vec::<u64>.new_in(&keep);
+    k.push(1);
+    let mut sl: [u64] = k.as_slice();
+    {
+        let mut w = Vec::<u64>.new_in(&keep);
+        w.push(5);
+        sl = w.as_slice();
+    }
+    if sl.len != 1 || sl[0] != 5 { return 5; }
+    return 0;
+}

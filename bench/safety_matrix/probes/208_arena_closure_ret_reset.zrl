@@ -1,0 +1,26 @@
+// name: Closure return value drops captured arena environment borrows
+// expected: compile_reject
+import "mem.zrl";
+import "vec.zrl";
+import "core.zrl";
+use mem::Arena;
+use vec::Vec;
+use core::Option;
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536 as u64).unwrap();
+    let mut v = Vec::<u64>.new_in(&a);
+    let mut i0 = 0 as u64;
+    while i0 < 64 { v.push(7); i0 = i0 + 1; }
+    let r: [u64] = {
+        let s = v.as_slice();
+        let f = || -> [u64] { return s; };
+        f()
+    };
+    a.reset();
+    let mut z = Vec::<u64>.new_in(&a);
+    let mut j = 0 as u64;
+    while j < 64 { z.push(99); j = j + 1; }
+    // r[0] reads 99 instead of 7
+    return r[0] as i32;
+}

@@ -1,0 +1,37 @@
+// expected exit code: 0
+enum PrimTy {
+    U8, U16, U32, U64, USize,
+    I8, I16, I32, I64, ISize,
+    F32, F64,
+    Bool, Char, Unit, Never
+}
+fn map(p: PrimTy) -> u32 {
+    return match p {
+        PrimTy.U8    => 1 as u32,
+        PrimTy.U16   => 2 as u32,
+        PrimTy.U32   => 3 as u32,
+        PrimTy.U64   => 4 as u32,
+        PrimTy.I8    => 5 as u32,
+        PrimTy.I16   => 6 as u32,
+        PrimTy.I32   => 7 as u32,
+        PrimTy.I64   => 8 as u32,
+        PrimTy.F32   => 9 as u32,
+        PrimTy.F64   => 10 as u32,
+        PrimTy.Bool  => 11 as u32,
+        PrimTy.Char  => 12 as u32,
+        PrimTy.Unit  => 0 as u32,
+        PrimTy.Never => 13 as u32,
+        PrimTy.USize => 18 as u32,
+        PrimTy.ISize => 19 as u32,
+    };
+}
+fn main() -> i32 {
+    if map(PrimTy.USize) != 18 as u32 { return 1; }
+    if map(PrimTy.ISize) != 19 as u32 { return 2; }
+    if map(PrimTy.Bool)  != 11 as u32 { return 3; }
+    if map(PrimTy.U8)    != 1  as u32 { return 4; }
+    if map(PrimTy.F32)   != 9  as u32 { return 5; }
+    if map(PrimTy.Never) != 13 as u32 { return 6; }
+    if map(PrimTy.Unit)  != 0  as u32 { return 7; }
+    return 0;
+}

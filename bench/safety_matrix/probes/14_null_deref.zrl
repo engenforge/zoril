@@ -1,0 +1,10 @@
+// name: Null dereference
+// expected: compile_reject
+// The raw-pointer deref that forged the null reference now requires `unsafe`,
+// so this is unreachable from unmarked code. See 31_null_deref_unsafe.zrl for
+// the marked form, which still faults as documented.
+fn main() -> i32 {
+    let p = 0 as *u8;
+    let r: &u8 = &*p;
+    return *r as i32;
+}

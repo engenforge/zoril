@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: error: cannot assign to
+// EXPECT: because it is behind a shared reference
+static C: i64 = 42;
+
+fn main() -> i32 {
+    C = 100;
+    return C as i32;
+}

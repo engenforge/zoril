@@ -1,0 +1,8 @@
+// name: OOB array write
+// expected: runtime_trap
+fn main() -> i32 {
+    let mut data = [1 as u8, 2 as u8, 3 as u8];
+    let i = 99 as usize;
+    data[i] = 42 as u8;
+    return data[0] as i32;
+}

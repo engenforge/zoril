@@ -1,0 +1,7 @@
+// expected compile success
+struct Large { a: u64, b: u64, c: u64 }
+fn take_large(arg: Large) {}
+fn test_call() {
+    let l = Large { a: 1, b: 2, c: 3 };
+    take_large(l);
+}

@@ -1,0 +1,16 @@
+// name: Vec — element count × element size wrapped at construction
+// expected: runtime_trap
+// `with_capacity_in(&a, 1 << 61)` multiplied by 8 and wrapped to 0: the Vec believed it had 2^61
+// slots over a 0-byte allocation, so the next allocation aliased it and a push through the first
+// one overwrote the second (silent corruption, not a fault). It must trap (134) instead.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let a = Arena.new(4096).unwrap();
+    let v = Vec::<u64>.with_capacity_in(&a, 1 as usize << 61);
+    if v.len() != 0 as usize { return 1; }
+    return 0;
+}

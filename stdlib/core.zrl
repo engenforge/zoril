@@ -1,0 +1,222 @@
+// Fundamental sum types (Option, Result) and standard traits
+
+import "core0.zrl";
+use core0::swap_bytes;
+
+// Sum type representing an optional value: either Some(T) or None.
+pub enum Option<T> {
+    None,
+    Some(T),
+}
+
+impl<T> Option<T> {
+    // Returns true if the option contains a Some value.
+    pub fn is_some(self: &Option<T>) -> bool {
+        return match *self {
+            Some(_) => true,
+            None => false,
+        };
+    }
+
+    // Returns true if the option is None.
+    pub fn is_none(self: &Option<T>) -> bool {
+        return match *self {
+            Some(_) => false,
+            None => true,
+        };
+    }
+
+    // Extracts the contained value, panicking if the option is None.
+    pub fn unwrap(self: Option<T>) -> T {
+        return match self {
+            Some(v) => v,
+            None => {
+                zoril_user_panic("called Option.unwrap() on a None value");
+            },
+        };
+    }
+
+    // Extracts the contained value, panicking with msg if the option is None.
+    pub fn expect(self: Option<T>, msg: [u8]) -> T {
+        return match self {
+            Some(v) => v,
+            None => {
+                zoril_user_panic(msg);
+            },
+        };
+    }
+
+    // Takes the value out of the option, leaving None in its place.
+    pub fn take(self: &mut Option<T>) -> Option<T> {
+        let mut none: Option<T> = Option.None;
+        // SAFETY: `self` and `none` are valid non-overlapping pointers to `Option<T>`.
+        unsafe {
+            swap_bytes(
+                self as *mut Option<T> as *mut u8,
+                (&mut none) as *mut Option<T> as *mut u8,
+                sizeof(Option<T>) as u64
+            );
+        }
+        return none;
+    }
+
+    // Returns an immutable reference to the contained value, panicking if None.
+    pub fn get_ref(self: &Option<T>) -> &T {
+        return match self {
+            Some(v) => v,
+            None => {
+                zoril_user_panic("called Option.get_ref() on a None value");
+            },
+        };
+    }
+
+    // Returns a mutable reference to the contained value, panicking if None.
+    pub fn get_mut(self: &mut Option<T>) -> &mut T {
+        if self.is_none() {
+            zoril_user_panic("called Option.get_mut() on a None value");
+        }
+        let base = (self as *mut Option<T>) as usize;
+        let offset = if alignof(T) == 8 as usize { 8 as usize } else { 4 as usize };
+        let p = (base + offset) as *mut T;
+        // SAFETY: `self` is `Some`, so the payload at `offset` is initialized and valid for `&mut T`.
+        return unsafe { &mut *p };
+    }
+}
+
+// Sum type representing success (Ok(T)) or failure (Err(E)).
+pub enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+impl<T, E> Result<T, E> {
+    // Returns true if the result is Ok.
+    pub fn is_ok(self: &Result<T, E>) -> bool {
+        return match *self {
+            Ok(_) => true,
+            Err(_) => false,
+        };
+    }
+
+    // Returns true if the result is Err.
+    pub fn is_err(self: &Result<T, E>) -> bool {
+        return match *self {
+            Ok(_) => false,
+            Err(_) => true,
+        };
+    }
+
+    // Converts from Result<T, E> to Option<T>, discarding the error if any.
+    pub fn ok(self: Result<T, E>) -> Option<T> {
+        return match self {
+            Ok(v) => Option.Some(v),
+            Err(_) => Option.None,
+        };
+    }
+
+    // Extracts the contained Ok value, panicking if the result is Err.
+    pub fn unwrap(self: Result<T, E>) -> T {
+        return match self {
+            Ok(v) => v,
+            Err(_) => {
+                zoril_user_panic("called Result.unwrap() on an Err value");
+            },
+        };
+    }
+
+    // Converts from Result<T, E> to Option<E>, discarding the success value if any.
+    pub fn err(self: Result<T, E>) -> Option<E> {
+        return match self {
+            Ok(_) => Option.None,
+            Err(e) => Option.Some(e),
+        };
+    }
+
+    // Applies function f to the contained Ok value, leaving Err untouched.
+    pub fn map<U>(self: Result<T, E>, f: fn(T) -> U) -> Result<U, E> {
+        return match self {
+            Ok(v) => Result.Ok(f(v)),
+            Err(e) => Result.Err(e),
+        };
+    }
+
+    // Applies function f to the contained Err value, leaving Ok untouched.
+    pub fn map_err<F>(self: Result<T, E>, f: fn(E) -> F) -> Result<T, F> {
+        return match self {
+            Ok(v) => Result.Ok(v),
+            Err(e) => Result.Err(f(e)),
+        };
+    }
+}
+
+// Trait for types supporting equality comparisons.
+//
+// Equality that is an equivalence relation: reflexive, symmetric and
+// transitive. Implementations for the primitive types and Option are in cmp.zrl.
+pub trait Eq {
+    // Returns true if self and other are equal.
+    fn eq(self: &Self, other: &Self) -> bool;
+}
+
+// Trait for types supporting explicit deep duplication.
+//
+// Explicit duplication. A clone owns its own copy of everything the original
+// owns (a cloned String gets its own buffer). Implementations for the primitive
+// types, Option, Vec and String are in clone.zrl; #[derive(Clone)] writes one
+// for a struct whose fields all implement Clone.
+pub trait Clone {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &Self) -> Self;
+}
+
+// Marker trait indicating that values of this type can be copied bitwise.
+//
+// Implicit, bitwise duplication on assignment and argument passing. Copy is
+// structural: a type is Copy exactly when it owns no value that implements
+// Drop, so a `T: Copy` bound needs no impl, and `impl Copy for T` is rejected
+// for a type that is not.
+pub trait Copy {}
+
+// Trait for types that can be hashed into a 64-bit integer.
+pub trait Hash {
+    // Computes the 64-bit hash of the value.
+    fn hash(self: &Self) -> u64;
+}
+
+// Trait for types that represent an error condition.
+pub trait Error {
+    // Returns the descriptive error message as a byte slice.
+    fn message(self: &Self) -> [u8];
+}
+
+// Trait for types that provide a human-readable diagnostic error message.
+pub trait ErrorMessage {
+    // Returns the formatted error message for diagnostic display.
+    fn error_message(self: &Self) -> [u8];
+}
+
+impl<T, E: ErrorMessage> Result<T, E> {
+    // Extracts the contained Ok value, panicking with msg and the formatted error detail if Err.
+    pub fn expect(self: Result<T, E>, msg: [u8]) -> T {
+        return match self {
+            Ok(v) => v,
+            Err(e) => {
+                zoril_user_panic_error(msg, e.error_message());
+            },
+        };
+    }
+}
+
+impl Error for i32 {
+    // Returns the descriptive error message as a byte slice.
+    fn message(self: &i32) -> [u8] {
+        return "error code";
+    }
+}
+
+impl ErrorMessage for i32 {
+    // Returns the formatted error message for diagnostic display.
+    fn error_message(self: &i32) -> [u8] {
+        return "error code";
+    }
+}

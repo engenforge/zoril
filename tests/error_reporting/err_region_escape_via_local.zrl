@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: region escape: returning a pointer to local stack storage
+// Keeping the address in a local first does not hide it.
+fn leak() -> *mut i32 {
+    let mut x: i32 = 42;
+    let p: *mut i32 = &mut x;
+    let q = p;
+    return q;
+}
+fn main() -> i32 { let p = leak(); if p as usize == 0 as usize { return 1; } return 0; }

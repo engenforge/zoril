@@ -1,0 +1,9 @@
+// name: Reassignment of immutable static
+// expected: compile_reject
+// An immutable static cannot be reassigned or mutably borrowed from safe code.
+static C: i64 = 42;
+
+fn main() -> i32 {
+    C = 100;
+    return C as i32;
+}

@@ -1,0 +1,12 @@
+// name: Raw pointer laundered through a tuple
+// expected: compile_reject
+// closed: the dereference, field access and index checks decide from the IL type, which
+// keeps `RawPtr`/`RawPtrMut` through this route - so the program is a located type error.
+fn main() -> i32 {
+    let mut x: i32 = 42;
+    let p = &mut x as *mut i32;
+    let t = (p, 1);
+    let v = *t.0;
+    if v == 42 { return 0; }
+    return 1;
+}

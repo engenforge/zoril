@@ -1,0 +1,18 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_arena_premark_growth.zrl:16:5: error: cannot mutably borrow 'a' while it is already borrowed
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return 1; },
+    };
+    let mut v = Vec::<u64>.new_in(&a);
+    let m = a.mark();
+    v.push(42);
+    a.reset_to(m);
+    return v.len() as i32;
+}

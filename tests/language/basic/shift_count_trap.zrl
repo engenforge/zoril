@@ -1,0 +1,4 @@
+// expected exit 134
+// A variable count >= the width traps instead of being masked by the hardware.
+fn shl(v: u32, s: u32) -> u32 { return v << s; }
+fn main() -> i32 { return shl(1, 32) as i32; }

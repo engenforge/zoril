@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_ref_into_local_through_call.zrl:6:1: error: region escape: returning a pointer to local stack storage
+// get's body returns an address into self's own storage, so c.get() points into leak's frame.
+struct C { v: i32 }
+impl C { fn get(self: &C) -> &i32 { return &self.v; } }
+fn leak() -> &i32 { let c = C { v: 7 }; return c.get(); }
+fn main() -> i32 { return *leak(); }

@@ -1,0 +1,29 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::{write, stdout};
+use fmt::{write_i64, write_u64};
+
+struct Wrapper<T> {
+    val: T,
+}
+
+fn main() -> i32 {
+    let mut out = stdout();
+    let w1 = Wrapper::<i32> { val: 42 };
+    write(stdout(), "w1.val = ");
+    let _ = write_i64(&mut out, w1.val as i64);
+    write(stdout(), "\n");
+    let w2 = Wrapper::<u64> { val: 100 };
+    write(stdout(), "w2.val = ");
+    let _ = write_u64(&mut out, w2.val);
+    write(stdout(), "\n");
+    
+    if w1.val != 42 { 
+        write(stdout(), "Fail w1\n");
+        return 1; 
+    }
+    if w2.val != 100 { return 2; }
+    
+    write(stdout(), "Generic struct lowering test passed\n");
+    return 0;
+}

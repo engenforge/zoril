@@ -1,0 +1,16 @@
+pub enum Region {
+    Static,
+    Local,
+    Heap,
+    Custom([u8]),
+}
+
+pub struct RegionCastInstr {
+    pub val: u32,
+    pub region: Region,
+}
+
+pub fn main() -> i32 {
+    let rc = RegionCastInstr { val: 42, region: Region.Local };
+    return 0;
+}

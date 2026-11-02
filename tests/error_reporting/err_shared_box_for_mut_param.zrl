@@ -1,0 +1,11 @@
+// expected compile fail
+// A `Box<T>` where `BoxMut<T>` is expected: the owning twin of the reference pair above (see
+// safety_model.md §5.8 row 10).
+// EXPECT: tests/error_reporting/err_shared_box_for_mut_param.zrl:10:12: error: type mismatch: expected `Box<i32>`, found `Box<i32>`
+
+fn make() -> Box<i32> { return box 41; }
+fn take_mut_box(b: BoxMut<i32>) -> i32 { return 1; }
+
+fn main() -> i32 {
+    return take_mut_box(make());
+}

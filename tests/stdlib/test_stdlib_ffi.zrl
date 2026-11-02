@@ -1,0 +1,26 @@
+// expected exit 0
+// ffi: the C type aliases have the x86_64 Linux widths, and cstr_len counts to the NUL.
+
+import "ffi.zrl";
+use ffi::{c_char, c_schar, c_uchar, c_short, c_ushort, c_int, c_uint, c_long, c_ulong, c_longlong, c_ulonglong, c_size_t, c_float, c_double, cstr_len};
+
+fn main() -> i32 {
+    if sizeof(c_char) != 1 || sizeof(c_schar) != 1 || sizeof(c_uchar) != 1 { return 1; }
+    if sizeof(c_short) != 2 || sizeof(c_ushort) != 2 { return 2; }
+    if sizeof(c_int) != 4 || sizeof(c_uint) != 4 { return 3; }
+    if sizeof(c_long) != 8 || sizeof(c_ulong) != 8 { return 4; }
+    if sizeof(c_longlong) != 8 || sizeof(c_ulonglong) != 8 { return 5; }
+    if sizeof(c_size_t) != 8 { return 6; }
+    if sizeof(c_float) != 4 || sizeof(c_double) != 8 { return 7; }
+
+    // c_char is signed on x86_64 Linux, as in C.
+    let c: c_char = -1;
+    if (c as i32) != -1 { return 8; }
+    let u: c_uchar = 255;
+    if (u as i32) != 255 { return 9; }
+
+    let s = "hello\0";
+    if unsafe { cstr_len(s.ptr) } != 5 { return 10; }
+    if unsafe { cstr_len("\0".ptr) } != 0 { return 11; }
+    return 0;
+}

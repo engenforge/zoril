@@ -1,0 +1,16 @@
+// A --checked build poisons a local's slot where its scope ends, so a read through a pointer to a
+// dead local finds 0xA5 (exit 165) instead of the value the slot still held. Without --checked the
+// same program returns 7: a dangling stack read that silently "works".
+// flags: --checked
+// expected exit 165
+fn main() -> i32 {
+    let mut raw = 0 as *mut u64;
+    {
+        let mut x = 7 as u64;
+        raw = &mut x as *mut u64;
+        // SAFETY: `id` is never read through; it keeps the slot live and addressable.
+        let _ = unsafe { *raw };
+    }
+    // SAFETY: this test reads a dead local's slot on purpose; a checked build poisons it.
+    return unsafe { *raw } as i32;
+}

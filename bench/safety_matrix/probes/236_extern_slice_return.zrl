@@ -1,0 +1,5 @@
+// name: Slice returned across an extern signature
+// expected: compile_reject
+// C returns a slice through no ABI Zoril shares: the length would be whatever the hidden result slot held.
+extern fn names() -> [u8];
+fn main() -> i32 { let s = unsafe { names() }; return s[5] as i32; }

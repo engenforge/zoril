@@ -1,0 +1,34 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::stdout;
+use fmt::write_u64;
+
+pub struct Inner {
+    pub value: u32,
+}
+
+pub enum Outer {
+    Variant(Inner),
+}
+
+impl Outer {
+    pub fn get_Variant(self: &Outer) -> &Inner {
+        unsafe { return &*((self as usize + 4) as *Inner); }
+    }
+}
+
+fn main() -> i32 {
+    let mut i = Inner { value: 42 as u32 };
+    let mut o = Outer.Variant(i);
+    
+    let v = o.get_Variant().value;
+    
+    let mut out = stdout();
+    let _ = write_u64(&mut out, v as u64);
+    let _ = write_u64(&mut out, 10); // \n
+    
+    if v != 42 as u32 {
+        return 1; // Failed!
+    }
+    return 0; // Success!
+}

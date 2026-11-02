@@ -1,0 +1,6 @@
+// name: Zoril function value used as a C function pointer
+// expected: compile_reject
+// A Zoril function value is two words (code and environment); C reads one. Only an extern "C" fn converts.
+fn plain(a: i32) -> i32 { return a; }
+extern fn takes_cb(cb: extern "C" fn(i32) -> i32) -> i32;
+fn main() -> i32 { return unsafe { takes_cb(plain) }; }

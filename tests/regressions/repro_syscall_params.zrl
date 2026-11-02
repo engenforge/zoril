@@ -1,0 +1,10 @@
+fn my_write(buf: [u8]) {
+    let p = buf.ptr;
+    let l = buf.len;
+    unsafe { @syscall(1, 1, p, l) };
+}
+
+fn main() -> i32 {
+    my_write("hello\n");
+    return 0;
+}

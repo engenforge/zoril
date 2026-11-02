@@ -1,0 +1,26 @@
+import "core.zrl";
+
+pub struct Symbol {
+    pub name: u32,
+}
+
+fn find_symbol(name: u32) -> Option<*mut Symbol> {
+    if name == 42 {
+        // A fabricated sentinel address, not a real allocation: @ptr_from_int is
+        // how Zoril-0 requires that to be spelled (strategy R2.2).
+        let sym = @ptr_from_int<*mut Symbol>(0x1234);
+        return Option.Some(sym);
+    }
+    return Option.None;
+}
+
+fn main() -> i32 {
+    let opt = find_symbol(42);
+    match opt {
+        Some(s) => {
+            if s as usize == 0x1234 { return 0; }
+            return 1;
+        },
+        None => return 2,
+    }
+}

@@ -1,0 +1,18 @@
+// name: Safe call to an allocator primitive outside unsafe
+// expected: compile_reject
+// The allocator primitives write the arena header through a raw pointer, so `unsafe fn` is the
+// signature the policy requires (unsafe_policy.md §80) and a safe call is rejected. This probe was
+// the known_gap half of the pair until the primitives became `unsafe fn`; the hole that remains in
+// this class is `Args`, pinned by 160_args_raw_pointer_argument.zrl, because `Args.new` takes a
+// `**u8` and the safe `Args::get` dereferences it. `tests/error_reporting/
+// err_allocator_raw_call_outside_unsafe.zrl` pins the same diagnostic with a located EXPECT, and
+// 128_arena_use_after_reset.zrl and 139_raw_call_result_deref_outside_unsafe.zrl its neighbours.
+import "mem_raw.zrl";
+use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+fn main() -> i32 {
+    let mut fake: [u64; 3] = [0, 0, 1000000];
+    let a = &mut fake as *mut ArenaHeader;
+    let p = zoril_allocator_alloc(a, 8);
+    if fake[1] == 8 as u64 { return 0; }
+    return 1;
+}

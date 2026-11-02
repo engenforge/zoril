@@ -1,0 +1,30 @@
+// expected compile fail
+// The same derived-borrow case as `err_block_scope_borrow_struct_arena_derived.zrl`, with the
+// `Arena` field nine struct levels down: past `type_has_drop`'s recursion limit the answer must
+// still be "frees storage" (mutation M108).
+// EXPECT: tests/error_reporting/err_block_scope_borrow_deep_arena_derived.zrl:28:5: error: cannot let 'h' go out of scope while it is still borrowed
+import "mem.zrl";
+use mem::Arena;
+
+struct S1 { a: Arena }
+struct S2 { a: S1 }
+struct S3 { a: S2 }
+struct S4 { a: S3 }
+struct S5 { a: S4 }
+struct S6 { a: S5 }
+struct S7 { a: S6 }
+struct S8 { a: S7 }
+struct S9 { a: S8, p: *u8, n: usize }
+
+fn view(h: &S9) -> [u8] {
+    return unsafe { @slice(h.p, h.n) };
+}
+
+fn main() -> i32 {
+    let mut out: [u8] = @slice(0 as *u8, 0);
+    {
+        let h = S9 { a: S8 { a: S7 { a: S6 { a: S5 { a: S4 { a: S3 { a: S2 { a: S1 { a: Arena.new(4096).unwrap() } } } } } } } }, p: 0 as *u8, n: 0 as usize };
+        out = view(&h);
+    }
+    return out.len as i32;
+}

@@ -1,0 +1,27 @@
+// name: A view of a parameter's arena buffer stored through a parameter is accepted
+// expected: accept
+// The arena belongs to the caller's frame, so views allocated in it outlive this frame and may be stored out.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn f(out: &mut [i32], a: &Arena) {
+    let mut v = Vec::<i32>.new_in(a);
+    v.push(7);
+    *out = v.as_slice();
+}
+
+fn main() -> i32 {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return 1; }
+    };
+    let e: [i32] = @slice(0 as *i32, 0);
+    let mut s = e;
+    f(&mut s, &a);
+    if s.len == 1 as usize && s[0] == 7 {
+        return 0;
+    }
+    return 1;
+}

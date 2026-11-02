@@ -1,0 +1,42 @@
+// Zoril functions defined for C to call: extern "C" fn with a body. Compiled with no main of its
+// own; scripts/test_ffi_export.sh links it with a C main.
+import "helper.zrl";
+
+extern "C" fn zoril_add(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+// Called from Zoril without `unsafe`: it has a body, so the checker has verified it.
+extern "C" fn zoril_twice(a: i32) -> i32 {
+    return zoril_add(a, a);
+}
+
+extern "C" fn zoril_index(i: usize) -> i32 {
+    let a = [10, 20, 30];
+    return a[i];
+}
+
+extern "C" fn zoril_from_module(a: i32) -> i32 {
+    return helper::triple(a);
+}
+
+// Names that look like the compiler's placeholder names (f<id>) are still the C names.
+extern "C" fn f0() -> i32 { return 0; }
+extern "C" fn f1() -> i32 { return 1; }
+extern "C" fn f2() -> i32 { return 2; }
+extern "C" fn f3() -> i32 { return 3; }
+extern "C" fn f4() -> i32 { return 4; }
+extern "C" fn f5() -> i32 { return 5; }
+
+// C's default argument promotions: an f32 reaches `...` as a double, and an integer narrower
+// than int as an int. main.c is the C side and reads both back through va_arg.
+extern fn c_sum_doubles(n: i32, ...) -> f64;
+extern fn c_sum_ints(n: i32, ...) -> i64;
+
+extern "C" fn zoril_variadic_double(x: f32) -> f64 {
+    return unsafe { c_sum_doubles(1, x) };
+}
+
+extern "C" fn zoril_variadic_int(a: i8, b: u8) -> i64 {
+    return unsafe { c_sum_ints(2, a, b) };
+}

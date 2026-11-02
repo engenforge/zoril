@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: cannot compare structs, tuples, arrays or payload-carrying enums with == or !=
+struct P { a: i64, b: i64, c: i64 }
+
+fn main() -> i32 {
+    let x = P { a: 1, b: 2, c: 3 };
+    let z = P { a: 1, b: 2, c: 3 };
+    if x != z { return 1; }
+    return 0;
+}

@@ -1,0 +1,27 @@
+// name: Derived borrow outliving a value whose *field* frees storage
+// expected: compile_reject
+// A struct whose field is an `Arena` has no `Drop` impl of its own, so the scope-end rule read it
+// as freeing nothing and accepted a `v.get(0)` that outlived it - the slice then read the unmapped
+// region (139). The rule follows the fields now.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct Holder {
+    a: Arena,
+}
+
+fn main() -> i32 {
+    let mut out: Option<&u64> = Option.None;
+    {
+        let h = Holder { a: Arena.new(4096).unwrap() };
+        let mut v = Vec::<u64>.new_in(&h.a);
+        v.push(42 as u64);
+        out = v.get(0 as u64);
+    }
+    return match out {
+        Option.Some(r) => *r as i32,
+        Option.None => 0,
+    };
+}

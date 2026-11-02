@@ -1,0 +1,16 @@
+// expected compile fail
+// The task's own example: a `static` whose initializer is a struct literal. Supporting it needs a
+// constant evaluator that lays out an aggregate's bytes (field offsets, padding, nested
+// aggregates) the way src/il_layout.zrl does, which is planned. Until then it is a
+// located error at the initializer, not an internal compiler error
+// ("internal compiler error: extract_const_u64: unsupported expression kind", 2026-10-09).
+// EXPECT: tests/error_reporting/err_static_init_struct_literal.zrl:12:23: error: a static or constant initializer must be a constant: an integer, float, char, bool, byte string or enum variant
+
+struct Header { off: u64 }
+struct Handle { header: *mut Header }
+
+static HEAP: Handle = Handle { header: 0 as *mut Header };
+
+fn main() -> i32 {
+    return 0;
+}

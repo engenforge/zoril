@@ -1,0 +1,20 @@
+// name: Function returning struct wrapping parameter reference misses ret_storage
+// expected: compile_reject
+struct Holder {
+    r: &u64,
+}
+
+fn wrap(r: &u64) -> Holder {
+    return Holder { r: r };
+}
+
+fn main() -> i32 {
+    let zero: u64 = 0;
+    let mut out: &u64 = &zero;
+    for i in 0..2 {
+        let x: u64 = 7 + (i as u64) * 92;
+        if i == 0 { out = wrap(&x).r; }
+    }
+    // *out reads 99 instead of 7
+    return *out as i32;
+}

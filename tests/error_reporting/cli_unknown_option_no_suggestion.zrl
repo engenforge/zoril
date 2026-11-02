@@ -1,0 +1,7 @@
+// expected compile fail
+// flags: --definitely-not-an-option
+// EXPECT: zoril: error: unrecognized option `--definitely-not-an-option`
+
+fn main() -> i32 {
+    return 0;
+}

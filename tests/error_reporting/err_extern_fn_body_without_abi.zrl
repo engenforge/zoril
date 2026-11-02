@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_extern_fn_body_without_abi.zrl:4:29: error: an extern function declaration has no body (to define one for C to call, write extern "C" fn)
+// The body used to be dropped silently and the call linked against nothing.
+extern fn cb(a: i32) -> i32 { return a + 1; }
+fn main() -> i32 { return 0; }

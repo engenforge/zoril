@@ -1,0 +1,28 @@
+// expected exit code: 0
+// A fixed address is a valid `static` initializer: `n as *T` creates a raw pointer, and creating
+// one is safe because every *use* of it is gated on its type - so a constant context, which has
+// nowhere to put an `unsafe` block, is no longer left without a spelling for memory-mapped I/O.
+//
+// This file was tests/error_reporting/err_static_init_forged_pointer.zrl until 2026-10-13, when
+// the gate on the cast was removed. What the two halves pin:
+//   - the initializer is a constant the data section can hold, and its value is the address
+//     written (read back in safe code, because reading the *value* of a raw pointer is safe);
+//   - reading *through* a forged pointer still needs `unsafe`, which is where the marker now
+//     sits (tests/error_reporting/err_int_to_raw_ptr_cast_deref.zrl is the located error).
+// The address below is never dereferenced: it is 1 GiB, which nothing in this process maps. The
+// run-time dereference uses the same cast on an address that is real, to show the two halves
+// together.
+static CONSOLE: *mut u32 = 0x40000000 as *mut u32;
+
+fn main() -> i32 {
+    if CONSOLE as usize != 0x40000000 as usize { return 1; }
+    let mut x: u32 = 7;
+    let real = &mut x as *mut u32;
+    let p = (real as usize) as *mut u32;
+    unsafe {
+        if *p != 7 { return 2; }
+        *p = 9;
+    }
+    if x != 9 { return 3; }
+    return 0;
+}

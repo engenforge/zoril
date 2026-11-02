@@ -1,0 +1,20 @@
+export function w $f(w %a, w %b, l %c, l %d) {
+@s
+	%q =w div %a, %b
+	%r =w rem %a, %b
+	%u =w udiv %a, %b
+	%s =w shl %a, %b
+	%t =w sar %a, %b
+	%v =w shr %a, %b
+	%x =l mul %c, %d
+	%y =l extsw %q
+	%z =l add %x, %y
+	%w =w copy %z
+	%n =w neg %w
+	%m =w xor %n, %r
+	%k =w or %m, %u
+	%j =w and %k, %s
+	%i =w add %j, %t
+	%h =w sub %i, %v
+	ret %h
+}

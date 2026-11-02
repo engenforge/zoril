@@ -1,0 +1,63 @@
+// expected exit code: 150
+// 08: User-defined generics with monomorphization and type inference.
+// Demonstrates: generic structs, generic functions, explicit and inferred type args.
+
+struct Pair<A, B> {
+    first: A,
+    second: B,
+}
+
+struct Wrapper<T> {
+    value: T,
+}
+
+fn identity<T>(x: T) -> T {
+    return x;
+}
+
+fn make_pair<A, B>(a: A, b: B) -> Pair<A, B> {
+    return Pair { first: a, second: b };
+}
+
+fn swap<A, B>(p: Pair<A, B>) -> Pair<B, A> {
+    return Pair {
+        first: p.second,
+        second: p.first,
+    };
+}
+
+fn wrap<T>(val: T) -> Wrapper<T> {
+    return Wrapper { value: val };
+}
+
+fn unwrap<T>(w: Wrapper<T>) -> T {
+    return w.value;
+}
+
+impl Wrapper<T> {
+    fn map<U>(self: &Wrapper<T>, f: fn(T) -> U) -> U {
+        return f(self.value);
+    }
+}
+
+fn double(x: i32) -> i32 { return x * 2; }
+
+fn main() -> i32 {
+    // Type inference: compiler deduces A=i32, B=bool from arguments
+    let p = make_pair(42, true);
+    let swapped = swap(p);
+
+    // Explicit type argument
+    let x = identity::<i32>(100);
+
+    // Nested generics
+    let wrapped = wrap(make_pair(10, 20));
+    let inner = unwrap(wrapped);
+
+    // Turbofish on member access
+    let w = Wrapper { value: 10 };
+    let y = w.map::<i32>(double);
+
+    return inner.first + inner.second + x + y;
+    // 10 + 20 + 100 + 20 = 150
+}

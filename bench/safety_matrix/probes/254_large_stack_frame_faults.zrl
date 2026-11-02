@@ -1,0 +1,10 @@
+// name: A local array larger than the guard-page gap faults instead of trapping cleanly
+// expected: runtime_fault
+// There is no stack probe (doc/SAFETY.md §3): the frame is established by subtracting from the
+// stack pointer, so a local larger than the pages the guard leaves below it skips the guard page
+// and touches unmapped memory. The fault is deterministic but arrives as SIGSEGV (139), which is
+// the same status a wild pointer gives - it costs triage, it does not lose safety.
+fn main() -> i32 {
+    let big: [u8; 268435456] = [0 as u8; 268435456];
+    return big[0] as i32;
+}

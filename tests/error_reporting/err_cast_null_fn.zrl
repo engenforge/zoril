@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: cannot cast integer to function pointer: function pointers cannot be null
+fn main() -> i32 {
+    let fp: fn(i64) -> i64 = 0 as fn(i64) -> i64;
+    return 0;
+}

@@ -1,0 +1,23 @@
+// name: A view through a returned &mut cannot outlive a mutation
+// expected: compile_reject
+// A reference returned as &mut preserves borrow tracking: a view taken through that &mut
+// reference prevents subsequent mutations of the referent until the view is no longer live.
+import "vec.zrl";
+use vec::Vec;
+
+fn get_ref(v: &mut Vec<i32>) -> &mut Vec<i32> {
+    return v;
+}
+
+fn evil(v: &mut Vec<i32>) -> i32 {
+    let r = get_ref(v);
+    let val = r.get(0).unwrap();
+    r.free();
+    return *val;
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    return evil(&mut v);
+}

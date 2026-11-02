@@ -1,0 +1,25 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_arena_spoof_user_mem_module.zrl:20:5: error: cannot mutably borrow 'a' while it is already borrowed
+// EXPECT: tests/error_reporting/err_arena_spoof_user_mem_module.zrl:18:13: note: borrow of 'a.v' taken here
+// A user library file named `mem.zrl` must not be mistaken for the standard library's
+// `mem::Arena`: this file did not come from a standard-library root, so its `reset_to` is an
+// ordinary `&mut self` call and conflicts with the live slice. Matching the callee's name (or a
+// "/mem.zrl" path suffix) instead accepts this program, which then reads 99 out of a buffer the
+// fake `reset_to` released (probe 218_fake_mem_arena_spoof.zrl).
+import "include/fake_mem/mem.zrl";
+import "vec.zrl";
+use mem::{Arena, ArenaMark};
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = Arena { v: Vec::<u64>.new() };
+    let mut i = 0 as u64;
+    while i < 64 { a.v.push(7); i = i + 1; }
+    let s = a.v.as_slice();
+    let m = a.mark();
+    a.reset_to(m);
+    let mut b = Vec::<u64>.new();
+    let mut j = 0 as u64;
+    while j < 64 { b.push(99); j = j + 1; }
+    return s[0] as i32;
+}

@@ -1,0 +1,21 @@
+// expected exit 0
+// #[borrows(..)] parses everywhere a function can carry attributes, including methods and
+// together with #[must_use]. stage0-C runs this too: it accepts the attribute and ignores it.
+struct P { a: i32, b: i32 }
+impl P {
+    #[borrows(self)]
+    fn first(self: &P) -> &i32 { return &self.a; }
+}
+#[must_use]
+#[borrows(y)]
+fn second(x: &P, y: &P) -> &i32 { return &y.b; }
+#[borrows()]
+fn none(x: &P) -> i32 { return x.a; }
+fn main() -> i32 {
+    let p = P { a: 3, b: 4 };
+    let q = P { a: 5, b: 6 };
+    if *p.first() != 3 { return 1; }
+    if *second(&p, &q) != 6 { return 2; }
+    if none(&q) != 5 { return 3; }
+    return 0;
+}

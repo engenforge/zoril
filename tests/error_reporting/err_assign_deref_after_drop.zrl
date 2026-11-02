@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: error: use of dropped value 'b'
+fn main() -> i32 {
+    let b = box 1;
+    @drop(b);
+    *b = 5;
+    return 0;
+}

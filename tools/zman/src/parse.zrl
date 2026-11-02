@@ -1,0 +1,504 @@
+// tools/zman/src/parse.zrl
+//
+// The two readers behind zman.
+//
+// `parse_interface` reads a compiler-emitted `.zri`: the declarations of one standard library
+// module, in source order, with visibility and `#[must_use]` already resolved by the compiler. Its
+// brace-depth tracking is what makes a method body (which generic functions keep in an interface)
+// not end the `impl` block it belongs to.
+//
+// `parse_source` reads the module's `.zrl` for the two things an interface does not carry: the
+// module summary (the first paragraph of the file's first comment block) and the comment block
+// above each item, which is the item's description. A `SAFETY:` or `INTERNAL:` line is a note to
+// this repository and not part of the description; a `CALLER OBLIGATION:` line is the item's
+// obligations paragraph.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "string.zrl";
+import "vec.zrl";
+use mem_raw::ArenaHeader;
+use string::String;
+use vec::Vec;
+
+// Declaration kinds, as recorded for each item read from a .zri.
+pub const KIND_FN: u8 = 0;
+pub const KIND_STRUCT: u8 = 1;
+pub const KIND_ENUM: u8 = 2;
+pub const KIND_CONST: u8 = 3;
+pub const KIND_TRAIT: u8 = 4;
+
+// One method declared inside a trait body.
+pub struct Method {
+    pub name: [u8],
+    pub sig: [u8],
+}
+
+// One declaration read from a .zri.
+//
+// `owner` is the `impl` header the item belongs to ("impl<T> Vec<T>", or "" for a top-level item);
+// `header` is the trait header for a trait item, which is the owner its methods' comments are
+// keyed by; `lines` is the declaration text, one entry per output line.
+pub struct Item {
+    pub kind: u8,
+    pub name: [u8],
+    pub owner: [u8],
+    pub header: [u8],
+    pub lines: Vec<[u8]>,
+    pub must_use: bool,
+    pub is_unsafe: bool,
+    pub methods: Vec<Method>,
+}
+
+// One description, keyed the same way the source and the interface name an item.
+pub struct Doc {
+    pub owner: [u8],
+    pub name: [u8],
+    pub text: [u8],
+}
+
+pub struct Source {
+    pub summary: [u8],
+    pub docs: Vec<Doc>,
+}
+
+pub fn empty_methods(arena: *mut ArenaHeader) -> Vec<Method> {
+    return unsafe { Vec::<Method>.new_in_raw(arena) };
+}
+
+pub fn empty_lines(arena: *mut ArenaHeader) -> Vec<[u8]> {
+    return unsafe { Vec::<[u8]>.new_in_raw(arena) };
+}
+
+fn cat2(a: [u8], b: [u8], arena: *mut ArenaHeader) -> [u8] {
+    let mut s = unsafe { String.new_in_raw(arena) };
+    s.push_str(a);
+    s.push_str(b);
+    return s.as_slice();
+}
+
+fn is_ident_byte(c: u8) -> bool {
+    if c >= 'a' as u8 && c <= 'z' as u8 { return true; }
+    if c >= 'A' as u8 && c <= 'Z' as u8 { return true; }
+    if c >= '0' as u8 && c <= '9' as u8 { return true; }
+    return c == '_' as u8;
+}
+
+// The identifier that follows `kw` in a declaration line, or "" when it is absent.
+pub fn ident_after(line: [u8], kw: [u8]) -> [u8] {
+    let at = match line.find(kw) {
+        Option.Some(i) => i,
+        Option.None => { return ""; },
+    };
+    let begin = at + kw.len;
+    let mut end = begin;
+    while end < line.len && is_ident_byte(line[end]) {
+        end = end + 1;
+    }
+    if end == begin { return ""; }
+    return line.sub(begin, end - begin);
+}
+
+// The net brace depth change of one line.
+fn brace_delta(line: [u8]) -> i32 {
+    let mut delta = 0 as i32;
+    let mut i = 0 as usize;
+    while i < line.len {
+        if line[i] == '{' as u8 { delta = delta + 1; }
+        if line[i] == '}' as u8 { delta = delta - 1; }
+        i = i + 1;
+    }
+    return delta;
+}
+
+// True when a line starts a function declaration, with or without `pub`, `unsafe` and `extern`.
+fn is_fn_decl(line: [u8]) -> bool {
+    if line.starts_with("pub fn ") || line.starts_with("fn ") { return true; }
+    if line.starts_with("pub unsafe fn ") || line.starts_with("unsafe fn ") { return true; }
+    if line.starts_with("pub extern fn ") || line.starts_with("extern fn ") { return true; }
+    if line.starts_with("pub unsafe extern fn ") || line.starts_with("unsafe extern fn ") {
+        return true;
+    }
+    return false;
+}
+
+// The declaration text of a function line: the body-opening brace dropped and a `;` added. Cutting
+// at the first `;` instead would truncate a parameter of array type such as `[i32; 2]`.
+fn decl_sig(line: [u8], arena: *mut ArenaHeader) -> [u8] {
+    let mut text = line.trim();
+    if text.ends_with("{") {
+        text = text.sub(0, text.len - 1).trim();
+    }
+    if text.ends_with(";") { return text; }
+    return cat2(text, ";", arena);
+}
+
+fn is_unsafe_sig(sig: [u8]) -> bool {
+    if sig.starts_with("pub unsafe ") { return true; }
+    return sig.starts_with("unsafe ");
+}
+
+fn push_fn(
+    items: &mut Vec<Item>,
+    name: [u8],
+    owner: [u8],
+    sig: [u8],
+    must_use: bool,
+    arena: *mut ArenaHeader
+) {
+    let mut lines = empty_lines(arena);
+    lines.push(sig);
+    items.push(Item {
+        kind: KIND_FN,
+        name: name,
+        owner: owner,
+        header: "",
+        lines: lines,
+        must_use: must_use,
+        is_unsafe: is_unsafe_sig(sig),
+        methods: empty_methods(arena),
+    });
+}
+
+pub fn parse_interface(content: [u8], arena: *mut ArenaHeader) -> Vec<Item> {
+    let lines = unsafe { content.split_raw('\n' as u8, arena) };
+    let mut items = unsafe { Vec::<Item>.new_in_raw(arena) };
+    let mut i = 0 as usize;
+    let mut must_use = false;
+    while i < lines.len() {
+        let t = lines.as_slice()[i].trim();
+        i = i + 1;
+        if t.len == 0 || t.starts_with("//") || t.starts_with("import ") || t.starts_with("use ") {
+            continue;
+        }
+        if t.starts_with("#[") {
+            if t == "#[must_use]" { must_use = true; }
+            continue;
+        }
+        if t.starts_with("impl ") || t.starts_with("impl<") {
+            if !t.ends_with("{") { continue; }
+            let owner = t.sub(0, t.len - 1).trim();
+            let mut depth = 1 as i32;
+            while i < lines.len() && depth > 0 {
+                let l = lines.as_slice()[i].trim();
+                i = i + 1;
+                if l.len == 0 || l.starts_with("//") { continue; }
+                if l.starts_with("#[") {
+                    if l == "#[must_use]" { must_use = true; }
+                    continue;
+                }
+                // An inherent impl's private methods are in the interface as signatures (an importer is
+                // told they are private); a page lists what a caller can use.
+                let is_trait_impl = owner.find(" for ").is_some();
+                if depth == 1 && is_fn_decl(l) && (is_trait_impl || l.starts_with("pub ")) {
+                    push_fn(
+                        &mut items,
+                        ident_after(l, "fn "),
+                        owner,
+                        decl_sig(l, arena),
+                        must_use,
+                        arena
+                    );
+                    must_use = false;
+                }
+                depth = depth + brace_delta(l);
+            }
+            continue;
+        }
+        if t.starts_with("pub trait ") || t.starts_with("trait ") {
+            let name = ident_after(t, "trait ");
+            let header = if t.ends_with("{") { t.sub(0, t.len - 1).trim() } else { t };
+            let mut decl = empty_lines(arena);
+            let mut methods = empty_methods(arena);
+            let mut depth = brace_delta(t);
+            if depth == 0 {
+                decl.push(t);
+            } else {
+                decl.push(cat2(header, " {", arena));
+            }
+            while depth > 0 && i < lines.len() {
+                let l = lines.as_slice()[i].trim();
+                if depth == 1 && l.len > 0 && !l.starts_with("//") && !l.starts_with("#") {
+                    if is_fn_decl(l) {
+                        let sig = decl_sig(l, arena);
+                        methods.push(Method { name: ident_after(l, "fn "), sig: sig });
+                        decl.push(cat2("    ", sig, arena));
+                    } else if l.starts_with("type ") {
+                        decl.push(cat2("    ", l, arena));
+                    }
+                }
+                depth = depth + brace_delta(l);
+                if depth == 0 {
+                    decl.push(l);
+                }
+                i = i + 1;
+            }
+            must_use = false;
+            items.push(Item {
+                kind: KIND_TRAIT,
+                name: name,
+                owner: "",
+                header: header,
+                lines: decl,
+                must_use: false,
+                is_unsafe: false,
+                methods: methods,
+            });
+            continue;
+        }
+        if t.starts_with("pub struct ") || t.starts_with("pub enum ") {
+            let is_struct = t.starts_with("pub struct ");
+            let name = if is_struct {
+                ident_after(t, "struct ")
+            } else {
+                ident_after(t, "enum ")
+            };
+            let mut decl = empty_lines(arena);
+            decl.push(t);
+            if t.find_byte('{' as u8).is_some() && t.find_byte('}' as u8).is_none() {
+                let mut private_seen = false;
+                while i < lines.len() {
+                    let l = lines.as_slice()[i].trim();
+                    i = i + 1;
+                    let closes = l.find_byte('}' as u8).is_some();
+                    if closes && private_seen { decl.push("/* private fields */"); }
+                    if !closes && is_struct && is_private_field(l) {
+                        // A struct's fields are part of its documented surface only where a caller
+                        // can reach them: publishing the private ones invents an API nobody can
+                        // use (zoril-intern(3) used to list `InternTable`'s seven private fields,
+                        // down to the layout of its table). One line says the rest is hidden.
+                        private_seen = true;
+                    } else {
+                        decl.push(l);
+                    }
+                    if closes { break; }
+                }
+            }
+            must_use = false;
+            items.push(Item {
+                kind: if is_struct { KIND_STRUCT } else { KIND_ENUM },
+                name: name,
+                owner: "",
+                header: "",
+                lines: decl,
+                must_use: false,
+                is_unsafe: false,
+                methods: empty_methods(arena),
+            });
+            continue;
+        }
+        if t.starts_with("pub const ") {
+            let mut decl = empty_lines(arena);
+            decl.push(t);
+            must_use = false;
+            items.push(Item {
+                kind: KIND_CONST,
+                name: ident_after(t, "const "),
+                owner: "",
+                header: "",
+                lines: decl,
+                must_use: false,
+                is_unsafe: false,
+                methods: empty_methods(arena),
+            });
+            continue;
+        }
+        if is_fn_decl(t) {
+            if t.starts_with("pub ") {
+                push_fn(&mut items, ident_after(t, "fn "), "", decl_sig(t, arena), must_use, arena);
+            }
+            must_use = false;
+            if t.find_byte('{' as u8).is_some() {
+                let mut depth = brace_delta(t);
+                while depth > 0 && i < lines.len() {
+                    depth = depth + brace_delta(lines.as_slice()[i]);
+                    i = i + 1;
+                }
+            }
+            continue;
+        }
+    }
+    return items;
+}
+
+// The comment lines directly above `idx`, with attribute lines skipped, in source order.
+fn comment_block(lines: &Vec<[u8]>, idx: usize, arena: *mut ArenaHeader) -> Vec<[u8]> {
+    let mut block = empty_lines(arena);
+    let mut k = idx;
+    while k > 0 {
+        k = k - 1;
+        let prev = lines.as_slice()[k].trim();
+        if prev.starts_with("#[") { continue; }
+        if prev.starts_with("//") {
+            block.push(prev.sub(2, prev.len - 2).trim());
+            continue;
+        }
+        break;
+    }
+    let mut in_order = empty_lines(arena);
+    let mut i = block.len();
+    while i > 0 {
+        i = i - 1;
+        in_order.push(block.as_slice()[i]);
+    }
+    return in_order;
+}
+
+// A line that is part of an item's description. The two markers below are notes about this
+// repository's own conventions, not documentation for a caller.
+fn keeps_descriptions_line(line: [u8]) -> bool {
+    if line.starts_with("SAFETY:") { return false; }
+    return !line.starts_with("INTERNAL:");
+}
+
+fn is_obligation_line(line: [u8]) -> bool {
+    return line.starts_with("CALLER OBLIGATION:");
+}
+
+// The description text of an item, paragraphs separated by newlines, with the blank lines that
+// the source uses to separate it from neighbouring comments trimmed off both ends.
+fn doc_text(block: Vec<[u8]>, arena: *mut ArenaHeader) -> [u8] {
+    let mut start = block.len();
+    let mut end = 0 as usize;
+    let mut i = 0 as usize;
+    while i < block.len() {
+        let line = block.as_slice()[i];
+        if keeps_descriptions_line(line) && line.len > 0 {
+            if start == block.len() { start = i; }
+            end = i;
+        }
+        i = i + 1;
+    }
+    if start == block.len() { return ""; }
+    let mut s = unsafe { String.new_in_raw(arena) };
+    let mut written = 0 as usize;
+    i = start;
+    while i <= end {
+        let line = block.as_slice()[i];
+        if keeps_descriptions_line(line) {
+            if written > 0 { s.push_u8('\n' as u8); }
+            if is_obligation_line(line) {
+                let marker = "CALLER OBLIGATION:";
+                s.push_str("Caller obligation:");
+                s.push_str(line.sub(marker.len, line.len - marker.len));
+            } else {
+                s.push_str(line);
+            }
+            written = written + 1;
+        }
+        i = i + 1;
+    }
+    return s.as_slice();
+}
+
+// True when a struct body line declares a field the module does not export: no `pub`, and not a
+// comment or a blank line (an enum's variants keep theirs - they are the type's own surface).
+fn is_private_field(line: [u8]) -> bool {
+    if line.len == 0 as usize { return false; }
+    if line.starts_with("//") || line.starts_with("#[") { return false; }
+    return !line.starts_with("pub ");
+}
+
+fn is_owner_start(line: [u8]) -> bool {
+    if !line.ends_with("{") { return false; }
+    if line.starts_with("impl ") || line.starts_with("impl<") { return true; }
+    return line.starts_with("pub trait ") || line.starts_with("trait ");
+}
+
+fn is_trait_start(line: [u8]) -> bool {
+    return line.starts_with("pub trait ") || line.starts_with("trait ");
+}
+
+// True when a top-level declaration line is one whose comment block is a description.
+fn is_public_decl(line: [u8]) -> bool {
+    if line.starts_with("pub struct ") || line.starts_with("pub enum ") { return true; }
+    if line.starts_with("pub const ") || line.starts_with("pub trait ") { return true; }
+    if line.starts_with("pub fn ") || line.starts_with("pub unsafe fn ") { return true; }
+    if line.starts_with("pub extern fn ") || line.starts_with("pub unsafe extern fn ") {
+        return true;
+    }
+    return false;
+}
+
+fn decl_keyword(line: [u8]) -> [u8] {
+    if line.starts_with("pub struct ") { return "struct "; }
+    if line.starts_with("pub enum ") { return "enum "; }
+    if line.starts_with("pub const ") { return "const "; }
+    if line.starts_with("pub trait ") { return "trait "; }
+    return "fn ";
+}
+
+pub fn parse_source(content: [u8], arena: *mut ArenaHeader) -> Source {
+    let lines = unsafe { content.split_raw('\n' as u8, arena) };
+    let mut docs = unsafe { Vec::<Doc>.new_in_raw(arena) };
+
+    // The module summary: the first paragraph of the file's first comment block.
+    let mut head = empty_lines(arena);
+    let mut k = 0 as usize;
+    while k < lines.len() {
+        let t = lines.as_slice()[k].trim();
+        if t.starts_with("//") {
+            head.push(t.sub(2, t.len - 2).trim());
+            k = k + 1;
+            continue;
+        }
+        if t.len == 0 && head.len() > 0 { break; }
+        break;
+    }
+    let mut summary = unsafe { String.new_in_raw(arena) };
+    let mut opened = false;
+    let mut h = 0 as usize;
+    while h < head.len() {
+        let line = head.as_slice()[h];
+        if line.len == 0 { break; }
+        if opened { summary.push_u8(' ' as u8); }
+        summary.push_str(line);
+        opened = true;
+        h = h + 1;
+    }
+
+    let mut i = 0 as usize;
+    while i < lines.len() {
+        let t = lines.as_slice()[i].trim();
+        if is_owner_start(t) {
+            let owner = t.sub(0, t.len - 1).trim();
+            if is_trait_start(t) {
+                let text = doc_text(comment_block(&lines, i, arena), arena);
+                if text.len > 0 {
+                    docs.push(Doc { owner: "", name: ident_after(t, "trait "), text: text });
+                }
+            }
+            let mut depth = 1 as i32;
+            i = i + 1;
+            while i < lines.len() && depth > 0 {
+                let l = lines.as_slice()[i].trim();
+                if depth == 1 && is_fn_decl(l) {
+                    let text = doc_text(comment_block(&lines, i, arena), arena);
+                    if text.len > 0 {
+                        docs.push(Doc {
+                            owner: owner,
+                            name: ident_after(l, "fn "),
+                            text: text,
+                        });
+                    }
+                }
+                depth = depth + brace_delta(l);
+                i = i + 1;
+            }
+            continue;
+        }
+        if is_public_decl(t) {
+            let text = doc_text(comment_block(&lines, i, arena), arena);
+            if text.len > 0 {
+                docs.push(Doc {
+                    owner: "",
+                    name: ident_after(t, decl_keyword(t)),
+                    text: text,
+                });
+            }
+        }
+        i = i + 1;
+    }
+
+    return Source { summary: summary.as_slice(), docs: docs };
+}

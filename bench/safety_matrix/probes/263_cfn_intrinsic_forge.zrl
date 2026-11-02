@@ -1,0 +1,9 @@
+// name: A C function pointer forged from a number through @int_cast
+// expected: compile_reject
+// `as` refused integer-to-function-pointer (a function pointer cannot be null), but the
+// intrinsic route did not consult the same rule: @int_cast<extern "C" fn(..)>(4096) made a
+// code address out of a number. @ptr_cast and @ptr_from_int are the same route.
+fn main() -> i32 {
+    let p = @int_cast<extern "C" fn(i32) -> i32>(4096);
+    return 0;
+}

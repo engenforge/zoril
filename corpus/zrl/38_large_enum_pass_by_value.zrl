@@ -1,0 +1,76 @@
+// 38: Large enum pass-by-value (regression: bootstrap bug "Stack Corruption on Large Enum Pass-by-Value").
+// Demonstrates: passing enums larger than a pointer by value, tag extraction, method calls on by-value enums.
+// Regression test for: enums with struct payloads (~24 bytes) passed to functions or matched upon.
+import "io.zrl";
+use io::{close, stdout, write};
+
+struct Payload {
+    a: u64,
+    b: u64,
+    c: u64,
+}
+
+enum Token {
+    Ident(Payload),
+    Number(u64),
+    Eof,
+}
+
+impl Token {
+    fn get_tag(self: &Token) -> u64 {
+        match *self {
+            Token.Ident(_) => { return 1 as u64; },
+            Token.Number(_) => { return 2 as u64; },
+            Token.Eof => { return 0 as u64; },
+        }
+    }
+}
+
+fn match_tag(tok: Token) -> u64 {
+    match tok {
+        Token.Ident(_) => { return 1 as u64; },
+        Token.Number(_) => { return 2 as u64; },
+        Token.Eof => { return 0 as u64; },
+    }
+}
+
+fn method_tag(tok: Token) -> u64 {
+    return tok.get_tag();
+}
+
+fn main() -> i32 {
+    let p = Payload { a: 10 as u64, b: 20 as u64, c: 30 as u64 };
+    let t1 = Token.Ident(p);
+    let t2 = Token.Number(42 as u64);
+    let t3 = Token.Eof;
+
+    let mut stdout_fd = stdout();
+    if match_tag(t1) == 1 as u64 {
+        write(stdout_fd, "pass: match Ident\n");
+    } else {
+        write(stdout_fd, "FAIL: match Ident\n");
+    }
+
+    if match_tag(t2) == 2 as u64 {
+        write(stdout_fd, "pass: match Number\n");
+    } else {
+        write(stdout_fd, "FAIL: match Number\n");
+    }
+
+    if match_tag(t3) == 0 as u64 {
+        write(stdout_fd, "pass: match Eof\n");
+    } else {
+        write(stdout_fd, "FAIL: match Eof\n");
+    }
+
+    let p2 = Payload { a: 1 as u64, b: 2 as u64, c: 3 as u64 };
+    let t4 = Token.Ident(p2);
+    if method_tag(t4) == 1 as u64 {
+        write(stdout_fd, "pass: method Ident\n");
+    } else {
+        write(stdout_fd, "FAIL: method Ident\n");
+    }
+    close(stdout_fd);
+
+    return 0;
+}

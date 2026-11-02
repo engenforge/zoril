@@ -1,0 +1,22 @@
+// name: Array repeat with count > 64 drops arena borrow tracking on reset
+// expected: compile_reject
+import "mem.zrl";
+import "vec.zrl";
+import "core.zrl";
+use mem::Arena;
+use vec::Vec;
+use core::Option;
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536 as u64).unwrap();
+    let mut v = Vec::<u64>.new_in(&a);
+    let mut i0 = 0 as u64;
+    while i0 < 64 { v.push(7); i0 = i0 + 1; }
+    let arr: [[u64]; 65] = [v.as_slice(); 65];
+    a.reset();
+    let mut z = Vec::<u64>.new_in(&a);
+    let mut j = 0 as u64;
+    while j < 64 { z.push(99); j = j + 1; }
+    // arr[0][0] reads 99 instead of 7
+    return arr[0][0] as i32;
+}

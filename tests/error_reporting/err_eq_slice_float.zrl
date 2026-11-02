@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: == and != on slices require integer, bool, char or pointer elements
+// Float elements are not byte-comparable: NaN != NaN, and -0.0 == 0.0 with different bytes.
+fn main() -> i32 {
+    let a: [f64; 2] = [1.0, 2.0];
+    let b: [f64; 2] = [1.0, 2.0];
+    let sa: [f64] = &a;
+    let sb: [f64] = &b;
+    if sa == sb { return 1; }
+    return 0;
+}

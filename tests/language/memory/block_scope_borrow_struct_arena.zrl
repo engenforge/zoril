@@ -1,0 +1,25 @@
+// The other side of probe 166: the same shape is accepted while the derived borrow ends inside the
+// block that owns the arena. `Holder` has no `Drop` impl itself; its field's is what the scope-end
+// rule now follows.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct Holder {
+    a: Arena,
+}
+
+fn main() -> i32 {
+    {
+        let h = Holder { a: Arena.new(4096).unwrap() };
+        let mut v = Vec::<u64>.new_in(&h.a);
+        v.push(42 as u64);
+        let got = match v.get(0 as u64) {
+            Option.Some(r) => *r,
+            Option.None => 0 as u64,
+        };
+        if got != 42 as u64 { return 1; }
+    }
+    return 0;
+}

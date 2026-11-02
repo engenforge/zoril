@@ -1,0 +1,8 @@
+// Calls a C function that zbuild links in from an object file or a library.
+extern fn c_add(a: i32, b: i32) -> i32;
+
+fn main() -> i32 {
+    let r = unsafe { c_add(40, 2) };
+    if r == 42 { return 0; }
+    return 1;
+}

@@ -1,0 +1,27 @@
+// expected exit 0
+import "io.zrl";
+
+// Per ABI Spec Section 3.2:
+// enum_align = max(4, max_variant_align)
+
+enum SmallEnum { A, B } // max_variant_align = 1. enum_align = max(4, 1) = 4.
+enum U8Enum { A(u8), B(u8) } // max_variant_align = 1. enum_align = 4.
+enum U16Enum { A(u16), B(u16) } // max_variant_align = 2. enum_align = 4.
+enum U32Enum { A(u32), B(u32) } // max_variant_align = 4. enum_align = 4.
+enum U64Enum { A(u64), B(u64) } // max_variant_align = 8. enum_align = 8.
+
+struct StructU8 { a: u8, b: SmallEnum } // SmallEnum align 4. StructU8 align 4. Size 8.
+struct StructU64 { a: u8, b: U64Enum } // U64Enum align 8. StructU64 align 8. Size 16.
+
+fn main() -> i32 {
+    if alignof(SmallEnum) != 4 { return 1; }
+    if alignof(U8Enum) != 4 { return 2; }
+    if alignof(U16Enum) != 4 { return 3; }
+    if alignof(U32Enum) != 4 { return 4; }
+    if alignof(U64Enum) != 8 { return 5; }
+    
+    if sizeof(StructU8) != 8 { return 6; }
+    if sizeof(StructU64) != 24 { return 7; }
+
+    return 0;
+}

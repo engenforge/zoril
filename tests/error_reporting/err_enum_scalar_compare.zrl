@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: cannot use an enum or struct value as a scalar operand
+import "core.zrl";
+
+pub fn main() -> i32 {
+    let o: Option<i32> = Option.Some(3 as i32);
+    if o != 0 as i32 {
+        return 1 as i32;
+    }
+    return 0 as i32;
+}

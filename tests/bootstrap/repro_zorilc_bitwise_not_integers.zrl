@@ -1,0 +1,35 @@
+// Repro: zoril-c.release incorrectly compiles `!x` on integer types
+// as XOR-with-1 instead of bitwise complement (XOR-with-all-ones).
+//
+// Expected: !7u64 == 0xFFFFFFFFFFFFFFF8 (18446744073709551608)
+// Actual:   !7u64 == 6  (7 XOR 1)
+//
+// Root cause: zoril-c.release emits `xor x, 1` for `!x` on integers,
+// but the correct implementation is `xor x, -1` (or `not x`).
+//
+// Impact: stdlib/mem.zrl uses `& !(7 as u64)` as an 8-byte alignment mask.
+// With the bug this becomes `& 6`, causing initial allocations to start at
+// offset 6 (instead of 64), overlapping the ArenaHeader struct itself.
+// InternTable.cap writes to offset 14 from ArenaHeader base, corrupting
+// ArenaHeader.capacity (at offset 16), setting it to 0 → "ArenaHeader overflow (capacity: 0)".
+
+pub fn not_fn(x: u64) -> u64 {
+    return !x;
+}
+
+pub fn main() -> i32 {
+    // Runtime value: should be bitwise NOT (all bits flipped)
+    let x: u64 = 7 as u64;
+    let mask = not_fn(x);
+    if mask != 18446744073709551608 { return 1; }  // 0xFFFFFFFFFFFFFFF8
+
+    // Constant: same result expected
+    let const_mask: u64 = !(7 as u64);
+    if const_mask != 18446744073709551608 { return 2; }
+
+    // Zero: !0 should be all ones
+    let zero_mask: u64 = not_fn(0 as u64);
+    if zero_mask != 18446744073709551615 { return 3; }  // 0xFFFFFFFFFFFFFFFF
+
+    return 0;
+}

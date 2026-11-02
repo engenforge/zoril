@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: error: cannot assign to 'x' because it is immutable
+fn main() {
+    let x = 1;
+    x = 2;
+}

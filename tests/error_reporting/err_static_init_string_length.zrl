@@ -1,0 +1,11 @@
+// expected compile fail
+// A byte string's type in a constant context is the byte array of its own length, so one that does
+// not fit the declared `[u8; N]` is a type mismatch, reported with both lengths. (In a function
+// body a string literal is `[u8]`, a slice - a descriptor a data section cannot hold.)
+// EXPECT: tests/error_reporting/err_static_init_string_length.zrl:7:28: error: type mismatch: expected `[u8; 6]`, found `[u8; 5]`
+
+static GREETING: [u8; 6] = "hello";
+
+fn main() -> i32 {
+    return 0;
+}

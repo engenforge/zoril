@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: error: cannot return 'b' a reference into storage owned by this frame (a collection, a box or an arena) cannot outlive the frame
+// Returning a reference into a local Box dropped at return is rejected.
+fn make() -> &i32 {
+    let b = box 5;
+    return &*b;
+}
+
+fn main() -> i32 {
+    let r = make();
+    return *r;
+}

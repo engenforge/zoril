@@ -1,0 +1,10 @@
+// name: System call outside unsafe
+// expected: compile_reject
+// `@syscall` takes addresses as plain integers, so it can write or unmap any memory: this
+// one unmaps the page holding `x`. It needed no `unsafe` and faulted in safe code.
+fn main() -> i32 {
+    let x: u64 = 1;
+    let page = (&x as *u64 as u64) & !(4095 as u64);
+    let _ = @syscall(11, page, 4096 as u64);
+    return x as i32;
+}

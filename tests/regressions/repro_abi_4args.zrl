@@ -1,0 +1,16 @@
+extern fn write(fd: i32, buf: *u8, count: usize) -> isize;
+
+fn test_write(fd: i32, s: [u8]) {
+    unsafe { write(fd, s.ptr, s.len); }
+}
+
+fn test_4_args(a: u32, b: u32, c: u32, d: u32) -> u32 {
+    test_write(2, "test_4_args\n");
+    return a + b + c + d;
+}
+
+fn main() -> i32 {
+    let r = test_4_args(1, 2, 3, 4);
+    test_write(2, "done\n");
+    return 0;
+}

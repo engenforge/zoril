@@ -1,0 +1,18 @@
+// name: Arena allocator — bump arithmetic wrapped by a size near usize's maximum
+// expected: runtime_trap
+// `aligned_offset + size` wrapped, so the capacity check passed and the same bytes were handed
+// out twice: `p1 == p2`. The subtraction form must trap (134) instead.
+import "mem.zrl";
+import "mem_raw.zrl";
+use mem::{Arena, arena_raw};
+use mem_raw::zoril_allocator_alloc;
+
+fn main() -> i32 {
+    let a = Arena.new(4096).unwrap();
+    let raw = unsafe { arena_raw(&a) };
+    let huge = 18446744073709551615 as u64;
+    let p1 = unsafe { zoril_allocator_alloc(raw, huge) };
+    let p2 = unsafe { zoril_allocator_alloc(raw, 8 as u64) };
+    if p1 == p2 { return 1; }
+    return 0;
+}

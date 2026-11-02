@@ -1,0 +1,17 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::{print, stdout};
+use fmt::write_u64;
+
+enum Kind {
+    Small(u32),
+    Large(u64),
+}
+
+fn main() -> i32 {
+    print("sizeof(Kind): ");
+    let mut out = stdout();
+    let _ = write_u64(&mut out, sizeof(Kind));
+    print("\n");
+    return 0;
+}

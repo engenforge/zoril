@@ -1,0 +1,1 @@
+enum SmallEnum { A, B(u64) } struct SmallStruct { a: u32, b: u64 } fn main() { let x = sizeof(SmallEnum); let y = sizeof(SmallStruct); if x == 0 as usize || y == 0 as usize { } }

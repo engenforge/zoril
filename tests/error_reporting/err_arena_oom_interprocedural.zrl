@@ -1,0 +1,19 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_arena_oom_interprocedural.zrl:16:5: error: arena capacity exceeded at compile time (interprocedural)
+
+import "local_mem.zrl";
+use local_mem::{ArenaHeader, arena_init, zoril_allocator_alloc};
+
+fn sub_alloc(arena: *mut ArenaHeader) {
+    // Statically allocates 2048 bytes
+    let data = unsafe { zoril_allocator_alloc(arena, 2048 as u64) };
+}
+
+fn main() -> i32 {
+    let arena = arena_init(1024 as u64);
+
+    // Flagged by Phase 5 interprocedural analysis. `arena` is an owned `Box<ArenaHeader>` and `sub_alloc` wants a mutable pointer to it, so borrow the box (see err_arena_oom_compile_time.zrl).
+    sub_alloc(&mut *arena);
+
+    return 0;
+}

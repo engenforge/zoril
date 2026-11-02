@@ -1,0 +1,26 @@
+// POSIX-only operating-system interface: file locks and seeking
+
+import "core0.zrl";
+import "core.zrl";
+import "io.zrl";
+use io::Fd;
+
+// Everything in this module means something on every Unix and nothing on Windows. Code that names
+// these says so.
+
+// File lock flag: acquire a shared lock.
+pub const LOCK_SH: u64 = 1;
+// File lock flag: acquire an exclusive lock.
+pub const LOCK_EX: u64 = 2;
+// File lock flag: non-blocking lock request.
+pub const LOCK_NB: u64 = 4;
+// File lock flag: release an existing lock.
+pub const LOCK_UN: u64 = 8;
+
+// Repositions the file offset of open descriptor fd according to offset and whence (SEEK_SET, SEEK_CUR, SEEK_END).
+#[must_use]
+pub fn lseek(fd: Fd, offset: i64, whence: u64) -> i64 {
+    // Linux syscall for lseek is 8; SEEK_SET=0, SEEK_CUR=1, SEEK_END=2
+    // SAFETY: no pointer is involved; lseek(8) is the raw operation the wrapper exposes.
+    return unsafe { @syscall(8, fd.unix_raw() as u64, offset as u64, whence) } as i64;
+}

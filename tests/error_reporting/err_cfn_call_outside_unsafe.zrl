@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_cfn_call_outside_unsafe.zrl:6:12: error: call through a C function pointer requires unsafe block
+extern "C" fn callee(a: i32) -> i32 { return a + 1; }
+fn main() -> i32 {
+    let f: extern "C" fn(i32) -> i32 = callee;
+    return f(1);
+}

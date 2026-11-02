@@ -1,0 +1,8 @@
+// expected exit 12
+// A closure may capture a function value, itself a closure with an environment.
+fn apply(f: fn(i32) -> i32, x: i32) -> i32 { return f(x); }
+fn twice(f: fn(i32) -> i32) -> i32 {
+    let g = |x: i32| -> i32 { f(f(x)) };
+    return apply(g, 2);
+}
+fn main() -> i32 { let k = 5; return twice(|x: i32| -> i32 { x + k }); }

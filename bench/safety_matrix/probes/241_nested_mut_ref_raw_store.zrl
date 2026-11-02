@@ -1,0 +1,6 @@
+// name: A raw pointer stored through `&mut &T` standing for `&mut *T`
+// expected: compile_reject
+// What sits behind a `&mut` must be the same type, not a convertible one: `&mut &i32` accepted as
+// `&mut *i32` let the callee store a null raw pointer into the caller's reference, read back in safe code.
+fn clobber(p: &mut *i32) { *p = 0 as *i32; }
+fn main() -> i32 { let x = 5; let mut r: &i32 = &x; clobber(&mut r); return *r; }

@@ -1,0 +1,36 @@
+// Zoril Standard Library: System Calls
+
+import "io.zrl";
+import "core0.zrl";
+
+pub fn must_mmap(addr: *u8, length: u64, prot: u64, flags: u64, fd: i64, offset: u64) -> *u8 {
+    let ptr = unsafe { @ptr_from_int<*u8>(@syscall(9, addr as u64, length, prot, flags, fd as u64, offset)) };
+    // Basic error check for mmap (returns MAP_FAILED on error)
+    if ptr as i64 == -1 as i64 {
+        zoril_user_panic("must_mmap: syscall failed");
+    }
+    return ptr;
+}
+
+pub fn must_munmap(addr: *u8, length: u64) {
+    if (@syscall(11, addr as u64, length) as u64 as i64) < 0 as i64 {
+        zoril_user_panic("must_munmap: syscall failed");
+    }
+}
+
+// Converts argv[i] (a C-style nul-terminated string) to a Zoril byte slice.
+// Returns an empty slice if i is out of range (argv[i] is a null pointer).
+pub fn arg_to_slice(argv: **u8, i: i32) -> [u8] {
+    // argv is a kernel-supplied array of nul-terminated C strings: walking it means
+    // indexing and dereferencing raw pointers whose bounds only the ABI guarantees.
+    let addr = unsafe { *((argv as usize + i as usize * 8 as usize) as **u8) } as usize;
+    if addr == 0 as usize { return @slice(0 as *u8, 0 as usize); }
+    let mut len = 0 as usize;
+    unsafe {
+        while *((addr + len) as *u8) != 0 as u8 {
+            len = len + 1 as usize;
+        }
+    }
+    // `len` was just measured by walking to the nul terminator above.
+    return unsafe { @slice(addr as *u8, len) };
+}

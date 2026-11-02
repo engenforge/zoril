@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: error: value 'b' holds a linear resource (fd or ioring) that must be explicitly closed, not dropped
+extern fn open_r(path: *u8) -> fd<r>;
+
+fn main() -> i32 {
+    let b = box unsafe { open_r("x".ptr) };
+    return 0;
+}

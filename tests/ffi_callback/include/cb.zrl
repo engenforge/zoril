@@ -1,0 +1,75 @@
+// A C library calls back into Zoril through `extern "C" fn(..)` pointers: a callback with
+// userdata, a struct of callbacks, and Zoril -> C -> Zoril re-entrancy.
+// scripts/test_ffi_callback.sh links this with callbacks.c (no libc) and checks the exit status.
+
+struct State { sum: i32, done: i32, depth: i32 }
+
+struct Vtable {
+    on_item: extern "C" fn(*mut u8, i32) -> i32,
+    on_done: extern "C" fn(*mut u8) -> i32,
+}
+
+extern fn c_for_each(n: i32, cb: extern "C" fn(*mut u8, i32) -> i32, userdata: *mut u8) -> i32;
+extern fn c_run_vtable(vt: *Vtable, userdata: *mut u8) -> i32;
+extern fn c_reenter(levels: i32, cb: extern "C" fn(*mut u8, i32) -> i32, userdata: *mut u8) -> i32;
+extern fn c_dirty_u8() -> u8;
+extern fn c_dirty_bool() -> bool;
+extern fn c_dirty_i16() -> i16;
+
+extern "C" fn on_item(ud: *mut u8, v: i32) -> i32 {
+    let st = ud as *mut State;
+    unsafe {
+        (*st).sum = (*st).sum + v;
+    }
+    return 0;
+}
+
+extern "C" fn on_done(ud: *mut u8) -> i32 {
+    let st = ud as *mut State;
+    unsafe {
+        (*st).done = (*st).done + 1;
+    }
+    return 7;
+}
+
+// Called by C, calls C again through the same pointer: Zoril -> C -> Zoril -> C -> Zoril.
+extern "C" fn nested(ud: *mut u8, levels_left: i32) -> i32 {
+    let st = ud as *mut State;
+    unsafe {
+        (*st).depth = (*st).depth + 1;
+    }
+    if levels_left > 0 {
+        return unsafe { c_reenter(levels_left - 1, nested, ud) };
+    }
+    return 0;
+}
+
+fn main() -> i32 {
+    let mut st = State { sum: 0, done: 0, depth: 0 };
+    let ud = &mut st as *mut State as *mut u8;
+
+    let n = unsafe { c_for_each(4, on_item, ud) };
+    if n != 4 { return 1; }
+    if st.sum != 10 { return 2; }
+
+    let vt = Vtable { on_item: on_item, on_done: on_done };
+    let r = unsafe { c_run_vtable(&vt as *Vtable, ud) };
+    if r != 7 { return 3; }
+    if st.done != 1 { return 4; }
+    if st.sum != 10 + 6 { return 5; }
+
+    st.depth = 0;
+    let _ = unsafe { c_reenter(3, nested, ud) };
+    if st.depth != 4 { return 6; }
+
+    // A small result is extended by the caller: the C side leaves garbage above it.
+    if 1 + unsafe { c_dirty_u8() } as i32 != 6 { return 8; }
+    if unsafe { c_dirty_bool() } { return 9; }
+    if unsafe { c_dirty_i16() } as i32 != -2 { return 10; }
+
+    // Calling a pointer from Zoril needs unsafe; the pointer is the function itself.
+    let f: extern "C" fn(*mut u8, i32) -> i32 = on_item;
+    let _ = unsafe { f(ud, 100) };
+    if st.sum != 16 + 100 { return 7; }
+    return 0;
+}

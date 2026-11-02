@@ -1,0 +1,16 @@
+pub type MyU32 = u32;
+
+pub struct Payload {
+    pub value: MyU32,
+}
+
+fn main() -> i32 {
+    if sizeof(Payload) == 8 as usize {
+        unsafe { @syscall(60, 2) }; // Reproduced: MyU32 was promoted to 64-bit
+    }
+    if sizeof(Payload) == 4 as usize {
+        unsafe { @syscall(60, 0) }; // Correct
+    }
+    unsafe { @syscall(60, 1) };
+    return 0;
+}

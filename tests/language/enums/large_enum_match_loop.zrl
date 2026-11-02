@@ -1,0 +1,22 @@
+// expected exit code: 0
+import "io.zrl";
+use io::{close, stdout, write};
+struct Large { a: u64, b: u64, c: u64, d: u64, e: u64 }
+enum BigEnum { Small(u32), Large(Large) }
+fn test_match(e: BigEnum) {
+    let mut stdout_fd = stdout();
+    match e {
+        BigEnum.Small(s) => { write(stdout_fd, "Small\n"); },
+        BigEnum.Large(l) => { if l.a == 42 {} else {} }
+    }
+    close(stdout_fd);
+}
+fn main() -> i32 {
+    let mut i = 0 as u64;
+    while i < 100 {
+        let e = BigEnum.Large(Large { a: 42, b: 1, c: 2, d: 3, e: 4 });
+        test_match(e);
+        i += 1;
+    }
+    return 0;
+}

@@ -1,0 +1,17 @@
+// name: Dangling stack ptr — through a slice descriptor
+// expected: compile_reject
+// A local address stored into a slice descriptor and loaded back out of it. The verifier
+// tracked stack pointers through SSA values but not through memory slots, so this was a
+// known gap until 2026-10-02.
+fn dangle_slice_escape() -> *mut i64 {
+    let mut a = [1 as i64, 2 as i64];
+    let s: [i64] = @slice(&mut a[0], 2 as u64);
+    return &mut s[0] as *mut i64;
+}
+
+fn main() -> i32 {
+    let p = dangle_slice_escape();
+    // Not dereferenced: the probe pins that the escape compiles, not what it reads.
+    if p as usize == 0 as usize { return 1; }
+    return 0;
+}

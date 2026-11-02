@@ -1,0 +1,28 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::{stdout, write};
+use fmt::write_i64;
+
+struct WithSlice {
+    s: [u8],
+}
+
+enum Decl {
+    Small(i32),
+    Impl(WithSlice),
+}
+
+fn main() -> i32 {
+    let mut out = stdout();
+    write_str("sizeof(WithSlice) = ");
+    let _ = write_i64(&mut out, sizeof(WithSlice) as i64);
+    write_str("\n");
+    write_str("sizeof(Decl) = ");
+    let _ = write_i64(&mut out, sizeof(Decl) as i64);
+    write_str("\n");
+    return 0;
+}
+
+fn write_str(s: [u8]) {
+    write(stdout(), s);
+}

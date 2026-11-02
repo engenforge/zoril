@@ -1,0 +1,30 @@
+import "io.zrl";
+import "fmt.zrl";
+import "core.zrl";
+use io::{stdout, write};
+use fmt::write_u64;
+
+pub struct TestStruct {
+    pub a: u32,
+    pub b: u32,
+}
+
+pub fn main() -> i32 {
+    let t = TestStruct { b: 20 as u32, a: 10 as u32 };
+    
+    let mut f = stdout();
+    write(f, "a = ");
+    let _ = write_u64(&mut f, t.a as u64);
+    write(f, "\n");
+
+    write(f, "b = ");
+    let _ = write_u64(&mut f, t.b as u64);
+    write(f, "\n");
+
+    if t.a == 20 as u32 {
+        write(f, "BUG REPRODUCED: Field names ignored!\n");
+        return 1;
+    }
+
+    return 0;
+}

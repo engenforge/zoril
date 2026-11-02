@@ -1,0 +1,56 @@
+fn test_and_op() -> i32 {
+    let c = 102 as u8; // 'f'
+    let low = 48 as u8; // '0'
+    let high = 57 as u8; // '9'
+    
+    if c >= low && c <= high {
+        return 42; // Should not happen
+    } else {
+        return 0;
+    }
+}
+
+fn test_precedence() -> i32 {
+    let mut val = 4 as u64;
+    let x = 2 as u64;
+    val = val * 10 + x;
+    if val != 42 {
+        return val as i32;
+    }
+    return 0;
+}
+
+fn test_neg_bool() -> i32 {
+    let flag: bool = true;
+    let negated = !flag;
+    if negated { return 1; }
+    return 0;
+}
+
+fn test_neg_int() -> i32 {
+    let x = 10;
+    let y = -x;
+    if y != -10 { return 1; }
+    return 0;
+}
+
+fn test_float() -> i32 {
+    let f: f32 = 3.14;
+    return 0;
+}
+
+fn test_cast_f64() -> i32 {
+    let decimal: i32 = 1_000_000;
+    let to_float = decimal as f64;
+    return 0;
+}
+
+fn main() -> i32 {
+    if test_and_op() != 0 { return 1; }
+    if test_precedence() != 0 { return 2; }
+    if test_neg_bool() != 0 { return 3; }
+    if test_neg_int() != 0 { return 4; }
+    if test_float() != 0 { return 5; }
+    if test_cast_f64() != 0 { return 6; }
+    return 0;
+}

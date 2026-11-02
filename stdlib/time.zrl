@@ -1,0 +1,41 @@
+// Monotonic clock and sleep
+
+// A clock that never goes backwards, and a sleep measured on it. Neither call can fail on Linux, so
+// neither returns a Result. The wall clock (time since the Unix epoch) is `fsys::realtime_ns`.
+
+// Nanoseconds on a monotonic clock (CLOCK_MONOTONIC) with an unspecified starting point. Only the
+// difference between two readings means anything. It does not count time the system was suspended.
+pub fn monotonic_ns() -> i64 {
+    // SAFETY: `@alloca` hands back one uninitialized `[i64; 2]` slot in this frame and the
+    // clock_gettime syscall (228) fills it, so nothing reads it before it is written.
+    let ts = unsafe { @alloca<[i64; 2]>(1) };
+    // SAFETY: `ts` points at the two-word slot above, which the kernel writes; CLOCK_MONOTONIC is 1.
+    let r = unsafe { @syscall(228, 1 as u64, ts as u64) } as i64;
+    if r != 0 { return 0; }
+    let sec = ts[0 as usize];
+    let nsec = ts[1 as usize];
+    return sec * 1000000000 + nsec;
+}
+
+// Blocks the calling thread for at least `ns` nanoseconds. A duration of zero or less returns at
+// once. A sleep interrupted by a signal resumes for the time that remained.
+pub fn sleep_ns(ns: i64) {
+    if ns <= 0 as i64 { return; }
+    // SAFETY: `@alloca` hands back two uninitialized `[i64; 2]` slots (requested time, remaining
+    // time) in this frame; both are written before the kernel reads or the code reads them.
+    let req = unsafe { @alloca<[i64; 2]>(1) };
+    // SAFETY: the second slot, written by nanosleep before it is read.
+    let rem = unsafe { @alloca<[i64; 2]>(1) };
+    req[0 as usize] = ns / 1000000000;
+    req[1 as usize] = ns % 1000000000;
+    loop {
+        // SAFETY: nanosleep (35) reads the request slot and writes the remaining time to `rem`.
+        let r = unsafe { @syscall(35, req as u64, rem as u64) } as i64;
+        // -EINTR: a signal cut the sleep short, so sleep the remainder.
+        if r != -4 as i64 {
+            return;
+        }
+        req[0 as usize] = rem[0 as usize];
+        req[1 as usize] = rem[1 as usize];
+    }
+}

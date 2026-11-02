@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: error: use of moved value 'p'
+fn f(p: &mut i32) {
+    let b = p;
+    *p = 1;
+    *b = 2;
+}
+
+fn main() -> i32 {
+    let mut x = 0;
+    f(&mut x);
+    return x;
+}

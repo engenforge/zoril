@@ -1,0 +1,57 @@
+// expected exit 0
+// stage0-C parses and ignores #[stores(..)] attributes on functions and methods.
+struct S {
+    p: &i32,
+}
+
+impl S {
+    #[stores(p)]
+    fn store_self(self: &mut S, p: &i32) {
+        self.p = p;
+    }
+}
+
+static mut G_ADDR: usize = 0 as usize;
+
+#[stores(note -> static)]
+fn store_static(note: [u8]) {
+    unsafe { G_ADDR = note.ptr as usize; }
+}
+
+struct R {
+    p: &i32,
+}
+
+#[stores(a -> b)]
+fn store_pair(a: &i32, b: &mut R) {
+    b.p = a;
+}
+
+struct Pair {
+    a: &i32,
+    b: &i32,
+}
+
+#[stores(a -> h, b -> h)]
+fn store_multi(a: &i32, b: &i32, h: &mut Pair) {
+    h.a = a;
+    h.b = b;
+}
+
+fn main() -> i32 {
+    let mut x = 1;
+    let mut s = S { p: &x };
+    let n = 42;
+    s.store_self(&n);
+
+    let msg = "test";
+    store_static(msg);
+
+    let mut r = R { p: &x };
+    store_pair(&n, &mut r);
+
+    let mut pair = Pair { a: &x, b: &x };
+    store_multi(&n, &n, &mut pair);
+
+    return 0;
+}

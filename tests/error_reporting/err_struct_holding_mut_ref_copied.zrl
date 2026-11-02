@@ -1,0 +1,21 @@
+// expected compile fail
+// EXPECT: error: use of moved value 'h'
+struct Holder {
+    r: &mut i32,
+}
+
+fn take(h: Holder) {
+    *h.r = 10;
+}
+
+fn test(h: Holder) {
+    take(h);
+    take(h);
+}
+
+fn main() -> i32 {
+    let mut x = 0;
+    let h = Holder { r: &mut x };
+    test(h);
+    return x;
+}

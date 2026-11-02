@@ -1,0 +1,60 @@
+// 07: Option and Result types with the ? (try) operator for error propagation.
+// Demonstrates: generic enums, ?, match, early return, sum_construct.
+
+enum Option<T> {
+    None,
+    Some(T),
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+fn safe_divide(a: i32, b: i32) -> Result<i32, i32> {
+    if b == 0 {
+        return Result.Err(0);
+    } else {
+        return Result.Ok(a / b);
+    }
+}
+
+fn lookup(index: i32) -> Option<i32> {
+    if index < 0 || index >= 3 {
+        return Option.None;
+    } else {
+        // Simulate a small lookup table
+        if index == 0 {
+            return Option.Some(100);
+        } else {
+            if index == 1 {
+                return Option.Some(200);
+            } else {
+                return Option.Some(300);
+            }
+        }
+    }
+}
+
+fn compute(a: i32, b: i32) -> Result<i32, i32> {
+    // The ? operator: if safe_divide returns Err, propagate it immediately
+    let quotient = safe_divide(a, b)?;
+    return Result.Ok(quotient * 10);
+}
+
+fn main() -> i32 {
+    let r1 = compute(100, 5);
+    let val = match r1 {
+        Result.Ok(v) => v,
+        Result.Err(e) => e,
+    };
+
+    let opt = lookup(1);
+    let found = match opt {
+        Option.Some(v) => v,
+        Option.None => 0,
+    };
+
+    // 200 + 200 = 400
+    return (val + found) - 400;
+}

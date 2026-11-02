@@ -1,0 +1,16 @@
+struct Data {
+    val: i32,
+}
+
+impl Data {
+    #[must_use]
+    fn get_val(self: &Data) -> i32 {
+        return self.val;
+    }
+}
+
+fn main() -> i32 {
+    let d = Data { val: 42 };
+    d.get_val();
+    return 0;
+}

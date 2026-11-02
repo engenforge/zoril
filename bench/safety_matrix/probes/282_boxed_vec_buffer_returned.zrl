@@ -1,0 +1,15 @@
+// name: A reference into a Boxed local Vec's buffer returned from the frame
+// expected: compile_reject
+// The box owns the `Vec`; a reference into storage owned by this frame cannot outlive the frame.
+import "vec.zrl";
+use vec::Vec;
+
+fn view() -> &i32 {
+    let mut b = box Vec::<i32>.new();
+    (*b).push(77);
+    return (*b).get(0).unwrap();
+}
+
+fn main() -> i32 {
+    return *view();
+}

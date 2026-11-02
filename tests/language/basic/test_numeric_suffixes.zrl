@@ -1,0 +1,4 @@
+fn main() -> i32 {
+    let x = 123u32 + 456;
+    return 0;
+}

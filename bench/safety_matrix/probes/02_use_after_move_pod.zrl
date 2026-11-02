@@ -1,0 +1,11 @@
+// name: Use after move (POD)
+// expected: accept
+struct Point { x: i32, y: i32 }
+fn take_point(p: Point) -> i32 { return p.x; }
+fn main() -> i32 {
+    let p = Point { x: 42, y: 1 };
+    let a = take_point(p);
+    let b = p.x;
+    if b != 42 { return 1; }
+    return 0;
+}

@@ -1,0 +1,12 @@
+// name: Reassigning borrower in branch keeps predecessor 0 base across join
+// expected: compile_reject
+fn main() -> i32 {
+    let keep: u64 = 1;
+    let mut r: &u64 = &keep;
+    for i in 0..2 {
+        let x: u64 = 7 + (i as u64) * 92;
+        if i != 0 {} else { r = &x; }
+    }
+    // *r reads 99 instead of 7
+    return *r as i32;
+}

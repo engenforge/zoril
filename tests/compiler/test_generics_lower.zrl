@@ -1,0 +1,17 @@
+import "io.zrl";
+use io::{write, stdout};
+
+fn identity<T>(x: T) -> T {
+    return x;
+}
+
+fn main() -> i32 {
+    let a = identity::<i32>(42);
+    let b = identity::<u64>(100 as u64);
+    
+    if a != 42 { return 1; }
+    if b != 100 { return 2; }
+    
+    write(stdout(), "Generics lowering test passed\n");
+    return 0;
+}

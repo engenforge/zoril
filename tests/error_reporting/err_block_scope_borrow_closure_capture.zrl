@@ -1,0 +1,19 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_closure_capture.zrl:17:5: error: cannot let 'x' go out of scope while it is still borrowed
+
+// A closure that captured a reference to a local keeps it borrowed at that local's scope end, even
+// though the closure value is what holds the reference now (probe 173). The environment's copies
+// keep the flag of the borrow they copy; a borrow of the environment's own storage - a compiler
+// temporary in the enclosing frame - stays exempt, so a by-value capture is unaffected
+// (tests/language/closures/capturing_closure_if_expr.zrl).
+fn add_one(x: i32) -> i32 { return x + 1; }
+
+fn main() -> i32 {
+    let mut g: fn(i32) -> i32 = add_one;
+    {
+        let x: i32 = 7;
+        let p: &i32 = &x;
+        g = |q: i32| -> i32 { *p + q };
+    }
+    return g(1);
+}

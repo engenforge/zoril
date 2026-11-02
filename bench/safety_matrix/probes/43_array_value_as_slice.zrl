@@ -1,0 +1,11 @@
+// name: Array value stored into a slice field
+// expected: compile_reject
+// The array bytes were reinterpreted as a slice header, so indexing read address 10.
+
+struct P { a: u64, b: [u64] }
+fn first(p: &P) -> u64 { return p.b[0]; }
+fn main() -> i32 {
+    let data = [10 as u64, 20 as u64];
+    let p = P { a: 1, b: data };
+    return first(&p) as i32;
+}

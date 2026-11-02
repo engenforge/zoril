@@ -1,0 +1,20 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_arena.zrl:17:5: error: cannot let 'a' go out of scope while it is still borrowed
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+// The arena handle goes out of scope at the end of the block, but the collection it was
+// handed to outlives the block: the region is unmapped while `outer` still points into it.
+fn main() -> i32 {
+    let mut outer = Vec::<u64>.new();
+    {
+        let a = Arena.new(65536).unwrap();
+        let mut v = Vec::<u64>.new_in(&a);
+        v.push(1);
+        outer = v;
+    }
+    outer.push(2);
+    return 0;
+}

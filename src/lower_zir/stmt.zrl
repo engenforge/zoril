@@ -1,0 +1,450 @@
+import "zir.zrl";
+import "ast.zrl";
+import "resolve.zrl";
+import "intern.zrl";
+import "mono.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "decl.zrl";
+use ast::{BINARY_ADD, BINARY_LT, ExprId, ForStmt, LetStmt, PatternId, Span, StmtId, WhileStmt};
+use decl::{ZirLoopEntry, ZirLowerer};
+use il_type::{ILPrimitive, ILTYPE_ARRAY, ILTYPE_SLICE};
+use io::eprint;
+use resolve::{Symbol, SymbolKind};
+use zir::{LOCAL_KIND_LET, LOCAL_KIND_LETMUT, LOCAL_KIND_TMP, Place, Projection, ZirRvalue, ZirStmt, ZirTerminator};
+
+impl ZirLowerer {
+    pub fn lower_stmt(self: &mut ZirLowerer, stmt_id: StmtId) {
+        let p_stmt = self.get_stmt(stmt_id);
+        if p_stmt as usize == 0 as usize { return; }
+        // Copied out: the statement's own comment is saved below, which needs `&mut self`.
+        let stmt = self.resolver.ast.stmts[stmt_id as usize];
+        let span = self.get_stmt_span(stmt_id);
+
+        // Save/restore (not just set) since lowering this statement can
+        // recurse into nested statements (while/for/loop bodies) via
+        // lower_expr, each with their own literal comment - the ambient
+        // current_literal_comment must be restored to this statement's
+        // own value once any such nested lowering returns, so later emits
+        // in this same statement's lowering (e.g. for's increment block)
+        // don't pick up a comment belonging to the last nested statement.
+        let saved_literal_comment = self.current_literal_comment;
+        self.current_literal_comment = self.get_stmt_comment(stmt_id);
+
+        match stmt {
+            Stmt.Let(l) => { self.lower_let_stmt(l, stmt_id, span); },
+            Stmt.Expr(e) => {
+                self.lower_expr(e, 0 as u32);
+            },
+            Stmt.Return(r) => { self.lower_return_stmt(r, span); },
+            Stmt.Defer(e) => {
+                if self.scope_defers.len() == 0 as usize {
+                    ICE("Stmt.Defer: no active scope");
+                }
+                let current_scope_defers = &mut self.scope_defers[self.scope_defers.len()
+                    - 1 as usize];
+                current_scope_defers.push(e);
+            },
+            Stmt.While(w) => { self.lower_while_stmt(w); },
+            Stmt.For(f) => { self.lower_for_stmt(f, stmt_id, span, saved_literal_comment); },
+            Stmt.Break => { self.lower_loop_jump(true, span); },
+            Stmt.Continue => { self.lower_loop_jump(false, span); },
+        }
+
+        self.current_literal_comment = saved_literal_comment;
+    }
+
+    fn lower_let_stmt(self: &mut ZirLowerer, l: LetStmt, stmt_id: StmtId, span: Span) {
+        let declared_ty = if l.ty != 0 as u32 {
+            self.resolver.resolve_type(l.ty)
+        } else {
+            0 as u32
+        };
+        let mut ty = declared_ty;
+        // An unknown name in it is reported where the type is resolved.
+        if l.ty != 0 as u32 && ty == 0 as u32 && !self.resolver.type_reported(l.ty) {
+            self.report_error("unresolved type in let binding", span);
+        }
+        if self.is_assignment_expr(l.init) {
+            self.report_error("assignment is a statement and yields no value", span);
+        }
+        let mut init_place = self.lower_expr(l.init, ty);
+        if ty == 0 as u32 && init_place.base != 0 as u32 {
+            ty = self.get_place_type(&init_place);
+            if !self.is_branching_expr(l.init) {
+                self.check_type_known(ty, self.get_expr_span(l.init));
+            }
+        }
+
+        if ty != 0 as u32 && init_place.base != 0 as u32 {
+            init_place = self.coerce_array_ref_to_slice(
+                init_place,
+                self.get_place_type(&init_place),
+                ty,
+                span
+            );
+            let init_ty = self.get_place_type(&init_place);
+            if init_ty != 0 as u32 && !self.types_match(ty, init_ty) {
+                if !self.implicit_conv_ok(ty, init_ty) {
+                    self.report_conv_or_type_mismatch(ty, init_ty, self.get_expr_span(l.init));
+                } else {
+                    init_place = self.emit_cast(init_place, ty, span);
+                }
+            }
+        }
+
+        if l.pattern != 0 as PatternId {
+            self.lower_let_pattern(l.pattern, init_place, ty, span);
+            // A `let` pattern matches by value (there is no `ref` binding), so the whole
+            // initializer is consumed: without this the source keeps its drop flag and both
+            // the bindings and the source are dropped (`let (d, _) = pair;` dropped `pair.0`
+            // twice), Unified Solution E.
+            self.consume_place_if_move(&init_place);
+            return;
+        }
+
+        let sym = self.resolver.define(l.name, SymbolKind.Local(stmt_id), false);
+        let local_id = self.define_local(
+            sym,
+            ty,
+            if l.is_mut { LOCAL_KIND_LETMUT } else { LOCAL_KIND_LET }
+        );
+        let is_raw = if l.ty != 0 as u32 {
+            self.resolver.is_raw_ptr_type(l.ty)
+        } else {
+            self.place_is_raw_ptr(&init_place)
+        };
+        self.check_raw_into_ref(&init_place, ty, span);
+        if is_raw {
+            self.locals[local_id as usize - 1 as usize].is_copy = true;
+        }
+        self.consume_place_if_move(&init_place);
+        if !self.fuse_constructor_into(local_id, &init_place) {
+            self.emit(ZirStmt.Let(local_id, ZirRvalue.Use(init_place), span));
+        }
+    }
+
+    // Whether an expression outside a function body - a `static`'s or `const`'s initializer - is
+    // a value of the declared type EXPECTED_TY, reported with the same words `let x: T = ...`
+    // uses. The body's rules are the language's, so the check is this one, not a second reading
+    // of them in the driver: `static P: Big = 7` is the mismatch a local of type `Big` is, and
+    // `static X: u64 = "abc"` names the string's own type. The ZIR it emits is the caller's to
+    // discard.
+    pub fn check_initializer_value(
+        self: &mut ZirLowerer,
+        value: ExprId,
+        expected_ty: u32,
+        span: Span
+    ) -> bool {
+        let init_place = self.lower_expr(value, expected_ty);
+        if self.had_error { return false; }
+        if init_place.base == 0 as u32 { return false; }
+        let init_ty = self.get_place_type(&init_place);
+        if init_ty == 0 as u32 { return false; }
+        if !self.types_match(expected_ty, init_ty) && !self.implicit_conv_ok(expected_ty, init_ty) {
+            self.report_conv_or_type_mismatch(expected_ty, init_ty, self.get_expr_span(value));
+            return false;
+        }
+        return true;
+    }
+
+    // `let x = [..]` (or a tuple, struct literal or enum value): the aggregate was built in a
+    // fresh temporary INIT by the statement just emitted. That statement defines LOCAL_ID
+    // instead, so the value is built in the new local's own storage and not copied there.
+    fn fuse_constructor_into(self: &mut ZirLowerer, local_id: u32, init: &Place) -> bool {
+        if init.projections.len != 0 as usize || init.base == 0 as u32 { return false; }
+        let t = init.base;
+        if self.locals[t as usize - 1 as usize].kind != LOCAL_KIND_TMP
+            || self.locals[t as usize - 1 as usize].ty
+                != self.locals[local_id as usize - 1 as usize].ty {
+            return false;
+        }
+        let n = self.blocks[self.current_block_idx].stmts.len();
+        if n == 0 as usize { return false; }
+        let last = self.blocks[self.current_block_idx].stmts.as_slice()[n - 1 as usize];
+        let (rv, sp) = match last {
+            ZirStmt.Let(id, rv, sp) => {
+                if id != t { return false; }
+                match rv {
+                    ZirRvalue.Array(_, _)
+                        | ZirRvalue.ArrayRepeat(_, _, _)
+                        | ZirRvalue.Tuple(_)
+                        | ZirRvalue.StructLiteral(_, _)
+                        | ZirRvalue.EnumVariant(_, _, _) => (rv, sp),
+                    _ => { return false; }
+                }
+            },
+            _ => { return false; }
+        };
+        let p_block = &mut self.blocks[self.current_block_idx];
+        p_block.stmts.pop();
+        p_block.literal_comments.pop();
+        self.emit(ZirStmt.Let(local_id, rv, sp));
+        return true;
+    }
+
+    fn lower_return_stmt(self: &mut ZirLowerer, r: ExprId, span: Span) {
+        let mut ret_place = if r != 0 as ExprId {
+            let v = self.lower_expr(r, self.current_ret_ty);
+            self.infer_result_from(&v, self.get_expr_span(r));
+            v
+        } else {
+            if self.is_void_main {
+                let i32_ty = self.get_primitive_type(ILPrimitive.I32);
+                let zero_local = self.define_local(0 as *mut Symbol, i32_ty, LOCAL_KIND_TMP);
+                self.emit(ZirStmt.Let(zero_local, ZirRvalue.Const(0 as u64, i32_ty), span));
+                Place { base: zero_local, projections: @slice(0 as *mut Projection, 0 as usize) }
+            } else {
+                Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) }
+            }
+        };
+
+        if ret_place.base != 0 as u32 {
+            self.check_raw_into_ref(&ret_place, self.current_ret_ty, span);
+        }
+        if self.current_ret_ty != 0 as u32 && ret_place.base != 0 as u32 {
+            let actual_ty = self.get_place_type(&ret_place);
+            if actual_ty != 0 as u32 && !self.types_match(self.current_ret_ty, actual_ty) {
+                if !self.implicit_conv_ok(self.current_ret_ty, actual_ty) {
+                    let ret_span = if r != 0 as ExprId { self.get_expr_span(r) } else { span };
+                    // A narrowing `return` is a conversion problem, not an
+                    // unknown-type one: `report_return_type_mismatch` prints
+                    // "(unknown)" for a primitive, which names nothing.
+                    if self.is_primitive_type(self.current_ret_ty)
+                        && self.is_primitive_type(actual_ty) {
+                        self.report_implicit_conv_error(self.current_ret_ty, actual_ty, ret_span);
+                    } else {
+                        self.report_return_type_mismatch(self.current_ret_ty, actual_ty, ret_span);
+                    }
+                } else {
+                    ret_place = self.emit_cast(ret_place, self.current_ret_ty, span);
+                }
+            }
+        }
+
+        ret_place = self.materialize_return(ret_place, span);
+        self.emit_scope_cleanup(0 as usize, span, ret_place.base, true);
+        self.terminate(ZirTerminator.Ret(ret_place));
+    }
+
+    fn lower_while_stmt(self: &mut ZirLowerer, w: WhileStmt) {
+        let cond_block = self.new_block("while_cond");
+        let body_block = self.new_block("while_body");
+        let exit_block = self.new_block("while_exit");
+
+        self.terminate(ZirTerminator.Jmp(cond_block));
+        self.switch_to_block(cond_block);
+
+        let is_always_true = self.is_literal_true(w.cond);
+        if is_always_true {
+            self.terminate(ZirTerminator.Jmp(body_block));
+        } else {
+            self.lower_branch_on(w.cond, body_block, exit_block);
+        }
+
+        self.loop_stack.push(ZirLoopEntry {
+            cond_block: cond_block,
+            exit_block: exit_block,
+            scope_depth: self.scope_locals.len(),
+            has_break: false,
+        });
+
+        self.switch_to_block(body_block);
+        self.lower_expr(w.body, 0 as u32);
+
+        if !self.blocks[self.current_block_idx].is_terminated {
+            self.terminate(ZirTerminator.Jmp(cond_block));
+        }
+
+        let has_break = self.loop_stack[self.loop_stack.len() - 1 as usize].has_break;
+        let _pop = self.loop_stack.pop();
+        self.switch_to_block(exit_block);
+        if is_always_true && !has_break {
+            self.terminate(ZirTerminator.Unreachable);
+        }
+    }
+
+    fn lower_for_stmt(
+        self: &mut ZirLowerer,
+        f: ForStmt,
+        stmt_id: StmtId,
+        span: Span,
+        saved_literal_comment: u32
+    ) {
+        if f.end == 0 as ExprId {
+            self.lower_iterator_for(&f, span);
+            self.current_literal_comment = saved_literal_comment;
+            return;
+        }
+        let start_place = self.lower_expr(f.start, 0 as u32);
+        let end_place = self.lower_expr(f.end, 0 as u32);
+
+        let sym = self.resolver.define(f.var, SymbolKind.Local(stmt_id), false);
+        let ty = self.get_place_type(&start_place);
+        let local_id = self.define_local(sym, ty, LOCAL_KIND_LETMUT);
+
+        self.emit(ZirStmt.Let(local_id, ZirRvalue.Use(start_place), span));
+        let var_place = Place {
+            base: local_id,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+
+        let cond_block = self.new_block("for_cond");
+        let body_block = self.new_block("for_body");
+        let incr_block = self.new_block("for_incr");
+        let exit_block = self.new_block("for_exit");
+
+        self.terminate(ZirTerminator.Jmp(cond_block));
+        self.switch_to_block(cond_block);
+
+        let cmp_tmp = self.define_local(
+            0 as *mut Symbol,
+            self.get_primitive_type(ILPrimitive.Bool),
+            LOCAL_KIND_TMP
+        );
+        self.emit(ZirStmt.Let(cmp_tmp, ZirRvalue.BinaryOp(BINARY_LT, var_place, end_place), span));
+        let cond_place = Place {
+            base: cmp_tmp,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+
+        self.terminate(ZirTerminator.Branch(cond_place, body_block, exit_block));
+
+        self.loop_stack.push(ZirLoopEntry {
+            cond_block: incr_block,
+            exit_block: exit_block,
+            scope_depth: self.scope_locals.len(),
+            has_break: false,
+        });
+
+        self.switch_to_block(body_block);
+        self.lower_expr(f.body, 0 as u32);
+
+        if !self.blocks[self.current_block_idx].is_terminated {
+            self.terminate(ZirTerminator.Jmp(incr_block));
+        }
+
+        let _pop = self.loop_stack.pop();
+        self.switch_to_block(incr_block);
+
+        let one_tmp = self.define_local(0 as *mut Symbol, ty, LOCAL_KIND_TMP);
+        // Assume 1 is an appropriate literal (we extract as u64)
+        let one_lit_val = 1 as u64;
+        self.emit(ZirStmt.Let(one_tmp, ZirRvalue.Const(one_lit_val, ty), span));
+        let one_place = Place {
+            base: one_tmp,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+
+        let add_tmp = self.define_local(0 as *mut Symbol, ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(add_tmp, ZirRvalue.BinaryOp(BINARY_ADD, var_place, one_place), span));
+        let add_place = Place {
+            base: add_tmp,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+
+        self.emit(ZirStmt.Assign(var_place, ZirRvalue.Use(add_place), span));
+        self.terminate(ZirTerminator.Jmp(cond_block));
+
+        self.switch_to_block(exit_block);
+    }
+
+    // `break` (IS_BREAK) or `continue`: leave the innermost loop's scopes and jump to its exit
+    // or its condition.
+    pub fn lower_loop_jump(self: &mut ZirLowerer, is_break: bool, span: Span) {
+        if self.loop_stack.len() == 0 as usize {
+            self.report_error(
+                if is_break { "`break` outside a loop" } else { "`continue` outside a loop" },
+                span
+            );
+            return;
+        }
+        if is_break {
+            self.loop_stack[self.loop_stack.len() - 1 as usize].has_break = true;
+        }
+        let entry = self.loop_stack[self.loop_stack.len() - 1 as usize];
+        self.emit_scope_cleanup(entry.scope_depth, span, 0 as u32, false);
+        self.terminate(
+            ZirTerminator.Jmp(if is_break { entry.exit_block } else { entry.cond_block })
+        );
+    }
+
+    // `let PAT = INIT;`: PAT must match every value (else it belongs in an `if let`); its
+    // bindings land in the enclosing scope, as a plain `let`'s does.
+    fn lower_let_pattern(
+        self: &mut ZirLowerer,
+        pat: PatternId,
+        init_place: Place,
+        ty: u32,
+        span: Span
+    ) {
+        if init_place.base == 0 as u32 || ty == 0 as u32 { return; }
+        let missing = self.pattern_missing_case(pat, ty);
+        if missing.len > 0 as usize {
+            self.report_prefix(span);
+            eprint("this pattern does not match every value (`");
+            eprint(missing);
+            eprint("` is left out); use `if let` or `match`\n");
+            self.declare_pattern_bindings(pat);
+            return;
+        }
+        let pass_block = self.new_block("let_bound");
+        let fail_block = self.new_block("let_unreachable");
+        let saved = self.current_block_idx;
+        self.switch_to_block(fail_block);
+        self.terminate(ZirTerminator.Unreachable);
+        self.switch_to_block(saved as u32);
+        self.pattern_binds_fresh = true;
+        self.lower_pattern(init_place, ty, pat, pass_block, fail_block);
+        self.pattern_binds_fresh = false;
+        self.switch_to_block(pass_block);
+    }
+
+    // `for PAT in ITERABLE`: bind the iterable once, then run the index loop over a slice or
+    // the `next()` loop over anything else (see `ForStmt`). The iterable lives in a scope of
+    // its own, dropped when the loop ends.
+    fn lower_iterator_for(self: &mut ZirLowerer, f: &ForStmt, span: Span) {
+        self.push_scope();
+        self.lower_stmt(f.bind);
+        let mut ty = 0 as u32;
+        let opt_sym = self.resolver.lookup_current_scope_ptr(f.var);
+        match opt_sym {
+            Some(s) => {
+                let local_id = self.get_local_by_symbol((s as usize) as *mut Symbol);
+                if local_id != 0 as u32 { ty = self.locals[local_id as usize - 1 as usize].ty; }
+            },
+            None => {},
+        }
+        if ty != 0 as u32 && !self.blocks[self.current_block_idx].is_terminated {
+            let tag = self.get_type_decl(ty).def.get_tag();
+            if tag == ILTYPE_SLICE || tag == ILTYPE_ARRAY {
+                self.lower_stmt(f.slice_loop);
+            } else if self.find_method_in_impls(ty, self.intern_table.intern("next")).is_some() {
+                self.lower_stmt(f.iter_loop);
+            } else {
+                self.report_prefix(self.get_expr_span(f.start));
+                eprint(
+                    "`for` runs over a slice, an array or an iterator (a value with a `next()` method), not `"
+                );
+                eprint(self.mono.type_display(ty));
+                eprint("`\n");
+            }
+        }
+        self.pop_scope(span);
+    }
+
+    // `if` and `match` expressions check their own result type.
+    fn is_branching_expr(self: &mut ZirLowerer, expr: ExprId) -> bool {
+        let p_expr = self.get_expr(expr);
+        if p_expr as usize == 0 as usize { return false; }
+        return match *p_expr {
+            Expr.If(_) | Expr.Match(_) => true,
+            _ => false,
+        };
+    }
+}

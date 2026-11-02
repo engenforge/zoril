@@ -1,0 +1,257 @@
+// Test for Fd and descriptor unification in stdlib/io.zrl and stdlib/proc.zrl
+// [PASS] stdlib Fd streams, equality, File.from_fd, and Command redirection
+
+import "core.zrl";
+import "cmp.zrl";
+import "mem.zrl";
+import "io.zrl";
+import "file.zrl";
+import "os/linux.zrl" as os_linux;
+import "proc.zrl";
+use mem::Arena;
+use io::{Fd, File, read, stderr, stdin, stdout, write};
+use os_linux::open;
+use proc::Command;
+
+fn test_streams_and_equality() -> bool {
+    let in_fd = stdin();
+    let out_fd = stdout();
+    let err_fd = stderr();
+
+    if in_fd.unix_raw() != 0 { return false; }
+    if out_fd.unix_raw() != 1 { return false; }
+    if err_fd.unix_raw() != 2 { return false; }
+
+    if !in_fd.eq(&in_fd) { return false; }
+    if !out_fd.eq(&out_fd) { return false; }
+    if !err_fd.eq(&err_fd) { return false; }
+
+    if in_fd.eq(&out_fd) { return false; }
+    if out_fd.eq(&err_fd) { return false; }
+    if in_fd.eq(&err_fd) { return false; }
+
+    return true;
+}
+
+fn test_option_eq() -> bool {
+    let some_1: Option<Fd> = Option.Some(stdout());
+    let some_2: Option<Fd> = Option.Some(stdout());
+    let some_err: Option<Fd> = Option.Some(stderr());
+    let none: Option<Fd> = Option.None;
+
+    if !some_1.eq(&some_2) { return false; }
+    if some_1.eq(&some_err) { return false; }
+    if some_1.eq(&none) { return false; }
+    if some_err.eq(&none) { return false; }
+    return true;
+}
+
+fn test_file_from_fd() -> bool {
+    let tmp_path = "build/test_fd_from_fd.tmp";
+    // 577 is O_WRONLY|O_CREAT|O_TRUNC, 420 is 0644
+    let raw_fd = match open(tmp_path, 577, 420) {
+        Ok(f) => f,
+        Err(_) => { return false; },
+    };
+    if raw_fd.unix_raw() < 0 { return false; }
+
+    // SAFETY: raw_fd is an open, exclusively-owned descriptor created by open above.
+    let wrapped = unsafe { File.from_fd(raw_fd) };
+    if !wrapped.fd().eq(&raw_fd) { return false; }
+    if wrapped.fd().unix_raw() != raw_fd.unix_raw() { return false; }
+
+    // wrapped drops here and closes raw_fd cleanly without double-close
+    unsafe { @syscall(87, tmp_path.ptr as u64) };
+    return true;
+}
+
+fn test_command_redirect_stdout() -> bool {
+    let arena = match Arena.new(65536) {
+        Ok(a) => a,
+        Err(_) => { return false; },
+    };
+
+    let tmp_path = "build/test_fd_redirect.tmp";
+    let file = match File.create(tmp_path) {
+        Ok(f) => f,
+        Err(_) => { return false; },
+    };
+
+    let mut cmd = Command.new("/bin/echo", &arena);
+    cmd.arg("hello-fd-redirect");
+    cmd.set_stdout(file.fd());
+
+    let status = match cmd.status() {
+        Ok(st) => st,
+        Err(_) => { return false; },
+    };
+    if !status.is_success() { return false; }
+
+    // Read back through File
+    let mut read_file = match os_linux::open_file(tmp_path, 0, 0) {
+        Ok(f) => f,
+        Err(_) => { return false; },
+    };
+    let mut buf: [u8; 32] = [0; 32];
+    let n = match read_file.read(&mut buf) {
+        Ok(count) => count,
+        Err(_) => { return false; },
+    };
+    if n < 17 { return false; } // "hello-fd-redirect\n" is 18 bytes
+
+    let expected = "hello-fd-redirect";
+    let mut i = 0 as usize;
+    while i < expected.len {
+        if buf[i] != expected[i] { return false; }
+        i = i + 1;
+    }
+
+    // Clean up
+    unsafe { @syscall(87, tmp_path.ptr as u64) };
+    return true;
+}
+
+fn test_command_shared_redirection() -> bool {
+    let arena = match Arena.new(65536) {
+        Ok(a) => a,
+        Err(_) => { return false; },
+    };
+
+    let tmp_path = "build/test_fd_shared_redirect.tmp";
+    let file = match File.create(tmp_path) {
+        Ok(f) => f,
+        Err(_) => { return false; },
+    };
+
+    let mut cmd = Command.new("/bin/sh", &arena);
+    cmd.arg("-c");
+    cmd.arg("echo stdout-msg; echo stderr-msg >&2");
+    cmd.set_stdout(file.fd());
+    cmd.set_stderr(file.fd());
+
+    let status = match cmd.status() {
+        Ok(st) => st,
+        Err(_) => { return false; },
+    };
+    if !status.is_success() { return false; }
+
+    // Read back through File
+    let mut read_file = match os_linux::open_file(tmp_path, 0, 0) {
+        Ok(f) => f,
+        Err(_) => { return false; },
+    };
+    let mut buf: [u8; 64] = [0; 64];
+    let n = match read_file.read(&mut buf) {
+        Ok(count) => count,
+        Err(_) => { return false; },
+    };
+    if n < 20 { return false; }
+
+    let s = unsafe { @slice(&buf[0 as usize] as *u8, n) };
+    let mut has_out = false;
+    let mut has_err = false;
+    let out_target = "stdout-msg";
+    let err_target = "stderr-msg";
+    let mut i = 0 as usize;
+    while i + out_target.len <= n {
+        let mut match_out = true;
+        let mut j = 0 as usize;
+        while j < out_target.len {
+            if s[i + j] != out_target[j] { match_out = false; }
+            j = j + 1;
+        }
+        if match_out { has_out = true; }
+        i = i + 1;
+    }
+    i = 0 as usize;
+    while i + err_target.len <= n {
+        let mut match_err = true;
+        let mut j = 0 as usize;
+        while j < err_target.len {
+            if s[i + j] != err_target[j] { match_err = false; }
+            j = j + 1;
+        }
+        if match_err { has_err = true; }
+        i = i + 1;
+    }
+
+    unsafe { @syscall(87, tmp_path.ptr as u64) };
+    return has_out && has_err;
+}
+
+fn test_command_redirect_stderr_to_stdout() -> bool {
+    let arena = match Arena.new(65536) {
+        Ok(a) => a,
+        Err(_) => { return false; },
+    };
+
+    let tmp_path = "build/test_fd_err_to_out.tmp";
+    let file = match File.create(tmp_path) {
+        Ok(f) => f,
+        Err(_) => { return false; },
+    };
+
+    let mut cmd = Command.new("/bin/sh", &arena);
+    cmd.arg("-c");
+    cmd.arg("echo err-to-out-msg >&2");
+    cmd.set_stdout(file.fd());
+    cmd.set_stderr(stdout());
+
+    let status = match cmd.status() {
+        Ok(st) => st,
+        Err(_) => { return false; },
+    };
+    if !status.is_success() { return false; }
+
+    // Read back through File
+    let mut read_file = match os_linux::open_file(tmp_path, 0, 0) {
+        Ok(f) => f,
+        Err(_) => { return false; },
+    };
+    let mut buf: [u8; 64] = [0; 64];
+    let n = match read_file.read(&mut buf) {
+        Ok(count) => count,
+        Err(_) => { return false; },
+    };
+    if n < 15 { return false; }
+
+    let s = unsafe { @slice(&buf[0 as usize] as *u8, n) };
+    let mut has_msg = false;
+    let target = "err-to-out-msg";
+    let mut i = 0 as usize;
+    while i + target.len <= n {
+        let mut matches = true;
+        let mut j = 0 as usize;
+        while j < target.len {
+            if s[i + j] != target[j] { matches = false; }
+            j = j + 1;
+        }
+        if matches { has_msg = true; }
+        i = i + 1;
+    }
+
+    unsafe { @syscall(87, tmp_path.ptr as u64) };
+    return has_msg;
+}
+
+fn main() -> i32 {
+    if !test_streams_and_equality() {
+        return 1;
+    }
+    if !test_option_eq() {
+        return 2;
+    }
+    if !test_file_from_fd() {
+        return 3;
+    }
+    if !test_command_redirect_stdout() {
+        return 4;
+    }
+    if !test_command_shared_redirection() {
+        return 5;
+    }
+    if !test_command_redirect_stderr_to_stdout() {
+        return 6;
+    }
+    return 0;
+}

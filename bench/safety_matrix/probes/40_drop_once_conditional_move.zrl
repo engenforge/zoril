@@ -1,0 +1,36 @@
+// name: Drop exactly once after a conditional move
+// expected: accept
+// A binding moved on one path must still be dropped on the others, and a value moved into a callee
+// is dropped by the callee. Exits 0 only when every path drops exactly once; a double drop (the
+// pre-Phase-9 behaviour) or a skipped drop (the first Phase 9 fix) exits non-zero.
+static mut DROPS: i32 = 0;
+
+struct D { x: i64 }
+
+trait Drop {
+    fn drop(self: &mut D);
+}
+
+impl Drop for D {
+    fn drop(self: &mut D) {
+        DROPS = DROPS + 1;
+    }
+}
+
+fn take(d: D) -> i64 {
+    return d.x;
+}
+
+fn maybe_move(c: bool) {
+    let d = D { x: 1 };
+    if c {
+        let n = take(d);
+    }
+}
+
+fn main() -> i32 {
+    maybe_move(true);
+    maybe_move(false);
+    if DROPS != 2 { return 1; }
+    return 0;
+}

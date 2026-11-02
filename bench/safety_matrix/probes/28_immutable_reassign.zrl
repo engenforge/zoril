@@ -1,0 +1,3 @@
+// name: Reassignment of non-mut let (spec §392 says immutable)
+// expected: compile_reject
+fn main() -> i32 { let x: i32 = 1; x = 2; return x - 2; }

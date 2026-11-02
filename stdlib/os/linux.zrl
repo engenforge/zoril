@@ -1,0 +1,151 @@
+// Linux-only operating-system interface: open(2) flags, opening by raw flags, and raw process syscalls
+
+import "core0.zrl";
+import "core.zrl";
+import "io.zrl";
+use io::{Error, Fd, File};
+
+// Everything in this module is Linux. Portable code opens files through `file::OpenOptions`, which
+// uses this module on Linux and nothing else; code that names these constants says plainly that it
+// is Linux code.
+
+// Open flag: open for reading only.
+pub const O_RDONLY: u64 = 0;
+// Open flag: open for writing only.
+pub const O_WRONLY: u64 = 1;
+// Open flag: open for reading and writing.
+pub const O_RDWR: u64 = 2;
+// Open flag: create file if it does not exist.
+pub const O_CREAT: u64 = 64;
+// Open flag: error if O_CREAT is set and file exists.
+pub const O_EXCL: u64 = 128;
+// Open flag: do not assign controlling terminal.
+pub const O_NOCTTY: u64 = 256;
+// Open flag: truncate file length to 0 on open.
+pub const O_TRUNC: u64 = 512;
+// Open flag: append data to end of file on each write.
+pub const O_APPEND: u64 = 1024;
+// Open flag: non-blocking I/O mode.
+pub const O_NONBLOCK: u64 = 2048;
+// Open flag: fail if path is not a directory.
+pub const O_DIRECTORY: u64 = 65536;
+// Open flag: set close-on-exec flag on the descriptor.
+pub const O_CLOEXEC: u64 = 524288;
+
+fn raw_open(path: [u8], flags: u64, mode: u64) -> i64 {
+    let mut len = path.len;
+    if len > 0 as usize && path[len - 1 as usize] == 0 as u8 {
+        len = len - 1 as usize;
+    }
+    if len >= 4096 as usize {
+        return -36 as i64; // -ENAMETOOLONG
+    }
+    let mut buf: [u8; 4096] = [0 as u8; 4096];
+    let mut i = 0 as usize;
+    while i < len {
+        if path[i] == 0 as u8 {
+            return -36 as i64; // interior NUL rejected
+        }
+        buf[i] = path[i];
+        i = i + 1 as usize;
+    }
+    buf[len] = 0 as u8;
+    // SAFETY: the kernel only reads the NUL-terminated path bytes from buf. open(2).
+    return unsafe { @syscall(2, (&buf[0]) as *u8 as u64, flags, mode) } as i64;
+}
+
+// Opens a file by path, raw Linux `O_*` flags, and permission bits, returning its descriptor.
+pub fn open(path: [u8], flags: u64, mode: u64) -> Result<Fd, Error> {
+    let ret = raw_open(path, flags, mode);
+    if ret < 0 as i64 && ret > -4096 as i64 {
+        return Result.Err(Error.from_linux_errno((0 - ret) as i32));
+    }
+    // SAFETY: open(2) returned a valid open descriptor.
+    return Result.Ok(unsafe { Fd.from_unix_raw(ret as i32) });
+}
+
+// Opens a file by path, raw Linux `O_*` flags, and permission bits, returning a File that closes
+// the descriptor on drop.
+pub fn open_file(path: [u8], flags: u64, mode: u64) -> Result<File, Error> {
+    return match open(path, flags, mode) {
+        Result.Ok(fd) => {
+            // SAFETY: `fd` was just opened and nothing else owns it.
+            Result.Ok(unsafe { File.from_fd(fd) })
+        },
+        Result.Err(e) => Result.Err(e),
+    };
+}
+
+// Raw kernel fork system call wrapper.
+pub fn sys_fork() -> Result<i64, Error> {
+    // SAFETY: fork(57) takes no arguments.
+    let res = unsafe { @syscall(57) } as i64;
+    if res < 0 {
+        return Result.Err(Error.from_linux_errno((0 as i64 - res) as i32));
+    }
+    return Result.Ok(res);
+}
+
+// CALLER OBLIGATION: pathname, argv, and envp must be valid null-terminated C string pointers.
+pub unsafe fn sys_execve(pathname: *u8, argv: **u8, envp: **u8) -> Result<(), Error> {
+    let res = @syscall(59, pathname as u64, argv as u64, envp as u64) as i64;
+    if res < 0 {
+        return Result.Err(Error.from_linux_errno((0 as i64 - res) as i32));
+    }
+    return Result.Ok(());
+}
+
+// CALLER OBLIGATION: wstatus must be null or point to valid writable storage for an i32 status code.
+pub unsafe fn sys_wait4(pid: i64, wstatus: *mut i32, options: i32) -> Result<i64, Error> {
+    let res = @syscall(61, pid as u64, wstatus as u64, options as u64, 0 as u64) as i64;
+    if res < 0 {
+        return Result.Err(Error.from_linux_errno((0 as i64 - res) as i32));
+    }
+    return Result.Ok(res);
+}
+
+// Raw kernel kill system call wrapper.
+pub fn sys_kill(pid: i64, sig: i32) -> Result<(), Error> {
+    // SAFETY: kill(62) takes no pointer; the pid and signal are the caller's own values.
+    let res = unsafe { @syscall(62, pid as u64, sig as u64) } as i64;
+    if res < 0 {
+        return Result.Err(Error.from_linux_errno((0 as i64 - res) as i32));
+    }
+    return Result.Ok(());
+}
+
+// CALLER OBLIGATION: pipefd must point to valid writable storage for two i32 descriptors.
+pub unsafe fn sys_pipe2(pipefd: *mut [i32; 2], flags: i32) -> Result<(), Error> {
+    let res = @syscall(293, pipefd as u64, flags as u64) as i64;
+    if res < 0 {
+        return Result.Err(Error.from_linux_errno((0 as i64 - res) as i32));
+    }
+    return Result.Ok(());
+}
+
+// Raw kernel dup2 system call wrapper.
+pub fn sys_dup2(oldfd: Fd, newfd: Fd) -> Result<Fd, Error> {
+    // SAFETY: dup2(33) takes two descriptor numbers and no pointer.
+    let res = unsafe { @syscall(33, oldfd.unix_raw() as u64, newfd.unix_raw() as u64) } as i64;
+    if res < 0 {
+        return Result.Err(Error.from_linux_errno((0 as i64 - res) as i32));
+    }
+    // SAFETY: dup2 returned a valid open descriptor on success.
+    return Result.Ok(unsafe { Fd.from_unix_raw(res as i32) });
+}
+
+// Raw kernel fstat system call wrapper.
+pub fn sys_fstat(fd: Fd, out_size: &mut i64, out_mtime: &mut i64) -> Result<(), Error> {
+    // SAFETY: the 18-word `struct stat` buffer fstat fills; nothing reads it before the call.
+    let statbuf = unsafe { @alloca<[u64; 18]>(1) };
+    // SAFETY: fstat(5) writes the stat structure through the slot just allocated.
+    let ret = unsafe { @syscall(5, fd.unix_raw() as u64, statbuf as u64) } as i64;
+    if ret < 0 {
+        return Result.Err(Error.from_linux_errno((0 as i64 - ret) as i32));
+    }
+    *out_size = statbuf[6 as usize] as i64;
+    let sec = statbuf[11 as usize] as i64;
+    let nsec = statbuf[12 as usize] as i64;
+    *out_mtime = sec * 1000000000 + nsec;
+    return Result.Ok(());
+}

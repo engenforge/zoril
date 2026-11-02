@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_assoc_type_undefined.zrl:7:35: error: associated type `Out` of `Plain` is defined by no impl
+// `T::Out` for a type with no impl defining Out is reported where it is written, naming the type.
+trait Make { type Out; fn make(self: &Self) -> Self::Out; }
+struct Plain { v: i32 }
+impl Plain { fn make(self: &Plain) -> i32 { return self.v; } }
+fn made<T>(t: &T) -> i32 { let x: T::Out = t.make(); return 0; }
+fn main() -> i32 { return made(&Plain { v: 1 }); }

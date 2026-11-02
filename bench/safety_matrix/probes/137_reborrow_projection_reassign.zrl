@@ -1,0 +1,12 @@
+// name: Base mutated while a reborrow of a projected reference is live
+// expected: compile_reject
+// A reborrow through a place with projections (`&r.b`) inherits the base reference's borrows,
+// so mutating `s` while `x` is live is rejected.
+struct S { b: i32 }
+fn main() -> i32 {
+    let mut s = S { b: 1 };
+    let r = &s;
+    let x = &r.b;
+    s = S { b: 2 };
+    return *x;
+}

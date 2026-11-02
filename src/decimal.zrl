@@ -1,0 +1,157 @@
+// Decimal literals to the nearest f64 (round half to even), as C and Rust read them.
+
+import "core.zrl";
+import "vec.zrl";
+import "mem_raw.zrl";
+use mem_raw::ArenaHeader;
+use vec::Vec;
+
+// DIGITS (decimal digits, no point or underscores) * 10^SCALE as the nearest f64.
+pub fn decimal_to_f64(digits: [u8], scale: i32, arena: *mut ArenaHeader) -> f64 {
+    let mut first = 0 as usize;
+    while first < digits.len && digits[first] == '0' as u8 { first = first + 1 as usize; }
+    if first == digits.len { return 0.0; }
+    let significant = subslice(digits, first, digits.len - first);
+    // Clinger's fast path: up to 15 digits is an exact double below 2^53, and so is every
+    // power of ten up to 10^22, so one multiplication or division rounds once.
+    if significant.len <= 15 as usize && scale >= -22 && scale <= 22 {
+        let mut mantissa = 0 as u64;
+        for d in significant { mantissa = mantissa * 10 + (*d - '0' as u8) as u64; }
+        let m = mantissa as f64;
+        return if scale < 0 { m / pow10(0 - scale) } else { m * pow10(scale) };
+    }
+    return slow_decimal_to_f64(significant, scale, arena);
+}
+
+// 10^N for 0 <= N <= 22, exactly.
+fn pow10(n: i32) -> f64 {
+    let mut p = 1.0;
+    for _i in 0..n { p = p * 10.0; }
+    return p;
+}
+
+// The exact path: VALUE = NUM / DEN in big integers (NUM = DIGITS * 10^SCALE when SCALE >= 0,
+// else DEN = 10^-SCALE). Scale by 2^K so the quotient Q has 54 bits: 53 for the mantissa and a
+// guard bit, with the remainder as the sticky bit.
+fn slow_decimal_to_f64(digits: [u8], scale: i32, arena: *mut ArenaHeader) -> f64 {
+    let mut num = unsafe { Vec::<u32>.new_in_raw(arena) };
+    for d in digits { big_mul_add(&mut num, 10 as u32, (*d - '0' as u8) as u32); }
+    let mut den = unsafe { Vec::<u32>.new_in_raw(arena) };
+    den.push(1 as u32);
+    for _i in 0..(if scale < 0 { 0 - scale } else { scale }) {
+        if scale < 0 {
+            big_mul_add(&mut den, 10 as u32, 0 as u32);
+        } else {
+            big_mul_add(&mut num, 10 as u32, 0 as u32);
+        }
+    }
+    // NUM * 2^K / DEN lands in [2^53, 2^54) for K near 54 - (bits(NUM) - bits(DEN)).
+    let mut k = 54 - (big_bits(&num) as i32 - big_bits(&den) as i32);
+    let mut q = 0 as u64;
+    let mut sticky = false;
+    loop {
+        let mut n = big_shl(&num, if k > 0 { k } else { 0 }, arena);
+        let mut dd = big_shl(&den, if k < 0 { 0 - k } else { 0 }, arena);
+        q = big_div_small_quotient(&mut n, &dd, arena);
+        if q < (1 as u64 << 53) { k = k + 1; continue; }
+        if q >= (1 as u64 << 54) { k = k - 1; continue; }
+        sticky = n.len() != 0 as usize;
+        break;
+    }
+    let mut mantissa = q >> 1;
+    if (q & 1 as u64) != 0 as u64 && (sticky || (mantissa & 1 as u64) != 0 as u64) {
+        mantissa = mantissa + 1 as u64;
+        if mantissa == (1 as u64 << 53) {
+            mantissa = mantissa >> 1;
+            k = k - 1;
+        }
+    }
+    // VALUE = MANTISSA * 2^(1 - K); scaling by powers of two is exact.
+    let mut value = mantissa as f64;
+    let mut e = 1 - k;
+    while e > 0 { value = value * 2.0; e = e - 1; }
+    while e < 0 { value = value / 2.0; e = e + 1; }
+    return value;
+}
+
+// ── Big unsigned integers: little-endian u32 limbs, no high zero limbs (zero is empty) ─
+
+fn big_mul_add(a: &mut Vec<u32>, mul: u32, add: u32) {
+    let mut carry = add as u64;
+    for i in 0..a.len() {
+        let t = (*a)[i] as u64 * mul as u64 + carry;
+        a.set(i, (t & 0xffffffff as u64) as u32);
+        carry = t >> 32;
+    }
+    if carry != 0 as u64 { a.push(carry as u32); }
+}
+
+fn big_bits(a: &Vec<u32>) -> u32 {
+    if a.len() == 0 as usize { return 0 as u32; }
+    let mut top = (*a)[a.len() - 1 as usize];
+    let mut bits = (a.len() as u32 - 1 as u32) * 32 as u32;
+    while top != 0 as u32 { bits = bits + 1 as u32; top = top >> 1; }
+    return bits;
+}
+
+fn big_shl(a: &Vec<u32>, bits: i32, arena: *mut ArenaHeader) -> Vec<u32> {
+    let mut out = unsafe { Vec::<u32>.new_in_raw(arena) };
+    if a.len() == 0 as usize { return out; }
+    let limbs = (bits / 32) as usize;
+    let shift = (bits % 32) as u64;
+    for _i in 0..limbs { out.push(0 as u32); }
+    let mut carry = 0 as u64;
+    for i in 0..a.len() {
+        let t = (a[i] as u64 << shift) | carry;
+        out.push((t & 0xffffffff as u64) as u32);
+        carry = t >> 32;
+    }
+    if carry != 0 as u64 { out.push(carry as u32); }
+    return out;
+}
+
+// -1, 0 or 1 as A is less than, equal to or greater than B.
+fn big_cmp(a: &Vec<u32>, b: &Vec<u32>) -> i32 {
+    if a.len() != b.len() { return if a.len() < b.len() { -1 } else { 1 }; }
+    let mut i = a.len();
+    while i > 0 as usize {
+        i = i - 1 as usize;
+        if (*a)[i] != (*b)[i] { return if (*a)[i] < (*b)[i] { -1 } else { 1 }; }
+    }
+    return 0;
+}
+
+// A -= B, for A >= B.
+fn big_sub(a: &mut Vec<u32>, b: &Vec<u32>) {
+    let mut borrow = 0 as u64;
+    for i in 0..a.len() {
+        let bi = if i < b.len() { (*b)[i] as u64 } else { 0 as u64 };
+        let ai = (*a)[i] as u64;
+        let sub = bi + borrow;
+        if ai >= sub {
+            a.set(i, (ai - sub) as u32);
+            borrow = 0 as u64;
+        } else {
+            a.set(i, (ai + (1 as u64 << 32) - sub) as u32);
+            borrow = 1 as u64;
+        }
+    }
+    while a.len() > 0 as usize && (*a)[a.len() - 1 as usize] == 0 as u32 { a.pop(); }
+}
+
+// N / D when the quotient is below 2^63, leaving the remainder in N: binary long division.
+fn big_div_small_quotient(n: &mut Vec<u32>, d: &Vec<u32>, arena: *mut ArenaHeader) -> u64 {
+    if big_cmp(n, d) < 0 { return 0 as u64; }
+    let mut top = big_bits(n) as i32 - big_bits(d) as i32;
+    if top > 62 { return 0xffffffffffffffff as u64; }
+    let mut q = 0 as u64;
+    while top >= 0 {
+        let shifted = big_shl(d, top, arena);
+        if big_cmp(n, &shifted) >= 0 {
+            big_sub(n, &shifted);
+            q = q | (1 as u64 << top as u64);
+        }
+        top = top - 1;
+    }
+    return q;
+}

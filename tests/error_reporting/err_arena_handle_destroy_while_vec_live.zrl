@@ -1,0 +1,19 @@
+// expected compile fail
+// EXPECT: error: cannot move borrowed value 'a'
+// A Vec built with `Vec::new_in(&arena)` holds the arena: destroying the arena while the
+// Vec is live is a compile error (Stage 4 tie).
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn consume(a: Arena) {}
+
+fn main() -> i32 {
+    let a = Arena.new(65536).unwrap();
+    let mut v = Vec::<u64>.new_in(&a);
+    v.push(1);
+    consume(a); // @error "cannot move borrowed value 'a'"
+    v.push(2);
+    return 0;
+}

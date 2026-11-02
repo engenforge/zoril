@@ -1,0 +1,9 @@
+// name: Dangling stack ptr — two levels of indirection
+// expected: compile_reject
+// The address of a local pointer variable (itself pointing at a local) is returned.
+fn leak() -> *mut *mut i32 {
+    let mut x: i32 = 42;
+    let mut p: *mut i32 = &mut x;
+    return &mut p;
+}
+fn main() -> i32 { let pp = leak(); if pp as usize == 0 as usize { return 1; } return 0; }

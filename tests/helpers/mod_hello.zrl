@@ -1,0 +1,6 @@
+import "io.zrl";
+use io::print;
+
+pub fn say_hello() {
+    print("Hello from mod!\n");
+}

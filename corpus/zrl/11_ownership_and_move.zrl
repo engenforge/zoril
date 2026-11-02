@@ -1,0 +1,54 @@
+// expected exit code: 62
+// 11: Ownership, move semantics, and Box<T>.
+// Demonstrates: box, move, @drop, linear ownership, heap allocation.
+
+struct Resource {
+    id: i32,
+    data: i32,
+}
+
+fn create_resource(id: i32) -> Box<Resource> {
+    return box Resource { id: id, data: id * 10 };
+}
+
+fn consume_resource(r: Box<Resource>) -> i32 {
+    // r is moved into this function — caller can no longer use it
+    let val = r.data;
+    // This release does not free a Box at scope exit: the allocation leaks.
+    return val;
+}
+
+fn transfer_ownership() -> i32 {
+    let r1 = create_resource(1);
+    let r2 = create_resource(2);
+
+    // Move r1 into consume_resource — r1 is no longer valid after this
+    let val1 = consume_resource(r1);
+
+    // r2 is still valid — we can access it before consuming
+    let id = r2.id;
+    let val2 = consume_resource(r2);
+
+    return val1 + val2 + id;
+}
+
+fn explicit_drop() -> i32 {
+    let r = create_resource(3);
+    let saved = r.data;
+    // Explicitly consume the resource before scope end
+    @drop(r);
+    return saved;
+}
+
+fn naked_expression_drop() -> i32 {
+    // Naked expressions of non-copy types are automatically dropped
+    create_resource(100);
+    return 0;
+}
+
+fn main() -> i32 {
+    let a = transfer_ownership();
+    let b = explicit_drop();
+    let c = naked_expression_drop();
+    return a + b + c;
+}

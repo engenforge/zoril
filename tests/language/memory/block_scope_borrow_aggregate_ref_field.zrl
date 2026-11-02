@@ -1,0 +1,30 @@
+// A struct literal holding a reference to a local, used inside that local's scope, beside a struct
+// literal holding what a *call* derived: the copy keeps the operand borrow's own flag, so the field
+// holding `&x` counts at `x`'s scope end while the arena-backed one stays exempt there (the `Vec`
+// frees nothing, so its buffer outlives it). The pair pins
+// err_block_scope_borrow_aggregate_ref_field from both sides: dropping the flag rejects the second
+// half, forcing it derived accepts the first.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct Holder {
+    r: &i32,
+}
+
+struct Store {
+    v: Vec<u64>,
+}
+
+fn main() -> i32 {
+    let x: i32 = 7;
+    let h = Holder { r: &x };
+    if *h.r != 7 { return 1; }
+    let a: Arena = Arena.new(4096).unwrap();
+    {
+        let mut s = Store { v: Vec::<u64>.new_in(&a) };
+        s.v.push(9 as u64);
+    }
+    return 0;
+}

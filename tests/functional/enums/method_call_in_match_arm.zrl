@@ -1,0 +1,15 @@
+// expected exit code: 0
+struct Counter { val: u32 }
+impl Counter {
+    fn inc(self: &mut Counter) -> u32 { self.val = self.val + 1; return self.val; }
+}
+enum Op { Increment }
+fn apply(c: &mut Counter, op: Op) -> u32 {
+    return match op {
+        Op.Increment => c.inc(),
+    };
+}
+fn main() -> i32 {
+    let mut c = Counter { val: 0 };
+    if apply(&mut c, Op.Increment) == 1 { return 0; } else { return 1; }
+}

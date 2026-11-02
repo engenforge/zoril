@@ -1,0 +1,81 @@
+# Shared tests that are correct Zoril but outside the stage0-C dialect
+# (doc/stage0-C/language_subset.md §3), or that expect a diagnostic this compiler does not
+# produce (§1.6). They are out of scope for stage0-C: its runners neither run nor count them,
+# as for any file outside a suite's directory. The self-hosted compiler's suites run them.
+# One entry per line:
+#   <path relative to the repository root>: <reason>
+#
+# The runners compile these files against the repository's `stdlib/`, not against the frozen
+# `stage1/stdlib` (which only the bootstrap build of `stage1/` uses). A stdlib API that moved
+# is therefore never a reason to list a file here: a gate that stops compiling a file after a
+# stdlib change is reporting a stage0-C gap, to fix or to record in `tests/known_bugs.txt`.
+# One runner, `test_error_locations.sh`, passes no include flags at all, so a test whose file
+# imports a `stdlib/` module cannot get the diagnostic it annotates; those files are listed
+# with the diagnostic they expect.
+#
+# Add an entry only for a dialect limit documented in language_subset.md §3 or a §1.6
+# checker diagnostic. A stage0-C bug is not out of scope: fix it (with a test in
+# tests/fixed_bugs/) or, if it is not a quick fix, list it in tests/known_bugs.txt, where it
+# is reported as a skip until it is fixed.
+corpus/zrl/21_allocators.zrl: Arena handle and Vec::new_in(&Arena) with Drop are outside the stage0-C dialect, §1.6
+corpus/zrl/31_hashmap.zrl: stdlib/hashmap.zrl uses multiple trait bounds (K: Hash + Eq), §3.9
+corpus/zrl/42_traits_and_iterators.zrl: associated types and trait default methods, §3.13
+tests/functional/stdlib/hashmap_basic.zrl: stdlib/hashmap.zrl uses multiple trait bounds (K: Hash + Eq), §3.9
+tests/functional/enums/match_guard.zrl: match guards (`Pat if cond =>`), §3.5
+tests/functional/stdlib/result_map.zrl: generic code with function-typed values, §3.7
+tests/functional/test_vec_get_option.zrl: Option-returning generic methods (Vec::get), §3.7
+tests/functional/stdlib/string_file_args.zrl: stdlib/file.zrl is outside the subset, §3.8
+tests/functional/test_move_fail.zrl: expects a use-after-drop error; stage0-C is not the safety checker, §1.6
+tests/functional/pointers/unsafe_borrow.zrl: expects a borrow-conflict error; stage0-C is not the safety checker, §1.6
+tests/functional/repro_missing_type_check_literal.zrl: expects a type error stage0-C does not report; it is not the checker, §1.6
+
+# tests/error_reporting/ is shared with the self-hosted compiler. These cases expect diagnostics
+# from the shipped checker (ownership, borrows, trait bounds, Copy, privacy, regions, literal
+# validity), which stage0-C deliberately does not produce, §1.6.
+tests/error_reporting/ec_aggregate_move.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/ec_aggregate_move_mut.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/ec_borrow_aliasing.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/ec_bound_not_implemented.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/ec_copy_bound_drop_type.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/ec_impl_copy_for_drop_type.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/err_impl_copy_deep_drop_field.zrl: shipped-checker diagnostic (the `Copy`-impl rule answers "not `Copy`" past its recursion limit, so a `Drop` value eleven levels down is not seen), §1.6
+tests/error_reporting/ec_move_branch.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/ec_move_branch_fail.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/ec_move_loop.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/ec_move_while_borrowed.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/ec_moved_value.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/ec_mut_borrow_aliasing.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/ec_private_field_forge_str.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/ec_region_escape.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/err_box_allocator_not_implemented.zrl: shipped-checker diagnostic (the lowering rejects `box(allocator)`), §1.6
+tests/error_reporting/err_vec_len_private.zrl: shipped-checker diagnostic (the private-field rule), §1.6
+tests/error_reporting/err_block_scope_borrow_recursion_cycle.zrl: shipped-checker diagnostic (a cycle in the storage summary is unknown, so the call hands back each tied argument's own storage), §1.6
+tests/error_reporting/err_block_scope_borrow_recursion_cycle_wrapper.zrl: shipped-checker diagnostic (a callee whose storage masks are unknown makes the walk that reads it unknown too), §1.6
+tests/error_reporting/err_block_scope_borrow_recursion_cycle_memo.zrl: shipped-checker diagnostic (a memoized storage mask that is a lower bound reads as unknown), §1.6
+tests/error_reporting/err_block_scope_borrow_struct_arena.zrl: shipped-checker diagnostic (the scope-end rule follows a value's fields); also arena_create, Vec::new_in(&Arena) and a struct field of type Arena are outside the dialect, §1.6
+tests/error_reporting/err_move_deep_type_after_move.zrl: shipped-checker diagnostic (a value of a type nested past the copy-check limit is a move); also arena_create and a struct field of type Arena are outside the dialect, §1.6
+tests/error_reporting/err_block_scope_borrow_deep_arena.zrl: shipped-checker diagnostic (the scope-end rule answers "it frees storage" past its recursion limit, so a `Drop` field nine levels down is not exempt); also arena_create, Vec::new_in(&Arena) and a struct field of type Arena are outside the dialect, §1.6
+tests/error_reporting/err_block_scope_borrow_param_receiver_method.zrl: shipped-checker diagnostic (the storage walk resolves a method whose receiver is a parameter, so the call's result is the argument's own storage), §1.6
+tests/error_reporting/err_block_scope_borrow_call_through_value.zrl: shipped-checker diagnostic (a call through a function value has no summary, so its result is read as any argument's own storage), §1.6
+tests/error_reporting/err_block_scope_borrow_aggregate_ref_field.zrl: shipped-checker diagnostic (a value built from a borrowed operand keeps that borrow's own classification), §1.6
+tests/error_reporting/err_block_scope_borrow_closure_capture.zrl: shipped-checker diagnostic (a closure that captured a reference keeps it borrowed at the referent's scope end); also stage0-C's dialect rejects a capturing closure reassigned into an existing binding ("capturing closure can only be bound with `let`"), §1.6
+tests/error_reporting/ec_str_literal_invalid_utf8.zrl: shipped-checker diagnostic, §1.6
+tests/error_reporting/ec_zil_use_after_move.zil: shipped-checker diagnostic, §1.6
+tests/error_reporting/err_arena_handle_double_free.zrl: shipped-checker diagnostic (Drop-based non-Copy move check), §1.6
+tests/error_reporting/err_arena_handle_use_after_free.zrl: shipped-checker diagnostic (Drop-based non-Copy move check), §1.6
+tests/error_reporting/err_arena_handle_reset_while_vec_live.zrl: shipped-checker diagnostic (the borrow tie between a Vec and its arena), §1.6
+tests/error_reporting/err_arena_handle_destroy_while_vec_live.zrl: shipped-checker diagnostic (the borrow tie between a Vec and its arena), §1.6
+tests/error_reporting/err_arena_handle_reset_while_string_live.zrl: shipped-checker diagnostic (the borrow tie between a String and its arena), §1.6
+tests/error_reporting/err_arena_handle_destroy_while_string_live.zrl: shipped-checker diagnostic (the borrow tie between a String and its arena), §1.6
+tests/error_reporting/err_arena_handle_reset_while_bytevec_live.zrl: shipped-checker diagnostic (the borrow tie between a ByteVec and its arena), §1.6
+tests/error_reporting/err_arena_handle_destroy_while_bytevec_live.zrl: shipped-checker diagnostic (the borrow tie between a ByteVec and its arena), §1.6
+tests/error_reporting/err_arena_handle_reset_while_hashmap_live.zrl: shipped-checker diagnostic (the borrow tie between a HashMap and its arena), §1.6
+tests/error_reporting/err_arena_handle_destroy_while_hashmap_live.zrl: shipped-checker diagnostic (the borrow tie between a HashMap and its arena), §1.6
+tests/error_reporting/err_arena_handle_reset_while_interntable_live.zrl: shipped-checker diagnostic (the borrow tie between an InternTable and its arena), §1.6
+tests/error_reporting/err_arena_handle_destroy_while_interntable_live.zrl: shipped-checker diagnostic (the borrow tie between an InternTable and its arena), §1.6
+tests/error_reporting/err_arena_handle_reset_while_read_file_slice_live.zrl: shipped-checker diagnostic (the borrow tie between a value an arena-taking function hands out and its arena), §1.6
+tests/error_reporting/err_arena_handle_destroy_while_read_file_slice_live.zrl: shipped-checker diagnostic (the borrow tie between a value an arena-taking function hands out and its arena), §1.6
+tests/error_reporting/err_arena_oom_interprocedural.zrl: shipped-checker diagnostic (the verifier's arena capacity accounting, interprocedurally), §1.6
+tests/error_reporting/err_borrow_named_local_used_after_move.zrl: shipped-checker diagnostic (non-lexical borrows: the borrower's last use ends its borrow, so a use after the move keeps the arena immovable), §1.6
+tests/error_reporting/err_borrow_drop_local_blocks_move.zrl: shipped-checker diagnostic (liveness counts a value's `Drop` as a use, which is what keeps the liveness-based move check safe); also arena_create/arena_destroy, a `Drop` impl and a struct field holding `&Arena` are outside the stage0-C dialect, §1.6
+tests/error_reporting/err_arena_reset_to_while_borrowed.zrl: shipped-checker diagnostic (the borrow tie between a Vec and its arena across reset_to), §1.6

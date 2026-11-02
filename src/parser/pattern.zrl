@@ -1,0 +1,257 @@
+// The parser: patterns.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "intern.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "ast.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "module_path.zrl";
+import "base.zrl";
+use ast::{FieldPattern, LITERAL_CHAR, LITERAL_INT, Literal, PAREN_PATTERN, Pattern, PatternId, RangePattern, Span, StructPattern, VariantPattern};
+use base::Parser;
+use token::{NO_SUFFIX, Token, TokenKind};
+use vec::Vec;
+
+impl Parser {
+    pub fn parse_pattern(self: &mut Parser) -> PatternId {
+        let span = self.cur.span;
+        let mut first = self.parse_pattern_single();
+        if !self.is_kind(TokenKind.Pipe) { return first; }
+
+        let mut patterns = unsafe { Vec::<PatternId>.new_in_raw(self.arena) };
+        patterns.push(first);
+
+        while self.is_kind(TokenKind.Pipe) {
+            self.next_token();
+            let next = self.parse_pattern_single();
+            patterns.push(next);
+        }
+
+        return self.ast.alloc_pattern(Pattern.Or(patterns.as_slice()), span);
+    }
+
+    // `(p, q, ..)` after a variant name: its payload patterns.
+    // The list is built in the parser's arena, so allocating elsewhere in it is not a conflict.
+    #[borrows()]
+    fn parse_pattern_list(self: &mut Parser) -> [PatternId] {
+        self.expect(Token.LParen);
+        let mut pats = unsafe { Vec::<PatternId>.new_in_raw(self.arena) };
+        while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+            pats.push(self.parse_pattern());
+            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+        }
+        self.expect(Token.RParen);
+        return pats.as_slice();
+    }
+
+    // `Name { field: p, short, .. }`, with the opening brace current.
+    fn parse_struct_pattern(self: &mut Parser, type_name: u32, span: Span) -> PatternId {
+        self.expect(Token.LBrace);
+        let mut fields = unsafe { Vec::<FieldPattern>.new_in_raw(self.arena) };
+        let mut has_rest = false;
+        while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+            if self.is_kind(TokenKind.DotDot) {
+                self.next_token();
+                has_rest = true;
+                break;
+            }
+            let fspan = self.cur.span;
+            let shorthand_mut = self.is_kind(TokenKind.KMut);
+            if shorthand_mut { self.next_token(); }
+            let fname = self.cur.token.get_ident_id();
+            self.expect(Token.Ident(0 as u32));
+            let mut fpat = 0 as PatternId;
+            if shorthand_mut {
+                fpat = self.ast.alloc_pattern(Pattern.MutIdent(fname), fspan);
+            } else if self.is_kind(TokenKind.Colon) {
+                self.next_token();
+                fpat = self.parse_pattern();
+            } else {
+                fpat = self.ast.alloc_pattern(Pattern.Ident(fname), fspan);
+            }
+            fields.push(FieldPattern { name: fname, pattern: fpat });
+            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+        }
+        self.expect(Token.RBrace);
+        return self.ast.alloc_pattern(
+            Pattern.Struct(StructPattern {
+                type_name: type_name,
+                fields: fields.as_slice(),
+                has_rest: has_rest
+            }),
+            span
+        );
+    }
+
+    fn parse_pattern_single(self: &mut Parser) -> PatternId {
+        let span = self.cur.span;
+        return match self.cur.token {
+            Token.Int(v) => {
+                self.next_token();
+                self.parse_literal_pattern(Literal.Int((v.0, NO_SUFFIX)), span)
+            },
+            Token.Minus => {
+                let value = self.parse_negative_int();
+                self.parse_literal_pattern(Literal.Int((value, NO_SUFFIX)), span)
+            },
+            Token.Char(c) => {
+                self.next_token();
+                self.parse_literal_pattern(Literal.Char(c), span)
+            },
+            Token.Bool(b) => {
+                self.next_token();
+                self.ast.alloc_pattern(Pattern.Literal(Literal.Bool(b)), span)
+            },
+            Token.Underscore => {
+                self.next_token();
+                self.ast.alloc_pattern(Pattern.Wildcard, span)
+            },
+            Token.KMut => {
+                self.next_token();
+                let name = self.cur.token.get_ident_id();
+                self.expect(Token.Ident(0 as u32));
+                self.ast.alloc_pattern(Pattern.MutIdent(name), span)
+            },
+            Token.LParen => self.parse_tuple_pattern(span),
+            Token.Ident(id) => {
+                self.next_token();
+                let path = self.parse_path_rest(id);
+                self.parse_named_pattern(path, span)
+            },
+            _ => 0 as PatternId,
+        };
+    }
+
+    // A literal pattern, or a range `lo..hi` / `lo..=hi` when `..` follows it; START has
+    // been read. The end must be the same kind of literal.
+    fn parse_literal_pattern(self: &mut Parser, start: Literal, span: Span) -> PatternId {
+        if !self.is_kind(TokenKind.DotDot) {
+            return self.ast.alloc_pattern(Pattern.Literal(start), span);
+        }
+        self.next_token();
+        let inclusive = self.is_kind(TokenKind.Equal);
+        if inclusive { self.next_token(); }
+        let end = match self.cur.token {
+            Token.Int(v) => {
+                if start.get_tag() == LITERAL_INT {
+                    Option.Some(Literal.Int((v.0, NO_SUFFIX)))
+                } else {
+                    Option.None
+                }
+            },
+            Token.Minus => {
+                if start.get_tag() == LITERAL_INT {
+                    let value = self.parse_negative_int();
+                    return self.ast.alloc_pattern(
+                        Pattern.Range(RangePattern {
+                            start: start,
+                            end: Literal.Int((value, NO_SUFFIX)),
+                            inclusive: inclusive
+                        }),
+                        span
+                    );
+                }
+                Option.None
+            },
+            Token.Char(c) => {
+                if start.get_tag() == LITERAL_CHAR {
+                    Option.Some(Literal.Char(c))
+                } else {
+                    Option.None
+                }
+            },
+            _ => Option.None,
+        };
+        match end {
+            Some(e) => {
+                self.next_token();
+                return self.ast.alloc_pattern(
+                    Pattern.Range(RangePattern { start: start, end: e, inclusive: inclusive }),
+                    span
+                );
+            },
+            None => {
+                self.report_error(
+                    if start.get_tag() == LITERAL_INT {
+                        "expected integer literal for range pattern end"
+                    } else {
+                        "expected char literal for range pattern end"
+                    },
+                    span
+                );
+                return 0 as PatternId;
+            },
+        }
+    }
+
+    // `(p, q)` is a tuple pattern; `(p)` only groups, as `(p,)` is the one-element tuple.
+    fn parse_tuple_pattern(self: &mut Parser, span: Span) -> PatternId {
+        self.next_token();
+        let mut elems = unsafe { Vec::<PatternId>.new_in_raw(self.arena) };
+        let mut trailing_comma = false;
+        while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+            elems.push(self.parse_pattern());
+            trailing_comma = false;
+            if self.is_kind(TokenKind.Comma) {
+                self.next_token();
+                trailing_comma = true;
+            } else {
+                break;
+            }
+        }
+        self.expect(Token.RParen);
+        if elems.len() == 1 as usize && !trailing_comma {
+            self.ast.add_paren(PAREN_PATTERN, elems.as_slice()[0]);
+            return elems.as_slice()[0];
+        }
+        return self.ast.alloc_pattern(Pattern.Tuple(elems.as_slice()), span);
+    }
+
+    // After a name: `E.V`, `E.V(..)`, `V(..)`, `S { .. }`, or a binding (or constant).
+    fn parse_named_pattern(self: &mut Parser, id: u32, span: Span) -> PatternId {
+        if self.is_kind(TokenKind.Dot) {
+            self.next_token();
+            let variant = self.cur.token.get_ident_id();
+            self.expect(Token.Ident(0 as u32));
+            let payload = if self.is_kind(TokenKind.LParen) {
+                self.parse_pattern_list()
+            } else {
+                @slice(0 as *mut PatternId, 0 as usize)
+            };
+            return self.ast.alloc_pattern(
+                Pattern.EnumVariant(VariantPattern {
+                    type_name: id,
+                    variant_name: variant,
+                    payload: payload
+                }),
+                span
+            );
+        }
+        if self.is_kind(TokenKind.LParen) {
+            let payload = self.parse_pattern_list();
+            return self.ast.alloc_pattern(
+                Pattern.EnumVariant(VariantPattern {
+                    type_name: 0 as u32,
+                    variant_name: id,
+                    payload: payload
+                }),
+                span
+            );
+        }
+        if self.is_kind(TokenKind.LBrace) { return self.parse_struct_pattern(id, span); }
+        return self.ast.alloc_pattern(Pattern.Ident(id), span);
+    }
+
+    // `-N` in a pattern, as the two's-complement bits of the negative number; the `-` is the
+    // current token.
+    fn parse_negative_int(self: &mut Parser) -> u64 {
+        self.next_token();
+        let magnitude = self.cur.token.get_int_val();
+        self.expect(Token.Int((0 as u64, NO_SUFFIX)));
+        return 0 as u64 -% magnitude;
+    }
+}

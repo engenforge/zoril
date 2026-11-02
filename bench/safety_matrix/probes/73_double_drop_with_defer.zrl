@@ -1,0 +1,10 @@
+// name: Explicit drop of a value a defer will also drop
+// expected: compile_reject
+struct R { v: i32 }
+impl Drop for R { fn drop(self: &mut R) { } }
+fn main() -> i32 {
+    let r = R { v: 1 };
+    defer @drop(r);
+    @drop(r);
+    return 0;
+}

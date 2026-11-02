@@ -1,0 +1,11 @@
+// name: Raw pointer laundered through a match binding
+// expected: compile_reject
+// closed: the dereference, field access and index checks decide from the IL type, which
+// keeps `RawPtr`/`RawPtrMut` through this route - so the program is a located type error.
+fn main() -> i32 {
+    let mut x: i32 = 42;
+    let p = &mut x as *mut i32;
+    let v = match p { q => *q };
+    if v == 42 { return 0; }
+    return 1;
+}

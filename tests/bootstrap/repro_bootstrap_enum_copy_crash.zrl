@@ -1,0 +1,29 @@
+import "io.zrl";
+use io::print;
+
+enum Kind {
+    Large([u64; 4]),
+    Small(u32),
+}
+
+struct Item {
+    pub name: u32,
+    pub kind: Kind,
+}
+
+fn main() -> i32 {
+    let mut k = Kind.Small(42 as u32);
+    let item = Item { name: 1, kind: k };
+
+    match item.kind {
+        Kind.Small(v) => {
+            if v == 42 as u32 {
+                print("ENUM COPY OK\n");
+                return 0;
+            }
+        },
+        Kind.Large(_) => {}
+    }
+    print("ENUM COPY FAIL\n");
+    return 1;
+}

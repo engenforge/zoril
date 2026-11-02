@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: region escape: a pointer to local stack storage is written to memory that outlives this function
+// Writing a local's address through an out-parameter leaves the caller holding it after return.
+fn leak(out: &mut *mut i32) {
+    let mut x: i32 = 42;
+    *out = &mut x;
+}
+fn main() -> i32 {
+    let mut p: *mut i32 = 0 as *mut i32;
+    leak(&mut p);
+    if p as usize == 0 as usize { return 1; }
+    return 0;
+}

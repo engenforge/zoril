@@ -1,0 +1,10 @@
+import "keep_lib.zrl";
+use keep_lib::stash_global;
+fn test_stash() {
+    let mut x: i32 = 42;
+    stash_global(&mut x);
+}
+pub fn main() -> i32 {
+    test_stash();
+    return 0;
+}

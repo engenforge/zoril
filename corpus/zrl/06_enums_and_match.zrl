@@ -1,0 +1,110 @@
+// expected exit code: 20
+// 06: Enums (sum types) with pattern matching, bare variants, qualified construction, and qualified patterns.
+// Demonstrates: enum, bare variants, match, variant payloads, exhaustive matching, Type.Variant patterns, OR patterns, never type.
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+    Custom(u32),
+    Theme(u32),
+}
+
+enum Shape {
+    Circle(i32),
+    Rectangle((i32, i32)),
+    Point,
+}
+
+enum Explicit {
+    A = 1,
+    B = 42,
+}
+
+fn color_value(c: Color) -> u32 {
+    return match c {
+        Red => 0xFF_00_00,
+        Green => 0x00_FF_00,
+        Blue => 0x00_00_FF,
+        Custom(v) | Theme(v) => v,
+    };
+}
+
+// Qualified patterns: Type.Variant is interchangeable with bare Variant.
+fn color_value_qualified(c: Color) -> u32 {
+    return match c {
+        Color.Red => 0xFF_00_00,
+        Color.Green => 0x00_FF_00,
+        Color.Blue => 0x00_00_FF,
+        Color.Custom(v) | Color.Theme(v) => v,
+    };
+}
+
+fn is_primary_color(c: Color) -> bool {
+    return match c {
+        Red | Green | Blue => true,
+        _ => false,
+    };
+}
+
+fn is_complex_color(c: Color) -> bool {
+    return match c {
+        Custom(_) | Theme(_) => true,
+        _ => false,
+    };
+}
+
+fn shape_area(s: Shape) -> i32 {
+    return match s {
+        Circle(r) => r * r * 3,
+        Rectangle(dims) => {
+            let w = dims.0;
+            let h = dims.1;
+            w * h
+        },
+        Point => 0,
+    };
+}
+
+// Never type: block arms that use `return` have type `never` and are excluded
+// from the match result type. All arms may diverge; the whole match has type `never`.
+fn color_index(c: Color) -> u32 {
+    return match c {
+        Red          => { return 0 as u32; },
+        Green        => { return 1 as u32; },
+        Blue         => { return 2 as u32; },
+        Custom(_) | Theme(_) => { return 3 as u32; },
+    };
+}
+
+fn main() -> i32 {
+    let c = Color.Custom(0xAB_CD_EFu32);
+    let hex_val = color_value(c);
+    // Qualified patterns produce the same result as bare patterns.
+    let hex_val2 = color_value_qualified(Color.Custom(0xAB_CD_EFu32));
+    let _ = hex_val == hex_val2;
+
+    let rect = Shape.Rectangle((10i32, 20i32));
+    let circle = Shape.Circle(5i32);
+    let pt = Shape.Point;
+    
+    let is_prim = is_primary_color(Color.Red);
+    let is_complex = is_complex_color(Color.Custom(123u32));
+    if !is_complex { return 97; }
+
+    // Verify never-type match: color_index uses return inside every block arm.
+    let idx = color_index(Color.Blue);
+    if idx != 2 as u32 { return 99; }
+
+    let tag_val = match Explicit.B {
+        A => 10,
+        B => 20,
+    };
+    if tag_val != 20 { return 98; }
+
+    let total = shape_area(rect) + shape_area(circle) + shape_area(pt);
+    if is_prim {
+        return total + 1; // 275 + 1 = 276 -> % 256 = 20
+    }
+    return total;
+}

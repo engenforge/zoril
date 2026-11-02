@@ -1,0 +1,14 @@
+pub fn test_params(a: [u8], b: u64) -> u64 {
+    return b;
+}
+
+pub fn test_sret(a: [u8]) -> [u8] {
+    return a;
+}
+
+pub fn main() -> i32 {
+    let s = "hello";
+    let s2 = test_sret(s);
+    test_params(s2, 123);
+    return 0;
+}

@@ -1,0 +1,24 @@
+// name: A collection tied to an arena outlives the arena's block
+// expected: compile_reject
+// The collection is moved out of the block that owns the arena handle, so the handle's implicit
+// drop at the block's end unmaps the region while the collection still points into it. The
+// block-scope check rejects it at the scope exit (`check_scope_end_borrowed`).
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut outer = Vec::<u64>.new();
+    {
+        let a = match Arena.new(65536) {
+            Ok(arena) => arena,
+            Err(_) => { return 1; },
+        };
+        let mut v = Vec::<u64>.new_in(&a);
+        v.push(1);
+        outer = v; // the tied collection is moved out of the arena's block
+    } // `a` is dropped here: `Drop` unmaps the arena while `outer` still points into it
+    outer.push(2); // without the check this is a use after free (exit 139)
+    return 0;
+}

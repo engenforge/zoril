@@ -1,0 +1,28 @@
+// Repro for bootstrap compiler bug: miscalculation of temporary stack size for large struct literals.
+
+struct Large {
+    f1: u64,
+    f2: u64,
+    f3: u64,
+    f4: u64,
+    f5: u64,
+    f6: u64,
+    f7: u64,
+    f8: u64,
+}
+
+fn test() -> Large {
+    // This literal should require 64 bytes on the stack.
+    return Large {
+        f1: 1, f2: 2, f3: 3, f4: 4,
+        f5: 5, f6: 6, f7: 7, f8: 8,
+    };
+}
+
+fn main() -> i32 {
+    let l = test();
+    if l.f1 == 1 && l.f8 == 8 {
+        return 0;
+    }
+    return 1;
+}

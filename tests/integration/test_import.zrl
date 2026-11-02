@@ -1,0 +1,19 @@
+// Repro for import type mismatch
+import "repro_import_bug_mod.zrl";
+import "io.zrl";
+use io::{write, stdout};
+use repro_import_bug_mod::MyEnum;
+
+fn main() -> i32 {
+    let e = MyEnum.Variant(42 as u32);
+    match e {
+        MyEnum.Variant(id) => {
+            if id == 42 {
+                write(stdout(), "Pass\n");
+                return 0;
+            }
+        },
+        MyEnum.Other => {},
+    };
+    return 1;
+}

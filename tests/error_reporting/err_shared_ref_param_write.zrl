@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: error: cannot assign to 'r' because it is behind a shared reference
+struct P { x: i64 }
+fn evil(r: &P) {
+    r.x = 99;
+}
+fn main() {
+    let p = P { x: 1 };
+    evil(&p);
+}

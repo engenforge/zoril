@@ -1,0 +1,11 @@
+// expected exit 0
+import "lib_head.zrl";
+
+fn main() -> i32 {
+    if lib_head::hd_if::<i32>(0, 42) != 1 { return 1; }
+    if lib_head::hd_while::<i32>(0, 42) != 42 { return 2; }
+    if lib_head::hd_match::<i32>(0, 42) != 1 { return 3; }
+    if lib_head::hd_if_let::<i32>(0, 42) != 1 { return 4; }
+    if lib_head::hd_operand::<i32>(0, 42) != 1 { return 5; }
+    return 0;
+}

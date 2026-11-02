@@ -1,0 +1,58 @@
+// Diagnostics. An error or warning is `FILE:LINE:COL: error: MESSAGE` (or `warning:`) on
+// stderr; one with no source location is `zoril: error: MESSAGE` (main.zrl).
+
+import "io.zrl";
+import "fmt.zrl";
+import "ast.zrl";
+use ast::Span;
+use io::{eprint, stderr};
+use fmt::write_u64;
+
+// `FILE:LINE:COL: KIND: `, the start of a diagnostic (`FILE: KIND: ` for a span with no line, an
+// interface's declaration); the caller writes the message and the newline.
+pub fn diag_start(file: [u8], span: Span, kind: [u8]) {
+    eprint(file);
+    if span.line == 0 as u32 {
+        eprint(": ");
+        eprint(kind);
+        eprint(": ");
+        return;
+    }
+    eprint(":");
+    let mut err = stderr();
+    let _ = write_u64(&mut err, span.line as u64);
+    eprint(":");
+    let _ = write_u64(&mut err, span.col as u64);
+    eprint(": ");
+    eprint(kind);
+    eprint(": ");
+}
+
+// Lints: warnings a compile can turn on (`-W NAME`) or off (`-A NAME`). Each has a bit, and
+// LINTS_ON_BY_DEFAULT says which start on; making one opt-in is clearing its bit there.
+pub const LINT_WILDCARD_ARM: u32 = 0;   // `wildcard-arm`: `_` standing for few enum variants
+pub const LINT_REDUNDANT_CAST: u32 = 1; // `redundant-cast`: `0 as u32` where a u32 is expected
+
+pub const LINTS_ON_BY_DEFAULT: u64 = 1;
+pub static mut LINTS_ON: u64 = 1;
+
+pub fn lint_enabled(lint: u32) -> bool {
+    return (unsafe { LINTS_ON } >> (lint as u64)) & (1 as u64) != 0 as u64;
+}
+
+pub fn set_lint(lint: u32, on: bool) {
+    unsafe {
+        if on {
+            LINTS_ON = LINTS_ON | ((1 as u64) << (lint as u64));
+        } else {
+            LINTS_ON = LINTS_ON & !((1 as u64) << (lint as u64));
+        }
+    }
+}
+
+// The lint called NAME on the command line.
+pub fn lint_named(name: [u8]) -> Option<u32> {
+    if name == "wildcard-arm" { return Option.Some(LINT_WILDCARD_ARM); }
+    if name == "redundant-cast" { return Option.Some(LINT_REDUNDANT_CAST); }
+    return Option.None;
+}

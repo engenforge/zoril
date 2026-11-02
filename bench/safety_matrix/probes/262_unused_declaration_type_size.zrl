@@ -1,0 +1,14 @@
+// name: An unused declaration whose type cannot be laid out
+// expected: compile_reject
+// zbuild: accept (a separate build checks only the declarations something calls: KNOWN_ISSUES.md section 4, "A method nothing calls is checked by a whole-program build, not by -c")
+// Nothing names E, so nothing used to lay it out; an unused declaration is still part of the
+// program (as an uncalled method is), and its payload is rejected where it is written.
+// The declaration is checked in the whole-program pass that also checks uncalled methods.
+enum E {
+    A([[[[u8; 65536]; 65536]; 65536]; 65536]),
+    B,
+}
+
+fn main() -> i32 {
+    return 0;
+}

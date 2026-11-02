@@ -1,0 +1,18 @@
+// name: Whole reassignment of a Vec after @drop is accepted
+// expected: accept
+// Explicit @drop marks the binding consumed so reassigning a new collection is permitted.
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    @drop(v);
+    v = Vec::<i32>.new();
+    v.push(42);
+    let val = match v.get(0) {
+        Option.Some(x) => *x,
+        Option.None => 0,
+    };
+    return if val == 42 { 0 } else { 1 };
+}

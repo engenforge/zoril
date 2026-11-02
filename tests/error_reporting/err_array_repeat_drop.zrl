@@ -1,0 +1,21 @@
+// expected compile fail
+// EXPECT: array repeat expression requires an element that does not need dropping
+// `[v; 3]` copies v three times; each copy would be dropped.
+static mut DROPS: i32 = 0;
+
+struct D { x: i64 }
+
+trait Drop {
+    fn drop(self: &mut D);
+}
+
+impl Drop for D {
+    fn drop(self: &mut D) {
+        DROPS = DROPS + 1;
+    }
+}
+
+fn main() -> i32 {
+    let a = [D { x: 1 }; 3];
+    return 0;
+}

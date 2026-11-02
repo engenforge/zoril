@@ -1,0 +1,11 @@
+// expected exit code: 0
+enum MyEnum {
+    A = 10,
+    B = 20,
+}
+fn main() -> i32 {
+    let e = MyEnum.B;
+    let tag = e as u32;
+    if tag == 20 { return 0; }
+    return 1;
+}

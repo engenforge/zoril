@@ -1,0 +1,12 @@
+// expected exit 0
+// Two modules may each define a private type of the same name, with methods and constants of
+// the same names. Each module's calls reach its own: impls were matched to a receiver by the
+// type's name, and a method instance was reused by its name, so `from_b` called `a`'s `T::f`.
+import "type_collide_a_lib.zrl";
+import "type_collide_b_lib.zrl";
+use type_collide_a_lib::from_a;
+use type_collide_b_lib::from_b;
+fn main() -> i32 {
+    if from_a() != 1 || from_b() != 20 { return 1; }
+    return 0;
+}

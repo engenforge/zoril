@@ -1,0 +1,16 @@
+// name: Match pattern auto-dereferences raw pointer to enum without unsafe
+// expected: compile_reject
+import "core.zrl";
+use core::Option;
+
+fn forge_enum(p: u64) -> u64 {
+    let raw: *Option<u64> = p as *Option<u64>;
+    match raw {
+        Option.Some(x) => { return *x; },
+        Option.None => { return 0; },
+    }
+}
+
+fn main() -> i32 {
+    return forge_enum(3735928559) as i32;
+}

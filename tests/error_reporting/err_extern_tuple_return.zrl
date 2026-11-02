@@ -1,0 +1,4 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_extern_tuple_return.zrl:3:35: error: an extern function cannot take or return a tuple (pass a raw pointer to a struct): returns_pair
+extern fn returns_pair(n: i32) -> (i32, i32);
+fn main() -> i32 { return 0; }

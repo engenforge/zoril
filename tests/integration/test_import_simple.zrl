@@ -1,0 +1,6 @@
+import "helper.zrl";
+use helper::helper_fn;
+
+fn main() {
+    helper_fn();
+}

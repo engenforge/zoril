@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_cfn_different_signature.zrl:9:22: error: cannot cast a C function pointer to a different signature
+// A C function pointer has a signature the compiler can see, so a cast to a different one is a
+// signature mismatch, not an unchecked address: `unsafe` does not lift it (raw addresses that the
+// compiler cannot type are the route `unsafe` opens).
+extern "C" fn g(x: i32) -> i32 { return x; }
+
+fn main() -> i32 {
+    let h = unsafe { g as extern "C" fn(i64) -> i64 };
+    return 0;
+}

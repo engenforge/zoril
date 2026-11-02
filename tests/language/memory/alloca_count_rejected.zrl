@@ -1,0 +1,11 @@
+// @alloca<T>(count) with count != 1 has never been implemented: the count
+// argument was silently ignored, so @alloca<u8>(64) produced a single-byte
+// slot and writes past it corrupted the stack (Jul 8 flat-snapshot debugging).
+// The compiler must reject a non-1 count loudly instead.
+// expected compile fail
+
+pub fn main() -> i32 {
+    let buf = unsafe { @alloca<u8>(64) };
+    *buf = 1 as u8;
+    return 0;
+}

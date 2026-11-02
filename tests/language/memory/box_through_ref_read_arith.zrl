@@ -1,0 +1,12 @@
+// A field read or write through a reference to a Box reaches the boxed value, not the Box's own slot.
+struct Point { x: i64, y: i64 }
+
+fn sum(p: &Box<Point>) -> i64 {
+    return p.x + p.y;
+}
+
+fn main() -> i32 {
+    let b = box Point { x: 20, y: 22 };
+    if sum(&b) != 42 { return 1; }
+    return 0;
+}

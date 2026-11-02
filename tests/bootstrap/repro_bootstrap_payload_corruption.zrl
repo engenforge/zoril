@@ -1,0 +1,35 @@
+import "io.zrl";
+
+pub struct Payload {
+    pub num: u32,
+    pub args: [u32], // slice forces 8-byte align
+}
+
+pub enum Container {
+    Target(Payload),
+}
+
+impl Container {
+    pub fn get_num(self: &Container) -> u32 {
+        let p = unsafe { &*((self as usize + 8) as *Payload) };
+        return p.num;
+    }
+}
+
+fn main() -> i32 {
+    let mut args = [0 as u32, 0 as u32];
+    let mut p = Payload { num: 42 as u32, args: &args };
+    let mut c = Container.Target(p);
+
+    let n = c.get_num();
+
+    // Use syscall directly to avoid broken io.zrl
+    if n == 42 as u32 {
+        unsafe { @syscall(60, 0) }; // Success
+    }
+    if n == 0 as u32 {
+        unsafe { @syscall(60, 2) }; // Reproduced: num=0
+    }
+    unsafe { @syscall(60, 1) }; // Fail (other)
+    return 0;
+}

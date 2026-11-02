@@ -1,0 +1,40 @@
+// expected exit code: 3
+// 02: Primitive types, numeric literal formats, and explicit casting.
+// Demonstrates: all integer types, floats, bool, hex/bin/oct, underscores, as.
+
+fn main() -> i32 {
+    // Integer types and literal formats
+    let decimal: i32 = 1_000_000;
+    let hex: u32 = 0xFF_AB;
+    let binary: u8 = 0b1010_0101;
+    let octal: u32 = 0o755;
+
+    // Floating point
+    let pi: f64 = 3.141_592_653;
+    let half: f32 = 0.5;
+
+    // Boolean
+    let flag: bool = true;
+    let negated = !flag;
+
+    // Explicit casting between numeric types
+    let wide = decimal as u64;
+    let narrow = wide as u8;
+    let to_float = decimal as f64;
+    let to_int = pi as i32;
+
+    // Character literals are u8 integers
+    let newline = '\n';
+    let letter = 'A';
+    let escaped = '\x1B';
+
+    // Numeric suffixes
+    let big_unsigned = 1000u64;
+    let small_signed = 42i8;
+    let ptr_sized_u = 123usize;
+    let ptr_sized_i = -456isize;
+    let float_32 = 1.0f32;
+    let float_64 = 2.5f64;
+
+    return to_int;
+}

@@ -1,0 +1,134 @@
+// Tests for io.zrl and file.zrl fixes:
+// 1. write_i64 with i64::MIN
+// 2. format_unknown_errno with i32::MIN and non-aliasing ring buffer
+// 3. file::write_file and file::append_file returning Result<(), Error>
+// 4. Error.write_to
+// expected exit 0
+
+import "io.zrl";
+import "file.zrl";
+import "fmt.zrl";
+import "mem.zrl";
+import "string.zrl";
+use file::{append_file, read_file, write_file};
+use io::{Error, File};
+use fmt::write_i64;
+use mem::Arena;
+
+fn format_temp_path(prefix: [u8], pid: u64, buf: &mut [u8; 64]) -> [u8] {
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        buf[i] = prefix[i];
+        i = i + 1;
+    }
+    let mut digits: [u8; 20] = [0 as u8; 20];
+    let mut dcount = 0 as usize;
+    let mut n = pid;
+    if n == 0 as u64 {
+        digits[0] = '0' as u8;
+        dcount = 1;
+    } else {
+        while n > 0 as u64 {
+            let rem = (n % 10 as u64) as u8;
+            digits[dcount] = '0' as u8 + rem;
+            dcount = dcount + 1;
+            n = n / 10 as u64;
+        }
+    }
+    let mut d = dcount;
+    while d > 0 {
+        d = d - 1;
+        buf[i] = digits[d];
+        i = i + 1;
+    }
+    let suffix = ".txt\0";
+    let mut s = 0 as usize;
+    while s < suffix.len {
+        buf[i] = suffix[s];
+        i = i + 1;
+        s = s + 1;
+    }
+    unsafe { return @slice(&buf[0] as *u8, i - 1); }
+}
+
+fn main() -> i32 {
+    let arena = Arena.new(65536).unwrap();
+    let pid = unsafe { @syscall(39) } as u64;
+    let mut path_buf = [0 as u8; 64];
+
+    // 1. write_i64 with i64::MIN (-9223372036854775808)
+    let min_path = format_temp_path("/tmp/zrl_test_min_i64_", pid, &mut path_buf);
+    {
+        let mut file = match File.create(min_path) {
+            Ok(f) => f,
+            Err(_) => return 1,
+        };
+        // -9223372036854775807 - 1 = i64::MIN
+        let min_val: i64 = -9223372036854775807 as i64 - 1 as i64;
+        let _ = write_i64(&mut file, min_val);
+        let _ = file.close();
+    }
+    let read_back = match read_file(min_path, &arena) {
+        Ok(s) => s,
+        Err(_) => return 2,
+    };
+    if read_back != "-9223372036854775808" {
+        return 3;
+    }
+    unsafe { @syscall(87, min_path.ptr, 0, 0); }
+
+    // 2. format_unknown_errno with i32::MIN and non-aliasing
+    let min_errno: i32 = -2147483647 - 1;
+    let err_min = Error.from_linux_errno(min_errno);
+    let d_min = err_min.detail();
+    if d_min != "errno -2147483648" {
+        return 4;
+    }
+
+    // Non-aliasing of consecutive calls
+    let e1 = Error.from_linux_errno(9901);
+    let e2 = Error.from_linux_errno(9902);
+    let d1 = e1.detail();
+    let d2 = e2.detail();
+    if d1 != "errno 9901" {
+        return 5;
+    }
+    if d2 != "errno 9902" {
+        return 6;
+    }
+
+    // 3. file::write_file and file::append_file returning Result<(), Error>
+    let test_path = format_temp_path("/tmp/zrl_test_write_res_", pid, &mut path_buf);
+    match write_file(test_path, "hello") {
+        Ok(_) => {},
+        Err(_) => return 7,
+    }
+    match append_file(test_path, " world") {
+        Ok(_) => {},
+        Err(_) => return 8,
+    }
+    let content = match read_file(test_path, &arena) {
+        Ok(c) => c,
+        Err(_) => return 9,
+    };
+    if content != "hello world" {
+        return 10;
+    }
+    unsafe { @syscall(87, test_path.ptr, 0, 0); }
+
+    // Missing directory returns Result.Err with ENOENT (2)
+    match write_file("/nonexistent_dir_zoril_test/foo.txt", "data") {
+        Ok(_) => return 11,
+        Err(e) => {
+            if e.errno != 2 { return 12; }
+        },
+    }
+    match append_file("/nonexistent_dir_zoril_test/foo.txt", "data") {
+        Ok(_) => return 13,
+        Err(e) => {
+            if e.errno != 2 { return 14; }
+        },
+    }
+
+    return 0;
+}

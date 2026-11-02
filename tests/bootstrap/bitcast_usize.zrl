@@ -1,0 +1,5 @@
+fn main() -> i32 {
+    let x = 0 as *mut u64;
+    let y = (x as usize + 8 as usize) as *mut u64;
+    return 0;
+}

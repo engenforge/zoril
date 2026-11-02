@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: error: call to extern function requires unsafe block
+extern fn puts(s: *u8) -> i32;
+
+fn main() -> i32 {
+    puts(0 as *u8);
+    return 0;
+}

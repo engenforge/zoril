@@ -1,0 +1,2 @@
+# Keep the bootstrap seeds out of GitHub's language statistics: the compiler is src/.
+bootstrap/** linguist-vendored

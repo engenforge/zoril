@@ -1,0 +1,20 @@
+// libc's qsort calls back into Zoril through a C function pointer.
+extern fn qsort(base: *mut u8, n: usize, size: usize, cmp: extern "C" fn(*u8, *u8) -> i32);
+extern fn printf(fmt: *u8, ...) -> i32;
+
+extern "C" fn by_value(a: *u8, b: *u8) -> i32 {
+    let x = unsafe { *(a as *i32) };
+    let y = unsafe { *(b as *i32) };
+    if x < y { return -1; }
+    if x > y { return 1; }
+    return 0;
+}
+
+fn main() -> i32 {
+    let mut v = [5, 3, 9, 1, 7];
+    unsafe {
+        qsort(&mut v[0] as *mut i32 as *mut u8, 5, 4, by_value);
+        printf("%d %d %d %d %d\n".ptr, v[0], v[1], v[2], v[3], v[4]);
+    }
+    return 0;
+}

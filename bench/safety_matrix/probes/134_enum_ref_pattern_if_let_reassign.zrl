@@ -1,0 +1,13 @@
+// name: Enum mutated while an if-let pattern binding through a reference is live
+// expected: compile_reject
+// A pattern binding through a reference (`if let ... = &e`) inherits the borrow of `e`,
+// so mutating `e` while the payload binding is live is rejected instead of dropping the pointee.
+enum E { A(Box<i32>), B }
+fn main() -> i32 {
+    let mut e = E.A(box 5);
+    if let E.A(x) = &e {
+        e = E.B;
+        return **x;
+    }
+    return 0;
+}

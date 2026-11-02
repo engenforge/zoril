@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: cannot cast integer to type parameter: type parameters may be reference types
+fn make<T>() -> T {
+    return (0 as u64) as T;
+}
+fn main() -> i32 {
+    let x = make::<i32>();
+    return 0;
+}

@@ -1,0 +1,24 @@
+// name: Storing a static string slice through reference copy_into is accepted
+// expected: accept
+// A callee store of a static slice loaded through a reference parameter is accepted.
+import "mem.zrl";
+
+fn copy_into(dst: &mut [u8], src: &[u8]) {
+    *dst = *src;
+}
+
+fn f(out: &mut [u8]) {
+    let s: [u8] = "hello";
+    let local = s;
+    copy_into(out, &local);
+}
+
+fn main() -> i32 {
+    let e: [u8] = @slice(0 as *u8, 0);
+    let mut s = e;
+    f(&mut s);
+    if s.len == 5 as usize && s[0] == 'h' as u8 {
+        return 0;
+    }
+    return 1;
+}

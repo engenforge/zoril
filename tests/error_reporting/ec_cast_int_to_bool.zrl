@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/ec_cast_int_to_bool.zrl:5:13: error: cannot cast to bool: `n != 0` is the spelling
+// A bool is 0 or 1: a number cast to it leaves every two-armed match without an arm.
+fn main() -> i32 {
+    let b = 5 as bool;
+    return 0;
+}

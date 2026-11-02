@@ -1,0 +1,40 @@
+// name: Storing a frame-owned view into a &mut destination through two chained calls is rejected
+// expected: compile_reject
+// Storing a frame-owned arena buffer view through a destination returned by two chained helper calls is rejected.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct Slot {
+    s: [i32],
+}
+
+struct H {
+    slot: Slot,
+}
+
+fn outer(h: &mut H) -> &mut Slot {
+    return &mut h.slot;
+}
+
+fn inner(s: &mut Slot) -> &mut [i32] {
+    return &mut s.s;
+}
+
+fn f(h: &mut H) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; },
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(7);
+    *inner(outer(h)) = v.as_slice();
+}
+
+fn main() -> i32 {
+    let e: [i32] = @slice(0 as *i32, 0);
+    let mut h = H { slot: Slot { s: e } };
+    f(&mut h);
+    return 0;
+}

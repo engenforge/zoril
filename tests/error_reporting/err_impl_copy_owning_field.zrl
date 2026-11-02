@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_impl_copy_owning_field.zrl:10:1: error: 'impl Copy' on 'S', which owns storage through field 'v'
+import "vec.zrl";
+use vec::Vec;
+
+struct S {
+    v: Vec<i32>,
+}
+
+impl Copy for S {}
+
+fn main() -> i32 {
+    return 0;
+}

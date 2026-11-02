@@ -1,0 +1,4 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_break_outside_loop.zrl:4:43: error: `break` outside a loop
+// A user mistake, reported as one (it was an internal compiler error).
+fn main() -> i32 { let x = match 1 { 1 => break, _ => 0 }; return x; }

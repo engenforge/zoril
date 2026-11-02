@@ -1,0 +1,19 @@
+// expected exit code: 0
+struct Large { a: u64, b: u64, c: u64, d: u64 }
+fn get_large() -> Large {
+    return Large { a: 1, b: 2, c: 3, d: 4 };
+}
+fn process_large(l: Large) -> Large {
+    if l.a != 1 as u64 || l.b != 2 as u64 || l.c != 3 as u64 || l.d != 4 as u64 {
+        return Large { a: 0, b: 0, c: 0, d: 0 };
+    }
+    return Large { a: l.a + 10, b: l.b + 10, c: l.c + 10, d: l.d + 10 };
+}
+fn main() -> i32 {
+    let res = process_large(get_large());
+    if res.a != 11 as u64 { return 1; }
+    if res.b != 12 as u64 { return 2; }
+    if res.c != 13 as u64 { return 3; }
+    if res.d != 14 as u64 { return 4; }
+    return 0;
+}

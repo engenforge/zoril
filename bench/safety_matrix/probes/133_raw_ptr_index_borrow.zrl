@@ -1,0 +1,9 @@
+// name: Borrow of a raw-pointer index
+// expected: compile_reject
+// `&p[i]` computes the same unchecked address as `p[i]`, through a separate lowering path
+// that skipped the `unsafe` check: this read through a null pointer faulted in safe code.
+fn main() -> i32 {
+    let p = 0 as *mut u64;
+    let r = &p[5];
+    return *r as i32;
+}

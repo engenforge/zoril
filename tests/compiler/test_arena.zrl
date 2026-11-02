@@ -1,0 +1,46 @@
+// Test: arena_reset(0) is safe and returns to first allocatable byte
+// [PASS] arena_reset to offset 0 works correctly
+// [PASS] arena allocations after reset reuse the same memory
+
+import "mem_raw.zrl";
+import "io.zrl";
+use io::print;
+use mem_raw::{arena_free, arena_init, arena_reset, zoril_allocator_alloc};
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(4096) };
+
+    // Allocate first block
+    let p1 = unsafe { zoril_allocator_alloc(arena, 64) };
+    // Write a marker
+    unsafe { *(p1 as *mut u64) = 0xDEADBEEF; }
+
+    // Allocate second block
+    let p2 = unsafe { zoril_allocator_alloc(arena, 32) };
+
+    // Reset arena to 0
+    unsafe { arena_reset(arena, 0); }
+
+    // Allocate again — should get the same first pointer
+    let p3 = unsafe { zoril_allocator_alloc(arena, 64) };
+    if p1 != p3 {
+        print("FAIL: arena_reset(0) did not return to first position\n");
+        return 1;
+    }
+
+    // Verify the arena struct wasn't corrupted: allocate past header size
+    let p4 = unsafe { zoril_allocator_alloc(arena, 128) };
+    let p5 = unsafe { zoril_allocator_alloc(arena, 256) };
+    // If arena was corrupted, this would crash or produce garbage pointers
+
+    // Reset to an intermediate offset
+    unsafe { arena_reset(arena, 0); }
+    let p6 = unsafe { zoril_allocator_alloc(arena, 64) };
+    let p7 = unsafe { zoril_allocator_alloc(arena, 32) };
+    if p1 != p6 { print("FAIL: reset+realloc mismatch\n"); return 1; }
+    if p2 != p7 { print("FAIL: reset+realloc mismatch 2\n"); return 1; }
+
+    unsafe { arena_free(arena); }
+
+    return 0;
+}

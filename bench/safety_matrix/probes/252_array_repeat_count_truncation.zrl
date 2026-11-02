@@ -1,0 +1,5 @@
+// name: An array repeat count above 32 bits truncated to its low half
+// expected: compile_reject
+// The repeat's `ArrayRepeat` count is stored in 32 bits too, so `[v; 4294967298]` built an array
+// of 2 while the program said 4294967298 - the same miscompile as a declared length.
+fn main() -> i32 { let a = [0 as u8; 4294967298]; return a.len as i32; }

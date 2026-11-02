@@ -1,0 +1,9 @@
+// name: Linear fd leaked inside a heap box
+// expected: compile_reject
+// Linear types (fd, ioring) cannot be implicitly dropped inside a Box.
+extern fn open_r(path: *u8) -> fd<r>;
+
+fn main() -> i32 {
+    let b = box unsafe { open_r("x".ptr) };
+    return 0;
+}

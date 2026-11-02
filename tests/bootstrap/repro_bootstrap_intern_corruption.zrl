@@ -1,0 +1,35 @@
+import "io.zrl";
+import "helper_bootstrap_sizeof.zrl";
+import "bytevec.zrl";
+import "intern.zrl";
+import "fmt.zrl";
+use bytevec::ByteVec;
+use intern::InternTable;
+use io::{print, stdout};
+use fmt::write_u64;
+
+fn main() -> i32 {
+    print("Testing sizeof with imported embedded struct...\n");
+
+    let sz_vec = sizeof(ByteVec);
+    let sz_table = sizeof(InternTable);
+
+    let mut out = stdout();
+    print("sizeof(ByteVec): ");
+    let _ = write_u64(&mut out, sz_vec as u64);
+    print("\nsizeof(InternTable): ");
+    let _ = write_u64(&mut out, sz_table as u64);
+    print("\n");
+
+    if sz_table != 56 as usize {
+        print(
+            "BOOTSTRAP BUG CONFIRMED: sizeof(InternTable) miscalculated via import! Expected 56, got "
+        );
+        let _ = write_u64(&mut out, sz_table as u64);
+        print("\n");
+        return 1;
+    }
+
+    print("SUCCESS: sizeof correct across imports.\n");
+    return 0;
+}

@@ -1,0 +1,20 @@
+// name: Explicit drop of a value moved in one if branch
+// expected: compile_reject
+// On the path where sink(r) ran, @drop(r) dropped r a second time (drop count 2) until
+// 2026-10-02. An explicit @drop now needs the value definitely live.
+static mut DROPS: i32 = 0;
+struct R { v: i32 }
+impl Drop for R { fn drop(self: &mut R) { DROPS = DROPS + 1; } }
+fn sink(r: R) { }
+fn run(c: i32) {
+    let r = R { v: 1 };
+    if c == 1 { sink(r); }
+    @drop(r);
+}
+fn main() -> i32 {
+    run(1);
+    if DROPS != 1 { return 10 + DROPS; }
+    run(0);
+    if DROPS != 2 { return 20 + DROPS; }
+    return 0;
+}

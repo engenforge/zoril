@@ -1,0 +1,231 @@
+// Tests for Result<_, io::Error> across fsys, proc, and FileLock.
+// expected exit 0
+
+import "core.zrl";
+import "mem.zrl";
+import "io.zrl";
+import "file.zrl";
+import "fsys.zrl";
+import "proc.zrl";
+
+use file::write_file;
+use fsys::{FileLock, acquire_file_lock, list_dir, make_dir_all, unlink_path};
+use io::Error;
+use mem::Arena;
+use proc::Command;
+
+fn format_temp_path(prefix: [u8], pid: u64, suffix: [u8], buf: &mut [u8; 64]) -> [u8] {
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        buf[i] = prefix[i];
+        i = i + 1;
+    }
+    let mut digits: [u8; 20] = [0 as u8; 20];
+    let mut dcount = 0 as usize;
+    let mut n = pid;
+    if n == 0 as u64 {
+        digits[0] = '0' as u8;
+        dcount = 1;
+    } else {
+        while n > 0 as u64 {
+            let rem = (n % 10 as u64) as u8;
+            digits[dcount] = '0' as u8 + rem;
+            dcount = dcount + 1;
+            n = n / 10 as u64;
+        }
+    }
+    let mut d = dcount;
+    while d > 0 {
+        d = d - 1;
+        buf[i] = digits[d];
+        i = i + 1;
+    }
+    let mut s = 0 as usize;
+    while s < suffix.len {
+        buf[i] = suffix[s];
+        i = i + 1;
+        s = s + 1;
+    }
+    buf[i] = 0 as u8;
+    unsafe { return @slice(&buf[0] as *u8, i); }
+}
+
+fn test_unlink_missing(arena: &mem::Arena) -> bool {
+    let res = unlink_path("/path/to/definitely/nonexistent_file_xyz_12345", arena);
+    match res {
+        Ok(_) => false,
+        Err(e) => e.linux_errno() == 2, // ENOENT
+    }
+}
+
+fn test_make_dir_all_under_file(arena: &mem::Arena, reg_file: [u8], sub_dir: [u8]) -> bool {
+    if write_file(reg_file, "content").is_err() {
+        return false;
+    }
+    let res = make_dir_all(sub_dir, arena);
+    match res {
+        Ok(_) => false,
+        Err(e) => e.linux_errno() == 20, // ENOTDIR
+    }
+}
+
+fn test_list_dir_of_file(arena: &mem::Arena, reg_file: [u8]) -> bool {
+    let res = list_dir(reg_file, arena);
+    match res {
+        Ok(_) => false,
+        Err(e) => e.linux_errno() == 20, // ENOTDIR
+    }
+}
+
+fn test_spawn_missing_binary(arena: &mem::Arena) -> bool {
+    let cmd = Command.new("/path/to/definitely/nonexistent_prog_xyz_12345", arena);
+    let res = cmd.spawn();
+    match res {
+        Ok(_) => false,
+        Err(e) => e.linux_errno() == 2, // ENOENT
+    }
+}
+
+fn test_kill_reaped_child(arena: &mem::Arena) -> bool {
+    let cmd = Command.new("/bin/true", arena);
+    let ch_res = cmd.spawn();
+    if ch_res.is_err() {
+        return false;
+    }
+    let mut ch = ch_res.ok().unwrap();
+    let wait_res = ch.wait();
+    if wait_res.is_err() {
+        return false;
+    }
+    // Child is reaped now. Kill should return ESRCH (3).
+    let kill_res = ch.unix_kill(9);
+    match kill_res {
+        Ok(_) => false,
+        Err(e) => e.linux_errno() == 3, // ESRCH
+    }
+}
+
+fn test_lock_scope_release(lock_path: [u8]) -> bool {
+    {
+        let l1 = match acquire_file_lock(lock_path) {
+            Ok(l) => l,
+            Err(_) => return false,
+        };
+        // l1 dropped at block end
+    }
+    {
+        let l2 = match acquire_file_lock(lock_path) {
+            Ok(l) => l,
+            Err(_) => return false,
+        };
+        // l2 dropped at block end
+    }
+    return true;
+}
+
+fn helper_lock_fail(lock_path: [u8]) -> Result<(), Error> {
+    let _l = match acquire_file_lock(lock_path) {
+        Ok(l) => l,
+        Err(e) => return Result.Err(e),
+    };
+    return Result.Err(Error.from_linux_errno(22)); // EINVAL
+}
+
+fn test_lock_held_across_error_released(lock_path: [u8]) -> bool {
+    let res = helper_lock_fail(lock_path);
+    if res.is_ok() {
+        return false;
+    }
+    // Lock should have been released during early return
+    let l = match acquire_file_lock(lock_path) {
+        Ok(l) => l,
+        Err(_) => return false,
+    };
+    return true;
+}
+
+fn test_lock_contention(lock_path: [u8]) -> bool {
+    let mut fd2: i64 = -1;
+    {
+        let l = match acquire_file_lock(lock_path) {
+            Ok(lock) => lock,
+            Err(_) => return false,
+        };
+        // While l is held, open the file independently and attempt non-blocking LOCK_EX | LOCK_NB (2 | 4 = 6)
+        fd2 = unsafe { @syscall(2, lock_path.ptr as u64, 2 as u64, 0 as u64) } as i64; // O_RDWR
+        if fd2 < 0 { return false; }
+        let flock_res = unsafe { @syscall(73, fd2 as u64, 6 as u64) } as i64;
+        if flock_res != -11 as i64 { // -11 is -EWOULDBLOCK / -EAGAIN
+            let _ = unsafe { @syscall(3, fd2 as u64) };
+            return false;
+        }
+        // l is dropped here at block exit
+    }
+    // Now that l is dropped, LOCK_EX | LOCK_NB should succeed!
+    let flock_res2 = unsafe { @syscall(73, fd2 as u64, 6 as u64) } as i64;
+    if flock_res2 != 0 {
+        let _ = unsafe { @syscall(3, fd2 as u64) };
+        return false;
+    }
+    let _ = unsafe { @syscall(73, fd2 as u64, 8 as u64) }; // LOCK_UN
+    let _ = unsafe { @syscall(3, fd2 as u64) };
+    return true;
+}
+
+fn test_list_dir_entries_non_aliasing(arena: &Arena, test_dir: [u8], file1: [u8], file2: [u8]) -> bool {
+    if make_dir_all(test_dir, arena).is_err() { return false; }
+    if write_file(file1, "1").is_err() { return false; }
+    if write_file(file2, "2").is_err() { return false; }
+
+    let res = list_dir(test_dir, arena);
+    if res.is_err() { return false; }
+    let names = res.ok().unwrap();
+    // Must have anchor attached
+    if names.anchor.is_none() { return false; }
+    if names.len() != 2 as usize { return false; }
+
+    let e0 = names.as_slice()[0];
+    let e1 = names.as_slice()[1];
+    // Names must be stored in independent arena allocations, not aliasing the same buffer
+    if e0.ptr == e1.ptr { return false; }
+
+    let _ = unlink_path(file1, arena);
+    let _ = unlink_path(file2, arena);
+    let _ = unlink_path(test_dir, arena);
+    return true;
+}
+
+fn main() -> i32 {
+    let arena = Arena.new(1 << 20).unwrap();
+    let pid = unsafe { @syscall(39) } as u64;
+
+    let mut buf1 = [0 as u8; 64];
+    let reg_file = format_temp_path("/tmp/zoril_fstest_reg_", pid, ".txt", &mut buf1);
+
+    let mut buf2 = [0 as u8; 64];
+    let sub_dir = format_temp_path("/tmp/zoril_fstest_reg_", pid, ".txt/subdir", &mut buf2);
+
+    let mut buf3 = [0 as u8; 64];
+    let lock_file = format_temp_path("/tmp/zoril_fstest_lock_", pid, ".lock", &mut buf3);
+
+    let mut buf4 = [0 as u8; 64];
+    let list_test_dir = format_temp_path("/tmp/zoril_fstest_dir_", pid, "", &mut buf4);
+    let mut buf5 = [0 as u8; 64];
+    let list_file1 = format_temp_path("/tmp/zoril_fstest_dir_", pid, "/alpha.txt", &mut buf5);
+    let mut buf6 = [0 as u8; 64];
+    let list_file2 = format_temp_path("/tmp/zoril_fstest_dir_", pid, "/beta.txt", &mut buf6);
+
+    if !test_unlink_missing(&arena) { return 1; }
+    if !test_make_dir_all_under_file(&arena, reg_file, sub_dir) { return 2; }
+    if !test_list_dir_of_file(&arena, reg_file) { return 3; }
+    if !test_spawn_missing_binary(&arena) { return 4; }
+    if !test_kill_reaped_child(&arena) { return 5; }
+    if !test_lock_scope_release(lock_file) { return 6; }
+    if !test_lock_held_across_error_released(lock_file) { return 7; }
+    if !test_lock_contention(lock_file) { return 8; }
+    if !test_list_dir_entries_non_aliasing(&arena, list_test_dir, list_file1, list_file2) { return 9; }
+
+    let _ = unlink_path(reg_file, &arena);
+    let _ = unlink_path(lock_file, &arena);
+    return 0;
+}

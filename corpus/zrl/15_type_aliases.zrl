@@ -1,0 +1,44 @@
+// 15: Type aliases for readability and abstraction.
+// expected exit code: 224
+// Demonstrates: type keyword, aliasing primitives, aliasing generic types.
+
+type Byte = u8;
+type Word = u32;
+type Size = u64;
+
+type Coordinate = (i32, i32);
+
+struct Matrix {
+    rows: i32,
+    cols: i32,
+}
+
+type Grid = Matrix;
+
+fn byte_to_word(b: Byte) -> Word {
+    return b as Word;
+}
+
+fn distance_squared(a: Coordinate, b: Coordinate) -> i32 {
+    let dx = a.0 - b.0;
+    let dy = a.1 - b.1;
+    return dx * dx + dy * dy;
+}
+
+fn grid_cells(g: &Grid) -> i32 {
+    return g.rows * g.cols;
+}
+
+fn main() -> i32 {
+    let b: Byte = 0xFF;
+    let w = byte_to_word(b);
+
+    let origin: Coordinate = (0, 0);
+    let target: Coordinate = (3, 4);
+    let dist2 = distance_squared(origin, target);
+
+    let g = Grid { rows: 10, cols: 20 };
+    let cells = grid_cells(&g);
+
+    return dist2 + cells + w as i32;
+}

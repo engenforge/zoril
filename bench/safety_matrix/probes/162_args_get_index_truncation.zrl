@@ -1,0 +1,19 @@
+// name: Args::get — index truncated to i32, so the bounds guard passed
+// expected: accept
+// `index as i32` made an index at or above 2^31 small or negative: the guard passed and the read
+// went past the end of `argv` (a fault, 139, before the fix). It must return None, and argv[0]
+// must still resolve.
+import "args.zrl";
+use args::args;
+
+fn main() -> i32 {
+    let a = args();
+    match a.get((1 as usize << 31) + 5 as usize) {
+        Some(_) => { return 1; }
+        None => {}
+    }
+    match a.get(0 as usize) {
+        Some(_) => { return 0; }
+        None => { return 2; }
+    }
+}

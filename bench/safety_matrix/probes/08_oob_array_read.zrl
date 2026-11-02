@@ -1,0 +1,7 @@
+// name: OOB array read
+// expected: runtime_trap
+fn main() -> i32 {
+    let data = [1 as u8, 2 as u8, 3 as u8];
+    let i = 99 as usize;
+    return data[i] as i32;
+}

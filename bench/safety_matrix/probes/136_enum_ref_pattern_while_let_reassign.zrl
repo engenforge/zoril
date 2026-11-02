@@ -1,0 +1,13 @@
+// name: Enum mutated while a while-let pattern binding through a reference is live
+// expected: compile_reject
+// A pattern binding through a reference (`while let ... = &e`) inherits the borrow of `e`,
+// so mutating `e` while `x` is live is rejected.
+enum E { A(Box<i32>), B }
+fn main() -> i32 {
+    let mut e = E.A(box 5);
+    while let E.A(x) = &e {
+        e = E.B;
+        return **x;
+    }
+    return 0;
+}

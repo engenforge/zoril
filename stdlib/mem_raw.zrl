@@ -1,0 +1,142 @@
+// Low-level raw memory mapping, bump primitives, and heap allocation
+
+import "sys.zrl";
+import "io.zrl";
+import "fmt.zrl";
+import "core0.zrl";
+
+use io::{Error, eprint, exit, stderr};
+use fmt::write_u64;
+use sys::{mmap_or_trap, munmap_or_trap, syscall_failed};
+
+// CALLER OBLIGATION: dest and src must point to valid memory of at least size bytes; regions must not overlap.
+pub extern fn memcpy(dest: *mut u8, src: *u8, size: u64);
+
+// CALLER OBLIGATION: dest must point to valid writable memory of at least size bytes.
+pub extern fn memset(dest: *mut u8, value: i32, size: u64);
+
+// Low-level memory header tracking arena offset, capacity, and backing mmap bounds.
+pub struct ArenaHeader {
+    pub start: *mut u8,
+    pub offset: u64,
+    pub capacity: u64,
+    pub generation: u64,
+}
+
+// Size in bytes of the ArenaHeader structure (64 bytes).
+pub const ARENA_HEADER_SIZE: u64 = 64;
+// Poison byte pattern written over freed memory pages in debug mode.
+pub const ARENA_POISON: i32 = 165;
+
+// Allocates an arena mapping, returning a raw pointer to ArenaHeader.
+// Traps if mmap fails.
+pub unsafe fn arena_init(capacity: u64) -> *mut ArenaHeader {
+    // PROT_READ|PROT_WRITE = 3, MAP_PRIVATE|MAP_ANONYMOUS = 0x22 (34)
+    let ptr = mmap_or_trap(0 as *mut u8, capacity, 3 as u64, 34 as u64, -1 as i64, 0 as u64);
+    let arena = ptr as *mut ArenaHeader;
+    (*arena).start = ptr;
+    (*arena).offset = 0 as u64;
+    (*arena).capacity = capacity;
+    (*arena).generation = 0 as u64;
+    return arena;
+}
+
+// Allocates an arena mapping, returning Result<*mut ArenaHeader, Error>.
+pub unsafe fn arena_init_result(capacity: u64) -> Result<*mut ArenaHeader, Error> {
+    if capacity < ARENA_HEADER_SIZE + 8 as u64 {
+        return Result.Err(Error.from_linux_errno(22 as i32));
+    }
+    let ret = @syscall(9, 0 as u64, capacity, 3 as u64, 34 as u64, -1 as i64 as u64, 0 as u64);
+    if syscall_failed(ret) {
+        return Result.Err(Error.from_linux_errno((0 as i64 - ret) as i32));
+    }
+    let ptr = @ptr_from_int<*mut u8>(ret);
+    let arena = ptr as *mut ArenaHeader;
+    (*arena).start = ptr;
+    (*arena).offset = 0 as u64;
+    (*arena).capacity = capacity;
+    (*arena).generation = 0 as u64;
+    return Result.Ok(arena);
+}
+
+// CALLER OBLIGATION: arena must point to a live, mapped ArenaHeader.
+pub unsafe fn arena_free(arena: *mut ArenaHeader) {
+    munmap_or_trap((*arena).start, (*arena).capacity);
+}
+
+// CALLER OBLIGATION: arena must point to a live ArenaHeader, and offset must not exceed capacity.
+pub unsafe fn arena_reset(arena: *mut ArenaHeader, offset: u64) {
+    let old_offset = (*arena).offset;
+    if offset < old_offset {
+        let released = ((*arena).start as u64 + ARENA_HEADER_SIZE + offset) as *mut u8;
+        memset(released, ARENA_POISON, old_offset - offset);
+    }
+    (*arena).offset = offset;
+}
+
+fn arena_overflow(capacity: u64, offset: u64, size: u64) -> never {
+    eprint("ArenaHeader overflow (capacity: ");
+    let mut err = stderr();
+    let _ = write_u64(&mut err, capacity);
+    eprint(", offset: ");
+    let _ = write_u64(&mut err, offset);
+    eprint(", requested: ");
+    let _ = write_u64(&mut err, size);
+    eprint(")\n");
+    exit(134);
+    zoril_abort();
+}
+
+// CALLER OBLIGATION: arena must be null (global heap) or point to a valid ArenaHeader.
+pub unsafe fn zoril_allocator_alloc(arena: *mut ArenaHeader, size: u64) -> *mut u8 {
+    if arena as u64 == 0 as u64 {
+        return mmap_or_trap(0 as *mut u8, size, 3 as u64, 34 as u64, -1 as i64, 0 as u64);
+    }
+    if arena.offset > arena.capacity
+        || arena.capacity - arena.offset < ARENA_HEADER_SIZE + 7 as u64 {
+        arena_overflow(arena.capacity, arena.offset, size);
+    }
+    let aligned_offset = (arena.offset + ARENA_HEADER_SIZE + 7 as u64) & !(7 as u64);
+    if aligned_offset > arena.capacity || size > arena.capacity - aligned_offset {
+        arena_overflow(arena.capacity, arena.offset, size);
+    }
+    let user_ptr = (arena.start as u64 + aligned_offset) as *mut u8;
+    arena.offset = aligned_offset + size - ARENA_HEADER_SIZE;
+    return user_ptr;
+}
+
+// CALLER OBLIGATION: arena must be valid, and old_ptr must have been allocated in arena with old_size.
+pub unsafe fn zoril_allocator_realloc(
+    arena: *mut ArenaHeader,
+    old_ptr: *u8,
+    old_size: u64,
+    new_size: u64
+) -> *u8 {
+    let used = old_ptr as u64 - arena.start as u64;
+    if arena.start as u64 + arena.offset + ARENA_HEADER_SIZE == old_ptr as u64 + old_size {
+        if used <= arena.capacity && new_size <= arena.capacity - used {
+            arena.offset = used + new_size - ARENA_HEADER_SIZE;
+            return old_ptr;
+        }
+    }
+    let new_ptr = zoril_allocator_alloc(arena, new_size);
+    memcpy(new_ptr, old_ptr, old_size);
+    return new_ptr;
+}
+
+// CALLER OBLIGATION: arena must be null or a valid ArenaHeader matching ptr's allocation.
+pub unsafe fn zoril_allocator_free(arena: *mut ArenaHeader, ptr: *u8, size: u64) {
+    if arena as u64 == 0 as u64 {
+        munmap_or_trap(ptr, size);
+    }
+}
+
+// CALLER OBLIGATION: size bytes must be released by heap_free with identical size when no longer needed.
+pub unsafe fn heap_alloc(size: u64) -> *mut u8 {
+    return zoril_allocator_alloc(0 as *mut ArenaHeader, size);
+}
+
+// CALLER OBLIGATION: ptr must have been returned by heap_alloc with exact size.
+pub unsafe fn heap_free(ptr: *u8, size: u64) {
+    zoril_allocator_free(0 as *mut ArenaHeader, ptr, size);
+}

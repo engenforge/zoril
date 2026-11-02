@@ -1,0 +1,9 @@
+// expected exit 0
+// Two imports with one stem are told apart with `as`.
+import "one/clash_lib.zrl";
+import "two/clash_lib.zrl" as other;
+
+fn main() -> i32 {
+    if clash_lib::one() + other::two() != 3 { return 1; }
+    return 0;
+}

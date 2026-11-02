@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_duplicate_definition.zrl:7:1: error: `g` is defined twice; the other is at tests/error_reporting/err_duplicate_definition.zrl:6:1
+// EXPECT: tests/error_reporting/err_duplicate_definition.zrl:9:1: error: `T` is defined twice; the other is at tests/error_reporting/err_duplicate_definition.zrl:8:1
+// EXPECT: tests/error_reporting/err_duplicate_definition.zrl:10:1: error: `T::f` is defined twice; the other is at tests/error_reporting/err_duplicate_definition.zrl:10:1
+// A second definition of a name in one module was accepted, one of the two silently winning.
+fn g() -> i32 { return 1; }
+fn g() -> i32 { return 2; }
+struct T { y: i32 }
+struct T { z: i32 }
+impl T { fn f(self: &T) -> i32 { return 1; } fn f(self: &T) -> i32 { return 2; } }
+fn main() -> i32 { return g(); }

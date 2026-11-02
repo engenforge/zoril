@@ -1,0 +1,10 @@
+
+// expected exit 42
+enum MyResult<T> { Ok(T), Err }
+fn main() -> i32 {
+    let r = MyResult::<i32>.Ok(42);
+    return match r {
+        MyResult.Ok(v) => v,
+        MyResult.Err => 0,
+    };
+}

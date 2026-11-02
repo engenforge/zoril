@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: error: invalid assignment target
+// A literal is a value, not a place.
+fn main() -> i32 {
+    1 = 2;
+    return 0;
+}

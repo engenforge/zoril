@@ -1,0 +1,21 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_assoc_fn.zrl:19:5: error: cannot let 'x' go out of scope while it is still borrowed
+
+// An associated function: `W.borrow(&x)` takes the address as its first parameter and hands it
+// back, and the summary follows the call to `borrow` the same way it follows a free function.
+struct W {
+    v: i32,
+}
+
+impl W {
+    fn borrow(w: &W) -> &i32 { return &w.v; }
+}
+
+fn main() -> i32 {
+    let mut r: &i32 = &0;
+    {
+        let x = W { v: 5 };
+        r = W.borrow(&x);
+    }
+    return *r;
+}

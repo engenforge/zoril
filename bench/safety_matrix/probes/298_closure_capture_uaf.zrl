@@ -1,0 +1,21 @@
+// name: A closure's capture of a String outlives the String it was copied from
+// expected: compile_reject
+// The capture was a shallow copy of the owning struct: `@drop(s)` freed the buffer while the
+// closure still pointed at it, and `f()` read the dead slot (exit 97). Capturing an owning value
+// must move it, so the outer binding is unusable and the drop belongs to the closure.
+import "string.zrl";
+use string::String;
+
+fn churn() -> i32 {
+    let a: [i32; 64] = [97; 64];
+    return a[0];
+}
+
+fn main() -> i32 {
+    let mut s = String.new();
+    s.push_str("abcdefgh");
+    let f = || { return s.as_slice()[0] as i32; };
+    @drop(s);
+    let _c = churn();
+    return f();
+}

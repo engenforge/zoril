@@ -1,0 +1,20 @@
+// EXPECT: tests/error_reporting/warn_wildcard_arm.zrl:12:39: warning: `_` here stands for only `Color.Green`, `Color.Blue`, `Color.Alpha`; list them, so that a new variant must be handled here (wildcard-arm)
+// EXPECT: tests/error_reporting/warn_wildcard_arm.zrl:15:83: warning: `_` here stands for only `Big.H`, `Big.I`, `Big.J`; list them, so that a new variant must be handled here (wildcard-arm)
+// EXPECT: tests/error_reporting/warn_wildcard_arm.zrl:17:44: warning: `_` here stands for only `Option.None`; list them, so that a new variant must be handled here (wildcard-arm)
+// The wildcard-arm lint (on by default; -A wildcard-arm turns it off): a `_` arm standing for
+// few variants hides a new variant from the exhaustiveness check. Not for a diverging arm
+// (line 13), a `_` standing for most of the enum (line 14), or an `if let` (line 16).
+import "core.zrl";
+enum Color { Red, Green, Blue, Alpha }
+enum Big { A, B, C, D, E, F, G, H, I, J }
+fn f(c: Color, b: Big, o: Option<i32>) -> i32 {
+    let v0 = 0;
+    let x = match c { Color.Red => 1, _ => 2 };
+    let y = match c { Color.Red => 1, Color.Green => 2, _ => ICE("no") };
+    let z = match b { Big.A => 1, _ => 2 };
+    let w = match b { Big.A | Big.B | Big.C | Big.D | Big.E | Big.F | Big.G => 1, _ => 2 };
+    if let Option.Some(v) = o { return v; }
+    let u = match o { Option.Some(v) => v, _ => 0 };
+    return x + y + z + w + u + v0;
+}
+fn main() -> i32 { return 0; }

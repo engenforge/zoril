@@ -1,0 +1,326 @@
+// Lexer Token Definitions for Zoril v1.1
+
+import "ast.zrl";
+
+// Bit-pattern zero instead of `0 as f64`: an int->float cast is runtime
+// float arithmetic, which the flat/bootstrap subset cannot execute
+// (stdlib/softfp.zrl).
+fn f64_zero() -> f64 {
+    let z = 0 as u64;
+    return unsafe { *( (&z as usize) as *f64 ) };
+}
+
+pub struct TokenWithSpan {
+    pub token: Token,
+    pub span: Span,
+}
+
+pub enum Token {
+    // Keywords (0-27)
+    KFn = 0, KStruct = 1, KEnum = 2, KTrait = 3, KImpl = 4,
+    KLet = 5, KMut = 6,
+    KIf = 7, KElse = 8, KMatch = 9,
+    KWhile = 10, KFor = 11, KIn = 12,
+    KReturn = 13, KBreak = 14, KContinue = 15, KDefer = 16,
+    KType = 17, KPub = 18, KExtern = 19,
+    KBox = 20, KTry = 21,
+    KSizeof = 22, KAlignof = 23,
+    KAs = 24,
+    KConst = 25, KStatic = 26, KImport = 27,
+    
+    // Identifiers and Literals (28-33)
+    Ident(u32) = 28, Int((u64, u32)) = 29, Float(f64) = 30, Char(u32) = 31, String(u32) = 32,
+    Bool(bool) = 33,
+    
+    // Operators (34-69)
+    Plus = 34, Minus = 35, Star = 36, Slash = 37, Percent = 38,
+    PlusEqual = 39, MinusEqual = 40, StarEqual = 41, SlashEqual = 42, PercentEqual = 43,
+    PlusPercent = 44, MinusPercent = 45, StarPercent = 46,
+    PlusPercentEqual = 47, MinusPercentEqual = 48, StarPercentEqual = 49,
+    Equal = 50, EqualEqual = 51, BangEqual = 52,
+    Less = 53, Greater = 54, LessEqual = 55, GreaterEqual = 56,
+    Amp = 57, Pipe = 58, Caret = 59, Bang = 60,
+    AmpAmp = 61, PipePipe = 62,
+    AmpEqual = 63, PipeEqual = 64, CaretEqual = 65,
+    LessLess = 66, GreaterGreater = 67,
+    LessLessEqual = 68, GreaterGreaterEqual = 69,
+    
+    // Punctuation (70-83)
+    Dot = 70, DotDot = 71, DotDotDot = 72, Comma = 73, Colon = 74, Semi = 75, Arrow = 76, FatArrow = 77,
+    LParen = 78, RParen = 79, LBrace = 80, RBrace = 81, LBracket = 82, RBracket = 83,
+    
+    // Special (84-90)
+    Question = 84, Underscore = 85, At = 86, DoubleColon = 87, Hash = 88,
+    Eof = 89, Invalid(u32) = 90,
+    KLoop = 91, KUnsafe = 92
+}
+
+// Token without its payload, for comparing and matching token kinds (`Token` itself carries
+// payloads and so has no `==`). Discriminants match Token's.
+pub enum TokenKind {
+    KFn = 0,
+    KStruct = 1,
+    KEnum = 2,
+    KTrait = 3,
+    KImpl = 4,
+    KLet = 5,
+    KMut = 6,
+    KIf = 7,
+    KElse = 8,
+    KMatch = 9,
+    KWhile = 10,
+    KFor = 11,
+    KIn = 12,
+    KReturn = 13,
+    KBreak = 14,
+    KContinue = 15,
+    KDefer = 16,
+    KType = 17,
+    KPub = 18,
+    KExtern = 19,
+    KBox = 20,
+    KTry = 21,
+    KSizeof = 22,
+    KAlignof = 23,
+    KAs = 24,
+    KConst = 25,
+    KStatic = 26,
+    KImport = 27,
+    Ident = 28,
+    Int = 29,
+    Float = 30,
+    Char = 31,
+    String = 32,
+    Bool = 33,
+    Plus = 34,
+    Minus = 35,
+    Star = 36,
+    Slash = 37,
+    Percent = 38,
+    PlusEqual = 39,
+    MinusEqual = 40,
+    StarEqual = 41,
+    SlashEqual = 42,
+    PercentEqual = 43,
+    PlusPercent = 44,
+    MinusPercent = 45,
+    StarPercent = 46,
+    PlusPercentEqual = 47,
+    MinusPercentEqual = 48,
+    StarPercentEqual = 49,
+    Equal = 50,
+    EqualEqual = 51,
+    BangEqual = 52,
+    Less = 53,
+    Greater = 54,
+    LessEqual = 55,
+    GreaterEqual = 56,
+    Amp = 57,
+    Pipe = 58,
+    Caret = 59,
+    Bang = 60,
+    AmpAmp = 61,
+    PipePipe = 62,
+    AmpEqual = 63,
+    PipeEqual = 64,
+    CaretEqual = 65,
+    LessLess = 66,
+    GreaterGreater = 67,
+    LessLessEqual = 68,
+    GreaterGreaterEqual = 69,
+    Dot = 70,
+    DotDot = 71,
+    DotDotDot = 72,
+    Comma = 73,
+    Colon = 74,
+    Semi = 75,
+    Arrow = 76,
+    FatArrow = 77,
+    LParen = 78,
+    RParen = 79,
+    LBrace = 80,
+    RBrace = 81,
+    LBracket = 82,
+    RBracket = 83,
+    Question = 84,
+    Underscore = 85,
+    At = 86,
+    DoubleColon = 87,
+    Hash = 88,
+    Eof = 89,
+    Invalid = 90,
+    KLoop = 91,
+    KUnsafe = 92,
+}
+
+impl Token {
+    // The variant without its payload. Token carries payloads, so it has no `==`; the parser
+    // compares and matches kinds instead.
+    pub fn kind(self: &Token) -> TokenKind {
+        return match *self {
+            Token.KFn => TokenKind.KFn,
+            Token.KStruct => TokenKind.KStruct,
+            Token.KEnum => TokenKind.KEnum,
+            Token.KTrait => TokenKind.KTrait,
+            Token.KImpl => TokenKind.KImpl,
+            Token.KLet => TokenKind.KLet,
+            Token.KMut => TokenKind.KMut,
+            Token.KIf => TokenKind.KIf,
+            Token.KElse => TokenKind.KElse,
+            Token.KMatch => TokenKind.KMatch,
+            Token.KWhile => TokenKind.KWhile,
+            Token.KFor => TokenKind.KFor,
+            Token.KIn => TokenKind.KIn,
+            Token.KReturn => TokenKind.KReturn,
+            Token.KBreak => TokenKind.KBreak,
+            Token.KContinue => TokenKind.KContinue,
+            Token.KDefer => TokenKind.KDefer,
+            Token.KType => TokenKind.KType,
+            Token.KPub => TokenKind.KPub,
+            Token.KExtern => TokenKind.KExtern,
+            Token.KBox => TokenKind.KBox,
+            Token.KTry => TokenKind.KTry,
+            Token.KSizeof => TokenKind.KSizeof,
+            Token.KAlignof => TokenKind.KAlignof,
+            Token.KAs => TokenKind.KAs,
+            Token.KConst => TokenKind.KConst,
+            Token.KStatic => TokenKind.KStatic,
+            Token.KImport => TokenKind.KImport,
+            Token.Ident(_) => TokenKind.Ident,
+            Token.Int(_) => TokenKind.Int,
+            Token.Float(_) => TokenKind.Float,
+            Token.Char(_) => TokenKind.Char,
+            Token.String(_) => TokenKind.String,
+            Token.Bool(_) => TokenKind.Bool,
+            Token.Plus => TokenKind.Plus,
+            Token.Minus => TokenKind.Minus,
+            Token.Star => TokenKind.Star,
+            Token.Slash => TokenKind.Slash,
+            Token.Percent => TokenKind.Percent,
+            Token.PlusEqual => TokenKind.PlusEqual,
+            Token.MinusEqual => TokenKind.MinusEqual,
+            Token.StarEqual => TokenKind.StarEqual,
+            Token.SlashEqual => TokenKind.SlashEqual,
+            Token.PercentEqual => TokenKind.PercentEqual,
+            Token.PlusPercent => TokenKind.PlusPercent,
+            Token.MinusPercent => TokenKind.MinusPercent,
+            Token.StarPercent => TokenKind.StarPercent,
+            Token.PlusPercentEqual => TokenKind.PlusPercentEqual,
+            Token.MinusPercentEqual => TokenKind.MinusPercentEqual,
+            Token.StarPercentEqual => TokenKind.StarPercentEqual,
+            Token.Equal => TokenKind.Equal,
+            Token.EqualEqual => TokenKind.EqualEqual,
+            Token.BangEqual => TokenKind.BangEqual,
+            Token.Less => TokenKind.Less,
+            Token.Greater => TokenKind.Greater,
+            Token.LessEqual => TokenKind.LessEqual,
+            Token.GreaterEqual => TokenKind.GreaterEqual,
+            Token.Amp => TokenKind.Amp,
+            Token.Pipe => TokenKind.Pipe,
+            Token.Caret => TokenKind.Caret,
+            Token.Bang => TokenKind.Bang,
+            Token.AmpAmp => TokenKind.AmpAmp,
+            Token.PipePipe => TokenKind.PipePipe,
+            Token.AmpEqual => TokenKind.AmpEqual,
+            Token.PipeEqual => TokenKind.PipeEqual,
+            Token.CaretEqual => TokenKind.CaretEqual,
+            Token.LessLess => TokenKind.LessLess,
+            Token.GreaterGreater => TokenKind.GreaterGreater,
+            Token.LessLessEqual => TokenKind.LessLessEqual,
+            Token.GreaterGreaterEqual => TokenKind.GreaterGreaterEqual,
+            Token.Dot => TokenKind.Dot,
+            Token.DotDot => TokenKind.DotDot,
+            Token.DotDotDot => TokenKind.DotDotDot,
+            Token.Comma => TokenKind.Comma,
+            Token.Colon => TokenKind.Colon,
+            Token.Semi => TokenKind.Semi,
+            Token.Arrow => TokenKind.Arrow,
+            Token.FatArrow => TokenKind.FatArrow,
+            Token.LParen => TokenKind.LParen,
+            Token.RParen => TokenKind.RParen,
+            Token.LBrace => TokenKind.LBrace,
+            Token.RBrace => TokenKind.RBrace,
+            Token.LBracket => TokenKind.LBracket,
+            Token.RBracket => TokenKind.RBracket,
+            Token.Question => TokenKind.Question,
+            Token.Underscore => TokenKind.Underscore,
+            Token.At => TokenKind.At,
+            Token.DoubleColon => TokenKind.DoubleColon,
+            Token.Hash => TokenKind.Hash,
+            Token.Eof => TokenKind.Eof,
+            Token.Invalid(_) => TokenKind.Invalid,
+            Token.KLoop => TokenKind.KLoop,
+            Token.KUnsafe => TokenKind.KUnsafe,
+        };
+    }
+
+    pub fn is_ident(self: &Token) -> bool {
+        return match *self {
+            Token.Ident(_) => true,
+            _ => false,
+        };
+    }
+
+    pub fn get_ident_id(self: &Token) -> u32 {
+        return match *self {
+            Token.Ident(id) => id,
+            _ => 0 as u32,
+        };
+    }
+
+    pub fn get_int_val(self: &Token) -> u64 {
+        match *self {
+            Token.Int(v) => v.0,
+            _ => 0 as u64
+        }
+    }
+
+    pub fn get_int_suffix(self: &Token) -> u32 {
+        match *self {
+            Token.Int(v) => v.1,
+            _ => 0 as u32
+        }
+    }
+
+    pub fn get_float_val(self: &Token) -> f64 {
+        match *self {
+            Token.Float(v) => v,
+            _ => f64_zero()
+        }
+    }
+
+    pub fn get_float_suffix(self: &Token) -> u32 {
+        match *self {
+            Token.Float(v) => 0 as u32,
+            _ => 0 as u32
+        }
+    }
+
+    pub fn get_bool_val(self: &Token) -> bool {
+        return match *self {
+            Token.Bool(v) => v,
+            _ => false,
+        };
+    }
+
+    pub fn get_char_val(self: &Token) -> u32 {
+        return match *self {
+            Token.Char(v) => v,
+            _ => 0 as u32,
+        };
+    }
+
+    pub fn get_ident_id_mut(self: &mut Token) -> u32 {
+        return match *self {
+            Token.Ident(id) => id,
+            _ => 0 as u32,
+        };
+    }
+
+    pub fn get_string_id(self: &Token) -> u32 {
+        return match *self {
+            Token.String(v) => v,
+            _ => 0 as u32,
+        };
+    }
+}

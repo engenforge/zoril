@@ -1,0 +1,7 @@
+import "helpers/mod_hello.zrl";
+use mod_hello::say_hello;
+
+fn main() -> i32 {
+    say_hello();
+    return 0;
+}

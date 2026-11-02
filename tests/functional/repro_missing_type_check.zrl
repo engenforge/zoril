@@ -1,0 +1,8 @@
+// expected compile fail
+import "io.zrl";
+
+fn takes_ptr(p: &u32) {}
+
+fn main() {
+    takes_ptr(1 as u64);
+}

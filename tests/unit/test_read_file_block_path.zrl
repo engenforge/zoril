@@ -1,0 +1,26 @@
+import "file.zrl";
+import "mem.zrl";
+import "core0.zrl";
+use file::read_file;
+use mem::Arena;
+use core0::subslice;
+
+fn main() -> i32 {
+    let a = Arena.new(65536 as u64).unwrap();
+    let mut outer_bytes: [u8] = "";
+    {
+        let path_buf: [u8; 18] = [
+            '/' as u8, 'p' as u8, 'r' as u8, 'o' as u8, 'c' as u8,
+            '/' as u8, 's' as u8, 'e' as u8, 'l' as u8, 'f' as u8,
+            '/' as u8, 'c' as u8, 'm' as u8, 'd' as u8, 'l' as u8,
+            'i' as u8, 'n' as u8, 'e' as u8
+        ];
+        let p_slice: [u8] = subslice(&path_buf, 0 as usize, 18 as usize);
+        let res = read_file(p_slice, &a);
+        if res.is_ok() {
+            outer_bytes = res.ok().unwrap();
+        }
+    }
+    if outer_bytes.len > 0 as usize { return 0; }
+    return 1;
+}

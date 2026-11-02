@@ -1,0 +1,11 @@
+// expected compile fail
+// An array literal is the other aggregate initializer with no constant evaluator yet (planned, with the
+// struct literal). A byte string into `[u8; N]` is the form for
+// a byte array that *is* supported.
+// EXPECT: tests/error_reporting/err_static_init_array_literal.zrl:7:25: error: a static or constant initializer must be a constant: an integer, float, char, bool, byte string or enum variant
+
+static TABLE: [u8; 3] = [1, 2, 3];
+
+fn main() -> i32 {
+    return 0;
+}

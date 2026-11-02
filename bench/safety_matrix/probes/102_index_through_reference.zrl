@@ -1,0 +1,9 @@
+// name: Index a reference as a pointer
+// expected: compile_reject
+// A reference is not a raw pointer. `x[1]` with `x: &u32` compiled in safe code and
+// read the word after `x`.
+fn peek(x: &u32) -> u32 { return x[1]; }
+fn main() -> i32 {
+    let a = 5 as u32;
+    return peek(&a) as i32;
+}

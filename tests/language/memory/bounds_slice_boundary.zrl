@@ -1,0 +1,13 @@
+// expected exit 134
+// The boundary case: index == len must trap. A slice of length 3 has valid
+// indices 0..2, so s[3] is out of bounds by exactly one.
+//
+// This exists because mutation testing found the gap: bounds_slice_oob.zrl uses
+// index 99, so flipping the check from `idx < len` to `idx <= len` -- the
+// classic off-by-one, and the single most likely way to get a bounds check
+// wrong -- left the whole suite green. See scripts/mutation-check.sh, M2.
+fn main() -> i32 {
+    let mut arr = [1 as u8, 2, 7];
+    let s: [u8] = &mut arr;
+    return s[3 as usize] as i32;
+}

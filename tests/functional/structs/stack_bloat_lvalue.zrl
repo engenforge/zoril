@@ -1,0 +1,23 @@
+// tests/test_stack_bloat_lvalue.zrl
+
+struct Data {
+    a: i64,
+    b: i64,
+}
+
+fn get_data() -> Data {
+    return Data { a: 1, b: 2 };
+}
+
+fn test() -> i64 {
+    // Accessing a field of a returned struct currently often 
+    // results in the entire struct being copied to a new stack slot
+    // for EVERY access if not handled as a single lvalue.
+    let x = get_data().a + get_data().b;
+    return x;
+}
+
+fn main() -> i32 {
+    if test() == 3 { return 0; }
+    return 1;
+}

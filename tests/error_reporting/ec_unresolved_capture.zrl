@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/ec_unresolved_capture.zrl:4:12: error: unknown type `NonExistent`
+pub fn main() {
+    let x: NonExistent = 0;
+    let f = |dummy: i32| {
+        let z = x;
+    };
+}

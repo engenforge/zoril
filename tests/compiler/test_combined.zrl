@@ -1,0 +1,699 @@
+// Parser for Zoril v1.1
+// Hand-written recursive descent parser for declarations and statements.
+// Uses Pratt parsing for expressions.
+
+pub struct Parser {
+    pub lexer: Lexer,
+    pub cur_token: Token,
+    pub peek_token: Token,
+    pub arena: *mut ArenaHeader,
+    pub ast: *mut AST,
+}
+
+impl Parser {
+    pub fn new(lexer: Lexer, ast: &mut AST) -> Parser {
+        let mut p = Parser {
+            lexer: lexer,
+            cur_token: Token.Eof,
+            peek_token: Token.Eof,
+            arena: ast.arena,
+            ast: ast as *mut AST,
+        };
+        // Prime the token stream
+        p.next_token();
+        p.next_token();
+        return p;
+    }
+
+    fn next_token(self: &mut Parser) {
+        self.cur_token = self.peek_token;
+        self.peek_token = self.lexer.next_token_kind();
+    }
+
+    fn is_kind(self: &Parser, kind: Token) -> bool {
+        return self.cur_token.get_tag() == kind.get_tag();
+    }
+
+    fn peek_is_kind(self: &Parser, kind: Token) -> bool {
+        return self.peek_token.get_tag() == kind.get_tag();
+    }
+
+    fn expect(self: &mut Parser, kind: Token) -> bool {
+        if self.is_kind(kind) {
+            self.next_token();
+            return true;
+        }
+        // TODO: Proper error reporting
+        return false;
+    }
+
+    pub fn parse_module(self: &mut Parser) -> [Decl] {
+        let mut decls_ptr = unsafe {
+            zoril_allocator_alloc(self.arena, 1024 as u64 *% sizeof(Decl))
+        } as *mut Decl;
+        let mut count = 0 as u64;
+
+        while !self.is_kind(Token.Eof) {
+            let decl = self.parse_declaration();
+            let p = (decls_ptr as u64 + count *% sizeof(Decl)) as *mut Decl;
+            unsafe { *p = decl; }
+            count = count + 1;
+        }
+
+        unsafe { return @slice(decls_ptr as *Decl, count); }
+    }
+
+    fn parse_declaration(self: &mut Parser) -> Decl {
+        return Decl.Import;
+    }
+}
+// Lexer implementation for Zoril v1.1
+
+pub struct Lexer {
+    pub pos: u64,
+}
+
+impl Lexer {
+    pub fn new(source: [u8], intern_table: *mut InternTable) -> Lexer {
+        return Lexer {
+            pos: 0 as u64,
+        };
+    }
+
+    pub fn next_token_kind(self: &mut Lexer) -> Token {
+        return Token.Eof;
+    }
+}
+// Lexer Token Definitions for Zoril v1.1
+
+pub enum Token {
+    // Keywords (0-27)
+    KFn, KStruct, KEnum, KTrait, KImpl,
+    KLet, KMut,
+    KIf, KElse, KMatch,
+    KWhile, KFor, KIn,
+    KReturn, KBreak, KContinue, KDefer,
+    KType, KPub, KExtern,
+    KBox, KTry,
+    KSizeof, KAlignof,
+    KAs,
+    KConst, KStatic, KImport,
+
+    // Identifiers and Literals (28-33)
+    Ident(u32), Int(u64), Float(f64), Char(u32), // String(u32),
+    Bool(bool),
+
+    // Operators (34-69)
+    Plus, Minus, Star, Slash, Percent,
+    PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual,
+    PlusPercent, MinusPercent, StarPercent,
+    PlusPercentEqual, MinusPercentEqual, StarPercentEqual,
+    Equal, EqualEqual, BangEqual,
+    Less, Greater, LessEqual, GreaterEqual,
+    Amp, Pipe, Caret, Bang,
+    AmpAmp, PipePipe,
+    AmpEqual, PipeEqual, CaretEqual,
+    LessLess, GreaterGreater,
+    LessLessEqual, GreaterGreaterEqual,
+
+    // Punctuation (70-83)
+    Dot, DotDot, DotDotDot, Comma, Colon, Semi, Arrow, FatArrow,
+    LParen, RParen, LBrace, RBrace, LBracket, RBracket,
+
+    // Special (84-89)
+    Question, Underscore, At, DoubleColon,
+    Eof, Invalid(u32)
+}
+
+impl Token {
+    pub fn get_tag(self: &Token) -> i32 {
+        let tag = self.get_tag_low();
+        if tag != -1 { return tag; }
+        let tag = self.get_tag_op();
+        if tag != -1 { return tag; }
+        return self.get_tag_punct();
+    }
+
+    fn get_tag_low(self: &Token) -> i32 {
+        return match *self {
+            KFn => 0,
+            KStruct => 1,
+            KEnum => 2,
+            KTrait => 3,
+            KImpl => 4,
+            KLet => 5,
+            KMut => 6,
+            KIf => 7,
+            KElse => 8,
+            KMatch => 9,
+            KWhile => 10,
+            KFor => 11,
+            KIn => 12,
+            KReturn => 13,
+            KBreak => 14,
+            KContinue => 15,
+            KDefer => 16,
+            KType => 17,
+            KPub => 18,
+            KExtern => 19,
+            KBox => 20,
+            KTry => 21,
+            KSizeof => 22,
+            KAlignof => 23,
+            KAs => 24,
+            KConst => 25,
+            KStatic => 26,
+            KImport => 27,
+            Ident(_) => 28,
+            Int(_) => 29,
+            Float(_) => 30,
+            Char(_) => 31,                                               // String(_) => 32,
+            Bool(_) => 33,
+            Plus => 34,
+            Minus => 35,
+            Star => 36,
+            Slash => 37,
+            _ => -1,
+        };
+    }
+
+    fn get_tag_op(self: &Token) -> i32 {
+        return match *self {
+            Percent => 38,
+            PlusEqual => 39,
+            MinusEqual => 40,
+            StarEqual => 41,
+            SlashEqual => 42,
+            PercentEqual => 43,
+            PlusPercent => 44,
+            MinusPercent => 45,
+            StarPercent => 46,
+            PlusPercentEqual => 47,
+            MinusPercentEqual => 48,
+            StarPercentEqual => 49,
+            Equal => 50,
+            EqualEqual => 51,
+            BangEqual => 52,
+            Less => 53,
+            Greater => 54,
+            LessEqual => 55,
+            GreaterEqual => 56,
+            Amp => 57,
+            Pipe => 58,
+            Caret => 59,
+            Bang => 60,
+            AmpAmp => 61,
+            PipePipe => 62,
+            AmpEqual => 63,
+            PipeEqual => 64,
+            CaretEqual => 65,
+            LessLess => 66,
+            GreaterGreater => 67,
+            LessLessEqual => 68,
+            GreaterGreaterEqual => 69,
+            _ => -1,
+        };
+    }
+
+    fn get_tag_punct(self: &Token) -> i32 {
+        return match *self {
+            Dot => 70,
+            DotDot => 71,
+            DotDotDot => 72,
+            Comma => 73,
+            Colon => 74,
+            Semi => 75,
+            Arrow => 76,
+            FatArrow => 77,
+            LParen => 78,
+            RParen => 79,
+            LBrace => 80,
+            RBrace => 81,
+            LBracket => 82,
+            RBracket => 83,
+            Question => 84,
+            Underscore => 85,
+            At => 86,
+            DoubleColon => 87,
+            Eof => 88,
+            Invalid(_) => 89,
+            _ => -1,
+        };
+    }
+
+    pub fn is_ident(self: &Token) -> bool {
+        return match *self {
+            Ident(id) => true,
+            _ => false,
+        };
+    }
+
+    pub fn get_ident_id(self: &Token) -> u32 {
+        return match *self {
+            Ident(id) => id,
+            _ => 0 as u32,
+        };
+    }
+}
+// AST (Abstract Syntax Tree) Data Structures
+// Data-oriented design using indices into arena-allocated arrays.
+
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+    pub line: u32,
+    pub col: u32,
+}
+
+// Handles into AST arenas
+pub type ExprId = u32;
+pub type TypeId = u32;
+pub type StmtId = u32;
+pub type InternId = u32;
+
+pub enum Literal {
+    Int(u64),
+    Float(f64),
+    String(InternId),
+    Char(u32),
+    Bool(bool),
+}
+
+pub enum BinaryOp {
+    // Arithmetic
+    Add, Sub, Mul, Div, Mod,
+    AddWrap, SubWrap, MulWrap,
+
+    // Comparison
+    Eq, Ne, Lt, Le, Gt, Ge,
+
+    // Logical / Bitwise
+    And, Or, BitAnd, BitOr, BitXor, Shl, Shr,
+
+    // Assignment
+    Assign,
+    AddAssign, SubAssign, MulAssign, DivAssign, ModAssign,
+    BitAndAssign, BitOrAssign, BitXorAssign, ShlAssign, ShrAssign,
+    AddWrapAssign, SubWrapAssign, MulWrapAssign,
+}
+
+pub enum UnaryOp {
+    Neg, Not, BitNot,
+    Deref, Ref, RefMut,
+}
+
+pub struct BinaryExpr {
+    pub op: BinaryOp,
+    pub lhs: ExprId,
+    pub rhs: ExprId,
+}
+
+pub struct UnaryExpr {
+    pub op: UnaryOp,
+    pub expr: ExprId,
+}
+
+pub struct CallExpr {
+    pub callee: ExprId,
+    pub args_ptr: *ExprId,
+    pub args_len: u64,
+    pub type_args_ptr: *TypeId,
+    pub type_args_len: u64,
+}
+
+pub struct BlockExpr {
+    pub stmts_ptr: *StmtId,
+    pub stmts_len: u64,
+    pub tail_expr: ExprId, // 0 if none
+}
+
+pub struct IfExpr {
+    pub cond: ExprId,
+    pub then_block: ExprId,
+    pub else_block: ExprId, // 0 if none
+}
+
+pub struct MatchExpr {
+    pub expr: ExprId,
+    pub arms_ptr: *MatchArm,
+    pub arms_len: u64,
+}
+
+pub struct MatchArm {
+    pub pattern: ExprId, // Pattern is represented as an Expr for now
+    pub guard: ExprId,   // 0 if none
+    pub body: ExprId,
+}
+
+pub struct StructLiteralExpr {
+    pub struct_name: InternId,
+    pub fields_ptr: *FieldInit,
+    pub fields_len: u64,
+}
+
+pub struct FieldInit {
+    pub name: InternId,
+    pub value: ExprId,
+}
+
+pub struct MemberAccessExpr {
+    pub expr: ExprId,
+    pub member: InternId,
+}
+
+pub struct TupleAccessExpr {
+    pub expr: ExprId,
+    pub index: u32,
+}
+
+pub struct IndexExpr {
+    pub expr: ExprId,
+    pub index: ExprId,
+}
+
+pub struct BoxExpr {
+    pub expr: ExprId,
+    pub allocator: ExprId, // 0 if default
+}
+
+pub struct CastExpr {
+    pub expr: ExprId,
+    pub target_ty: TypeId,
+}
+
+pub struct ArrayLiteralExpr {
+    pub elements_ptr: *ExprId,
+    pub elements_len: u64,
+}
+
+pub struct TupleLiteralExpr {
+    pub elements_ptr: *ExprId,
+    pub elements_len: u64,
+}
+
+pub struct ClosureExpr {
+    pub params_ptr: *Param,
+    pub params_len: u64,
+    pub ret_ty: TypeId,
+    pub body: ExprId,
+}
+
+pub enum Expr {
+    Literal(Literal),
+    Ident(InternId),
+    Binary(BinaryExpr),
+    Unary(UnaryExpr),
+    Call(CallExpr),
+    Block(BlockExpr),
+    If(IfExpr),
+    Match(MatchExpr),
+    StructLiteral(StructLiteralExpr),
+    MemberAccess(MemberAccessExpr),
+    TupleAccess(TupleAccessExpr),
+    Index(IndexExpr),
+    Boxed(BoxExpr),
+    Cast(CastExpr),
+    Try(ExprId),
+    ArrayLiteral(ArrayLiteralExpr),
+    TupleLiteral(TupleLiteralExpr),
+    Closure(ClosureExpr),
+    Sizeof(TypeId),
+    Alignof(TypeId),
+}
+
+pub struct LetStmt {
+    pub name: InternId,
+    pub is_mut: bool,
+    pub ty: TypeId, // 0 if inferred
+    pub init: ExprId, // 0 if none
+}
+
+pub struct WhileStmt {
+    pub cond: ExprId,
+    pub body: ExprId,
+}
+
+pub struct ForStmt {
+    pub var: InternId,
+    pub range_start: ExprId,
+    pub range_end: ExprId,
+    pub body: ExprId,
+}
+
+pub enum Stmt {
+    Let(LetStmt),
+    While(WhileStmt),
+    For(ForStmt),
+    Expr(ExprId),
+    Defer(ExprId),
+    Return(ExprId),
+    Break,
+    Continue,
+}
+
+pub enum PrimitiveType {
+    I8, I16, I32, I64,
+    U8, U16, U32, U64,
+    F32, F64,
+    Bool,
+    Unit,
+    Char,
+}
+
+pub struct PointerType {
+    pub inner: TypeId,
+    pub is_mut: bool,
+}
+
+pub struct ArrayType {
+    pub inner: TypeId,
+    pub len: u64,
+}
+
+pub struct SliceType {
+    pub inner: TypeId,
+    pub is_mut: bool,
+}
+
+pub struct FnType {
+    pub params_ptr: *TypeId,
+    pub params_len: u64,
+    pub ret_ty: TypeId,
+    pub is_variadic: bool,
+}
+
+pub struct GenericType {
+    pub name: InternId,
+    pub type_args_ptr: *TypeId,
+    pub type_args_len: u64,
+}
+
+pub struct TupleType {
+    pub elements_ptr: *TypeId,
+    pub elements_len: u64,
+}
+
+pub enum Type {
+    Primitive(PrimitiveType),
+    Pointer(PointerType),
+    Boxed(TypeId),
+    Array(ArrayType),
+    Slice(SliceType),
+    Tuple(TupleType),
+    UserDefined(GenericType),
+    Fn(FnType),
+}
+
+pub struct FnDecl {
+    pub name: InternId,
+    pub params_ptr: *Param,
+    pub params_len: u64,
+    pub ret_ty: TypeId,
+    pub body: ExprId, // 0 if extern
+    pub is_pub: bool,
+    pub is_extern: bool,
+    pub is_variadic: bool,
+}
+
+pub struct Param {
+    pub name: InternId,
+    pub ty: TypeId,
+}
+
+pub struct StructDecl {
+    pub name: InternId,
+    pub fields_ptr: *Field,
+    pub fields_len: u64,
+    pub is_pub: bool,
+}
+
+pub struct Field {
+    pub name: InternId,
+    pub ty: TypeId,
+    pub is_pub: bool,
+}
+
+pub struct EnumDecl {
+    pub name: InternId,
+    pub variants_ptr: *Variant,
+    pub variants_len: u64,
+    pub is_pub: bool,
+}
+
+pub struct Variant {
+    pub name: InternId,
+    pub payload: TypeId, // 0 if none
+}
+
+pub struct TypeAliasDecl {
+    pub name: InternId,
+    pub target: TypeId,
+    pub is_pub: bool,
+}
+
+pub struct TraitDecl {
+    pub name: InternId,
+    pub methods_ptr: *FnDecl,
+    pub methods_len: u64,
+    pub is_pub: bool,
+}
+
+pub struct ImplDecl {
+    pub trait_name: InternId, // 0 if inherent
+    pub target_ty: TypeId,
+    pub methods_ptr: *FnDecl,
+    pub methods_len: u64,
+}
+
+pub struct ConstDecl {
+    pub name: InternId,
+    pub ty: TypeId,
+    pub value: ExprId,
+    pub is_pub: bool,
+}
+
+pub struct StaticDecl {
+    pub name: InternId,
+    pub is_mut: bool,
+    pub ty: TypeId,
+    pub value: ExprId,
+    pub is_pub: bool,
+}
+
+pub enum Decl {
+    Fn(FnDecl),
+    Struct(StructDecl),
+    Enum(EnumDecl),
+    TypeAlias(TypeAliasDecl),
+    Trait(TraitDecl),
+    Impl(ImplDecl),
+    Const(ConstDecl),
+    Static(StaticDecl),
+    Import(InternId),
+}
+
+pub struct AST {
+    pub arena: *mut ArenaHeader,
+    pub exprs: *mut Expr,
+    pub expr_count: u64,
+    pub expr_cap: u64,
+
+    pub types: *mut Type,
+    pub type_count: u64,
+    pub type_cap: u64,
+
+    pub stmts: *mut Stmt,
+    pub stmt_count: u64,
+    pub stmt_cap: u64,
+}
+
+impl AST {
+    pub fn new(arena: *mut ArenaHeader) -> AST {
+        let initial_cap = 1024 as u64;
+
+        return AST {
+            arena: arena,
+            exprs: unsafe {
+                zoril_allocator_alloc(arena, initial_cap *% sizeof(Expr))
+            } as *mut Expr,
+            expr_count: 1, // 0 is reserved for null/none
+            expr_cap: initial_cap,
+
+            types: unsafe {
+                zoril_allocator_alloc(arena, initial_cap *% sizeof(Type))
+            } as *mut Type,
+            type_count: 1,
+            type_cap: initial_cap,
+
+            stmts: unsafe {
+                zoril_allocator_alloc(arena, initial_cap *% sizeof(Stmt))
+            } as *mut Stmt,
+            stmt_count: 1,
+            stmt_cap: initial_cap,
+        };
+    }
+
+    pub fn alloc_expr(self: &mut AST, expr: Expr) -> ExprId {
+        if self.expr_count >= self.expr_cap {
+            // TODO: realloc (but for now just assume enough space in arena)
+        }
+        let id = self.expr_count as ExprId;
+        // SAFETY: the pointer arithmetic and the store are the raw arena writes this helper is
+        // for; `self.expr_count < self.expr_cap` is the caller's (unwritten) precondition.
+        unsafe {
+            let p = (self.exprs as u64 + self.expr_count *% sizeof(Expr)) as *mut Expr;
+            *p = expr;
+        }
+        self.expr_count = self.expr_count + 1 as u64;
+        return id;
+    }
+
+    pub fn alloc_type(self: &mut AST, ty: Type) -> TypeId {
+        if self.type_count >= self.type_cap {
+            // TODO: realloc
+        }
+        let id = self.type_count as TypeId;
+        // SAFETY: as AST.alloc_expr.
+        unsafe {
+            let p = (self.types as u64 + self.type_count *% sizeof(Type)) as *mut Type;
+            *p = ty;
+        }
+        self.type_count = self.type_count + 1 as u64;
+        return id;
+    }
+
+    pub fn alloc_stmt(self: &mut AST, stmt: Stmt) -> StmtId {
+        if self.stmt_count >= self.stmt_cap {
+            // TODO: realloc
+        }
+        let id = self.stmt_count as StmtId;
+        // SAFETY: as AST.alloc_expr.
+        unsafe {
+            let p = (self.stmts as u64 + self.stmt_count *% sizeof(Stmt)) as *mut Stmt;
+            *p = stmt;
+        }
+        self.stmt_count = self.stmt_count + 1 as u64;
+        return id;
+    }
+}
+import "core.zrl";
+import "mem_raw.zrl";
+import "intern.zrl";
+import "bytevec.zrl";
+use intern::InternTable;
+use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
+
+fn main() -> i32 {
+    let arena_box = unsafe { arena_init(4096 * 100) };
+    let arena = arena_box as *mut ArenaHeader;
+    let mut table = unsafe { InternTable.new_raw(arena) };
+    let mut ast = AST.new(arena);
+    let source = "import \"std.zrl\"; const X: u32 = 0; static mut Y: u32 = 0; pub fn printf(fmt: *u8, ...) -> i32 { } enum Option { None, Some: u32 }";
+    let mut lex = Lexer { pos: 0, };
+    let mut parser = Parser.new(lex, &mut ast);
+    let decls = parser.parse_module();
+    if decls.len == 0 as u64 {
+        return 0;
+    }
+    return 1;
+}

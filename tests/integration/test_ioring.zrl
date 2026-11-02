@@ -1,0 +1,14 @@
+fn main() -> i32 {
+    // ioring_setup(64) -> syscall 425
+    let ring = unsafe { @syscall(425, 64, 0) };
+    // close(ring) -> syscall 3
+    unsafe { @syscall(3, ring) };
+
+    // open(path, 0, 0) -> syscall 2
+    let fd = unsafe { @syscall(2, "tests/integration/test_ioring.zrl", 0, 0) };
+    if fd as i64 > 0 {
+        unsafe { @syscall(3, fd) };
+    }
+
+    return 0;
+}

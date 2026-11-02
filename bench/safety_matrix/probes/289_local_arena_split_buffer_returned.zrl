@@ -1,0 +1,17 @@
+// name: A slice from a split into a local arena, returned from the frame
+// expected: compile_reject
+// The `Vec<[u8]>` `split` returns is a temporary allocated in the local arena; its buffer dies
+// with the arena at the return (the reported reproducer exited 139 reading the unmapped region).
+import "mem.zrl";
+import "string.zrl";
+use mem::Arena;
+
+fn view() -> [u8] {
+    let a = Arena.new(65536).unwrap();
+    return "a,b".split(44 as u8, &a).as_slice()[0];
+}
+
+fn main() -> i32 {
+    let b = view();
+    return b[0] as i32;
+}

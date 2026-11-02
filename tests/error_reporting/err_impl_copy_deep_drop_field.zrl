@@ -1,0 +1,35 @@
+// expected compile fail
+// The driver's copy question (`is_copy_type_internal` in `src/driver/state.zrl`, one of the five
+// copies of it) stops recursing past ten levels, and it answers "`Copy`" there - so `impl Copy`
+// was accepted for a type whose `Drop` value sits eleven levels down: a `Copy` impl for a type
+// that owns a `Drop` value, which lets the value be copied and then dropped once per copy.
+// Its one-level sibling is `ec_impl_copy_for_drop_type.zrl`, which the same check rejects either
+// way; the depth is the point (doc/SAFETY.md §4.4).
+// EXPECT: tests/error_reporting/err_impl_copy_deep_drop_field.zrl:33:1: error: 'impl Copy' on 'S11', which owns storage through field 'a'
+import "core.zrl";
+
+struct D { x: i32 }
+
+trait Drop {
+    fn drop(self: &mut Self);
+}
+
+impl Drop for D {
+    fn drop(self: &mut D) {}
+}
+
+struct S1 { d: D }
+struct S2 { a: S1 }
+struct S3 { a: S2 }
+struct S4 { a: S3 }
+struct S5 { a: S4 }
+struct S6 { a: S5 }
+struct S7 { a: S6 }
+struct S8 { a: S7 }
+struct S9 { a: S8 }
+struct S10 { a: S9 }
+struct S11 { a: S10 }
+
+impl Copy for S11 {}
+
+fn main() -> i32 { return 0; }

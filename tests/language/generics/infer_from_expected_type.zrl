@@ -1,0 +1,34 @@
+// expected exit 0
+// A generic type named bare in a call (`Vec.new()`) and a generic function whose type
+// parameter appears only in its result (`none()`) take their type arguments from the type the
+// context expects. Both needed `::<..>`: `Vec.new()` failed inside Vec with "unknown type T".
+import "vec.zrl";
+import "hashmap.zrl";
+import "mem_raw.zrl";
+use vec::Vec;
+use hashmap::HashMap;
+use mem_raw::{ArenaHeader, arena_init};
+
+fn none<T>() -> Option<T> { return Option.None; }
+fn zero<T>() -> Vec<T> { return Vec::<T>.new(); }
+fn make_list() -> Vec<u64> { return Vec.new(); }
+
+fn main() -> i32 {
+    let mut v: Vec<u32> = Vec.new();
+    v.push(3);
+    if v.len() != 1 { return 1; }
+    let arena = unsafe { arena_init(65536) } as *mut ArenaHeader;
+    let mut w: Vec<u64> = unsafe { Vec.new_in_raw(arena) };
+    w.push(1 << 40);
+    if *w.get(0).unwrap() != 1099511627776 { return 2; }
+    let o: Option<u64> = none();
+    if o.is_some() { return 3; }
+    let z: Vec<i8> = zero();
+    if z.len() != 0 { return 4; }
+    let mut m: HashMap<u32, u32> = unsafe { HashMap.new_raw(arena) };
+    let k = 1 as u32;
+    m.insert(k, 2);
+    if *m.get(&k).unwrap() != 2 { return 5; }
+    if make_list().len() != 0 { return 6; }
+    return 0;
+}

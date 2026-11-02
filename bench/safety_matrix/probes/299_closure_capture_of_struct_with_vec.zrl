@@ -1,0 +1,20 @@
+// name: A closure's capture of a struct holding a Vec keeps a second copy of the owner
+// expected: compile_reject
+// The capture route through a field: the struct owns a Vec, so capturing it is a move into the
+// closure environment, and the outer binding cannot be used afterwards (probe 298 is the direct
+// collection).
+import "vec.zrl";
+use vec::Vec;
+
+struct Holder {
+    items: Vec<i32>,
+}
+
+fn main() -> i32 {
+    let mut h = Holder { items: Vec::<i32>.new() };
+    h.items.push(7);
+    let f = || { return h.items.len() as i32; };
+    let seen = f();
+    h.items.push(8);
+    return seen + (h.items.len() as i32);
+}

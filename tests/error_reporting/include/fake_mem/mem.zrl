@@ -1,0 +1,26 @@
+// A user library whose *file name* is `mem.zrl`, defining its own `Arena` with `mark` and
+// `reset_to`. It carries none of the attributes the compiler reserves for the standard library,
+// so `reset_to` here is an ordinary `&mut self` method and conflicts with every live borrow of the
+// value - which is the point of err_arena_spoof_user_mem_module.zrl: a compiler that recognized
+// the arena lifecycle by the callee's name, or by its file ending in `/mem.zrl`, would hand this
+// type the epoch exemption and accept a use-after-free.
+import "vec.zrl";
+use vec::Vec;
+
+pub struct ArenaMark {
+    off: u64,
+}
+
+pub struct Arena {
+    pub v: Vec<u64>,
+}
+
+impl Arena {
+    pub fn mark(self: &Arena) -> ArenaMark {
+        return ArenaMark { off: 0 as u64 };
+    }
+
+    pub fn reset_to(self: &mut Arena, m: ArenaMark) {
+        self.v = Vec::<u64>.new();
+    }
+}

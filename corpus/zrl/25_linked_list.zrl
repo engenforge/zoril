@@ -1,0 +1,56 @@
+// 25: A generic linked list — combining generics, Box, enums, match, and methods.
+// expected exit code: 73
+// Demonstrates: realistic data structure using multiple language features together.
+// Note: takes ownership (List<T>, not &List<T>) because matching through a borrow and binding
+// payloads by move is a verifier error (cannot move out of borrow); Zoril has no ref-pattern
+// binding yet. Arm bodies also use explicit lets, working around a lowering-order issue where RHS
+// sub-expressions lower movers before the LHS is read.
+
+enum List<T> {
+    Nil,
+    Cons((T, Box<List<T>>)),
+}
+
+fn cons<T>(head: T, tail: List<T>) -> List<T> {
+    return List.Cons((head, box tail));
+}
+
+fn nil<T>() -> List<T> {
+    return List.Nil;
+}
+
+fn head(list: List<i32>) -> i32 {
+    return match list {
+        Cons(pair) => pair.0,
+        Nil => 0,
+    };
+}
+
+fn length(list: List<i32>) -> i32 {
+    return match list {
+        Nil => 0,
+        Cons(pair) => {
+            let tail = *pair.1;
+            return 1 + length(tail);
+        },
+    };
+}
+
+fn sum(list: List<i32>) -> i32 {
+    return match list {
+        Nil => 0,
+        Cons(pair) => {
+            let a = pair.0;
+            let tail = *pair.1;
+            return a + sum(tail);
+        },
+    };
+}
+
+fn main() -> i32 {
+    let h = head(cons(10, cons(20, cons(30, nil()))));
+    let len = length(cons(10, cons(20, cons(30, nil()))));
+    let total = sum(cons(10, cons(20, cons(30, nil()))));
+
+    return h + len + total;  // 10 + 3 + 60 = 73
+}

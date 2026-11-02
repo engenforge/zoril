@@ -1,0 +1,4 @@
+pub static mut KEPT: *mut i32 = 0 as *mut i32;
+pub fn stash_global(p: *mut i32) {
+    KEPT = p;
+}

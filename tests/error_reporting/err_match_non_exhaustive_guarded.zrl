@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: error: non-exhaustive match: missing variant 'Two'
+enum Num {
+    One,
+    Two,
+}
+
+fn test_guard(n: Num, cond: bool) -> i32 {
+    return match n {
+        Num.One => 1,
+        Num.Two if cond => 2,
+    };
+}
+
+fn main() -> i32 {
+    return test_guard(Num.One, true);
+}

@@ -1,0 +1,20 @@
+// The module the private-method error tests reach into. `pub` decides who may name a method
+// (surface_syntax.md §11.1.2), so a method without it is reachable from this module only - which
+// is why the public entry point below calls it and the callers outside cannot.
+pub struct Widget { pub n: i32 }
+
+impl Widget {
+    fn secret(self: &Widget) -> i32 { return self.n + 1; }
+
+    fn assoc_secret() -> i32 { return 7; }
+
+    const SECRET: i32 = 5;
+
+    pub fn open(self: &Widget) -> i32 {
+        return self.secret() + Widget.assoc_secret() + Widget.SECRET;
+    }
+}
+
+// A public item a caller may name only through `err_private_method_helper::` or a `use`: the
+// error test for a missing import in a method body calls it bare.
+pub fn span_of(base: i32) -> i32 { return base + 1; }

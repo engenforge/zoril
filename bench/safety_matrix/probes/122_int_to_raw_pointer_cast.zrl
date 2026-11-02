@@ -1,0 +1,13 @@
+// name: Pointer forged from integer with `as`
+// expected: accept
+// `n as *T` creates a raw pointer as `@ptr_from_int(n)` does, and the creation is safe: every
+// *use* of the pointer is gated on its type, so the marker sits on the use rather than here
+// (unsafe_policy.md §1). Probes 13_forged_pointer.zrl and
+// 187_int_to_raw_ptr_cast_safe.zrl pin the two halves; this one forges from a value the
+// compiler cannot fold, which is what makes it a forge rather than a literal.
+fn addr() -> usize { return 4096; }
+fn main() -> i32 {
+    let p = addr() as *u8;
+    if p as usize != addr() as usize { return 1; }
+    return 0;
+}

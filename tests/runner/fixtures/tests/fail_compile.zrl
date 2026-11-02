@@ -1,0 +1,2 @@
+// expected exit 0
+fn main() -> i32 { return undefined_name; }

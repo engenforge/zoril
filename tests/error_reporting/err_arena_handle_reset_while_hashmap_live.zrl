@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: error: cannot mutably borrow 'a' while it is already borrowed
+// A HashMap from `HashMap.new(&arena)` holds the arena, so resetting the arena while the map
+// is live is a compile error (Stage 4 for HashMap).
+import "hashmap.zrl";
+import "mem.zrl";
+use hashmap::HashMap;
+use mem::Arena;
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536).unwrap();
+    let mut m = HashMap::<u64, u64>.new(&a);
+    m.insert(1 as u64, 1 as u64);
+    a.reset(); // @error "cannot mutably borrow 'a' while it is already borrowed"
+    m.insert(2 as u64, 2 as u64);
+    return 0;
+}

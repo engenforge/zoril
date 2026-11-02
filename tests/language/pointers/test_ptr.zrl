@@ -1,0 +1,175 @@
+import "mem_raw.zrl";
+use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
+
+// From repro_ptr_region.zrl
+pub struct MyPtr {
+    pub ptr: *u8,
+}
+
+impl MyPtr {
+    pub fn get_first(self: &MyPtr) -> u8 {
+        unsafe { return *self.ptr; }
+    }
+}
+
+// From repro_ptr_bug.zrl
+pub struct Buffer_0 {
+    pub ptr: *u8,
+}
+
+impl Copy for Buffer_0 {}
+
+pub struct Processor_0 {
+    pub buf: *mut Buffer_0,
+}
+
+impl Processor_0 {
+    pub fn process(self: &mut Processor_0, p: *u8) {
+        let b = unsafe { *self.buf };
+        if b.ptr == p {
+            // pass
+        }
+    }
+}
+
+fn test_ptr_bug() {
+    let mut b = Buffer_0 { ptr: "abc".ptr };
+    let mut p = Processor_0 { buf: &mut b as *mut Buffer_0 };
+    p.process("abc".ptr);
+}
+
+// From repro_ptr_method.zrl
+struct Table_1 {
+    count: u32,
+}
+
+impl Table_1 {
+    fn next_id(self: &mut Table_1) -> u32 {
+        self.count = self.count + 1;
+        return self.count;
+    }
+}
+
+struct Runner_1 {
+    table_ptr: *mut Table_1,
+}
+
+impl Runner_1 {
+    fn run(self: &mut Runner_1) -> u32 {
+        // Calling via a pointer dereference often triggers bugs
+        unsafe { return (*self.table_ptr).next_id(); }
+    }
+}
+
+fn test_ptr_method() -> i32 {
+    let mut t = Table_1 { count: 0 };
+    let mut r = Runner_1 { table_ptr: &mut t as *mut Table_1 };
+
+    let id = r.run();
+    if id != 1 {
+        return 1;
+    }
+    return 0;
+}
+
+// From repro_ptr_method_deref.zrl
+struct Test_2 { val: i32 }
+impl Test_2 {
+    fn get_val(self: &Test_2) -> i32 { return self.val; }
+}
+fn test_ptr_method_deref() -> i32 {
+    let mut t = Test_2 { val: 42 };
+    let p = &mut t as *mut Test_2;
+    if unsafe { (*p).get_val() } != 42 { return 1; }
+    return 0;
+}
+
+// From repro_ptr_region.zrl
+fn test_ptr_region() -> i32 {
+    let s = "abc";
+    let mut p = MyPtr { ptr: s.ptr };
+
+    if p.get_first() != 'a' as u8 {
+        return 1;
+    }
+    return 0;
+}
+
+// From repro_ptr_ret.zrl
+struct Test_3 { val: i32 }
+struct Container_3 { ptr: *mut Test_3 }
+
+impl Container_3 {
+    fn get_ptr(self: &Container_3) -> *mut Test_3 {
+        return self.ptr;
+    }
+}
+
+fn test_ptr_ret() -> i32 {
+    let mut t = Test_3 { val: 42 };
+    let c = Container_3 { ptr: &mut t as *mut Test_3 };
+    let res = c.get_ptr();
+    if res == 0 as *mut Test_3 { return 1; }
+    if unsafe { (*res).val } != 42 { return 2; }
+    return 0;
+}
+
+// From repro_ptr_write.zrl
+fn test_ptr_write() -> i32 {
+    let arena_ptr = unsafe { arena_init(4096) };
+    let ptr = unsafe { zoril_allocator_alloc(arena_ptr, 100) } as *mut u8;
+
+    unsafe { ptr[0] = 'H' as u8; }
+
+    if unsafe { ptr[0] } != 'H' as u8 {
+        return 1;
+    }
+    return 0;
+}
+
+// From repro_ptr_write_multi.zrl
+fn test_ptr_write_multi() -> i32 {
+    let arena = unsafe { arena_init(1024) };
+    let ptr = unsafe { zoril_allocator_alloc(arena, 10) } as *mut u8;
+
+    unsafe {
+        ptr[0] = 104;
+    }                        // 'h'
+    unsafe {
+        ptr[1] = 101;
+    }                        // 'e'
+
+    if unsafe { ptr[0] } != 104 {
+        return 1;
+    }
+    return 0;
+}
+
+// From test_ptr_iteration.zrl
+fn test_ptr_iteration() -> i32 {
+    let s = "hello";
+    let mut p = s.ptr;
+    let end = (s.ptr as u64 + s.len as u64) as *u8;
+    let mut sum = 0;
+    while (p as u64) < (end as u64) {
+        sum = sum + unsafe { *p } as i32;
+        p = (p as u64 + 1) as *u8;
+    }
+    if sum != 532 {
+        return 1;
+    }
+    return 0;
+}
+
+fn main() -> i32 {
+    test_ptr_bug();
+    if test_ptr_method() != 0 { return 1; }
+    if test_ptr_method_deref() != 0 { return 2; }
+    if test_ptr_region() != 0 { return 3; }
+    if test_ptr_ret() != 0 { return 4; }
+    if test_ptr_write() != 0 { return 5; }
+    if test_ptr_write_multi() != 0 { return 6; }
+    if test_ptr_iteration() != 0 { return 7; }
+
+    return 0;
+}

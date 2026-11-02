@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: error: cannot mutably borrow 'r' while it is already borrowed
+struct Resource { id: i32 }
+fn main() -> i32 {
+    let mut r = Resource { id: 1 };
+    let s = &r;
+    let t = &mut r; // This should be caught: s is used below, so both borrows are live.
+    (*s).id - 1
+}

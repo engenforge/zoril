@@ -1,0 +1,11 @@
+struct S {
+    s: [mut i32],
+}
+
+fn main() -> i32 {
+    let mut arr = [0, 0, 0];
+    let mut x = S { s: &mut arr };
+    x.s[1] = 42;
+    if x.s[1] != 42 { return 1; }
+    return 0;
+}

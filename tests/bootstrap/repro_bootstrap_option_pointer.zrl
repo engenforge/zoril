@@ -1,0 +1,26 @@
+// Repro for bootstrap compiler bug: Generic enum with pointer payload monomorphization failure.
+
+pub enum Option<T> {
+    None,
+    Some(T),
+}
+
+pub struct Symbol {
+    pub name: u32,
+}
+
+fn test_match(opt: Option<*mut Symbol>) -> u32 {
+    return match opt {
+        Option.Some(s) => unsafe { (*s).name },
+        Option.None => 0 as u32,
+    };
+}
+
+fn main() -> i32 {
+    let mut s = Symbol { name: 42 as u32 };
+    let opt: Option<*mut Symbol> = Option.Some(&mut s);
+    let val = test_match(opt);
+    
+    if val != 42 as u32 { return 1; }
+    return 0;
+}

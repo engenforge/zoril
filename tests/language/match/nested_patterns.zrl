@@ -1,0 +1,47 @@
+// expected exit 0
+// Patterns nest: tuple patterns, struct patterns (`field: p`, shorthand `field`, `..`) and
+// sub-patterns in variant payloads, at any depth, with literals and bindings at the leaves.
+// Matching through a reference binds by reference (match ergonomics).
+enum Option<T> { Some(T), None }
+struct P { x: i32, y: i32 }
+enum Shape { Pt(P), Pair((i32, i32)), Empty }
+
+fn classify(s: &Shape) -> i32 {
+    match s {
+        Shape.Pt(P { x: 0, y }) => { return *y; },
+        Shape.Pt(P { x, .. }) => { return *x * 100; },
+        Shape.Pair(1, b) => { return *b + 1000; },
+        Shape.Pair(a, b) => { return *a + *b; },
+        Shape.Empty => { return -1; },
+    }
+}
+
+fn depth(o: Option<Option<bool>>) -> i32 {
+    match o {
+        Option.Some(Option.Some(true)) => { return 1; },
+        Option.Some(Option.Some(false)) => { return 2; },
+        Option.Some(Option.None) => { return 3; },
+        Option.None => { return 4; },
+    }
+}
+
+fn pairs(a: bool, b: bool) -> i32 {
+    match (a, b) { (true, _) => { return 1; }, (false, true) => { return 2; }, (false, false) => { return 3; } }
+}
+
+fn main() -> i32 {
+    let t = (1, (2, 3));
+    let r = match t { (1, (a, 3)) => a, _ => 0 };
+    if r != 2 { return 1; }
+    if classify(&Shape.Pt(P { x: 0, y: 7 })) != 7 { return 2; }
+    if classify(&Shape.Pt(P { x: 4, y: 7 })) != 400 { return 3; }
+    if classify(&Shape.Pair((1, 5))) != 1005 { return 4; }
+    if classify(&Shape.Pair((2, 5))) != 7 { return 5; }
+    if classify(&Shape.Empty) != -1 { return 6; }
+    if depth(Option.Some(Option.Some(true))) + depth(Option.Some(Option.Some(false))) * 10 + depth(Option.Some(Option.None)) * 100 + depth(Option.None) * 1000 != 4321 { return 7; }
+    if pairs(true, false) + pairs(false, true) * 10 + pairs(false, false) * 100 != 321 { return 8; }
+    let p = P { x: 3, y: 4 };
+    let sum = match p { P { x, y } => x + y };
+    if sum != 7 { return 9; }
+    return 0;
+}

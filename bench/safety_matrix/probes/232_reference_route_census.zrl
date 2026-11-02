@@ -1,0 +1,116 @@
+// name: Reference route census
+// expected: accept
+// A census, not a property test: this program exercises every ZIR construct that can carry a
+// reference, every statement and terminator form a borrow row depends on, and both CFG shapes
+// (a join and a back-edge). scripts/check_route_coverage.sh reads its `--emit-zir-stats`
+// output through the borrow and region rows of doc/spec/safety_model.md.
+struct Holder { r: &i32 }
+struct Pair { x: i32, y: i32 }
+struct DropMe { x: i32 }
+static mut DROPS: i32 = 0;
+trait Drop { fn drop(self: DropMe); }
+impl Drop for DropMe {
+    fn drop(self: DropMe) { DROPS = DROPS + 1; }
+}
+enum Choice { A(&i32), B(i32) }
+
+fn id(p: &i32) -> &i32 {
+    return p;
+}
+
+fn consume(p: Pair) -> i32 {
+    return p.x;
+}
+
+fn take(d: DropMe) -> i32 {
+    return d.x;
+}
+
+// A value moved on one branch only: the scope exit uses a flagged drop (`DropIfLive`).
+fn conditional_move(c: bool) {
+    let d = DropMe { x: 2 };
+    if c { let n = take(d); }
+}
+
+fn main() -> i32 {
+    let x = 5;
+    let mut m = 7;
+
+    // Use, Ref, RefMut.
+    let a = &x;
+    let b = a;
+    let bm = &mut m;
+    *bm = 9;
+
+    // Call (direct).
+    let c = id(&x);
+
+    // CallPtr: a function value, called through the value.
+    let f: fn(&i32) -> &i32 = id;
+    let cp = f(&x);
+
+    // StructLiteral, Tuple, Array, ArrayRepeat.
+    let h = Holder { r: &x };
+    let t = (&x, 3);
+    let arr = [&x, &x];
+    // Above the unroll threshold (64) the lowerer emits the loop form, `ArrayRepeat`.
+    let rep = [x; 65];
+
+    // Boxed. (Not `box &x`: a stack pointer in heap memory is a region escape, correctly
+    // rejected by the IL verifier; the construct itself is what this census walks.)
+    let bx = box x;
+
+    // EnumVariant, VariantCheck, EnumPayload.
+    let e = Choice.A(&x);
+    let pay = match &e {
+        Choice.A(r) => *r,
+        Choice.B(n) => &x,
+    };
+
+    // Cast: an array reference coerced to a slice.
+    let sl: [&i32] = &arr;
+
+    // FuncAddr and GetEnv: a closure value and a closure that captures a reference.
+    let cl = |q: &i32| -> &i32 { return q; };
+    let k = &x;
+    let cap = |q: i32| -> i32 { return *k + q; };
+
+    // Drop, DropIfLive and Intrinsic (`@drop`).
+    let owned = box 3;
+    @drop(owned);
+    let maybe = box 4;
+    if x > 0 { let moved = maybe; }
+    // A by-value call whose argument is a possibly-moved drop local is the shape the flagged
+    // drop exists for.
+    let p1 = Pair { x: 1, y: 2 };
+    let _ = consume(p1);
+    conditional_move(x > 0);
+    conditional_move(x < 0);
+
+    // Cast (a numeric conversion; a cast is also the route by which an aggregate conversion
+    // carries its operand's borrows).
+    let c64 = x as i64;
+    let _ = c64;
+
+    // A join (the if) and a back-edge (the while).
+    let mut i = 0;
+    let mut acc = 0;
+    while i < 3 {
+        if i == 1 { acc = acc + 1; } else { acc = acc + 2; }
+        i = i + 1;
+    }
+
+    let _ = bx;
+    let _ = sl;
+    let _ = rep;
+    let _ = t;
+    let _ = h;
+    let _ = pay;
+    let _ = c;
+    let _ = cp;
+    let _ = b;
+    let _ = cl(&x);
+    let _ = cap(1);
+    if acc < 0 { return 1; }
+    return 0;
+}

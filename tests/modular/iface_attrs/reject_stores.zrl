@@ -1,0 +1,16 @@
+// expected compile fail
+import "lib.zrl";
+
+use lib::Holder;
+
+fn fill(h: &mut Holder<i32>) {
+    let x = 5;
+    lib::gen_stores(&x, h);
+}
+
+fn main() -> i32 {
+    let y = 1;
+    let mut h = Holder<i32> { r: &y };
+    fill(&mut h);
+    return *h.r;
+}

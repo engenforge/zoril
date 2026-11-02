@@ -1,0 +1,7 @@
+// expected compile fail
+// flags: --chekced
+// EXPECT: zoril: error: unrecognized option `--chekced`; did you mean `--checked`?
+
+fn main() -> i32 {
+    return 0;
+}

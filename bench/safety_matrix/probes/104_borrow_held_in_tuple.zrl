@@ -1,0 +1,11 @@
+// name: Mutable borrow held in a tuple, then the borrowed value written
+// expected: compile_reject
+// A tuple literal holding `&mut x` keeps `x` borrowed. The borrow was not passed on to the
+// tuple, so `x` could be written while `t.0` still pointed at it.
+fn main() -> i32 {
+    let mut x = 1;
+    let t = (&mut x, 1);
+    x = 5;
+    *t.0 = 7;
+    return x;
+}

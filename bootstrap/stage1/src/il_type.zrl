@@ -1,0 +1,347 @@
+// IL Type System
+
+import "core.zrl";
+import "mem.zrl";
+import "io.zrl";
+
+pub const ILTYPE_PRIMITIVE: u32 = 0;
+pub const ILTYPE_PTR: u32 = 1;
+pub const ILTYPE_PTRMUT: u32 = 2;
+pub const ILTYPE_BOXED: u32 = 3;
+pub const ILTYPE_BOXEDMUT: u32 = 4;
+pub const ILTYPE_SLICE: u32 = 5;
+pub const ILTYPE_ARRAY: u32 = 6;
+pub const ILTYPE_FN: u32 = 7;
+pub const ILTYPE_TUPLE: u32 = 8;
+pub const ILTYPE_FD: u32 = 9;
+pub const ILTYPE_IORING: u32 = 10;
+pub const ILTYPE_USER: u32 = 11;
+pub const ILTYPE_VAR: u32 = 12;
+
+pub const ILPRIM_U8: u32 = 0;
+pub const ILPRIM_U16: u32 = 1;
+pub const ILPRIM_U32: u32 = 2;
+pub const ILPRIM_U64: u32 = 3;
+pub const ILPRIM_USIZE: u32 = 4;
+pub const ILPRIM_I8: u32 = 5;
+pub const ILPRIM_I16: u32 = 6;
+pub const ILPRIM_I32: u32 = 7;
+pub const ILPRIM_I64: u32 = 8;
+pub const ILPRIM_ISIZE: u32 = 9;
+pub const ILPRIM_F32: u32 = 10;
+pub const ILPRIM_F64: u32 = 11;
+pub const ILPRIM_BOOL: u32 = 12;
+pub const ILPRIM_CHAR: u32 = 13;
+pub const ILPRIM_UNIT: u32 = 14;
+pub const ILPRIM_NEVER: u32 = 15;
+
+pub const ENUM_TAG_SIZE: u64 = 4;
+pub const ENUM_PAYLOAD_OFFSET: u64 = 8;
+
+pub const IL_TYPEDEF_STRUCT: u32 = 0;
+pub const IL_TYPEDEF_ENUM: u32 = 1;
+pub const IL_TYPEDEF_FN: u32 = 2;
+
+pub enum Region {
+    Static,
+    Local,
+    Heap,
+    Custom([u8]),
+}
+
+impl Region {
+    pub fn get_tag(self: &Region) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Custom(self: &Region) -> [u8] { return unsafe { *( (self as usize + 8) as *[u8] ) }; }
+}
+
+pub enum FDCap {
+    R,
+    W,
+    RW,
+}
+
+impl FDCap {
+    pub fn get_tag(self: &FDCap) -> u32 { return unsafe { *(self as *u32) }; }
+}
+
+pub enum ILTypeDef {
+    Struct(ILStruct),
+    Enum(ILEnum),
+    Fn(ILFn),
+}
+
+impl ILTypeDef {
+    pub fn get_tag(self: &ILTypeDef) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Struct(self: &ILTypeDef) -> &ILStruct { return unsafe { &*((self as usize + 8) as *ILStruct) }; }
+    pub fn get_Enum(self: &ILTypeDef) -> &ILEnum { return unsafe { &*((self as usize + 8) as *ILEnum) }; }
+    pub fn get_Fn(self: &ILTypeDef) -> &ILFn { return unsafe { &*((self as usize + 8) as *ILFn) }; }
+}
+
+pub struct ILStruct {
+    pub fields: [ILField],
+}
+
+pub struct ILField {
+    pub name: u32,
+    pub ty: u32, // Index to ILType
+    pub is_raw_ptr: bool,
+}
+
+pub struct ILEnum {
+    pub variants: [ILVariant],
+}
+
+pub struct ILVariant {
+    pub name: u32,
+    pub payload: u32, // Index to ILType, 0 if none
+    pub discriminant: u32,
+}
+
+pub enum ILPrimitive {
+    U8, U16, U32, U64, USize,
+    I8, I16, I32, I64, ISize,
+    F32, F64,
+    Bool, Char,
+    Unit, Never,
+}
+
+impl ILPrimitive {
+    pub fn get_tag(self: &ILPrimitive) -> u32 { return unsafe { *(self as *u32) }; }
+}
+
+pub struct ILSlice {
+    pub element: u32, // Index to ILType
+    pub mutable: bool, // [mut T]: its holder may write the elements
+}
+
+pub struct ILArray {
+    pub element: u32, // Index to ILType
+    pub size: u32,
+}
+
+pub struct ILFn {
+    pub params: [u32], // Indices to ILType
+    pub ret_ty: u32,    // Index to ILType
+    pub is_variadic: bool,
+}
+
+pub struct ILUser {
+    pub id: u32,
+    pub name: u32,
+    pub type_args: [u32], // Indices to ILType
+}
+
+pub struct ILVar {
+    pub name: u32,
+    pub bounds: [u32], // Indices to ILType
+}
+
+pub struct ILTypeDecl {
+    pub id: u32,
+    pub name: u32,
+    pub def: ILType,
+    pub source_file: u32,
+}
+
+pub enum ILType {
+    Primitive(ILPrimitive),
+    Ptr(u32),    // Index to ILType
+    PtrMut(u32), // Index to ILType
+    Boxed(u32),
+    BoxedMut(u32),
+    Slice(ILSlice),
+    Array(ILArray),
+    Fn(ILFn),
+    Tuple([u32]),
+    FD(FDCap),
+    IORing,
+    User(ILUser),
+    Var(ILVar), // type parameter with optional bounds
+}
+
+impl ILType {
+    pub fn get_tag(self: &ILType) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Primitive(self: &ILType) -> ILPrimitive { return unsafe { *( (self as usize + 8) as *ILPrimitive ) }; }
+    pub fn get_Ptr(self: &ILType) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_PtrMut(self: &ILType) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Boxed(self: &ILType) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_BoxedMut(self: &ILType) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Slice(self: &ILType) -> &ILSlice { return unsafe { &*((self as usize + 8) as *ILSlice) }; }
+    pub fn get_Array(self: &ILType) -> &ILArray { return unsafe { &*((self as usize + 8) as *ILArray) }; }
+    pub fn get_Fn(self: &ILType) -> &ILFn { return unsafe { &*((self as usize + 8) as *ILFn) }; }
+    pub fn get_Tuple(self: &ILType) -> [u32] { return unsafe { *( (self as usize + 8) as *[u32] ) }; }
+    pub fn get_User(self: &ILType) -> &ILUser { return unsafe { &*((self as usize + 8) as *ILUser) }; }
+    pub fn get_Var(self: &ILType) -> &ILVar { return unsafe { &*((self as usize + 8) as *ILVar) }; }
+}
+
+pub fn is_type_eq(a: ILType, b: ILType) -> bool {
+    return match a {
+        ILType.Primitive(p1) => {
+            match b {
+                ILType.Primitive(p2) => p1.get_tag() == p2.get_tag(),
+                _ => false,
+            }
+        },
+        ILType.Ptr(inner1) => {
+            match b {
+                ILType.Ptr(inner2) => inner1 == inner2,
+                _ => false,
+            }
+        },
+        ILType.PtrMut(inner1) => {
+            match b {
+                ILType.PtrMut(inner2) => inner1 == inner2,
+                _ => false,
+            }
+        },
+        ILType.Boxed(inner1) => {
+            match b {
+                ILType.Boxed(inner2) => inner1 == inner2,
+                _ => false,
+            }
+        },
+        ILType.BoxedMut(inner1) => {
+            match b {
+                ILType.BoxedMut(inner2) => inner1 == inner2,
+                _ => false,
+            }
+        },
+        ILType.Slice(s1) => {
+            match b {
+                ILType.Slice(s2) => s1.element == s2.element && s1.mutable == s2.mutable,
+                _ => false,
+            }
+        },
+        ILType.Array(a1) => {
+            match b {
+                ILType.Array(a2) => a1.element == a2.element && a1.size == a2.size,
+                _ => false,
+            }
+        },
+        ILType.Fn(f1) => {
+            match b {
+                ILType.Fn(f2) => {
+                    if f1.ret_ty != f2.ret_ty { return false; }
+                    if f1.is_variadic != f2.is_variadic { return false; }
+                    if f1.params.len != f2.params.len { return false; }
+                    let mut i = 0 as usize;
+                    while i < f1.params.len {
+                        if f1.params[i] != f2.params[i] { return false; }
+                        i = i + 1 as usize;
+                    }
+                    true
+                },
+                _ => false,
+            }
+        },
+        ILType.Tuple(t1) => {
+            match b {
+                ILType.Tuple(t2) => {
+                    if t1.len != t2.len { return false; }
+                    let mut i = 0 as usize;
+                    while i < t1.len {
+                        if t1[i] != t2[i] { return false; }
+                        i = i + 1 as usize;
+                    }
+                    true
+                },
+                _ => false,
+            }
+        },
+        ILType.User(u1) => {
+            match b {
+                ILType.User(u2) => {
+                    if u1.id != u2.id { return false; }
+                    if u1.name != u2.name { return false; }
+                    if u1.type_args.len != u2.type_args.len { return false; }
+                    let mut i = 0 as usize;
+                    while i < u1.type_args.len {
+                        if u1.type_args[i] != u2.type_args[i] { return false; }
+                        i = i + 1 as usize;
+                    }
+                    true
+                },
+                _ => false,
+            }
+        },
+        ILType.Var(v1) => {
+            match b {
+                ILType.Var(v2) => v1.name == v2.name,
+                _ => false,
+            }
+        },
+        ILType.FD(c1) => {
+            match b {
+                ILType.FD(c2) => {
+                    let tag1 = unsafe { *( (&c1) as *u32 ) };
+                    let tag2 = unsafe { *( (&c2) as *u32 ) };
+                    tag1 == tag2
+                },
+                _ => false,
+            }
+        },
+        ILType.IORing => {
+            match b {
+                ILType.IORing => true,
+                _ => false,
+            }
+        },
+    };
+}
+
+pub fn hash_type(ty: ILType) -> u64 {
+    let h1 = 0xcbf2 as u64 << 48;
+    let h2 = 0x9ce4 as u64 << 32;
+    let h3 = 0x8422 as u64 << 16;
+    let h4 = 0x2325 as u64;
+    let mut h = h1 | h2 | h3 | h4;
+    
+    let p_high = 0x100 as u64 << 32;
+    let p_low = 0x1b3 as u64;
+    let prime = p_high | p_low;
+
+    let tag = ty.get_tag();
+    h = (h ^ (tag as u64)) * prime;
+    
+    match ty {
+        ILType.Primitive(p) => { h = (h ^ (p.get_tag() as u64)) * prime; },
+        ILType.Ptr(inner) | ILType.PtrMut(inner) | ILType.Boxed(inner) | ILType.BoxedMut(inner) => {
+            h = (h ^ (inner as u64)) * prime;
+        },
+        ILType.Slice(s) => {
+            h = (h ^ (s.element as u64)) * prime;
+            if s.mutable { h = (h ^ 1 as u64) * prime; }
+        },
+        ILType.Array(a) => {
+            h = (h ^ (a.element as u64)) * prime;
+            h = (h ^ (a.size as u64)) * prime;
+        },
+        ILType.Fn(f) => {
+            h = (h ^ (f.ret_ty as u64)) * prime;
+            let mut i = 0 as usize;
+            while i < f.params.len {
+                h = (h ^ (f.params[i] as u64)) * prime;
+                i = i + 1 as usize;
+            }
+        },
+        ILType.Tuple(types) => {
+            let mut i = 0 as usize;
+            while i < types.len {
+                h = (h ^ (types[i] as u64)) * prime;
+                i = i + 1 as usize;
+            }
+        },
+        ILType.User(u) => {
+            h = (h ^ (u.id as u64)) * prime;
+            let mut i = 0 as usize;
+            while i < u.type_args.len {
+                h = (h ^ (u.type_args[i] as u64)) * prime;
+                i = i + 1 as usize;
+            }
+        },
+        ILType.FD(c) => { h = (h ^ (c.get_tag() as u64)) * prime; },
+        ILType.IORing => {},
+        ILType.Var(v) => { h = (h ^ (v.name as u64)) * prime; },
+    }
+    return h;
+}

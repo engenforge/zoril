@@ -1,0 +1,18 @@
+// name: An owning value moved after the last use of its borrow, in operand order
+// expected: accept
+// Twin of 408: `H { n: r.len(), w: v }` reads through `r` first and moves `v` after, so it is
+// correct and stays accepted. Exit 0.
+import "vec.zrl";
+use vec::Vec;
+
+struct H { w: Vec<i32>, n: usize }
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(7);
+    let r = &mut v;
+    let h = H { n: r.len(), w: v };
+    if h.n != 1 { return 1; }
+    if h.w.len() != 1 { return 2; }
+    return 0;
+}

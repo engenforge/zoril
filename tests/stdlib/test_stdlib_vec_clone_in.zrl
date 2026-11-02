@@ -1,0 +1,34 @@
+// Vec::clone_in(&Arena) and its raw escape hatch clone_in_raw: a clone copies the
+// elements into a fresh arena-backed buffer, independent of the source's.
+// expected exit 0
+
+import "mem.zrl";
+import "vec.zrl";
+use mem::{Arena, arena_raw};
+use vec::Vec;
+
+fn main() -> i32 {
+    let arena = Arena.new(65536).unwrap();
+
+    let mut src = Vec::<u64>.new_in(&arena);
+    src.push(1);
+    src.push(2);
+    src.push(3);
+
+    // clone_in(&Arena): the copy is tied to the same arena.
+    let copy = src.clone_in(&arena);
+    if copy.len() != 3 { return 1; }
+    if *copy.get(0).unwrap() != 1 { return 2; }
+    if *copy.get(2).unwrap() != 3 { return 3; }
+
+    // clone_in_raw(*mut ArenaHeader): the internal escape hatch.
+    let copy2 = unsafe { src.clone_in_raw(arena_raw(&arena)) };
+    if copy2.len() != 3 { return 4; }
+    if *copy2.get(1).unwrap() != 2 { return 5; }
+
+    // Cloning an empty Vec takes the len == 0 path.
+    let empty = Vec::<u64>.new_in(&arena);
+    let empty2 = empty.clone_in(&arena);
+    if empty2.len() != 0 { return 6; }
+    return 0;
+}

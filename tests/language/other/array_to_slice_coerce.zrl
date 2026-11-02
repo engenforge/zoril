@@ -1,0 +1,40 @@
+// Tests that arrays are correctly coerced to slices when passed to functions
+// expecting slice parameters (&[T]).
+
+fn sum_slice(s: &[i32]) -> i32 {
+    let mut total = 0;
+    let mut i = 0 as usize;
+    while i < s.len {
+        total = total + s[i];
+        i = i + 1;
+    }
+    return total;
+}
+
+fn first_elem(s: &[i32]) -> i32 {
+    return s[0];
+}
+
+fn slice_len(s: &[i32]) -> usize {
+    return s.len;
+}
+
+fn main() -> i32 {
+    let arr = [1, 2, 3, 4, 5];
+
+    // Pass &array to &[T] function - must coerce correctly
+    let total = sum_slice(&arr);
+    if total != 15 { return 1; }
+
+    let first = first_elem(&arr);
+    if first != 1 { return 2; }
+
+    let len = slice_len(&arr);
+    if len != 5 { return 3; }
+
+    // Inline array literal
+    let t2 = sum_slice(&[10, 20, 30]);
+    if t2 != 60 { return 4; }
+
+    return 0;
+}

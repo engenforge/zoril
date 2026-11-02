@@ -1,0 +1,24 @@
+import "io.zrl";
+use io::{write, stdout};
+
+fn main() -> i32 {
+    let x = 10;
+    let y = -x;
+    if y != -10 { return 1; }
+    
+    let b = true;
+    let not_b = !b;
+    if not_b { return 2; }
+    
+    let z = 5;
+    let p = &z;
+    if *p != 5 { return 3; }
+    
+    let mut w = 20;
+    let pm = &mut w;
+    *pm = 30;
+    if w != 30 { return 4; }
+
+    write(stdout(), "Unary ops test passed\n");
+    return 0;
+}

@@ -1,0 +1,42 @@
+// expected exit code: 16
+// 03: Complete operator coverage with precedence and compound assignment.
+// Demonstrates: arithmetic, bitwise, comparison, logical, compound assignment, short-circuit.
+
+fn main() -> i32 {
+    // Arithmetic (precedence: * / % > + -)
+    let a = 2 + 3 * 4;        // 14, not 20
+    let b = 10 % 3;           // 1
+    let c = 100 / 7;          // 14
+
+    // Bitwise operators
+    let mask = 0xFF & 0x0F;   // 0x0F
+    let flags = 0x01 | 0x04;  // 0x05
+    let toggled = flags ^ 0x04; // 0x01
+    let shifted = 1 << 8;     // 256
+    let down = shifted >> 4;   // 16
+
+    // Comparison
+    let lt = a < b;
+    let ge = a >= 14;
+    let eq = mask == 15;
+    let ne = a != b;
+
+    // Short-circuiting logical operators
+    let both = eq && ge;       // true && true
+    let either = lt || ge;     // false || true
+
+    // Compound assignment
+    let mut x = 10;
+    x += 5;     // 15
+    x -= 3;     // 12
+    x *= 2;     // 24
+    x /= 4;     // 6
+    x %= 5;     // 1
+    x <<= 3;    // 8
+    x >>= 1;    // 4
+    x |= 0x10;  // 20
+    x &= 0x14;  // 20
+    x ^= 0x04;  // 16
+
+    return x;
+}

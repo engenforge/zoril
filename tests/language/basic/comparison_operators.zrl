@@ -1,0 +1,111 @@
+// expected exit code: 0
+// Tests comparison operators used in let bindings and conditions.
+// This specifically tests the '<' parsing fix (was misinterpreted as generic type start).
+
+fn test_int_comparisons() -> i32 {
+    let a = 14;
+    let b = 1;
+
+    let lt = a < b;
+    if lt { return 1; }
+
+    let gt = a > b;
+    if !gt { return 2; }
+
+    let le = b <= b;
+    if !le { return 3; }
+
+    let ge = a >= 14;
+    if !ge { return 4; }
+
+    let eq = b == 1;
+    if !eq { return 5; }
+
+    let ne = a != b;
+    if !ne { return 6; }
+
+    return 0;
+}
+
+fn test_comparison_in_conditions() -> i32 {
+    let a: i32 = 10;
+    let b: i32 = 20;
+
+    if !(a < b) { return 1; }
+    if !(a <= b) { return 2; }
+    if !(b > a) { return 3; }
+    if !(b >= a) { return 4; }
+    if !(a == 10) { return 5; }
+    if !(a != b) { return 6; }
+
+    return 0;
+}
+
+fn test_bitwise_ops() -> i32 {
+    let mask = 0xFF & 0x0F;
+    if mask != 15 { return 1; }
+
+    let flags = 0x01 | 0x04;
+    if flags != 5 { return 2; }
+
+    let toggled = flags ^ 0x04;
+    if toggled != 1 { return 3; }
+
+    let shifted = 1 << 8;
+    if shifted != 256 { return 4; }
+
+    let down = shifted >> 4;
+    if down != 16 { return 5; }
+
+    return 0;
+}
+
+fn test_compound_assignment() -> i32 {
+    let mut x = 10;
+    x += 5;
+    if x != 15 { return 1; }
+    x -= 3;
+    if x != 12 { return 2; }
+    x *= 2;
+    if x != 24 { return 3; }
+    x /= 4;
+    if x != 6 { return 4; }
+    x %= 5;
+    if x != 1 { return 5; }
+    x <<= 3;
+    if x != 8 { return 6; }
+    x >>= 1;
+    if x != 4 { return 7; }
+    x |= 0x10;
+    if x != 20 { return 8; }
+    x &= 0x14;
+    if x != 20 { return 9; }
+    x ^= 0x04;
+    if x != 16 { return 10; }
+    return 0;
+}
+
+fn test_short_circuit() -> i32 {
+    let both = true && true;
+    if !both { return 1; }
+
+    let neither = false && true;
+    if neither { return 2; }
+
+    let either = false || true;
+    if !either { return 3; }
+
+    let none = false || false;
+    if none { return 4; }
+
+    return 0;
+}
+
+fn main() -> i32 {
+    if test_int_comparisons() != 0 { return 1; }
+    if test_comparison_in_conditions() != 0 { return 2; }
+    if test_bitwise_ops() != 0 { return 3; }
+    if test_compound_assignment() != 0 { return 4; }
+    if test_short_circuit() != 0 { return 5; }
+    return 0;
+}

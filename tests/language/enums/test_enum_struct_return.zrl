@@ -1,0 +1,33 @@
+import "core.zrl";
+
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+    pub line: u32,
+    pub col: u32,
+}
+
+pub enum Token {
+    Ident(u32), Int(u64), Float(f64), Char(u32), String(u32),
+    Semi, Eof, KFn,
+}
+
+pub struct TokenWithSpan {
+    pub token: Token,
+    pub span: Span,
+}
+
+fn make_token(start_line: u32) -> TokenWithSpan {
+    return TokenWithSpan {
+        token: Token.KFn,
+        span: Span { start: 0, end: 0, line: start_line, col: 100 },
+    };
+}
+
+fn main() -> i32 {
+    let t = make_token(42);
+    if t.span.line != 42 {
+        return t.span.line as i32;
+    }
+    return 0;
+}

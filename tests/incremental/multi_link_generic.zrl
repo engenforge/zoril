@@ -1,0 +1,12 @@
+pub struct Pair<T> {
+    pub first: T,
+    pub second: T,
+}
+
+pub fn make_pair<T>(a: T, b: T) -> Pair<T> {
+    return Pair { first: a, second: b };
+}
+
+pub fn swap_pair<T>(p: Pair<T>) -> Pair<T> {
+    return Pair { first: p.second, second: p.first };
+}

@@ -1,0 +1,10 @@
+// expected exit code: 0
+import "io.zrl";
+struct Large { f1: u64, f2: u64 }
+struct Holder { p: *mut Large }
+struct Top { h: Holder }
+fn main() -> i32 {
+    let mut s = Large { f1: 123 as u64, f2: 456 as u64 };
+    let t = Top { h: Holder { p: &mut s as *mut Large } };
+    if unsafe { (*t.h.p).f1 } == 123 as u64 { return 0; } else { return 1; }
+}

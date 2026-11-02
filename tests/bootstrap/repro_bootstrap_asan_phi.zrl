@@ -1,0 +1,81 @@
+// tests/repro_bootstrap_asan_phi.zrl
+// Reproduces a bug in zoril-c.release where -fsanitize=asan-lite
+// generates invalid QBE IR (phi with invalid predecessors).
+
+struct LargeStruct {
+    a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64,
+    i: u64, j: u64, k: u64, l: u64, m: u64, n: u64, o: u64, p: u64,
+    q: u64, r: u64, s: u64, t: u64, u: u64, v: u64
+}
+
+fn raw_write(fd: u64, buf: [u8]) {
+    unsafe { @syscall(1, fd, buf.ptr as u64, buf.len) };
+}
+
+fn check(s1: LargeStruct, s2: LargeStruct, a: bool, b: bool, c: bool) -> bool {
+    // Force some copies and complex condition
+    let s3 = s1;
+    let s4 = s2;
+    if (a && b) || (c && s3.a == s4.a) {
+        return true;
+    }
+    return false;
+}
+
+fn main() -> i32 {
+    let s1 = LargeStruct {
+        a: 1,
+        b: 0,
+        c: 0,
+        d: 0,
+        e: 0,
+        f: 0,
+        g: 0,
+        h: 0,
+        i: 0,
+        j: 0,
+        k: 0,
+        l: 0,
+        m: 0,
+        n: 0,
+        o: 0,
+        p: 0,
+        q: 0,
+        r: 0,
+        s: 0,
+        t: 0,
+        u: 0,
+        v: 0
+    };
+    let s2 = LargeStruct {
+        a: 1,
+        b: 0,
+        c: 0,
+        d: 0,
+        e: 0,
+        f: 0,
+        g: 0,
+        h: 0,
+        i: 0,
+        j: 0,
+        k: 0,
+        l: 0,
+        m: 0,
+        n: 0,
+        o: 0,
+        p: 0,
+        q: 0,
+        r: 0,
+        s: 0,
+        t: 0,
+        u: 0,
+        v: 0
+    };
+    let r = check(s1, s2, true, false, true);
+    if r {
+        raw_write(1, "SUCCESS\n");
+    } else {
+        raw_write(1, "FAILURE\n");
+    }
+    return 0;
+}

@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_intern_table_cap_private.zrl:12:5: error: cannot access private field: cap
+// InternTable fields are private: safe code cannot forge capacity or mutate table pointers.
+import "mem.zrl";
+import "intern.zrl";
+use mem::Arena;
+use intern::InternTable;
+
+fn main() -> i32 {
+    let a = Arena.new(65536 as u64).unwrap();
+    let t = InternTable.new(&a);
+    t.cap = 1000000000 as u64;
+    return 0;
+}

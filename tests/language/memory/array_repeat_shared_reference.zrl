@@ -1,0 +1,18 @@
+// expected exit 0
+// `[v; n]` with a shared reference element: every element is a copy of the same `&x`, and a
+// shared reference is Copy. The short form (n <= 64) is unrolled and used to report "use of
+// moved value" for element 2..n; the long form (n > 64) goes through ArrayRepeat. Both must
+// accept and return the same value.
+fn main() -> i32 {
+    let x: u64 = 7;
+    let a1: [&u64; 1] = [&x; 1];
+    let a3: [&u64; 3] = [&x; 3];
+    let a64: [&u64; 64] = [&x; 64];
+    let a65: [&u64; 65] = [&x; 65];
+    if *a1[0] != 7 as u64 { return 1; }
+    if *a3[0] != 7 as u64 { return 2; }
+    if *a3[2] != 7 as u64 { return 3; }
+    if *a64[63] != 7 as u64 { return 4; }
+    if *a65[64] != 7 as u64 { return 5; }
+    return 0;
+}

@@ -1,0 +1,8 @@
+// name: Capturing closure escapes inside a value a callee builds
+// expected: compile_reject
+// wrap() copies its function-value argument into its result; the escape check follows the
+// environment pointer through the call, as it follows a slice's data pointer.
+struct S { f: fn(i32) -> i32 }
+fn wrap(f: fn(i32) -> i32) -> S { return S { f: f }; }
+fn make(k: i32) -> S { return wrap(|x: i32| -> i32 { x + k }); }
+fn main() -> i32 { let s = make(5); return (s.f)(2); }

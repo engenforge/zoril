@@ -1,0 +1,463 @@
+import "il_type.zrl";
+
+// IL Instruction definitions.
+// Uses SSA (Static Single Assignment) form.
+
+pub const NO_SSA: u32 = 0xffffffff;
+pub const NO_TYPE: u32 = 0;
+pub const NO_BLOCK: u32 = 0xffffffff;
+pub const NO_FUNC: u32 = 0xffffffff;
+pub const NO_DECL: u32 = 0xffffffff;
+
+// Opcodes aligned with stage0-C
+pub const IL_OP_INVALID: u32 = 0;
+pub const IL_OP_ADD: u32 = 1;
+pub const IL_OP_SUB: u32 = 2;
+pub const IL_OP_MUL: u32 = 3;
+pub const IL_OP_DIV: u32 = 4;
+pub const IL_OP_REM: u32 = 5;
+pub const IL_OP_AND: u32 = 6;
+pub const IL_OP_OR: u32 = 7;
+pub const IL_OP_XOR: u32 = 8;
+pub const IL_OP_SHL: u32 = 9;
+pub const IL_OP_SHR: u32 = 10;
+pub const IL_OP_CMP_LT: u32 = 11;
+pub const IL_OP_CMP_LE: u32 = 12;
+pub const IL_OP_CMP_GT: u32 = 13;
+pub const IL_OP_CMP_GE: u32 = 14;
+pub const IL_OP_CMP_EQ: u32 = 15;
+pub const IL_OP_CMP_NE: u32 = 16;
+pub const IL_OP_WRAPPING_ADD: u32 = 17;
+pub const IL_OP_WRAPPING_SUB: u32 = 18;
+pub const IL_OP_WRAPPING_MUL: u32 = 19;
+pub const IL_OP_SATURATING_ADD: u32 = 20;
+pub const IL_OP_CHECKED_ADD: u32 = 21;
+pub const IL_OP_CHECKED_SUB: u32 = 22;
+pub const IL_OP_CHECKED_MUL: u32 = 23;
+pub const IL_OP_ALLOC: u32 = 24;
+pub const IL_OP_LOAD: u32 = 25;
+pub const IL_OP_STORE: u32 = 26;
+pub const IL_OP_DROP: u32 = 27;
+pub const IL_OP_BOUNDS_CHECK: u32 = 28;
+pub const IL_OP_SLICE_LOAD: u32 = 29;
+pub const IL_OP_SLICE_STORE: u32 = 30;
+pub const IL_OP_SLICE_LEN: u32 = 31;
+pub const IL_OP_SLICE_DATA: u32 = 32;
+pub const IL_OP_SLICE_CONSTRUCT: u32 = 33;
+pub const IL_OP_ARRAY_CONSTRUCT: u32 = 34;
+pub const IL_OP_ARRAY_LOAD: u32 = 35;
+pub const IL_OP_ARRAY_STORE: u32 = 36;
+pub const IL_OP_MOVE: u32 = 37;
+pub const IL_OP_BITCAST: u32 = 38;
+pub const IL_OP_REGION_CAST: u32 = 39;
+pub const IL_OP_IS_SOME: u32 = 40;
+pub const IL_OP_UNWRAP: u32 = 41;
+pub const IL_OP_CALL: u32 = 42;
+pub const IL_OP_RETURN: u32 = 43;
+pub const IL_OP_BRANCH: u32 = 44;
+pub const IL_OP_JUMP: u32 = 45;
+pub const IL_OP_GLOBAL_ADDR: u32 = 46;
+pub const IL_OP_FIELD_ADDR: u32 = 47;
+pub const IL_OP_ELEM_ADDR: u32 = 48;
+pub const IL_OP_VARIANT_MATCH: u32 = 49;
+pub const IL_OP_SUM_CONSTRUCT: u32 = 50;
+pub const IL_OP_SYSCALL: u32 = 51;
+pub const IL_OP_CONST: u32 = 52;
+pub const IL_OP_PHI: u32 = 53;
+pub const IL_OP_STRING_CONST: u32 = 54;
+pub const IL_OP_CALL_PTR: u32 = 55;
+pub const IL_OP_FUNC_ADDR: u32 = 56;
+pub const IL_OP_FD_OPEN: u32 = 57;
+pub const IL_OP_FD_CLOSE: u32 = 58;
+pub const IL_OP_FD_READ: u32 = 59;
+pub const IL_OP_FD_WRITE: u32 = 60;
+pub const IL_OP_ASYNC_SETUP: u32 = 61;
+pub const IL_OP_ASYNC_ENTER: u32 = 62;
+pub const IL_OP_ASYNC_CLOSE: u32 = 63;
+
+// Aliases for self-hosted names
+pub const IL_INSTR_ADD: u32 = 1;
+pub const IL_INSTR_SUB: u32 = 2;
+pub const IL_INSTR_MUL: u32 = 3;
+pub const IL_INSTR_DIV: u32 = 4;
+pub const IL_INSTR_REM: u32 = 5;
+pub const IL_INSTR_AND: u32 = 6;
+pub const IL_INSTR_OR: u32 = 7;
+pub const IL_INSTR_XOR: u32 = 8;
+pub const IL_INSTR_SHL: u32 = 9;
+pub const IL_INSTR_SHR: u32 = 10;
+pub const IL_INSTR_CMP_LT: u32 = 11;
+pub const IL_INSTR_CMP_LE: u32 = 12;
+pub const IL_INSTR_CMP_GT: u32 = 13;
+pub const IL_INSTR_CMP_GE: u32 = 14;
+pub const IL_INSTR_CMP_EQ: u32 = 15;
+pub const IL_INSTR_CMP_NE: u32 = 16;
+pub const IL_INSTR_WRAPPING_ADD: u32 = 17;
+pub const IL_INSTR_WRAPPING_SUB: u32 = 18;
+pub const IL_INSTR_WRAPPING_MUL: u32 = 19;
+pub const IL_INSTR_SATURATING_ADD: u32 = 20;
+pub const IL_INSTR_CHECKED_ADD: u32 = 21;
+pub const IL_INSTR_CHECKED_SUB: u32 = 22;
+pub const IL_INSTR_CHECKED_MUL: u32 = 23;
+pub const IL_INSTR_ALLOC: u32 = 24;
+pub const IL_INSTR_LOAD: u32 = 25;
+pub const IL_INSTR_STORE: u32 = 26;
+pub const IL_INSTR_DROP: u32 = 27;
+pub const IL_INSTR_BOUNDS_CHECK: u32 = 28;
+pub const IL_INSTR_SLICE_LOAD: u32 = 29;
+pub const IL_INSTR_SLICE_STORE: u32 = 30;
+pub const IL_INSTR_SLICE_LEN: u32 = 31;
+pub const IL_INSTR_SLICE_CONSTRUCT: u32 = 33;
+pub const IL_INSTR_ARRAY_CONSTRUCT: u32 = 34;
+pub const IL_INSTR_ARRAY_LOAD: u32 = 35;
+pub const IL_INSTR_ARRAY_STORE: u32 = 36;
+pub const IL_INSTR_MOVE: u32 = 37;
+pub const IL_INSTR_REGION_CAST: u32 = 39;
+pub const IL_INSTR_IS_SOME: u32 = 40;
+pub const IL_INSTR_UNWRAP: u32 = 41;
+pub const IL_INSTR_CALL: u32 = 42;
+pub const IL_INSTR_RET: u32 = 43;
+pub const IL_INSTR_BRANCH: u32 = 44;
+pub const IL_INSTR_JMP: u32 = 45;
+pub const IL_INSTR_GLOBAL_ADDR: u32 = 46;
+pub const IL_INSTR_FIELD_ADDR: u32 = 47;
+pub const IL_INSTR_VARIANT_MATCH: u32 = 49;
+pub const IL_INSTR_SUM_CONSTRUCT: u32 = 50;
+pub const IL_INSTR_SYSCALL: u32 = 51;
+pub const IL_INSTR_CONST: u32 = 52;
+pub const IL_INSTR_PHI: u32 = 53;
+pub const IL_INSTR_STRING_CONST: u32 = 54;
+pub const IL_INSTR_CALL_PTR: u32 = 55;
+pub const IL_INSTR_FUNC_ADDR: u32 = 56;
+pub const IL_INSTR_FDOPEN: u32 = 57;
+pub const IL_INSTR_FDCLOSE: u32 = 58;
+pub const IL_INSTR_FDREAD: u32 = 59;
+pub const IL_INSTR_FDWRITE: u32 = 60;
+pub const IL_INSTR_IORING_SETUP: u32 = 61;
+pub const IL_INSTR_IORING_ENTER: u32 = 62;
+pub const IL_INSTR_IORING_CLOSE: u32 = 63;
+
+// Extension opcodes
+pub const IL_INSTR_PARAM: u32 = 64;
+pub const IL_INSTR_LIKELY: u32 = 65;
+pub const IL_INSTR_UNLIKELY: u32 = 66;
+pub const IL_INSTR_CAST: u32 = 67;
+pub const IL_INSTR_GETENV: u32 = 68;
+pub const IL_INSTR_END_BORROW: u32 = 69;
+pub const IL_INSTR_RELEASE: u32 = 70;
+pub const IL_INSTR_NEG: u32 = 71;
+pub const IL_INSTR_NOT: u32 = 72;
+pub const IL_INSTR_STRUCT_CONSTRUCT: u32 = 73;
+pub const IL_INSTR_TUPLE_CONSTRUCT: u32 = 74;
+pub const IL_INSTR_BORROW: u32 = 75;
+pub const IL_INSTR_UNREACHABLE: u32 = 76;
+
+pub type SSAId = u32;
+pub type BlockId = u32;
+
+pub struct ILBinaryOp {
+    pub lhs: SSAId,
+    pub rhs: SSAId,
+}
+
+pub struct BorrowInstr {
+    pub val: SSAId,
+    pub is_mut: bool,
+}
+
+pub enum ILInstr {
+    Invalid, // 0
+    Add(ILBinaryOp), // 1
+    Sub(ILBinaryOp), // 2
+    Mul(ILBinaryOp), // 3
+    Div(ILBinaryOp), // 4
+    Rem(ILBinaryOp), // 5
+    And(ILBinaryOp), // 6
+    Or(ILBinaryOp), // 7
+    Xor(ILBinaryOp), // 8
+    Shl(ILBinaryOp), // 9
+    Shr(ILBinaryOp), // 10
+    CmpLt(ILBinaryOp), // 11
+    CmpLe(ILBinaryOp), // 12
+    CmpGt(ILBinaryOp), // 13
+    CmpGe(ILBinaryOp), // 14
+    CmpEq(ILBinaryOp), // 15
+    CmpNe(ILBinaryOp), // 16
+    WrappingAdd(ILBinaryOp), // 17
+    WrappingSub(ILBinaryOp), // 18
+    WrappingMul(ILBinaryOp), // 19
+    SaturatingAdd(ILBinaryOp), // 20
+    CheckedAdd(ILBinaryOp), // 21
+    CheckedSub(ILBinaryOp), // 22
+    CheckedMul(ILBinaryOp), // 23
+    Alloc(AllocInstr), // 24
+    Load(SSAId), // 25
+    Store(StoreInstr), // 26
+    Drop(SSAId), // 27
+    BoundsCheck(BoundsCheckInstr), // 28
+    SliceLoad(IndexInstr), // 29
+    SliceStore(IndexStoreInstr), // 30
+    SliceLen(SSAId), // 31
+    SliceData(SSAId), // 32
+    SliceConstruct(SliceConstructInstr), // 33
+    ArrayConstruct([SSAId]), // 34
+    ArrayLoad(IndexInstr), // 35
+    ArrayStore(IndexStoreInstr), // 36
+    Move(SSAId), // 37
+    Bitcast(SSAId), // 38
+    RegionCast(RegionCastInstr), // 39
+    IsSome(SSAId), // 40
+    Unwrap(SSAId), // 41
+    Call(CallInstr), // 42
+    Ret(SSAId), // 43
+    Branch(BranchInstr), // 44
+    Jmp(BlockId), // 45
+    GlobalAddr(u32), // 46
+    FieldAddr(FieldAddrInstr), // 47
+    ElemAddr(IndexInstr), // 48
+    VariantMatch(VariantMatchInstr), // 49
+    SumConstruct(SumConstructInstr), // 50
+    Syscall(SyscallInstr), // 51
+    Const(ConstInstr), // 52
+    Phi(PhiInstr), // 53
+    StringConst([u8]), // 54
+    CallPtr(CallPtrInstr), // 55
+    FuncAddr(u32), // 56
+    FDOpen(FDOpenInstr), // 57
+    FDClose(SSAId), // 58
+    FDRead(FDIOInstr), // 59
+    FDWrite(FDIOInstr), // 60
+    IORingSetup(SSAId), // 61
+    IORingEnter(IORingEnterInstr), // 62
+    IORingClose(SSAId), // 63
+    
+    // Extensions
+    Param(u32), // 64
+    Likely(SSAId), // 65
+    Unlikely(SSAId), // 66
+    Cast(CastInstr), // 67
+    GetEnv, // 68
+    EndBorrow(SSAId), // 69
+    Release(SSAId), // 70
+    Neg(SSAId), // 71
+    Not(SSAId), // 72
+    StructConstruct(StructConstructInstr), // 73
+    TupleConstruct([SSAId]), // 74
+    Borrow(BorrowInstr), // 75
+    // Control never reaches here (after a call that exits). Ends a block with no successor.
+    Unreachable, // 76
+}
+
+pub struct CastInstr {
+    pub val: SSAId,
+    pub target_ty: u32,
+    // Set only by @ptr_from_int. Distinguishes an authorized pointer forgery
+    // from ordinary pointer arithmetic, so the marker survives lowering rather
+    // than being re-guessed downstream.
+    pub is_ptr_from_int: bool,
+}
+
+pub struct AllocInstr {
+    pub region: Region,
+    pub ty: u32, // Index to ILType
+    pub allocator: SSAId, // 0 if default
+}
+
+pub struct StoreInstr {
+    pub ptr: SSAId,
+    pub val: SSAId,
+}
+
+pub struct BoundsCheckInstr {
+    pub idx: SSAId,
+    pub len: SSAId,
+}
+
+pub struct RegionCastInstr {
+    pub val: SSAId,
+    pub region: Region,
+}
+
+pub struct IndexInstr {
+    pub base: SSAId,
+    pub idx: SSAId,
+}
+
+pub struct IndexStoreInstr {
+    pub base: SSAId,
+    pub idx: SSAId,
+    pub val: SSAId,
+}
+
+pub struct SliceConstructInstr {
+    pub ptr: SSAId,
+    pub len: SSAId,
+}
+
+pub struct VariantMatchInstr {
+    pub val: SSAId,
+    pub type_id: u32,
+    pub variant_idx: u32,
+}
+
+pub struct SumConstructInstr {
+    pub type_id: u32,
+    pub variant_idx: u32,
+    pub payload: SSAId,
+}
+
+pub struct CallInstr {
+    pub args: [SSAId],
+    pub name_id: u32,
+    pub is_extern: bool,
+}
+
+pub struct CallPtrInstr {
+    pub args: [SSAId],
+    pub func_ptr: SSAId,
+    pub env_ssa: SSAId,
+}
+
+pub struct BranchInstr {
+    pub cond: SSAId,
+    pub then_block: BlockId,
+    pub else_block: BlockId,
+}
+
+pub enum ConstValue {
+    U64(u64),
+    I64(i64),
+    F64(u64),
+    Bool(u64),
+}
+
+pub struct ConstInstr {
+    pub val: ConstValue,
+    pub ty: u32, // Index to ILType
+}
+
+pub struct PhiInstr {
+    pub preds: [PhiPred],
+}
+
+pub struct PhiPred {
+    pub block: BlockId,
+    pub val: SSAId,
+}
+
+pub struct FieldAddrInstr {
+    pub val: SSAId,
+    pub field_idx: u32,
+}
+
+pub struct StructConstructInstr {
+    pub ty: u32, // Struct type ID
+    pub fields: [SSAId],
+}
+
+pub struct SyscallInstr {
+    pub num: SSAId,
+    pub args: [SSAId],
+}
+
+pub struct FDOpenInstr {
+    pub path: SSAId,
+    pub flags: u64,
+    pub mode: u64,
+}
+
+pub struct FDIOInstr {
+    pub fd: SSAId,
+    pub buf: SSAId,
+    pub count: SSAId,
+}
+
+pub struct IORingEnterInstr {
+    pub ring: SSAId,
+    pub to_submit: u32,
+    pub min_complete: u32,
+}
+
+impl ILInstr {
+    pub fn get_tag(self: &ILInstr) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Add(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_Sub(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_Mul(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_Div(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_Rem(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_Neg(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_Not(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_And(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_Or(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_Xor(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_Shl(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_Shr(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_CmpLt(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_CmpLe(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_CmpGt(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_CmpGe(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_CmpEq(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_CmpNe(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_WrappingAdd(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_WrappingSub(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_WrappingMul(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_SaturatingAdd(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_CheckedAdd(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_CheckedSub(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_CheckedMul(self: &ILInstr) -> &ILBinaryOp { return unsafe { &*((self as usize + 8) as *ILBinaryOp) }; }
+    pub fn get_Alloc(self: &ILInstr) -> &AllocInstr { return unsafe { &*((self as usize + 8) as *AllocInstr) }; }
+    pub fn get_Load(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_Store(self: &ILInstr) -> &StoreInstr { return unsafe { &*((self as usize + 8) as *StoreInstr) }; }
+    pub fn get_Drop(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_BoundsCheck(self: &ILInstr) -> &BoundsCheckInstr { return unsafe { &*((self as usize + 8) as *BoundsCheckInstr) }; }
+    pub fn get_Move(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_Borrow(self: &ILInstr) -> &BorrowInstr { return unsafe { &*((self as usize + 8) as *BorrowInstr) }; }
+    pub fn get_RegionCast(self: &ILInstr) -> &RegionCastInstr { return unsafe { &*((self as usize + 8) as *RegionCastInstr) }; }
+    pub fn get_SliceLoad(self: &ILInstr) -> &IndexInstr { return unsafe { &*((self as usize + 8) as *IndexInstr) }; }
+    pub fn get_SliceStore(self: &ILInstr) -> &IndexStoreInstr { return unsafe { &*((self as usize + 8) as *IndexStoreInstr) }; }
+    pub fn get_SliceLen(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_SliceConstruct(self: &ILInstr) -> &SliceConstructInstr { return unsafe { &*((self as usize + 8) as *SliceConstructInstr) }; }
+    pub fn get_ArrayConstruct(self: &ILInstr) -> [SSAId] { return unsafe { *( (self as usize + 8) as *[SSAId] ) }; }
+    pub fn get_ArrayLoad(self: &ILInstr) -> &IndexInstr { return unsafe { &*((self as usize + 8) as *IndexInstr) }; }
+    pub fn get_ArrayStore(self: &ILInstr) -> &IndexStoreInstr { return unsafe { &*((self as usize + 8) as *IndexStoreInstr) }; }
+    pub fn get_IsSome(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_Unwrap(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_VariantMatch(self: &ILInstr) -> &VariantMatchInstr { return unsafe { &*((self as usize + 8) as *VariantMatchInstr) }; }
+    pub fn get_SumConstruct(self: &ILInstr) -> &SumConstructInstr { return unsafe { &*((self as usize + 8) as *SumConstructInstr) }; }
+    pub fn get_Call(self: &ILInstr) -> &CallInstr { return unsafe { &*((self as usize + 8) as *CallInstr) }; }
+    pub fn get_CallPtr(self: &ILInstr) -> &CallPtrInstr { return unsafe { &*((self as usize + 8) as *CallPtrInstr) }; }
+    pub fn get_Branch(self: &ILInstr) -> &BranchInstr { return unsafe { &*((self as usize + 8) as *BranchInstr) }; }
+    pub fn get_Jmp(self: &ILInstr) -> BlockId { return unsafe { *( (self as usize + 8) as *BlockId ) }; }
+    pub fn get_Const(self: &ILInstr) -> &ConstInstr { return unsafe { &*((self as usize + 8) as *ConstInstr) }; }
+    pub fn get_GlobalAddr(self: &ILInstr) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_FuncAddr(self: &ILInstr) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_FieldAddr(self: &ILInstr) -> &FieldAddrInstr { return unsafe { &*((self as usize + 8) as *FieldAddrInstr) }; }
+    pub fn get_StructConstruct(self: &ILInstr) -> &StructConstructInstr { return unsafe { &*((self as usize + 8) as *StructConstructInstr) }; }
+    pub fn get_TupleConstruct(self: &ILInstr) -> [SSAId] { return unsafe { *( (self as usize + 8) as *[SSAId] ) }; }
+    pub fn get_StringConst(self: &ILInstr) -> [u8] { return unsafe { *( (self as usize + 8) as *[u8] ) }; }
+    pub fn get_Syscall(self: &ILInstr) -> &SyscallInstr { return unsafe { &*((self as usize + 8) as *SyscallInstr) }; }
+    pub fn get_Phi(self: &ILInstr) -> &PhiInstr { return unsafe { &*((self as usize + 8) as *PhiInstr) }; }
+    pub fn get_Ret(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_Param(self: &ILInstr) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_FDOpen(self: &ILInstr) -> &FDOpenInstr { return unsafe { &*((self as usize + 8) as *FDOpenInstr) }; }
+    pub fn get_FDClose(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_FDRead(self: &ILInstr) -> &FDIOInstr { return unsafe { &*((self as usize + 8) as *FDIOInstr) }; }
+    pub fn get_FDWrite(self: &ILInstr) -> &FDIOInstr { return unsafe { &*((self as usize + 8) as *FDIOInstr) }; }
+    pub fn get_IORingSetup(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_IORingEnter(self: &ILInstr) -> &IORingEnterInstr { return unsafe { &*((self as usize + 8) as *IORingEnterInstr) }; }
+    pub fn get_IORingClose(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_Move(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_Cast(self: &ILInstr) -> &CastInstr { return unsafe { &*((self as usize + 8) as *CastInstr) }; }
+    pub fn get_Likely(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_Unlikely(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_EndBorrow(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+    pub fn get_Release(self: &ILInstr) -> SSAId { return unsafe { *( (self as usize + 8) as *SSAId ) }; }
+}
+
+impl ConstValue {
+    pub fn get_tag(self: &ConstValue) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_U64(self: &ConstValue) -> u64 { return unsafe { *( (self as usize + 8) as *u64 ) }; }
+    pub fn get_I64(self: &ConstValue) -> i64 { return unsafe { *( (self as usize + 8) as *i64 ) }; }
+    pub fn get_F64(self: &ConstValue) -> u64 { return unsafe { *( (self as usize + 8) as *u64 ) }; }
+    pub fn get_Bool(self: &ConstValue) -> bool { return unsafe { *( (self as usize + 8) as *bool ) }; }
+}

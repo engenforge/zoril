@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_cfn_from_zoril_fn.zrl:6:21: error: type mismatch: expected `extern "C" fn(i32) -> i32`, found `fn(i32) -> i32`
+fn plain(a: i32) -> i32 { return a; }
+extern fn takes_cb(cb: extern "C" fn(i32) -> i32) -> i32;
+fn main() -> i32 {
+    return unsafe { takes_cb(plain) };
+}

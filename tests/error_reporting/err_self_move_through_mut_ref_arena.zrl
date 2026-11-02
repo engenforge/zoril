@@ -1,0 +1,21 @@
+// expected compile fail
+// Moving a place into itself through its own `&mut`. `*rm = a` drops the old `*rm` before storing,
+// and recording that drop against the pointer local `rm` made the live `&mut` stop counting, so the
+// right-hand side's read of `a` passed the conflict scan: the value was moved out of itself, the
+// arena it owned was freed twice, and the program segfaulted (exit 139) in safe code.
+// EXPECT: tests/error_reporting/err_self_move_through_mut_ref_arena.zrl:17:5: error: cannot use 'a' while it is mutably borrowed
+// EXPECT: tests/error_reporting/err_self_move_through_mut_ref_arena.zrl:16:14: note: borrow of 'a' taken here
+
+import "mem.zrl";
+use mem::Arena;
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536).unwrap();
+    let rm = &mut a;
+    *rm = a;
+    let mut v = Vec::<u64>.new_in(&*rm);
+    v.push(7);
+    return 0;
+}

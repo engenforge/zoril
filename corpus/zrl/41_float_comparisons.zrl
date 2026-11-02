@@ -1,0 +1,29 @@
+// expected exit code: 42
+// 41: Floating-point comparison operators.
+// Demonstrates: <, <=, >, >=, ==, != for f32 and f64.
+
+fn main() -> i32 {
+    let a: f64 = 1.23;
+    let b: f64 = 4.56;
+    let c: f64 = 1.23;
+
+    if !(a < b) { return 1; }
+    if !(a <= b) { return 2; }
+    if !(a <= c) { return 3; }
+    if !(b > a) { return 4; }
+    if !(b >= a) { return 5; }
+    if !(c >= a) { return 6; }
+    if !(a == c) { return 7; }
+    if !(a != b) { return 8; }
+
+    let x: f32 = 0.5f32;
+    let y: f32 = 0.5f32;
+    let z: f32 = 1.0f32;
+
+    if !(x == y) { return 9; }
+    if !(x < z) { return 10; }
+    if !(z > y) { return 11; }
+    if (x != y) { return 12; }
+
+    return 42;
+}

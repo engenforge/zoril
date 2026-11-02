@@ -1,0 +1,52 @@
+// expected exit 0
+// `unsafe fn` in every position: a free declaration, a `pub` one, a method in an `impl`, a
+// signature in a `trait`, and a call to each. This is also the form the C seed (stage0-C) had
+// to learn (2026-10-09): the seed's gates compile the shared tests against this repository's
+// `stdlib/`, whose `vec`, `mem`, `sys`, `args` and `proc` modules declare `unsafe fn`, and
+// with the seed's parse reverted 63 of the 215 `.zrl` files those suites compile fail at the
+// parse. The self-hosted compiler accepts the same program.
+unsafe fn add_one(p: *mut i32) -> i32 {
+    // The body of an `unsafe fn` is an unsafe context: the dereference needs no block.
+    return *p + 1;
+}
+
+pub unsafe fn store(p: *mut i32, v: i32) {
+    *p = v;
+}
+
+trait Sink {
+    unsafe fn put(self: &Self, p: *mut i32, v: i32);
+}
+
+struct Cell {
+    val: i32,
+}
+
+impl Sink for Cell {
+    unsafe fn put(self: &Cell, p: *mut i32, v: i32) {
+        *p = v + self.val;
+    }
+}
+
+impl Cell {
+    unsafe fn bump(self: &mut Cell, by: i32) {
+        self.val = self.val + by;
+    }
+}
+
+fn main() -> i32 {
+    let mut x: i32 = 41;
+    let p = &mut x as *mut i32;
+    let mut c = Cell { val: 1 };
+    let seen = unsafe {
+        store(p, 5);
+        let n = add_one(p);
+        c.bump(10);
+        c.put(p, n);
+        n
+    };
+    if seen != 6 { return 1; }
+    if x != 17 { return 2; }
+    if c.val != 11 { return 3; }
+    return 0;
+}

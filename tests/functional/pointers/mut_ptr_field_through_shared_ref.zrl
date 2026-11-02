@@ -1,0 +1,14 @@
+// expected exit code: 0
+// Pins the documented escape hatch: a `*mut T` field read out of a `&T` stays
+// writable. `&T` (and non-mut `*T`) are read-only, but a `*mut T` value found
+// while reading through a shared reference is unaffected -- it is a
+// different, unchecked piece of memory. See doc/spec/unsafe_policy.md.
+struct Scope { inner: *mut i64 }
+fn main() -> i32 {
+    let mut v: i64 = 1;
+    let s = Scope { inner: &mut v as *mut i64 };
+    let cur: &Scope = &s;
+    unsafe { *(*cur).inner = 99; }
+    if v != 99 { return 1; }
+    return 0;
+}

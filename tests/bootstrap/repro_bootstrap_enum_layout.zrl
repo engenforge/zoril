@@ -1,0 +1,34 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::{stderr, write};
+use fmt::write_u64;
+
+enum Large {
+    V0, V1, V2, V3, V4, V5, V6, V7, V8, V9,
+    V10, V11, V12, V13, V14, V15, V16, V17, V18, V19,
+    V20, V21, V22, V23, V24, V25, V26, V27, V28, V29,
+    V30, V31, V32, V33, V34, V35, V36, V37, V38, V39,
+    V40, V41, V42, V43, V44(u64), V45, V46, V47, V48, V49,
+}
+
+fn test_layout(l: &Large) {
+    let mut err = stderr();
+    let ptr = l as *u32;
+    let tag = unsafe { *ptr };
+    let _ = write(err, "Manual tag (offset 0): ");
+    let _ = write_u64(&mut err, tag as u64);
+    let _ = write(err, "\n");
+    
+    let ptr64 = l as *u64;
+    let _ = write(err, "Manual tag (as u64): ");
+    unsafe { let _ = write_u64(&mut err, *ptr64); }
+    let _ = write(err, "\n");
+}
+
+fn main() {
+    let val = Large.V38;
+    test_layout(&val);
+    
+    let val44 = Large.V44(123 as u64);
+    test_layout(&val44);
+}

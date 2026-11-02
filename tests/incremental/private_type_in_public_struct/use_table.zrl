@@ -1,0 +1,4 @@
+import "entry.zrl";
+use entry::Table;
+
+pub fn count(t: &Table) -> u32 { return t.entries.len() as u32; }

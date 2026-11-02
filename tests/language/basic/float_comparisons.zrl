@@ -1,0 +1,52 @@
+// expected exit code: 0
+// Tests floating-point comparison operators for f32 and f64.
+
+fn test_f64_comparisons() -> i32 {
+    let a: f64 = 1.23;
+    let b: f64 = 4.56;
+    let c: f64 = 1.23;
+
+    if !(a < b) { return 1; }
+    if !(a <= b) { return 2; }
+    if !(a <= c) { return 3; }
+    if !(b > a) { return 4; }
+    if !(b >= a) { return 5; }
+    if !(c >= a) { return 6; }
+    if !(a == c) { return 7; }
+    if !(a != b) { return 8; }
+
+    return 0;
+}
+
+fn test_f32_comparisons() -> i32 {
+    let x: f32 = 0.5f32;
+    let y: f32 = 0.5f32;
+    let z: f32 = 1.0f32;
+
+    if !(x == y) { return 1; }
+    if !(x < z) { return 2; }
+    if !(z > y) { return 3; }
+    if x != y { return 4; }
+
+    return 0;
+}
+
+fn test_float_comparison_in_let() -> i32 {
+    let a: f64 = 1.0;
+    let b: f64 = 2.0;
+
+    let lt = a < b;
+    if !lt { return 1; }
+
+    let gt = b > a;
+    if !gt { return 2; }
+
+    return 0;
+}
+
+fn main() -> i32 {
+    if test_f64_comparisons() != 0 { return 1; }
+    if test_f32_comparisons() != 0 { return 2; }
+    if test_float_comparison_in_let() != 0 { return 3; }
+    return 0;
+}

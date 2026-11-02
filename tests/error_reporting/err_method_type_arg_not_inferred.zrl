@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_method_type_arg_not_inferred.zrl:10:12: error: cannot infer type argument `U` of method `make`; give it as `.make::<..>(..)`
+// A method type parameter that no argument determines must be given explicitly.
+struct S { v: i32 }
+impl S {
+    fn make<U>(self: &S) -> i32 { return self.v; }
+}
+fn main() -> i32 {
+    let s = S { v: 1 };
+    return s.make();
+}

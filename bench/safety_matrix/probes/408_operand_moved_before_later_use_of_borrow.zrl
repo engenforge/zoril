@@ -1,0 +1,19 @@
+// name: An owning value moved into an aggregate while a later operand uses a borrow of it
+// expected: compile_reject
+// `H { w: v, n: { r.free(); 0 } }` moves `v` into `w` and then frees `v`'s buffer through `r`: two
+// owners of one buffer, and the later `h.w` reads freed memory. The move happens where `v` is
+// written, before the later operand runs, so the use of `r` is a use of a moved value. The same
+// holds for tuples, arrays, enum payloads, call arguments and a by-value receiver.
+import "vec.zrl";
+use vec::Vec;
+
+struct H { w: Vec<i32>, n: usize }
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(7);
+    let r = &mut v;
+    let mut h = H { w: v, n: { r.free(); 0 } };
+    h.w.push(8);
+    return h.w.get(0).unwrap() as i32;
+}

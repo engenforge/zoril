@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_box_arena_consumed_as_borrow.zrl:16:12: error: type mismatch: expected `Box<Arena>`, found `&Arena`
+// EXPECT: note: a `Box<T>` owns what it points at, so a reference cannot stand in for one: pass an owned box (`box x`)
+
+import "mem.zrl";
+use mem::Arena;
+import "vec.zrl";
+use vec::Vec;
+
+fn consume(b: Box<mem::Arena>) -> i32 { return 0; }
+
+fn main() -> i32 {
+    let a = Arena.new(65536).unwrap();
+    let mut v = Vec::<u64>.new_in(&a);
+    v.push(42);
+    return consume(&a);
+}

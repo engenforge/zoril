@@ -1,0 +1,25 @@
+// Primitive type implementations of the Hash trait
+
+import "core.zrl";
+import "cmp.zrl";
+
+impl Hash for i32 {
+    // Computes the 64-bit FNV-1a hash value for the integer.
+    fn hash(self: &i32) -> u64 {
+        return (*self) as u64;
+    }
+}
+
+impl Hash for u64 {
+    // Computes the 64-bit FNV-1a hash value for the integer.
+    fn hash(self: &u64) -> u64 {
+        return *self;
+    }
+}
+
+impl Hash for u32 {
+    // Computes the 64-bit FNV-1a hash value for the integer.
+    fn hash(self: &u32) -> u64 {
+        return (*self) as u64;
+    }
+}

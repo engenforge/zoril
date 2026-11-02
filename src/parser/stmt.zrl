@@ -1,0 +1,465 @@
+// The parser: statements and blocks.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "intern.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "ast.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "module_path.zrl";
+import "base.zrl";
+use ast::{BinaryExpr, BinaryOp, BlockExpr, CallExpr, Expr, ExprId, ForStmt, IndexExpr, LetStmt, Literal, MemberAccessExpr, Pattern, PatternId, Span, Stmt, StmtId, TypeId, UnaryExpr, UnaryOp, VariantPattern, WhileStmt};
+use base::Parser;
+use token::{Token, TokenKind};
+use vec::Vec;
+
+impl Parser {
+    pub fn parse_while(self: &mut Parser) -> Stmt {
+        let span = self.cur.span;
+        self.expect(Token.KWhile);
+        if self.is_kind(TokenKind.KLet) {
+            // `while let PAT = EXPR { BODY }` is `loop { match EXPR { PAT => { BODY }, _ => break } }`:
+            // EXPR is evaluated again on every iteration, `continue` included.
+            self.next_token();
+            let pattern = self.parse_pattern();
+            self.expect(Token.Equal);
+            let scrut = self.parse_expr_full(0 as u32, false);
+            let body_b = self.parse_block();
+            let body = self.ast.alloc_expr(Expr.Block(body_b), span);
+            let brk = self.ast.alloc_expr(Expr.Break, span);
+            let m = self.two_arm_match(scrut, pattern, body, brk, span);
+            let stmt = self.ast.alloc_stmt(Stmt.Expr(m), span, 0 as u32);
+            let mut stmts = unsafe { Vec::<StmtId>.new_in_raw(self.arena) };
+            stmts.push(stmt);
+            let loop_body = self.ast.alloc_expr(
+                Expr.Block(BlockExpr {
+                    stmts: stmts.as_slice(),
+                    tail_expr: 0 as ExprId,
+                    is_unsafe: false,
+                    end_span: Span { start: 0, end: 0, line: 0, col: 0 }
+                }),
+                span
+            );
+            let true_lit = self.ast.alloc_expr(Expr.Literal(Literal.Bool(true)), span);
+            return Stmt.While(WhileStmt { cond: true_lit, body: loop_body });
+        }
+        let cond = self.parse_expr_full(0 as u32, false);
+        let body_b = self.parse_block();
+        let body = self.ast.alloc_expr(Expr.Block(body_b), span);
+        return Stmt.While(WhileStmt { cond: cond, body: body });
+    }
+
+    pub fn parse_loop(self: &mut Parser) -> Stmt {
+        let span = self.cur.span;
+        self.expect(Token.KLoop);
+        let body_b = self.parse_block();
+        let body = self.ast.alloc_expr(Expr.Block(body_b), span);
+        let true_lit = self.ast.alloc_expr(Expr.Literal(Literal.Bool(true)), span);
+        return Stmt.While(WhileStmt { cond: true_lit, body: body });
+    }
+
+    pub fn parse_for(self: &mut Parser) -> Stmt {
+        let span = self.cur.span;
+        self.expect(Token.KFor);
+        let mut var_id = 0 as u32;
+        let mut pattern = 0 as PatternId;
+        if self.is_kind(TokenKind.Ident) && self.peek_is_kind(TokenKind.KIn) {
+            var_id = self.cur.token.get_ident_id();
+            self.next_token();
+        } else {
+            pattern = self.parse_pattern();
+        }
+        self.expect(Token.KIn);
+        let start = self.parse_expr_full(0 as u32, false);
+        if self.is_kind(TokenKind.DotDot) {
+            self.next_token();
+            let end = self.parse_expr_full(0 as u32, false);
+            if var_id == 0 as u32 { self.report_error("a range `for` binds a single name", span); }
+            let body_b = self.parse_block();
+            let body = self.ast.alloc_expr(Expr.Block(body_b), span);
+            return Stmt.For(ForStmt {
+                var: var_id,
+                start: start,
+                end: end,
+                body: body,
+                pattern: 0 as PatternId,
+                bind: 0 as StmtId,
+                slice_loop: 0 as StmtId,
+                iter_loop: 0 as StmtId
+            });
+        }
+        if pattern == 0 as PatternId {
+            pattern = self.ast.alloc_pattern(Pattern.Ident(var_id), span);
+        }
+        let body_b = self.parse_block();
+        let body = self.ast.alloc_expr(Expr.Block(body_b), span);
+        return self.iterator_for(pattern, start, body, span);
+    }
+
+    // The iterator form of `for` (see `ForStmt`). Its hidden names are compiler-internal
+    // (`__`, like `__env`); a nested `for` shadows the outer loop's.
+    fn iterator_for(
+        self: &mut Parser,
+        pattern: PatternId,
+        iterable: ExprId,
+        body: ExprId,
+        span: Span
+    ) -> Stmt {
+        let src_id = self.intern_table.intern("__for_iterable");
+        let idx_id = self.intern_table.intern("__for_index");
+        let elem_id = self.intern_table.intern("__for_element");
+        let no_ty = 0 as TypeId;
+        let bind = self.ast.alloc_stmt(
+            Stmt.Let(LetStmt {
+                pattern: 0 as PatternId,
+                name: src_id,
+                ty: no_ty,
+                init: iterable,
+                is_mut: true
+            }),
+            span,
+            0 as u32
+        );
+        let body_stmt = self.ast.alloc_stmt(Stmt.Expr(body), span, 0 as u32);
+
+        // { let mut <i> = 0usize; while <i> < <s>.len { let PAT = &<s>[<i>]; <i> = <i> + 1usize; BODY } }
+        let zero = self.ast.alloc_expr(Expr.Literal(Literal.Int((0 as u64, 4 as u32))), span);
+        let idx_let = self.ast.alloc_stmt(
+            Stmt.Let(LetStmt {
+                pattern: 0 as PatternId,
+                name: idx_id,
+                ty: no_ty,
+                init: zero,
+                is_mut: true
+            }),
+            span,
+            0 as u32
+        );
+        let len = self.ast.alloc_expr(
+            Expr.MemberAccess(MemberAccessExpr {
+                expr: self.ast.alloc_expr(Expr.Ident(src_id), span),
+                member: self.intern_table.intern("len")
+            }),
+            span
+        );
+        let cond = self.ast.alloc_expr(
+            Expr.Binary(BinaryExpr {
+                op: BinaryOp.Lt,
+                lhs: self.ast.alloc_expr(Expr.Ident(idx_id), span),
+                rhs: len
+            }),
+            span
+        );
+        let elem = self.ast.alloc_expr(
+            Expr.Index(IndexExpr {
+                expr: self.ast.alloc_expr(Expr.Ident(src_id), span),
+                index: self.ast.alloc_expr(Expr.Ident(idx_id), span)
+            }),
+            span
+        );
+        let elem_ref = self.ast.alloc_expr(
+            Expr.Unary(UnaryExpr { op: UnaryOp.Ref, expr: elem }),
+            span
+        );
+        let elem_let = self.ast.alloc_stmt(
+            Stmt.Let(LetStmt {
+                pattern: pattern,
+                name: 0 as u32,
+                ty: no_ty,
+                init: elem_ref,
+                is_mut: false
+            }),
+            span,
+            0 as u32
+        );
+        let one = self.ast.alloc_expr(Expr.Literal(Literal.Int((1 as u64, 4 as u32))), span);
+        let next_idx = self.ast.alloc_expr(
+            Expr.Binary(BinaryExpr {
+                op: BinaryOp.Add,
+                lhs: self.ast.alloc_expr(Expr.Ident(idx_id), span),
+                rhs: one
+            }),
+            span
+        );
+        let step = self.ast.alloc_expr(
+            Expr.Binary(BinaryExpr {
+                op: BinaryOp.Assign,
+                lhs: self.ast.alloc_expr(Expr.Ident(idx_id), span),
+                rhs: next_idx
+            }),
+            span
+        );
+        let step_stmt = self.ast.alloc_stmt(Stmt.Expr(step), span, 0 as u32);
+        let mut slice_body = unsafe { Vec::<StmtId>.new_in_raw(self.arena) };
+        slice_body.push(elem_let);
+        slice_body.push(step_stmt);
+        slice_body.push(body_stmt);
+        let slice_while = self.ast.alloc_stmt(
+            Stmt.While(WhileStmt { cond: cond, body: self.block_of(slice_body.as_slice(), span) }),
+            span,
+            0 as u32
+        );
+        let mut slice_outer = unsafe { Vec::<StmtId>.new_in_raw(self.arena) };
+        slice_outer.push(idx_let);
+        slice_outer.push(slice_while);
+        let slice_loop = self.ast.alloc_stmt(
+            Stmt.Expr(self.block_of(slice_outer.as_slice(), span)),
+            span,
+            0 as u32
+        );
+
+        // while true { match <s>.next() { Option.Some(<e>) => { let PAT = <e>; BODY }, _ => break } }
+        let next_fn = self.ast.alloc_expr(
+            Expr.MemberAccess(MemberAccessExpr {
+                expr: self.ast.alloc_expr(Expr.Ident(src_id), span),
+                member: self.intern_table.intern("next")
+            }),
+            span
+        );
+        let next_call = self.ast.alloc_expr(
+            Expr.Call(CallExpr {
+                callee: next_fn,
+                args: @slice(0 as *ExprId, 0 as usize),
+                type_args: @slice(0 as *TypeId, 0 as usize)
+            }),
+            span
+        );
+        let mut payload = unsafe { Vec::<PatternId>.new_in_raw(self.arena) };
+        payload.push(self.ast.alloc_pattern(Pattern.Ident(elem_id), span));
+        let some = self.ast.alloc_pattern(
+            Pattern.EnumVariant(VariantPattern {
+                type_name: self.intern_table.intern("Option"),
+                variant_name: self.intern_table.intern("Some"),
+                payload: payload.as_slice()
+            }),
+            span
+        );
+        let item_let = self.ast.alloc_stmt(
+            Stmt.Let(LetStmt {
+                pattern: pattern,
+                name: 0 as u32,
+                ty: no_ty,
+                init: self.ast.alloc_expr(Expr.Ident(elem_id), span),
+                is_mut: false
+            }),
+            span,
+            0 as u32
+        );
+        let mut arm_body = unsafe { Vec::<StmtId>.new_in_raw(self.arena) };
+        arm_body.push(item_let);
+        arm_body.push(body_stmt);
+        let brk = self.ast.alloc_expr(Expr.Break, span);
+        let m = self.two_arm_match(
+            next_call,
+            some,
+            self.block_of(arm_body.as_slice(), span),
+            brk,
+            span
+        );
+        let mut loop_body = unsafe { Vec::<StmtId>.new_in_raw(self.arena) };
+        loop_body.push(self.ast.alloc_stmt(Stmt.Expr(m), span, 0 as u32));
+        let true_lit = self.ast.alloc_expr(Expr.Literal(Literal.Bool(true)), span);
+        let iter_loop = self.ast.alloc_stmt(
+            Stmt.While(WhileStmt {
+                cond: true_lit,
+                body: self.block_of(loop_body.as_slice(), span)
+            }),
+            span,
+            0 as u32
+        );
+
+        return Stmt.For(ForStmt {
+            var: src_id,
+            start: iterable,
+            end: 0 as ExprId,
+            body: body,
+            pattern: pattern,
+            bind: bind,
+            slice_loop: slice_loop,
+            iter_loop: iter_loop
+        });
+    }
+
+    pub fn block_of(self: &mut Parser, stmts: [StmtId], span: Span) -> ExprId {
+        return self.ast.alloc_expr(
+            Expr.Block(BlockExpr {
+                stmts: stmts, tail_expr: 0 as ExprId, is_unsafe: false,
+                end_span: Span { start: 0, end: 0, line: 0, col: 0 }
+            }),
+            span
+        );
+    }
+
+    #[borrows()]
+    pub fn parse_block(self: &mut Parser) -> BlockExpr {
+        self.expect(Token.LBrace);
+        let mut stmts = unsafe { Vec::<StmtId>.new_in_raw(self.arena) };
+        let mut tail_expr = 0 as ExprId;
+        while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+            let span = self.cur.span;
+            // The `//` block right before the statement, captured when its first token was lexed
+            // (the lexer's `pending_block` is already past it).
+            let comment = self.cur_comment;
+            match self.parse_statement() {
+                BlockItem.Statement(stmt) => {
+                    stmts.push(self.ast.alloc_stmt(stmt, span, comment));
+                },
+                BlockItem.Tail(e) => { tail_expr = e; break; },
+            }
+        }
+        let end_span = self.cur.span;
+        self.expect(Token.RBrace);
+        return BlockExpr {
+            stmts: stmts.as_slice(),
+            tail_expr: tail_expr,
+            is_unsafe: false,
+            end_span: end_span
+        };
+    }
+
+    fn parse_statement(self: &mut Parser) -> BlockItem {
+        let kind = self.cur.token.kind();
+        return match kind {
+            TokenKind.KLet => BlockItem.Statement(self.parse_let_stmt()),
+            TokenKind.KReturn => BlockItem.Statement(self.parse_return_stmt()),
+            TokenKind.KBreak => {
+                self.next_token();
+                self.expect(Token.Semi);
+                BlockItem.Statement(Stmt.Break)
+            },
+            TokenKind.KContinue => {
+                self.next_token();
+                self.expect(Token.Semi);
+                BlockItem.Statement(Stmt.Continue)
+            },
+            TokenKind.KDefer => {
+                self.next_token();
+                let e = self.parse_expr(0);
+                self.expect(Token.Semi);
+                BlockItem.Statement(Stmt.Defer(e))
+            },
+            // Loops are statements here, so a `(` after one starts the next statement rather
+            // than calling the loop.
+            TokenKind.KWhile => BlockItem.Statement(self.parse_while()),
+            TokenKind.KLoop => BlockItem.Statement(self.parse_loop()),
+            TokenKind.KFor => BlockItem.Statement(self.parse_for()),
+            TokenKind.KIf => { let e = self.parse_if(); self.expression_item(e, true) },
+            TokenKind.KMatch => { let e = self.parse_match(); self.expression_item(e, true) },
+            _ => {
+                let block_like = is_block_like_start(kind);
+                // A block in statement position is a statement of its own: `{ } *r = 5` is the
+                // block, then the dereference assignment, never `({ }) * r = 5`. Parsing only the
+                // primary here is what stops the infix loop from continuing across the `}`; the
+                // other block-like forms (`if`, `match`, the loops) are already parsed just above.
+                let e = if kind == TokenKind.LBrace || kind == TokenKind.KUnsafe {
+                    self.parse_block_statement_expr()
+                } else {
+                    self.parse_expr(0)
+                };
+                self.expression_item(e, block_like)
+            },
+        };
+    }
+
+    // An expression E in a block: a statement if `;` follows it, or if it is BLOCK_LIKE (ends
+    // in `}`) and is not last; otherwise the block's value.
+    fn expression_item(self: &mut Parser, e: ExprId, block_like: bool) -> BlockItem {
+        if self.is_kind(TokenKind.Semi) {
+            self.next_token();
+            return BlockItem.Statement(Stmt.Expr(e));
+        }
+        if block_like && !self.is_kind(TokenKind.RBrace) {
+            return BlockItem.Statement(Stmt.Expr(e));
+        }
+        return BlockItem.Tail(e);
+    }
+
+    fn parse_let_stmt(self: &mut Parser) -> Stmt {
+        self.expect(Token.KLet);
+        // A destructuring `let`: `let (a, b) = ..`, `let P { x, y } = ..`, `let V(x) = ..`.
+        if self.is_kind(TokenKind.LParen)
+            || (self.is_kind(TokenKind.Ident)
+                && (self.peek_is_kind(TokenKind.LBrace)
+                    || self.peek_is_kind(TokenKind.LParen)
+                    || self.peek_is_kind(TokenKind.Dot))) {
+            let pattern = self.parse_pattern();
+            let mut pty = 0 as TypeId;
+            if self.is_kind(TokenKind.Colon) {
+                self.next_token();
+                pty = self.parse_type();
+            }
+            self.expect(Token.Equal);
+            let pinit = self.parse_expr(0);
+            self.expect(Token.Semi);
+            return Stmt.Let(LetStmt {
+                pattern: pattern,
+                name: 0 as u32,
+                ty: pty,
+                init: pinit,
+                is_mut: false
+            });
+        }
+        let is_mut = self.eat_mut();
+        let mut name = 0 as u32;
+        if self.is_kind(TokenKind.Ident) {
+            name = self.cur.token.get_ident_id();
+            self.next_token();
+        } else if self.is_kind(TokenKind.Underscore) {
+            self.next_token();
+        } else {
+            self.report_expected(TokenKind.Ident);
+            self.next_token();
+        }
+
+        let mut ty = 0 as TypeId;
+        if self.is_kind(TokenKind.Colon) {
+            self.next_token();
+            ty = self.parse_type();
+        }
+
+        self.expect(Token.Equal);
+        let init = self.parse_expr(0);
+        self.expect(Token.Semi);
+
+        return Stmt.Let(LetStmt {
+            pattern: 0 as PatternId,
+            name: name,
+            ty: ty,
+            init: init,
+            is_mut: is_mut
+        });
+    }
+
+    fn parse_return_stmt(self: &mut Parser) -> Stmt {
+        self.expect(Token.KReturn);
+        let mut e = 0 as ExprId;
+        if !self.is_kind(TokenKind.Semi) {
+            e = self.parse_expr(0);
+        }
+        self.expect(Token.Semi);
+        return Stmt.Return(e);
+    }
+}
+
+// What one step of a block reads: a statement, or the expression that is the block's value.
+enum BlockItem {
+    Statement(Stmt),
+    Tail(ExprId),
+}
+
+// Tokens that start an expression ending in `}`, which needs no `;` to end a statement.
+fn is_block_like_start(kind: TokenKind) -> bool {
+    return match kind {
+        TokenKind.KIf
+            | TokenKind.KWhile
+            | TokenKind.KFor
+            | TokenKind.KLoop
+            | TokenKind.KMatch
+            | TokenKind.LBrace
+            | TokenKind.KUnsafe => true,
+        _ => false,
+    };
+}

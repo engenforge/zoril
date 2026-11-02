@@ -1,0 +1,52 @@
+import "io.zrl";
+import "fmt.zrl";
+import "mem_raw.zrl";
+use io::{stdout, write};
+use fmt::write_i64;
+use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
+
+struct FnDecl { a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64 }
+struct StructDecl { a: u64, b: u64, c: u64 }
+struct EnumDecl { a: u64, b: u64, c: u64 }
+struct ImplDecl { a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64 }
+
+enum Decl {
+    Fn(FnDecl),
+    Struct(StructDecl),
+    Enum(EnumDecl),
+    Impl(ImplDecl),
+    None,
+}
+
+fn write_str(s: [u8]) {
+    write(stdout(), s);
+}
+
+fn test_match(p_decl: *mut Decl) {
+    match unsafe { *p_decl } {
+        Decl.Fn(v) => { write_str("Matched Fn\n"); },
+        Decl.Struct(v) => { write_str("Matched Struct\n"); },
+        Decl.Enum(v) => {
+            write_str("Matched Enum! a=");
+            let mut out = stdout();
+            let _ = write_i64(&mut out, v.a as i64);
+            write_str("\n");
+        },
+        Decl.Impl(v) => { write_str("Matched Impl\n"); },
+        Decl.None => { write_str("Matched None\n"); },
+    }
+}
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(1024 * 1024) };
+
+    // Allocate array of decls dynamically
+    let decls = unsafe { zoril_allocator_alloc(arena, 10 * sizeof(Decl)) } as *mut Decl;
+
+    // Put an EnumDecl at index 5
+    let p = (decls as usize + 5 * sizeof(Decl)) as *mut Decl;
+    unsafe { *p = Decl.Enum(EnumDecl { a: 42, b: 0, c: 0 }); }
+
+    test_match(p);
+    return 0;
+}

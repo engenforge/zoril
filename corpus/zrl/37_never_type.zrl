@@ -1,0 +1,53 @@
+// 37: The `never` type and diverging expressions.
+// Demonstrates: never type, loop, return/break as expressions, exhaustive match with never.
+
+import "io.zrl";
+use io::exit;
+
+fn panics() -> never {
+    loop {}
+}
+
+fn test_never_coercion(cond: bool) -> i32 {
+    // A `never` typed expression can be coerced to any type.
+    let x: i32 = if cond {
+        42
+    } else {
+        panics()
+    };
+    return x;
+}
+
+fn test_return_as_expression(x: i32) -> i32 {
+    // return is an expression of type `never`.
+    let y = match x {
+        1 => return 100,
+        _ => 200,
+    };
+    return y;
+}
+
+enum Status {
+    Ok,
+    Error(u32),
+    Fatal,
+}
+
+fn check_status(s: Status) -> u32 {
+    return match s {
+        Status.Ok => 0,
+        Status.Error(code) => code,
+        Status.Fatal => panics(),
+    };
+}
+
+fn main() -> i32 {
+    let _ = test_never_coercion(true);
+    let _ = test_return_as_expression(2);
+    let s = Status.Error(1);
+    let code = check_status(s);
+    if code == 0 as u32 {
+        exit(0);
+    }
+    return code as i32 - 1; // Should return 0
+}

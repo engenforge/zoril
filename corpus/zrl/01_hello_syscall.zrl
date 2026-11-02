@@ -1,0 +1,16 @@
+// 01: Hello world via direct syscall — no libc dependency.
+// Demonstrates: extern-free I/O, @syscall, string literals, slices, numeric literals.
+
+fn sys_write(fd: u64, buf: &[u8], len: usize) -> i64 {
+    return unsafe { @syscall(1, fd, buf.ptr, len) };
+}
+
+fn sys_exit(code: u64) {
+    unsafe { @syscall(60, code) };
+}
+
+fn main() {
+    let msg = "Hello, Zoril!\n";
+    sys_write(1, msg, msg.len);
+    sys_exit(0);
+}

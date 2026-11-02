@@ -1,0 +1,13 @@
+// expected exit 42
+// `&&T` and `&&x` lex as one `&&` token; in type and prefix position they mean a reference
+// to a reference (`& &T`, `& &x`), as in Rust.
+fn get(h: &&i32) -> i32 { return **h; }
+fn bump(h: &&mut i32) -> i32 { return **h + 1; }
+fn main() -> i32 {
+    let x = 40;
+    let r = &x;
+    let mut y = 1;
+    let m = &mut y;
+    if get(&&x) != 40 { return 1; }
+    return get(&r) + bump(&m);
+}

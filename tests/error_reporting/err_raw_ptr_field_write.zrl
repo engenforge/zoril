@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: error: dereference of raw pointer requires unsafe block
+// A write through a raw pointer's field dereferences it as a read does.
+struct Point { x: i32, y: i32 }
+fn set_x(p: *mut Point) { p.x = 5; }
+fn main() -> i32 { set_x(0 as *mut Point); return 0; }

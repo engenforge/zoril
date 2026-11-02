@@ -1,0 +1,78 @@
+// expected exit code: 0
+import "io.zrl";
+
+struct Inner {
+    a: u8,
+    b: u64,
+}
+
+struct Outer {
+    x: u8,
+    inner: Inner,
+    y: u64,
+}
+
+struct PaddingTest {
+    first: u8,
+    inner: Inner,
+    last: u8,
+}
+
+enum Token { A(u64), B }
+struct Span { line: u32, col: u32, start: u32, end: u32 }
+struct TokenWithSpan { token: Token, span: Span }
+struct Parser {
+    lexer: *u8,
+    cur: TokenWithSpan,
+    peek: TokenWithSpan,
+}
+
+fn test_nested_updates() -> i32 {
+    let mut o = Outer {
+        x: 1 as u8,
+        inner: Inner { a: 2 as u8, b: 3 as u64 },
+        y: 4 as u64,
+    };
+    if o.x != 1 { return 1; }
+    if o.inner.a != 2 { return 2; }
+    if o.inner.b != 3 { return 3; }
+    if o.y != 4 { return 4; }
+    o.inner.b = 10 as u64;
+    if o.inner.b != 10 { return 5; }
+    if o.y != 4 { return 6; }
+    o.y = 20 as u64;
+    if o.y != 20 { return 7; }
+    if o.inner.b != 10 { return 8; }
+    return 0;
+}
+
+fn test_padding() -> i32 {
+    let o = PaddingTest {
+        first: 1 as u8,
+        inner: Inner { a: 2 as u8, b: 3 as u64 },
+        last: 4 as u8,
+    };
+    if o.first == 1 as u8 && o.inner.a == 2 as u8 && o.inner.b == 3 as u64 && o.last == 4 as u8 {
+        return 0;
+    }
+    return 1;
+}
+
+fn test_sizes() -> i32 {
+    if sizeof(Token) != 16 { return 1; }
+    if alignof(Token) != 8 { return 2; }
+    if sizeof(Span) != 16 { return 3; }
+    if alignof(Span) != 4 { return 4; }
+    if sizeof(TokenWithSpan) != 32 { return 5; }
+    if alignof(TokenWithSpan) != 8 { return 6; }
+    if sizeof(Parser) != 72 { return 7; }
+    if alignof(Parser) != 8 { return 8; }
+    return 0;
+}
+
+fn main() -> i32 {
+    if test_nested_updates() != 0 { return 1; }
+    if test_padding() != 0 { return 2; }
+    if test_sizes() != 0 { return 3; }
+    return 0;
+}

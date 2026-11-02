@@ -1,0 +1,14 @@
+// expected exit code: 0
+// 18: System calls and direct kernel interface.
+// Demonstrates: @syscall, direct I/O, bypassing libc.
+
+fn sys_write(fd: u64, buf: [u8]) -> i64 {
+    return unsafe { @syscall(1, fd, buf.ptr, buf.len) } as i64;
+}
+
+fn main() -> i32 {
+    let msg = "Hello from Zoril via direct syscall!\n";
+    sys_write(1, msg);
+
+    return 0;
+}

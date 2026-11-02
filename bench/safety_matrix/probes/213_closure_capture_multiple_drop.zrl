@@ -1,0 +1,32 @@
+// name: Non-Copy closure capture dropped on each invocation and on env exit
+// expected: accept
+static mut DROPS: i32 = 0;
+
+struct D {
+    x: u64,
+}
+
+trait Drop {
+    fn drop(self: &mut D);
+}
+
+impl Drop for D {
+    fn drop(self: &mut D) {
+        DROPS = DROPS + 1;
+    }
+}
+
+fn run() -> u64 {
+    let d = D { x: 7 };
+    let f = || -> u64 { return d.x; };
+    let a = f();
+    let b = f();
+    return a + b;
+}
+
+fn main() -> i32 {
+    let _ = run();
+    // Four drops of one value: each call drops a copy of the capture, and `env` and `d` are
+    // dropped again at scope exit.
+    return DROPS - 1;
+}

@@ -1,0 +1,181 @@
+// Dependency discovery. The compiler is the only authority on what an import names
+// (`zoril --emit-deps`); zbuild never scans source text itself, so the two cannot disagree.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "string.zrl";
+import "vec.zrl";
+import "proc.zrl";
+import "util.zrl";
+import "ctx.zrl";
+use ctx::BuildCtx;
+use io::eprint;
+use mem_raw::ArenaHeader;
+use proc::Command;
+use util::{fail2, fail_reason, join_path, read_file_to_slice, run_cmd_checked};
+use vec::Vec;
+
+pub struct Graph {
+    pub paths: Vec<[u8]>,    // node index -> canonical module path
+    pub files: Vec<[u8]>,    // node index -> resolved file path
+    pub edge_from: Vec<usize>,
+    pub edge_to: Vec<usize>,
+    pub order: Vec<usize>,   // topological: dependencies before dependants
+}
+
+#[stores(path -> g, file -> g)]
+pub fn node_of(g: &mut Graph, path: [u8], file: [u8]) -> usize {
+    let mut i = 0 as usize;
+    while i < g.paths.len() {
+        if g.paths.as_slice()[i] == path {
+            if file.len > 0 && file != path {
+                g.files.set(i, file);
+            }
+            return i;
+        }
+        i = i + 1;
+    }
+    g.paths.push(path);
+    g.files.push(file);
+    return g.paths.len() - 1;
+}
+
+pub fn deps_of(g: &Graph, node: usize, arena: *mut ArenaHeader) -> Vec<usize> {
+    let mut out = unsafe { Vec::<usize>.new_in_raw(arena) };
+    let mut e = 0 as usize;
+    while e < g.edge_from.len() {
+        if g.edge_from.as_slice()[e] == node { out.push(g.edge_to.as_slice()[e]); }
+        e = e + 1;
+    }
+    return out;
+}
+
+fn add_edge(g: &mut Graph, from: usize, to: usize) {
+    let mut e = 0 as usize;
+    while e < g.edge_from.len() {
+        if g.edge_from.as_slice()[e] == from && g.edge_to.as_slice()[e] == to { return; }
+        e = e + 1;
+    }
+    g.edge_from.push(from);
+    g.edge_to.push(to);
+}
+
+pub fn push_compiler_paths(cmd: &mut Command, ctx: &BuildCtx) {
+    if ctx.opts.root.len > 0 {
+        cmd.arg("--root");
+        cmd.arg(ctx.opts.root);
+    }
+    let mut k = 0 as usize;
+    while k < ctx.opts.inc_dirs.len() {
+        cmd.arg("-I");
+        cmd.arg(ctx.opts.inc_dirs.as_slice()[k]);
+        k = k + 1;
+    }
+    // `--require-interface` is deliberately *not* passed. zbuild writes every interface it asks for, so a
+    // missing one usually is a bug in the build - but not always: in an import cycle there is no module
+    // that can be compiled first, so neither interface exists, and the compiler must read the sources to
+    // report the cycle. Passing the flag here replaced that diagnostic with a missing-interface error
+    // (test 15 of scripts/test_incremental.sh asserts it), so the fallback stays for that case.
+    cmd.arg("--iface-dir");
+    cmd.arg(ctx.iface_dir);
+}
+
+fn read_edges(g: &mut Graph, content: [u8], arena: *mut ArenaHeader) {
+    let lines = unsafe { content.split_raw('\n' as u8, arena) };
+    let mut i = 0 as usize;
+    while i < lines.len() {
+        let line = lines.as_slice()[i];
+        i = i + 1;
+        if line.len == 0 { continue; }
+        let cols = unsafe { line.split_raw('\t' as u8, arena) };
+        if cols.len() == 3 {
+            let from = node_of(g, cols.as_slice()[0], cols.as_slice()[0]);
+            let to = node_of(g, cols.as_slice()[1], cols.as_slice()[2]);
+            add_edge(g, from, to);
+        } else if cols.len() == 2 {
+            let from = node_of(g, cols.as_slice()[0], cols.as_slice()[0]);
+            let to = node_of(g, cols.as_slice()[1], cols.as_slice()[1]);
+            add_edge(g, from, to);
+        }
+    }
+}
+
+// Post-order DFS from node 0 (the entry). Returns 0, or 1 after printing the cycle as a path.
+fn topo_sort(g: &mut Graph, arena: *mut ArenaHeader) -> i32 {
+    let n = g.paths.len();
+    let mut state = unsafe { Vec::<u8>.new_in_raw(arena) };
+    let mut i = 0 as usize;
+    while i < n { state.push(0); i = i + 1; }
+    let mut stack = unsafe { Vec::<usize>.new_in_raw(arena) };
+    let mut scan = unsafe { Vec::<usize>.new_in_raw(arena) };
+    stack.push(0);
+    scan.push(0);
+    state.set(0, 1);
+    while stack.len() > 0 {
+        let top = stack.len() - 1;
+        let node = stack.as_slice()[top];
+        let mut e = scan.as_slice()[top];
+        while e < g.edge_from.len() && g.edge_from.as_slice()[e] != node { e = e + 1; }
+        if e < g.edge_from.len() {
+            scan.set(top, e + 1);
+            let to = g.edge_to.as_slice()[e];
+            let st = state.as_slice()[to];
+            if st == 1 {
+                eprint("error: circular import detected: ");
+                let mut c = 0 as usize;
+                while c < stack.len() && stack.as_slice()[c] != to { c = c + 1; }
+                while c < stack.len() {
+                    eprint(g.paths.as_slice()[stack.as_slice()[c]]);
+                    eprint(" -> ");
+                    c = c + 1;
+                }
+                eprint(g.paths.as_slice()[to]);
+                eprint("\n");
+                return 1;
+            }
+            if st == 0 {
+                state.set(to, 1);
+                stack.push(to);
+                scan.push(0);
+            }
+        } else {
+            state.set(node, 2);
+            g.order.push(node);
+            let _ = stack.pop();
+            let _ = scan.pop();
+        }
+    }
+    return 0;
+}
+
+// Asks the compiler for every import edge reachable from `entry` and orders the modules.
+// Node 0 is the entry. Sources that no longer exist are served from cached interfaces.
+#[stores(entry -> g, abs_entry -> g)]
+pub fn discover_graph(ctx: &BuildCtx, entry: [u8], abs_entry: [u8], g: &mut Graph) -> i32 {
+    let arena = ctx.arena;
+    g.paths = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+    g.files = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+    g.edge_from = unsafe { Vec::<usize>.new_in_raw(arena) };
+    g.edge_to = unsafe { Vec::<usize>.new_in_raw(arena) };
+    g.order = unsafe { Vec::<usize>.new_in_raw(arena) };
+    let _ = node_of(g, entry, abs_entry);
+
+    let deps_file = join_path(ctx.tmp_dir, "deps.txt", arena);
+    let mut cmd = unsafe { Command.new_raw(ctx.tools.compiler, arena) };
+    cmd.arg("--emit-deps");
+    cmd.arg(abs_entry);
+    push_compiler_paths(&mut cmd, ctx);
+    cmd.arg("-o");
+    cmd.arg(deps_file);
+    run_cmd_checked(cmd, "zoril --emit-deps");
+
+    let content = match read_file_to_slice(deps_file, arena) {
+        Ok(c) => c,
+        Err(err) => {
+            return fail_reason("cannot read dependency list: ", deps_file, err.message());
+        },
+    };
+    read_edges(g, content, arena);
+    return topo_sort(g, arena);
+}

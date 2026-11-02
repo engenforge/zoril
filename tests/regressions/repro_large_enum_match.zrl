@@ -1,0 +1,21 @@
+enum Large {
+    A((u64, u64)),
+    B((u64, u64)),
+}
+
+fn test(l: Large) -> u64 {
+    match l {
+        Large.A(t) => return t.0 + t.1,
+        Large.B(t) => return t.0 * t.1,
+    }
+}
+
+fn main() -> i32 {
+    let a = Large.A((10 as u64, 20 as u64));
+    let b = Large.B((10 as u64, 20 as u64));
+    
+    if test(a) == 30 && test(b) == 200 {
+        return 0;
+    }
+    return 1;
+}

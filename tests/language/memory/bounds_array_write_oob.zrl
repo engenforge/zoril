@@ -1,0 +1,8 @@
+// expected exit 134
+// Out-of-bounds fixed-array write must trap rather than writing past the end.
+fn main() -> i32 {
+    let mut data = [1 as u8, 2, 7];
+    let i = 99 as usize;
+    data[i] = 42;
+    return data[0] as i32;
+}

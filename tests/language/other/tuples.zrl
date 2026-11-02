@@ -1,0 +1,50 @@
+// expected exit code: 0
+// Tests tuple types, field access, tuples as return values and in structs.
+
+fn divmod(a: i32, b: i32) -> (i32, i32) {
+    return (a / b, a % b);
+}
+
+fn swap(p: (i32, i32)) -> (i32, i32) {
+    return (p.1, p.0);
+}
+
+struct Point {
+    coords: (i32, i32),
+}
+
+fn test_tuple_return() -> i32 {
+    let result = divmod(17, 5);
+    if result.0 != 3 { return 1; }
+    if result.1 != 2 { return 2; }
+    return 0;
+}
+
+fn test_tuple_swap() -> i32 {
+    let pair = swap((100, 200));
+    if pair.0 != 200 { return 1; }
+    if pair.1 != 100 { return 2; }
+    return 0;
+}
+
+fn test_tuple_in_struct() -> i32 {
+    let pt = Point { coords: (3, 4) };
+    if pt.coords.0 != 3 { return 1; }
+    if pt.coords.1 != 4 { return 2; }
+    return 0;
+}
+
+fn test_tuple_trailing_comma() -> i32 {
+    let t = (10, 20,);
+    if t.0 != 10 { return 1; }
+    if t.1 != 20 { return 2; }
+    return 0;
+}
+
+fn main() -> i32 {
+    if test_tuple_return() != 0 { return 1; }
+    if test_tuple_swap() != 0 { return 2; }
+    if test_tuple_in_struct() != 0 { return 3; }
+    if test_tuple_trailing_comma() != 0 { return 4; }
+    return 0;
+}

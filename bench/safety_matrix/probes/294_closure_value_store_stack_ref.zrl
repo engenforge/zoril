@@ -1,0 +1,26 @@
+// name: A call through a closure value stores a stack reference into the caller's memory
+// expected: compile_reject
+// The same contract in a closure: its summary is the body's, and taking the closure's address is
+// the coercion the check refuses (probe 293 is the `fn` twin).
+struct H {
+    p: &i32,
+}
+
+fn fill(h: &mut H) {
+    let x = 5;
+    let f = |hh: &mut H, p: &i32| { hh.p = p; };
+    f(h, &x);
+}
+
+fn churn() -> i32 {
+    let a: [i32; 64] = [77; 64];
+    return a[3];
+}
+
+fn main() -> i32 {
+    let dummy = 0;
+    let mut h = H { p: &dummy };
+    fill(&mut h);
+    let _q = churn();
+    return *h.p;
+}

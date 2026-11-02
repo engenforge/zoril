@@ -1,0 +1,21 @@
+// expected compile success
+
+trait Base {}
+
+trait Derived<T: Base> {
+    fn do_it(self: &Self, t: T);
+}
+
+struct MyBase {}
+impl Base for MyBase {}
+
+struct MyDerived {}
+impl Derived<MyBase> for MyDerived {
+    fn do_it(self: &MyDerived, t: MyBase) {}
+}
+
+fn main() {
+    let d = MyDerived {};
+    let b = MyBase {};
+    d.do_it(b);
+}

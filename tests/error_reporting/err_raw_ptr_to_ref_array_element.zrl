@@ -1,0 +1,14 @@
+// expected compile fail
+// The array-index spelling of the same shape: a raw pointer into a `&mut u32` element. Before the
+// guard went, this reported the bare type mismatch; now it names the conversion rule.
+// The valid twin is `tests/language/memory/raw_ptr_element_assignment.zrl`.
+// EXPECT: tests/error_reporting/err_raw_ptr_to_ref_array_element.zrl:12:5: error: converting a raw pointer to a reference requires an `unsafe` block and an explicit `&*p`
+// EXPECT: tests/error_reporting/err_raw_ptr_to_ref_array_element.zrl:12:5: error: type mismatch: expected `&mut u32`, found `*mut u32`
+
+fn main() -> i32 {
+    let mut x: u32 = 1;
+    let p: *mut u32 = &mut x as *mut u32;
+    let mut arr: [&mut u32; 1] = [&mut x];
+    arr[0] = p;
+    return 0;
+}

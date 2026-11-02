@@ -1,0 +1,15 @@
+// expected compile fail
+// Tests that use after move is caught when it happens in only one branch.
+// EXPECT: error: use of moved value 'r'
+struct Resource { id: i32 }
+
+fn consume(r: Box<Resource>) {}
+
+fn main(cond: bool) -> i32 {
+    let r = box Resource { id: 1 };
+    if cond {
+        consume(r);
+    }
+    let s = r; // @error "use of moved value 'r'"
+    0
+}

@@ -1,0 +1,20 @@
+fn test_match_return(x: i32) -> i32 {
+    let y = match x {
+        1 => return 10,
+        2 => 20,
+        _ => 30,
+    };
+    return y;
+}
+
+fn main() -> i32 {
+    let r1 = test_match_return(1);
+    let r2 = test_match_return(2);
+    let r3 = test_match_return(3);
+    
+    // We can't really "check" r1 because test_match_return(1) returns directly.
+    // But we can check r2 and r3.
+    if r2 != 20 { return 1; }
+    if r3 != 30 { return 2; }
+    return 0;
+}

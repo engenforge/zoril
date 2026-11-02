@@ -1,0 +1,15 @@
+// expected compile fail
+// EXPECT: a static's initializer must be a constant this compiler can evaluate
+// A `static` whose initializer stage0-C cannot evaluate used to be emitted with no init data at
+// all, so the data section got `z <size>` and the program ran with a zeroed global - a miscompile
+// with no diagnostic. It is reported now. The form itself is what the self-hosted compiler also
+// rejects (tests/error_reporting/err_static_init_struct_literal.zrl): a struct literal needs a
+// constant evaluator that lays out an aggregate's bytes, which neither compiler has yet.
+struct Header { off: u64 }
+struct Handle { header: *mut Header }
+
+static HEAP: Handle = Handle { header: 0 as *mut Header };
+
+fn main() -> i32 {
+    return 0;
+}

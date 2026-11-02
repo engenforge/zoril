@@ -1,0 +1,45 @@
+// Regression test for Bug #4: SSA dominance bug for method calls on `self` inside short-circuit `&&` / `||`.
+// When `self` is a non-lvalue parameter, promoting it to a stack slot inside the RHS
+// of `&&` or `||` emitted an un-hoisted allocation/initialization in the branch block,
+// resulting in uninitialized stack memory and non-dominating SSA definitions.
+
+struct Checker {
+    value: i32,
+}
+
+impl Checker {
+    fn check_val(self: &Checker, expected: i32) -> bool {
+        return self.value == expected;
+    }
+
+    fn test_and(self: Checker) -> bool {
+        let flag = false;
+        // The RHS method call is NOT executed due to short-circuiting:
+        if flag && self.check_val(42) {
+            return false;
+        }
+        // Subsequent method call on `self` must observe valid, initialized self:
+        return self.check_val(42);
+    }
+
+    fn test_or(self: Checker) -> bool {
+        let flag = true;
+        // The RHS method call is NOT executed due to short-circuiting:
+        if flag || self.check_val(999) {
+            // Subsequent method call on `self`:
+            return self.check_val(42);
+        }
+        return false;
+    }
+}
+
+fn main() -> i32 {
+    let c = Checker { value: 42 };
+    if !c.test_and() {
+        return 1;
+    }
+    if !c.test_or() {
+        return 2;
+    }
+    return 0;
+}

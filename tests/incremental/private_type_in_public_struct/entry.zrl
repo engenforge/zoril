@@ -1,0 +1,7 @@
+// A private type named inside an exported declaration. The interface has to be able to print `Entry`
+// even though it is not `pub`: an importer may not *name* it, but it must resolve it to read `Table`.
+import "vec.zrl";
+use vec::Vec;
+
+struct Entry { a: u32, val: u32 }
+pub struct Table { pub entries: Vec<Entry> }

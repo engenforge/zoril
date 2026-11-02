@@ -1,0 +1,21 @@
+struct Pair<A, B> {
+    first: A,
+    second: B,
+}
+
+fn identity<T>(x: T) -> T {
+    return x;
+}
+
+fn make_pair<A, B>(a: A, b: B) -> Pair<A, B> {
+    return Pair { first: a, second: b };
+}
+
+fn main() -> i32 {
+    let p = make_pair(10, 20);
+    let x = identity::<i32>(100);
+    if p.first + p.second + x == 130 {
+        return 0;
+    }
+    return 1;
+}

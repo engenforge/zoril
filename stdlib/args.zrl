@@ -1,0 +1,105 @@
+// Command-line argument inspection and iteration
+
+import "core.zrl";
+
+// Returns the number of command-line arguments passed to the process.
+//
+// The process arguments the runtime recorded before it called `main`, handed back through these
+// (the `zoril_argc`/`zoril_argv` accessors in rt/runtime.s). Declared here so that the only code
+// that ever holds the raw `argv` is `args()` below.
+pub extern fn zoril_argc() -> i32;
+// Returns the raw pointer to the null-terminated array of argument strings.
+//
+// CALLER OBLIGATION: caller must not mutate the array or access pointers beyond argc.
+pub extern fn zoril_argv() -> **u8;
+
+// Iterator over command-line arguments provided by the runtime environment.
+pub struct Args {
+    argc: i32,
+    argv: **u8,
+    index: i32,
+}
+
+impl Args {
+    // Constructs an Args iterator from raw argc and argv pointers.
+    //
+    // CALLER OBLIGATION: caller must ensure argv is non-null and points to valid strings for argc elements.
+    //
+    // Requires `unsafe`: the caller vouches that `argv` points at `argc` NUL-terminated strings it
+    // may read from. Safe code uses `args()` below, which takes both from the runtime.
+    pub unsafe fn new(argc: i32, argv: **u8) -> Args {
+        return Args {
+            argc: argc,
+            argv: argv,
+            index: 0,
+        };
+    }
+
+    // Returns the total number of command-line arguments.
+    pub fn len(self: &Args) -> usize {
+        if self.argc < 0 as i32 { return 0 as usize; }
+        return self.argc as usize;
+    }
+
+    // Returns the argument at index as a byte slice, or None if index is out of bounds.
+    #[borrows()]
+    pub fn get(self: &Args, index: usize) -> Option<[u8]> {
+        // Compare in `usize`: `index as i32` truncated, so an index at or above 2^31 became a
+        // small (or negative) i32, passed the guard and then read the wrong argument, or past the
+        // end of `argv` (probe 162_args_get_index_truncation.zrl).
+        if self.argc <= 0 as i32 || index >= self.argc as usize {
+            return Option.None;
+        }
+        // SAFETY: `index < self.argc` was checked above, so the slot is inside the `argv` array
+        // the runtime recorded (from `_start`, or an `unsafe` caller's promise).
+        let addr = unsafe { *((self.argv as usize + index * sizeof(*u8)) as **u8) } as usize;
+        if addr == 0 {
+            return Option.None;
+        }
+        let mut len = 0 as usize;
+        // SAFETY: `addr` is a NUL-terminated argument string; the loop stops at its NUL, so the
+        // slice handed back covers exactly its bytes.
+        while unsafe { *((addr + len) as *u8) } != 0 {
+            len = len + 1;
+        }
+        // SAFETY: `addr` was checked non-null above and the loop found its NUL within `len`
+        // bytes, so the slice covers exactly the argument's bytes.
+        return Option.Some(unsafe { @slice(addr as *u8, len) });
+    }
+
+    // Returns the program invocation name (argv[0]) as a byte slice.
+    pub fn program_name(self: &Args) -> [u8] {
+        return match self.get(0 as usize) {
+            Some(s) => s,
+            None => @slice(0 as *u8, 0 as usize),
+        };
+    }
+
+    // Returns true if more arguments remain to be yielded.
+    pub fn has_next(self: &Args) -> bool {
+        return self.index < self.argc;
+    }
+
+    #[borrows()]
+    // Yields the next argument as a byte slice, or None when all arguments have been consumed.
+    pub fn next(self: &mut Args) -> Option<[u8]> {
+        if self.index >= self.argc {
+            return Option.None;
+        }
+        let res = self.get(self.index as usize);
+        self.index = self.index + 1;
+        return res;
+    }
+}
+
+// Returns an Args iterator initialized with process command-line arguments.
+//
+// The arguments this process was started with. Safe: the values come from the kernel by way of the
+// runtime, and no caller can name them, so nothing here points at memory the program does not own.
+// Prefer this to `Args.new`, which needs `unsafe` for the case where the caller already has an
+// `(argc, argv)` pair of its own, as a `main(argc: i32, argv: **u8)` receives.
+pub fn args() -> Args {
+    // SAFETY: the two values come from the runtime's own `_start` bookkeeping, so `argv` holds
+    // `argc` valid NUL-terminated strings for the life of the process.
+    return unsafe { Args.new(zoril_argc(), zoril_argv()) };
+}

@@ -1,0 +1,91 @@
+import "io.zrl";
+use io::{write, stdout};
+
+// --- Single module tests ---
+
+// From repro_slice_ptr.zrl
+struct SlicePtrWrapper {
+    data: [u8],
+}
+impl SlicePtrWrapper {
+    fn get_at(self: &SlicePtrWrapper, idx: u64) -> u8 {
+        let p = unsafe { (self.data.ptr as u64 + idx) as *u8 };
+        return unsafe { *p };
+    }
+}
+fn test_slice_ptr() -> i32 {
+    let w = SlicePtrWrapper { data: "abc" };
+    let c = w.get_at(1);
+    if c != 'b' as u8 { return 1; }
+    return 0;
+}
+
+// From repro_struct_slice_idx.zrl
+struct SliceIdxWrapper {
+    data: [u8],
+}
+impl SliceIdxWrapper {
+    fn get_at(self: &SliceIdxWrapper, idx: u64) -> u8 {
+        return self.data[idx];
+    }
+}
+fn test_slice_idx() -> i32 {
+    let w = SliceIdxWrapper { data: "abc" };
+    let c = w.get_at(1);
+    if c != 98 { return 1; }
+    return 0;
+}
+
+// From repro_slice_u32_missing.zrl, repro_slice_u32_missing_alias.zrl, repro_slice_u32_missing_struct.zrl
+type ExprId = u32;
+struct FooU32 { x: [u32] }
+struct FooExprId { x: [ExprId] }
+fn test_slice_u32() -> i32 {
+    let x: [u32] = @slice(0 as *u32, 0);
+    let f1 = FooU32 { x: @slice(0 as *u32, 0) };
+    let f2 = FooExprId { x: @slice(0 as *u32, 0) };
+    return 0;
+}
+
+// --- Multi module tests ---
+
+import "test_slice_helpers.zrl";
+use io::write;
+use test_slice_helpers::{Dummy, Wrapper, make_variant};
+
+fn test_slice_bug_cross_mod() -> i32 {
+    let e = make_variant();
+    match e {
+        MyEnum.Variant(s) => {
+            if s.len == 3 as u64 { return 0; }
+            return 1;
+        },
+    };
+    return 2;
+}
+
+fn test_slice_idx_cross_mod() -> i32 {
+    let w = Wrapper { data: "abc" };
+    let c = w.get_at(1);
+    if c != 'b' as u8 { return 1; }
+    return 0;
+}
+
+fn test_self_slice_len_cross_mod() -> i32 {
+    let mut d = Dummy { source: "abc" };
+    let len = d.get_len();
+    if len != 3 { return 1; }
+    return 0;
+}
+
+fn main() -> i32 {
+    if test_slice_ptr() != 0 { return 1; }
+    if test_slice_idx() != 0 { return 2; }
+    if test_slice_u32() != 0 { return 3; }
+    if test_slice_bug_cross_mod() != 0 { return 4; }
+    if test_slice_idx_cross_mod() != 0 { return 5; }
+    if test_self_slice_len_cross_mod() != 0 { return 6; }
+    
+    write(stdout(), "All slice tests passed\n");
+    return 0;
+}

@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_pattern_struct_fields.zrl:6:56: error: this pattern does not name every field of `P`; add `..` to ignore the rest
+// A struct pattern names every field, or says `..` for the rest, so adding a field to the
+// struct is noticed where it is matched.
+struct P { x: i32, y: i32 }
+fn main() -> i32 { let p = P { x: 1, y: 2 }; match p { P { x } => { return x; } } }

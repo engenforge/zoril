@@ -1,0 +1,638 @@
+import "core.zrl";
+import "mem.zrl";
+import "io.zrl";
+import "ast.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "il_cfg.zrl";
+import "resolve.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "intern.zrl";
+import "bytevec.zrl";
+import "mono.zrl";
+import "builder.zrl";
+import "vec.zrl";
+import "env.zrl";
+import "expr.zrl";
+import "stmt.zrl";
+import "zir.zrl";
+import "lower_zir.zrl";
+import "check_zir.zrl";
+import "lower_zir_to_zil.zrl";
+
+impl Lowerer {
+
+    // A private function used by a public generic body must be linkable from the TU that
+    // instantiates the body (see AST.collect_generic_body_refs).
+    fn collect_generic_private_refs(self: &mut Lowerer) {
+        let ast: &AST = self.resolver.ast;
+        ast.collect_generic_body_refs(self.target_source_file, &mut self.generic_private_refs);
+    }
+
+    // A method can be named from a generic body as `x.m()` (member name) or `T.m()` (the parser
+    // joins that into the IL name `T_m`), so both spellings count.
+    fn is_method_generic_reachable(self: &mut Lowerer, type_name: u32, method: u32) -> bool {
+        if self.is_generic_reachable(method) { return true; }
+        let mut full = ByteVec.new(self.arena);
+        full.push_slice(self.intern_table.lookup(type_name));
+        full.push(':' as u8);
+        full.push(':' as u8);
+        full.push_slice(self.intern_table.lookup(method));
+        if self.is_generic_reachable(self.intern_table.intern(full.as_slice())) { return true; }
+        let mut full_us = ByteVec.new(self.arena);
+        full_us.push_slice(self.intern_table.lookup(type_name));
+        full_us.push('_' as u8);
+        full_us.push_slice(self.intern_table.lookup(method));
+        return self.is_generic_reachable(self.intern_table.intern(full_us.as_slice()));
+    }
+
+    fn is_generic_reachable(self: &Lowerer, name: u32) -> bool {
+        let mut i = 0 as usize;
+        while i < self.generic_private_refs.len {
+            if self.generic_private_refs.as_slice()[i] == name { return true; }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
+    fn is_pointer_like_param(self: &mut Lowerer, ast_ty: TypeId) -> bool {
+        let il = self.resolver.resolve_type(ast_ty);
+        if il == 0 as u32 { return false; }
+        let tag = self.builder.get_type_decl(il).def.get_tag();
+        return tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_SLICE
+            || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT;
+    }
+
+    // Which parameters a returned reference or pointer may point into (bit i = user
+    // parameter i). `#[borrows(..)]` names them. Otherwise: `self` if the function has a
+    // reference `self`, else every reference/pointer parameter. (Rust's elision rules
+    // give the same answer wherever Rust accepts the signature unannotated.)
+    fn compute_ret_ties(self: &mut Lowerer, f: &FnDecl, il_params: *mut ILParam, param_count: usize) -> u64 {
+        let mut mask = 0 as u64;
+        if f.has_borrows {
+            let mut bi = 0 as usize;
+            while bi < f.borrows.len {
+                let mut found = false;
+                let mut pi = 0 as usize;
+                while pi < f.params.len && pi < 64 as usize {
+                    if f.params[pi].name == f.borrows[bi] {
+                        mask = mask | ((1 as u64) << (pi as u64));
+                        found = true;
+                    }
+                    pi = pi + 1 as usize;
+                }
+                if !found {
+                    let sp = if f.body != 0 as ExprId { self.resolver.ast.expr_spans[f.body as usize] } else { Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 } };
+                    self.report_error_concat("#[borrows] names no parameter of this function: ", self.resolver.intern_table.lookup(f.borrows[bi]), sp);
+                    must_write(2, "\n");
+                }
+                bi = bi + 1 as usize;
+            }
+            return mask;
+        }
+        let self_id = self.resolver.intern_table.intern("self");
+        if f.params.len > 0 as usize && f.params[0].name == self_id && self.is_pointer_like_param(f.params[0].ty) {
+            return 1 as u64;
+        }
+        let mut pi = 0 as usize;
+        while pi < f.params.len && pi < 64 as usize {
+            if self.is_pointer_like_param(f.params[pi].ty) {
+                mask = mask | ((1 as u64) << (pi as u64));
+            }
+            pi = pi + 1 as usize;
+        }
+        return mask;
+    }
+
+    // A reference, a slice, or a struct holding a (non-raw) reference field.
+    fn static_type_holds_ref(self: &mut Lowerer, ast_ty: TypeId, il_ty: u32) -> bool {
+        if ast_ty != 0 as TypeId && (ast_ty as usize) < self.resolver.ast.types.len {
+            let p_ty: &Type = &self.resolver.ast.types[ast_ty as usize];
+            match *p_ty {
+                Type.Ref(_) | Type.RefMut(_) | Type.Slice(_) | Type.SliceMut(_) => { return true; },
+                _ => {},
+            }
+        }
+        return self.il_type_holds_ref(il_ty, 0 as usize);
+    }
+
+    fn il_type_holds_ref(self: &mut Lowerer, ty_id: u32, depth: usize) -> bool {
+        if ty_id == 0 as u32 || depth > 4 as usize { return false; }
+        let p_decl: &ILTypeDecl = self.builder.get_type_decl(ty_id);
+        let tag = (*p_decl).def.get_tag();
+        if tag == ILTYPE_SLICE { return true; }
+        if tag != ILTYPE_USER { return false; }
+        let uid = (*p_decl).def.get_User().id;
+        if uid == 0xffffffff as u32 || uid as usize >= self.module.typedefs.len { return false; }
+        let p_def: &ILTypeDef = &self.module.typedefs[uid as usize];
+        if (*p_def).get_tag() != IL_TYPEDEF_STRUCT { return false; }
+        let fields = (*p_def).get_Struct().fields;
+        let mut i = 0 as usize;
+        while i < fields.len {
+            let ft = self.builder.get_type_decl(fields[i].ty).def.get_tag();
+            if !fields[i].is_raw_ptr && (ft == ILTYPE_PTR || ft == ILTYPE_PTRMUT) { return true; }
+            if self.il_type_holds_ref(fields[i].ty, depth + 1 as usize) { return true; }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
+    pub fn lower_module(self: &mut Lowerer) {
+        self.module.module_doc = self.resolver.ast.module_doc;
+        if self.compile_only {
+            self.collect_generic_private_refs();
+        }
+        let decls = self.resolver.ast.decls;
+        let mut i = 0 as usize;
+        let base_decl_id = 0 as usize;
+        // Pass 1: register statics and consts as module globals before any
+        // function body is lowered. Function instantiation below is eager, so
+        // a body that references a static declared later in the file would
+        // otherwise miss the by-name globals lookup and silently lower the
+        // reference to a null place (loads dropped, stores to NULL).
+        while i < decls.len {
+            let p_decl: &Decl = &decls[i];
+            unsafe { match *p_decl {
+                Decl.Static(s) => {
+                    let ty = self.resolver.resolve_type(s.ty);
+                    // A `static mut` lives forever and can be reassigned from anywhere, so a
+                    // reference stored in it outlives what it borrows (`G = r` with a
+                    // parameter `r`, then read after the caller returns). An immutable static
+                    // is fixed by its constant initializer and stays allowed.
+                    if s.is_mut && self.static_type_holds_ref(s.ty, ty) {
+                        let name = self.resolver.intern_table.lookup(s.name);
+                        self.report_error_concat("a static mut cannot hold a reference or slice (use a raw pointer): ", name, self.resolver.ast.expr_spans[s.value as usize]);
+                        must_write(2, "\n");
+                    }
+                    let val = self.extract_const_u64(s.value);
+                    let data = zoril_allocator_alloc(self.arena, 8) as *mut u8;
+                    *(data as *mut u64) = val;
+                    self.module.alloc_global(ILGlobal {
+                        id: 0 as u32, name: s.name, ty: ty,
+                        init_data_ptr: data, init_data_len: self.get_type_size(ty) as usize,
+                        is_pub: s.is_pub, is_extern: false, is_mut: s.is_mut,
+                        source_file: s.source_file,
+                    });
+                },
+                Decl.Const(c) => {
+                    let ty = self.resolver.resolve_type(c.ty);
+                    let val = self.extract_const_u64(c.value);
+                    let data = zoril_allocator_alloc(self.arena, 8) as *mut u8;
+                    *(data as *mut u64) = val;
+                    self.module.alloc_global(ILGlobal {
+                        id: 0 as u32, name: c.name, ty: ty,
+                        init_data_ptr: data, init_data_len: self.get_type_size(ty) as usize,
+                        is_pub: c.is_pub, is_extern: false, is_mut: false,
+                        source_file: c.source_file,
+                    });
+                },
+                _ => {},
+            } }
+            i = i + 1 as usize;
+        }
+        if self.had_error { return; }
+        // Pass 2: instantiate functions and Drop impls.
+        i = 0 as usize;
+        while i < decls.len {
+            let p_decl: &Decl = &decls[i];
+            unsafe { match *p_decl {
+                Decl.Fn(f) => {
+                    if f.type_params.len == 0 as usize {
+                        let func_id = self.mono.instantiate_function((base_decl_id + i) as u32, @slice(0 as *mut u32, 0 as usize));
+                        self.resolver.define(f.name, SymbolKind.Function(func_id), false);
+                    }
+                },
+                Decl.Static(_) => {},
+                Decl.Struct(_) => {},
+                Decl.Enum(_) => {},
+                Decl.Trait(_) => {},
+                Decl.Impl(imp) => {
+                    let drop_name_id = self.intern_table.intern("drop");
+                    let drop_trait_name = self.intern_table.intern("Drop");
+                    let base_ty = self.resolver.resolve_type(imp.target_ty);
+                    if base_ty != 0 as u32 {
+                        let p_base: &ILTypeDecl = self.builder.get_type_decl(base_ty);
+                        let type_name_id = (*p_base).name;
+                        let typedef_id_for_recv = match (*p_base).def {
+                            ILType.User(u) => u.id,
+                            _ => 0 as u32,
+                        };
+                        let struct_decl_id = self.mono.get_typedef_origin(typedef_id_for_recv);
+                        let mut is_generic_struct = false;
+                        if struct_decl_id != 0 as u32 && struct_decl_id as usize < self.resolver.ast.decls.len {
+                            let ast: &AST = self.resolver.ast;
+                            let p_decl_s: &Decl = &ast.decls[struct_decl_id as usize];
+                            match *p_decl_s {
+                                Decl.Struct(s) => { if s.type_params.len > 0 as usize { is_generic_struct = true; } },
+                                Decl.Enum(e) => { if e.type_params.len > 0 as usize { is_generic_struct = true; } },
+                                _ => {},
+                            }
+                        }
+                        let is_drop = imp.trait_name == drop_trait_name;
+                        let mut jk = 0 as usize;
+                        while jk < imp.methods.len {
+                            if is_drop {
+                                if imp.methods[jk].name == drop_name_id {
+                                    self.mono.instantiate_method(&imp.methods[jk], @slice(0 as *mut u32, 0 as usize), type_name_id, drop_name_id, &imp, base_ty);
+                                }
+                            } else {
+                                if self.compile_only && !is_generic_struct {
+                                    let wanted = imp.methods[jk].is_pub || self.is_method_generic_reachable(type_name_id, imp.methods[jk].name);
+                                    if imp.source_file == self.target_source_file && wanted {
+                                        if imp.methods[jk].type_params.len == 0 as usize {
+                                            self.mono.instantiate_method(&imp.methods[jk], @slice(0 as *mut u32, 0 as usize), type_name_id, imp.methods[jk].name, &imp, base_ty);
+                                        }
+                                    }
+                                }
+                            }
+                            jk = jk + 1 as usize;
+                        }
+                    }
+                },
+                Decl.TypeAlias(_) => {},
+                Decl.Const(_) => {},
+                Decl.Import(_) => {},
+                Decl.None => {},
+            } }
+            i = i + 1 as usize;
+        }
+        self.check_impl_trait_bounds(decls.as_slice());
+        self.check_copy_impls(decls.as_slice());
+    }
+
+    fn restore_fn_context(self: &mut Lowerer, saved_fn_name: u32, saved_file_path: [u8]) {
+        self.current_fn_name = saved_fn_name;
+        self.file_path = saved_file_path;
+    }
+
+    pub fn do_lower_fn(self: &mut Lowerer, f: &FnDecl, name: u32) -> u32 {
+        let saved_file_path = self.file_path;
+        if f.source_file != 0 as u32 {
+            self.file_path = self.intern_table.lookup(f.source_file);
+        }
+        let saved_fn_name = self.current_fn_name;
+        self.current_fn_name = name;
+        let fn_name = self.intern_table.lookup(name);
+        if saved_fn_name == 0 as u32 {
+            must_write(2, "Lowering function: ");
+            must_write(2, fn_name);
+            must_write(2, "\n");
+        }
+        let mut resolved_ret = self.resolver.resolve_type(f.ret_ty);
+        let unit_ty = self.get_primitive_type(ILPrimitive.Unit);
+        let i32_ty = self.get_primitive_type(ILPrimitive.I32);
+        let is_void_main = is_str_eq(fn_name, "main") && (resolved_ret == unit_ty || resolved_ret == 0 as u32);
+        if is_void_main { resolved_ret = i32_ty; }
+
+        let is_sret = self.requires_pass_by_ref(resolved_ret);
+        let needs_env = self.needs_env_ptr(f.is_extern, name);
+        let mut param_count = f.params.len;
+        if is_sret { param_count = param_count + 1 as usize; }
+        if needs_env { param_count = param_count + 1 as usize; }
+
+        let il_params = zoril_allocator_alloc(self.arena, param_count * sizeof(ILParam)) as *mut ILParam;
+        
+        let mut k = 0 as usize;
+        let mut dst_idx = 0 as usize;
+
+        if is_sret {
+            let p_dst = (il_params as usize + dst_idx * sizeof(ILParam)) as *mut ILParam;
+            unsafe {
+                (*p_dst).name = self.intern_table.intern("__sret");
+                (*p_dst).ty = self.module.alloc_type(ILTypeDecl { id: 0 as u32, name: 0 as u32, def: ILType.Ptr(resolved_ret) , source_file: 0 as u32 });
+                (*p_dst).is_raw_ptr = false;
+            }
+            dst_idx = dst_idx + 1 as usize;
+        }
+
+        if needs_env {
+            let p_dst = (il_params as usize + dst_idx * sizeof(ILParam)) as *mut ILParam;
+            unsafe {
+                (*p_dst).name = self.intern_table.intern("__env");
+                (*p_dst).ty = self.get_ptr_type(self.get_primitive_type(ILPrimitive.Unit));
+                (*p_dst).is_raw_ptr = false;
+            }
+            dst_idx = dst_idx + 1 as usize;
+        }
+
+        while k < f.params.len {
+            let p_dst = (il_params as usize + dst_idx * sizeof(ILParam)) as *mut ILParam;
+            unsafe {
+                (*p_dst).name = f.params[k].name;
+                (*p_dst).is_raw_ptr = self.resolver.is_raw_ptr_type(f.params[k].ty);
+            }
+            let mut p_ty = self.resolver.resolve_type(f.params[k].ty);
+            // Bare 'self' parameter (no type annotation in source): resolve from implicit_self_ty
+            if p_ty == 0 as u32 && self.implicit_self_ty != 0 as u32 {
+                p_ty = self.implicit_self_ty;
+            }
+            if self.is_aggregate(p_ty) {
+                p_ty = self.module.alloc_type(ILTypeDecl { id: 0 as u32, name: 0 as u32, def: ILType.Ptr(p_ty) , source_file: 0 as u32 });
+            }
+            unsafe { (*p_dst).ty = p_ty; }
+            k = k + 1 as usize;
+            dst_idx = dst_idx + 1 as usize;
+        }
+
+        let co = self.compile_only;
+        let is_spec = self.is_specialization;
+        let mut is_local_fn = false;
+        if co {
+            if is_spec {
+                is_local_fn = true;
+            }
+            if !f.is_pub {
+                if !is_str_eq(fn_name, "main") && !self.is_generic_reachable(f.name) && !self.is_generic_reachable(name) {
+                    is_local_fn = true;
+                }
+            }
+        }
+
+        let mut init_alloc = 0 as usize;
+        if f.has_summary {
+            init_alloc = f.summary_alloc;
+        }
+        let mut fn_owner_len = self.current_owner_len;
+        if fn_owner_len == 0 as u32 {
+            let fn_str = self.intern_table.lookup(name);
+            let mut ci = 0 as usize;
+            while ci + 1 as usize < fn_str.len {
+                if fn_str[ci] == ':' as u8 && fn_str[ci + 1 as usize] == ':' as u8 {
+                    fn_owner_len = ci as u32;
+                    break;
+                }
+                ci = ci + 1 as usize;
+            }
+        }
+        let ret_ties = self.compute_ret_ties(f, il_params, param_count);
+        let il_func_id = self.module.alloc_function(ILFunction {
+            id: 0 as u32, name: name, params: il_params, params_len: param_count,
+            ret_ty: resolved_ret,
+            blocks: 0 as *mut u32, blocks_len: 0 as usize, blocks_cap: 0 as usize,
+            result_types: 0 as *mut u32, result_types_len: 0 as usize, result_types_cap: 0 as usize,
+            ssa_names: 0 as *mut u32, is_variadic: f.is_variadic,
+            is_extern: f.is_extern, is_local: is_local_fn, is_pub: f.is_pub, must_use: f.must_use, ret_is_raw_ptr: self.resolver.is_raw_ptr_type(f.ret_ty), arena_alloc_bytes: init_alloc,
+            doc_comment: f.doc_comment,
+            source_file: f.source_file,
+            owner_len: fn_owner_len,
+            has_summary: f.has_summary,
+            summary_escape: f.summary_escape,
+            summary_stash: f.summary_stash,
+            summary_storage: f.summary_storage,
+            summary_ret_stack: f.summary_ret_stack,
+            ret_ties: ret_ties,
+            // A body recomputes this (compute_ret_storage); an import keeps its `.zri` summary,
+            // or without one the signature's ties, the conservative answer.
+            ret_storage: if f.has_summary { f.summary_storage } else if f.is_extern { 0 as u64 } else { ret_ties },
+            stores_storage: if f.has_summary { f.summary_stores } else { 0 as u64 },
+            store_targets: if f.has_summary { f.summary_into } else { 0 as u64 },
+            has_borrows: f.has_borrows,
+        });
+
+        let co = self.compile_only;
+        let tsf = self.target_source_file;
+        let f_sf = f.source_file;
+        let f_ext = f.is_extern;
+        let f_tpl = f.type_params.len;
+        let mut is_extern_zoril = is_zoril_extern_decl(f_ext, f_sf, f_tpl, co, tsf);
+        if is_spec {
+            is_extern_zoril = false;
+        }
+
+        let mut should_lower_body = !f.is_extern;
+        if is_extern_zoril {
+            should_lower_body = false;
+        }
+        if f.body == 0 as ExprId {
+            should_lower_body = false;
+        }
+
+        if should_lower_body {
+            let saved_func_idx = self.builder.current_func_idx;
+            let saved_block_idx = self.builder.current_block_idx;
+            let saved_entry_block = self.builder.entry_block_idx;
+            let saved_ssa_id = self.builder.next_ssa_id;
+            let saved_map_base = self.symbol_map_base;
+            let saved_map_len = self.symbol_map_len;
+            let saved_span = self.builder.current_span;
+            let saved_sret = self.sret_ssa;
+            let saved_defer_base = self.defer_list_base;
+            let saved_defer_len = self.defer_list_len;
+            let saved_loop_len = self.loop_stack_len;
+            let saved_loop_base = self.loop_stack_base;
+
+            self.builder.current_func_idx = il_func_id;
+            self.builder.next_ssa_id = 1 as SSAId;
+            self.symbol_map_base = self.symbol_map_len;
+            self.sret_ssa = NO_SSA as u32;
+            self.defer_list_base = self.defer_list_len;
+            self.loop_stack_base = self.loop_stack_len;
+
+            self.resolver.push_scope();
+            let alloc_block = self.new_block();
+            let start_block = self.new_block();
+            self.builder.entry_block_idx = alloc_block;
+            self.switch_to_block(start_block);
+            
+            let mut current_dst = 0 as usize;
+            if is_sret {
+                let p_il = (il_params as usize + current_dst * sizeof(ILParam)) as *mut ILParam;
+                let ssa = unsafe { self.emit_with_type(ILInstr.Param(current_dst as u32), (*p_il).ty) };
+                unsafe { (*p_il).ssa = ssa; }
+                self.sret_ssa = ssa;
+                current_dst = current_dst + 1 as usize;
+            }
+            if needs_env {
+                let p_il = (il_params as usize + current_dst * sizeof(ILParam)) as *mut ILParam;
+                let ssa = unsafe { self.emit_with_type(ILInstr.Param(current_dst as u32), (*p_il).ty) };
+                unsafe { (*p_il).ssa = ssa; }
+                current_dst = current_dst + 1 as usize;
+            }
+
+            let zir_arg_start = current_dst as u32;
+            current_dst = current_dst + f.params.len;
+
+            // If this is a capturing closure, load captured vars from %env
+            if self.pending_cap_len > 0 as usize {
+                let env_ssa = self.emit_with_type(ILInstr.GetEnv, self.pending_cap_env_ty);
+                let mut ci = 0 as usize;
+                while ci < self.pending_cap_len {
+                    let cap_name = unsafe { *((self.pending_cap_names as usize + ci * 4) as *mut u32) };
+                    let cap_ty = unsafe { *((self.pending_cap_tys as usize + ci * 4) as *mut u32) };
+                    let fa = self.emit_with_type(ILInstr.FieldAddr(FieldAddrInstr { val: env_ssa, field_idx: ci as u32 }), self.get_ptr_type(cap_ty));
+                    let cap_val = self.emit_with_type(ILInstr.Load(fa), cap_ty);
+                    let cap_sym = self.resolver.define(cap_name, SymbolKind.Local(0 as StmtId), false);
+                    self.set_symbol_ssa_ptr(cap_sym, cap_val);
+                    ci = ci + 1 as usize;
+                }
+                self.pending_cap_len = 0 as usize;
+            }
+            // For Block bodies, use lower_fn_body_block to emit defers before scope pops.
+            let p_fbody = &self.resolver.ast.exprs()[f.body as usize];
+            let body_val = {
+                let zir_scratch_offset = unsafe { (*self.scratch_arena).offset };
+                // 1. ZIR Lowering: FnDecl -> ZirFunction
+                let mut zir_low = ZirLowerer.new(self.scratch_arena, self.arena, self.resolver, self.intern_table, self.mono, self.module);
+                // Same per-file attribution the ZirVerifier gets below, for the same reason: the
+                // lowering pass reports its own errors (unresolved callee, type mismatch, the
+                // unsafe-boundary diagnostics) and was naming the entry file for all of them.
+                if f.source_file != 0 as u32 {
+                    zir_low.file_path = self.intern_table.lookup(f.source_file);
+                    zir_low.current_source_file = f.source_file;
+                } else {
+                    zir_low.file_path = self.file_path;
+                    zir_low.current_source_file = self.intern_table.intern(self.file_path);
+                }
+                zir_low.implicit_self_ty = self.implicit_self_ty;
+                let mut zir_func = zir_low.lower_function(f, name);
+                if zir_low.had_error {
+                    self.had_error = true;
+                    arena_reset(self.scratch_arena, zir_scratch_offset);
+                    self.restore_fn_context(saved_fn_name, saved_file_path);
+                    return il_func_id;
+                }
+
+                let mut zm = ZirModule { funcs: unsafe { @slice(&mut zir_func, 1 as usize) } };
+
+                // 2. ZIR verify
+                let mut zir_ver = ZirVerifier.new(self.scratch_arena, &mut zm, self.module, self.intern_table);
+                // `self.resolver.file_path` is the *entry* file's path for the whole compilation
+                // (the `Resolver` is shared across every imported file) -- using it here reported
+                // every error as being in that one file, regardless of which file `f` actually
+                // came from. Each top-level decl already carries its own `source_file` (interned
+                // path) from the parser; use that instead, falling back to the entry file only
+                // for declarations with no origin (e.g. a monomorphized generic instance).
+                if f.source_file != 0 as u32 {
+                    zir_ver.file_path = self.intern_table.lookup(f.source_file);
+                } else {
+                    zir_ver.file_path = self.file_path;
+                }
+                zir_ver.verify();
+                if zir_ver.had_error {
+                    self.had_error = true;
+                    arena_reset(self.scratch_arena, zir_scratch_offset);
+                    self.restore_fn_context(saved_fn_name, saved_file_path);
+                    return il_func_id;
+                }
+
+                // 3. ZIR -> ZIL
+                let mut zir_to_zil = ZirToZilLowerer.new(self.scratch_arena, self.arena, self.resolver, self.mono, self.intern_table, &mut zm, self.module, self.builder, self.sret_ssa, zir_arg_start);
+                let zir_res = zir_to_zil.lower();
+                if zir_to_zil.had_error {
+                    self.had_error = true;
+                }
+                arena_reset(self.scratch_arena, zir_scratch_offset);
+                zir_res
+            };
+            // Validate that body value type matches the declared return type.
+            if body_val != NO_SSA as u32 && resolved_ret != 0 as u32 && resolved_ret != unit_ty && !is_void_main {
+                let body_ty = self.get_ssa_type(body_val);
+                if body_ty != 0 as u32 && body_ty != NO_SSA as u32 && !self.types_match(resolved_ret, body_ty) {
+                    let span = self.builder.current_span;
+                    must_write(2, self.file_path);
+                    must_write(2, ":");
+                    write_u64(2, span.line as u64);
+                    must_write(2, ":");
+                    write_u64(2, span.col as u64);
+                    must_write(2, ": error: type mismatch: the function returns `");
+                    must_write(2, self.mono.type_display(resolved_ret));
+                    must_write(2, "`, found `");
+                    must_write(2, self.mono.type_display(body_ty));
+                    must_write(2, "`\n");
+                    self.had_error = true;
+                }
+            }
+            if !self.is_terminated() {
+                if self.sret_ssa != NO_SSA as u32 && body_val != NO_SSA as u32 {
+                    let ty = self.get_ssa_type(body_val);
+                    if self.is_aggregate(ty) {
+                        self.emit(ILInstr.Store(StoreInstr { ptr: self.sret_ssa, val: body_val }));
+                        self.emit(ILInstr.Ret(NO_SSA as u32));
+                    } else {
+                        self.emit(ILInstr.Ret(body_val));
+                    }
+                } else if is_void_main {
+                    let zero = self.emit_const_u64(0 as u64, i32_ty);
+                    self.emit(ILInstr.Ret(zero));
+                } else if resolved_ret == unit_ty || resolved_ret == 0 as u32 {
+                    self.emit(ILInstr.Ret(NO_SSA as u32));
+                } else {
+                    self.emit(ILInstr.Ret(body_val));
+                }
+                }
+            self.switch_to_block(alloc_block);
+            self.emit(ILInstr.Jmp(start_block));
+
+            self.resolver.pop_scope();
+            self.builder.current_func_idx = saved_func_idx;
+            self.builder.current_block_idx = saved_block_idx;
+            self.builder.entry_block_idx = saved_entry_block;
+            self.builder.next_ssa_id = saved_ssa_id;
+            self.defer_list_base = saved_defer_base;
+            self.defer_list_len = saved_defer_len;
+            self.symbol_map_base = saved_map_base;
+            self.symbol_map_len = saved_map_len;
+            self.builder.current_span = saved_span;
+            self.sret_ssa = saved_sret;
+            self.loop_stack_len = saved_loop_len;
+            self.loop_stack_base = saved_loop_base;
+        }
+        self.restore_fn_context(saved_fn_name, saved_file_path);
+        return il_func_id;
+    }
+
+    pub fn lower_fn_instance(self: &mut Lowerer, f: &FnDecl, name: u32, type_params_ptr: *TypeParam, type_params_len: usize, type_args_ptr: *u32, type_args_len: usize, self_name: u32, self_ty: u32) -> u32 {
+        let saved_func_idx = self.builder.current_func_idx;
+        let saved_block_idx = self.builder.current_block_idx;
+        let saved_ssa_id = self.builder.next_ssa_id;
+        let saved_map_base = self.symbol_map_base;
+        self.resolver.push_scope();
+        let saved_bypass = self.resolver.bypass_cache;
+        self.resolver.bypass_cache = true;
+
+        let mut i = 0 as usize;
+        while i < type_params_len && i < type_args_len {
+            let off_tp = i * sizeof(TypeParam);
+            let p_param = (type_params_ptr as usize + off_tp) as *mut TypeParam;
+            let p_name = unsafe { (*p_param).name };
+            let off_ta = i * 4;
+            let p_arg = unsafe { *( (type_args_ptr as usize + off_ta) as *mut u32 ) };
+            self.resolver.define(p_name, SymbolKind.Type(p_arg), false);
+            i = i + 1 as usize;
+        }
+        if self_name != 0 as u32 {
+            self.resolver.define(self_name, SymbolKind.Type(self_ty), false);
+        }
+        let self_id = self.intern_table.intern("Self");
+        self.resolver.define(self_id, SymbolKind.Type(self_ty), false);
+        let saved_implicit_self_ty = self.implicit_self_ty;
+        self.implicit_self_ty = self_ty;
+        let saved_owner_len = self.current_owner_len;
+        self.current_owner_len = 0 as u32;
+        if self_name != 0 as u32 {
+            self.current_owner_len = self.intern_table.lookup(self_name).len as u32;
+        }
+
+        let mut is_spec = false;
+        if type_params_len > 0 as usize { is_spec = true; }
+        if type_args_len > 0 as usize { is_spec = true; }
+        let f_tpl = f.type_params.len;
+        if f_tpl > 0 as usize { is_spec = true; }
+        let saved_spec = self.is_specialization;
+        self.is_specialization = is_spec;
+
+        let id = self.do_lower_fn(f, name);
+
+        self.is_specialization = saved_spec;
+        self.implicit_self_ty = saved_implicit_self_ty;
+        self.current_owner_len = saved_owner_len;
+        self.resolver.pop_scope();
+        self.resolver.bypass_cache = saved_bypass;
+        self.builder.current_func_idx = saved_func_idx;
+        self.builder.current_block_idx = saved_block_idx;
+        self.builder.next_ssa_id = saved_ssa_id;
+        self.symbol_map_base = saved_map_base;
+        return id;
+    }
+}

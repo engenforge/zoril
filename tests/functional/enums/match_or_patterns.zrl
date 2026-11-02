@@ -1,0 +1,36 @@
+// expected exit code: 0
+import "io.zrl";
+
+enum MyEnum {
+    A(u32),
+    B(u32),
+    C,
+}
+
+fn test_match(e: MyEnum) -> u32 {
+    match e {
+        MyEnum.A(v) | MyEnum.B(v) => {
+            return v;
+        },
+        _ => { return 0; }
+    }
+}
+
+enum E { A(i32), B } 
+
+fn main() -> i32 {
+    let val_a = test_match(MyEnum.A(100 as u32));
+    let val_b = test_match(MyEnum.B(200 as u32));
+    if val_a != 100 || val_b != 200 {
+        return 1;
+    }
+
+    let e = E.B;
+    let res = match e { 
+        E.A(_) | E.B => 42, 
+        _ => 0 
+    };
+    if res != 42 { return 2; }
+
+    return 0; 
+}

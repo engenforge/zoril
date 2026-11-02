@@ -1,0 +1,26 @@
+// name: Pre-mark container growth through by-value move escapes epoch check
+// expected: compile_reject
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn grow(v: Vec<u64>) -> Vec<u64> {
+    let mut w = v;
+    let mut i = 0 as u64;
+    while i < 64 { w.push(7); i = i + 1; }
+    return w;
+}
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536 as u64).unwrap();
+    let v_pre = Vec::<u64>.new_in(&a);
+    let m = a.mark();
+    let w = grow(v_pre);
+    a.reset_to(m);
+    let mut z = Vec::<u64>.new_in(&a);
+    let mut j = 0 as u64;
+    while j < 64 { z.push(99); j = j + 1; }
+    // w.as_slice()[0] reads 99 instead of 7
+    return w.as_slice()[0] as i32;
+}

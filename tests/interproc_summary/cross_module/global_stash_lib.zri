@@ -1,0 +1,2 @@
+#[summary(escape = 0, stash = 1, ret_stack = false, alloc = 0)]
+pub fn stash_global(p: *mut i32);

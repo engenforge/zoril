@@ -1,0 +1,15 @@
+fn test_match_int(v: i32) -> i32 {
+    match v {
+        1 => { return 10; },
+        2 => { return 20; },
+        _ => { return 30; },
+    }
+    return 0; // fallback
+}
+
+fn main() -> i32 {
+    if test_match_int(1) != 10 { return 1; }
+    if test_match_int(2) != 20 { return 2; }
+    if test_match_int(3) != 30 { return 3; }
+    return 0;
+}

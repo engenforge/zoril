@@ -1,0 +1,7 @@
+enum Foo { A(u32), B(u64) }
+fn test(f: Foo) -> bool {
+    match f {
+        Foo.A(_) | Foo.B(_) => { return true; }
+    }
+}
+fn main() -> i32 { return 0; }

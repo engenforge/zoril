@@ -1,0 +1,24 @@
+// expected exit 0
+// `base[i] = v` where base is an array-typed place reached through a pointer (s.data[i] through
+// &mut S) stored into a temporary copy of the array, so the caller never saw the write. The
+// base was also lowered twice, running side effects in it twice.
+struct Row { cells: [i32; 3] }
+struct Grid { rows: [Row; 2] }
+static mut CALLS: i32 = 0;
+fn idx() -> i32 { CALLS = CALLS + 1; return 1; }
+fn fill(g: &mut Grid) { g.rows[idx()].cells[2] = 9; }
+fn main() -> i32 {
+    let mut g = Grid { rows: [Row { cells: [0, 0, 0] }, Row { cells: [0, 0, 0] }] };
+    fill(&mut g);
+    if g.rows[1].cells[2] != 9 { return 1; }
+    if CALLS != 1 { return 2; }
+    let mut arr = [1, 2, 3];
+    arr[0] = 7;
+    if arr[0] != 7 { return 3; }
+    let p = &mut arr;
+    (*p)[1] = 8;
+    if arr[1] != 8 { return 4; }
+    arr[2] += 5;
+    if arr[2] != 8 { return 5; }
+    return 0;
+}

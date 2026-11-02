@@ -1,0 +1,45 @@
+// The forms the operand allowlist must keep accepting: numbers of every width, bool bitwise,
+// char ordering, reference equality between references, slice equality between slices, and raw
+// pointer arithmetic inside `unsafe`.
+fn main() -> i32 {
+    let x: u64 = 40;
+    if x + 2 != 42 {
+        return 1;
+    }
+    let y: u64 = 3;
+    if y * 2 != 6 {
+        return 2;
+    }
+    let f: f64 = 1.5;
+    if f * 2.0 != 3.0 {
+        return 3;
+    }
+    let c: char = 'm';
+    if c < 'z' { } else {
+        return 4;
+    }
+    let b: bool = true;
+    if b & false {
+        return 5;
+    }
+    let r: &u64 = &x;
+    let q: &u64 = &x;
+    if r != q {
+        return 6;
+    }
+    let arr: [u64; 2] = [7, 8];
+    let s: [u64] = &arr;
+    let t: [u64] = &arr;
+    if s != t {
+        return 7;
+    }
+    unsafe {
+        let p = 4096 as *mut u64;
+        let p2 = p + 1;
+        let p3 = p2 - 1;
+        if p3 != p {
+            return 8;
+        }
+    }
+    return 0;
+}

@@ -1,0 +1,19 @@
+// name: Stack reference stored out via 65th parameter
+// expected: compile_reject
+// Rejected by the interprocedural summary pass, which every build now enforces.
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn pass_param65(_p1: i32, _p2: i32, _p3: i32, _p4: i32, _p5: i32, _p6: i32, _p7: i32, _p8: i32, _p9: i32, _p10: i32, _p11: i32, _p12: i32, _p13: i32, _p14: i32, _p15: i32, _p16: i32, _p17: i32, _p18: i32, _p19: i32, _p20: i32, _p21: i32, _p22: i32, _p23: i32, _p24: i32, _p25: i32, _p26: i32, _p27: i32, _p28: i32, _p29: i32, _p30: i32, _p31: i32, _p32: i32, _p33: i32, _p34: i32, _p35: i32, _p36: i32, _p37: i32, _p38: i32, _p39: i32, _p40: i32, _p41: i32, _p42: i32, _p43: i32, _p44: i32, _p45: i32, _p46: i32, _p47: i32, _p48: i32, _p49: i32, _p50: i32, _p51: i32, _p52: i32, _p53: i32, _p54: i32, _p55: i32, _p56: i32, _p57: i32, _p58: i32, _p59: i32, _p60: i32, _p61: i32, _p62: i32, _p63: i32, v: &i32) -> &i32 { return v; }
+fn escape_storer(out: &mut &i32) {
+    let x = 42;
+    let src_val = &x;
+    let carried = src_val;
+    let routed = pass_param65(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, carried);
+    *out = routed;
+}
+fn main() -> i32 {
+    let mut seed = 0;
+    let mut dest_val: &i32 = &seed;
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    return *dest_val;
+}

@@ -1,0 +1,41 @@
+// expected exit 0
+
+impl [u8] {
+    pub fn twice(self: &[u8]) -> usize {
+        return self.len * 2 as usize;
+    }
+
+    pub fn first_byte(self: &[u8]) -> u8 {
+        if self.len == 0 as usize { return 0 as u8; }
+        return self[0];
+    }
+
+    pub fn len_by_val(self: [u8]) -> usize {
+        return self.len;
+    }
+}
+
+impl<T> [T] {
+    pub fn slice_len(self: &[T]) -> usize {
+        return self.len;
+    }
+}
+
+fn main() -> i32 {
+    let s = "hello";
+    if s.twice() != 10 as usize { return 1; }
+    if s.first_byte() != 'h' as u8 { return 2; }
+    if "abc".twice() != 6 as usize { return 3; }
+    if s.len_by_val() != 5 as usize { return 4; }
+
+    // Calling through reference
+    let r: &[u8] = &s;
+    if r.twice() != 10 as usize { return 5; }
+    if r.first_byte() != 'h' as u8 { return 6; }
+
+    if s.slice_len() != 5 as usize { return 7; }
+    let ints: [i32; 3] = [10, 20, 30];
+    let int_slice: [i32] = &ints;
+    if int_slice.slice_len() != 3 as usize { return 8; }
+    return 0;
+}

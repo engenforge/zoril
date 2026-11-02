@@ -1,0 +1,14 @@
+// expected compile fail
+// A raw pointer laundered through a closure capture, written through: the capture keeps the raw IL
+// type, so the store needs `unsafe`.
+// EXPECT: tests/error_reporting/err_raw_deref_after_closure.zrl:10:9: error: dereference of raw pointer requires unsafe block
+
+fn main() -> i32 {
+    let mut x: u32 = 7;
+    let p: *mut u32 = &mut x as *mut u32;
+    let f = |v: u32| -> i32 {
+        *p = v;
+        return 0;
+    };
+    return f(9);
+}

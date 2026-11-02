@@ -1,0 +1,19 @@
+// name: Option<*mut T> is Copy because Option's declared payload is a type parameter
+// expected: accept
+// Instantiated generics whose declared fields are type parameters stay Copy when their arguments are Copy.
+import "core.zrl";
+
+fn consume(opt: Option<*mut u8>) -> i32 {
+    return match opt {
+        Option.Some(_) => 1,
+        Option.None => 0,
+    };
+}
+
+fn main() -> i32 {
+    let o1: Option<*mut u8> = Option.Some(0 as *mut u8);
+    let o2 = o1;
+    if consume(o1) != 1 { return 1; }
+    if consume(o2) != 1 { return 2; }
+    return 0;
+}

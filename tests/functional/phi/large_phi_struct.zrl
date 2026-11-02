@@ -1,0 +1,69 @@
+struct Token {
+    tag: u32,
+    payload: u64,
+}
+
+enum Choice {
+    V0, V1, V2, V3, V4, V5, V6, V7, V8, V9,
+    V10, V11, V12, V13, V14, V15, V16, V17, V18, V19,
+    V20, V21, V22, V23, V24, V25, V26, V27, V28, V29,
+    V30, V31, V32, V33, V34, V35, Other
+}
+
+fn test_large_phi(val: Choice, t1: *mut Token, t2: *mut Token) -> Token {
+    return match val {
+        Choice.V0 => unsafe { *t1 },
+        Choice.V1 => unsafe { *t2 },
+        Choice.V2 => unsafe { *t1 },
+        Choice.V3 => unsafe { *t2 },
+        Choice.V4 => unsafe { *t1 },
+        Choice.V5 => unsafe { *t2 },
+        Choice.V6 => unsafe { *t1 },
+        Choice.V7 => unsafe { *t2 },
+        Choice.V8 => unsafe { *t1 },
+        Choice.V9 => unsafe { *t2 },
+        Choice.V10 => unsafe { *t1 },
+        Choice.V11 => unsafe { *t2 },
+        Choice.V12 => unsafe { *t1 },
+        Choice.V13 => unsafe { *t2 },
+        Choice.V14 => unsafe { *t1 },
+        Choice.V15 => unsafe { *t2 },
+        Choice.V16 => unsafe { *t1 },
+        Choice.V17 => unsafe { *t2 },
+        Choice.V18 => unsafe { *t1 },
+        Choice.V19 => unsafe { *t2 },
+        Choice.V20 => unsafe { *t1 },
+        Choice.V21 => unsafe { *t2 },
+        Choice.V22 => unsafe { *t1 },
+        Choice.V23 => unsafe { *t2 },
+        Choice.V24 => unsafe { *t1 },
+        Choice.V25 => unsafe { *t2 },
+        Choice.V26 => unsafe { *t1 },
+        Choice.V27 => unsafe { *t2 },
+        Choice.V28 => unsafe { *t1 },
+        Choice.V29 => unsafe { *t2 },
+        Choice.V30 => unsafe { *t1 },
+        Choice.V31 => unsafe { *t2 },
+        Choice.V32 => unsafe { *t1 },
+        Choice.V33 => unsafe { *t2 },
+        Choice.V34 => unsafe { *t1 },
+        Choice.V35 => unsafe { *t2 },
+        _ => unsafe { *t1 },
+    };
+}
+
+fn main() -> i32 {
+    let mut t1 = Token { tag: 1, payload: 100 };
+    let mut t2 = Token { tag: 2, payload: 200 };
+    
+    let res = test_large_phi(Choice.V0, &mut t1, &mut t2);
+    if res.tag != 1 || res.payload != 100 { return 1; }
+    
+    let res2 = test_large_phi(Choice.V1, &mut t1, &mut t2);
+    if res2.tag != 2 || res2.payload != 200 { return 2; }
+    
+    let res3 = test_large_phi(Choice.V35, &mut t1, &mut t2);
+    if res3.tag != 2 || res3.payload != 200 { return 3; }
+    
+    return 0;
+}

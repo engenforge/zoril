@@ -1,0 +1,20 @@
+
+import "il_type.zrl";
+import "io.zrl";
+import "fmt.zrl";
+use il_type::ILPrimitive;
+use io::{write, stdout};
+use fmt::write_u64;
+
+fn main() -> i32 {
+    let p = ILPrimitive.U8;
+    let tag = p.get_tag();
+    write(stdout(), "Tag: ");
+    let mut out = stdout();
+    let _ = write_u64(&mut out, tag as u64);
+    write(stdout(), "\n");
+    if tag == 0 {
+        return 0;
+    }
+    return 1;
+}

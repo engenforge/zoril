@@ -1,0 +1,11 @@
+# scripts/comment_noise_allow.txt — reasoned exceptions to scripts/check_comment_noise.sh
+#
+# Format: <path>|<text the finding contains>|<why the finding is not a policy breach>
+#
+# An entry is a decision, not a suppression: every one names the change that removes it, or the
+# reason it is permanent. A new entry needs that sentence. `scripts/check_safety_comments.sh`
+# has no allowlist because its rule has no exceptions; this one does, and keeps them visible.
+
+# A hypothetical module named in prose: the paragraph explains what a project's own
+# `stdlib/<name>.zrl` means to the compiler, and the file is deliberately not on disk.
+src/parser.zrl|stdlib/mylib.zrl|Hypothetical project module named in prose, never a file on disk.

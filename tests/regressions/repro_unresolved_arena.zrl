@@ -1,0 +1,10 @@
+// expected compile fail
+struct ArenaHeader { start: *u8, offset: u64, capacity: u64 }
+fn test_oom() {
+    let arena = arena_init(1024 as u64);
+    let data = zoril_allocator_alloc(arena, 2048 as u64); 
+}
+fn main() -> i32 {
+    test_oom();
+    return 0;
+}

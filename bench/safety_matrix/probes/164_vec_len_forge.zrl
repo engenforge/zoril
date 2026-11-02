@@ -1,0 +1,17 @@
+// name: Vec — length forged from safe code through the public field
+// expected: compile_reject
+// `v.len = 1000000` compiled, and `v.get(999999)` then read far past the allocation (139). The
+// fields are private now; the only direct writer is `unsafe fn set_len`, which traps above `cap`
+// (probe 165).
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let a = Arena.new(4096).unwrap();
+    let mut v = Vec::<u64>.new_in(&a);
+    v.push(1);
+    v.len = 1000000 as usize;
+    return 0;
+}

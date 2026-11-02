@@ -1,0 +1,23 @@
+// Test for #[must_use] attribute
+// [PASS] must_use attribute parsing and warning
+
+import "io.zrl";
+use io::{write, stdout};
+
+#[must_use]
+fn dangerous_op() -> i32 {
+    return 42;
+}
+
+fn main() -> i32 {
+    write(stdout(), "Testing #[must_use]...\n");
+    
+    // This should trigger a warning
+    dangerous_op();
+    
+    // This should NOT trigger a warning
+    let _ = dangerous_op();
+    
+    write(stdout(), "must_use test completed\n");
+    return 0;
+}

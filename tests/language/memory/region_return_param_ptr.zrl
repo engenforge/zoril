@@ -1,0 +1,18 @@
+// expected exit 0
+// A pointer returned from a POINTER PARAMETER must still be accepted. This is
+// the false positive that matters: stage0-C's type-level return-escape check
+// rejects exactly this shape (stdlib/bytevec.zrl:56's as_slice), which is why
+// Makefile:59-77 has to pass --no-verify. Our check keys on whether the value
+// points into local storage, not on its declared type.
+struct BV { data: *mut u8, len: u64 }
+fn as_slice(self: *BV) -> [u8] { return unsafe { @slice((*self).data, (*self).len) }; }
+fn passthrough(p: *mut u8) -> *mut u8 { return p; }
+fn main() -> i32 {
+    let mut buf = [7 as u8, 8];
+    let bv = BV { data: &mut buf[0], len: 2 };
+    let s = as_slice(&bv);
+    let q = passthrough(&mut buf[0]);
+    if s.len != 2 as u64 { return 1; }
+    if unsafe { *q } != 7 { return 2; }
+    return 0;
+}

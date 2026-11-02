@@ -1,0 +1,17 @@
+// name: Storing a copied element out of a closure's owned capture is accepted
+// expected: accept
+// Copying an element out of a closure's owned Vec through a captured &mut is accepted.
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut dest: i32 = 0;
+    let out = &mut dest;
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut f = || {
+        *out = *v.get(0).unwrap();
+    };
+    f();
+    return if dest == 42 { 0 } else { 1 };
+}

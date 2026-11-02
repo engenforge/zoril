@@ -1,0 +1,21 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_int_literal_range.zrl:12:17: error: integer literal 300 is out of range for `u8`
+// EXPECT: tests/error_reporting/err_int_literal_range.zrl:13:19: error: integer literal -1 is out of range for `u32`
+// EXPECT: tests/error_reporting/err_int_literal_range.zrl:14:17: error: integer literal 128 is out of range for `i8`
+// EXPECT: tests/error_reporting/err_int_literal_range.zrl:15:13: error: integer literal 300 is out of range for `u8`
+// EXPECT: tests/error_reporting/err_int_literal_range.zrl:18:9: error: integer literal -1 is out of range for `u32`
+// An integer literal was never checked against its type: `let a: u8 = 300;` stored 44, and a
+// `-1` pattern on a u32 matched 4294967295.
+fn f(x: u32) -> i32 { return 0; }
+fn main() -> i32 {
+    let ok: i8 = -128; let ok2: u64 = 18446744073709551615; let ok3 = 0xffffffffffffffff as u64;
+    let a: u8 = 300;
+    let b: u32 = -1;
+    let c: i8 = 128;
+    let d = 300u8;
+    let x = 5 as u32;
+    return match x {
+        -1 => 1,
+        _ => 0,
+    };
+}

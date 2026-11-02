@@ -1,0 +1,233 @@
+// Validated UTF-8 string slices and character validation (Str)
+//
+//
+// A Str is a byte slice that holds well-formed UTF-8 (RFC 3629: no overlong
+// forms, no surrogates, nothing above U+10FFFF). Its field is private, so every
+// Str comes from a checked constructor:
+//
+//     @str("literal")       checked by the compiler; invalid UTF-8 is a compile error
+//     Str.from_utf8(bytes)  checked at run time; None when invalid
+//     s.substr(start, end)  only on char boundaries of a Str that is already valid
+
+import "core.zrl";
+
+// Validated UTF-8 string slice wrapper guarantee-backed by utf8_valid.
+pub struct Str {
+    bytes: [u8],
+}
+
+// Length of the well-formed UTF-8 sequence starting at bytes[i], or 0 when the
+// bytes there do not begin one.
+fn utf8_sequence_len(bytes: [u8], i: usize) -> usize {
+    let b0 = bytes[i];
+    if b0 < 0x80 as u8 {
+        return 1 as usize;
+    }
+    // Every lead byte fixes the sequence length and the range of its second byte;
+    // the narrowed ranges exclude overlong forms, surrogates and code points
+    // above U+10FFFF.
+    let mut n = 0 as usize;
+    let mut lo = 0x80 as u8;
+    let mut hi = 0xbf as u8;
+    if b0 >= 0xc2 as u8 && b0 <= 0xdf as u8 {
+        n = 2 as usize;
+    } else if b0 == 0xe0 as u8 {
+        n = 3 as usize;
+        lo = 0xa0 as u8;
+    } else if b0 >= 0xe1 as u8 && b0 <= 0xec as u8 {
+        n = 3 as usize;
+    } else if b0 == 0xed as u8 {
+        n = 3 as usize;
+        hi = 0x9f as u8;
+    } else if b0 >= 0xee as u8 && b0 <= 0xef as u8 {
+        n = 3 as usize;
+    } else if b0 == 0xf0 as u8 {
+        n = 4 as usize;
+        lo = 0x90 as u8;
+    } else if b0 >= 0xf1 as u8 && b0 <= 0xf3 as u8 {
+        n = 4 as usize;
+    } else if b0 == 0xf4 as u8 {
+        n = 4 as usize;
+        hi = 0x8f as u8;
+    } else {
+        return 0 as usize;
+    }
+    if i + n > bytes.len {
+        return 0 as usize;
+    }
+    let b1 = bytes[i + 1 as usize];
+    if b1 < lo || b1 > hi {
+        return 0 as usize;
+    }
+    let mut k = 2 as usize;
+    while k < n {
+        let b = bytes[i + k];
+        if b < 0x80 as u8 || b > 0xbf as u8 {
+            return 0 as usize;
+        }
+        k = k + 1 as usize;
+    }
+    return n;
+}
+
+// Validates whether bytes forms a well-formed UTF-8 byte sequence.
+pub fn utf8_valid(bytes: [u8]) -> bool {
+    let mut i = 0 as usize;
+    while i < bytes.len {
+        let n = utf8_sequence_len(bytes, i);
+        if n == 0 as usize {
+            return false;
+        }
+        i = i + n;
+    }
+    return true;
+}
+
+fn is_continuation_byte(b: u8) -> bool {
+    return (b & 0xc0 as u8) == 0x80 as u8;
+}
+
+impl Str {
+    // Validates bytes and returns Some(Str) if well-formed, or None if invalid UTF-8.
+    pub fn from_utf8(bytes: [u8]) -> Option<Str> {
+        if !utf8_valid(bytes) {
+            return Option.None;
+        }
+        return Option.Some(Str { bytes: bytes });
+    }
+
+    // Returns the underlying byte slice.
+    pub fn as_bytes(self: &Str) -> [u8] {
+        return self.bytes;
+    }
+
+    // Returns the length of the string in bytes.
+    pub fn len(self: &Str) -> usize {
+        return self.bytes.len;
+    }
+
+    // Returns true if the string slice contains zero bytes.
+    pub fn is_empty(self: &Str) -> bool {
+        return self.bytes.len == 0 as usize;
+    }
+
+    // Returns the total number of Unicode code points in the string.
+    pub fn char_count(self: &Str) -> usize {
+        let mut count = 0 as usize;
+        let mut i = 0 as usize;
+        while i < self.bytes.len {
+            if !is_continuation_byte(self.bytes[i]) {
+                count = count + 1 as usize;
+            }
+            i = i + 1 as usize;
+        }
+        return count;
+    }
+
+    // Returns true if byte index i lies on a valid UTF-8 code point boundary.
+    pub fn is_char_boundary(self: &Str, i: usize) -> bool {
+        if i == self.bytes.len {
+            return true;
+        }
+        if i > self.bytes.len {
+            return false;
+        }
+        return !is_continuation_byte(self.bytes[i]);
+    }
+
+    // Returns a substring slice spanning byte indices [start, end), or None if indices are invalid or not on code point boundaries.
+    pub fn substr(self: &Str, start: usize, end: usize) -> Option<Str> {
+        if start > end || !self.is_char_boundary(start) || !self.is_char_boundary(end) {
+            return Option.None;
+        }
+        // SAFETY: start <= end <= len was just checked, so the view stays inside self.bytes.
+        let part = unsafe { @slice((self.bytes.ptr as usize + start) as *u8, end - start) };
+        return Option.Some(Str { bytes: part });
+    }
+
+    // Returns true if the string begins with prefix.
+    pub fn starts_with(self: &Str, prefix: [u8]) -> bool {
+        if self.bytes.len < prefix.len
+            || !utf8_valid(prefix)
+            || !self.is_char_boundary(prefix.len) {
+            return false;
+        }
+        let mut i = 0 as usize;
+        while i < prefix.len {
+            if self.bytes[i] != prefix[i] { return false; }
+            i = i + 1 as usize;
+        }
+        return true;
+    }
+
+    // Returns true if the string ends with suffix.
+    pub fn ends_with(self: &Str, suffix: [u8]) -> bool {
+        if self.bytes.len < suffix.len || !utf8_valid(suffix) {
+            return false;
+        }
+        let offset = self.bytes.len - suffix.len;
+        if !self.is_char_boundary(offset) {
+            return false;
+        }
+        let mut i = 0 as usize;
+        while i < suffix.len {
+            if self.bytes[offset + i] != suffix[i] { return false; }
+            i = i + 1 as usize;
+        }
+        return true;
+    }
+
+    // Returns true if needle occurs within the string.
+    pub fn contains(self: &Str, needle: [u8]) -> bool {
+        return self.find(needle).is_some();
+    }
+
+    // Returns the byte index of the first occurrence of needle, or None if not found.
+    pub fn find(self: &Str, needle: [u8]) -> Option<usize> {
+        if !utf8_valid(needle) { return Option.None; }
+        if needle.len == 0 as usize { return Option.Some(0 as usize); }
+        if self.bytes.len < needle.len { return Option.None; }
+        let limit = self.bytes.len - needle.len;
+        let mut i = 0 as usize;
+        while i <= limit {
+            if self.is_char_boundary(i) {
+                let mut is_match = true;
+                let mut j = 0 as usize;
+                while j < needle.len {
+                    if self.bytes[i + j] != needle[j] {
+                        is_match = false;
+                        break;
+                    }
+                    j = j + 1 as usize;
+                }
+                if is_match { return Option.Some(i); }
+            }
+            i = i + 1 as usize;
+        }
+        return Option.None;
+    }
+
+    // Returns a subslice with leading and trailing ASCII whitespace removed.
+    pub fn trim(self: &Str) -> Str {
+        if self.bytes.len == 0 as usize { return *self; }
+        let mut start = 0 as usize;
+        while start < self.bytes.len && is_ascii_whitespace(self.bytes[start]) {
+            start = start + 1 as usize;
+        }
+        if start == self.bytes.len {
+            return Str { bytes: @slice(0 as *u8, 0 as usize) };
+        }
+        let mut end = self.bytes.len;
+        while end > start && is_ascii_whitespace(self.bytes[end - 1 as usize]) {
+            end = end - 1 as usize;
+        }
+        // SAFETY: start and end are ASCII whitespace offsets (single-byte UTF-8 code points),
+        // so both start and end fall on valid char boundaries and start <= end <= len.
+        let part = unsafe { @slice((self.bytes.ptr as usize + start) as *u8, end - start) };
+        return Str { bytes: part };
+    }
+}
+
+fn is_ascii_whitespace(b: u8) -> bool {
+    return b == ' ' as u8 || b == '\t' as u8 || b == '\n' as u8 || b == '\r' as u8;
+}

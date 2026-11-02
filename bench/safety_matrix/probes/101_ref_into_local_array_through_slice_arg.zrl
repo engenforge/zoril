@@ -1,0 +1,6 @@
+// name: Reference into a local array returned through a slice argument
+// expected: compile_reject
+// first's result points where its slice points; leak passes a slice over its own array.
+fn first(s: [u8]) -> &u8 { return &s[0]; }
+fn leak() -> &u8 { let a: [u8; 2] = [1, 2]; return first(&a); }
+fn main() -> i32 { return *leak() as i32; }

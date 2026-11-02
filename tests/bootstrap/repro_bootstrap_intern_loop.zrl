@@ -1,0 +1,39 @@
+import "io.zrl";
+import "intern.zrl";
+import "mem_raw.zrl";
+import "bytevec.zrl";
+use bytevec::ByteVec;
+use intern::InternTable;
+use io::print;
+use mem_raw::{ArenaHeader, arena_init};
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(1024 as u64 * 1024 as u64) };
+    let mut table = unsafe { InternTable.new_raw(arena) };
+
+    let mut i = 0 as u64;
+    while i < 50 as u64 {
+        let mut s = unsafe { ByteVec.new_raw(arena) };
+        write_u64_into_bytevec(s, i);
+        let id = table.intern(s.as_slice());
+        i = i + 1 as u64;
+    }
+    print("INTERN 1100 OK\n");
+    return 0;
+}
+
+fn write_u64_into_bytevec(bv: &mut ByteVec, val: u64) {
+    if val == 0 as u64 {
+        bv.push('0' as u8);
+        return;
+    }
+    let mut v = val;
+    let mut buf = [0 as u8; 20];
+    let mut pos = 20 as u64;
+    while v > 0 as u64 {
+        pos = pos - 1 as u64;
+        buf[pos] = ((v % 10 as u64) + 48 as u64) as u8;
+        v = v / 10 as u64;
+    }
+    unsafe { bv.push_range(&buf[0], pos, 20 as u64 - pos); }
+}

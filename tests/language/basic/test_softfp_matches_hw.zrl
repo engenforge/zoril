@@ -1,0 +1,139 @@
+// expected exit code: 0
+// Differential test: stdlib/softfp.zrl integer-only IEEE-754 helpers must
+// match the hardware SSE results bit-for-bit. This test runs with real
+// floats (qbe/SSE backend), so every softfp result is checked against the
+// hardware computing the same operation.
+import "softfp.zrl";
+use softfp::{softfp_f64_add_bits, softfp_f64_mul_bits, softfp_f64_to_f32_bits, softfp_u64_to_f64_bits};
+
+fn bits_of(f: f64) -> u64 {
+    unsafe { return *( (&f as usize) as *u64 ); }
+}
+
+fn f64_of(b: u64) -> f64 {
+    unsafe { return *( (&b as usize) as *f64 ); }
+}
+
+fn bits_of_f32(f: f32) -> u32 {
+    unsafe { return *( (&f as usize) as *u32 ); }
+}
+
+// xorshift64 PRNG for reproducible pseudo-random coverage
+fn next_rand(state: *mut u64) -> u64 {
+    let mut x = unsafe { *state };
+    x = x ^ (x << 13);
+    x = x ^ (x >> 7);
+    x = x ^ (x << 17);
+    unsafe { *state = x; }
+    return x;
+}
+
+fn main() -> i32 {
+    // ── u64 -> f64: edges and rounding cases above 2^53 ─────────────────────
+    let mut fix = [
+        0 as u64, 1, 2, 5, 9, 10,
+        4095, 4096, 4097,
+        9007199254740992,      // 2^53 (exact)
+        9007199254740993,      // 2^53+1 (rounds to even)
+        9007199254740995,      // 2^53+3 (rounds up)
+        18446744073709551615,  // u64 max
+        12345678901234567890,
+        1000000000000000000
+    ];
+    let mut i = 0 as usize;
+    while i < 15 {
+        let v = fix[i];
+        if softfp_u64_to_f64_bits(v) != bits_of(v as f64) { return 1; }
+        i = i + 1;
+    }
+
+    let mut st = 0x9E3779B97F4A7C15 as u64;
+    let mut k = 0 as u64;
+    while k < 500 {
+        let v = next_rand(&mut st);
+        if softfp_u64_to_f64_bits(v) != bits_of(v as f64) { return 2; }
+        k = k + 1;
+    }
+
+    // ── f64 add: random positive finite pairs (mid exponents, no overflow) ──
+    k = 0;
+    while k < 500 {
+        let ra = next_rand(&mut st);
+        let rb = next_rand(&mut st);
+        // Positive, exponent field forced into [512, 1535]: finite, no
+        // overflow when added, and wide enough to exercise big alignments.
+        let a = (ra & 0xFFFFFFFFFFFFF) | ((((ra >> 52) & 0x3FF) + 512) << 52);
+        let b = (rb & 0xFFFFFFFFFFFFF) | ((((rb >> 52) & 0x3FF) + 512) << 52);
+        let want = bits_of(f64_of(a) + f64_of(b));
+        if softfp_f64_add_bits(a, b) != want { return 3; }
+        k = k + 1;
+    }
+
+    // add: equal values, denormal + normal, zero identities
+    if softfp_f64_add_bits(0, 0x3FF0000000000000) != 0x3FF0000000000000 { return 4; }
+    if softfp_f64_add_bits(0x3FF0000000000000, 0) != 0x3FF0000000000000 { return 5; }
+    let dn = 0x0000000000000007 as u64;   // small denormal
+    let sm = 0x0010000000000003 as u64;   // near-smallest normal
+    if softfp_f64_add_bits(dn, sm) != bits_of(f64_of(dn) + f64_of(sm)) { return 6; }
+    if softfp_f64_add_bits(dn, dn) != bits_of(f64_of(dn) + f64_of(dn)) { return 7; }
+
+    // ── f64 mul: random pairs with exponents balanced to stay finite ────────
+    k = 0;
+    while k < 500 {
+        let ra = next_rand(&mut st);
+        let rb = next_rand(&mut st);
+        // Exponent fields in [768, 1279]: products stay normal and finite.
+        let a = (ra & 0xFFFFFFFFFFFFF) | (((ra >> 52) & 0x1FF) + 768 << 52);
+        let b = (rb & 0xFFFFFFFFFFFFF) | (((rb >> 52) & 0x1FF) + 768 << 52);
+        let want = bits_of(f64_of(a) * f64_of(b));
+        if softfp_f64_mul_bits(a, b) != want { return 8; }
+        k = k + 1;
+    }
+
+    // mul: signs, zeros, underflow to denormal
+    let n1 = 0xBFF0000000000000 as u64;   // -1.0
+    let p2 = 0x4000000000000000 as u64;   // 2.0
+    if softfp_f64_mul_bits(n1, p2) != bits_of(f64_of(n1) * f64_of(p2)) { return 9; }
+    if softfp_f64_mul_bits(n1, n1) != bits_of(f64_of(n1) * f64_of(n1)) { return 10; }
+    if softfp_f64_mul_bits(0, p2) != 0 { return 11; }
+    k = 0;
+    while k < 200 {
+        let ra = next_rand(&mut st);
+        let rb = next_rand(&mut st);
+        // Tiny exponents so many products underflow into denormal range.
+        let a = (ra & 0xFFFFFFFFFFFFF) | (((ra >> 52) & 0x1F) + 1 << 52);
+        let b = (rb & 0xFFFFFFFFFFFFF) | (((rb >> 52) & 0x1F) + 1 << 52);
+        let want = bits_of(f64_of(a) * f64_of(b));
+        if softfp_f64_mul_bits(a, b) != want { return 12; }
+        k = k + 1;
+    }
+
+    // ── f64 -> f32 narrowing vs cvtsd2ss ─────────────────────────────────────
+    k = 0;
+    while k < 500 {
+        let ra = next_rand(&mut st);
+        // Any finite exponent [0, 2046], both signs: covers overflow to f32
+        // infinity, denormal results, and rounding.
+        let mut e = (ra >> 52) & 0x7FF;
+        if e == 0x7FF { e = 2046; }
+        let a = (ra & 0x800FFFFFFFFFFFFF) | (e << 52);
+        let want = bits_of_f32(f64_of(a) as f32);
+        if softfp_f64_to_f32_bits(a) != want { return 13; }
+        k = k + 1;
+    }
+    // f32 fixed edges: 1.0, rounding at 2^-150 boundary, exact denormal
+    if softfp_f64_to_f32_bits(0x3FF0000000000000) != bits_of_f32(f64_of(0x3FF0000000000000) as f32) { return 14; }
+    if softfp_f64_to_f32_bits(0) != 0 { return 15; }
+
+    // ── the lexer's exact accumulation sequence for "12.34" ─────────────────
+    // (mirrors src/lexer.zrl lex_dec_int: f = 12; f += 3*0.1; f += 4*0.01)
+    let tenth = 0x3FB999999999999A as u64;   // bits of 0.1
+    let mut fb = softfp_u64_to_f64_bits(12);
+    let mut frac = tenth;
+    fb = softfp_f64_add_bits(fb, softfp_f64_mul_bits(softfp_u64_to_f64_bits(3), frac));
+    frac = softfp_f64_mul_bits(frac, tenth);
+    fb = softfp_f64_add_bits(fb, softfp_f64_mul_bits(softfp_u64_to_f64_bits(4), frac));
+    if fb != bits_of(12.34) { return 16; }
+
+    return 0;
+}

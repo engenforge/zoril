@@ -1,0 +1,20 @@
+// expected exit code: 0
+enum Action {
+    Move(i32),
+    Stop,
+}
+
+fn eval_action(a: Action) -> i32 {
+    return match a {
+        Action.Move(x) if x > 10 => 100,
+        Action.Move(x) => x,
+        Action.Stop => 0,
+    };
+}
+
+fn main() -> i32 {
+    if eval_action(Action.Move(20)) != 100 { return 1; }
+    if eval_action(Action.Move(5)) != 5 { return 2; }
+    if eval_action(Action.Stop) != 0 { return 3; }
+    return 0;
+}

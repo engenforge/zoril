@@ -1,0 +1,225 @@
+import "il_typecheck.zrl";
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "os/linux.zrl" as os_linux;
+import "intern.zrl";
+import "bytevec.zrl";
+import "il_instr.zrl";
+import "il_type.zrl";
+import "il_cfg.zrl";
+import "zil_parse.zrl";
+import "qbe.zrl";
+import "sys.zrl";
+import "version.zrl";
+import "file.zrl";
+use file::{read_file_raw, read_stdin_raw};
+use il_cfg::ILModule;
+use il_typecheck::type_check_function;
+use intern::InternTable;
+use bytevec::ByteVec;
+use io::{Fd, close, eprint, print, stdout};
+use os_linux::open;
+use mem_raw::{ArenaHeader, arena_init, memcpy, zoril_allocator_alloc};
+use qbe::QBEEmitter;
+use sys::arg_to_slice;
+use version::version;
+use zil_parse::ZilParser;
+
+fn read_stdin_content(arena: *mut ArenaHeader) -> [u8] {
+    return match unsafe { read_stdin_raw(arena) } {
+        Ok(s) => s,
+        Err(err) => {
+            eprint("error: cannot read stdin: ");
+            eprint(err.message());
+            eprint("\n");
+            @slice(0 as *u8, 0 as usize)
+        }
+    };
+}
+
+fn read_file_content(path: [u8], arena: *mut ArenaHeader) -> [u8] {
+    return match unsafe { read_file_raw(path, arena) } {
+        Ok(s) => s,
+        Err(err) => {
+            eprint("error: cannot open input file ");
+            eprint(path);
+            eprint(": ");
+            eprint(err.message());
+            eprint("\n");
+            @slice(0 as *u8, 0 as usize)
+        }
+    };
+}
+
+fn str_has_prefix(s: [u8], prefix: [u8]) -> bool {
+    if s.len < prefix.len { return false; }
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        if s[i] != prefix[i] { return false; }
+        i = i + 1 as usize;
+    }
+    return true;
+}
+
+fn str_after_prefix(s: [u8], prefix_len: usize) -> [u8] {
+    if s.len < prefix_len { return unsafe { @slice(0 as *u8, 0 as usize) }; }
+    return unsafe { @slice((s.ptr as usize + prefix_len) as *u8, s.len - prefix_len) };
+}
+
+// Operand types (src/il_typecheck.zrl): ZIL with a value of the wrong type for an instruction
+// is rejected, naming the function and the instruction, rather than miscompiled.
+fn operand_types_ok(m: &ILModule, table: &InternTable, arena: *mut ArenaHeader) -> bool {
+    let mut ok = true;
+    for fi in 0 as usize..m.functions.len() {
+        let f = &m.functions[fi];
+        if f.blocks_len == 0 as usize { continue; }
+        let issues = type_check_function(m, f, arena);
+        for issue in issues.as_slice() {
+            eprint("zilc: error: in `");
+            eprint(table.lookup(f.name));
+            eprint("`: ");
+            eprint(issue.message);
+            eprint("\n");
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+fn main(argc: i32, argv: **u8) -> i32 {
+    // SAFETY: zilc compiler pipeline arena mapping.
+    let arena = unsafe { arena_init(1024 as u64 * 1024 * 1024) }; // 1GB - was 256MB, overflowed compiling the full self-hosted compiler's ZIL
+
+    let mut in_path = unsafe { @slice(0 as *u8, 0 as usize) };
+    let mut out_path = unsafe { @slice(0 as *u8, 0 as usize) };
+    let mut cli_module = unsafe { @slice(0 as *u8, 0 as usize) };
+
+    let mut v_i = 1 as i32;
+    while v_i < argc {
+        let v_arg = unsafe { arg_to_slice(argv, v_i) };
+        if v_arg == "-V" || v_arg == "--version" {
+            print("zilc ");
+            print(version());
+            print("\n");
+            return 0;
+        }
+        v_i = v_i + 1 as i32;
+    }
+
+    let mut i = 1 as i32;
+    while i < argc {
+        let arg = unsafe { arg_to_slice(argv, i) };
+        if arg == "-h" || arg == "--help" {
+            print("usage: zilc [options] <input.zil> [output.ssa]\n\n");
+            print("options:\n");
+            print("  -o, --output <file>    write output to <file>\n");
+            print("  -m, --module <name>    override module name\n");
+            print("  -h, --help             show this help message\n");
+            print("  -V, --version          display version and exit\n");
+            return 0;
+        } else if arg == "-m" || arg == "--module" {
+            if i + 1 as i32 < argc {
+                i = i + 1 as i32;
+                cli_module = unsafe { arg_to_slice(argv, i) };
+            } else {
+                eprint("error: missing argument to ");
+                eprint(arg);
+                eprint("\n");
+                return 1;
+            }
+        } else if str_has_prefix(arg, "--module=") {
+            cli_module = str_after_prefix(arg, 9 as usize);
+        } else if arg == "-o" || arg == "--output" {
+            if i + 1 as i32 < argc {
+                i = i + 1 as i32;
+                out_path = unsafe { arg_to_slice(argv, i) };
+            } else {
+                eprint("error: missing argument to ");
+                eprint(arg);
+                eprint("\n");
+                return 1;
+            }
+        } else if str_has_prefix(arg, "-o=") {
+            out_path = str_after_prefix(arg, 3 as usize);
+        } else if str_has_prefix(arg, "--output=") {
+            out_path = str_after_prefix(arg, 9 as usize);
+        } else if arg.len > 0 as usize && arg[0] == '-' as u8 {
+            eprint("error: unrecognized flag: ");
+            eprint(arg);
+            eprint("\n");
+            return 1;
+        } else {
+            if in_path.len == 0 as usize {
+                in_path = arg;
+            } else if out_path.len == 0 as usize {
+                out_path = arg;
+            } else {
+                eprint("error: unexpected extra positional argument: ");
+                eprint(arg);
+                eprint("\n");
+                return 1;
+            }
+        }
+        i = i + 1 as i32;
+    }
+
+    let source = if in_path.len > 0 as usize {
+        read_file_content(in_path, arena)
+    } else {
+        read_stdin_content(arena)
+    };
+
+    if source.len == 0 as usize {
+        eprint("error: empty input\n");
+        return 1;
+    }
+
+    let mut out_fd = stdout();
+    let mut opened_file = false;
+    if out_path.len > 0 as usize {
+        let res = open(out_path, 577, 420); // O_WRONLY|O_CREAT|O_TRUNC, 0644
+        let fd = match res {
+            Ok(f) => f,
+            Err(err) => {
+                eprint("error: cannot open output file ");
+                eprint(out_path);
+                eprint(": ");
+                eprint(err.message());
+                eprint("\n");
+                return 1;
+            }
+        };
+        out_fd = fd;
+        opened_file = true;
+    }
+
+    let mut table = unsafe { InternTable.new_raw(arena) };
+    // The module is arena storage that outlives every use below.
+    let module = unsafe { &mut *ILModule.new(arena, 0 as usize) };
+
+    // The parser keeps the module and the table for its own lifetime, so it is done before
+    // either is handed on; only its two recorded names outlive it.
+    let mut parser_doc = 0 as u32;
+    let mut name_buf = unsafe { ByteVec.new_raw(arena) };
+    {
+        let mut parser = ZilParser.new(source, module, table);
+        parser.parse_module();
+        parser_doc = parser.module_doc;
+        name_buf.push_slice(parser.module_name);
+    }
+    let parser_name = name_buf.as_slice();
+    if !operand_types_ok(module, table, arena) { return 1; }
+
+    let mut qbe = QBEEmitter.new(arena, module, table, out_fd);
+    qbe.module_doc = parser_doc;
+    qbe.module_name = if cli_module.len > 0 as usize { cli_module } else { parser_name };
+    qbe.emit_module();
+    qbe.flush();
+
+    if opened_file {
+        close(out_fd).expect("zilc: failed to close output file");
+    }
+
+    return 0;
+}

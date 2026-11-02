@@ -1,0 +1,25 @@
+// expected compile fail
+// EXPECT: error: cannot move out of borrow
+
+enum Opt2 {
+    Some(NonCopy),
+    None,
+}
+struct NonCopy { x: i32 }
+impl Drop for NonCopy { fn drop(self) {} }
+
+fn consume(n: NonCopy) -> i32 { return n.x; }
+
+fn peek(o: &Opt2) -> i32 {
+    match *o {
+        Opt2.Some(v) => { return consume(v); },
+        Opt2.None => { return 0; },
+    }
+}
+
+fn main() -> i32 {
+    let a = Opt2.Some(NonCopy { x: 7 });
+    let r = peek(&a);
+    if r != 7 { return 1; }
+    return 0;
+}

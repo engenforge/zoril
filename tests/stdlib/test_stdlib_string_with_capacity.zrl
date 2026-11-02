@@ -1,0 +1,19 @@
+// String.with_capacity: reserve an arena-backed buffer up front, then append.
+// Exercises the constructor the unsafe-scan reported as unexercised.
+// expected exit 0
+
+import "mem.zrl";
+import "string.zrl";
+use mem::Arena;
+use string::String;
+
+fn main() -> i32 {
+    let arena = Arena.new(65536).unwrap();
+    let mut s = String.with_capacity(&arena, 64);
+    s.push_str("hello");
+    s.push_u8(33 as u8); // '!'
+    if s.len() != 6 { return 1; }
+    if s.as_slice()[0] != 104 as u8 { return 2; } // 'h'
+    if s.as_slice()[5] != 33 as u8 { return 3; } // '!'
+    return 0;
+}

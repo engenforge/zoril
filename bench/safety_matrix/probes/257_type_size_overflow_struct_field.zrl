@@ -1,0 +1,14 @@
+// name: A struct whose field makes the struct's size wrap past 2^64
+// expected: compile_reject
+// The sum of a struct's field sizes was not checked, so `S` was laid out as its 8-byte `b`
+// field: a local of it, or an element of a `Vec<S>`, had an allocation and a stride that
+// disagreed with the fields the program wrote through.
+struct S {
+    a: [[[[u8; 65536]; 65536]; 65536]; 65536],
+    b: u64,
+}
+
+fn main() -> i32 {
+    let s = S { a: [[[[0 as u8; 65536]; 65536]; 65536]; 65536], b: 1 };
+    return s.b as i32;
+}

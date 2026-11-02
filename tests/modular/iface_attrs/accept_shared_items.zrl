@@ -1,0 +1,18 @@
+// expected exit 0
+import "lib.zrl";
+
+fn main() -> i32 {
+    lib::set_count(5);
+    if lib::COUNT != 5 { return 1; }
+    if lib::peek_count() != 5 { return 2; }
+    if lib::bump_hidden(1) != 11 { return 3; }
+    if lib::peek_hidden() != 11 { return 4; }
+    if lib::limit_double(1) != 14 { return 5; }
+    if lib::Cell::SLOTS != 4 { return 6; }
+    let c = lib::Cell<i32> { item: 1, slot: 0 as *mut i32 };
+    if c.secret() != 9 { return 7; }
+    let a = lib::Plain { v: 2 };
+    let b = a;
+    if a.v + b.v != 4 { return 8; }
+    return 0;
+}

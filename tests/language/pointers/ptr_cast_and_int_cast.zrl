@@ -1,0 +1,34 @@
+// Tests @ptr_cast<*T>(expr) and @int_cast<U>(expr) intrinsics.
+// @ptr_cast reinterprets a value as a pointer type.
+// @int_cast reinterprets a value as an integer type.
+//
+// Neither needs `unsafe` when it produces a raw pointer or a number: creating a raw pointer is
+// safe because every *use* of one is gated on its type, and an integer result has lost the
+// address rather than gained a way to use it (see `ptr_forge_needs_unsafe`). A cast to a
+// `&T` or a `[T]` still needs the marker, and pins that direction in
+// tests/error_reporting/err_ptr_cast_to_reference.zrl.
+
+fn main() -> i32 {
+    // @ptr_cast: reinterpret a u64 as a *i32 pointer
+    let addr: u64 = 0x1234;
+    let p = @ptr_cast<*i32>(addr);
+    // Round-trip: cast pointer back to u64 via @int_cast
+    let addr2 = @int_cast<u64>(p);
+    if addr2 != addr { return 1; }
+
+    // @int_cast: reinterpret an i32 as u32 (bit-level)
+    let neg: i32 = -1;
+    let bits = @int_cast<u32>(neg);
+    if bits != 4294967295 { return 2; }
+
+    // @ptr_cast: null pointer
+    let null_p = @ptr_cast<*u8>(0 as u64);
+    let null_int = @int_cast<u64>(null_p);
+    if null_int != 0 { return 3; }
+
+    // The same forge with `as`, which is the same rule: the value is a pointer, not an index.
+    let q = addr as *i32;
+    if q as u64 != addr { return 4; }
+
+    return 0;
+}

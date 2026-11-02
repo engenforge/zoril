@@ -1,0 +1,20 @@
+// name: Reference into a dead local held by a closure that captured it
+// expected: compile_reject
+// A closure's environment carried the captures' borrows as *derived*, because both steps of the
+// chain forced that flag: `&env` (inherit_reborrow) and the closure value's inherit of the
+// environment (FuncAddr). A derived borrow is exempt at a local's scope end when the local has no
+// `Drop`, so a closure capturing `p: &i32` could outlive `x` and `g(1)` read its dead slot (8). The
+// copies keep each borrow's own flag now, and a borrow whose base is a compiler temporary - the
+// environment's own storage, which lives in the enclosing frame - stays exempt, which is what keeps
+// a by-value capture (tests/language/closures/capturing_closure_if_expr.zrl) compiling.
+fn add_one(x: i32) -> i32 { return x + 1; }
+
+fn main() -> i32 {
+    let mut g: fn(i32) -> i32 = add_one;
+    {
+        let x: i32 = 7;
+        let p: &i32 = &x;
+        g = |q: i32| -> i32 { *p + q };
+    }
+    return g(1);
+}

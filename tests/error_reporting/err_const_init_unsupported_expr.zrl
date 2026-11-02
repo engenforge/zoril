@@ -1,0 +1,17 @@
+// expected compile fail
+// The operators a constant context does not evaluate yet, each a located error rather than the
+// internal compiler error of the path these replaced. All three are planned with the aggregate
+// initializers: float arithmetic (which would have to round in the
+// declared precision, f32 or f64, to match the run-time value), `&&`/`||`, and the comparisons
+// (which need the signedness of operands a `bool`-typed initializer does not give).
+// EXPECT: tests/error_reporting/err_const_init_unsupported_expr.zrl:11:24: error: a static or constant initializer must be a constant: an integer, float, char, bool, byte string or enum variant
+// EXPECT: tests/error_reporting/err_const_init_unsupported_expr.zrl:12:23: error: a static or constant initializer must be a constant: an integer, float, char, bool, byte string or enum variant
+// EXPECT: tests/error_reporting/err_const_init_unsupported_expr.zrl:13:24: error: a static or constant initializer must be a constant: an integer, float, char, bool, byte string or enum variant
+
+const FLOAT_SUM: f64 = 1.0 + 2.0;
+const LOGICAL: bool = true && false;
+const COMPARED: bool = 1 < 2;
+
+fn main() -> i32 {
+    return 0;
+}

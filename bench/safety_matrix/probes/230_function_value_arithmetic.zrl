@@ -1,0 +1,13 @@
+// name: Function value in arithmetic is rejected
+// expected: compile_reject
+// A function value is a code pointer (plus an environment), not a number: the operator
+// allowlist refuses it, so `1 + f` cannot add the code address to an integer.
+fn target() -> u64 {
+    return 7;
+}
+
+fn main() -> i32 {
+    let f: fn() -> u64 = target;
+    let y: u64 = 1 + f;
+    return y as i32;
+}

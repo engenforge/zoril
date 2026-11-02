@@ -1,0 +1,333 @@
+import "ast.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "parser.zrl";
+import "resolve.zrl";
+import "mono.zrl";
+import "builder.zrl";
+import "lower.zrl";
+import "verify.zrl";
+import "summary_pass.zrl";
+import "zil_print.zrl";
+import "interface_print.zrl";
+import "intern.zrl";
+import "io.zrl";
+import "mem.zrl";
+import "bytevec.zrl";
+import "core.zrl";
+import "vec.zrl";
+import "il_cfg.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "module_path.zrl";
+
+fn write_interface_file(path: [u8], ast: &AST, table: &mut InternTable, arena: *mut Arena, m: &mut ILModule, summaries: [FuncSummary], input_mod_id: [u8]) -> bool {
+    let out_fd = open(path, 577, 420);
+    if out_fd < 0 {
+        must_write(1, "Error: could not open output file\n");
+        return false;
+    }
+    defer must_close(out_fd as u64);
+    let target_sf = table.intern(input_mod_id);
+    let mut ip = InterfacePrinter.new(ast, table, out_fd as u32, arena, target_sf, m as *mut ILModule, summaries);
+    ip.emit_interface();
+    return true;
+}
+
+fn read_file(path: [u8], arena: *mut Arena, out: *mut [u8]) {
+    let fd = open(path, 0, 0);
+    if fd < 0 { return; }
+    defer must_close(fd as u64);
+
+    let size = @syscall(8, fd as u64, 0 as u64, 2 as u64) as i64;
+    @syscall(8, fd as u64, 0 as u64, 0 as u64); // SEEK_SET
+    if size <= 0 { return; }
+
+    let buf = zoril_allocator_alloc(arena, size as u64) as *mut u8;
+    let mut slice = unsafe { @slice(buf, size as usize) };
+    let n = must_read(fd as u64, slice);
+    unsafe { *out = @slice(buf as *u8, n as usize); }
+}
+
+fn main(argc: i32, argv: **u8) -> i32 {
+    if argc < 2 as i32 {
+        // Public flags only (doc/release/public_surface.md). --no-verify and --interproc-summary /
+        // --interproc-stats are internal/debug: accepted, deliberately not listed.
+        must_write(1, "Usage: zoril [options] <input.zrl>\n");
+        must_write(1, "  -o <file>                Output file (default: out.zil)\n");
+        must_write(1, "  -I <dir> | -I name=dir   Add an include root (named roots anchor module identities)\n");
+        must_write(1, "  --root <dir>             Set the project root directory\n");
+        must_write(1, "  --emit-zil               Emit textual ZIL (the default)\n");
+        must_write(1, "  -c, --compile-only       Compile only the target module (separate compilation)\n");
+        must_write(1, "  --emit-interface         Write the module's interface (.zri) instead of ZIL\n");
+        must_write(1, "  --write-interface <file> Also write the module's interface to <file>\n");
+        must_write(1, "  --iface-dir <dir>        Read imported modules' interfaces from <dir>\n");
+        must_write(1, "  --emit-deps              Print the import graph reachable from the input\n");
+        return 1;
+    }
+
+    // mmap'd with lazy paging (see arena_init) - this is a virtual address
+    // space reservation, not an upfront physical-memory cost, so sizing it
+    // generously is cheap. Compiling the compiler as one flat file needed more than 2GB.
+    let arena = arena_init((1024 as u64) * 1024 * 4096);
+    let mut table: &mut InternTable = InternTable.new(arena);
+
+    let mut input_path = @slice(0 as *u8, 0 as usize) as [u8];
+    let mut output_path = @slice(0 as *u8, 0 as usize) as [u8];
+    let mut options_compile_only = false;
+    let mut options_emit_interface = false;
+    let mut options_no_verify = false;
+    let mut options_interproc_summary = false;
+    let mut options_interproc_stats = false;
+    let mut options_emit_deps = false;
+    let mut write_interface_path = @slice(0 as *u8, 0 as usize) as [u8];
+    let mut iface_dir = @slice(0 as *u8, 0 as usize) as [u8];
+    let mut options_root = @slice(0 as *u8, 0 as usize) as [u8];
+    let mut include_ids = Vec::<u32>.new_in(arena);
+
+    let mut i = 1 as i32;
+    while i < argc {
+        let arg = arg_to_slice(argv, i);
+        if is_str_eq(arg, "-c") || is_str_eq(arg, "--compile-only") {
+            options_compile_only = true;
+        } else if is_str_eq(arg, "--emit-interface") {
+            options_emit_interface = true;
+        } else if is_str_eq(arg, "--emit-deps") {
+            options_emit_deps = true;
+        } else if is_str_eq(arg, "--write-interface") {
+            i = i + 1 as i32;
+            if i < argc { write_interface_path = arg_to_slice(argv, i); }
+        } else if is_str_eq(arg, "--iface-dir") {
+            i = i + 1 as i32;
+            if i < argc { iface_dir = arg_to_slice(argv, i); }
+        } else if is_str_eq(arg, "--root") {
+            i = i + 1 as i32;
+            if i < argc { options_root = arg_to_slice(argv, i); }
+        } else if is_str_eq(arg, "-o") {
+            i = i + 1 as i32;
+            if i < argc { output_path = arg_to_slice(argv, i); }
+        } else if is_str_eq(arg, "-I") {
+            i = i + 1 as i32;
+            if i < argc {
+                let inc_arg = arg_to_slice(argv, i);
+                include_ids.push(table.intern(inc_arg));
+            }
+        } else if is_str_eq(arg, "--emit-zil") {
+            // no-op: ZIL is the only output; kept for backward compat
+        } else if is_str_eq(arg, "--interproc-summary") {
+            options_interproc_summary = true;
+        } else if is_str_eq(arg, "--interproc-stats") {
+            options_interproc_summary = true;
+            options_interproc_stats = true;
+        } else if is_str_eq(arg, "--no-verify") {
+            options_no_verify = true;
+        } else {
+            input_path = arg;
+        }
+        i = i + 1 as i32;
+    }
+
+    if input_path.len == 0 as usize {
+        must_write(1, "Error: no input file specified\n");
+        return 1;
+    }
+    if output_path.len == 0 as usize && !options_emit_deps {
+        if options_emit_interface {
+            let mname = extract_module_name(input_path);
+            let mut bv = ByteVec.new(arena);
+            bv.push_slice(mname);
+            bv.push_slice(".zri");
+            bv.push(0 as u8);
+            output_path = subslice(bv.as_slice(), 0 as usize, bv.len - 1 as usize);
+        } else if options_compile_only {
+            let mname = extract_module_name(input_path);
+            let mut bv = ByteVec.new(arena);
+            bv.push_slice(mname);
+            bv.push_slice(".zil");
+            bv.push(0 as u8);
+            output_path = subslice(bv.as_slice(), 0 as usize, bv.len - 1 as usize);
+        } else {
+            output_path = "out.zil";
+        }
+    }
+
+    let mut source = @slice(0 as *u8, 0 as usize);
+    read_file(input_path, arena, (&mut source) as *mut [u8]);
+    if source.len == 0 as usize && options_root.len > 0 as usize {
+        let abs_cand = make_absolute(input_path, options_root, arena);
+        read_file(abs_cand, arena, (&mut source) as *mut [u8]);
+        if source.len > 0 as usize {
+            input_path = abs_cand;
+        }
+    }
+    if source.len == 0 as usize {
+        must_write(1, "Error: could not read input file\n");
+        return 1;
+    }
+
+    // Module identity is derived from the explicit roots only; the entry's own directory (added
+    // below for import search) must not become an unnamed include root of its own.
+    let mut mr = module_resolution_new(input_path, options_root, &include_ids, table as *mut InternTable, arena);
+    if mr.had_error {
+        return 1;
+    }
+
+    // Add input file's directory to includes
+    let mut last_slash = -1 as i64;
+    let mut idx_dir = 0 as usize;
+    while idx_dir < input_path.len {
+        if input_path[idx_dir] == '/' as u8 { last_slash = idx_dir as i64; }
+        idx_dir = idx_dir + 1 as usize;
+    }
+    if last_slash != -1 as i64 {
+        let input_dir = unsafe { @slice(input_path.ptr, last_slash as usize) };
+        include_ids.push(table.intern(input_dir));
+    }
+
+    let cwd = mr.cwd;
+    let abs_input = make_absolute(input_path, cwd, arena);
+    let input_mod_id = derive_module_identity(&mr, abs_input, arena);
+    if input_mod_id.len == 0 as usize {
+        must_write(2, "error: path resolves outside every root: ");
+        must_write(2, input_path);
+        must_write(2, "\n");
+        return 1;
+    }
+
+    must_write(2, "PROGRESS: Parsing...\n");
+    let mut ast_ptr = AST.new(arena);
+    let lexer = Lexer.new(source, table, arena);
+    // The parser and its load state keep the module resolution: it moves into the arena with
+    // them rather than staying in this frame.
+    let mr_owned = zoril_allocator_alloc(arena, sizeof(ModuleResolution)) as *mut ModuleResolution;
+    unsafe { *mr_owned = mr; }
+    let mut parser = Parser.new_modular(lexer, ast_ptr, table, input_path, input_mod_id, include_ids.data, include_ids.len, 0 as *mut LoadState, mr_owned);
+    // Dependency discovery reads the sources that exist; compilation prefers interfaces.
+    unsafe {
+        (*(*parser).state).iface_dir = iface_dir;
+        (*(*parser).state).iface_shadows = !options_emit_deps;
+        (*(*parser).state).deps_only = options_emit_deps;
+    }
+
+    (*parser).parse_module();
+
+    if (*parser).had_error {
+        return 1;
+    }
+
+    if options_emit_deps {
+        // The compiler is the single authority on what an import names. Print every import edge
+        // reachable from the entry as "<importer>\t<imported file>", sorted and de-duplicated.
+        let mut raw = Vec::<u32>.new_in(arena);
+        let mut ei = 0 as usize;
+        while ei < ast_ptr.import_edges.len {
+            let e = ast_ptr.import_edges.as_slice()[ei];
+            let mut line = ByteVec.new(arena);
+            line.push_slice(table.lookup(e.from_module));
+            line.push('\t' as u8);
+            line.push_slice(table.lookup(e.to_module));
+            line.push('\t' as u8);
+            line.push_slice(table.lookup(e.to_file));
+            raw.push(table.intern(line.as_slice()));
+            ei = ei + 1 as usize;
+        }
+        let edges = sorted_unique_ids(&raw, table, arena);
+        let mut out_fd = 1 as i64;
+        if output_path.len > 0 as usize {
+            out_fd = open(output_path, 577, 420);
+            if out_fd < 0 as i64 {
+                must_write(1, "Error: could not open output file\n");
+                return 1;
+            }
+        }
+        let mut di = 0 as usize;
+        while di < edges.len {
+            must_write(out_fd as u64, table.lookup(edges.as_slice()[di]));
+            must_write(out_fd as u64, "\n");
+            di = di + 1 as usize;
+        }
+        if output_path.len > 0 as usize { must_close(out_fd as u64); }
+        return 0;
+    }
+
+    let ast: &AST = &*ast_ptr;
+
+    must_write(2, "PROGRESS: Resolving...\n");
+    let m: &mut ILModule = &mut *ILModule.new(arena, ast.decls.len);
+    let mut resolver = Resolver.new(arena, ast, m, table, input_path);
+    let mut monomorphizer = Monomorphizer.new(arena, m, &mut *resolver, table);
+    (*resolver).set_mono(monomorphizer);
+    if (*resolver).had_error {
+        return 1;
+    }
+
+    must_write(2, "PROGRESS: Lowering...\n");
+    let mut lowerer = Lowerer.new(arena, &mut *resolver, m, table, &mut *monomorphizer);
+    lowerer.compile_only = options_compile_only || options_emit_interface;
+    lowerer.target_source_file = table.intern(input_mod_id);
+    (*monomorphizer).set_lowerer(lowerer);
+
+    (*lowerer).lower_module();
+
+    if (*lowerer).had_error {
+        return 1;
+    }
+
+    must_write(2, "PROGRESS: Verifying...\n");
+    let t: &mut InternTable = table;
+    let mut summary_pass = InterprocSummaryPass.new(arena, m, t, input_path);
+    summary_pass.apply_conservative_defaults((*lowerer).compile_only, (*lowerer).target_source_file);
+    if !options_no_verify {
+        let mut verifier = Verifier.new(arena, m, t, input_path);
+        verifier.verify();
+
+        if verifier.had_error {
+           return 1;
+        }
+
+        if options_interproc_summary || options_emit_interface || write_interface_path.len > 0 as usize {
+            summary_pass.verbose = options_interproc_stats;
+            let pass_ok = summary_pass.run(options_interproc_summary);
+            if options_interproc_summary && (!pass_ok || summary_pass.had_error) {
+                return 1;
+            }
+        }
+    } else if options_emit_interface || write_interface_path.len > 0 as usize {
+        summary_pass.run(false);
+    }
+
+    if write_interface_path.len > 0 as usize {
+        // Emitted alongside the object's ZIL so one compiler run yields both.
+        if !write_interface_file(write_interface_path, ast, table, arena, m, summary_pass.summaries, input_mod_id) {
+            return 1;
+        }
+    }
+
+    if options_emit_interface {
+        must_write(2, "PROGRESS: Emitting interface...\n");
+        if !write_interface_file(output_path, ast, table, arena, m, summary_pass.summaries, input_mod_id) {
+            return 1;
+        }
+        must_write(2, "PROGRESS: Done.\n");
+        return 0;
+    }
+
+    must_write(2, "PROGRESS: Emitting...\n");
+
+    let out_fd = open(output_path, 577, 420);
+    if out_fd < 0 {
+        must_write(1, "Error: could not open output file\n");
+        return 1;
+    }
+    defer must_close(out_fd as u64);
+    let mut zil = ZilPrinter.new(m, t, out_fd as u32);
+    zil.compile_only = options_compile_only;
+    zil.target_source_file = table.intern(input_mod_id);
+    zil.module_name = extract_module_name(input_mod_id);
+    zil.entry_path = input_mod_id;
+    zil.emit_module();
+
+    must_write(2, "PROGRESS: Done.\n");
+
+    return 0;
+}

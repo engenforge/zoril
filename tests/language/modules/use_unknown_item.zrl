@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: cannot use `geom_lib::nope`: the module defines no `nope`
+// EXPECT: cannot use `geom_lib::hidden`: it is private: `hidden`
+// EXPECT: cannot use `geo::Point`: no import is named `geo`
+import "geom_lib.zrl";
+use geom_lib::nope;
+use geom_lib::hidden;
+use geo::Point;
+
+fn main() -> i32 { return 0; }

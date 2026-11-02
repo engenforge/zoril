@@ -1,0 +1,13 @@
+// expected exit 0
+// Two modules may each have a public `parse`: a `use` brings one in bare, and the other is
+// written through its module.
+import "pub_twice_x_lib.zrl";
+import "pub_twice_y_lib.zrl";
+use pub_twice_x_lib::parse;
+
+fn main() -> i32 {
+    if parse() != 1 { return 1; }
+    if pub_twice_y_lib::parse() != 2 { return 2; }
+    if pub_twice_x_lib::parse() != 1 { return 3; }
+    return 0;
+}

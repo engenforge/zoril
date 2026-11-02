@@ -1,0 +1,9 @@
+// expected exit code: 0
+struct S { data: [u8] }
+fn test_slice_field(s: S) -> u8 {
+    return s.data[0];
+}
+fn main() -> i32 {
+    let mut arr = [104 as u8];
+    return test_slice_field(S { data: &mut arr }) as i32 - 104;
+}

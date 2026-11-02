@@ -1,0 +1,34 @@
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return 1; },
+    };
+    let m0 = a.mark();
+    let mut v0 = Vec::<u64>.new_in(&a);
+    v0.push(1);
+
+    let m1 = a.mark();
+    let mut v1 = Vec::<u64>.new_in(&a);
+    v1.push(2);
+
+    // Reset to m1 first
+    a.reset_to(m1);
+    if v0.len() != 1 || v0[0] != 1 {
+        return 2;
+    }
+
+    // Now reset to m0
+    a.reset_to(m0);
+    // At m0, arena is rewound to beginning.
+    let m_new = a.mark();
+    let mut v2 = Vec::<u64>.new_in(&a);
+    v2.push(99);
+    a.reset_to(m_new);
+
+    return 0;
+}

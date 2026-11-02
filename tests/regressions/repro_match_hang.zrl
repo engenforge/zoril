@@ -1,0 +1,14 @@
+enum BindingToken { String(u32), Other }
+fn get_binding_id(t: BindingToken) -> u32 {
+    let mut id_out = 0 as u32;
+    match t {
+        BindingToken.String(id) => { id_out = id; },
+        BindingToken.Other => {}
+    }
+    return id_out;
+}
+fn main() -> i32 {
+    let t = BindingToken.String(42);
+    if get_binding_id(t) != 42 { return 1; }
+    return 0;
+}

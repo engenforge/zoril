@@ -1,0 +1,229 @@
+// tools/zman/src/main.zrl
+//
+// zman — write the standard library man pages, doc/man/zoril-<module>.3.scd, from two inputs per
+// module: the interface the compiler emits for it (signatures, visibility, #[must_use]) and the
+// module's own comment blocks (descriptions). The pages are therefore documentation of the stdlib
+// as the compiler sees it: an item the page omits, or a signature that drifted, is a test failure
+// (scripts/test_man_pages.sh regenerates every page and diffs it against doc/man).
+//
+// Usage:
+//   zman [options] <module>.zrl ...
+//
+// Each module needs a fresh interface, which `make man-gen` produces before running this:
+//   build/zoril --emit-interface -I stdlib=stdlib -o <zri dir>/<module>.zri stdlib/<module>.zrl
+
+import "core.zrl";
+import "file.zrl";
+import "fsys.zrl";
+import "io.zrl";
+import "mem_raw.zrl";
+import "string.zrl";
+import "sys.zrl";
+import "vec.zrl";
+import "parse.zrl";
+import "render.zrl";
+use file::{read_file_raw, write_file};
+use fsys::make_dir_all_raw;
+use io::{eprint, print};
+use mem_raw::{ArenaHeader, arena_init};
+use string::String;
+use sys::arg_to_slice;
+use vec::Vec;
+
+fn usage() {
+    print("usage: zman [options] <module>.zrl ...\n\n");
+    print("Generate doc/man/zoril-<module>.3.scd for each given standard library module.\n");
+    print("Each module needs a fresh interface: build/zoril --emit-interface -I stdlib=stdlib\n");
+    print("-o <zri dir>/<module>.zri stdlib/<module>.zrl (make man-gen does both steps).\n\n");
+    print("options:\n");
+    print("  --zri <dir>   fresh per-module interfaces (default: build/man-gen/zri)\n");
+    print("  --out <dir>   directory to write the pages to (default: doc/man)\n");
+    print("  -h, --help    show this help message\n");
+}
+
+fn fail(msg: [u8]) {
+    eprint("zman: ");
+    eprint(msg);
+    eprint("\n");
+}
+
+fn fail2(a: [u8], b: [u8]) {
+    eprint("zman: ");
+    eprint(a);
+    eprint(b);
+    eprint("\n");
+}
+
+fn fail3(a: [u8], b: [u8], c: [u8]) {
+    eprint("zman: ");
+    eprint(a);
+    eprint(b);
+    eprint(c);
+    eprint("\n");
+}
+
+fn fail4(a: [u8], b: [u8], c: [u8], d: [u8]) {
+    eprint("zman: ");
+    eprint(a);
+    eprint(b);
+    eprint(c);
+    eprint(d);
+    eprint("\n");
+}
+
+fn cat4(a: [u8], b: [u8], c: [u8], d: [u8], arena: *mut ArenaHeader) -> [u8] {
+    let mut s = unsafe { String.new_in_raw(arena) };
+    s.push_str(a);
+    s.push_str(b);
+    s.push_str(c);
+    s.push_str(d);
+    return s.as_slice();
+}
+
+// The last path component, which is the module's `.zrl` file name.
+fn basename(path: [u8]) -> [u8] {
+    let mut i = path.len;
+    while i > 0 {
+        i = i - 1;
+        if path[i] == '/' as u8 {
+            return path.sub(i + 1, path.len - i - 1);
+        }
+    }
+    return path;
+}
+
+// The module a source path names: the path below the last `stdlib/` with `/` written as `_`
+// (`stdlib/os/unix.zrl` is `os_unix`), or the bare file name when the path has no `stdlib/`.
+fn module_id(path: [u8], arena: *mut ArenaHeader) -> [u8] {
+    let marker = "stdlib/";
+    let mut start = 0 as usize;
+    let mut found = false;
+    let mut i = 0 as usize;
+    while i + marker.len <= path.len {
+        if path.sub(i, marker.len) == marker && (i == 0 as usize || path[i - 1] == '/' as u8) {
+            start = i + marker.len;
+            found = true;
+        }
+        i = i + 1;
+    }
+    if !found { return module_of(basename(path)); }
+    let rel = module_of(path.sub(start, path.len - start));
+    if rel.len == 0 { return ""; }
+    let mut s = unsafe { String.new_in_raw(arena) };
+    let mut k = 0 as usize;
+    while k < rel.len {
+        if rel[k] == '/' as u8 { s.push_str("_"); } else { s.push_str(rel.sub(k, 1 as usize)); }
+        k = k + 1;
+    }
+    return s.as_slice();
+}
+
+// `name` without the `.zrl` suffix, or "" when it does not carry it.
+fn module_of(name: [u8]) -> [u8] {
+    let suffix = ".zrl";
+    if !name.ends_with(suffix) { return ""; }
+    return name.sub(0, name.len - suffix.len);
+}
+
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    // SAFETY: zman's own arena mapping, live for the whole run.
+    let arena = unsafe { arena_init(256 as u64 * 1024 * 1024) };
+    let mut zri_dir = "build/man-gen/zri";
+    let mut out_dir = "doc/man";
+    let mut files = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+
+    let mut i = 1 as i32;
+    while i < argc {
+        let arg = unsafe { arg_to_slice(argv, i) };
+        i = i + 1;
+        if arg == "-h" || arg == "--help" {
+            usage();
+            return 0;
+        }
+        if arg == "--zri" || arg == "--out" {
+            if i >= argc {
+                fail("option needs a directory argument");
+                return 2;
+            }
+            let dir = unsafe { arg_to_slice(argv, i) };
+            i = i + 1;
+            if arg == "--zri" {
+                zri_dir = dir;
+            } else {
+                out_dir = dir;
+            }
+            continue;
+        }
+        if arg.starts_with("--") {
+            fail("unknown option; try --help");
+            return 2;
+        }
+        files.push(arg);
+    }
+    if files.len() == 0 {
+        fail("no modules given; try --help");
+        return 2;
+    }
+
+    let made = unsafe { make_dir_all_raw(out_dir, arena) };
+    if made.is_err() {
+        fail4("cannot create ", out_dir, ": ", made.err().unwrap().message());
+        return 1;
+    }
+
+    let mut written = 0 as u64;
+    let mut f = 0 as usize;
+    while f < files.len() {
+        let source_path = files.as_slice()[f];
+        f = f + 1;
+        let module = module_id(source_path, arena);
+        if module.len == 0 {
+            fail2("not a .zrl file: ", source_path);
+            return 1;
+        }
+        let zri_path = cat4(zri_dir, "/", module, ".zri", arena);
+        let interface = match unsafe { read_file_raw(zri_path, arena) } {
+            Ok(text) => text,
+            Err(e) => {
+                fail4("cannot read ", zri_path, ": ", e.message());
+                return 1;
+            },
+        };
+        let source_text = match unsafe { read_file_raw(source_path, arena) } {
+            Ok(text) => text,
+            Err(e) => {
+                fail4("cannot read ", source_path, ": ", e.message());
+                return 1;
+            },
+        };
+        let items = parse::parse_interface(interface, arena);
+        let source = parse::parse_source(source_text, arena);
+        if source.summary.len == 0 {
+            fail2(source_path, ": no module summary; the file must open with a comment naming it");
+            return 1;
+        }
+        let page = match render::render_page(module, &source, &items, arena) {
+            Ok(text) => text,
+            Err(name) => {
+                fail4(source_path, ": no description for '", name, "'");
+                return 1;
+            },
+        };
+        let out_path = cat4(out_dir, "/zoril-", module, ".3.scd", arena);
+        match write_file(out_path, page) {
+            Ok(_) => {},
+            Err(e) => {
+                fail4("cannot write ", out_path, ": ", e.message());
+                return 1;
+            },
+        }
+        written = written + 1;
+    }
+
+    let mut msg = unsafe { String.new_in_raw(arena) };
+    msg.push_str("zman: wrote ");
+    msg.push_u64(written);
+    msg.push_str(" module pages\n");
+    print(msg.as_slice());
+    return 0;
+}

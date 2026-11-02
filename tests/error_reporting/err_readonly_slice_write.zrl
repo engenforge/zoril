@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_readonly_slice_write.zrl:6:5: error: cannot assign to 's' through a read-only slice (`[T]`; writing needs `[mut T]`)
+// Slices are read-only unless declared `[mut T]`, as `&T` is unless `&mut T`. Before, any
+// slice was writable, so `fill(&a)` changed a non-`mut` array.
+fn fill(s: [u8], v: u8) {
+    s[0] = v;
+}
+fn main() -> i32 { let a: [u8; 2] = [1, 2]; fill(&a, 7 as u8); return a[0] as i32; }

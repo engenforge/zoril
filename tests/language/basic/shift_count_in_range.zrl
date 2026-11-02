@@ -1,0 +1,13 @@
+// expected exit 0
+// In-range shifts, constant and variable, and the masked opt-out.
+fn shl(v: u32, s: u32) -> u32 { return v << s; }
+fn main() -> i32 {
+    let a: u32 = 1;
+    if a << 3 != 8 { return 1; }
+    if shl(a, 31) != 2147483648 { return 2; }
+    if @shl_wrap(a, 33) != 2 { return 3; }
+    let b: u8 = 1;
+    if @shl_wrap(b, 9) != 2 { return 4; }
+    if @shr_wrap(256 as u32, 40) != 1 { return 5; }
+    return 0;
+}

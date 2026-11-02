@@ -1,0 +1,11 @@
+// expected exit 0
+// A write through a `&mut`, then a read through it: the reference's own borrow is live throughout,
+// which is the point of err_mut_ref_write_ends_borrow* (a *second* borrow while it lives is what
+// must be rejected, not a use of the `&mut` itself).
+fn main() -> i32 {
+    let mut x: i32 = 3;
+    let rm = &mut x;
+    *rm = 5;
+    let v = *rm;
+    return v - 5;
+}

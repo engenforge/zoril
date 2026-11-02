@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_box_moved_into_borrow.zrl:9:17: error: type mismatch: expected `&i32`, found `Box<i32>`
+// EXPECT: note: borrow the box instead of moving it into the call: `&*b`, or `&mut *b`
+
+fn bump(b: &i32) -> i32 { return *b + 1; }
+
+fn main() -> i32 {
+    let b = box 41;
+    return *b + bump(b);
+}

@@ -1,0 +1,35 @@
+// expected exit 0
+// `if let PAT = EXPR { .. } else { .. }` and `while let PAT = EXPR { .. }` take any pattern
+// (nested ones too) and lower through `match`, so bindings, borrows and moves are the same.
+import "vec.zrl";
+import "iter.zrl";
+use vec::Vec;
+struct P { x: i32, y: i32 }
+fn pick(o: Option<(i32, i32)>) -> i32 {
+    if let Option.Some((1, b)) = o { return b; } else if let Option.Some((a, _)) = o { return a * 10; } else { return -1; }
+}
+fn main() -> i32 {
+    if pick(Option.Some((1, 7))) != 7 { return 1; }
+    if pick(Option.Some((3, 7))) != 30 { return 2; }
+    if pick(Option.None) != -1 { return 3; }
+
+    let p = P { x: 2, y: 5 };
+    let mut hit = 0;
+    if let P { x: 2, y } = p { hit = y; }
+    if hit != 5 { return 4; }
+
+    let mut v = Vec::<i32>.new();
+    v.push(1); v.push(2); v.push(3); v.push(4);
+    let mut it = v.iter();
+    let mut sum = 0;
+    while let Option.Some(x) = it.next() {
+        if *x == 2 { continue; }
+        sum = sum + *x;
+    }
+    if sum != 8 { return 5; }
+
+    // A binding through a reference is a reference.
+    let o = Option.Some(P { x: 9, y: 1 });
+    if let Option.Some(P { x, .. }) = &o { if *x != 9 { return 6; } } else { return 7; }
+    return 0;
+}

@@ -1,0 +1,29 @@
+// The poison pattern 0xA5A5A5A5A5A5A5A5 is a non-canonical address, so a --checked build turns a
+// dangling pointer to a pointer into a fault: the released slot is not reused, its poisoned slice
+// header is still there, and reading through it dereferences 0xA5.. (SIGSEGV, exit 139). Without
+// --checked the next allocation reuses the slot and the read returns 42.
+// flags: --checked
+// expected exit 139
+import "core.zrl";
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536 as u64).unwrap();
+    let mut w = Vec::<u64>.new_in(&a);
+    w.push(7 as u64);
+    let s: [u64] = w.as_slice();
+    let mut vv = Vec::<[u64]>.new_in(&a);
+    vv.push(s);
+    let p = vv.as_ptr() as *mut [u64];
+    a.reset();
+    let mut q = Vec::<u64>.new_in(&a);
+    q.push(42 as u64);
+    let sq: [u64] = q.as_slice();
+    let mut z = Vec::<[u64]>.new_in(&a);
+    z.push(sq);
+    // SAFETY: as above; a checked build leaves the released slice header poisoned.
+    return unsafe { (*p)[0] } as i32;
+}

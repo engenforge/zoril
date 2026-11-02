@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_extern_enum_return.zrl:4:35: error: an extern function cannot take or return a struct or enum by value (pass a raw pointer to it, `*mut T`): returns_enum
+enum Color { Red, Green }
+extern fn returns_enum(n: i32) -> Color;
+fn main() -> i32 { return 0; }

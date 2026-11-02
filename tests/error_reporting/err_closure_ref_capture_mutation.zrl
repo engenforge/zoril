@@ -1,0 +1,25 @@
+// expected compile fail
+// EXPECT: error: cannot assign to 'd' because it is borrowed
+// A closure capturing a reference keeps the referent borrowed while the closure is live.
+enum Data {
+    Text([u8; 16]),
+    Num(u64),
+}
+
+static dummy: u8 = 0;
+
+fn get_first(d: &Data) -> &u8 {
+    return match d {
+        Data.Text(t) => &t[0],
+        Data.Num(_) => &dummy,
+    };
+}
+
+fn main() -> i32 {
+    let mut d = Data.Text([65 as u8; 16]);
+    let r = get_first(&d);
+    let cl = || -> u8 { *r };
+    d = Data.Num(999);
+    let _ = cl();
+    return 0;
+}

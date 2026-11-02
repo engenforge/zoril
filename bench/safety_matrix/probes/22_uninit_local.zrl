@@ -1,0 +1,3 @@
+// name: Read of uninitialized local
+// expected: compile_reject
+fn main() -> i32 { let x: i32; return x; }

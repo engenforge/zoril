@@ -1,0 +1,19 @@
+export function l $f(l %p, l %q) {
+@s
+	%a =l alloc8 16
+	%b =w loadub %p
+	%c =w loadsb %p
+	%d =w loaduh %q
+	%e =w loadsh %q
+	%f =l loadl %p
+	storeb %b, %a
+	storeh %d, %a
+	storew %e, %a
+	storel %f, %a
+	blit %p, %q, 16
+	%g =l add %a, 8
+	%h =l loadl %g
+	%i =l extuw %c
+	%j =l add %h, %i
+	ret %j
+}

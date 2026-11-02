@@ -1,0 +1,12 @@
+// expected exit 0
+// An argument to a call through a function pointer is converted to the parameter's type, as
+// for a direct call: `4` reached the closure's i64 parameter as an unconverted i32.
+fn main() -> i32 {
+    let inc = |x: i64| -> i64 { x + 1 };
+    let big = 4294967296 as i64;
+    if inc(4) != 5 { return 1; }
+    if inc(big) != 4294967297 { return 2; }
+    let n = 7 as i32;
+    if inc(n) != 8 { return 3; }
+    return 0;
+}

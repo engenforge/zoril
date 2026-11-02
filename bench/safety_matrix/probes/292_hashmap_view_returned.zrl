@@ -1,0 +1,19 @@
+// name: A `HashMap::get` view of a map in a local arena returned from the frame
+// expected: compile_reject
+// `HashMap::get` was on the old view list but a map in a *local* arena was not: the arena unmaps
+// at the return and the entry reference dangles.
+import "mem.zrl";
+import "hashmap.zrl";
+use mem::Arena;
+use hashmap::HashMap;
+
+fn view() -> &i32 {
+    let a = Arena.new(65536).unwrap();
+    let mut m = HashMap::<i32, i32>.new(&a);
+    m.insert(1, 77);
+    return m.get(&1).unwrap();
+}
+
+fn main() -> i32 {
+    return *view();
+}

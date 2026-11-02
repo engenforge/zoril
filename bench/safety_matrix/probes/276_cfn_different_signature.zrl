@@ -1,0 +1,10 @@
+// name: A C function pointer cast to a different signature
+// expected: compile_reject
+// The compiler can see both signatures, so this is a mismatch rather than an unchecked address;
+// `unsafe` does not lift it.
+extern "C" fn g(x: i32) -> i32 { return x; }
+
+fn main() -> i32 {
+    let h = unsafe { g as extern "C" fn(i64) -> i64 };
+    return 0;
+}

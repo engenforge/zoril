@@ -1,0 +1,18 @@
+// expected compile fail
+// EXPECT: error: cannot assign to 'e' because it is borrowed
+// A closure capturing a reference into a Box payload keeps the enum borrowed across variant reassignment.
+enum E {
+    A(Box<i32>),
+    B,
+}
+
+fn main() -> i32 {
+    let mut e = E.A(box 5);
+    let r = match &e {
+        E.A(x) => x,
+        E.B => { return 0; },
+    };
+    let cl = || -> i32 { **r };
+    e = E.B;
+    return cl();
+}

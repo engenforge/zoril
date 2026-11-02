@@ -1,0 +1,19 @@
+// name: Stack reference stored out via closure parameter
+// expected: compile_reject
+// Rejected by the interprocedural summary pass, which every build now enforces.
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn escape_storer(out: &mut &i32) {
+    let x = 42;
+    let src_val = &x;
+    let carried = src_val;
+    let f_clos = |item: &i32| -> &i32 { return item; };
+    let routed = f_clos(carried);
+    *out = routed;
+}
+fn main() -> i32 {
+    let mut seed = 0;
+    let mut dest_val: &i32 = &seed;
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    return *dest_val;
+}

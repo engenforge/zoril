@@ -1,0 +1,14 @@
+// name: Dropping a collection while a reference into its buffer is live
+// expected: compile_reject
+// `@drop(b)` frees the buffer the live reference reads; the explicit drop form needs its own
+// check because no `EndBorrow` runs at an intrinsic.
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut b = box Vec::<i32>.new();
+    (*b).push(77);
+    let r = (*b).get(0).unwrap();
+    @drop(b);
+    return *r;
+}

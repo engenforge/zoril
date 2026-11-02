@@ -1,0 +1,8 @@
+// Module with private and public functions to verify linkage in object file
+fn private_helper() -> i32 {
+    return 42;
+}
+
+pub fn public_entry() -> i32 {
+    return private_helper();
+}

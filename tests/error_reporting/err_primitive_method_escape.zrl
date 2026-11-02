@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_primitive_method_escape.zrl:8:5: error: region escape: the callee stores a pointer to local stack storage where it outlives this function
+import "include/err_primitive_method_stash_helper.zrl";
+use err_primitive_method_stash_helper::Stash;
+
+pub fn main() -> i32 {
+    let x: u64 = 5;
+    x.stash();
+    return 0;
+}

@@ -1,0 +1,10 @@
+pub struct Table {
+    pub count: u32,
+}
+
+impl Table {
+    pub fn next_id(self: &mut Table) -> u32 {
+        self.count = self.count + 1 as u32;
+        return self.count;
+    }
+}

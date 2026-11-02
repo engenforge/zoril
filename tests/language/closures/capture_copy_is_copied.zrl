@@ -1,0 +1,11 @@
+// expected exit 0
+// A `Copy` capture is copied when the closure is made: the closure keeps the value it saw, and
+// the outer binding keeps working (doc/spec/surface_syntax.md §5.2; probe 302).
+fn main() -> i32 {
+    let mut n = 1;
+    let f = || { return n; };
+    n = 2;
+    if f() != 1 { return 90; }
+    if n != 2 { return 91; }
+    return 0;
+}

@@ -1,0 +1,38 @@
+struct Item<T> {
+    val: T,
+}
+
+impl [Item<u64>] {
+    pub fn sum_items(self: &[Item<u64>]) -> u64 {
+        let mut total: u64 = 0 as u64;
+        let mut i = 0 as usize;
+        while i < self.len {
+            total = total + self[i].val;
+            i = i + 1 as usize;
+        }
+        return total;
+    }
+}
+
+impl [Item<u32>] {
+    pub fn sum_items(self: &[Item<u32>]) -> u32 {
+        let mut total: u32 = 0 as u32;
+        let mut i = 0 as usize;
+        while i < self.len {
+            total = total + self[i].val;
+            i = i + 1 as usize;
+        }
+        return total;
+    }
+}
+
+fn main() -> i32 {
+    let a: [Item<u64>; 2] = [Item { val: 10 as u64 }, Item { val: 20 as u64 }];
+    let s_a: [Item<u64>] = &a;
+    let b: [Item<u32>; 2] = [Item { val: 5 as u32 }, Item { val: 15 as u32 }];
+    let s_b: [Item<u32>] = &b;
+    if s_a.sum_items() == 30 as u64 && s_b.sum_items() == 20 as u32 {
+        return 0;
+    }
+    return 1;
+}

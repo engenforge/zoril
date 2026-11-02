@@ -1,0 +1,25 @@
+struct Foo { x: i32 }
+
+fn use_foo(f: &mut Foo) {}
+
+fn main() -> i32 {
+    // repro_box_cast.zrl
+    {
+        let b = box Foo { x: 42 };
+        let p = b as *mut Foo;
+    }
+
+    // repro_box_mut_borrow.zrl
+    {
+        let mut f = box Foo { x: 42 };
+        use_foo(*f);
+        use_foo(*f);
+    }
+
+    // repro_box_ptr.zrl
+    {
+        // just verify it compiles
+    }
+
+    return 0;
+}

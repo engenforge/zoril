@@ -1,0 +1,3 @@
+pub fn unwrap_box<T>(val: T) -> T {
+    return val;
+}

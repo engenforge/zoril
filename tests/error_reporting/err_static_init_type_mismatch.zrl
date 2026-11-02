@@ -1,0 +1,13 @@
+// expected compile fail
+// The initializer is checked against the declared type by the same rules a `let` of that type
+// answers to. `static P: Big = 7` used to compile: an integer literal was taken as the whole
+// value of a 24-byte struct, so its first 8 bytes were 7 and the other 16 came from compiler heap.
+// EXPECT: tests/error_reporting/err_static_init_type_mismatch.zrl:9:17: error: type mismatch: expected `Big`, found `i32`
+
+struct Big { a: u64, b: u64, c: u64 }
+
+static P: Big = 7;
+
+fn main() -> i32 {
+    return 0;
+}

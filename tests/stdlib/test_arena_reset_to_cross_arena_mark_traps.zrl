@@ -1,0 +1,19 @@
+// expected exit 134
+// Passing a mark from another arena must trap at runtime with "cross-arena mark".
+
+import "mem.zrl";
+use mem::Arena;
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return 1; },
+    };
+    let b = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return 1; },
+    };
+    let mark_b = b.mark();
+    a.reset_to(mark_b);
+    return 0;
+}

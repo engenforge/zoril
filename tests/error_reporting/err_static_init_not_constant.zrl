@@ -1,0 +1,17 @@
+// expected compile fail
+// Two initializers that are not constants: a call (made at run time) and another static's name
+// (whose address would be a relocation, which a data image cannot hold). Both used to be an
+// internal compiler error ("extract_const_u64: unsupported expression kind" and ": constant not
+// found").
+// EXPECT: tests/error_reporting/err_static_init_not_constant.zrl:12:25: error: a static or constant initializer must be a constant: an integer, float, char, bool, byte string or enum variant
+// EXPECT: tests/error_reporting/err_static_init_not_constant.zrl:13:27: error: a static or constant initializer must be a constant: an integer, float, char, bool, byte string or enum variant
+
+fn value() -> u64 { return 3; }
+
+static FIRST: u64 = 3;
+static FROM_CALL: u64 = value();
+static FROM_STATIC: u64 = FIRST;
+
+fn main() -> i32 {
+    return 0;
+}

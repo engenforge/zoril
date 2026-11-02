@@ -1,0 +1,15 @@
+// name: A view through a local &mut Vec reference cannot outlive a free()
+// expected: compile_reject
+// A view taken through a local &mut Vec reference keeps the reference borrowed; calling
+// free() on the reference while the view is live is rejected at compile time.
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let vr = &mut v;
+    let r = vr.get(0).unwrap();
+    vr.free();
+    return *r;
+}

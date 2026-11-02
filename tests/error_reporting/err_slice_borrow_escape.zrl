@@ -1,0 +1,32 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_slice_borrow_escape.zrl:14:5: error: cannot let 'buf' go out of scope while it is still borrowed
+// EXPECT: tests/error_reporting/err_slice_borrow_escape.zrl:12:23: note: borrow of 'buf' taken here
+// EXPECT: tests/error_reporting/err_slice_borrow_escape.zrl:25:5: error: cannot let 'buf2' go out of scope while it is still borrowed
+// EXPECT: tests/error_reporting/err_slice_borrow_escape.zrl:23:24: note: borrow of 'buf2' taken here
+import "string.zrl";
+
+fn test_sub_escape() -> i32 {
+    let mut outer: [u8] = "";
+    {
+        let buf: [u8; 4] = [1 as u8, 2 as u8, 3 as u8, 4 as u8];
+        let s: [u8] = &buf;
+        outer = s.sub(0, 2);
+    }
+    if outer.len == 0 as usize { return 1; }
+    return 0;
+}
+
+fn test_trim_escape() -> i32 {
+    let mut outer2: [u8] = "";
+    {
+        let buf2: [u8; 4] = [32 as u8, 65 as u8, 32 as u8, 32 as u8];
+        let s2: [u8] = &buf2;
+        outer2 = s2.trim();
+    }
+    if outer2.len == 0 as usize { return 1; }
+    return 0;
+}
+
+fn main() -> i32 {
+    return test_sub_escape() + test_trim_escape();
+}

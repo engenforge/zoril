@@ -1,0 +1,16 @@
+// expected compile fail
+// A write through a `&mut` used to end the borrow that reference itself holds, so a *second*
+// borrow of the same place was accepted while the `&mut` went on being used.
+// EXPECT: tests/error_reporting/err_mut_ref_write_ends_borrow_field.zrl:13:17: error: cannot borrow 's' while it is mutably borrowed
+// EXPECT: tests/error_reporting/err_mut_ref_write_ends_borrow_field.zrl:11:22: note: borrow of 's' taken here
+
+struct S { n: i32, m: i32 }
+
+fn main() -> i32 {
+    let mut s = S { n: 1, m: 2 };
+    let rm: &mut S = &mut s;
+    rm.n = 5;
+    let q: &S = &s;
+    rm.m = 3;
+    return q.m - 3;
+}

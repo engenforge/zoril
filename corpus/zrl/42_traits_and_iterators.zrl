@@ -1,0 +1,59 @@
+// expected exit code: 42
+// 42: Default methods, associated types and iterator chains.
+// Demonstrates: a trait method with a default body, `type Item;` and `Self::Item`, `I::Item` in
+// a generic signature, a trait imported with `use`, adapters chained as methods, and a capturing
+// closure passed as a function value.
+
+import "iter.zrl";
+import "vec.zrl";
+use iter::{Iterator, range};
+use vec::Vec;
+
+// A trait with an associated type and a default method.
+trait Measure {
+    type Unit;
+    fn measure(self: &Self) -> Self::Unit;
+    fn measure_twice(self: &Self) -> (Self::Unit, Self::Unit) {
+        return (self.measure(), self.measure());
+    }
+}
+
+struct Rod { len: i64 }
+
+impl Measure for Rod {
+    type Unit = i64;
+    fn measure(self: &Rod) -> i64 { return self.len; }
+}
+
+// A generic function names the associated type through its parameter.
+fn total<T: Measure>(t: &T) -> T::Unit { return t.measure(); }
+
+// The first item of any iterator, typed by the iterator's own Item.
+fn first<I: Iterator>(mut it: I) -> Option<I::Item> { return it.next(); }
+
+fn add(acc: i32, x: i32) -> i32 { return acc + x; }
+
+fn main() -> i32 {
+    let rod = Rod { len: 3 as i64 };
+    let pair = rod.measure_twice();
+    if pair.0 + pair.1 != 6 as i64 { return 1; }
+    if total(&rod) != 3 as i64 { return 2; }
+
+    let mut v = Vec::<i32>.new();
+    v.push(1); v.push(2); v.push(3); v.push(4);
+
+    // A capturing closure is a function value: map takes it like a named function.
+    let scale = 2;
+    let doubled = v.iter().map(|x: &i32| -> i32 { *x * scale }).fold(0, add);
+    if doubled != 20 { return 3; }
+
+    let evens = range(0 as usize, 10 as usize).filter(|n: usize| -> bool { n % 2 as usize == 0 as usize });
+    let count = evens.fold(0, |acc: i32, n: usize| -> i32 { acc + 1 });
+    if count != 5 { return 4; }
+
+    match first(v.iter()) {
+        Some(x) => { if *x != 1 { return 5; } },
+        None => { return 6; },
+    }
+    return doubled + 22;
+}

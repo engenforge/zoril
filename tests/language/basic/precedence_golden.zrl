@@ -1,0 +1,32 @@
+// expected exit code: 0
+// Golden test for operator precedence (Rust-style ordering):
+//   * / % %*  >  + - +% -%  >  << >>  >  &  >  ^  >  |  >  comparisons  >  &&  >  ||
+// Comparisons are non-associative; assignment is a statement.
+// If the parser's precedence table drifts, one of these asserts fails.
+
+fn main() -> i32 {
+    // multiplication over addition
+    if 2 + 3 * 4 != 14 { return 1; }
+    // addition binds tighter than shifts
+    if 1 << 2 + 1 != 8 { return 2; }
+    if 16 >> 1 + 1 != 4 { return 3; }
+    // shifts bind tighter than &
+    if 0xF0 & 1 << 4 != 16 { return 4; }
+    // & > ^ > |
+    if 4 | 2 ^ 3 & 1 != 7 { return 5; }
+    if 1 ^ 2 & 2 != 3 { return 6; }
+    // bitwise binds tighter than comparisons (the big change from C-style)
+    let x = 5;
+    if x & 1 != 1 { return 7; }        // parses as (x & 1) != 1 -> false
+    let is_odd = x & 1 == 1;           // (x & 1) == 1
+    if !is_odd { return 8; }
+    if x | 2 != 7 { return 9; }        // (x | 2) != 7 -> false
+    // comparisons bind tighter than &&/||
+    if 1 < 2 && 3 < 4 {} else { return 10; }
+    let b = 2 > 1 || 1 > 2;
+    if !b { return 11; }
+    // unary and cast still above everything
+    if -2 * 3 != -6 { return 12; }
+    if 10 as u8 + 5 != 15 { return 13; }
+    return 0;
+}

@@ -1,0 +1,18 @@
+// expected exit 0
+// The same repeat forms with a Copy struct element: the unrolled short form must copy the value
+// per element, and the long form (`ArrayRepeat`) must do the same.
+struct P { x: u64 }
+
+fn main() -> i32 {
+    let v = P { x: 7 };
+    let a1: [P; 1] = [v; 1];
+    let a3: [P; 3] = [v; 3];
+    let a64: [P; 64] = [v; 64];
+    let a65: [P; 65] = [v; 65];
+    if a1[0].x != 7 { return 1; }
+    if a3[0].x != 7 { return 2; }
+    if a3[2].x != 7 { return 3; }
+    if a64[63].x != 7 { return 4; }
+    if a65[64].x != 7 { return 5; }
+    return 0;
+}

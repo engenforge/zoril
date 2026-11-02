@@ -1,0 +1,70 @@
+// Layout twin for tests/layout/include/layout.c, driven by scripts/test_struct_layout.sh (not a stand-alone test).
+// Prints sizeof, alignof and field offsets of structs whose C twins (layout.c) print the same lines:
+// scripts/test_struct_layout.sh compares the two outputs byte for byte.
+
+import "io.zrl";
+import "string.zrl";
+import "mem.zrl";
+use io::print;
+use string::String;
+use mem::Arena;
+
+struct A { a: u8, b: i32, c: f64, d: *u8 }
+struct B { x: u8, y: u16, z: u8 }
+struct C { a: A, t: u8 }
+struct D { p: u64, q: u8 }
+struct F { c: u8, d: u8, e: u8 }
+struct G { f: f32, h: bool, i: i64 }
+struct H { n: i16, m: i64, k: i16 }
+struct Arr { a: [u8; 5], b: u32 }
+struct ArrS { a: [B; 2], t: u8 }
+struct Empty {}
+struct Zst { a: u8, e: Empty, b: u32 }
+
+fn off<T, U>(base: &T, field: &U) -> usize {
+    return (field as *U as usize) - (base as *T as usize);
+}
+
+fn emit(name: [u8], size: usize, align: usize, o0: usize, o1: usize, o2: usize, o3: usize) {
+    let arena = Arena.new(4096).unwrap();
+    let mut s = String.new_in(&arena);
+    s.push_str(name);
+    s.push_str(" ");
+    s.push_u64(size as u64);
+    s.push_str(" ");
+    s.push_u64(align as u64);
+    s.push_str(" ");
+    s.push_u64(o0 as u64);
+    s.push_str(" ");
+    s.push_u64(o1 as u64);
+    s.push_str(" ");
+    s.push_u64(o2 as u64);
+    s.push_str(" ");
+    s.push_u64(o3 as u64);
+    s.push_str("\n");
+    print(s.as_slice());
+}
+
+fn main() -> i32 {
+    let a = A { a: 1, b: 2, c: 3.0, d: 0 as *u8 };
+    emit("A", sizeof(A), alignof(A), off(&a, &a.a), off(&a, &a.b), off(&a, &a.c), off(&a, &a.d));
+    let b = B { x: 1, y: 2, z: 3 };
+    emit("B", sizeof(B), alignof(B), off(&b, &b.x), off(&b, &b.y), off(&b, &b.z), 0);
+    let c = C { a: a, t: 4 };
+    emit("C", sizeof(C), alignof(C), off(&c, &c.a), off(&c, &c.t), 0, 0);
+    let d = D { p: 1, q: 2 };
+    emit("D", sizeof(D), alignof(D), off(&d, &d.p), off(&d, &d.q), 0, 0);
+    let f = F { c: 1, d: 2, e: 3 };
+    emit("F", sizeof(F), alignof(F), off(&f, &f.c), off(&f, &f.d), off(&f, &f.e), 0);
+    let g = G { f: 1.0, h: true, i: 2 };
+    emit("G", sizeof(G), alignof(G), off(&g, &g.f), off(&g, &g.h), off(&g, &g.i), 0);
+    let h = H { n: 1, m: 2, k: 3 };
+    emit("H", sizeof(H), alignof(H), off(&h, &h.n), off(&h, &h.m), off(&h, &h.k), 0);
+    let arr = Arr { a: [1, 2, 3, 4, 5], b: 6 };
+    emit("Arr", sizeof(Arr), alignof(Arr), off(&arr, &arr.a), off(&arr, &arr.b), 0, 0);
+    let arrs = ArrS { a: [B { x: 1, y: 2, z: 3 }, B { x: 4, y: 5, z: 6 }], t: 7 };
+    emit("ArrS", sizeof(ArrS), alignof(ArrS), off(&arrs, &arrs.a), off(&arrs, &arrs.t), 0, 0);
+    let zst = Zst { a: 1, e: Empty {}, b: 2 };
+    emit("Zst", sizeof(Zst), alignof(Zst), off(&zst, &zst.a), off(&zst, &zst.b), 0, 0);
+    return 0;
+}

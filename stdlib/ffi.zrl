@@ -1,0 +1,49 @@
+// C type aliases and helpers for calling C
+
+// The names C code uses for its types, as aliases with the widths of x86_64 Linux. Spell a C
+// signature with these rather than `i8` or `i64`: `char` is unsigned on aarch64 Linux and `long`
+// is 32 bits on 64-bit Windows, so a port changes the aliases here and leaves the caller's code
+// alone.
+
+// C `char` (signed on x86_64 Linux).
+pub type c_char = i8;
+// C `signed char`.
+pub type c_schar = i8;
+// C `unsigned char`.
+pub type c_uchar = u8;
+// C `short`.
+pub type c_short = i16;
+// C `unsigned short`.
+pub type c_ushort = u16;
+// C `int`.
+pub type c_int = i32;
+// C `unsigned int`.
+pub type c_uint = u32;
+// C `long`.
+pub type c_long = i64;
+// C `unsigned long`.
+pub type c_ulong = u64;
+// C `long long`.
+pub type c_longlong = i64;
+// C `unsigned long long`.
+pub type c_ulonglong = u64;
+// C `size_t`.
+pub type c_size_t = usize;
+// C `float`.
+pub type c_float = f32;
+// C `double`.
+pub type c_double = f64;
+
+// Counts the bytes before the first NUL of a C string.
+//
+// CALLER OBLIGATION: `p` must point at a NUL-terminated sequence of bytes, all readable up to and
+// including the NUL.
+pub unsafe fn cstr_len(p: *u8) -> usize {
+    let mut n = 0 as usize;
+    // The caller promised a readable, NUL-terminated sequence, so every byte read here lies before
+    // or on the terminator; an `unsafe fn` body is already an unsafe context.
+    while *((p as usize + n) as *u8) != 0 as u8 {
+        n = n + 1 as usize;
+    }
+    return n;
+}

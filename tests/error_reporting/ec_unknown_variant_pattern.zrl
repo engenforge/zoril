@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/ec_unknown_variant_pattern.zrl:6:15: error: no variant or associated constant `Nope` in `K`
+enum K { A, B }
+fn main() -> i32 {
+    let k = K.B;
+    match k { K.Nope => { return 2; }, _ => { return 3; } }
+}

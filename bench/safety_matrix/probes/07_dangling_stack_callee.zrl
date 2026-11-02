@@ -1,0 +1,15 @@
+// name: Dangling stack ptr — via callee
+// expected: compile_reject
+// stash's result may point into its pointer argument (its signature ties them), so passing
+// it a stack address makes the result one. A known gap until 2026-10-03.
+struct S { a: i32 }
+fn stash(p: *mut S) -> *mut S { return p; }
+fn leak() -> *mut S {
+    let mut s = S { a: 42 };
+    return stash(&mut s);
+}
+fn main() -> i32 {
+    let p = leak();
+    if (*p).a != 42 { return 1; }
+    return 0;
+}

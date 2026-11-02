@@ -1,0 +1,17 @@
+// expected compile fail
+// flags: --interproc-summary
+// EXPECT: error: region escape: returning a pointer to local stack storage
+// Cross-module test: callee returns local stack pointer (ret_stack=true in ret_stack_lib.zri).
+// Caller propagates stack taint from callee return value to its own return value.
+import "ret_stack_lib.zrl";
+use ret_stack_lib::get_dangling;
+
+fn forward_dangle() -> *mut i32 {
+    let p = get_dangling();
+    return p;
+}
+
+fn main() -> i32 {
+    let p = forward_dangle();
+    return 0;
+}

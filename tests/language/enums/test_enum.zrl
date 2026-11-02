@@ -1,0 +1,137 @@
+import "test_enum_helper.zrl";
+use test_enum_helper::{Dummy, get_int, get_target};
+
+// --- repro_enum_large_main ---
+fn test_enum_large() -> i32 {
+    let t = get_target(42);
+    match t {
+        Large.Target(v) => {
+            if v != 42 {
+                return 1;
+            } else {
+                // success
+            }
+        },
+        _ => { return 2; },
+    };
+    
+    let i = get_int(1234567890123);
+    match i {
+        Large.Int(v) => {
+            if v != 1234567890123 {
+                return 3;
+            } else {
+                // success
+            }
+        },
+        _ => { return 4; },
+    };
+    
+    return 0;
+}
+
+// --- repro_enum_method_main ---
+fn test_enum_method() -> i32 {
+    let mut d = Dummy {};
+    let l = d.get_v1();
+    match l {
+        Large.V1 => { return 0; },
+        Large.Eof => { return 99; },
+        _ => { return 1; },
+    };
+}
+
+// --- repro_enum_return ---
+enum TokenReturn { String(u32), Other }
+fn test_match_return(t: TokenReturn) -> u32 {
+    match t {
+        TokenReturn.String(id) => { return id; },
+        _ => { return 0; }
+    }
+}
+fn test_repro_enum_return() -> i32 {
+    if test_match_return(TokenReturn.String(42)) != 42 { return 1; }
+    return 0;
+}
+
+// --- repro_enum_syntax ---
+enum EnumSyntax {
+    Variant(u32),
+}
+fn test_repro_enum_syntax() -> i32 {
+    let e = EnumSyntax.Variant(10u32);
+    return 0;
+}
+
+// --- repro_enum_unresolved ---
+enum EnumUnresolved { A, B }
+fn take_enum_unresolved(e: EnumUnresolved) -> i32 {
+    return 0;
+}
+fn test_repro_enum_unresolved() -> i32 {
+    return take_enum_unresolved(EnumUnresolved.A);
+}
+
+// --- repro_enum_wildcard_ptr ---
+pub enum EnumWildcard {
+    Bare,
+    Payload(u32),
+}
+
+impl EnumWildcard {
+    pub fn is_bare(self: &EnumWildcard) -> bool {
+        return match *self {
+            EnumWildcard.Bare => true,
+            _ => false,
+        };
+    }
+}
+
+fn test_repro_enum_wildcard_ptr() -> i32 {
+    let e = EnumWildcard.Payload(42);
+    if e.is_bare() { return 1; }
+    return 0;
+}
+
+// --- test_ast_enum ---
+enum Literal {
+    Int(u64),
+    Float(f64),
+    Bool(bool),
+    String([u8]),
+    Char(u8),
+}
+
+// --- test_enum_generic_simple ---
+enum Wrap<T> {
+    A(T),
+    B,
+}
+
+fn test_enum_generic() -> i32 {
+    let x = Wrap.A(10);
+    let y = Wrap::<i32>.A(10);
+    return 0;
+}
+
+// --- test_simple_enum_2 ---
+enum FooSimple { Bar(i32) }
+
+fn main() -> i32 {
+    if test_enum_large() != 0 { return 1; }
+    if test_enum_method() != 0 { return 2; }
+    if test_repro_enum_return() != 0 { return 3; }
+    if test_repro_enum_syntax() != 0 { return 4; }
+    if test_repro_enum_unresolved() != 0 { return 5; }
+    if test_repro_enum_wildcard_ptr() != 0 { return 6; }
+    if test_enum_generic() != 0 { return 7; }
+    
+    // Check Literal enum (just ensuring it compiles)
+    let lit_int = Literal.Int(42 as u64);
+    let lit_float = Literal.Float(3.14);
+    
+    // Check FooSimple
+    let foo = FooSimple.Bar(42);
+
+    return 0;
+}

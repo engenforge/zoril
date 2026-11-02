@@ -1,0 +1,68 @@
+// expected exit 0
+struct NonCopy { x: i32 }
+
+impl NonCopy {
+    fn drop(self) {}
+}
+
+fn test_never_coercion(c: bool) -> i32 {
+    let x: i32 = if c {
+        42
+    } else {
+        return 0; // Coerces never (!) to i32
+    };
+    return x;
+}
+
+fn test_match_never(c: i32) -> i32 {
+    let x = match c {
+        1 => 10,
+        2 => return 20,
+        _ => {
+            if c > 10 {
+                30
+            } else {
+                return 40;
+            }
+        }
+    };
+    return x;
+}
+
+fn test_ownership_divergence(c: bool) {
+    let n = NonCopy { x: 1 };
+    if c {
+        n.drop();
+    } else {
+        return; // n is NOT dropped here yet, but it should be dropped by defer or implicit drop
+    }
+    // if c was true, n is moved. If c was false, we returned.
+}
+
+fn test_move_in_one_arm(c: bool) -> i32 {
+    let n = NonCopy { x: 100 };
+    if c {
+        let v = n.x;
+        n.drop();
+        return v;
+    } else {
+        let v = n.x;
+        n.drop();
+        return v + 200;
+    }
+}
+
+pub fn main() -> i32 {
+    if test_never_coercion(true) != 42 { return 1; }
+    if test_never_coercion(false) != 0 { return 2; }
+
+    if test_match_never(1) != 10 { return 3; }
+    if test_match_never(2) != 20 { return 4; }
+    if test_match_never(11) != 30 { return 5; }
+    if test_match_never(0) != 40 { return 6; }
+
+    if test_move_in_one_arm(true) != 100 { return 7; }
+    if test_move_in_one_arm(false) != 300 { return 8; }
+
+    return 0;
+}

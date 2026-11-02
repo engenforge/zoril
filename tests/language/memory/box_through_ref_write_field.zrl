@@ -1,0 +1,14 @@
+// A field read or write through a reference to a Box reaches the boxed value, not the Box's own slot.
+struct Point { x: i64, y: i64 }
+
+fn set(p: &mut Box<Point>, v: i64) {
+    p.y = v;
+}
+
+fn main() -> i32 {
+    let mut b = box Point { x: 20, y: 22 };
+    set(&mut b, 99 as i64);
+    if b.y != 99 { return 1; }
+    if b.x != 20 { return 2; }
+    return 0;
+}

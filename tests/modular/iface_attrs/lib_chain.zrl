@@ -1,0 +1,16 @@
+// A public generic body reaches a private item through a private generic helper (A7.7): the
+// helper's body is written into the interface and instantiated in the importer, so what the
+// helper names must be linkable and in the interface as well.
+static mut CH_S: i32 = 10;
+fn ch_leaf() -> i32 { return CH_S; }
+fn ch_mid<T>(x: T) -> i32 { CH_S = CH_S + 0; return ch_leaf(); }
+pub fn ch_pub<T>(x: T) -> i32 { return ch_mid::<T>(x); }
+
+static mut CH_M: i32 = 20;
+fn ch_leaf2() -> i32 { return CH_M; }
+pub struct ChG<T> { pub v: T }
+impl<T> ChG<T> {
+    fn priv_get(self: &ChG<T>) -> i32 { CH_M = CH_M + 0; return ch_leaf2(); }
+    fn priv_get2(self: &ChG<T>) -> i32 { return self.priv_get(); }
+    pub fn pub_get(self: &ChG<T>) -> i32 { return self.priv_get2(); }
+}

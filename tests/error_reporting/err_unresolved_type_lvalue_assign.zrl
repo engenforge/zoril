@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_unresolved_type_lvalue_assign.zrl:4:16: error: unknown type `UnknownType`
+fn foo() {
+    let mut x: UnknownType = 0;
+    x = 1;
+}

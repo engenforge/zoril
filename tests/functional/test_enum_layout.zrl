@@ -1,0 +1,17 @@
+// expected exit 0
+import "io.zrl";
+
+// Per ABI Spec Section 3.2, tags are always u32 (4 bytes).
+enum SmallEnum { A, B } // Tag u32 (4). Size = 4.
+enum U8Enum { A(u8), B(u8) } // Tag u32 (4) + payload (1). Align 4. Size = 8.
+enum U16Enum { A(u16), B(u16) } // Tag u32 (4) + payload (2). Align 4. Size = 8.
+enum U32Enum { A(u32), B(u32) } // Tag u32 (4) + payload (4). Align 4. Size = 8.
+
+fn main() -> i32 {
+    if sizeof(SmallEnum) != 4 { return 1; }
+    if sizeof(U8Enum) != 8 { return 2; }
+    if sizeof(U16Enum) != 8 { return 3; }
+    if sizeof(U32Enum) != 8 { return 4; }
+    
+    return 0;
+}

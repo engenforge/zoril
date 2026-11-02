@@ -1,0 +1,4 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_extern_unknown_abi.zrl:3:8: error: unknown ABI: only "C" is supported
+extern "Rust" fn f(a: i32) -> i32;
+fn main() -> i32 { return 0; }

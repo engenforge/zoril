@@ -1,0 +1,1042 @@
+// Textual ZIL pretty-printer: renders an in-memory ILModule as ZIL source text
+// per the grammar in doc/spec/intermediate_language.md (v0.1.2).
+//
+// The in-memory ILModule is shared with the QBE backend and is a strict superset of the spec'd ZIL
+// instruction set: it carries extra opcodes (neg, not, borrow, cast, struct_construct,
+// tuple_construct, param, likely, unlikely, getenv, end_borrow, release) with no textual ZIL
+// equivalent, and represents some spec opcodes (variant_match, is_some) in their lowered
+// value-producing form rather than the spec's branch/terminator form. Those print as their natural
+// lowercase opcode names, readable extensions beyond the v0.1.2 grammar. Regions are erased after
+// verification, so a pointer/slice *type* has none and 'local prints as the placeholder; only
+// `alloc`/`region_cast`, which carry an explicit Region operand, print their true region.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "il_instr.zrl";
+import "il_type.zrl";
+import "il_cfg.zrl";
+import "intern.zrl";
+import "bytevec.zrl";
+import "io.zrl";
+use il_cfg::{ILFunction, ILGlobal, ILModule, canonical_module_stem, is_unmangled_symbol_name};
+use il_instr::{AllocInstr, BlockId, CallInstr, ILBinaryOp, ILInstr, IL_INSTR_ARRAY_STORE, IL_INSTR_BOUNDS_CHECK, IL_INSTR_BRANCH, IL_INSTR_DROP, IL_INSTR_FDCLOSE, IL_INSTR_IORING_CLOSE, IL_INSTR_JMP, IL_INSTR_RET, IL_INSTR_SLICE_STORE, IL_INSTR_STORE, IL_INSTR_UNREACHABLE, NO_SSA, PhiInstr, SSAId, SyscallInstr};
+use il_type::{FDCap, ILPRIM_BOOL, ILPRIM_CHAR, ILPRIM_F32, ILPRIM_F64, ILPRIM_I16, ILPRIM_I32, ILPRIM_I64, ILPRIM_I8, ILPRIM_ISIZE, ILPRIM_NEVER, ILPRIM_U16, ILPRIM_U32, ILPRIM_U64, ILPRIM_U8, ILPRIM_UNIT, ILPRIM_USIZE, ILPrimitive, ILTypeDef, Region};
+use intern::InternTable;
+use io::{Fd, write_all};
+use bytevec::ByteVec;
+use mem_raw::{memcpy, zoril_allocator_alloc};
+
+// Ring of one fixed 64 KB output buffer per printer. zil_write appends into it and
+// only flushes (a single write syscall) when the buffer is full or on emit_module
+// end. The emitter issues ~1M tiny writes for a self-compile; batching them turns
+// that into ~150 syscalls. The buffer lives in the module arena so it needs no
+// separate lifetime management.
+pub struct WriteBuf {
+    pub ptr: *mut u8,
+    pub len: usize,
+    pub cap: usize,
+}
+
+pub struct ZilPrinter {
+    pub fd: Fd,
+    pub module: &mut ILModule,
+    pub intern_table: &mut InternTable,
+    pub current_func: *mut ILFunction,
+    pub wbuf: *mut WriteBuf,
+    pub compile_only: bool,
+    pub target_source_file: u32,
+    pub module_name: [u8],
+    pub entry_path: [u8], // module path for functions without a source file (synthesized)
+    // Whether a `fn(..)` type is the front end's function value, two words written as the tuple
+    // of its code pointer and environment; otherwise it is ZIL's one-word code pointer (a
+    // module read from ZIL text).
+    pub fn_values: bool,
+}
+
+impl ZilPrinter {
+    pub fn new(module: &mut ILModule, intern_table: &mut InternTable, fd: Fd) -> ZilPrinter {
+        let wb = unsafe { zoril_allocator_alloc(module.arena, sizeof(WriteBuf)) } as *mut WriteBuf;
+        unsafe {
+            *wb = WriteBuf {
+                ptr: zoril_allocator_alloc(module.arena, 65536 as u64) as *mut u8,
+                len: 0 as usize,
+                cap: 65536 as usize,
+            };
+        }
+        return ZilPrinter {
+            fd: fd,
+            module: module,
+            intern_table: intern_table,
+            current_func: 0 as *mut ILFunction,
+            wbuf: wb,
+            compile_only: false,
+            target_source_file: 0 as u32,
+            module_name: unsafe { @slice(0 as *u8, 0 as usize) },
+            entry_path: unsafe { @slice(0 as *u8, 0 as usize) },
+            fn_values: false,
+        };
+    }
+
+    // Callers null-check `current_func` first; this is the single forge.
+    fn cur_func(self: &ZilPrinter) -> &ILFunction {
+        return unsafe { &*self.current_func };
+    }
+
+    fn get_ssa_type(self: &ZilPrinter, ssa: SSAId) -> u32 {
+        if self.current_func as usize == 0 as usize { return 0 as u32; }
+        return self.cur_func().get_ssa_type(ssa);
+    }
+
+    fn write_dec(self: &ZilPrinter, v: u64) {
+        if v == 0 as u64 {
+            self.append("0");
+            return;
+        }
+        let mut buf = [
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8
+        ];
+        let mut temp = v;
+        let mut i = 20 as usize;
+        while temp > 0 as u64 {
+            i = i - 1 as usize;
+            buf[i] = ((temp % 10 as u64) + 48 as u64) as u8;
+            temp = temp / 10 as u64;
+        }
+        // A stack array has no safe array-to-slice spelling yet, so the view over
+        // the digits written above is forged here; `i` is always in 0..20.
+        self.append(unsafe { @slice(&buf[i] as *u8, (20 as usize - i)) } as [u8]);
+    }
+
+    // --- Types ---
+
+    fn emit_primitive(self: &ZilPrinter, p: ILPrimitive) {
+        let tag = p.get_tag();
+        let s = match tag {
+            ILPRIM_U8 => "u8",
+            ILPRIM_U16 => "u16",
+            ILPRIM_U32 => "u32",
+            ILPRIM_U64 => "u64",
+            ILPRIM_USIZE => "usize",
+            ILPRIM_I8 => "i8",
+            ILPRIM_I16 => "i16",
+            ILPRIM_I32 => "i32",
+            ILPRIM_I64 => "i64",
+            ILPRIM_ISIZE => "isize",
+            ILPRIM_F32 => "f32",
+            ILPRIM_F64 => "f64",
+            ILPRIM_BOOL => "bool",
+            ILPRIM_CHAR => "char",
+            ILPRIM_UNIT => "unit",
+            ILPRIM_NEVER => "never",
+            _ => "?",
+        };
+        self.zil_write(s);
+    }
+
+    fn emit_fd_cap(self: &ZilPrinter, cap: FDCap) {
+        match cap {
+            FDCap.R => { self.zil_write("fd<r>"); },
+            FDCap.W => { self.zil_write("fd<w>"); },
+            FDCap.RW => { self.zil_write("fd<rw>"); },
+        }
+    }
+
+    fn emit_type(self: &ZilPrinter, ty_id: u32) {
+        if ty_id == 0 as u32 {
+            self.zil_write("unit");
+            return;
+        }
+        if ty_id as usize > self.module.types.len() {
+            self.zil_write("?");
+            return;
+        }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        match p_ty.def {
+            ILType.Primitive(p) => { self.emit_primitive(p); },
+            ILType.Ptr(inner) => {
+                self.zil_write("Ptr<");
+                self.emit_type(inner);
+                self.zil_write(", 'local>");
+            },
+            ILType.PtrMut(inner) => {
+                self.zil_write("PtrMut<");
+                self.emit_type(inner);
+                self.zil_write(", 'local>");
+            },
+            // Phase D's raw pointers: the IL text says which one it means, so `tools/zilc` can read
+            // it back (its parser takes the same four spellings) even though the lowering does not
+            // build these two tags yet.
+            ILType.RawPtr(inner) => {
+                self.zil_write("RawPtr<");
+                self.emit_type(inner);
+                self.zil_write(", 'local>");
+            },
+            ILType.RawPtrMut(inner) => {
+                self.zil_write("RawPtrMut<");
+                self.emit_type(inner);
+                self.zil_write(", 'local>");
+            },
+            ILType.Boxed(inner) => {
+                self.zil_write("Box<");
+                self.emit_type(inner);
+                self.zil_write(">");
+            },
+            ILType.BoxedMut(inner) => {
+                self.zil_write("BoxMut<");
+                self.emit_type(inner);
+                self.zil_write(">");
+            },
+            ILType.Slice(s) => {
+                self.zil_write("Slice<");
+                self.emit_type(s.element);
+                self.zil_write(", 'local>");
+            },
+            ILType.Array(a) => {
+                self.zil_write("[");
+                self.emit_type(a.element);
+                self.zil_write("; ");
+                self.write_dec(a.size as u64);
+                self.zil_write("]");
+            },
+            // A function value is two words, written as the tuple of its code pointer (ZIL's
+            // `fn(..)`, one word) and its environment (fn_values).
+            ILType.Fn(f) => {
+                if self.fn_values { self.zil_write("("); }
+                self.zil_write("fn(");
+                let mut i = 0 as usize;
+                while i < f.params.len {
+                    if i > 0 as usize { self.zil_write(", "); }
+                    self.emit_type(f.params[i]);
+                    i = i + 1 as usize;
+                }
+                if f.is_variadic {
+                    if f.params.len > 0 as usize { self.zil_write(", "); }
+                    self.zil_write("...");
+                }
+                self.zil_write(") -> ");
+                self.emit_type(f.ret_ty);
+                if self.fn_values { self.zil_write(", Ptr<unit, 'local>)"); }
+            },
+            ILType.Tuple(types) => {
+                self.zil_write("(");
+                let mut i = 0 as usize;
+                while i < types.len {
+                    if i > 0 as usize { self.zil_write(", "); }
+                    self.emit_type(types[i]);
+                    i = i + 1 as usize;
+                }
+                if types.len == 1 as usize { self.zil_write(","); }
+                self.zil_write(")");
+            },
+            ILType.FD(cap) => { self.emit_fd_cap(cap); },
+            ILType.IORing => { self.zil_write("async_context"); },
+            ILType.User(u) => {
+                self.zil_write("T");
+                self.write_dec(u.id as u64);
+                if u.type_args.len > 0 as usize {
+                    self.zil_write("<");
+                    let mut i = 0 as usize;
+                    while i < u.type_args.len {
+                        if i > 0 as usize { self.zil_write(", "); }
+                        self.emit_type(u.type_args[i]);
+                        i = i + 1 as usize;
+                    }
+                    self.zil_write(">");
+                }
+            },
+            ILType.Var(v) => {
+                let name = self.intern_table.lookup(v.name);
+                if name.len > 0 as usize { self.zil_write(name); } else { self.zil_write("var"); }
+            },
+        }
+    }
+
+    // --- Regions ---
+
+    fn emit_region(self: &ZilPrinter, region: &Region) {
+        match *region {
+            Region.Static => { self.zil_write("static"); },
+            Region.Local => { self.zil_write("local"); },
+            Region.Heap => { self.zil_write("heap"); },
+            Region.Custom(name) => { self.zil_write(name); },
+        }
+    }
+
+    // --- Floats ---
+
+    fn emit_f64(self: &ZilPrinter, bits: u64) {
+        // Emit IEEE 754 bit pattern as decimal integer for exact round-trip via
+        // the ZIL parser's parse_uint() + f64_from_bits() path.
+        self.write_dec(bits);
+    }
+
+    // --- Strings ---
+
+    fn emit_hex_byte(self: &ZilPrinter, b: u8) {
+        let hex = "0123456789abcdef";
+        let hi = (b >> 4 as u8) & (15 as u8);
+        let lo = b & (15 as u8);
+        self.zil_write(subslice(hex, hi as usize, 1 as usize));
+        self.zil_write(subslice(hex, lo as usize, 1 as usize));
+    }
+
+    fn emit_escaped_string(self: &ZilPrinter, s: [u8]) {
+        self.zil_write("\"");
+        let mut i = 0 as usize;
+        while i < s.len {
+            let c = s[i];
+            if c == '\n' as u8 {
+                self.zil_write("\\n");
+            } else if c == '\r' as u8 {
+                self.zil_write("\\r");
+            } else if c == '\t' as u8 {
+                self.zil_write("\\t");
+            } else if c == '"' as u8 {
+                self.zil_write("\\\"");
+            } else if c == '\\' as u8 {
+                self.zil_write("\\\\");
+            } else if is_printable_ascii(c) == false {
+                self.zil_write("\\x");
+                self.emit_hex_byte(c);
+            } else {
+                self.zil_write(subslice(s, i, 1 as usize));
+            }
+            i = i + 1 as usize;
+        }
+        self.zil_write("\"");
+    }
+
+    // --- SSA / blocks / globals / functions ---
+
+    // Mirrors QBEEmitter.emit_ssa's name-hint handling: prefer the source-level
+    // name recorded in ILFunction.ssa_names when present, falling back to a
+    // bare numeric id. The numeric suffix is always retained so the textual
+    // form remains unambiguous and round-trips to the same SSA id.
+    fn emit_ssa(self: &ZilPrinter, id: SSAId) {
+        let name = self.cur_func().get_ssa_name(id);
+        if name != 0 as u32 {
+            self.zil_write("v");
+            self.zil_write(self.intern_table.lookup(name));
+            self.zil_write("_");
+            self.write_dec(id as u64);
+        } else {
+            self.zil_write("v");
+            self.write_dec(id as u64);
+        }
+    }
+
+    // Mirrors QBEEmitter.emit_block_label: prefer the block's recorded label
+    // hint, falling back to a bare numeric id.
+    fn emit_block_ref(self: &ZilPrinter, id: BlockId) {
+        let p_block = &self.module.blocks[id as usize];
+        let name = p_block.name;
+        if name != 0 as u32 {
+            self.zil_write("@");
+            self.zil_write(self.intern_table.lookup(name));
+            self.zil_write("_");
+            self.write_dec(id as u64);
+        } else {
+            self.zil_write("@b");
+            self.write_dec(id as u64);
+        }
+    }
+
+    // Opcodes whose ILInstr carries no SSA result slot (pure statements/
+    // terminators) are written as bare statements with no "vN: T =" prefix.
+    // Note that `variant_match` is NOT in this set: the builder types it as
+    // `bool` and its result is consumed directly by a following `branch`, so
+    // it must be declared like any other value-producing instruction.
+    fn is_void_opcode(self: &ZilPrinter, tag: u32) -> bool {
+        return tag == IL_INSTR_STORE
+            || tag == IL_INSTR_DROP
+            || tag == IL_INSTR_BOUNDS_CHECK
+            || tag == IL_INSTR_SLICE_STORE
+            || tag == IL_INSTR_ARRAY_STORE
+            || tag == IL_INSTR_RET
+            || tag == IL_INSTR_BRANCH
+            || tag == IL_INSTR_JMP
+            || tag == IL_INSTR_UNREACHABLE
+            || tag == IL_INSTR_FDCLOSE
+            || tag == IL_INSTR_IORING_CLOSE;
+    }
+
+    // Emits "vN: T = " for value-producing instructions, nothing for void/terminator forms.
+    fn emit_result_decl(self: &ZilPrinter, ssa: SSAId, tag: u32) {
+        if self.is_void_opcode(tag) { return; }
+        let res_ty = self.get_ssa_type(ssa);
+        self.emit_ssa(ssa);
+        self.zil_write(": ");
+        self.emit_type(res_ty);
+        self.zil_write(" = ");
+    }
+
+    fn emit_args(self: &ZilPrinter, args: [SSAId]) {
+        let mut i = 0 as usize;
+        while i < args.len {
+            if i > 0 as usize { self.zil_write(", "); }
+            self.emit_ssa(args[i]);
+            i = i + 1 as usize;
+        }
+    }
+
+    fn emit_binop(self: &ZilPrinter, name: [u8], b: &ILBinaryOp) {
+        self.zil_write(name);
+        self.zil_write(" ");
+        self.emit_ssa(b.lhs);
+        self.zil_write(", ");
+        self.emit_ssa(b.rhs);
+    }
+
+    // NAME A, B.
+    fn emit_op2(self: &mut ZilPrinter, name: [u8], a: SSAId, b: SSAId) {
+        self.emit_unop(name, a);
+        self.zil_write(", ");
+        self.emit_ssa(b);
+    }
+
+    // NAME A, B, C.
+    fn emit_op3(self: &mut ZilPrinter, name: [u8], a: SSAId, b: SSAId, c: SSAId) {
+        self.emit_op2(name, a, b);
+        self.zil_write(", ");
+        self.emit_ssa(c);
+    }
+
+    fn emit_unop(self: &ZilPrinter, name: [u8], val: SSAId) {
+        self.zil_write(name);
+        self.zil_write(" ");
+        self.emit_ssa(val);
+    }
+
+    fn emit_instruction(self: &mut ZilPrinter, ssa: SSAId, instr: ILInstr) {
+        self.emit_result_decl(ssa, instr.get_tag());
+
+        match instr {
+            ILInstr.Add(b) => { self.emit_binop("add", &b); },
+            ILInstr.Sub(b) => { self.emit_binop("sub", &b); },
+            ILInstr.Mul(b) => { self.emit_binop("mul", &b); },
+            ILInstr.Div(b) => { self.emit_binop("div", &b); },
+            ILInstr.Rem(b) => { self.emit_binop("rem", &b); },
+            ILInstr.Neg(v) => { self.emit_unop("neg", v); },
+            ILInstr.Not(v) => { self.emit_unop("not", v); },
+            ILInstr.And(b) => { self.emit_binop("and", &b); },
+            ILInstr.Or(b) => { self.emit_binop("or", &b); },
+            ILInstr.Xor(b) => { self.emit_binop("xor", &b); },
+            ILInstr.Shl(b) => { self.emit_binop("shl", &b); },
+            ILInstr.Shr(b) => { self.emit_binop("shr", &b); },
+            ILInstr.CmpLt(b) => { self.emit_binop("cmp_lt", &b); },
+            ILInstr.CmpLe(b) => { self.emit_binop("cmp_le", &b); },
+            ILInstr.CmpGt(b) => { self.emit_binop("cmp_gt", &b); },
+            ILInstr.CmpGe(b) => { self.emit_binop("cmp_ge", &b); },
+            ILInstr.CmpEq(b) => { self.emit_binop("cmp_eq", &b); },
+            ILInstr.CmpNe(b) => { self.emit_binop("cmp_ne", &b); },
+            ILInstr.WrappingAdd(op) => { self.emit_binop("wrapping_add", &op); },
+            ILInstr.WrappingSub(op) => { self.emit_binop("wrapping_sub", &op); },
+            ILInstr.WrappingMul(op) => { self.emit_binop("wrapping_mul", &op); },
+            ILInstr.SaturatingAdd(op) => { self.emit_binop("saturating_add", &op); },
+            ILInstr.CheckedAdd(op) => { self.emit_binop("checked_add", &op); },
+            ILInstr.CheckedSub(op) => { self.emit_binop("checked_sub", &op); },
+            ILInstr.CheckedMul(op) => { self.emit_binop("checked_mul", &op); },
+
+            ILInstr.Alloc(a) => { self.emit_alloc(a); },
+            ILInstr.Load(v) => { self.emit_unop("load", v); },
+            ILInstr.Store(s) => { self.emit_op2("store", s.ptr, s.val); },
+            ILInstr.Drop(v) => { self.emit_unop("drop", v); },
+            ILInstr.BoundsCheck(b) => { self.emit_op2("bounds_check", b.idx, b.len); },
+            ILInstr.Move(v) => { self.emit_unop("move", v); },
+            ILInstr.Borrow(b) => {
+                if b.is_mut { self.zil_write("borrow_mut "); } else { self.zil_write("borrow "); }
+                self.emit_ssa(b.val);
+            },
+            ILInstr.RegionCast(r) => {
+                self.zil_write("region_cast '");
+                self.emit_region(&r.region);
+                self.zil_write(", ");
+                self.emit_ssa(r.val);
+            },
+            ILInstr.SliceLoad(s) => { self.emit_op2("slice_load", s.base, s.idx); },
+            ILInstr.SliceStore(s) => { self.emit_op3("slice_store", s.base, s.idx, s.val); },
+            ILInstr.SliceLen(v) => { self.emit_unop("slice_len", v); },
+            ILInstr.SliceConstruct(s) => { self.emit_op2("slice_construct", s.ptr, s.len); },
+            ILInstr.ArrayConstruct(args) => {
+                self.zil_write("array_construct ");
+                self.emit_args(args);
+            },
+            ILInstr.ArrayLoad(a) => { self.emit_op2("array_load", a.base, a.idx); },
+            ILInstr.ArrayStore(a) => { self.emit_op3("array_store", a.base, a.idx, a.val); },
+            ILInstr.IsSome(v) => { self.emit_unop("is_some", v); },
+            ILInstr.Unwrap(v) => { self.emit_unop("unwrap", v); },
+            ILInstr.VariantMatch(v) => {
+                self.zil_write("variant_match ");
+                self.emit_ssa(v.val);
+                self.zil_write(", ");
+                self.emit_type(v.type_id);
+                self.zil_write(", ");
+                self.write_dec(v.variant_idx as u64);
+            },
+            ILInstr.SumConstruct(s) => {
+                self.zil_write("sum_construct ");
+                self.emit_type(s.type_id);
+                self.zil_write(", ");
+                self.write_dec(s.variant_idx as u64);
+                self.zil_write(", ");
+                self.emit_ssa(s.payload);
+            },
+            ILInstr.Call(c) => { self.emit_call(c); },
+            ILInstr.CallPtr(c) => {
+                self.zil_write("call_ptr ");
+                self.emit_ssa(c.func_ptr);
+                self.zil_write("(");
+                self.emit_args(c.args);
+                self.zil_write(")");
+            },
+            ILInstr.Branch(b) => {
+                self.zil_write("branch ");
+                self.emit_ssa(b.cond);
+                self.zil_write(", ");
+                self.emit_block_ref(b.then_block);
+                self.zil_write(", ");
+                self.emit_block_ref(b.else_block);
+            },
+            ILInstr.Jmp(target) => {
+                self.zil_write("jump ");
+                self.emit_block_ref(target);
+            },
+            ILInstr.Const(c) => {
+                self.zil_write("const ");
+                match c.val {
+                    ConstValue.U64(v) => { self.write_dec(v); },
+                    ConstValue.F64(v) => { self.emit_f64(v); },
+                    ConstValue.Bool(v) => {
+                        if v != (0 as u64) {
+                            self.zil_write("true");
+                        } else {
+                            self.zil_write("false");
+                        }
+                    },
+                }
+            },
+            ILInstr.GlobalAddr(id) => {
+                self.zil_write("global_addr g");
+                self.write_dec(id as u64);
+            },
+            ILInstr.FuncAddr(id) => { self.zil_write("func_addr f"); self.write_dec(id as u64); },
+            ILInstr.FieldAddr(f) => {
+                self.zil_write("field_addr ");
+                self.emit_ssa(f.val);
+                self.zil_write(", ");
+                self.write_dec(f.field_idx as u64);
+            },
+            ILInstr.StructConstruct(s) => {
+                self.zil_write("struct_construct ");
+                self.emit_type(s.ty);
+                if s.fields.len > 0 as usize { self.zil_write(", "); }
+                self.emit_args(s.fields);
+            },
+            ILInstr.TupleConstruct(args) => {
+                self.zil_write("tuple_construct ");
+                self.emit_args(args);
+            },
+            ILInstr.StringConst(s) => {
+                self.zil_write("string_const ");
+                self.emit_escaped_string(s);
+            },
+            ILInstr.Syscall(s) => { self.emit_syscall(s); },
+            ILInstr.Phi(p) => { self.emit_phi(p); },
+            ILInstr.Ret(v) => {
+                if v == NO_SSA as u32 {
+                    self.zil_write("ret");
+                } else {
+                    self.emit_unop("ret", v);
+                }
+            },
+            ILInstr.Unreachable => { self.zil_write("unreachable"); },
+            ILInstr.GetEnv => { self.zil_write("getenv"); },
+            ILInstr.FDOpen(o) => {
+                self.zil_write("fd_open ");
+                self.emit_ssa(o.path);
+                self.zil_write(", ");
+                self.write_dec(o.flags);
+                self.zil_write(", ");
+                self.write_dec(o.mode);
+            },
+            ILInstr.FDClose(v) => { self.emit_unop("fd_close", v); },
+            ILInstr.FDRead(io) => { self.emit_op3("fd_read", io.fd, io.buf, io.count); },
+            ILInstr.FDWrite(io) => { self.emit_op3("fd_write", io.fd, io.buf, io.count); },
+            ILInstr.IORingSetup(v) => { self.emit_unop("async_setup", v); },
+            ILInstr.IORingEnter(r) => {
+                self.zil_write("async_enter ");
+                self.emit_ssa(r.ring);
+                self.zil_write(", ");
+                self.write_dec(r.to_submit as u64);
+                self.zil_write(", ");
+                self.write_dec(r.min_complete as u64);
+            },
+            ILInstr.IORingClose(v) => { self.emit_unop("async_close", v); },
+            ILInstr.Param(idx) => { self.zil_write("param "); self.write_dec(idx as u64); },
+            ILInstr.Likely(v) => { self.emit_unop("likely", v); },
+            ILInstr.Unlikely(v) => { self.emit_unop("unlikely", v); },
+            ILInstr.Cast(c) => { self.emit_unop("cast", c.val); },
+            ILInstr.EndBorrow(v) => { self.emit_unop("end_borrow", v); },
+            ILInstr.Release(v) => { self.emit_unop("release", v); },
+        }
+
+        self.zil_write("\n");
+    }
+
+    fn emit_alloc(self: &mut ZilPrinter, a: AllocInstr) {
+        self.zil_write("alloc '");
+        self.emit_region(&a.region);
+        self.zil_write(", ");
+        self.emit_type(a.ty);
+        if a.allocator != NO_SSA as u32 {
+            self.zil_write(", ");
+            self.emit_ssa(a.allocator);
+        }
+    }
+
+    fn emit_call(self: &mut ZilPrinter, c: CallInstr) {
+        self.zil_write("call ");
+        let p_func = self.module.callee(&c);
+        if p_func as usize != 0 as usize {
+            self.zil_write("f");
+            self.write_dec(unsafe { (*p_func).id } as u64);
+        } else {
+            self.zil_write(self.intern_table.lookup(c.name_id));
+        }
+        self.zil_write("(");
+        self.emit_args(c.args);
+        self.zil_write(")");
+    }
+
+    fn emit_syscall(self: &mut ZilPrinter, s: SyscallInstr) {
+        self.zil_write("syscall ");
+        self.emit_ssa(s.num);
+        let mut i = 0 as usize;
+        while i < s.args.len {
+            self.zil_write(", ");
+            self.emit_ssa(s.args[i]);
+            i = i + 1 as usize;
+        }
+    }
+
+    fn emit_phi(self: &mut ZilPrinter, p: PhiInstr) {
+        self.zil_write("phi [");
+        let mut i = 0 as usize;
+        while i < p.preds.len {
+            if i > 0 as usize { self.zil_write(", "); }
+            self.emit_block_ref(p.preds[i].block);
+            self.zil_write(": ");
+            self.emit_ssa(p.preds[i].val);
+            i = i + 1 as usize;
+        }
+        self.zil_write("]");
+    }
+
+    // Whether G is named by something other than its own `g<id>`: only then does a name follow it.
+    fn global_has_own_name(self: &ZilPrinter, g: &ILGlobal) -> bool {
+        let name = self.intern_table.lookup(g.name);
+        if name.len == 0 as usize { return false; }
+        if name[0] == 'g' as u8 {
+            let mut k = 1 as usize;
+            let mut nid = 0 as u64;
+            while k < name.len && name[k] >= '0' as u8 && name[k] <= '9' as u8 {
+                nid = nid * 10 as u64 + (name[k] - '0' as u8) as u64;
+                k = k + 1 as usize;
+            }
+            if k == name.len && nid == g.id as u64 { return false; }
+        }
+        return true;
+    }
+
+    // `-c` writes a global module-qualified ("a::util::COUNT"), as it does a function, so the
+    // module that defines it and one that imports it name one symbol (zilc mangles a name with
+    // `::` by its components, whatever the module header says).
+    fn write_global_name(self: &ZilPrinter, g: &ILGlobal) {
+        if self.compile_only && g.source_file != 0 as u32 {
+            let stem = canonical_module_stem(
+                self.module.arena,
+                self.intern_table.lookup(g.source_file)
+            );
+            if stem.len > 0 as usize {
+                self.zil_write(stem);
+                self.zil_write("::");
+            }
+        }
+        self.zil_write(self.intern_table.lookup(g.name));
+    }
+
+    // A global another module defines, which this one reads or writes: declared, not defined.
+    fn emit_extern_global(self: &ZilPrinter, g: &ILGlobal) {
+        self.zil_write("extern global g");
+        self.write_dec(g.id as u64);
+        self.zil_write(": ");
+        self.emit_type(g.ty);
+        self.zil_write(" ");
+        self.write_global_name(g);
+        self.zil_write("\n");
+    }
+
+    fn emit_global(self: &ZilPrinter, g: &ILGlobal) {
+        self.zil_write("global g");
+        self.write_dec(g.id as u64);
+        self.zil_write(": ");
+        self.emit_type(g.ty);
+
+        if self.global_has_own_name(g) {
+            self.zil_write(" ");
+            self.write_global_name(g);
+        }
+
+        self.zil_write(" = {");
+        let mut i = 0 as usize;
+        while i < g.init_data_len {
+            if i > 0 as usize { self.zil_write(", "); }
+            let init_data = unsafe { @slice(g.init_data_ptr, g.init_data_len) };
+            let byte = init_data[i];
+            self.write_dec(byte as u64);
+            i = i + 1 as usize;
+        }
+        self.zil_write("}\n");
+    }
+
+    fn emit_type_def(self: &ZilPrinter, id: u32, def: &ILTypeDef) {
+        match *def {
+            ILTypeDef.Struct(s) => {
+                self.zil_write("type T");
+                self.write_dec(id as u64);
+                self.zil_write(": struct {");
+                let mut i = 0 as usize;
+                while i < s.fields.len {
+                    if i > 0 as usize { self.zil_write(", "); }
+                    self.zil_write(self.intern_table.lookup(s.fields[i].name));
+                    self.zil_write(": ");
+                    self.emit_type(s.fields[i].ty);
+                    i = i + 1 as usize;
+                }
+                self.zil_write("}\n");
+            },
+            ILTypeDef.Enum(e) => {
+                self.zil_write("type T");
+                self.write_dec(id as u64);
+                self.zil_write(": sum {");
+                let mut i = 0 as usize;
+                while i < e.variants.len {
+                    if i > 0 as usize { self.zil_write(", "); }
+                    self.zil_write(self.intern_table.lookup(e.variants[i].name));
+                    if e.variants[i].discriminant != i as u32 {
+                        self.zil_write(" = ");
+                        self.write_dec(e.variants[i].discriminant as u64);
+                    }
+                    self.zil_write(": ");
+                    if e.variants[i].payload == 0 as u32 {
+                        self.zil_write("unit");
+                    } else {
+                        self.emit_type(e.variants[i].payload);
+                    }
+                    i = i + 1 as usize;
+                }
+                self.zil_write("}\n");
+            },
+            // Fn typedefs have no textual ZIL type_def form (function types are
+            // written inline as `fn(...) -> T`); skip them.
+            ILTypeDef.Fn(_) => {},
+        }
+    }
+
+    fn emit_function(self: &mut ZilPrinter, func_idx: u32) {
+        // A raw pointer: the printer stores the function it is emitting (`current_func`), so the
+        // view has to be of the module rather than of a stack copy, and taking it must not keep
+        // `self` borrowed for the calls below.
+        let p_func = (&self.module.functions[func_idx as usize]) as *mut ILFunction;
+        self.current_func = p_func;
+        let p_f = unsafe { &*p_func };
+        // An extern, or in compile-only mode another module's function: a declaration.
+        let is_zoril_ext = p_f.is_zoril_extern(self.compile_only, self.target_source_file);
+        let emit_as_extern = p_f.is_extern || is_zoril_ext;
+        if !emit_as_extern && p_f.doc_comment != 0 as u32 {
+            self.emit_comment_block(p_f.doc_comment, "// ");
+        }
+        if emit_as_extern {
+            self.zil_write("extern ");
+        } else if p_f.is_export {
+            self.zil_write("export ");
+        } else if p_f.is_local {
+            self.zil_write("local ");
+        }
+        self.zil_write("f");
+        self.write_dec(p_f.id as u64);
+        self.zil_write(": ");
+        self.emit_type(p_f.ret_ty);
+        self.emit_function_name(p_f);
+        self.emit_params(p_f);
+        if emit_as_extern && self.compile_only {
+            self.zil_write("\n\n");
+            return;
+        }
+        self.zil_write(" {\n");
+        self.emit_body(p_f);
+        self.zil_write("}\n\n");
+    }
+
+    // ` NAME` after the result type, unless the name is the default `f<id>`.
+    fn emit_function_name(self: &mut ZilPrinter, p_f: &ILFunction) {
+        let f_ext = p_f.has_c_symbol();
+        let name = self.intern_table.lookup(p_f.name);
+        if name.len > 0 as usize {
+            let mut is_default = false;
+            // A C symbol keeps its name even when it looks like the placeholder: `extern "C" fn f0()`.
+            if name[0] == 'f' as u8 && !f_ext && !p_f.is_export && name.len > 1 as usize {
+                let mut k = 1 as usize;
+                let mut nid = 0 as u64;
+                while k < name.len && name[k] >= '0' as u8 && name[k] <= '9' as u8 {
+                    nid = nid * 10 as u64 + (name[k] - '0' as u8) as u64;
+                    k = k + 1 as usize;
+                }
+                if k == name.len && nid == p_f.id as u64 {
+                    is_default = true;
+                }
+            }
+            if !is_default {
+                self.zil_write(" ");
+                let mut has_colons = false;
+                let mut ci = 0 as usize;
+                while ci + 1 as usize < name.len {
+                    if name[ci] == ':' as u8 && name[ci + 1 as usize] == ':' as u8 {
+                        has_colons = true;
+                        break;
+                    }
+                    ci = ci + 1 as usize;
+                }
+                // Every Zoril-ABI symbol is written module-qualified ("a::util::parse",
+                // methods "a::util::Point::norm") in both whole-program and -c mode, so zilc
+                // derives one symbol per (module path, declaration) regardless of build mode.
+                // C externs and the unmangled set keep their plain names.
+                let qualify = !f_ext
+                    && (!has_colons || p_f.owner_len > 0 as u32)
+                    && !is_unmangled_symbol_name(name);
+                if qualify {
+                    let sf = p_f.source_file;
+                    let path = if sf != 0 as u32 {
+                        self.intern_table.lookup(sf)
+                    } else {
+                        self.entry_path
+                    };
+                    let stem = canonical_module_stem(self.module.arena, path);
+                    if stem.len > 0 as usize {
+                        self.zil_write(stem);
+                        self.zil_write("::");
+                    }
+                    if p_f.owner_len > 0 as u32
+                        && (p_f.owner_len as usize) + 1 as usize < name.len
+                        && name[p_f.owner_len as usize] == '_' as u8 {
+                        self.zil_write(subslice(name, 0 as usize, p_f.owner_len as usize));
+                        self.zil_write("::");
+                        self.zil_write(subslice_from(name, (p_f.owner_len as usize) + 1 as usize));
+                    } else {
+                        self.zil_write(name);
+                    }
+                } else {
+                    self.zil_write(name);
+                }
+            }
+        }
+    }
+
+    fn emit_params(self: &mut ZilPrinter, p_f: &ILFunction) {
+        self.zil_write("(");
+        for k in 0 as usize..p_f.params_len {
+            if k > 0 as usize { self.zil_write(", "); }
+            let p = p_f.param(k);
+            self.zil_write(self.intern_table.lookup(p.name));
+            self.zil_write(": ");
+            self.emit_type(p.ty);
+        }
+        if p_f.is_variadic {
+            if p_f.params_len > 0 as usize { self.zil_write(", "); }
+            self.zil_write("...");
+        }
+        self.zil_write(")");
+    }
+
+    // The blocks and their instructions, each run of instructions from one source line and
+    // comment preceded by that comment (as QBEEmitter.emit_function does).
+    fn emit_body(self: &mut ZilPrinter, p_f: &ILFunction) {
+        let mut last_comment = 0 as u32;
+        let mut last_comment_line = 0xffffffff as u32;
+        for bi in 0 as usize..p_f.blocks_len {
+            let block_idx = p_f.block_ids()[bi];
+            let p_b = self.module.blocks[block_idx as usize];
+            self.zil_write("  ");
+            self.emit_block_ref(block_idx);
+            self.zil_write(":\n");
+            for ii in 0 as usize..p_b.instructions_len {
+                let instr_idx = p_b.instr_ids()[ii] as usize;
+                let comment = self.module.instr_comments[instr_idx];
+                let line = self.module.instr_spans[instr_idx].line;
+                if comment != 0 as u32 && (comment != last_comment || line != last_comment_line) {
+                    self.emit_source_comment(comment, line);
+                    last_comment = comment;
+                    last_comment_line = line;
+                }
+                self.zil_write("    ");
+                self.emit_instruction(p_b.ssa_result_ids()[ii], self.module.instrs[instr_idx]);
+            }
+        }
+    }
+
+    // `    // LINE: text`, one per line of COMMENT.
+    fn emit_source_comment(self: &mut ZilPrinter, comment: u32, line: u32) {
+        // Copied out of the intern table: emitting a line calls back into `&mut self`.
+        let mut s_buf = unsafe { ByteVec.new_raw(self.module.arena) };
+        s_buf.push_slice(self.intern_table.lookup(comment));
+        let s = s_buf.as_slice();
+        let mut start = 0 as usize;
+        for i in 0 as usize..s.len {
+            if s[i] == '\n' as u8 {
+                self.emit_comment_line(line, subslice(s, start, i - start));
+                start = i + 1 as usize;
+            }
+        }
+        if start < s.len { self.emit_comment_line(line, subslice(s, start, s.len - start)); }
+    }
+
+    fn emit_comment_line(self: &mut ZilPrinter, line: u32, text: [u8]) {
+        self.zil_write("    // ");
+        self.write_dec(line as u64);
+        self.zil_write(": ");
+        self.zil_write(text);
+        self.zil_write("\n");
+    }
+
+    fn emit_comment_block(self: &ZilPrinter, comment_id: u32, prefix: [u8]) {
+        let s = self.intern_table.lookup(comment_id);
+        let mut i = 0 as usize;
+        let mut start = 0 as usize;
+        while i < s.len {
+            if s[i] == '\n' as u8 {
+                self.zil_write(prefix);
+                self.zil_write(subslice(s, start, i - start));
+                self.zil_write("\n");
+                start = i + 1 as usize;
+            }
+            i = i + 1 as usize;
+        }
+        if start < s.len {
+            self.zil_write(prefix);
+            self.zil_write(subslice(s, start, s.len - start));
+            self.zil_write("\n");
+        }
+    }
+
+    pub fn emit_module(self: &mut ZilPrinter) {
+        if self.compile_only {
+            if self.module_name.len > 0 as usize {
+                self.zil_write("module ");
+                self.zil_write(self.module_name);
+                self.zil_write(";\n\n");
+            }
+        }
+        if self.module.module_doc != 0 as u32 {
+            self.emit_comment_block(self.module.module_doc, "// ");
+            self.zil_write("\n");
+        }
+        let mut ti = 0 as usize;
+        while ti < self.module.typedefs.len() {
+            self.emit_type_def(ti as u32, &self.module.typedefs[ti]);
+            ti = ti + 1 as usize;
+        }
+
+        let is_co = self.compile_only;
+        let target_sf = self.target_source_file;
+        let mut gi = 0 as usize;
+        while gi < self.module.globals.len() {
+            let g = &self.module.globals[gi];
+            let mut is_tu = true;
+            if is_co {
+                if g.source_file != target_sf {
+                    if g.source_file != 0 as u32 {
+                        is_tu = false;
+                    }
+                }
+            }
+            if is_tu {
+                self.emit_global(g);
+            } else if self.global_has_own_name(g) {
+                self.emit_extern_global(g);
+            }
+            gi = gi + 1 as usize;
+        }
+
+        let mut fi = 0 as usize;
+        while fi < self.module.functions.len() {
+            self.emit_function(fi as u32);
+            fi = fi + 1 as usize;
+        }
+        self.flush();
+    }
+
+    // Append to the 64 KB output buffer, flushing a single write syscall only when
+    // it would overflow (or for an oversized chunk that cannot fit). This is what
+    // collapses ~1M per-line write() syscalls into a few hundred for a self-compile.
+    fn append(self: &ZilPrinter, s: [u8]) {
+        // `wbuf` is arena-allocated in `new` and never null afterwards, so this is
+        // the one forge; the raw copy into the buffer tail is the unsafe interior.
+        let wb: &mut WriteBuf = unsafe { &mut *self.wbuf };
+        if wb.len + s.len > wb.cap {
+            if wb.len > 0 as usize {
+                let mut out = self.fd;
+                write_all(&mut out, unsafe { @slice(wb.ptr, wb.len) }).expect(
+                    "cannot write ZIL output"
+                );
+                wb.len = 0 as usize;
+            }
+            if s.len >= wb.cap {
+                let mut out = self.fd;
+                write_all(&mut out, s).expect("cannot write ZIL output");
+                return;
+            }
+        }
+        unsafe { memcpy((wb.ptr as usize + wb.len) as *mut u8, s.ptr as *u8, s.len as u64); }
+        wb.len = wb.len + s.len;
+    }
+
+    fn flush(self: &ZilPrinter) {
+        let wb: &mut WriteBuf = unsafe { &mut *self.wbuf };
+        if wb.len > 0 as usize {
+            let mut out = self.fd;
+            write_all(&mut out, unsafe { @slice(wb.ptr, wb.len) }).expect(
+                "cannot write ZIL output"
+            );
+            wb.len = 0 as usize;
+        }
+    }
+
+    fn zil_write(self: &ZilPrinter, s: [u8]) {
+        self.append(s);
+    }
+}
+
+fn is_printable_ascii(c: u8) -> bool {
+    let lo = 32 as u8;
+    let hi = 126 as u8;
+    return c >= lo && c <= hi;
+}

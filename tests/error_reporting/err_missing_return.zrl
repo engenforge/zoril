@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: control reaches end of non-void function without a return value
+fn f(x: i32) -> i32 {
+    if x > 0 {
+        return 42;
+    }
+}
+fn main() -> i32 {
+    return f(-1);
+}

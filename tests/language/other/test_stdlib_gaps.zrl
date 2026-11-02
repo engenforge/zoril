@@ -1,0 +1,49 @@
+
+import "core.zrl";
+import "vec.zrl";
+import "mem_raw.zrl";
+use mem_raw::arena_init;
+use vec::Vec;
+
+struct MyError { msg: [u8] }
+impl Error for MyError {
+    fn message(self: &MyError) -> [u8] { return self.msg; }
+}
+
+fn map_ok(val: i32) -> i32 { return val + 1; }
+fn map_err(val: i32) -> i32 { return val * 10; }
+
+fn main() -> i32 {
+    // Test Result::map
+    let r1: Result<i32, i32> = Result.Ok(10);
+    let r2 = r1.map::<i32>(map_ok);
+    if !r2.is_ok() { return 3; }
+    match r2 {
+        Ok(v) => { if v != 11 { return 1; } },
+        Err(_) => { return 2; },
+    }
+
+    // Test Result::map_err
+    let r3: Result<i32, i32> = Result.Err(5);
+    let r4 = r3.map_err::<i32>(map_err);
+    if !r4.is_err() { return 4; }
+    match r4 {
+        Ok(_) => { return 5; },
+        Err(e) => { if e != 50 { return 6; } },
+    }
+
+    // Test trait declarations (just check they compile)
+    let e_val = MyError { msg: "oops" };
+    if !is_str_eq(e_val.message(), "oops") { return 7; }
+
+    // Test Vec::clear
+    let mut arena = unsafe { arena_init(1024) };
+    let mut v = unsafe { Vec::<i32>.new_in_raw(arena) };
+    v.push(1);
+    v.push(2);
+    if v.len() != 2 { return 8; }
+    v.clear();
+    if v.len() != 0 { return 9; }
+
+    return 0;
+}

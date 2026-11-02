@@ -1,0 +1,12 @@
+enum Decl { Fn(u32), Import(u32) }
+fn main() -> i32 {
+    let d1 = Decl.Import(0x12345678 as u32);
+    let mut arr = [Decl.Fn(0), Decl.Fn(0)];
+    let p = &arr[1] as *mut Decl;
+    unsafe { *p = d1; }
+    match arr[1] {
+        Decl.Import(v) => { if v == 0x12345678 as u32 { return 0; } },
+        _ => {}
+    }
+    return 1;
+}

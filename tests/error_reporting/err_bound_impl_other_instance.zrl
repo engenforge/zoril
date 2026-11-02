@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_bound_impl_other_instance.zrl:8:27: error: type `W<i64>` does not implement trait `Get`
+// An impl of a trait for one instance (`W<i32>`) does not make another (`W<i64>`) meet a bound.
+trait Get { fn get(self: &Self) -> i32; }
+struct W<T> { v: T }
+impl Get for W<i32> { fn get(self: &W<i32>) -> i32 { return self.v; } }
+fn use_it<T: Get>(t: &T) -> i32 { return t.get(); }
+fn main() -> i32 { return use_it(&W { v: 5 as i64 }); }

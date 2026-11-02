@@ -1,0 +1,20 @@
+// expected exit 0
+// Operands of different integer types meet at the wider one, so nothing is lost: the sum of an
+// i32 and an i64 is an i64, and a u8 compound-added into a u64 is widened first.
+fn main() -> i32 {
+    let a = 5 as i32;
+    let b = 4294967296 as i64;
+    let c = a + b;
+    if c != 4294967301 { return 1; }
+    let x = 200 as u8;
+    let y = 100 as u32;
+    if x + y != 300 { return 2; }
+    let mut d = 7 as u64;
+    d += x;
+    if d != 207 { return 3; }
+    let k = 4294967300 as i64;
+    let mut n = 0 as i64;
+    for i in 4294967290..k { n = n + 1; }
+    if n != 10 { return 4; }
+    return 0;
+}

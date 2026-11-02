@@ -1,0 +1,18 @@
+// expected exit 0
+// The direction that stays, and the one the conversion list of `doc/spec/safety_model.md` §5.8 keeps:
+// a `&mut T` satisfies a `&T` parameter and a `*mut T` satisfies a `*T` one, because both take a
+// capability away from the callee. The reverse directions are refused by
+// `tests/error_reporting/err_shared_ref_for_mut_param.zrl` and
+// `tests/error_reporting/err_shared_raw_for_mut_param.zrl`.
+fn take_shared(p: &i32) -> i32 { return *p; }
+fn take_shared_raw(p: *i32) -> i32 { return unsafe { *p }; }
+
+fn main() -> i32 {
+    let mut x: i32 = 1;
+    let m: &mut i32 = &mut x;
+    if take_shared(m) != 1 { return 1; }
+    let mut y: i32 = 2;
+    let r: *mut i32 = &mut y as *mut i32;
+    if take_shared_raw(r) != 2 { return 2; }
+    return 0;
+}

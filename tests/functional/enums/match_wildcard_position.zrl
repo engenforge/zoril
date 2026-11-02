@@ -1,0 +1,16 @@
+// expected exit code: 0
+enum E { A, B, C }
+fn check(e: E) -> i32 {
+    let x = match e {
+        E.A => 10,
+        _ =>   20,
+        E.C => 30,
+    };
+    return x + 1;
+}
+fn main() -> i32 {
+    if check(E.A) != 11 { return 1; }
+    if check(E.B) != 21 { return 2; }
+    if check(E.C) != 21 { return 3; }
+    return 0;
+}

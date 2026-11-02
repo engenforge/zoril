@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: error: use of moved value
+struct Data {
+    x: i32,
+    handle: Box<i32>,
+}
+
+fn main() -> i32 {
+    let mut d = Data { x: 42, handle: box 0 };
+    let y = d.handle;
+    d.x = 99;
+    return 0;
+}

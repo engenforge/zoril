@@ -1,0 +1,321 @@
+// Test suite for Small API fixes: open flags, exit, number formatting, HashMap, ByteVec, range
+// [PASS] small stdlib API fixes
+
+import "core.zrl";
+import "mem.zrl";
+import "io.zrl";
+import "file.zrl";
+import "fmt.zrl";
+import "string.zrl";
+import "hashmap.zrl";
+import "iter.zrl";
+import "fsys.zrl";
+
+use mem::Arena;
+import "os/linux.zrl" as os_linux;
+use io::{stdout, stderr, File};
+use os_linux::{O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND};
+use file::{OpenOptions, write_file, read_file};
+use fsys::unlink_path;
+use string::String;
+use hashmap::HashMap;
+use iter::range;
+
+fn test_open_flags_and_options() -> bool {
+    let tmp_path = "build/test_small_api_open.tmp";
+
+    // Test OpenOptions creation and writing
+    let mut f = match File.options().write(true).create(true).truncate(true).open(tmp_path) {
+        Ok(file) => file,
+        Err(_) => { return false; },
+    };
+    match fmt::write_u64(&mut f, 12345 as u64) {
+        Ok(_) => {},
+        Err(_) => { return false; },
+    }
+    let _ = f.close();
+
+    // Test OpenOptions reading
+    let mut f_read = match File.options().read(true).open(tmp_path) {
+        Ok(file) => file,
+        Err(_) => { return false; },
+    };
+    let mut buf: [u8; 16] = [0; 16];
+    let n = match io::read(f_read.fd(), &mut buf) {
+        Ok(count) => count,
+        Err(_) => { return false; },
+    };
+    let _ = f_read.close();
+    if n != 5 { return false; }
+    if buf[0] != '1' as u8 || buf[1] != '2' as u8 || buf[2] != '3' as u8 || buf[3] != '4' as u8 || buf[4] != '5' as u8 {
+        return false;
+    }
+
+    // Test OpenOptions appending without write(true)
+    let mut f_app = match File.options().append(true).open(tmp_path) {
+        Ok(file) => file,
+        Err(_) => { return false; },
+    };
+    match fmt::write_u64(&mut f_app, 6789 as u64) {
+        Ok(_) => {},
+        Err(_) => { return false; },
+    }
+    let _ = f_app.close();
+
+    // Test non-NUL-terminated subslice in File.open and file::read_file
+    let full_sub = "build/test_sub.tmp___";
+    let sub_path = full_sub.sub(0, 18); // "build/test_sub.tmp"
+    let mut f_sub = match File.options().write(true).create(true).truncate(true).open(sub_path) {
+        Ok(file) => file,
+        Err(_) => { return false; },
+    };
+    match io::write_all(&mut f_sub, "subslice_ok") {
+        Ok(_) => {},
+        Err(_) => { return false; },
+    }
+    let _ = f_sub.close();
+
+    let a_sub = match Arena.new(4096) {
+        Ok(a) => a,
+        Err(_) => { return false; },
+    };
+    let content = match read_file(sub_path, &a_sub) {
+        Ok(c) => c,
+        Err(_) => { return false; },
+    };
+    if content != "subslice_ok" { return false; }
+
+    // Verify the exact file exists on disk, not the over-read string with trailing underscores
+    let exact_target = "build/test_sub.tmp";
+    match os_linux::open_file(exact_target, O_RDONLY, 0) {
+        Ok(mut f_ex) => { let _ = f_ex.close(); },
+        Err(_) => { return false; },
+    }
+    let overread_target = "build/test_sub.tmp___";
+    match os_linux::open_file(overread_target, O_RDONLY, 0) {
+        Ok(mut f_bad) => {
+            let _ = f_bad.close();
+            let _ = fsys::unlink_path(overread_target, &a_sub);
+            return false; // MUST NOT have created the overread file!
+        },
+        Err(_) => {},
+    }
+    let _ = fsys::unlink_path(exact_target, &a_sub);
+
+    // Verify constants
+    if O_RDONLY != 0 { return false; }
+    if O_WRONLY != 1 { return false; }
+    if O_RDWR != 2 { return false; }
+    if O_CREAT != 64 { return false; }
+    if O_TRUNC != 512 { return false; }
+    if O_APPEND != 1024 { return false; }
+
+    unsafe { @syscall(87, tmp_path.ptr as u64) };
+    return true;
+}
+
+fn test_number_formatting() -> bool {
+    let arena = match Arena.new(65536) {
+        Ok(a) => a,
+        Err(_) => { return false; },
+    };
+
+    // Test String.push_u64 and String.push_i64
+    let mut s = String.new_in(&arena);
+    s.push_u64(0);
+    s.push_str(", ");
+    s.push_u64(42);
+    s.push_str(", ");
+    s.push_i64(-999);
+    s.push_str(", ");
+    s.push_u64_hex(0xdeadbeef);
+
+    if s.as_slice() != "0, 42, -999, deadbeef" {
+        return false;
+    }
+
+    // Test fmt::write_* through String as Write sink
+    let mut s2 = String.new_in(&arena);
+    match fmt::write_u64(&mut s2, 100) {
+        Ok(_) => {},
+        Err(_) => { return false; },
+    }
+    match fmt::write_i64(&mut s2, -50) {
+        Ok(_) => {},
+        Err(_) => { return false; },
+    }
+    match fmt::write_hex_byte(&mut s2, 0x2a as u8) {
+        Ok(_) => {},
+        Err(_) => { return false; },
+    }
+    if s2.as_slice() != "100-502a" {
+        return false;
+    }
+
+    // Boundary tests for fmt::write_*
+    let mut s_b = String.new_in(&arena);
+    match fmt::write_u64(&mut s_b, 0 as u64) { Ok(_) => {}, Err(_) => return false, }
+    s_b.push_str(";");
+    match fmt::write_u64(&mut s_b, 0xffffffffffffffff as u64) { Ok(_) => {}, Err(_) => return false, }
+    s_b.push_str(";");
+    match fmt::write_i64(&mut s_b, 0 as i64) { Ok(_) => {}, Err(_) => return false, }
+    s_b.push_str(";");
+    match fmt::write_i64(&mut s_b, 9223372036854775807 as i64) { Ok(_) => {}, Err(_) => return false, }
+    s_b.push_str(";");
+    let min_i64 = -9223372036854775807 as i64 - 1 as i64;
+    match fmt::write_i64(&mut s_b, min_i64) { Ok(_) => {}, Err(_) => return false, }
+    s_b.push_str(";");
+    match fmt::write_u64_hex(&mut s_b, 0 as u64) { Ok(_) => {}, Err(_) => return false, }
+    s_b.push_str(";");
+    match fmt::write_u64_hex(&mut s_b, 0xffffffffffffffff as u64) { Ok(_) => {}, Err(_) => return false, }
+    s_b.push_str(";");
+    match fmt::write_hex_byte(&mut s_b, 0 as u8) { Ok(_) => {}, Err(_) => return false, }
+    s_b.push_str(";");
+    match fmt::write_hex_byte(&mut s_b, 255 as u8) { Ok(_) => {}, Err(_) => return false, }
+
+    if s_b.as_slice() != "0;18446744073709551615;0;9223372036854775807;-9223372036854775808;0;ffffffffffffffff;00;ff" {
+        return false;
+    }
+
+    return true;
+}
+
+fn test_hashmap_api() -> bool {
+    let arena = match Arena.new(65536) {
+        Ok(a) => a,
+        Err(_) => { return false; },
+    };
+
+    let mut map = HashMap::<u32, i32>.new(&arena);
+    if map.len() != 0 as usize { return false; }
+    if map.cap() < 16 as usize { return false; }
+
+    let k1: u32 = 10;
+    let k2: u32 = 20;
+    let k3: u32 = 30;
+
+    map.insert(k1, 100);
+    map.insert(k2, 200);
+    map.insert(k3, 300);
+
+    if map.len() != 3 as usize { return false; }
+    if !map.contains_key(&k1) { return false; }
+    if !map.contains_key(&k2) { return false; }
+    if !map.contains_key(&k3) { return false; }
+
+    let missing_k: u32 = 999;
+    if map.contains_key(&missing_k) { return false; }
+
+    // Test get(&key) -> Option<&V>
+    match map.get(&k1) {
+        Option.Some(val) => {
+            if *val != 100 { return false; }
+        },
+        Option.None => { return false; },
+    }
+
+    // Test get_mut(&key) -> Option<&mut V>
+    match map.get_mut(&k2) {
+        Option.Some(val) => {
+            *val = 250;
+        },
+        Option.None => { return false; },
+    }
+    match map.get(&k2) {
+        Option.Some(val) => {
+            if *val != 250 { return false; }
+        },
+        Option.None => { return false; },
+    }
+
+    // Test remove(&key)
+    match map.remove(&k1) {
+        Option.Some(val) => {
+            if val != 100 { return false; }
+        },
+        Option.None => { return false; },
+    }
+    if map.len() != 2 as usize { return false; }
+    if map.contains_key(&k1) { return false; }
+    if map.get(&k1).is_some() { return false; }
+
+    // Re-removing already removed key gives None
+    if map.remove(&k1).is_some() { return false; }
+
+    // Collision probe chain test:
+    // Insert keys that collide modulo initial capacity (16).
+    // Keys 1, 17, 33 all have hash % 16 = 1.
+    let c1: u32 = 1;
+    let c2: u32 = 17;
+    let c3: u32 = 33;
+    map.insert(c1, 111);
+    map.insert(c2, 222);
+    map.insert(c3, 333);
+
+    // Remove middle of collision chain (c2 = 17)
+    match map.remove(&c2) {
+        Option.Some(v) => { if v != 222 { return false; } },
+        Option.None => { return false; },
+    }
+
+    // Backward-shift deletion must preserve probe chain: c3 (33) must still be retrievable!
+    match map.get(&c3) {
+        Option.Some(v) => { if *v != 333 { return false; } },
+        Option.None => { return false; },
+    }
+    // Growth after removals:
+    // Initial cap was 16. With 4 items (k2, k3, c1, c3) currently present,
+    // inserting 15 more items will exceed the 0.7 threshold (11 items) and force map.grow().
+    let old_cap = map.cap();
+    let mut i: u32 = 0;
+    while i < 15 as u32 {
+        map.insert(100 + i, (1000 + i) as i32);
+        i = i + 1;
+    }
+    if map.cap() <= old_cap { return false; }
+    if map.len() != 19 as usize { return false; }
+
+    // Verify previously existing items survived growth:
+    match map.get(&k2) { Option.Some(v) => { if *v != 250 { return false; } }, Option.None => return false, }
+    match map.get(&k3) { Option.Some(v) => { if *v != 300 { return false; } }, Option.None => return false, }
+    match map.get(&c1) { Option.Some(v) => { if *v != 111 { return false; } }, Option.None => return false, }
+    match map.get(&c3) { Option.Some(v) => { if *v != 333 { return false; } }, Option.None => return false, }
+
+    // Verify removed items are still absent:
+    if map.contains_key(&k1) { return false; }
+    if map.contains_key(&c2) { return false; }
+
+    // Verify all 15 new items are present:
+    i = 0 as u32;
+    while i < 15 as u32 {
+        let key = 100 + i;
+        match map.get(&key) {
+            Option.Some(v) => { if *v != (1000 + i) as i32 { return false; } },
+            Option.None => return false,
+        }
+        i = i + 1;
+    }
+
+    return true;
+}
+
+fn test_range_iterator() -> bool {
+    let mut sum: usize = 0;
+    let mut it = range(0 as usize, 5 as usize);
+    while true {
+        match it.next() {
+            Option.Some(v) => { sum = sum + v; },
+            Option.None => { break; },
+        }
+    }
+    if sum != 10 { return false; } // 0 + 1 + 2 + 3 + 4 = 10
+    return true;
+}
+
+fn main() -> i32 {
+    if !test_open_flags_and_options() { return 1; }
+    if !test_number_formatting() { return 2; }
+    if !test_hashmap_api() { return 3; }
+    if !test_range_iterator() { return 4; }
+    return 0;
+}

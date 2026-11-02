@@ -1,0 +1,18 @@
+// expected exit 0
+// The side of the element rule that must *not* be refused: storing a `*mut u32` into a `*mut u32`
+// element - an array index and a tuple member - is an assignment between the same type, and an
+// element's raw-ness is its type (Phase D gave `*T` its own IL type), so no `unsafe` marker is needed
+// for the assignment itself; the reads through the pointer do need one.
+// The refused direction is `err_raw_ptr_to_ref_tuple_element.zrl` and
+// `err_raw_ptr_to_ref_array_element.zrl`.
+fn main() -> i32 {
+    let mut x: u32 = 1;
+    let p: *mut u32 = &mut x as *mut u32;
+    let mut arr: [*mut u32; 2] = [&mut x as *mut u32, &mut x as *mut u32];
+    arr[0] = p;
+    let mut t: (*mut u32,) = (&mut x as *mut u32,);
+    t.0 = p;
+    if unsafe { *arr[0] } != 1 { return 1; }
+    if unsafe { *t.0 } != 1 { return 2; }
+    return 0;
+}

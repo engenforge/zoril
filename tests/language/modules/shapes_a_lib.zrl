@@ -1,0 +1,5 @@
+// A trait of one name in each of two modules (with shapes_b_lib.zrl).
+pub trait Shape {
+    fn area(self: &Self) -> i32;
+    fn double_area(self: &Self) -> i32 { return self.area() * 2; }
+}

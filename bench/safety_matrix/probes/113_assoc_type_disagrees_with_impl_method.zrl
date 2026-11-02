@@ -1,0 +1,16 @@
+// name: Impl method's result disagrees with the impl's associated type
+// expected: compile_reject
+// Out = i64 while make returns &i32; the trait's default method returns make()'s result as
+// Self::Out, which would read a pointer as an integer. The impl's signature is checked against
+// the trait's (since 2026-10-05), so the error is at make.
+trait Make {
+    type Out;
+    fn make(self: &Self) -> Self::Out;
+    fn again(self: &Self) -> Self::Out { return self.make(); }
+}
+struct S { v: i32 }
+impl Make for S { type Out = i64; fn make(self: &S) -> &i32 { return &self.v; } }
+fn main() -> i32 {
+    let s = S { v: 1 };
+    return s.again() as i32;
+}

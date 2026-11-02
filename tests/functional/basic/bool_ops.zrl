@@ -1,0 +1,29 @@
+// expected exit code: 0
+import "io.zrl";
+
+struct Wrapper { flag: bool }
+
+fn test_chain(tag: u32) -> bool {
+    return tag == 7 as u32 || tag == 10 as u32 || tag == 9 as u32 || tag == 80 as u32;
+}
+
+fn main() -> i32 {
+    // Basic short-circuit
+    let x = true;
+    let y = true;
+    if !(x && y) { return 1; }
+
+    // Chained operations
+    if !(test_chain(7 as u32) && test_chain(10 as u32) && test_chain(9 as u32) && test_chain(80 as u32) && !test_chain(5 as u32)) {
+        return 2;
+    }
+
+    // Negation and field/pointer access
+    let w = Wrapper { flag: true };
+    if !w.flag == true { return 3; }
+    
+    let p = &w;
+    if !p.flag == true { return 4; }
+
+    return 0;
+}

@@ -1,0 +1,31 @@
+// expected exit code: 48
+// 33: Standard library Vec<T> (dynamic array) and String (growable text buffer).
+// Demonstrates: Vec push/len/get, String push_u8/len, stdlib import chain, automatic drop.
+
+import "string.zrl";
+import "vec.zrl";
+use string::String;
+use vec::Vec;
+
+fn main() -> i32 {
+    // Vec<i32>: push values, inspect by index
+    let mut v = Vec::<i32>.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    let vlen = v.len();              // 3
+    let vfirst = *v.get(0 as u64).unwrap();  // 10
+    let vlast = *v.get(2 as u64).unwrap();   // 30
+
+    // String: push ASCII bytes, check length
+    let mut s = String.new();
+    s.push_u8('H' as u8);
+    s.push_u8('e' as u8);
+    s.push_u8('l' as u8);
+    s.push_u8('l' as u8);
+    s.push_u8('o' as u8);
+    let slen = s.len();  // 5
+
+    return vfirst + vlast + vlen as i32 + slen as i32;
+    // 10 + 30 + 3 + 5 = 48
+}

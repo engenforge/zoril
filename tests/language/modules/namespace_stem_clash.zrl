@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: two imports are named `clash_lib`
+import "one/clash_lib.zrl";
+import "two/clash_lib.zrl";
+
+fn main() -> i32 { return 0; }

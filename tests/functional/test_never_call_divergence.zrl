@@ -1,0 +1,81 @@
+// expected exit 0
+import "core0.zrl";
+import "core.zrl";
+
+fn never_helper() -> never {
+    zoril_abort();
+}
+
+fn bare_abort_fn() -> i32 {
+    zoril_abort();
+}
+
+fn match_with_abort(opt: Option<i32>) -> i32 {
+    let val = match opt {
+        Some(x) => x,
+        None => {
+            zoril_abort();
+        },
+    };
+    return val * 2;
+}
+
+fn if_with_abort(flag: bool, val: i32) -> i32 {
+    if flag {
+        return val + 1;
+    } else {
+        zoril_abort();
+    }
+}
+
+fn terminal_if_with_abort(val: i32) -> i32 {
+    if val > 0 {
+        return val * 10;
+    }
+    zoril_abort();
+}
+
+fn call_custom_never(flag: bool) -> i32 {
+    if flag {
+        return 77;
+    }
+    never_helper();
+}
+
+fn custom_unwrap<T>(opt: Option<T>) -> T {
+    return match opt {
+        Some(x) => x,
+        None => {
+            zoril_abort();
+        },
+    };
+}
+
+pub fn main() -> i32 {
+    // 1. Test Option.unwrap with zoril_abort() in stdlib
+    let opt_some = Option.Some(21);
+    let unwrapped = opt_some.unwrap();
+    if unwrapped != 21 { return 1; }
+
+    // 2. Test match arm with abort
+    let m = match_with_abort(Option.Some(15));
+    if m != 30 { return 2; }
+
+    // 3. Test if-else with abort
+    let i = if_with_abort(true, 41);
+    if i != 42 { return 3; }
+
+    // 4. Test terminal if with abort
+    let t = terminal_if_with_abort(5);
+    if t != 50 { return 4; }
+
+    // 5. Test custom never-returning function call
+    let n = call_custom_never(true);
+    if n != 77 { return 5; }
+
+    // 6. Test custom generic unwrap with abort in match
+    let u = custom_unwrap(Option.Some(100));
+    if u != 100 { return 6; }
+
+    return 0;
+}

@@ -1,0 +1,11 @@
+// name: Reference into a by-value parameter box dropped at return
+// expected: compile_reject
+// A reference into a by-value parameter Box that the function drops at return cannot be returned.
+fn inner(b: Box<i32>) -> &i32 {
+    return &*b;
+}
+
+fn main() -> i32 {
+    let r = inner(box 5);
+    return *r;
+}

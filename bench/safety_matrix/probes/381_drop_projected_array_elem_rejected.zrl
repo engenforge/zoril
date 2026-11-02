@@ -1,0 +1,8 @@
+// name: @drop of a projected array element is rejected
+// expected: compile_reject
+// @drop requires an owned local variable binding; partial drop of an array element is not permitted.
+fn main() -> i32 {
+    let arr = [1, 2];
+    @drop(arr[0]);
+    return 0;
+}

@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: error: #[stores] names a parameter this body does not store
+
+struct H { p: &i32 }
+
+#[stores(x -> h)]
+fn put(h: &mut H, x: &i32) {
+    // does not store x into h
+}
+
+fn main() -> i32 { return 0; }

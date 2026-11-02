@@ -1,0 +1,11 @@
+// name: Reference operand in arithmetic is rejected
+// expected: compile_reject
+// `r + 1000` is pointer arithmetic on a safe reference; the operator checks refuse a reference
+// operand outside `unsafe`, so no address can be forged from it and stored through.
+fn main() -> i32 {
+    let mut x: u64 = 7;
+    let r: &mut u64 = &mut x;
+    let p = r + 1000;
+    *p = 9;
+    return x as i32;
+}

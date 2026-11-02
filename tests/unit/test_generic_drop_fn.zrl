@@ -1,0 +1,44 @@
+import "io.zrl";
+use io::Write;
+
+static mut HOLDER_DROPPED: bool = false;
+
+struct Holder<T> {
+    val: T,
+}
+
+impl<T> Drop for Holder<T> {
+    fn drop(self: &mut Holder<T>) {
+        HOLDER_DROPPED = true;
+    }
+}
+
+struct BoundedHolder<W> {
+    inner: W,
+}
+
+impl<W: Write> Drop for BoundedHolder<W> {
+    fn drop(self: &mut BoundedHolder<W>) {
+        let _ = self.inner.write("drop");
+    }
+}
+
+fn dummy(x: i32) {}
+
+fn test_fn_drop() -> bool {
+    {
+        let h = Holder::<fn(i32)> { val: dummy };
+    }
+    return HOLDER_DROPPED;
+}
+
+fn test_unbounded_instantiation() -> bool {
+    let b = BoundedHolder::<i32> { inner: 42 };
+    return b.inner == 42;
+}
+
+fn main() -> i32 {
+    if !test_fn_drop() { return 1; }
+    if !test_unbounded_instantiation() { return 2; }
+    return 0;
+}

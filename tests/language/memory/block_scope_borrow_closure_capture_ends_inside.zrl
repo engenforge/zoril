@@ -1,0 +1,19 @@
+// expected exit 0
+// The twin of err_block_scope_borrow_closure_capture: the same closure and the same captured
+// reference, with its last use inside `x`'s scope. The strict reading only removes the `Drop`
+// exemption, so a borrow that ends in time still compiles - and a by-value capture (which borrows
+// the environment's own temporary) is untouched, which is what the exempt-temporary rule in
+// inherit_borrows_captured is for.
+fn main() -> i32 {
+    let mut total: i32 = 0;
+    {
+        let x: i32 = 7;
+        let p: &i32 = &x;
+        let f = |q: i32| -> i32 { *p + q };
+        total = f(1);
+    }
+    if total != 8 { return 1; }
+    let k: i32 = 5;
+    let g = |q: i32| -> i32 { q + k };
+    return g(2) - 7;
+}

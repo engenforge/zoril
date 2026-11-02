@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: `await` is a reserved word, kept for a future feature
+fn f() -> i32 {
+    let await = 1;
+    return await;
+}

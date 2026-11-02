@@ -1,0 +1,28 @@
+// Tests that \xHH hex escape sequences in string literals produce the
+// correct byte values (not literal 'x' followed by digits).
+
+fn first_byte(s: &[u8]) -> u8 {
+    return s[0];
+}
+
+fn main() -> i32 {
+    // \x48 = 'H' = 72
+    let hello_hex = "\x48\x65\x6C\x6C\x6F";
+    if first_byte(hello_hex) != 72u8 { return 1; }  // 'H' = 0x48
+
+    // \x00 = null byte
+    let with_null = "\x00abc";
+    if first_byte(with_null) != 0u8 { return 2; }
+
+    // \xFF = 255
+    let max_byte = "\xFF";
+    if first_byte(max_byte) != 255u8 { return 3; }
+
+    // Mix of regular and hex escapes
+    let mixed = "\x41\n\x42";  // 'A', newline, 'B'
+    if mixed[0] != 65u8 { return 4; }   // 'A'
+    if mixed[1] != 10u8 { return 5; }   // '\n'
+    if mixed[2] != 66u8 { return 6; }   // 'B'
+
+    return 0;
+}

@@ -1,0 +1,12 @@
+// name: Reference into a local box dropped at return
+// expected: compile_reject
+// A reference into a local Box that the function drops at return cannot be returned.
+fn make() -> &i32 {
+    let b = box 5;
+    return &*b;
+}
+
+fn main() -> i32 {
+    let r = make();
+    return *r;
+}

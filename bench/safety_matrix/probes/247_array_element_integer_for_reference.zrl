@@ -1,0 +1,5 @@
+// name: An integer given as an element of an array of references (and of function values)
+// expected: compile_reject
+// An array literal or repeat never compared its elements with the element type; `[8 as usize]` was a
+// `[&i32; 1]`, and as `[fn() -> i32; 1]` it was a call to address 8.
+fn main() -> i32 { let a: [fn() -> i32; 1] = [8 as usize]; return a[0](); }

@@ -1,0 +1,55 @@
+// Str is a byte slice known to hold valid UTF-8: built from a literal checked
+// at compile time (@str), or from bytes checked at run time (Str.from_utf8).
+// expected exit 0
+
+import "string.zrl";
+import "str.zrl";
+use str::Str;
+use string::String;
+
+fn main() -> i32 {
+    let hello = @str("héllo");
+    if hello.len() != 6 { return 1; }
+    if hello.char_count() != 5 { return 2; }
+    if hello.as_bytes() != "héllo" { return 3; }
+
+    // Runtime validation: overlong, truncated, surrogate and out-of-range
+    // sequences are rejected; well-formed multi-byte text is accepted.
+    if Str.from_utf8("\xc0\xaf").is_some() { return 4; }
+    if Str.from_utf8("\xe2\x82").is_some() { return 5; }
+    if Str.from_utf8("\xed\xa0\x80").is_some() { return 6; }
+    if Str.from_utf8("\xf4\x90\x80\x80").is_some() { return 7; }
+    if Str.from_utf8("\xff").is_some() { return 8; }
+    let euro = match Str.from_utf8("\xe2\x82\xac and \xf0\x9f\x98\x80") {
+        Some(s) => s,
+        None => { return 9; },
+    };
+    if euro.char_count() != 7 { return 10; }
+
+    // Sub-slices stay valid: they may only start and end on char boundaries.
+    if hello.substr(0, 2).is_some() { return 11; }
+    let h = match hello.substr(0, 1) {
+        Some(s) => s,
+        None => { return 12; },
+    };
+    if h.as_bytes() != "h" { return 13; }
+    let tail = match hello.substr(1, 6) {
+        Some(s) => s,
+        None => { return 14; },
+    };
+    if tail.char_count() != 4 { return 15; }
+
+    // String: arbitrary bytes can be pushed, so viewing one as Str is checked;
+    // appending a Str keeps a valid String valid.
+    let mut s = String.new();
+    s.push_s(hello);
+    s.push_s(@str("!"));
+    let view = match s.as_str() {
+        Some(v) => v,
+        None => { return 16; },
+    };
+    if view.char_count() != 6 { return 17; }
+    s.push_u8(0xff);
+    if s.as_str().is_some() { return 18; }
+    return 0;
+}

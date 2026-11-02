@@ -1,0 +1,47 @@
+// `args()` returns the arguments the process was actually started with: it reads the pair the
+// runtime recorded in `_start` (the `os_argc`/`os_argv` globals behind `zoril_argc`/`zoril_argv` in
+// rt/runtime.s, and the same stores in stage0-C's runtimes), so its view has to agree with the
+// `(argc, argv)` a `main` receives. This test crosses the two on purpose and compares them string
+// by string, which is what makes it a test of the wiring rather than of the API's shape.
+import "core.zrl";
+import "args.zrl";
+use args::Args;
+
+// The runtime's own view of argument I, read the way `Args::get` reads it - the raw path this file
+// compares the safe one against.
+unsafe fn argv_slice(argv: **u8, i: usize) -> [u8] {
+    let addr = *((argv as usize + i * sizeof(*u8)) as **u8) as usize;
+    let mut len = 0 as usize;
+    while *((addr + len) as *u8) != 0 {
+        len = len + 1;
+    }
+    return @slice(addr as *u8, len);
+}
+
+fn main(argc: i32, argv: **u8) -> i32 {
+    let a = args::args();
+    if a.len() != argc as usize { return 1; }
+
+    let mut i = 0 as usize;
+    while i < a.len() {
+        let safe = match a.get(i) {
+            Option.Some(s) => s,
+            Option.None => { return 2; },
+        };
+        let raw = unsafe { argv_slice(argv, i) };
+        if safe.len != raw.len { return 3; }
+        let mut j = 0 as usize;
+        while j < safe.len {
+            if safe[j] != raw[j] { return 4; }
+            j = j + 1 as usize;
+        }
+        i = i + 1 as usize;
+    }
+
+    // The iterator view has to walk the same arguments.
+    let mut b = args::args();
+    if b.has_next() != (b.len() > 0 as usize) { return 5; }
+    let _ = b.next();
+    if b.has_next() != (b.len() > 1 as usize) { return 6; }
+    return 0;
+}

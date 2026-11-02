@@ -1,0 +1,24 @@
+// name: Option.unwrap() preserves borrow of reference payload
+// expected: compile_reject
+// A generic function returning a reference-holding argument ties the return value to the argument,
+// so mutating the underlying referent while the unwrapped reference is live is rejected.
+import "core.zrl";
+
+enum E {
+    A(Box<i32>),
+    B,
+}
+
+fn first(e: &E) -> Option<&Box<i32>> {
+    return match e {
+        E.A(x) => Option.Some(x),
+        E.B => Option.None,
+    };
+}
+
+fn main() -> i32 {
+    let mut e = E.A(box 5);
+    let r = first(&e).unwrap();
+    e = E.B;
+    return **r;
+}

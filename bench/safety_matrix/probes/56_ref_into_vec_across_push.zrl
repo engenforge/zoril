@@ -1,0 +1,25 @@
+// name: Reference into a Vec kept across a reallocating push
+// expected: compile_reject
+// The reference would read the buffer the push reallocated away from.
+import "vec.zrl";
+import "mem.zrl";
+use mem::Arena;
+use vec::Vec;
+struct Holder { items: Vec<i32> }
+impl Holder {
+    fn first(self: &Holder) -> &i32 { return &self.items.as_slice()[0]; }
+    fn add(self: &mut Holder, x: i32) { self.items.push(x); }
+}
+fn main() -> i32 {
+    let arena = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return 1; },
+    };
+    let mut h = Holder { items: Vec::<i32>.new_in(&arena) };
+    h.add(7);
+    let r = h.first();
+    let mut i = 0;
+    while i < 1000 { h.add(i); i = i + 1; }
+    if *r != 7 { return 1; }
+    return 0;
+}

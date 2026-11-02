@@ -1,0 +1,1 @@
+extern "C" fn shared_symbol(a: i32) -> i32 { return a + 1; }

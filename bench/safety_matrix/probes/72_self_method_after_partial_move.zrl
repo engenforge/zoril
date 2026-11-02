@@ -1,0 +1,10 @@
+// name: By-value method call after a field was moved out
+// expected: compile_reject
+struct D { a: Box<i32>, b: i32 }
+impl D { fn total(self: D) -> i32 { return *self.a + self.b; } }
+fn take(x: Box<i32>) -> i32 { return *x; }
+fn main() -> i32 {
+    let d = D { a: box 1, b: 2 };
+    let n = take(d.a);
+    return d.total() + n - 4;
+}

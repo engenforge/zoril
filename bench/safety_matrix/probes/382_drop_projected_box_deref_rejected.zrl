@@ -1,0 +1,8 @@
+// name: @drop of a dereferenced Box is rejected
+// expected: compile_reject
+// @drop(*b) bypasses ownership of the Box container; @drop must take the owned Box binding itself.
+fn main() -> i32 {
+    let b = box 1;
+    @drop(*b);
+    return 0;
+}

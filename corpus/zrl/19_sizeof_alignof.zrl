@@ -1,0 +1,43 @@
+// 19: Compile-time sizeof and alignof operators.
+// expected exit code: 12
+// Demonstrates: sizeof(T), alignof(T), applied to primitives, structs, tuples, generics.
+
+struct Packed {
+    a: u8,
+    b: u32,
+    c: u8,
+}
+
+struct Wrapper<T> {
+    value: T,
+}
+
+fn main() -> i32 {
+    // Primitive sizes
+    let s_u8 = sizeof(u8);       // 1
+    let s_i32 = sizeof(i32);     // 4
+    let s_u64 = sizeof(u64);     // 8
+    let s_usize = sizeof(usize); // 8 (on 64-bit)
+    let s_isize = sizeof(isize); // 8 (on 64-bit)
+    let s_f64 = sizeof(f64);     // 8
+    let s_bool = sizeof(bool);   // 1
+
+    // Alignment
+    let a_u8 = alignof(u8);     // 1
+    let a_i32 = alignof(i32);   // 4
+    let a_u64 = alignof(u64);   // 8
+    let a_usize = alignof(usize); // 8 (on 64-bit)
+
+    // Struct size (with padding for alignment)
+    let s_packed = sizeof(Packed);
+    let a_packed = alignof(Packed);
+
+    // Tuple size
+    let s_pair = sizeof((i32, u8));
+
+    // Generic instantiation
+    let s_wrap_i32 = sizeof(Wrapper<i32>);
+    let s_wrap_u64 = sizeof(Wrapper<u64>);
+
+    return s_i32 as i32 + a_u64 as i32;
+}

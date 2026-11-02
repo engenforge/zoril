@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: error: cannot assign to 'a' because it is borrowed
+// Propagating borrows copies all borrows, so copying a pair of references keeps both borrowed.
+fn main() -> i32 {
+    let mut a: i32 = 10;
+    let mut b: i32 = 20;
+    let pair = (&a, &b);
+    let p2 = pair;
+    a = 30;
+    return *p2.0;
+}

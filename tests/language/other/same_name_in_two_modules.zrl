@@ -1,0 +1,16 @@
+// expected exit 0
+// Two modules may each define a function of the same name. A name resolves in the module
+// that uses it: its own definition first, else the one public definition. The modules' names
+// used to share one global table where the latest definition won, so `from_b` (or `from_a`)
+// called the other module's `helper`.
+import "collide_a_lib.zrl";
+import "collide_b_lib.zrl";
+use collide_a_lib::{a_ptr, from_a};
+use collide_b_lib::{from_b, helper};
+fn main() -> i32 {
+    if from_a() != 1 || from_b() != 20 { return 1; }
+    if helper() != 20 { return 2; }       // the public one
+    let f = a_ptr();
+    if f() != 1 { return 3; }             // a function pointer to a's private helper
+    return 0;
+}

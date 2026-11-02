@@ -1,0 +1,27 @@
+// expected compile fail
+// A closure body reads a captured value through a non-owning alias: the environment owns it, so
+// moving it out would leave two owners and drop the value twice (once from the returned copy, once
+// with the environment). Unified Solution D: the move is rejected.
+// EXPECT: tests/error_reporting/err_closure_capture_move_out.zrl:22:13: error: cannot move out of a closure capture
+struct D {
+    x: u64,
+}
+
+trait Drop {
+    fn drop(self: &mut D);
+}
+
+impl Drop for D {
+    fn drop(self: &mut D) {
+        self.x = 0;
+    }
+}
+
+fn main() -> i32 {
+    let d = D { x: 7 };
+    let f = || -> D {
+        return d;
+    };
+    let x = f();
+    return x.x as i32;
+}

@@ -1,0 +1,10 @@
+// name: Assignment through dereference of a moved Box is rejected
+// expected: compile_reject
+// Assigning through a dereference of a moved Box base (`*b = 5`) is rejected as a use
+// of moved value, preventing safe-code write into memory owned by the move destination.
+fn main() -> i32 {
+    let b = box 1;
+    let c = b;
+    *b = 5;
+    return *c;
+}

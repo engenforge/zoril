@@ -1,0 +1,54 @@
+// Low-level kernel system calls and memory mapping wrappers
+
+import "io.zrl";
+import "core0.zrl";
+
+// Whether a raw syscall's result is an error. Linux reports a failed syscall by returning -errno in
+// the result register - any value in [-4095, -1] - and not the libc `MAP_FAILED` of -1: a check for
+// -1 alone misses every other errno, and the caller then uses a value that is not what the syscall
+// returns for success. `mmap_or_trap` did exactly that, so a failed `mmap` handed `arena_init` a value
+// in that range, the header was written through it, and the process died with 139 and no message
+// instead of the panic below.
+pub fn syscall_failed(ret: i64) -> bool {
+    return ret < 0 as i64 && ret > -4096 as i64;
+}
+
+// CALLER OBLIGATION: parameters must specify valid memory protection and mapping flags; traps on kernel failure.
+pub unsafe fn mmap_or_trap(
+    addr: *u8,
+    length: u64,
+    prot: u64,
+    flags: u64,
+    fd: i64,
+    offset: u64
+) -> *mut u8 {
+    // The result is read as the integer the kernel returned, *before* it becomes a pointer: that is
+    // the only point at which a failure is still distinguishable from a mapping.
+    let ret = @syscall(9, addr as u64, length, prot, flags, fd as u64, offset);
+    if syscall_failed(ret) {
+        zoril_user_trap("mmap_or_trap: syscall failed");
+    }
+    return @ptr_from_int<*mut u8>(ret);
+}
+
+// CALLER OBLIGATION: addr and length must specify a currently valid mapped memory range.
+pub unsafe fn munmap_or_trap(addr: *u8, length: u64) {
+    if syscall_failed(@syscall(11, addr as u64, length)) {
+        zoril_user_trap("munmap_or_trap: syscall failed");
+    }
+}
+
+// Converts argv[i] (a C-style nul-terminated string) to a Zoril byte slice.
+// Returns an empty slice if i is out of range (argv[i] is a null pointer).
+pub unsafe fn arg_to_slice(argv: **u8, i: i32) -> [u8] {
+    // argv is a kernel-supplied array of nul-terminated C strings: walking it means
+    // indexing and dereferencing raw pointers whose bounds only the ABI guarantees.
+    let addr = *((argv as usize + i as usize * 8 as usize) as **u8) as usize;
+    if addr == 0 as usize { return @slice(0 as *u8, 0 as usize); }
+    let mut len = 0 as usize;
+    while *((addr + len) as *u8) != 0 as u8 {
+        len = len + 1 as usize;
+    }
+    // `len` was just measured by walking to the nul terminator above.
+    return @slice(addr as *u8, len);
+}

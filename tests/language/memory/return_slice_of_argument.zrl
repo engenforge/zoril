@@ -1,0 +1,9 @@
+// expected exit 15
+// A slice or reference into what a slice argument points at may be returned when that is
+// not this frame: here a string literal, and the caller's own array.
+import "core0.zrl";
+fn first(s: [u8]) -> &u8 { return &s[0]; }
+fn tail(s: [u8]) -> [u8] { return subslice_from(s, 1); }
+fn sum(a: &[u8; 3]) -> i32 { let t = tail(a); return (*first(t) + t[1]) as i32; }
+fn lit() -> &u8 { return first("hi"); }
+fn main() -> i32 { let a: [u8; 3] = [1, 3, 4]; return sum(&a) + (*lit() as i32) - 'h' as i32 + 8; }

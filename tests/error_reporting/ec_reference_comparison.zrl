@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: error: comparison operator not supported on reference operands (dereference it)
+// Relational comparison compares values, not addresses: `r > 0` used to compare a reference's
+// address with zero and compile without a diagnostic.
+fn main() -> i32 {
+    let x: u64 = 1;
+    let r: &u64 = &x;
+    if r > 0 {
+        return 1;
+    }
+    return 0;
+}

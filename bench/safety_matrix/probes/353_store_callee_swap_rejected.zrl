@@ -1,0 +1,31 @@
+// name: A frame-owned view stored through swap of two reference parameters is rejected
+// expected: compile_reject
+// Swapping two mutable reference parameters when one carries a frame-owned view is rejected.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn swap(a: &mut [i32], b: &mut [i32]) {
+    let tmp = *a;
+    *a = *b;
+    *b = tmp;
+}
+
+fn f(out: &mut [i32]) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(7);
+    let mut local = v.as_slice();
+    swap(out, &mut local);
+}
+
+fn main() -> i32 {
+    let e: [i32] = @slice(0 as *i32, 0);
+    let mut s = e;
+    f(&mut s);
+    return s[0];
+}

@@ -1,0 +1,50 @@
+// expected exit 0
+// repeat 10
+// A `Drop` impl's callees are instantiated on demand before their own module's pass: dropping an
+// `Arena` calls `arena_free` (mem.zrl), which calls `must_munmap` (sys.zrl), and the panic path
+// reaches `zoril_user_panic` and `zoril_abort` (core0.zrl, an extern declared `-> never`).
+// stage0-C lowered a body for that extern - synthesizing `return unit`, which cannot be assigned
+// to `never`, so it reported "type mismatch: expected never, found unit" - then created a second
+// IL function for each name the on-demand path had already instantiated (two definitions of one
+// symbol, rejected by the assembler) and lowered one of those twice (the same block labels twice,
+// rejected by qbe). Importing a module that reaches that chain was enough to trigger it, and which
+// of the three errors surfaced first depended on the lowering order, which is why the original
+// report read as non-deterministic. `// repeat 10` because the class is order-dependent: one
+// compile is not a proof.
+import "vec.zrl";
+import "mem.zrl";
+use mem::arena_init;
+use vec::Vec;
+
+fn sum(v: &Vec<i32>) -> i32 {
+    let mut total = 0 as i32;
+    let mut i = 0 as usize;
+    while i < v.len() {
+        // `(*v)[i]`: the explicit deref is what stage0-C's dialect needs for indexing through a
+        // reference (the self-hosted compiler accepts `v[i]` here), as in
+        // tests/functional/test_vec_indexing.zrl.
+        total = total + (*v)[i];
+        i = i + 1 as usize;
+    }
+    return total;
+}
+
+pub fn main() -> i32 {
+    let arena = arena_init(65536);
+    let mut v = unsafe { Vec::<i32>.new_in_raw(arena) };
+    v.push(10);
+    v.push(20);
+    v.push(30);
+
+    if v[0] != 10 { return 1; }
+    if v[1] != 20 { return 2; }
+    if v[2] != 30 { return 3; }
+
+    v[1] = 99;
+    if v[1] != 99 { return 4; }
+    if sum(&v) != 139 { return 5; }
+
+    let p: &i32 = &v[2];
+    if *p != 30 { return 6; }
+    return 0;
+}

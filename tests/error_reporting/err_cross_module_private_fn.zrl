@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_cross_module_private_fn.zrl:7:13: error: unresolved symbol: secret
+// EXPECT: tests/error_reporting/err_cross_module_private_fn.zrl:7:13: note: `secret` is private to tests/error_reporting/include/err_private_fn_helper.zrl
+import "include/err_private_fn_helper.zrl";
+
+pub fn main() -> i32 {
+    let x = secret();
+    return x;
+}

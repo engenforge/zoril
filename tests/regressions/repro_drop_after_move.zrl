@@ -1,0 +1,7 @@
+
+struct Resource { id: i32 }
+fn main() -> i32 {
+    let a = box Resource { id: 1 };
+    @drop(a);
+    return 0;
+}

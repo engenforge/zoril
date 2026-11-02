@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: error: type mismatch: cannot mix bool and non-bool operands
+
+fn main() -> i32 {
+    let y = 6 & true;
+    return y;
+}

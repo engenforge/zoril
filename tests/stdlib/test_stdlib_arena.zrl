@@ -1,0 +1,42 @@
+import "mem_raw.zrl";
+import "io.zrl";
+use io::exit;
+use mem_raw::{arena_free, arena_init, zoril_allocator_alloc};
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(4096) };
+
+    let ptr1 = unsafe { zoril_allocator_alloc(arena, 100) };
+    if ptr1 as u64 == 0 {
+        exit(1);
+    }
+
+    // Offset must have advanced by at least the requested size
+    if unsafe { (*arena).offset } < 100 {
+        exit(2);
+    }
+
+    let ptr2 = unsafe { zoril_allocator_alloc(arena, 200) };
+    if ptr2 as u64 == 0 {
+        exit(3);
+    }
+
+    // Offset must have advanced further
+    if unsafe { (*arena).offset } < 300 {
+        exit(4);
+    }
+
+    // Pointers must be different and non-overlapping
+    if ptr1 as u64 == ptr2 as u64 {
+        exit(5);
+    }
+
+    // ptr1 and ptr2 must not overlap (ptr2 must be at least 100 bytes past ptr1)
+    if ptr2 as u64 < ptr1 as u64 + 100 {
+        exit(6);
+    }
+
+    unsafe { arena_free(arena); }
+
+    return 0;
+}

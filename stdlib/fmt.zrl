@@ -1,0 +1,112 @@
+// Sink-agnostic formatting for decimal integers and hexadecimal bytes
+
+import "core.zrl";
+import "io.zrl";
+use io::{Error, Write, write_all};
+
+// Formats a 64-bit unsigned integer as decimal digits to any Write sink.
+pub fn write_u64<W: Write>(w: &mut W, v: u64) -> Result<(), Error> {
+    if v == 0 as u64 {
+        return write_all(w, "0");
+    }
+
+    let mut buf = [
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+    ];
+    let mut temp = v;
+    let mut i = 20 as usize;
+
+    while temp > 0 as u64 {
+        i = i - 1 as usize;
+        buf[i] = ((temp % 10 as u64) + 48 as u64) as u8;
+        temp = temp / 10 as u64;
+    }
+
+    // SAFETY: i is between 0 and 19 inclusive; 20 - i is length.
+    let slice = unsafe { @slice(&buf[i] as *u8, 20 as usize - i) };
+    return write_all(w, slice);
+}
+
+// Formats a 64-bit signed integer as decimal digits to any Write sink.
+pub fn write_i64<W: Write>(w: &mut W, v: i64) -> Result<(), Error> {
+    if v < 0 as i64 {
+        let _ = write_all(w, "-")?;
+        return write_u64(w, 0 as u64 -% (v as u64));
+    }
+    return write_u64(w, v as u64);
+}
+
+// Formats a 64-bit unsigned integer as hexadecimal digits to any Write sink.
+pub fn write_u64_hex<W: Write>(w: &mut W, v: u64) -> Result<(), Error> {
+    if v == 0 as u64 {
+        return write_all(w, "0");
+    }
+
+    let mut buf = [
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+        0 as u8,
+    ];
+    let mut temp = v;
+    let mut i = 16 as usize;
+
+    while temp > 0 as u64 {
+        i = i - 1 as usize;
+        let rem = (temp % 16 as u64) as u8;
+        if rem < 10 as u8 {
+            buf[i] = rem + '0' as u8;
+        } else {
+            buf[i] = rem - 10 as u8 + 'a' as u8;
+        }
+        temp = temp / 16 as u64;
+    }
+
+    // SAFETY: i is between 0 and 15 inclusive; 16 - i is length.
+    let slice = unsafe { @slice(&buf[i] as *u8, 16 as usize - i) };
+    return write_all(w, slice);
+}
+
+// Formats a byte as two lowercase hexadecimal digits to any Write sink.
+pub fn write_hex_byte<W: Write>(w: &mut W, b: u8) -> Result<(), Error> {
+    let hi = (b >> 4 as u8) & 0xf as u8;
+    let lo = b & 0xf as u8;
+    let buf = [
+        if hi < 10 as u8 { hi + '0' as u8 } else { hi - 10 as u8 + 'a' as u8 },
+        if lo < 10 as u8 { lo + '0' as u8 } else { lo - 10 as u8 + 'a' as u8 },
+    ];
+    // SAFETY: buf is a local 2-byte array on the stack.
+    let slice = unsafe { @slice(&buf[0 as usize] as *u8, 2 as usize) };
+    return write_all(w, slice);
+}

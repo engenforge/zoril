@@ -1,0 +1,13 @@
+// expected compile fail
+// The same condition reached through a method spelled without its parentheses: `a.len` is a method
+// call, and the lowering reads it as a field access on `Args`, which has no `len`. This is the crash the
+// task records, as a located diagnostic.
+// EXPECT: tests/error_reporting/err_unknown_field_method_without_parens.zrl:11:8: error: no field 'len' on 'Args'; 'len' is a method, called as len()
+
+import "args.zrl";
+use args::Args;
+fn main(argc: i32, argv: **u8) -> i32 {
+    let mut a = args::args();
+    if a.len != 1 as usize { return 1; }
+    return 0;
+}

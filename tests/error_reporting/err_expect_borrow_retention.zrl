@@ -1,0 +1,32 @@
+// expected compile fail
+// EXPECT: error: cannot assign to 'e' because it is borrowed
+// An expect-like helper taking Option<T> by value preserves borrows in the returned T.
+import "core.zrl";
+
+enum E {
+    A(Box<i32>),
+    B,
+}
+
+fn custom_expect<T>(opt: Option<T>, msg: [u8]) -> T {
+    return match opt {
+        Option.Some(val) => val,
+        Option.None => {
+            zoril_user_panic(msg);
+        },
+    };
+}
+
+fn first(e: &E) -> Option<&Box<i32>> {
+    return match e {
+        E.A(x) => Option.Some(x),
+        E.B => Option.None,
+    };
+}
+
+fn main() -> i32 {
+    let mut e = E.A(box 5);
+    let r = custom_expect(first(&e), "expected value");
+    e = E.B;
+    return **r;
+}

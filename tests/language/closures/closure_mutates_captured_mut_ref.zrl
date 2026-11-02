@@ -1,0 +1,23 @@
+// A closure that mutates a captured &mut reference changes the referent (surface_syntax.md §5.2).
+
+fn mutate_via_closure(r: &mut i32) {
+    let f = || { *r = *r + 1; };
+    f();
+    f();
+}
+
+fn main() -> i32 {
+    let mut n = 1;
+    mutate_via_closure(&mut n);
+    if n != 3 { return 1; }
+
+    let r = &mut n;
+    let f = || -> i32 {
+        *r = *r + 10;
+        return *r;
+    };
+    if f() != 13 { return 2; }
+    if f() != 23 { return 3; }
+
+    return 0;
+}

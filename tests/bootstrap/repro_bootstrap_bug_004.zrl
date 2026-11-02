@@ -1,0 +1,31 @@
+// Repro for bootstrap compiler bug: miscompilation of nested struct/enum literals.
+
+struct Inner {
+    a: u64,
+    b: u64,
+}
+
+enum Outer {
+    Var(Inner),
+    Other,
+}
+
+fn test() -> Outer {
+    return Outer.Var(Inner { a: 1, b: 2 });
+}
+
+fn main() -> i32 {
+    let o = test();
+    match o {
+        Outer.Var(i) => {
+            if i.a == 1 && i.b == 2 {
+                return 0;
+            }
+            return 1;
+        },
+        Outer.Other => {
+            return 2;
+        },
+    }
+    return 3;
+}

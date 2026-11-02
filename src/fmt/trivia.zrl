@@ -1,0 +1,130 @@
+// A source file as the formatter reads it: its tokens, each with the comments that belong to
+// it. A comment on the line of the token before it trails that token; any other leads the
+// token after it (the end-of-file token takes the comments at the end). Blank lines are kept
+// as a flag on the comment or token they come before.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "vec.zrl";
+import "intern.zrl";
+import "ast.zrl";
+import "token.zrl";
+import "lexer.zrl";
+use ast::Span;
+use intern::InternTable;
+use lexer::Lexer;
+use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+use token::TokenKind;
+use vec::Vec;
+
+pub struct FTok {
+    pub kind: TokenKind,
+    pub start: u32,
+    pub end: u32,
+    pub lead: u32,          // index of its first leading comment
+    pub lead_count: u32,    // how many lead it
+    pub trail: u32,         // 1 + index of the comment that trails it; 0 if none
+    pub blank_before: bool, // an empty line between it and what precedes it
+    pub line_before: bool,  // it starts a line
+}
+
+pub struct FComment {
+    pub start: u32,
+    pub end: u32,
+    pub blank_before: bool, // an empty line between it and what precedes it
+    pub own_line: bool,     // it starts a line
+}
+
+pub struct Trivia {
+    pub toks: Vec<FTok>,
+    pub comments: Vec<FComment>,
+    pub ok: bool, // false when the source has a token the lexer rejects
+}
+
+// SOURCE's tokens and comments.
+// The token and comment lists are arena data, so a caller may keep them while it works with the
+// table it passed in.
+#[borrows(arena)]
+#[stores(arena -> arena)]
+pub fn scan(source: [u8], table: &mut InternTable, arena: *mut ArenaHeader) -> Trivia {
+    let spans = unsafe { zoril_allocator_alloc(arena, sizeof(Vec<Span>)) } as *mut Vec<Span>;
+    unsafe { *spans = Vec::<Span>.new_in_raw(arena); }
+    let mut lexer = Lexer.new(source, table, arena);
+    lexer.comment_sink = spans;
+    let mut toks = unsafe { Vec::<FTok>.new_in_raw(arena) };
+    let mut ok = true;
+    loop {
+        let t = lexer.next_token();
+        let kind = t.token.kind();
+        if kind == TokenKind.Invalid { ok = false; }
+        toks.push(FTok {
+            kind: kind,
+            start: t.span.start,
+            end: t.span.end,
+            lead: 0 as u32,
+            lead_count: 0 as u32,
+            trail: 0 as u32,
+            blank_before: false,
+            line_before: false
+        });
+        if kind == TokenKind.Eof { break; }
+    }
+    let mut comments = unsafe { Vec::<FComment>.new_in_raw(arena) };
+    // Walk tokens and comments in source order, attaching each comment.
+    let mut ci = 0 as usize;
+    let mut prev_end = 0 as u32;     // end of the last token or comment
+    let mut prev_tok = -1 as i64;    // the last token, if any
+    let spans_slice = unsafe { (*spans).as_slice() };
+    for ti in 0 as usize..toks.len() {
+        let mut tok = toks.as_slice()[ti];
+        tok.lead = comments.len() as u32;
+        while ci < spans_slice.len && spans_slice[ci].start < tok.start {
+            let c = spans_slice[ci];
+            let gap = newlines(source, prev_end, c.start);
+            if prev_tok >= 0 as i64
+                && gap == 0 as usize
+                && toks.as_slice()[prev_tok as usize].trail == 0 as u32
+                && prev_end == toks.as_slice()[prev_tok as usize].end {
+                // On the line of the token before it, right after that token.
+                comments.push(FComment {
+                    start: c.start,
+                    end: c.end,
+                    blank_before: false,
+                    own_line: false
+                });
+                let mut p = toks.as_slice()[prev_tok as usize];
+                p.trail = comments.len() as u32;
+                toks.set(prev_tok as usize, p);
+                tok.lead = comments.len() as u32;
+            } else {
+                comments.push(FComment {
+                    start: c.start,
+                    end: c.end,
+                    blank_before: gap >= 2 as usize,
+                    own_line: gap > 0 as usize || prev_end == 0 as u32
+                });
+                tok.lead_count = tok.lead_count + 1 as u32;
+            }
+            prev_end = c.end;
+            ci = ci + 1 as usize;
+        }
+        let gap = newlines(source, prev_end, tok.start);
+        tok.blank_before = gap >= 2 as usize;
+        tok.line_before = gap > 0 as usize;
+        toks.set(ti, tok);
+        prev_end = tok.end;
+        prev_tok = ti as i64;
+    }
+    return Trivia { toks: toks, comments: comments, ok: ok };
+}
+
+// How many newlines SOURCE has from FROM up to TO.
+fn newlines(source: [u8], from: u32, to: u32) -> usize {
+    let mut n = 0 as usize;
+    let mut i = from as usize;
+    while i < to as usize && i < source.len {
+        if source[i] == '\n' as u8 { n = n + 1 as usize; }
+        i = i + 1 as usize;
+    }
+    return n;
+}

@@ -1,0 +1,106 @@
+// Iterator: Vec and HashMap iterate without index bookkeeping, and the map / filter / fold /
+// collect adapters, default methods of the trait, chain over any iterator.
+// expected exit 0
+
+import "iter.zrl";
+import "hashmap.zrl";
+import "mem.zrl";
+import "vec.zrl";
+use hashmap::HashMap;
+use iter::{Iterator, range};
+use mem::Arena;
+use vec::Vec;
+
+fn double(x: &i32) -> i32 { return *x * 2; }
+fn is_big(x: &i32) -> bool { return *x > 2; }
+fn is_even(x: i32) -> bool { return x % 2 == 0; }
+fn add(acc: i32, x: i32) -> i32 { return acc + x; }
+fn add_ref(acc: i32, x: &i32) -> i32 { return acc + *x; }
+fn add_usize(acc: usize, x: usize) -> usize { return acc + x; }
+fn to_i64(x: usize) -> i64 { return x as i64; }
+fn add_i64(acc: i64, x: i64) -> i64 { return acc + x; }
+
+// I::Item names the item type of whatever iterator the caller passes.
+fn sum_all<I: Iterator>(it: I) -> i32 {
+    return it.fold(0, add_ref);
+}
+
+fn first<I: Iterator>(mut it: I) -> Option<I::Item> {
+    return it.next();
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    v.push(4);
+
+    // A plain next() loop: no index, no bounds to get wrong.
+    let mut it = v.iter();
+    let mut seen = 0;
+    while true {
+        match it.next() {
+            Some(x) => { seen = seen + *x; },
+            None => { break; },
+        }
+    }
+    if seen != 10 { return 1; }
+
+    if sum_all(v.iter()) != 10 { return 2; }
+    if v.iter().map(double).fold(0, add) != 20 { return 3; }
+    if v.iter().filter(is_big).fold(0, add_ref) != 7 { return 4; }
+
+    let doubled = v.iter().map(double).collect();
+    if doubled.len() != 4 { return 5; }
+    if *doubled.get(3).unwrap() != 8 { return 6; }
+
+    let empty = Vec::<i32>.new();
+    if empty.iter().next().is_some() { return 7; }
+
+    if range(0, 5).fold(0 as usize, add_usize) != 10 { return 8; }
+    // Adapters chain on adapters: map, then filter, then fold.
+    if v.iter().map(double).filter(is_even).fold(0, add) != 20 {
+        return 11;
+    }
+    if range(1, 4).map(to_i64).fold(0 as i64, add_i64) != 6 { return 12; }
+    match first(v.iter().filter(is_big)) {
+        Some(x) => { if *x != 3 { return 13; } },
+        None => { return 14; },
+    }
+    // A capturing closure is a function value too.
+    let k = 3;
+    if v.iter().map(|x: &i32| -> i32 { *x + k }).fold(0, add) != 22 { return 16; }
+    let limit = 2;
+    let big = v.iter().filter(|x: &i32| -> bool { *x > limit }).fold(
+        0,
+        |a: i32, x: &i32| -> i32 { a + *x * k }
+    );
+    if big != 21 { return 17; }
+    let mut evens = 0;
+    for x in v.iter().map(double).filter(is_even) { evens = evens + x; }
+    if evens != 20 { return 15; }
+
+    let arena = Arena.new(65536).unwrap();
+    let mut m = HashMap::<i32, i32>.new(&arena);
+    m.insert(1, 10);
+    m.insert(2, 20);
+    m.insert(3, 30);
+    let mut entries = m.iter();
+    let mut keys = 0;
+    let mut values = 0;
+    let mut count = 0;
+    while true {
+        match entries.next() {
+            Some(e) => {
+                keys = keys + *e.0;
+                values = values + *e.1;
+                count = count + 1;
+            },
+            None => { break; },
+        }
+    }
+    if count != 3 { return 9; }
+    if keys != 6 || values != 60 { return 10; }
+    return 0;
+}

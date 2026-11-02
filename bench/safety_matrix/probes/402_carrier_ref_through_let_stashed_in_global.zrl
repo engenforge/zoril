@@ -1,0 +1,10 @@
+// name: A reference to a local carrier that reaches the callee through a let, stashed in a global
+// expected: compile_reject
+// A pointer into the frame that arrives at the callee through a value (a load of a slot, a call result, a
+// phi) names no slot, so the summary pass reads it as pointing at stack and fails closed; the callee
+// reads a pointer out of the carrier, and that pointer is the frame's local.
+struct Carrier { v: &i32 }
+static mut KEEP: usize = 0 as usize;
+fn keep(co: &Carrier) { KEEP = co.v as *i32 as usize; }
+fn leak() { let x = 42; let c = Carrier { v: &x }; let r = &c; keep(r); }
+fn main() -> i32 { leak(); return 0; }

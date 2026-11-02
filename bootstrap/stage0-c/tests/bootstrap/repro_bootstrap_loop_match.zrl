@@ -1,0 +1,58 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::{stdout, write};
+use fmt::write_i64;
+
+enum Decl {
+    Fn(i32),
+    Struct(i32),
+    Enum(i32),
+    Impl(i32),
+    Typedef(i32),
+    Const(i32),
+    Import(i32),
+}
+
+struct AST {
+    decls_data: *mut Decl,
+    decls_len: usize,
+}
+
+fn find_impl(ast: &AST) -> i32 {
+    let mut i = 0 as usize;
+    while i < ast.decls_len {
+        let p_decl = (ast.decls_data as usize + i * sizeof(Decl)) as *mut Decl;
+        match unsafe { *p_decl } {
+            Decl.Impl(v) => { return v; },
+            _ => {},
+        }
+        i = i + 1 as usize;
+    }
+    return -1;
+}
+
+fn main() -> i32 {
+    let mut decls = [Decl.Fn(1), Decl.Fn(2), Decl.Impl(42), Decl.Fn(3)];
+    let ast = AST {
+        decls_data: &decls[0] as *mut Decl,
+        decls_len: 4,
+    };
+    
+    let result = find_impl(&ast);
+    write_str("Result: ");
+    let mut out = stdout();
+    let _ = write_i64(&mut out, result as i64);
+    write_str("\n");
+    
+    if result != 42 {
+        write_str("REPRODUCED! Match failed in loop\n");
+    } else {
+        write_str("Match OK\n");
+    }
+    
+    return 0;
+}
+
+fn write_str(s: [u8]) {
+    write(stdout(), s);
+}

@@ -1,0 +1,10 @@
+// io::exit ends the whole process, not only the calling thread: with a C thread running it must
+// still exit at once with the given status.
+import "io.zrl";
+
+extern fn start_thread();
+
+fn main() -> i32 {
+    unsafe { start_thread(); }
+    io::exit(3);
+}

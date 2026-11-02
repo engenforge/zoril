@@ -1,0 +1,28 @@
+// The accepted twin of the private-method error tests: a method, associated function and
+// associated constant without `pub` are reachable from the module that declares them, and the
+// public entry point below is what another module may call (surface_syntax.md §11.1.2).
+pub struct Widget { pub n: i32 }
+
+impl Widget {
+    fn secret(self: &Widget) -> i32 { return self.n + 1; }
+
+    fn assoc_secret() -> i32 { return 7; }
+
+    const SECRET: i32 = 5;
+
+    // Public, so any module may call it; private, so only this one may call it (`sum_private`),
+    // and a private method of a `pub` method's body is fine.
+    pub fn sum_private(self: &Widget) -> i32 { return self.n + self.secret(); }
+
+    pub fn total() -> i32 { return Widget.assoc_secret() + Widget.SECRET; }
+}
+
+// A trait's methods are as visible as the trait, so an impl's methods are public whether or not
+// `pub` is written on them: this one is called from the test file's module.
+pub trait Shaped {
+    fn girth(self: &Widget) -> i32;
+}
+
+impl Shaped for Widget {
+    fn girth(self: &Widget) -> i32 { return self.n * 2; }
+}

@@ -1,0 +1,53 @@
+import "mem.zrl";
+import "fsys.zrl";
+import "proc.zrl";
+use mem::Arena;
+use proc::Command;
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return 1; },
+    };
+    let bad_path = "foo\0bar";
+
+    match fsys::unlink_path(bad_path, &a) {
+        Ok(_) => { return 2; },
+        Err(e) => { if e.errno != 22 { return 3; } },
+    }
+
+    match fsys::rename_path(bad_path, "dst", &a) {
+        Ok(_) => { return 4; },
+        Err(e) => { if e.errno != 22 { return 5; } },
+    }
+
+    match fsys::list_dir(bad_path, &a) {
+        Ok(_) => { return 6; },
+        Err(e) => { if e.errno != 22 { return 7; } },
+    }
+
+    match fsys::make_dir_all(bad_path, &a) {
+        Ok(_) => { return 8; },
+        Err(e) => { if e.errno != 22 { return 9; } },
+    }
+
+    match fsys::acquire_file_lock(bad_path) {
+        Ok(_) => { return 10; },
+        Err(e) => { if e.errno != 22 { return 11; } },
+    }
+
+    let mut cmd = Command.new(bad_path, &a);
+    match cmd.spawn() {
+        Ok(_) => { return 12; },
+        Err(e) => { if e.errno != 22 { return 13; } },
+    }
+
+    let mut cmd2 = Command.new("/bin/echo", &a);
+    cmd2.arg(bad_path);
+    match cmd2.spawn() {
+        Ok(_) => { return 14; },
+        Err(e) => { if e.errno != 22 { return 15; } },
+    }
+
+    return 0;
+}

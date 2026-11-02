@@ -1,0 +1,20 @@
+// expected compile fail
+// EXPECT: error: use of moved value 'r'
+// Tests that defer using a moved value is an error.
+struct Resource { id: i32 }
+
+fn consume(r: Box<Resource>) {}
+fn use_ref(r: &Box<Resource>) {}
+
+fn main() -> i32 {
+    let r = box Resource { id: 1 };
+    defer use_ref(&r); // @error "use of moved value 'r'"
+    consume(r);
+    0
+}
+/*
+Note: The error might be reported at the point of move if the compiler
+detects that a future use (in defer) will be invalid.
+Or it might be reported at the end of the block.
+Looking at src/surface_lower_stmt.c might clarify.
+*/

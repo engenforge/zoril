@@ -1,0 +1,22 @@
+
+struct MyBox<T> {
+    val: T,
+}
+
+impl<T> MyBox<T> {
+    fn new(v: T) -> MyBox<T> {
+        return MyBox { val: v };
+    }
+
+    fn get(self: &MyBox<T>) -> T {
+        return self.val;
+    }
+}
+
+fn main() -> i32 {
+    let b = MyBox::<i32>.new(42);
+    let v = b.get();
+    
+    if v != 42 { return 1; }
+    return 0;
+}

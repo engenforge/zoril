@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_cfn_int_unsafe.zrl:7:23: error: cannot cast integer to function pointer: function pointers cannot be null
+// `unsafe` does not lift the number-to-function-pointer rule: a number is not an address in this
+// language. A raw address is spelled as a raw pointer first (`p as *mut u8`), and that pointer may
+// become a function pointer inside `unsafe`.
+fn main() -> i32 {
+    let f = unsafe { (5 as usize) as extern "C" fn(i32) -> i32 };
+    return 0;
+}

@@ -1,0 +1,8 @@
+// expected exit 134
+// Out-of-bounds slice write must trap rather than writing past the end.
+fn main() -> i32 {
+    let mut arr = [1 as u8, 2, 7];
+    let s: [mut u8] = &mut arr;
+    s[99 as usize] = 42;
+    return s[0] as i32;
+}

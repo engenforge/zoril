@@ -1,0 +1,104 @@
+// Internal test fixture for memory allocation failure validation
+
+import "core.zrl";
+import "sys.zrl";
+use sys::syscall_failed;
+
+// Internal memory arena header used for allocator test fixtures.
+pub struct ArenaHeader {
+    pub start: *u8,
+    pub offset: u64,
+    pub capacity: u64
+}
+
+// Initializes an arena header structure over a pre-allocated memory buffer.
+pub fn arena_init(capacity: u64) -> Box<ArenaHeader> {
+    // Syscall 9: mmap(addr, length, prot, flags, fd, offset)
+    // PROT_READ | PROT_WRITE = 3
+    // MAP_PRIVATE | MAP_ANONYMOUS = 0x22
+    // SAFETY: mmap'ing the arena's backing store is the act of manufacturing the storage the safe
+    // API above is built on (unsafe_policy.md §3). The result is read here as the integer the
+    // kernel returned, because that is the only point at which a failure is still distinguishable
+    // from a mapping: a failed mmap is -errno (-ENOMEM is -12), neither 0 nor -1, and testing for
+    // either let the header be written through the value (stdlib/sys.zrl's `syscall_failed`, as in
+    // `mmap_or_trap`).
+    let ret = unsafe { @syscall(9, 0, capacity, 3, 0x22, -1, 0) };
+
+    if syscall_failed(ret) {
+        zoril_user_trap("arena_init: mmap failed");
+    }
+
+    // `ret` is the mapping the syscall above just made - the failure case returned, so it is not
+    // -errno. The conversion needs no marker: it produces a raw pointer, and every *use* of that
+    // pointer is gated on its type (doc/spec/unsafe_policy.md §1).
+    let ptr = @ptr_from_int<*u8>(ret);
+
+    let a = box ArenaHeader {
+        start: ptr,
+        offset: 0 as u64,
+        capacity: capacity
+    };
+
+    return a;
+}
+
+// Bumps ARENA's offset and hands back the storage. `unsafe` because the header is a raw pointer it
+// writes through, as in stdlib/mem.zrl (this fixture mirrors that module's primitive).
+pub unsafe fn zoril_allocator_alloc(arena: *mut ArenaHeader, size: u64) -> *u8 {
+    // Bumping the arena's header is the allocator's own bookkeeping (unsafe_policy.md §3). The body
+    // of an `unsafe fn` is already an unsafe context, so these writes carry no marker of their own.
+    if arena.offset + size > arena.capacity {
+        return 0 as *u8;
+    }
+
+    let ptr = (arena.start as u64 + arena.offset) as *u8;
+    arena.offset = arena.offset + size;
+    return ptr;
+}
+
+// `unsafe` for the same reason as `zoril_allocator_alloc`: it writes the header and reads OLD_PTR.
+pub unsafe fn zoril_allocator_realloc(
+    arena: *mut ArenaHeader,
+    old_ptr: *u8,
+    old_size: u64,
+    new_size: u64
+) -> *u8 {
+    // If it's the last thing allocated, we can just expand it
+    if (arena.start as u64 + arena.offset) == (old_ptr as u64 + old_size) {
+        if arena.offset + (new_size - old_size) <= arena.capacity {
+            arena.offset = arena.offset + (new_size - old_size);
+            return old_ptr;
+        }
+    }
+
+    // Otherwise, allocate new and copy
+    let new_ptr = zoril_allocator_alloc(arena, new_size);
+    if new_ptr as u64 != 0 as u64 {
+        let mut i = 0 as u64;
+        while i < old_size {
+            let p_old = (old_ptr as u64 + i) as *mut u8;
+            let p_new = (new_ptr as u64 + i) as *mut u8;
+            *p_new = *p_old;
+            i = i + 1 as u64;
+        }
+    }
+    return new_ptr;
+}
+
+// CALLER OBLIGATION: arena must point to a live mapped ArenaHeader.
+pub unsafe fn arena_free(arena: *mut ArenaHeader) {
+    // Syscall 11: munmap(addr, length)
+    @syscall(11, arena.start as u64, arena.capacity);
+}
+
+// A byte-at-a-time copy between two raw pointers: the whole body is the
+// unsafe interior, exactly as in the non-local `mem.zrl`.
+pub unsafe fn memcpy(dest: *mut u8, src: *mut u8, n: u64) {
+    let mut i = 0 as u64;
+    while i < n {
+        let d = (dest as u64 + i) as *mut u8;
+        let s = (src as u64 + i) as *mut u8;
+        *d = *s;
+        i = i + 1 as u64;
+    }
+}

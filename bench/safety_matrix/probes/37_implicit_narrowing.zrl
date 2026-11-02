@@ -1,0 +1,10 @@
+// name: Implicit narrowing conversion
+// expected: compile_reject
+// A conversion that drops bits must be written. `a` does not fit in a u8, and
+// before the check landed this silently stored 44. See 20_narrowing_cast.zrl for
+// the explicit form, which still truncates -- that is the programmer asking.
+fn main() -> i32 {
+    let a: u32 = 300 as u32;
+    let b: u8 = a;
+    return b as i32;
+}

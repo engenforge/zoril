@@ -1,0 +1,11 @@
+// expected exit 0
+// A type parameter anywhere in a slice parameter's element type is inferred from a `&[X; N]`
+// argument, which coerces to the slice (it was inferred only at the top: `[T]`).
+fn first_tag<T>(s: [(i32, T)]) -> i32 { return s[0].0; }
+fn second<T>(s: [(i32, T)]) -> T { return s[1].1; }
+fn main() -> i32 {
+    let a = [(1, true), (2, false)];
+    if first_tag(&a) != 1 { return 1; }
+    if second(&a) { return 2; }
+    return 0;
+}

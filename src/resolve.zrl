@@ -1,0 +1,2299 @@
+// Name resolution: scopes of symbols (what each name refers to), and AST types resolved to
+// IL types.
+
+import "diag.zrl";
+import "core.zrl";
+import "il_layout.zrl";
+import "mem_raw.zrl";
+import "vec.zrl";
+import "intern.zrl";
+import "ast.zrl";
+import "il_type.zrl";
+import "il_cfg.zrl";
+import "pair_map.zrl";
+import "bytevec.zrl";
+import "io.zrl";
+import "fmt.zrl";
+use ast::{AST, AssocType, Decl, DeclId, ExprId, FnDecl, ImplDecl, Span, StmtId, TYPE_PATH, TYPE_PRIMITIVE, TYPE_SLICE, TYPE_SLICE_MUT, TraitDecl, Type, TypeId, TypeParam, primitive_type_name};
+use bytevec::ByteVec;
+use diag::diag_start;
+use il_cfg::{ILModule, extern_type_complaint, extract_module_name};
+use il_layout::{type_size, type_size_overflows, type_size_too_deep};
+use il_type::{FDCap, ILArray, ILFn, ILPRIM_BOOL, ILPRIM_CHAR, ILPRIM_F32, ILPRIM_F64, ILPRIM_I16, ILPRIM_I32, ILPRIM_I64, ILPRIM_I8, ILPRIM_ISIZE, ILPRIM_U16, ILPRIM_U32, ILPRIM_U64, ILPRIM_U8, ILPRIM_UNIT, ILPRIM_USIZE, ILPrimitive, ILSlice, ILType, ILTypeDecl};
+use intern::InternTable;
+use io::{eprint, stderr};
+use fmt::write_u64;
+use mem_raw::{ArenaHeader, memcpy, memset, zoril_allocator_alloc};
+use pair_map::PairMap;
+use vec::Vec;
+
+pub enum SymbolKind {
+    Global(DeclId),
+    Local(StmtId),
+    Param(u32),      // parameter index
+    Type(u32),       // ILType id (a type parameter bound to a type)
+    Primitive(ILPrimitive),
+    Function(u32),   // ILFunction index
+    Method(u32),     // (impl decl id << 16) | method index
+    AssocConst(u32), // (impl decl id << 16) | constant index
+}
+
+// Number of `ILPrimitive` tags, and so the length of `Resolver.primitives`.
+pub const PRIMITIVE_TAG_COUNT: usize = 16;
+
+pub struct Symbol {
+    pub name: u32,
+    pub kind: SymbolKind,
+    pub must_use: bool,
+}
+
+impl Symbol {
+    // The declaration a global name (fn, struct, enum, alias, const, static) refers to.
+    pub fn global_decl(self: &Symbol) -> Option<DeclId> {
+        return match self.kind {
+            SymbolKind.Global(d) => Option.Some(d),
+            _ => Option.None,
+        };
+    }
+
+    pub fn is_local_or_param(self: &Symbol) -> bool {
+        return match self.kind {
+            SymbolKind.Local(_) | SymbolKind.Param(_) => true,
+            _ => false,
+        };
+    }
+}
+
+pub struct SymbolTable {
+    pub symbols: *mut *mut Symbol,
+    pub count: usize,
+    pub cap: usize,
+    pub arena: *mut ArenaHeader,
+    pub buckets: *mut u32,
+    pub bucket_cap: usize,
+}
+
+impl SymbolTable {
+    #[stores(arena -> arena)]
+    pub fn new(arena: *mut ArenaHeader, initial_cap: usize) -> *mut SymbolTable {
+        let st = unsafe { zoril_allocator_alloc(arena, sizeof(SymbolTable)) } as *mut SymbolTable;
+        let sz_ptr = 8 as usize;
+        let bucket_cap = initial_cap * 2;
+        let buckets = unsafe { zoril_allocator_alloc(arena, bucket_cap * 4 as usize) } as *mut u32;
+        unsafe {
+            memset(buckets as *mut u8, 0, (bucket_cap * 4 as usize) as u64);
+            *st = SymbolTable {
+                symbols: zoril_allocator_alloc(arena, initial_cap * sz_ptr) as *mut *mut Symbol,
+                count: 0 as usize,
+                cap: initial_cap,
+                arena: arena,
+                buckets: buckets,
+                bucket_cap: bucket_cap,
+            };
+        }
+        return st;
+    }
+
+    // SymbolTable's raw open-addressed hash table (symbols/buckets) is the same
+    // unsafe-inside/safe-outside shape as stdlib's InternTable, so this whole
+    // function is the unsafe interior rather than a place to migrate.
+    pub fn insert(
+        self: &mut SymbolTable,
+        name: u32,
+        kind: SymbolKind,
+        must_use: bool
+    ) -> *mut Symbol {
+        let sz_ptr = 8 as usize;
+        unsafe {
+            if self.count >= self.cap {
+                let old_cap = self.cap;
+                self.cap = if old_cap == 0 as usize { 16 as usize } else { old_cap * 2 as usize };
+                let new_syms = zoril_allocator_alloc(
+                    self.arena,
+                    self.cap * sz_ptr
+                ) as *mut *mut Symbol;
+                if self.symbols as usize != 0 as usize {
+                    memcpy(new_syms as *mut u8, self.symbols as *u8, (old_cap * sz_ptr) as u64);
+                }
+                self.symbols = new_syms;
+
+                // Re-hash buckets
+                let new_bucket_cap = self.cap * 2;
+                let new_buckets = zoril_allocator_alloc(
+                    self.arena,
+                    new_bucket_cap * 4 as usize
+                ) as *mut u32;
+                memset(new_buckets as *mut u8, 0, (new_bucket_cap * 4 as usize) as u64);
+
+                let mut j = 0 as usize;
+                while j < self.count {
+                    let p_s = *((self.symbols as usize + j * 8) as *mut *mut Symbol);
+                    let mut b_idx = ((*p_s).name as usize) % new_bucket_cap;
+                    while true {
+                        let p_b = (new_buckets as usize + b_idx * 4) as *mut u32;
+                        if *p_b == 0 as u32 {
+                            *p_b = (j + 1 as usize) as u32;
+                            break;
+                        }
+                        b_idx = (b_idx + 1 as usize) % new_bucket_cap;
+                    }
+                    j = j + 1 as usize;
+                }
+                self.buckets = new_buckets;
+                self.bucket_cap = new_bucket_cap;
+            }
+
+            let p_sym = zoril_allocator_alloc(self.arena, sizeof(Symbol)) as *mut Symbol;
+            *p_sym = Symbol { name: name, kind: kind, must_use: must_use };
+
+            let s_idx = self.count;
+            let p_ptr = (self.symbols as usize + s_idx * sz_ptr) as *mut *mut Symbol;
+            *p_ptr = p_sym;
+            self.count = self.count + 1 as usize;
+
+            // Add to buckets
+            if self.bucket_cap > 0 as usize {
+                let mut b_idx = (name as usize) % self.bucket_cap;
+                while true {
+                    let p_b = (self.buckets as usize + b_idx * 4) as *mut u32;
+                    if *p_b == 0 as u32 {
+                        *p_b = (s_idx + 1 as usize) as u32;
+                        break;
+                    }
+                    b_idx = (b_idx + 1 as usize) % self.bucket_cap;
+                }
+            }
+
+            return p_sym;
+        }
+    }
+
+    // Symbols are allocated one by one in the arena and never move, so the result does
+    // not point into the table's (growable) bucket arrays.
+    #[borrows()]
+    pub fn lookup_ptr(self: &SymbolTable, name: u32) -> Option<&Symbol> {
+        if self.count == 0 as usize { return Option.None; }
+
+        unsafe {
+            if self.bucket_cap > 0 as usize {
+                // Shadowing: a re-declared name is inserted again further along
+                // the same probe chain, so scan the whole chain and return the
+                // most recently inserted match, not the first.
+                let mut found = 0 as *mut Symbol;
+                let mut b_idx = (name as usize) % self.bucket_cap;
+                while true {
+                    let s_idx_plus_1 = *((self.buckets as usize + b_idx * 4) as *mut u32);
+                    if s_idx_plus_1 == 0 as u32 { break; }
+
+                    let s_idx = s_idx_plus_1 as usize - 1 as usize;
+                    let p_sym = *((self.symbols as usize + s_idx * 8) as *mut *mut Symbol);
+                    if (*p_sym).name == name { found = p_sym; }
+
+                    b_idx = (b_idx + 1 as usize) % self.bucket_cap;
+                }
+                if found as usize != 0 as usize { return Option.Some(&*found); }
+                return Option.None;
+            }
+
+            // Fallback to linear search if no buckets
+            let mut i = self.count - 1 as usize;
+            while true {
+                let p_sym = *((self.symbols as usize + i * 8) as *mut *mut Symbol);
+                if (*p_sym).name == name { return Option.Some(&*p_sym); }
+                if i == 0 as usize { break; }
+                i = i - 1 as usize;
+            }
+            return Option.None;
+        }
+    }
+}
+
+pub struct Scope {
+    pub symbols: *mut SymbolTable,
+    pub parent: *mut Scope,
+}
+
+impl Scope {
+    // Parent-pointer tree walked mutably -- the classic shape references
+    // handle badly (Option<&mut Scope> fights the borrow checker on every
+    // ascent). Mark now; the real fix is index-based scopes, recorded as a
+    // design change rather than done here.
+    #[stores(arena -> arena, parent -> arena)]
+    pub fn new(arena: *mut ArenaHeader, parent: *mut Scope) -> *mut Scope {
+        let s = unsafe { zoril_allocator_alloc(arena, sizeof(Scope)) } as *mut Scope;
+        unsafe {
+            (*s).symbols = SymbolTable.new(arena, 1024);
+            (*s).parent = parent;
+        }
+        return s;
+    }
+}
+
+pub struct Resolver {
+    pub arena: *mut ArenaHeader,
+    pub ast: &AST,
+    pub module: &mut ILModule,
+    pub intern_table: &mut InternTable,
+    pub file_path: [u8],
+    pub current_scope: *mut Scope,
+    // Instantiates a generic struct or enum for resolve_type: the monomorphizer's, set by
+    // set_type_instantiator. A function and its context rather than the Monomorphizer, which
+    // imports this module.
+    pub instantiate: fn(*mut u8, u32, *u32, usize) -> u32,
+    pub instantiate_ctx: *mut u8,
+    // Resolves `T::Name`, an associated type of the type T stands for (TYPE, NAME, the TypeId
+    // to report at, the module): the monomorphizer's, set by set_assoc_projector with the
+    // instantiator's context.
+    pub project: fn(*mut u8, u32, u32, u32, u32) -> u32,
+    pub primitives: *mut u32, // Array of 16 u32
+    pub had_error: bool,
+    // The interned path of the module whose code is being resolved, or 0: a top-level name
+    // defined in several modules resolves to this module's definition (lookup_root).
+    pub current_module: u32,
+    // Module namespaces (surface_syntax.md §11.1): (module, name) -> the module it imports
+    // under that name; (module, name) -> the module whose item NAME a `use` brings in; and the
+    // prelude modules (core.zrl and core0.zrl), whose public items every module sees.
+    pub namespaces: PairMap,
+    pub used_names: PairMap,
+    // What has been reported as unknown, once each: (TypeId, 0) for a type, and
+    // (0xffffffff, ExprId) for the name in a `T::<A>` expression.
+    pub reported_types: PairMap,
+    // Whether an over-limit type has been reported. One report is enough: every instantiation
+    // that carries the type reports the same size, and the first names where the type is written.
+    pub reported_type_size: bool,
+    pub prelude: Vec<u32>,
+}
+
+impl Resolver {
+    pub fn map_primitive_tag(self: &Resolver, tag: u32) -> ILPrimitive {
+        if tag == ILPRIM_U8 { return ILPrimitive.U8; }
+        if tag == ILPRIM_U16 { return ILPrimitive.U16; }
+        if tag == ILPRIM_U32 { return ILPrimitive.U32; }
+        if tag == ILPRIM_U64 { return ILPrimitive.U64; }
+        if tag == ILPRIM_USIZE { return ILPrimitive.USize; }
+        if tag == ILPRIM_I8 { return ILPrimitive.I8; }
+        if tag == ILPRIM_I16 { return ILPrimitive.I16; }
+        if tag == ILPRIM_I32 { return ILPrimitive.I32; }
+        if tag == ILPRIM_I64 { return ILPrimitive.I64; }
+        if tag == ILPRIM_ISIZE { return ILPrimitive.ISize; }
+        if tag == ILPRIM_F32 { return ILPrimitive.F32; }
+        if tag == ILPRIM_F64 { return ILPrimitive.F64; }
+        if tag == ILPRIM_BOOL { return ILPrimitive.Bool; }
+        if tag == ILPRIM_CHAR { return ILPrimitive.Char; }
+        if tag == ILPRIM_UNIT { return ILPrimitive.Unit; }
+        return ILPrimitive.Never;
+    }
+
+    pub fn push_scope(self: &mut Resolver) {
+        self.current_scope = Scope.new(self.arena, self.current_scope);
+    }
+
+    pub fn pop_scope(self: &mut Resolver) {
+        let parent = unsafe { (*self.current_scope).parent };
+        if parent as usize != 0 as usize {
+            self.current_scope = parent;
+        }
+    }
+
+    // Defines a top-level NAME, whatever scope is current.
+    pub fn define_root(
+        self: &mut Resolver,
+        name: u32,
+        kind: SymbolKind,
+        must_use: bool
+    ) -> *mut Symbol {
+        return unsafe { (*(*self.root_scope()).symbols).insert(name, kind, must_use) };
+    }
+
+    pub fn define(self: &mut Resolver, name: u32, kind: SymbolKind, must_use: bool) -> *mut Symbol {
+        let symbols = unsafe { (*self.current_scope).symbols };
+        return unsafe { (*symbols).insert(name, kind, must_use) };
+    }
+
+    fn init_builtins(self: &mut Resolver) {
+        let id_u8 = self.intern_table.intern("u8");
+        self.define(id_u8, SymbolKind.Primitive(ILPrimitive.U8), false);
+        self.define(self.intern_table.intern("u16"), SymbolKind.Primitive(ILPrimitive.U16), false);
+        self.define(self.intern_table.intern("u32"), SymbolKind.Primitive(ILPrimitive.U32), false);
+        self.define(self.intern_table.intern("u64"), SymbolKind.Primitive(ILPrimitive.U64), false);
+        self.define(
+            self.intern_table.intern("usize"),
+            SymbolKind.Primitive(ILPrimitive.USize),
+            false
+        );
+        self.define(self.intern_table.intern("i8"), SymbolKind.Primitive(ILPrimitive.I8), false);
+        self.define(self.intern_table.intern("i16"), SymbolKind.Primitive(ILPrimitive.I16), false);
+        self.define(self.intern_table.intern("i32"), SymbolKind.Primitive(ILPrimitive.I32), false);
+        self.define(self.intern_table.intern("i64"), SymbolKind.Primitive(ILPrimitive.I64), false);
+        self.define(
+            self.intern_table.intern("isize"),
+            SymbolKind.Primitive(ILPrimitive.ISize),
+            false
+        );
+        self.define(
+            self.intern_table.intern("bool"),
+            SymbolKind.Primitive(ILPrimitive.Bool),
+            false
+        );
+        self.define(
+            self.intern_table.intern("char"),
+            SymbolKind.Primitive(ILPrimitive.Char),
+            false
+        );
+        self.define(self.intern_table.intern("f32"), SymbolKind.Primitive(ILPrimitive.F32), false);
+        self.define(self.intern_table.intern("f64"), SymbolKind.Primitive(ILPrimitive.F64), false);
+    }
+
+    // Defines every top-level name: functions, types, aliases, constants and statics by their
+    // declaration, and each impl's methods and constants by their packed (impl, index).
+    fn register_global_decls(self: &mut Resolver) {
+        let ast: &AST = self.ast;
+        for i in 1 as usize..ast.decls.len() {
+            match ast.decls()[i] {
+                Decl.Fn(f) => { self.define_global(f.name, i as u32, f.must_use); },
+                Decl.Struct(s) => { self.define_global(s.name, i as u32, s.must_use); },
+                Decl.Enum(e) => { self.define_global(e.name, i as u32, e.must_use); },
+                Decl.TypeAlias(ta) => { self.define_global(ta.name, i as u32, false); },
+                Decl.Const(c) => { self.define_global(c.name, i as u32, false); },
+                Decl.Static(s) => { self.define_global(s.name, i as u32, false); },
+                Decl.Impl(imp) => { self.register_impl_items(&imp, i as u32); },
+                Decl.Trait(t) => { self.define_global(t.name, i as u32, false); },
+                Decl.Import(_) | Decl.None => {},
+            }
+        }
+    }
+
+    // Defines the top-level NAME of declaration DECL_ID, reporting a second definition of it in
+    // the same module.
+    fn define_global(self: &mut Resolver, name: u32, decl_id: u32, must_use: bool) {
+        let decl = self.ast.decls[decl_id as usize];
+        let module = decl.source_file();
+        if let Option.Some(prev) = self.lookup_root_in(name, module) {
+            if let SymbolKind.Global(prev_id) = prev.kind {
+                let prev_decl = self.ast.decls[prev_id as usize];
+                if prev_decl.source_file() == module {
+                    self.report_duplicate(name, decl_id, prev_id, "defined twice");
+                }
+            }
+        }
+        self.define(name, SymbolKind.Global(decl_id), must_use);
+    }
+
+    // An earlier global definition of NAME that would conflict with one in MODULE: one from
+    // MODULE itself, else a public one from elsewhere.
+    fn lookup_root_in(self: &mut Resolver, name: u32, module: u32) -> Option<&Symbol> {
+        return self.lookup_root_from(name, module);
+    }
+
+    fn report_duplicate(self: &mut Resolver, name: u32, decl_id: u32, prev_id: u32, what: [u8]) {
+        let here = self.ast.decl_spans[decl_id as usize];
+        let there = self.ast.decl_spans[prev_id as usize];
+        diag_start(
+            self.intern_table.lookup(self.ast.decls[decl_id as usize].source_file()),
+            here,
+            "error"
+        );
+        eprint("`");
+        eprint(self.intern_table.lookup(name));
+        eprint("` is ");
+        eprint(what);
+        eprint("; the other is at ");
+        let there_file = self.ast.decls[prev_id as usize].source_file();
+        eprint(self.intern_table.lookup(there_file));
+        // A line of another module is not known to a separate build (it reads that module from an
+        // interface, whose lines are not the source's), so it is named only within one file.
+        if there_file == self.ast.decls[decl_id as usize].source_file() && there.line != 0 as u32 {
+            eprint(":");
+            let mut err = stderr();
+            let _ = write_u64(&mut err, there.line as u64);
+            eprint(":");
+            let _ = write_u64(&mut err, there.col as u64);
+        }
+        eprint("\n");
+        self.had_error = true;
+    }
+
+    // An impl's methods as `Type::method` and its constants as `Type::CONST`, names only a
+    // path to the type reaches. Impls on a primitive or a tuple, slice or function type
+    // register nothing.
+    fn register_impl_items(self: &mut Resolver, imp: &ImplDecl, impl_id: u32) {
+        let type_name = self.impl_type_name(imp);
+        if type_name == 0 as u32 { return; }
+        for k in 0 as usize..imp.methods.len {
+            let packed = (impl_id << 16) | (k as u32);
+            let m = &imp.methods[k];
+            self.define(
+                self.join_names(type_name, "::", m.name),
+                SymbolKind.Method(packed),
+                m.must_use
+            );
+        }
+        // An associated constant is found by the same packed index as a method.
+        for k in 0 as usize..imp.constants.len {
+            let packed = (impl_id << 16) | (k as u32);
+            self.define(
+                self.join_names(type_name, "::", imp.constants[k].name),
+                SymbolKind.AssocConst(packed),
+                false
+            );
+        }
+    }
+
+    fn append_type_arg_name(self: &Resolver, ty_id: TypeId, buf: &mut ByteVec) {
+        if ty_id == 0 as TypeId || (ty_id as usize) >= self.ast.types.len() { return; }
+        let p_ty = &self.ast.types[ty_id as usize];
+        match *p_ty {
+            Type.Primitive(p) => {
+                buf.push_slice(primitive_type_name(p));
+            },
+            Type.Path((name, args)) => {
+                buf.push_slice(self.intern_table.lookup(name));
+                if args.len > 0 as usize {
+                    buf.push_slice("_T");
+                    for a in args {
+                        self.append_type_arg_name(*a, buf);
+                    }
+                }
+            },
+            Type.Slice(inner) => {
+                buf.push_slice("S");
+                self.append_type_arg_name(inner, buf);
+            },
+            Type.SliceMut(inner) => {
+                buf.push_slice("M");
+                self.append_type_arg_name(inner, buf);
+            },
+            _ => {},
+        }
+    }
+
+    fn slice_canonical_name(
+        self: &Resolver,
+        elem_id: TypeId,
+        mutable: bool,
+        type_params: [TypeParam]
+    ) -> u32 {
+        if elem_id == 0 as TypeId || (elem_id as usize) >= self.ast.types.len() { return 0 as u32; }
+        let p_elem = &self.ast.types[elem_id as usize];
+        let elem_tag = p_elem.get_tag();
+        let prefix: [u8] = if mutable { "M" } else { "S" };
+        if elem_tag == TYPE_PRIMITIVE {
+            let prim_name = primitive_type_name(p_elem.get_Primitive());
+            let mut buf = unsafe { ByteVec.new_raw(self.arena) };
+            buf.push_slice(prefix);
+            buf.push_slice(prim_name);
+            return self.intern_table.intern(buf.as_slice());
+        }
+        if elem_tag == TYPE_PATH {
+            let path = p_elem.get_Path();
+            let path_name = path.0;
+            let mut is_gen = false;
+            for tp in type_params {
+                if tp.name == path_name { is_gen = true; break; }
+            }
+            let mut buf = unsafe { ByteVec.new_raw(self.arena) };
+            buf.push_slice(prefix);
+            if is_gen {
+                buf.push_slice("_gen");
+            } else {
+                buf.push_slice(self.intern_table.lookup(path_name));
+                if path.1.len > 0 as usize {
+                    buf.push_slice("_T");
+                    for a in path.1 {
+                        self.append_type_arg_name(*a, buf);
+                    }
+                }
+            }
+            return self.intern_table.intern(buf.as_slice());
+        }
+        if elem_tag == TYPE_SLICE || elem_tag == TYPE_SLICE_MUT {
+            let inner_name = self.slice_canonical_name(
+                p_elem.get_Slice(),
+                elem_tag == TYPE_SLICE_MUT,
+                type_params
+            );
+            if inner_name == 0 as u32 { return 0 as u32; }
+            let mut buf = unsafe { ByteVec.new_raw(self.arena) };
+            buf.push_slice(prefix);
+            buf.push_slice(self.intern_table.lookup(inner_name));
+            return self.intern_table.intern(buf.as_slice());
+        }
+        return 0 as u32;
+    }
+
+    // The name of the type an impl is for, through one pointer or reference; canonical
+    // slice key (Su8, S_gen, Mu8) for slice types; 0 for a primitive, tuple, or function type.
+    fn impl_type_name(self: &Resolver, imp: &ImplDecl) -> u32 {
+        let t = imp.target_ty;
+        if t == 0 as TypeId || (t as usize) >= self.ast.types.len() { return 0 as u32; }
+        return match self.ast.types[t as usize] {
+            Type.Path(path) => path.0,
+            Type.Ptr(inner) | Type.PtrMut(inner) | Type.Ref(inner) | Type.RefMut(inner) => {
+                match self.ast.types[inner as usize] { Type.Path(path) => path.0, _ => 0 as u32 }
+            },
+            Type.Slice(inner) => self.slice_canonical_name(inner, false, imp.type_params),
+            Type.SliceMut(inner) => self.slice_canonical_name(inner, true, imp.type_params),
+            _ => 0 as u32,
+        };
+    }
+
+    // The declaration of the type impl IMPL_ID is for, as its own module sees the name; 0 for
+    // a type that is not a declaration (a primitive, or an alias).
+    pub fn impl_type_decl(self: &Resolver, impl_id: u32) -> u32 {
+        let decl = self.ast.decls[impl_id as usize];
+        let type_name = self.impl_type_name(decl.get_Impl());
+        if let Option.Some(sym) = self.lookup_root_from(type_name, decl.source_file()) {
+            if let SymbolKind.Global(d) = sym.kind {
+                return match self.ast.decls[d as usize] {
+                    Decl.Struct(_) | Decl.Enum(_) => d,
+                    _ => 0 as u32
+                };
+            }
+        }
+        return 0 as u32;
+    }
+
+    // The module defining the type impl IMPL_ID is for (0 for built-in slice types).
+    fn impl_type_module(self: &mut Resolver, impl_id: u32) -> u32 {
+        let imp = self.ast.decls[impl_id as usize].get_Impl();
+        let t = imp.target_ty;
+        if t != 0 as TypeId && (t as usize) < self.ast.types.len() {
+            let tag = self.ast.types[t as usize].get_tag();
+            if tag == TYPE_SLICE || tag == TYPE_SLICE_MUT {
+                return 0 as u32;
+            }
+        }
+        let d = self.impl_type_decl(impl_id);
+        return self.ast.decls[(if d != 0 as u32 { d } else { impl_id }) as usize].source_file();
+    }
+
+    fn slice_generic_key(self: &Resolver, target_ty: TypeId) -> u32 {
+        let mut buf = unsafe { ByteVec.new_raw(self.arena) };
+        let mut curr = target_ty;
+        while curr != 0 as TypeId && (curr as usize) < self.ast.types.len() {
+            let tag = self.ast.types[curr as usize].get_tag();
+            if tag == TYPE_SLICE {
+                buf.push_slice("S");
+                curr = self.ast.types[curr as usize].get_Slice();
+            } else if tag == TYPE_SLICE_MUT {
+                buf.push_slice("M");
+                curr = self.ast.types[curr as usize].get_Slice();
+            } else {
+                break;
+            }
+        }
+        buf.push_slice("_gen");
+        return self.intern_table.intern(buf.as_slice());
+    }
+
+    // Reports a method or constant defined twice for one type: two items of one name in impls
+    // of the same type declaration, in one module or two. Runs once every name is defined, as
+    // an impl can come before its type.
+    fn check_impl_items_unique(self: &mut Resolver) {
+        for i in 1 as usize..self.ast.decls.len() {
+            if let Decl.Impl(imp) = self.ast.decls[i] {
+                let type_name = self.impl_type_name(&imp);
+                if type_name == 0 as u32 { continue; }
+                let owner = self.impl_type_module(i as u32);
+                let target_tag = self.ast.types[imp.target_ty as usize].get_tag();
+                let is_slice = target_tag == TYPE_SLICE || target_tag == TYPE_SLICE_MUT;
+                let gen_slice_key = if is_slice {
+                    self.slice_generic_key(imp.target_ty)
+                } else {
+                    0 as u32
+                };
+                let count = imp.methods.len + imp.constants.len;
+                for k in 0 as usize..count {
+                    let item = impl_item_name(imp, k);
+                    let full = self.join_names(type_name, "::", item);
+                    let mut prev = self.earlier_impl_item(full, owner, i as u32);
+                    for j in 0 as usize..k {
+                        if impl_item_name(imp, j) == item { prev = i as u32; }
+                    }
+                    if is_slice && prev == 0 as u32 {
+                        if type_name != gen_slice_key {
+                            // Concrete slice: check if generic slice already defined this method
+                            let gen_full = self.join_names(gen_slice_key, "::", item);
+                            let prev_gen = self.earlier_impl_item(gen_full, owner, i as u32);
+                            if prev_gen != 0 as u32 { prev = prev_gen; }
+                        } else {
+                            // Generic slice: check if an earlier concrete slice already defined this method
+                            for pi in 1 as usize..i {
+                                if let Decl.Impl(p_imp) = self.ast.decls[pi] {
+                                    let p_tag = self.ast.types[p_imp.target_ty as usize].get_tag();
+                                    if p_tag == TYPE_SLICE || p_tag == TYPE_SLICE_MUT {
+                                        if self.slice_generic_key(p_imp.target_ty)
+                                            == gen_slice_key {
+                                            let p_key = self.impl_type_name(&p_imp);
+                                            if p_key != gen_slice_key {
+                                                let p_count = p_imp.methods.len
+                                                    + p_imp.constants.len;
+                                                for pj in 0 as usize..p_count {
+                                                    if impl_item_name(p_imp, pj) == item {
+                                                        prev = pi as u32;
+                                                        break;
+                                                    }
+                                                }
+                                                if prev != 0 as u32 { break; }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if prev != 0 as u32 {
+                        self.report_duplicate(full, i as u32, prev, "defined twice");
+                    }
+                }
+            }
+        }
+    }
+
+    // Checks each trait impl against its trait: it defines every method that has no default
+    // body and every associated type, and nothing the trait does not declare. Its methods are
+    // made public, as the trait's are. The default
+    // methods it does not define are copied into it (FnDecl.default_of) and registered as its
+    // own (`Type::method`), so a call finds them as it finds any method; mono binds the
+    // trait's parameters when it instantiates one. An impl of a trait
+    // the program does not declare (`Drop`) is not checked.
+    fn expand_trait_impls(self: &mut Resolver, ast: &mut AST) {
+        for i in 1 as usize..ast.decls.len() {
+            let imp = match ast.decls[i] { Decl.Impl(imp) => imp, _ => { continue; } };
+            if imp.trait_name == 0 as u32 { continue; }
+            let trait_id = self.trait_decl_named(imp.trait_name, imp.source_file);
+            if trait_id == 0 as u32 {
+                self.check_trait_name(imp.trait_name, imp.source_file, ast.decl_spans[i]);
+                continue;
+            }
+            let tr = match ast.decls[trait_id as usize] {
+                Decl.Trait(tr) => tr,
+                _ => { continue; }
+            };
+            let impl_span = ast.decl_spans[i];
+            for m in imp.methods {
+                if !trait_has_method(&tr, m.name) {
+                    let span = if m.body != 0 as ExprId {
+                        ast.expr_spans[m.body as usize]
+                    } else {
+                        impl_span
+                    };
+                    self.report_not_in_trait("method", m.name, tr.name, imp.source_file, span);
+                }
+            }
+            for a in imp.assoc_types {
+                if !has_assoc_type(tr.assoc_types, a.name) {
+                    self.report_not_in_trait(
+                        "associated type",
+                        a.name,
+                        tr.name,
+                        imp.source_file,
+                        a.span
+                    );
+                }
+            }
+            for a in tr.assoc_types {
+                if !has_assoc_type(imp.assoc_types, a.name) {
+                    self.report_impl_missing(&imp, tr.name, "associated type", a.name, impl_span);
+                }
+            }
+            // A trait's methods are as visible as the trait: callable through it from any
+            // module, so in -c mode each TU exports its impls' methods.
+            let mut methods = unsafe { Vec::<FnDecl>.new_in_raw(self.arena) };
+            for m in imp.methods {
+                let mut public = *m;
+                public.is_pub = true;
+                methods.push(public);
+            }
+            for m in tr.methods {
+                if impl_has_method(&imp, m.name) { continue; }
+                if m.body == 0 as ExprId {
+                    self.report_impl_missing(&imp, tr.name, "method", m.name, impl_span);
+                    continue;
+                }
+                let mut copy = *m;
+                copy.default_of = i as u32;
+                copy.is_pub = true;
+                methods.push(copy);
+            }
+            let mut expanded = imp;
+            expanded.methods = methods.as_slice();
+            ast.decls[i] = Decl.Impl(expanded);
+            let type_name = self.impl_type_name(&expanded);
+            if type_name == 0 as u32 { continue; }
+            // The copied defaults, after the impl's own methods, which are already defined.
+            for k in imp.methods.len..expanded.methods.len {
+                self.define(
+                    self.join_names(type_name, "::", expanded.methods[k].name),
+                    SymbolKind.Method(((i as u32) << 16) | (k as u32)),
+                    expanded.methods[k].must_use
+                );
+            }
+        }
+    }
+
+    // The declaration of the trait NAME (`Iterator`, `iter::Iterator`) as MODULE sees it, like
+    // any other item name: its own, one a `use` brings in, the prelude's, or a module's
+    // through its path; 0 if NAME names no trait there.
+    pub fn trait_decl_named(self: &Resolver, name: u32, module: u32) -> u32 {
+        if let Option.Some(sym) = self.lookup_root_from(name, module) {
+            if let SymbolKind.Global(d) = sym.kind {
+                if let Decl.Trait(_) = self.ast.decls[d as usize] { return d; }
+            }
+        }
+        return 0 as u32;
+    }
+
+    // Whether trait name A, written in module A_MODULE, and B, in B_MODULE, name one trait. A
+    // language trait no module declares (`Drop`) is known by its name.
+    pub fn same_trait(self: &Resolver, a: u32, a_module: u32, b: u32, b_module: u32) -> bool {
+        let da = self.trait_decl_named(a, a_module);
+        let db = self.trait_decl_named(b, b_module);
+        if da != 0 as u32 || db != 0 as u32 { return da == db; }
+        return last_path_segment(self.intern_table.lookup(a))
+            == last_path_segment(self.intern_table.lookup(b));
+    }
+
+    // Whether NAME is a trait the language knows without a declaration: `Drop`, whose impls the
+    // compiler calls, and `Copy`, a property of a type (core.zrl declares it as a marker).
+    fn is_language_trait(self: &Resolver, name: u32) -> bool {
+        let base = last_path_segment(self.intern_table.lookup(name));
+        return base == "Drop" || base == "Copy";
+    }
+
+    // Reports trait NAME, at SPAN in MODULE, when no trait of that name is in scope there.
+    fn check_trait_name(self: &mut Resolver, name: u32, module: u32, span: Span) {
+        if self.trait_decl_named(name, module) != 0 as u32 || self.is_language_trait(name) {
+            return;
+        }
+        diag_start(self.intern_table.lookup(module), span, "error");
+        eprint("unknown trait `");
+        eprint(self.intern_table.lookup(name));
+        eprint("`\n");
+        self.had_error = true;
+        let saved = self.current_module;
+        self.current_module = module;
+        let hint = self.name_hint(name);
+        self.current_module = saved;
+        if hint.len > 0 as usize {
+            diag_start(self.intern_table.lookup(module), span, "note");
+            eprint(hint);
+            eprint("\n");
+        }
+    }
+
+    fn report_not_in_trait(
+        self: &mut Resolver,
+        what: [u8],
+        name: u32,
+        trait_name: u32,
+        file_id: u32,
+        span: Span
+    ) {
+        // An interned id, not a `lookup` slice: that would keep the table borrowed across this call.
+        diag_start(self.intern_table.lookup(file_id), span, "error");
+        eprint(what);
+        eprint(" `");
+        eprint(self.intern_table.lookup(name));
+        eprint("` is not a member of trait `");
+        eprint(self.intern_table.lookup(trait_name));
+        eprint("`\n");
+        self.had_error = true;
+    }
+
+    fn report_impl_missing(
+        self: &mut Resolver,
+        imp: &ImplDecl,
+        trait_name: u32,
+        what: [u8],
+        name: u32,
+        span: Span
+    ) {
+        diag_start(self.intern_table.lookup(imp.source_file), span, "error");
+        eprint("impl of `");
+        eprint(self.intern_table.lookup(trait_name));
+        let type_name = self.impl_type_name(imp);
+        if type_name != 0 as u32 {
+            eprint("` for `");
+            eprint(self.intern_table.lookup(type_name));
+        }
+        eprint("` is missing ");
+        eprint(what);
+        eprint(" `");
+        eprint(self.intern_table.lookup(name));
+        eprint("`\n");
+        self.had_error = true;
+    }
+
+    // An impl before impl BEFORE, of a type defined in OWNER, with an item named FULL_NAME
+    // (`Type::NAME`); 0 if there is none.
+    fn earlier_impl_item(self: &mut Resolver, full_name: u32, owner: u32, before: u32) -> u32 {
+        // A raw pointer, not a `&SymbolTable`: the reference cannot span `impl_type_module` below.
+        let table = unsafe { (*self.root_scope()).symbols };
+        let count = unsafe { (*table).count };
+        let bucket_cap = unsafe { (*table).bucket_cap };
+        if count == 0 as usize || bucket_cap == 0 as usize { return 0 as u32; }
+        let buckets = unsafe { (*table).buckets };
+        let symbols = unsafe { (*table).symbols };
+        let mut b = (full_name as usize) % bucket_cap;
+        loop {
+            let slot = unsafe { *((buckets as usize + b * 4) as *mut u32) };
+            if slot == 0 as u32 { return 0 as u32; }
+            let sym = unsafe {
+                *((symbols as usize + (slot as usize - 1 as usize) * 8) as *mut *mut Symbol)
+            };
+            let other = match unsafe { (*sym).kind } {
+                SymbolKind.Method(o) | SymbolKind.AssocConst(o) => o,
+                _ => 0xffffffff as u32
+            };
+            if other != 0xffffffff as u32
+                && unsafe { (*sym).name } == full_name
+                && (other >> 16) < before
+                && self.impl_type_module(other >> 16) == owner {
+                return other >> 16;
+            }
+            b = (b + 1 as usize) % bucket_cap;
+        }
+        return 0 as u32;
+    }
+
+    // Reports each struct or enum that contains itself by value, through fields, payloads,
+    // tuples and arrays (not pointers, references, slices or boxes): it would have no size.
+    fn check_type_cycles(self: &mut Resolver) {
+        for i in 1 as usize..self.ast.decls.len() {
+            let name = match self.ast.decls[i] {
+                Decl.Struct(st) => st.name,
+                Decl.Enum(en) => en.name,
+                _ => 0 as u32
+            };
+            if name == 0 as u32 { continue; }
+            let mut seen = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+            if !self.decl_contains(
+                i as u32,
+                i as u32,
+                0 as *mut TypeBinding,
+                &mut seen,
+                0 as usize
+            ) {
+                continue;
+            }
+            let span = self.ast.decl_spans[i];
+            diag_start(self.intern_table.lookup(self.ast.decls[i].source_file()), span, "error");
+            eprint("`");
+            eprint(self.intern_table.lookup(name));
+            eprint(
+                "` contains itself by value, so it has no size (put it behind a pointer or a box)\n"
+            );
+            self.had_error = true;
+        }
+    }
+
+    // Whether struct or enum D, its type parameters bound by ENV, holds TARGET by value.
+    // SEEN holds the declarations already explored with no bindings.
+    fn decl_contains(
+        self: &mut Resolver,
+        d: u32,
+        target: u32,
+        env: *mut TypeBinding,
+        seen: &mut Vec<u32>,
+        depth: usize
+    ) -> bool {
+        if depth > 32 as usize { return false; }
+        if env as usize == 0 as usize {
+            for v in seen.as_slice() { if *v == d { return false; } }
+            seen.push(d);
+        }
+        let decl = self.ast.decls[d as usize];
+        let module = decl.source_file();
+        match decl {
+            Decl.Struct(st) => {
+                for f in st.fields {
+                    if self.type_contains(f.ty, module, env, target, seen, depth) { return true; }
+                }
+            },
+            Decl.Enum(en) => {
+                for v in en.variants {
+                    if self.type_contains(v.payload, module, env, target, seen, depth) {
+                        return true;
+                    }
+                }
+            },
+            _ => {},
+        }
+        return false;
+    }
+
+    // Whether type TY, written in MODULE with type parameters bound by ENV, holds TARGET by value.
+    fn type_contains(
+        self: &mut Resolver,
+        ty: TypeId,
+        module: u32,
+        env: *mut TypeBinding,
+        target: u32,
+        seen: &mut Vec<u32>,
+        depth: usize
+    ) -> bool {
+        if ty == 0 as TypeId { return false; }
+        match self.ast.types[ty as usize] {
+            Type.Path(path) => {
+                // A type parameter: its argument, read where it was written.
+                let mut b = env;
+                while b as usize != 0 as usize {
+                    let bd = unsafe { *b };
+                    if bd.name == path.0 {
+                        return self.type_contains(
+                            bd.ty,
+                            bd.module,
+                            bd.outer,
+                            target,
+                            seen,
+                            depth + 1 as usize
+                        );
+                    }
+                    b = bd.next;
+                }
+                let d = match self.lookup_root_in(path.0, module) {
+                    Option.Some(sym) => match sym.kind { SymbolKind.Global(g) => g, _ => 0 as u32 },
+                    Option.None => 0 as u32,
+                };
+                if d == 0 as u32 { return false; }
+                let params = match self.ast.decls[d as usize] {
+                    Decl.TypeAlias(ta) => {
+                        return self.type_contains(
+                            ta.target,
+                            self.ast.decls[d as usize].source_file(),
+                            0 as *mut TypeBinding,
+                            target,
+                            seen,
+                            depth + 1 as usize
+                        );
+                    },
+                    Decl.Struct(st) => st.type_params,
+                    Decl.Enum(en) => en.type_params,
+                    _ => { return false; },
+                };
+                if d == target { return true; }
+                let mut inner = 0 as *mut TypeBinding;
+                for k in 0 as usize..params.len {
+                    if k >= path.1.len { break; }
+                    let nb = unsafe {
+                        zoril_allocator_alloc(self.arena, sizeof(TypeBinding))
+                    } as *mut TypeBinding;
+                    unsafe {
+                        *nb = TypeBinding {
+                            name: params[k].name,
+                            ty: path.1[k],
+                            module: module,
+                            outer: env,
+                            next: inner
+                        };
+                    }
+                    inner = nb;
+                }
+                return self.decl_contains(d, target, inner, seen, depth + 1 as usize);
+            },
+            Type.Tuple(types) => {
+                for t in types {
+                    if self.type_contains(*t, module, env, target, seen, depth + 1 as usize) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            Type.Array(arr) => {
+                return self.type_contains(arr.0, module, env, target, seen, depth + 1 as usize);
+            },
+            _ => { return false; },
+        }
+    }
+
+    // Reports each name in a declaration's types (fields, payloads, signatures, aliases, impl
+    // targets, constants and statics) that is no type: types are otherwise resolved only when
+    // used, and an unknown name resolved to no type at all, silently. In scope: the
+    // declaration's type parameters, an impl's (and the parameters its target names, `T` in
+    // `impl Vec<T>`), and `Self` in an impl or trait.
+    fn check_declared_types(self: &mut Resolver) {
+        let self_name = self.intern_table.intern("Self");
+        for i in 1 as usize..self.ast.decls.len() {
+            let decl = self.ast.decls[i];
+            let module = decl.source_file();
+            let mut params = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+            match decl {
+                Decl.Struct(st) => {
+                    for tp in st.type_params { params.push(tp.name); }
+                    self.check_bounds(st.type_params, &params, module);
+                    for f in st.fields { self.check_type_names(f.ty, &params, module); }
+                },
+                Decl.Enum(en) => {
+                    for tp in en.type_params { params.push(tp.name); }
+                    self.check_bounds(en.type_params, &params, module);
+                    for v in en.variants { self.check_type_names(v.payload, &params, module); }
+                },
+                Decl.TypeAlias(ta) => { self.check_type_names(ta.target, &params, module); },
+                Decl.Const(c) => { self.check_type_names(c.ty, &params, module); },
+                Decl.Static(st) => { self.check_type_names(st.ty, &params, module); },
+                Decl.Fn(f) => { self.check_fn_types(&f, &params, module); },
+                Decl.Trait(tr) => {
+                    params.push(self_name);
+                    for tp in tr.type_params { params.push(tp.name); }
+                    self.check_bounds(tr.type_params, &params, module);
+                    for m in tr.methods { self.check_fn_types(m, &params, module); }
+                },
+                Decl.Impl(imp) => {
+                    params.push(self_name);
+                    for tp in imp.type_params { params.push(tp.name); }
+                    self.check_bounds(imp.type_params, &params, module);
+                    // `impl Vec<T>`: the target's arguments that name no type are its parameters,
+                    // and the target type's own are bound in its methods (`T` in `impl Stack<i32>`).
+                    if let Type.Path(path) = self.ast.types[imp.target_ty as usize] {
+                        self.push_decl_type_params(path.0, module, &mut params);
+                        for a in path.1 {
+                            if let Type.Path(ap) = self.ast.types[*a as usize] {
+                                if !self.names_type(ap.0, module) { params.push(ap.0); }
+                            }
+                        }
+                    }
+                    self.check_type_names(imp.target_ty, &params, module);
+                    for t in imp.trait_type_args { self.check_type_names(*t, &params, module); }
+                    for c in imp.constants { self.check_type_names(c.ty, &params, module); }
+                    for a in imp.assoc_types { self.check_type_names(a.ty, &params, module); }
+                    // A trait's default method copied in is checked in the trait.
+                    for m in imp.methods {
+                        if m.default_of == 0 as u32 { self.check_fn_types(m, &params, module); }
+                    }
+                },
+                Decl.Import(_) | Decl.None => {},
+            }
+        }
+    }
+
+    // F's parameter and result types, with its own type parameters added to OUTER's.
+    fn check_fn_types(self: &mut Resolver, f: &FnDecl, outer: &Vec<u32>, module: u32) {
+        let mut params = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+        for p in outer.as_slice() { params.push(*p); }
+        for tp in f.type_params { params.push(tp.name); }
+        self.check_bounds(f.type_params, &params, module);
+        for p in f.params { self.check_type_names(p.ty, &params, module); }
+        self.check_type_names(f.ret_ty, &params, module);
+    }
+
+    // Each bound of TYPE_PARAMS (`T: iter::Iterator`, `S: Source<T>`) names a trait in scope
+    // in MODULE, its arguments types.
+    fn check_bounds(self: &mut Resolver, type_params: [TypeParam], params: &Vec<u32>, module: u32) {
+        for tp in type_params {
+            for b in tp.bounds {
+                if let Type.Path(path) = self.ast.types[*b as usize] {
+                    self.check_trait_name(path.0, module, self.ast.type_spans[*b as usize]);
+                    for a in path.1 { self.check_type_names(*a, params, module); }
+                }
+            }
+        }
+    }
+
+    // The type parameter names of struct or enum NAME (seen from MODULE), onto PARAMS.
+    fn push_decl_type_params(self: &mut Resolver, name: u32, module: u32, params: &mut Vec<u32>) {
+        if let Option.Some(sym) = self.lookup_root_in(name, module) {
+            if let SymbolKind.Global(d) = sym.kind {
+                match self.ast.decls[d as usize] {
+                    Decl.Struct(st) => { for tp in st.type_params { params.push(tp.name); } },
+                    Decl.Enum(en) => { for tp in en.type_params { params.push(tp.name); } },
+                    _ => {},
+                }
+            }
+        }
+    }
+
+    // Whether NAME, seen from MODULE, is a struct, enum or type alias. The monomorphizer asks this
+    // too, about an `impl`'s target, where a name that is no type is one of its type parameters
+    // (`Monomorphizer.target_names_param`).
+    pub fn names_type(self: &mut Resolver, name: u32, module: u32) -> bool {
+        if let Option.Some(sym) = self.lookup_root_in(name, module) {
+            return match sym.kind {
+                SymbolKind.Global(d) => match self.ast.decls[d as usize] {
+                    Decl.Struct(_) | Decl.Enum(_) | Decl.TypeAlias(_) => true,
+                    _ => false
+                },
+                SymbolKind.Primitive(_) => true,
+                _ => false,
+            };
+        }
+        return false;
+    }
+
+    fn check_type_names(self: &mut Resolver, ty: TypeId, params: &Vec<u32>, module: u32) {
+        if ty == 0 as TypeId { return; }
+        match self.ast.types[ty as usize] {
+            Type.Path(path) => {
+                // Copied out of the intern table: the checks below intern further names.
+                let mut name_buf = unsafe { ByteVec.new_raw(self.arena) };
+                name_buf.push_slice(self.intern_table.lookup(path.0));
+                let name = name_buf.as_slice();
+                // `fd<r>`'s argument is a capability, not a type.
+                if name == "fd" || name == "ioring" {
+                    return;
+                }
+                let mut known = name == "Box"
+                    || name == "BoxMut"
+                    || self.names_type(path.0, module);
+                // `T::Name`, an associated type of a parameter, `Self` or a type: whether the
+                // type has it is decided as each instance resolves it.
+                let mut base = path.0;
+                let sep = last_path_sep(name);
+                if !known && sep < name.len && path.1.len == 0 as usize {
+                    base = self.intern_table.intern(subslice(name, 0 as usize, sep));
+                    known = self.names_type(base, module);
+                }
+                for p in params.as_slice() { if *p == path.0 || *p == base { known = true; } }
+                if !known {
+                    diag_start(
+                        self.intern_table.lookup(module),
+                        self.ast.type_spans[ty as usize],
+                        "error"
+                    );
+                    eprint("unknown type `");
+                    eprint(name);
+                    eprint("`\n");
+                    self.had_error = true;
+                    let saved = self.current_module;
+                    self.current_module = module;
+                    let hint = self.name_hint(path.0);
+                    self.current_module = saved;
+                    if hint.len > 0 as usize {
+                        diag_start(
+                            self.intern_table.lookup(module),
+                            self.ast.type_spans[ty as usize],
+                            "note"
+                        );
+                        eprint(hint);
+                        eprint("\n");
+                    }
+                }
+                for a in path.1 { self.check_type_names(*a, params, module); }
+            },
+            Type.Ptr(inner)
+                | Type.PtrMut(inner)
+                | Type.Ref(inner)
+                | Type.RefMut(inner)
+                | Type.Slice(inner)
+                | Type.SliceMut(inner) => {
+                self.check_type_names(inner, params, module);
+            },
+            Type.Array(arr) => { self.check_type_names(arr.0, params, module); },
+            Type.Tuple(types) => { for t in types { self.check_type_names(*t, params, module); } },
+            Type.Fn(ft) => {
+                for t in ft.params { self.check_type_names(*t, params, module); }
+                self.check_type_names(ft.ret_ty, params, module);
+            },
+            Type.Primitive(_) => {},
+        }
+    }
+
+    // The interned name LEFT SEP RIGHT.
+    fn join_names(self: &mut Resolver, left: u32, sep: [u8], right: u32) -> u32 {
+        let mut name = unsafe { ByteVec.new_raw(self.arena) };
+        name.push_slice(self.intern_table.lookup(left));
+        name.push_slice(sep);
+        name.push_slice(self.intern_table.lookup(right));
+        return self.intern_table.intern(name.as_slice());
+    }
+
+    #[stores(arena -> arena, ast -> arena, module -> arena, table -> arena, file_path -> arena)]
+    pub fn new(
+        arena: *mut ArenaHeader,
+        ast: &mut AST,
+        module: &mut ILModule,
+        table: &mut InternTable,
+        file_path: [u8]
+    ) -> *mut Resolver {
+        let r = unsafe { zoril_allocator_alloc(arena, sizeof(Resolver)) } as *mut Resolver;
+        let primitives = unsafe {
+            zoril_allocator_alloc(arena, PRIMITIVE_TAG_COUNT * 4)
+        } as *mut u32;
+
+        unsafe {
+            *r = Resolver {
+                arena: arena,
+                ast: &*ast,
+                module: module,
+                intern_table: table,
+                file_path: file_path,
+                current_scope: Scope.new(arena, 0 as *mut Scope),
+                instantiate: no_type_instantiator,
+                instantiate_ctx: 0 as *mut u8,
+                project: no_assoc_projector,
+                primitives: primitives,
+                had_error: false,
+                current_module: 0 as u32,
+                namespaces: PairMap.new(arena),
+                used_names: PairMap.new(arena),
+                reported_types: PairMap.new(arena),
+                reported_type_size: false,
+                prelude: unsafe { Vec::<u32>.new_in_raw(arena) },
+            };
+        }
+
+        // The Resolver is fully initialised above, so this is where its arena
+        // storage becomes a reference; the rest of the constructor calls methods
+        // through it rather than auto-dereferencing the raw pointer.
+        let rr: &mut Resolver = unsafe { &mut *r };
+
+        // Pre-allocate primitives
+        let mut p = 0 as u32;
+        while p < PRIMITIVE_TAG_COUNT as u32 {
+            let id = rr.module.alloc_type(ILTypeDecl {
+                id: 0,
+                name: 0,
+                def: ILType.Primitive(rr.map_primitive_tag(p)),
+                source_file: 0 as u32
+            });
+            unsafe { *((primitives as usize + p as usize * 4) as *mut u32) = id; }
+            p = p + 1 as u32;
+        }
+
+        rr.init_builtins();
+        rr.register_global_decls();
+        rr.build_module_scopes();
+        rr.expand_trait_impls(ast);
+        rr.check_impl_items_unique();
+        rr.check_type_cycles();
+        rr.check_declared_types();
+
+        return r;
+    }
+
+    #[stores(f -> self)]
+    pub fn set_assoc_projector(self: &mut Resolver, f: fn(*mut u8, u32, u32, u32, u32) -> u32) {
+        self.project = f;
+    }
+
+    #[stores(f -> self, ctx -> self)]
+    pub fn set_type_instantiator(
+        self: &mut Resolver,
+        f: fn(*mut u8, u32, *u32, usize) -> u32,
+        ctx: *mut u8
+    ) {
+        self.instantiate = f;
+        self.instantiate_ctx = ctx;
+    }
+
+    pub fn lookup_ptr(self: &Resolver, name: u32) -> Option<&Symbol> {
+        let mut s = self.current_scope;
+        unsafe {
+            while (*s).parent as usize != 0 as usize {
+                if let Option.Some(sym) = (*(*s).symbols).lookup_ptr(name) {
+                    return Option.Some(sym);
+                }
+                s = (*s).parent;
+            }
+        }
+        return self.lookup_root(name);
+    }
+
+    fn lookup_root(self: &Resolver, name: u32) -> Option<&Symbol> {
+        return self.lookup_root_from(name, self.current_module);
+    }
+
+    // NAME as module MODULE sees it at top level, ignoring whatever local scopes the resolver
+    // currently holds. For resolving a callee in a body the driver walks but is not lowering:
+    // the storage summary follows calls from one function into another, and a local of the
+    // function it started in must not be picked up as a name in the callee's body.
+    pub fn resolve_toplevel_ptr(self: &Resolver, name: u32, module: u32) -> Option<&Symbol> {
+        return self.lookup_root_from(name, module);
+    }
+
+    // A top-level NAME as module MODULE (0: no module in particular) sees it. `ns::rest` is an
+    // item of the module MODULE imports as `ns`, and `T::item` an item of type T's impls. A
+    // bare name is MODULE's own definition, else one its `use` brings in, else the prelude's,
+    // else a builtin.
+    fn lookup_root_from(self: &Resolver, name: u32, module: u32) -> Option<&Symbol> {
+        // Copied out of the intern table: interning the head would reborrow it.
+        let mut text_buf = unsafe { ByteVec.new_raw(self.arena) };
+        text_buf.push_slice(self.intern_table.lookup(name));
+        let text = text_buf.as_slice();
+        let cut = path_sep(text);
+        if cut == text.len { return self.lookup_bare(name, module); }
+        let head = self.intern_table.intern(subslice(text, 0 as usize, cut));
+        if module != 0 as u32 {
+            let target = self.namespaces.get(module, head);
+            if target != 0 as u32 {
+                return self.lookup_in_module(
+                    self.intern_table.intern(subslice_from(text, cut + 2 as usize)),
+                    target
+                );
+            }
+        }
+        if let Option.Some(ty) = self.lookup_bare(head, module) {
+            if let SymbolKind.Global(d) = ty.kind {
+                if let Option.Some(item) = self.item_of_type(name, d) { return Option.Some(item); }
+            }
+        }
+        return self.lookup_any(name, module);
+    }
+
+    fn lookup_bare(self: &Resolver, name: u32, module: u32) -> Option<&Symbol> {
+        let table = unsafe { &*(*self.root_scope()).symbols };
+        if table.count == 0 as usize || table.bucket_cap == 0 as usize { return Option.None; }
+        let used_from = if module != 0 as u32 {
+            self.used_names.get(module, name)
+        } else {
+            0 as u32
+        };
+        let mut own = 0 as *mut Symbol;
+        let mut used = 0 as *mut Symbol;
+        let mut prelude = 0 as *mut Symbol;
+        let mut builtin = 0 as *mut Symbol;
+        let mut public = 0 as *mut Symbol;
+        let mut latest = 0 as *mut Symbol;
+        let mut b = (name as usize) % table.bucket_cap;
+        unsafe {
+            loop {
+                let slot = *((table.buckets as usize + b * 4) as *mut u32);
+                if slot == 0 as u32 { break; }
+                let sym = *((table.symbols as usize
+                    + (slot as usize - 1 as usize) * 8) as *mut *mut Symbol);
+                if (*sym).name == name {
+                    latest = sym;
+                    let m = self.symbol_module(&*sym);
+                    if module != 0 as u32 && m == module {
+                        own = sym;
+                    } else if m == 0 as u32 {
+                        builtin = sym;
+                    } else if self.symbol_is_pub(&*sym) {
+                        if used_from != 0 as u32 && m == used_from {
+                            used = sym;
+                        } else if self.is_prelude(m) {
+                            prelude = sym;
+                        } else {
+                            public = sym;
+                        }
+                    }
+                }
+                b = (b + 1 as usize) % table.bucket_cap;
+            }
+            if own as usize != 0 as usize { return Option.Some(&*own); }
+            if used as usize != 0 as usize { return Option.Some(&*used); }
+            if prelude as usize != 0 as usize { return Option.Some(&*prelude); }
+            if builtin as usize != 0 as usize { return Option.Some(&*builtin); }
+            // From no module in particular (the driver's own lookups): any public item.
+            if module != 0 as u32 {
+                return Option.None;
+            }
+            if public as usize != 0 as usize { return Option.Some(&*public); }
+            if latest as usize != 0 as usize { return Option.Some(&*latest); }
+        }
+        return Option.None;
+    }
+
+    // NAME, a bare name or `T::item`, as module TARGET defines it publicly.
+    fn lookup_in_module(self: &Resolver, name: u32, target: u32) -> Option<&Symbol> {
+        let text = self.intern_table.lookup(name);
+        let cut = path_sep(text);
+        if cut == text.len { return self.module_item(name, target, true); }
+        let head = self.intern_table.intern(subslice(text, 0 as usize, cut));
+        if let Option.Some(ty) = self.module_item(head, target, true) {
+            if let SymbolKind.Global(d) = ty.kind { return self.item_of_type(name, d); }
+        }
+        return Option.None;
+    }
+
+    // The latest definition of NAME by module TARGET (only a public one when NEED_PUB).
+    fn module_item(self: &Resolver, name: u32, target: u32, need_pub: bool) -> Option<&Symbol> {
+        let table = unsafe { &*(*self.root_scope()).symbols };
+        if table.count == 0 as usize || table.bucket_cap == 0 as usize { return Option.None; }
+        let mut found = 0 as *mut Symbol;
+        let mut b = (name as usize) % table.bucket_cap;
+        unsafe {
+            loop {
+                let slot = *((table.buckets as usize + b * 4) as *mut u32);
+                if slot == 0 as u32 { break; }
+                let sym = *((table.symbols as usize
+                    + (slot as usize - 1 as usize) * 8) as *mut *mut Symbol);
+                if (*sym).name == name
+                    && self.symbol_module(&*sym) == target
+                    && (!need_pub || self.symbol_is_pub(&*sym)) {
+                    found = sym;
+                }
+                b = (b + 1 as usize) % table.bucket_cap;
+            }
+            if found as usize != 0 as usize { return Option.Some(&*found); }
+        }
+        return Option.None;
+    }
+
+    // The method or constant FULL_NAME (`T::item`) of an impl of the type declared by DECL.
+    fn item_of_type(self: &Resolver, full_name: u32, decl: u32) -> Option<&Symbol> {
+        let table = unsafe { &*(*self.root_scope()).symbols };
+        if table.count == 0 as usize || table.bucket_cap == 0 as usize { return Option.None; }
+        let mut found = 0 as *mut Symbol;
+        let mut b = (full_name as usize) % table.bucket_cap;
+        unsafe {
+            loop {
+                let slot = *((table.buckets as usize + b * 4) as *mut u32);
+                if slot == 0 as u32 { break; }
+                let sym = *((table.symbols as usize
+                    + (slot as usize - 1 as usize) * 8) as *mut *mut Symbol);
+                if (*sym).name == full_name {
+                    let imp = match (*sym).kind {
+                        SymbolKind.Method(p) | SymbolKind.AssocConst(p) => p >> 16,
+                        _ => 0 as u32
+                    };
+                    if imp != 0 as u32 && self.impl_type_decl(imp) == decl { found = sym; }
+                }
+                b = (b + 1 as usize) % table.bucket_cap;
+            }
+            if found as usize != 0 as usize { return Option.Some(&*found); }
+        }
+        return Option.None;
+    }
+
+    // A `T::item` NAME by module alone: MODULE's own definition, else a public one, else the
+    // latest (for a type that is not a declaration: a type parameter, a primitive, an alias).
+    fn lookup_any(self: &Resolver, name: u32, module: u32) -> Option<&Symbol> {
+        let table = unsafe { &*(*self.root_scope()).symbols };
+        if table.count == 0 as usize || table.bucket_cap == 0 as usize { return Option.None; }
+        let mut own = 0 as *mut Symbol;
+        let mut public = 0 as *mut Symbol;
+        let mut latest = 0 as *mut Symbol;
+        let mut b = (name as usize) % table.bucket_cap;
+        unsafe {
+            loop {
+                let slot = *((table.buckets as usize + b * 4) as *mut u32);
+                if slot == 0 as u32 { break; }
+                let sym = *((table.symbols as usize
+                    + (slot as usize - 1 as usize) * 8) as *mut *mut Symbol);
+                if (*sym).name == name {
+                    latest = sym;
+                    let m = self.symbol_module(&*sym);
+                    if module != 0 as u32 && m == module {
+                        own = sym;
+                    } else if m == 0 as u32 || self.symbol_is_pub(&*sym) {
+                        public = sym;
+                    }
+                }
+                b = (b + 1 as usize) % table.bucket_cap;
+            }
+            if own as usize != 0 as usize { return Option.Some(&*own); }
+            if public as usize != 0 as usize { return Option.Some(&*public); }
+            if latest as usize != 0 as usize { return Option.Some(&*latest); }
+        }
+        return Option.None;
+    }
+
+    // Why NAME is not found from the current module, for a note after the error: "" when
+    // there is nothing to add. Built in the arena, so a caller may keep it across its own calls.
+    #[borrows()]
+    pub fn name_hint(self: &mut Resolver, name: u32) -> [u8] {
+        let module = self.current_module;
+        let mut out = unsafe { ByteVec.new_raw(self.arena) };
+        if module == 0 as u32 { return ""; }
+        // Copied out of the intern table: the search below interns more names.
+        let mut text_buf = unsafe { ByteVec.new_raw(self.arena) };
+        text_buf.push_slice(self.intern_table.lookup(name));
+        let text = text_buf.as_slice();
+        let cut = path_sep(text);
+        if cut < text.len {
+            let head = self.intern_table.intern(subslice(text, 0 as usize, cut));
+            let rest_text = subslice_from(text, cut + 2 as usize);
+            let target = self.namespaces.get(module, head);
+            if target == 0 as u32 {
+                if self.lookup_bare(head, module).is_none() {
+                    out.push_slice("`");
+                    out.push_slice(self.intern_table.lookup(head));
+                    out.push_slice("` is neither an import nor a type");
+                }
+                return out.as_slice();
+            }
+            if path_sep(rest_text) < rest_text.len { return ""; }
+            let rest = self.intern_table.intern(rest_text);
+            if self.module_item(rest, target, false).is_some() {
+                out.push_slice("`");
+                out.push_slice(rest_text);
+                out.push_slice("` is private to ");
+            } else {
+                out.push_slice("no item `");
+                out.push_slice(rest_text);
+                out.push_slice("` in ");
+            }
+            out.push_slice(self.intern_table.lookup(target));
+            return out.as_slice();
+        }
+        // A definition in some other module.
+        let mut home = 0 as u32;
+        let mut is_pub = false;
+        for i in 1 as usize..self.ast.decls.len() {
+            let d = self.ast.decls[i];
+            if decl_name(&d) != name || d.source_file() == module { continue; }
+            if home == 0 as u32 || (d.is_pub() && !is_pub) {
+                home = d.source_file();
+                is_pub = d.is_pub();
+            }
+        }
+        if home == 0 as u32 { return ""; }
+        out.push_slice("`");
+        out.push_slice(text);
+        if !is_pub {
+            out.push_slice("` is private to ");
+            out.push_slice(self.intern_table.lookup(home));
+            return out.as_slice();
+        }
+        let ns = self.namespace_of(module, home);
+        if ns == 0 as u32 {
+            out.push_slice("` is defined in ");
+            out.push_slice(self.intern_table.lookup(home));
+            out.push_slice(", which this module does not import");
+            return out.as_slice();
+        }
+        let ns_text = self.intern_table.lookup(ns);
+        out.push_slice("` is in `");
+        out.push_slice(ns_text);
+        out.push_slice("`: write `");
+        out.push_slice(ns_text);
+        out.push_slice("::");
+        out.push_slice(text);
+        out.push_slice("`, or add `use ");
+        out.push_slice(ns_text);
+        out.push_slice("::");
+        out.push_slice(text);
+        out.push_slice(";`");
+        return out.as_slice();
+    }
+
+    // Whether NAME is a constant or static that another module defines publicly.
+    pub fn names_hidden_constant(self: &Resolver, name: u32) -> bool {
+        for i in 1 as usize..self.ast.decls.len() {
+            let d = self.ast.decls[i];
+            let is_constant = match d {
+                Decl.Const(c) => c.name == name,
+                Decl.Static(st) => st.name == name,
+                _ => false
+            };
+            if is_constant && d.is_pub() && d.source_file() != self.current_module { return true; }
+        }
+        return false;
+    }
+
+    // The name MODULE imports TARGET under; 0 if it does not import it.
+    fn namespace_of(self: &mut Resolver, module: u32, target: u32) -> u32 {
+        for e in self.ast.import_edges.as_slice() {
+            if e.from_module != module || e.to_module != target { continue; }
+            if e.alias != 0 as u32 { return e.alias; }
+            return self.intern_table.intern(extract_module_name(self.intern_table.lookup(target)));
+        }
+        return 0 as u32;
+    }
+
+    fn is_prelude(self: &Resolver, module: u32) -> bool {
+        for p in self.prelude.as_slice() { if *p == module { return true; } }
+        return false;
+    }
+
+    // The namespaces each module's imports create (the file stem, or the `as` name), the
+    // prelude modules, and the names each `use` brings in; reporting two imports under one
+    // name and a `use` of an unknown or private item.
+    fn build_module_scopes(self: &mut Resolver) {
+        let core = self.intern_table.intern("core");
+        let core0 = self.intern_table.intern("core0");
+        for e in self.ast.import_edges.as_slice() {
+            let stem = self.intern_table.intern(
+                extract_module_name(self.intern_table.lookup(e.to_module))
+            );
+            if (stem == core || stem == core0) && !self.is_prelude(e.to_module) {
+                self.prelude.push(e.to_module);
+            }
+            let ns = if e.alias != 0 as u32 { e.alias } else { stem };
+            let prev = self.namespaces.get(e.from_module, ns);
+            if prev != 0 as u32 && prev != e.to_module {
+                diag_start(self.intern_table.lookup(e.from_module), e.span, "error");
+                eprint("two imports are named `");
+                eprint(self.intern_table.lookup(ns));
+                eprint("` (");
+                eprint(self.intern_table.lookup(prev));
+                eprint(" and ");
+                eprint(self.intern_table.lookup(e.to_module));
+                eprint("); name one with `as`\n");
+                self.had_error = true;
+                continue;
+            }
+            self.namespaces.set(e.from_module, ns, e.to_module);
+        }
+        for u in self.ast.uses.as_slice() {
+            let target = self.namespaces.get(u.module, u.ns);
+            let mut problem = "";
+            if target == 0 as u32 {
+                problem = "no import is named `";
+            } else if self.module_item(u.name, u.module, false).is_some() {
+                problem = "it is defined in this module: `";
+            } else if let Option.Some(sym) = self.module_item(u.name, target, false) {
+                if !self.symbol_is_pub(sym) { problem = "it is private: `"; }
+            } else {
+                problem = "the module defines no `";
+            }
+            let prev = self.used_names.get(u.module, u.name);
+            if problem.len == 0 as usize && prev != 0 as u32 && prev != target {
+                problem = "another `use` brings in `";
+            }
+            if problem.len > 0 as usize {
+                diag_start(self.intern_table.lookup(u.module), u.span, "error");
+                eprint("cannot use `");
+                eprint(self.intern_table.lookup(u.ns));
+                eprint("::");
+                eprint(self.intern_table.lookup(u.name));
+                eprint("`: ");
+                eprint(problem);
+                eprint(self.intern_table.lookup(if target == 0 as u32 { u.ns } else { u.name }));
+                eprint("`\n");
+                self.had_error = true;
+                continue;
+            }
+            self.used_names.set(u.module, u.name, target);
+        }
+    }
+
+    fn root_scope(self: &Resolver) -> *mut Scope {
+        let mut root = self.current_scope;
+        unsafe { while (*root).parent as usize != 0 as usize { root = (*root).parent; } }
+        return root;
+    }
+
+    // The module that defined what SYM names, or 0 for names no module defines.
+    pub fn symbol_module(self: &Resolver, sym: &Symbol) -> u32 {
+        return match sym.kind {
+            SymbolKind.Global(d) => self.ast.decls[d as usize].source_file(),
+            SymbolKind.Method(packed) | SymbolKind.AssocConst(packed) => self.ast.decls[(packed
+                >> 16) as usize].source_file(),
+            SymbolKind.Function(f) => if (f as usize) < self.module.functions.len() {
+                self.module.functions[f as usize].source_file
+            } else {
+                0 as u32
+            },
+            _ => 0 as u32,
+        };
+    }
+
+    fn symbol_is_pub(self: &Resolver, sym: &Symbol) -> bool {
+        match sym.kind {
+            SymbolKind.Global(d) => { return self.ast.decls[d as usize].is_pub(); },
+            SymbolKind.Method(packed) => {
+                return self.ast.decls[(packed >> 16) as usize].get_Impl().methods[(packed
+                    & 0xffff as u32) as usize].is_pub;
+            },
+            SymbolKind.AssocConst(packed) => {
+                return self.ast.decls[(packed >> 16) as usize].get_Impl().constants[(packed
+                    & 0xffff as u32) as usize].is_pub;
+            },
+            SymbolKind.Function(f) => {
+                return (f as usize) < self.module.functions.len()
+                    && self.module.functions[f as usize].is_pub;
+            },
+            _ => { return true; },
+        }
+    }
+
+    // NAME as a value in lowered code: a trait is no value, so it is not found (as a name that
+    // names nothing is not).
+    pub fn resolve_ptr(self: &Resolver, name: u32) -> Option<&Symbol> {
+        let found = self.lookup_ptr(name);
+        if let Option.Some(sym) = found {
+            if let SymbolKind.Global(d) = sym.kind {
+                if let Decl.Trait(_) = self.ast.decls[d as usize] { return Option.None; }
+            }
+        }
+        return found;
+    }
+
+    pub fn lookup_current_scope_ptr(self: &Resolver, name: u32) -> Option<&Symbol> {
+        if self.current_scope as usize == 0 as usize { return Option.None; }
+        return unsafe { (*(*self.current_scope).symbols).lookup_ptr(name) };
+    }
+
+    pub fn lookup_global_ptr(self: &Resolver, name: u32) -> Option<&Symbol> {
+        return self.lookup_root(name);
+    }
+
+    // TY_ID with type aliases followed (at most 10 deep), or 0 for no type.
+    fn unaliased(self: &mut Resolver, ty_id: TypeId) -> TypeId {
+        let mut ty = ty_id;
+        for _depth in 0..11 {
+            if ty == 0 as TypeId || ty as usize >= self.ast.types.len() { return 0 as TypeId; }
+            let target = self.alias_target(ty);
+            if target == 0 as TypeId { return ty; }
+            ty = target;
+        }
+        return 0 as TypeId;
+    }
+
+    // The type alias TY_ID names stands for, or 0 when it is not a name of an alias.
+    fn alias_target(self: &mut Resolver, ty_id: TypeId) -> TypeId {
+        if let Type.Path(path) = self.ast.types[ty_id as usize] {
+            if let Option.Some(sym) = self.lookup_ptr(path.0) {
+                if let Option.Some(decl_id) = sym.global_decl() {
+                    if let Decl.TypeAlias(ta) = self.ast.decls()[decl_id as usize] {
+                        return ta.target;
+                    }
+                }
+            }
+        }
+        return 0 as TypeId;
+    }
+
+    pub fn is_ref_type(self: &mut Resolver, ty_id: TypeId) -> bool {
+        let ty = self.unaliased(ty_id);
+        if ty == 0 as TypeId { return false; }
+        return match self.ast.types[ty as usize] {
+            Type.Ref(_) | Type.RefMut(_) => true,
+            _ => false,
+        };
+    }
+
+    pub fn is_raw_ptr_type(self: &mut Resolver, ty_id: TypeId) -> bool {
+        let ty = self.unaliased(ty_id);
+        if ty == 0 as TypeId { return false; }
+        return match self.ast.types[ty as usize] {
+            Type.Ptr(_) | Type.PtrMut(_) => true,
+            _ => false,
+        };
+    }
+
+    pub fn type_contains_raw_ptr(self: &mut Resolver, ty_id: TypeId) -> bool {
+        let ty = self.unaliased(ty_id);
+        if ty == 0 as TypeId || ty as usize >= self.ast.types.len() { return false; }
+        return match self.ast.types[ty as usize] {
+            Type.Ptr(_) | Type.PtrMut(_) => true,
+            Type.Array(arr) => self.type_contains_raw_ptr(arr.0),
+            Type.Tuple(elem_tys) => {
+                for elem in elem_tys {
+                    if self.type_contains_raw_ptr(*elem) {
+                        return true;
+                    }
+                }
+                false
+            },
+            _ => false,
+        };
+    }
+
+    // True when the declared type is a reference or pointer (`&T`, `&mut T`, `*T`,
+    // `*mut T`, or an alias of a pointer). By-value aggregate parameters are lowered to a
+    // pointer too, so only the declared type tells a borrowing receiver from a
+    // consuming one.
+    pub fn is_ref_or_ptr_type(self: &mut Resolver, ty_id: TypeId) -> bool {
+        if ty_id == 0 as TypeId || ty_id as usize >= self.ast.types.len() { return false; }
+        return match self.ast.types[ty_id as usize] {
+            Type.Ref(_) | Type.RefMut(_) => true,
+            _ => self.is_raw_ptr_type(ty_id),
+        };
+    }
+
+    pub fn is_fn_type(self: &mut Resolver, ty_id: TypeId) -> bool {
+        let ty = self.unaliased(ty_id);
+        if ty == 0 as TypeId { return false; }
+        return match self.ast.types[ty as usize] {
+            Type.Fn(_) => true,
+            _ => false,
+        };
+    }
+
+    pub fn is_enum_type(self: &mut Resolver, ty_id: TypeId) -> bool {
+        let ty = self.unaliased(ty_id);
+        if ty == 0 as TypeId { return false; }
+        if let Type.Path(path) = self.ast.types[ty as usize] {
+            if let Option.Some(sym) = self.lookup_ptr(path.0) {
+                if let Option.Some(decl_id) = sym.global_decl() {
+                    if let Decl.Enum(_) = self.ast.decls()[decl_id as usize] { return true; }
+                }
+            }
+        }
+        return false;
+    }
+
+    // Whether TY_ID, through aliases, names an associated type (`T::Out`, `Num::Out`): what it
+    // stands for, perhaps a reference, is up to an impl.
+    pub fn is_assoc_type_path(self: &mut Resolver, ty_id: TypeId) -> bool {
+        let ty = self.unaliased(ty_id);
+        if ty == 0 as TypeId { return false; }
+        if let Type.Path(path) = self.ast.types[ty as usize] {
+            let name = self.intern_table.lookup(path.0);
+            return path.1.len == 0 as usize
+                && last_path_sep(name) < name.len
+                && self.lookup_ptr(path.0).is_none();
+        }
+        return false;
+    }
+
+    pub fn is_type_param(self: &mut Resolver, ty_id: TypeId) -> bool {
+        let ast: &AST = self.ast;
+        if ty_id == 0 as TypeId || ty_id as usize >= ast.types.len() { return false; }
+        let p_ty: &Type = &ast.types[ty_id as usize];
+        match *p_ty {
+            Type.Path(path) => {
+                if path.1.len > 0 as usize { return false; }
+                let name = path.0;
+                let self_id = self.intern_table.intern("Self");
+                if name == self_id { return false; }
+                // Bound to a type here, and not the name of a global type.
+                if let Option.Some(s) = self.lookup_ptr(name) {
+                    if let SymbolKind.Type(_) = s.kind {
+                        if let Option.Some(root) = self.lookup_global_ptr(name) {
+                            if root.global_decl().is_some() { return false; }
+                        }
+                        return true;
+                    }
+                }
+            },
+            _ => {},
+        }
+        return false;
+    }
+
+    // The IL type id of a primitive, by its `ILPrimitive` tag. `primitives` is a
+    // fixed 16-entry raw array owned by `Resolver`; this is the safe way in.
+    pub fn primitive_type(self: &Resolver, tag: u32) -> u32 {
+        let prims = unsafe { @slice(self.primitives, PRIMITIVE_TAG_COUNT) };
+        return prims[tag as usize];
+    }
+
+    // Whether TY_ID was reported as an unknown type.
+    pub fn type_reported(self: &Resolver, ty_id: TypeId) -> bool {
+        return self.reported_types.get(ty_id, 0 as u32) != 0 as u32;
+    }
+
+    // A type in the signature of an `extern "C" fn(..)` type that C cannot take (WHY, from
+    // `extern_type_complaint`), reported once.
+    fn report_c_fn_type(self: &mut Resolver, ty_id: TypeId, why: [u8]) {
+        if self.current_module == 0 as u32 || self.reported_types.get(ty_id, 1 as u32) != 0 as u32 {
+            return;
+        }
+        self.reported_types.set(ty_id, 1 as u32, 1 as u32);
+        let span = self.ast.type_spans[ty_id as usize];
+        diag_start(self.intern_table.lookup(self.current_module), span, "error");
+        eprint("an extern \"C\" fn type cannot take or return ");
+        eprint(why);
+        eprint("\n");
+        self.had_error = true;
+    }
+
+    // Reports the type TY_ID, a path naming NAME, as unknown: once, and only in a module's code
+    // (the declarations' own types are checked by check_declared_types).
+    fn report_unknown_type(self: &mut Resolver, ty_id: TypeId, name: u32) {
+        if self.current_module == 0 as u32 || self.reported_types.get(ty_id, 0 as u32) != 0 as u32 {
+            return;
+        }
+        self.reported_types.set(ty_id, 0 as u32, 1 as u32);
+        let span = self.ast.type_spans[ty_id as usize];
+        diag_start(self.intern_table.lookup(self.current_module), span, "error");
+        eprint("unknown type `");
+        eprint(self.intern_table.lookup(name));
+        eprint("`\n");
+        self.had_error = true;
+        let hint = self.name_hint(name);
+        if hint.len > 0 as usize {
+            diag_start(self.intern_table.lookup(self.current_module), span, "note");
+            eprint(hint);
+            eprint("\n");
+        }
+    }
+
+    fn report_trait_as_type(self: &mut Resolver, ty_id: TypeId, name: u32) {
+        if self.current_module == 0 as u32 || self.reported_types.get(ty_id, 0 as u32) != 0 as u32 {
+            return;
+        }
+        self.reported_types.set(ty_id, 0 as u32, 1 as u32);
+        diag_start(
+            self.intern_table.lookup(self.current_module),
+            self.ast.type_spans[ty_id as usize],
+            "error"
+        );
+        eprint("`");
+        eprint(self.intern_table.lookup(name));
+        eprint("` is a trait, not a type: a value has a type that implements it (`T: ");
+        eprint(self.intern_table.lookup(name));
+        eprint("`)\n");
+        self.had_error = true;
+    }
+
+    pub fn resolve_type(self: &mut Resolver, ty_id: TypeId) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let ast: &AST = self.ast;
+        let p_ty: &Type = &ast.types[ty_id as usize];
+        let mut res = 0 as u32;
+        match *p_ty {
+            Type.Primitive(p) => {
+                let tag = p.get_tag();
+                res = self.primitive_type(tag);
+            },
+            Type.Ptr(inner) => {
+                let r = self.resolve_type(inner);
+                res = self.module.alloc_type(ILTypeDecl {
+                    id: 0,
+                    name: 0,
+                    def: ILType.RawPtr(r),
+                    source_file: 0 as u32
+                });
+            },
+            Type.PtrMut(inner) => {
+                let r = self.resolve_type(inner);
+                res = self.module.alloc_type(ILTypeDecl {
+                    id: 0,
+                    name: 0,
+                    def: ILType.RawPtrMut(r),
+                    source_file: 0 as u32
+                });
+            },
+            Type.Ref(inner) => {
+                let r = self.resolve_type(inner);
+                res = self.module.alloc_type(ILTypeDecl {
+                    id: 0,
+                    name: 0,
+                    def: ILType.Ptr(r),
+                    source_file: 0 as u32
+                });
+            },
+            Type.RefMut(inner) => {
+                let r = self.resolve_type(inner);
+                res = self.module.alloc_type(ILTypeDecl {
+                    id: 0,
+                    name: 0,
+                    def: ILType.PtrMut(r),
+                    source_file: 0 as u32
+                });
+            },
+            Type.Slice(inner) => {
+                let r = self.resolve_type(inner);
+                res = self.module.alloc_type(ILTypeDecl {
+                    id: 0,
+                    name: 0,
+                    def: ILType.Slice(ILSlice { element: r, mutable: false }),
+                    source_file: 0 as u32
+                });
+            },
+            Type.SliceMut(inner) => {
+                let r = self.resolve_type(inner);
+                res = self.module.alloc_type(ILTypeDecl {
+                    id: 0,
+                    name: 0,
+                    def: ILType.Slice(ILSlice { element: r, mutable: true }),
+                    source_file: 0 as u32
+                });
+            },
+            Type.Array(a) => {
+                let r = self.resolve_type(a.0);
+                res = self.module.alloc_type(ILTypeDecl {
+                    id: 0,
+                    name: 0,
+                    def: ILType.Array(ILArray { element: r, size: a.1 as u32 }),
+                    source_file: 0 as u32
+                });
+            },
+            Type.Tuple(types) => {
+                let resolved = self.resolve_type_list(types);
+                res = self.module.alloc_type(ILTypeDecl {
+                    id: 0,
+                    name: 0,
+                    def: ILType.Tuple(resolved),
+                    source_file: 0 as u32
+                });
+            },
+            Type.Fn(f) => {
+                let params = self.resolve_type_list(f.params);
+                let ret = self.resolve_type(f.ret_ty);
+                res = self.module.alloc_type(ILTypeDecl {
+                    id: 0,
+                    name: 0,
+                    def: ILType.Fn(ILFn {
+                        params: params,
+                        ret_ty: ret,
+                        is_variadic: false,
+                        c_abi: f.is_c
+                    }),
+                    source_file: 0 as u32
+                });
+                if f.is_c {
+                    // A C function pointer is a thin raw pointer to the signature (8 bytes, no
+                    // environment), and its signature obeys the rules of an extern one.
+                    for k in 0 as usize..params.len {
+                        let why = extern_type_complaint(self.module, params[k], false, false);
+                        if why.len > 0 as usize {
+                            self.report_c_fn_type(f.params[k], why);
+                            break;
+                        }
+                    }
+                    let why = extern_type_complaint(self.module, ret, true, false);
+                    if why.len > 0 as usize {
+                        self.report_c_fn_type(f.ret_ty, why);
+                    }
+                    res = self.module.alloc_type(ILTypeDecl {
+                        id: 0,
+                        name: 0,
+                        def: ILType.RawPtr(res),
+                        source_file: 0 as u32
+                    });
+                }
+            },
+            Type.Path(path) => {
+                let opt_sym = self.lookup_ptr(path.0);
+                match opt_sym {
+                    Option.Some(s) => {
+                        match s.kind {
+                            SymbolKind.Primitive(prim) => {
+                                res = self.primitive_type(prim.get_tag());
+                            },
+                            // A type parameter, bound to its type argument.
+                            SymbolKind.Type(bound) => { res = bound; },
+                            SymbolKind.Global(decl_id) => {
+                                match ast.decls()[decl_id as usize] {
+                                    Decl.Struct(_) | Decl.Enum(_) => {
+                                        let type_args = self.resolve_type_list(path.1);
+                                        res = (self.instantiate)(
+                                            self.instantiate_ctx,
+                                            decl_id,
+                                            type_args.ptr,
+                                            type_args.len
+                                        );
+                                    },
+                                    Decl.TypeAlias(ta) => { res = self.resolve_type(ta.target); },
+                                    Decl.Trait(_) => { self.report_trait_as_type(ty_id, path.0); },
+                                    _ => {
+                                        ICE(
+                                            "resolve_type: a path names a function, trait, impl, const or static"
+                                        );
+                                    },
+                                }
+                            },
+                            _ => {},
+                        }
+                    },
+                    Option.None => {
+                        let name = self.intern_table.lookup(path.0);
+                        if name == "Box" {
+                            let r = self.resolve_type(path.1[0]);
+                            res = self.module.alloc_type(ILTypeDecl {
+                                id: 0,
+                                name: 0,
+                                def: ILType.Boxed(r),
+                                source_file: 0 as u32
+                            });
+                        } else if name == "BoxMut" {
+                            let r = self.resolve_type(path.1[0]);
+                            res = self.module.alloc_type(ILTypeDecl {
+                                id: 0,
+                                name: 0,
+                                def: ILType.BoxedMut(r),
+                                source_file: 0 as u32
+                            });
+                        } else if name == "fd" {
+                            let mut cap = FDCap.RW;
+                            if path.1.len > 0 as usize {
+                                let arg_ty_id = path.1[0];
+                                let p_arg_ty: &Type = &ast.types[arg_ty_id as usize];
+                                if p_arg_ty.get_tag() == TYPE_PATH {
+                                    let arg_path = p_arg_ty.get_Path();
+                                    let arg_name = self.intern_table.lookup(arg_path.0);
+                                    if arg_name == "r" {
+                                        cap = FDCap.R;
+                                    } else if arg_name == "w" {
+                                        cap = FDCap.W;
+                                    } else if arg_name == "rw" {
+                                        cap = FDCap.RW;
+                                    }
+                                }
+                            }
+                            res = self.module.alloc_type(ILTypeDecl {
+                                id: 0,
+                                name: 0,
+                                def: ILType.FD(cap),
+                                source_file: 0 as u32
+                            });
+                        } else if name == "ioring" {
+                            res = self.module.alloc_type(ILTypeDecl {
+                                id: 0,
+                                name: 0,
+                                def: ILType.IORing,
+                                source_file: 0 as u32
+                            });
+                        } else if let Option.Some(projected) = self.resolve_assoc_path(
+                            ty_id,
+                            path
+                        ) {
+                            res = projected;
+                        } else {
+                            self.report_unknown_type(ty_id, path.0);
+                        }
+                    },
+                }
+            },
+        }
+
+        if res != 0 as u32 { self.check_type_size(ty_id, res); }
+        return res;
+    }
+
+    // A type is laid out when it is resolved, and one above isize::MAX is rejected here rather
+    // than where a use happens to lay it out: every spelling of the class (`sizeof(T)`, a struct
+    // field, a `Vec` element type, through an alias) passes through this function. `type_size`
+    // returns TYPE_SIZE_OVERFLOW instead of wrapping, so a nested array or a sum of fields cannot
+    // come back as a small size nobody questions.
+    fn check_type_size(self: &mut Resolver, ty_id: TypeId, res: u32) {
+        if self.current_module == 0 as u32 || res as usize > self.module.types.len() { return; }
+        if self.reported_type_size { return; }
+        let size = type_size(self.module, res);
+        if !type_size_overflows(size) { return; }
+        diag_start(
+            self.intern_table.lookup(self.current_module),
+            self.ast.type_spans[ty_id as usize],
+            "error"
+        );
+        if type_size_too_deep(size) {
+            eprint("type nests more than 100 levels deep by value: it has no layout\n");
+        } else {
+            eprint(
+                "type is larger than isize::MAX: its size cannot be computed without wrapping\n"
+            );
+        }
+        self.had_error = true;
+        self.reported_type_size = true;
+    }
+
+    // `T::Name` naming an associated type, T a type parameter, `Self` or a type with no
+    // arguments: the type T's impl defines Name as (0 when that is reported). None when the
+    // path is not of that form.
+    fn resolve_assoc_path(
+        self: &mut Resolver,
+        ty_id: TypeId,
+        path: (u32, [TypeId])
+    ) -> Option<u32> {
+        // Copied out of the intern table: the two interns below reborrow it.
+        let mut text_buf = unsafe { ByteVec.new_raw(self.arena) };
+        text_buf.push_slice(self.intern_table.lookup(path.0));
+        let text = text_buf.as_slice();
+        let sep = last_path_sep(text);
+        if sep == text.len || path.1.len > 0 as usize { return Option.None; }
+        let prefix = self.intern_table.intern(subslice(text, 0 as usize, sep));
+        let name = self.intern_table.intern(subslice_from(text, sep + 2 as usize));
+        let base = match self.lookup_ptr(prefix) {
+            Option.Some(sym) => match sym.kind {
+                // A parameter bound to no type (a generic impl's target resolved with its
+                // parameters unbound) has no associated types either, and is no error here.
+                SymbolKind.Type(bound) => if bound == 0 as u32 {
+                    return Option.Some(0 as u32);
+                } else {
+                    bound
+                },
+                SymbolKind.Global(d) => match self.ast.decls[d as usize] {
+                    Decl.Struct(st) => if st.type_params.len == 0 as usize {
+                        (self.instantiate)(self.instantiate_ctx, d, 0 as *u32, 0 as usize)
+                    } else {
+                        0 as u32
+                    },
+                    Decl.Enum(en) => if en.type_params.len == 0 as usize {
+                        (self.instantiate)(self.instantiate_ctx, d, 0 as *u32, 0 as usize)
+                    } else {
+                        0 as u32
+                    },
+                    _ => 0 as u32,
+                },
+                _ => 0 as u32,
+            },
+            Option.None => 0 as u32,
+        };
+        if base == 0 as u32 { return Option.None; }
+        return Option.Some(
+            (self.project)(self.instantiate_ctx, base, name, ty_id, self.current_module)
+        );
+    }
+
+    // The result is a fresh arena list, not a view of the resolver: callers hold it across
+    // further `&mut self` calls (the monomorphizer resolves an impl's signature and then binds
+    // the trait's parameters).
+    #[borrows()]
+    pub fn resolve_type_list(self: &mut Resolver, types: [TypeId]) -> [u32] {
+        let mut resolved = unsafe { Vec::<u32>.with_capacity_in_raw(self.arena, types.len) };
+        for t in types { resolved.push(self.resolve_type(*t)); }
+        return resolved.as_slice();
+    }
+}
+
+// Item K of an impl: its methods, then its constants.
+fn impl_item_name(imp: &ImplDecl, k: usize) -> u32 {
+    return if k < imp.methods.len {
+        imp.methods[k].name
+    } else {
+        imp.constants[k - imp.methods.len].name
+    };
+}
+
+// A type parameter bound to its argument, for check_type_cycles: the argument type, the module
+// it is written in and the bindings it is read with (OUTER); NEXT is the next parameter.
+struct TypeBinding {
+    name: u32,
+    ty: TypeId,
+    module: u32,
+    outer: *mut TypeBinding,
+    next: *mut TypeBinding,
+}
+
+// Non-owning handle into arena memory; safe to duplicate bitwise.
+impl Copy for TypeBinding {}
+
+fn no_assoc_projector(ctx: *mut u8, ty: u32, name: u32, site: u32, module: u32) -> u32 {
+    ICE("resolve_type: an associated type before set_assoc_projector");
+}
+
+fn no_type_instantiator(ctx: *mut u8, decl_id: u32, args: *u32, n: usize) -> u32 {
+    ICE("resolve_type: a generic type before set_type_instantiator");
+}
+
+// Where the last `::` of TEXT starts; TEXT.len if it has none.
+fn last_path_sep(text: [u8]) -> usize {
+    let mut sep = text.len;
+    let mut i = 0 as usize;
+    while i + 1 as usize < text.len {
+        if text[i] == ':' as u8 && text[i + 1 as usize] == ':' as u8 { sep = i; }
+        i = i + 1 as usize;
+    }
+    return sep;
+}
+
+// What follows the last `::` of TEXT (all of it if it has none).
+pub fn last_path_segment(text: [u8]) -> [u8] {
+    let sep = last_path_sep(text);
+    return if sep == text.len { text } else { subslice_from(text, sep + 2 as usize) };
+}
+
+fn trait_has_method(tr: &TraitDecl, name: u32) -> bool {
+    for m in tr.methods { if m.name == name { return true; } }
+    return false;
+}
+
+fn impl_has_method(imp: &ImplDecl, name: u32) -> bool {
+    for m in imp.methods { if m.name == name { return true; } }
+    return false;
+}
+
+fn has_assoc_type(assoc_types: [AssocType], name: u32) -> bool {
+    for a in assoc_types { if a.name == name { return true; } }
+    return false;
+}
+
+// Where the first `::` of TEXT starts; TEXT.len if it has none.
+fn path_sep(text: [u8]) -> usize {
+    let mut i = 0 as usize;
+    while i + 1 as usize < text.len {
+        if text[i] == ':' as u8 && text[i + 1 as usize] == ':' as u8 { return i; }
+        i = i + 1 as usize;
+    }
+    return text.len;
+}
+
+// The name a top-level declaration defines; 0 for an impl, an import or none.
+fn decl_name(d: &Decl) -> u32 {
+    return match *d {
+        Decl.Fn(f) => f.name,
+        Decl.Struct(st) => st.name,
+        Decl.Enum(e) => e.name,
+        Decl.Trait(t) => t.name,
+        Decl.TypeAlias(t) => t.name,
+        Decl.Const(c) => c.name,
+        Decl.Static(st) => st.name,
+        Decl.Impl(_) | Decl.Import(_) | Decl.None => 0 as u32,
+    };
+}

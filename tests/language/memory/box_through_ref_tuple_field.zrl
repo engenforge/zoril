@@ -1,0 +1,17 @@
+// A field read or write through a reference to a Box reaches the boxed value, not the Box's own slot.
+
+fn first(t: &Box<(i64, i64)>) -> i64 {
+    return t.0;
+}
+
+fn second(t: &Box<(i64, i64)>) -> i64 {
+    return t.1;
+}
+
+fn main() -> i32 {
+    let t = (20 as i64, 22 as i64);
+    let b = box t;
+    if first(&b) != 20 { return 1; }
+    if second(&b) != 22 { return 2; }
+    return 0;
+}

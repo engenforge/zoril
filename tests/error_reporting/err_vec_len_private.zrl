@@ -1,0 +1,16 @@
+// expected compile fail
+// A collection's length is its own invariant, so the fields are private: the only direct writer
+// is `unsafe fn Vec::set_len`, which refuses a length above the capacity (probe 164/165).
+// EXPECT: tests/error_reporting/err_vec_len_private.zrl:14:5: error: cannot access private field: len
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let a = Arena.new(4096).unwrap();
+    let mut v = Vec::<u64>.new_in(&a);
+    v.push(1);
+    v.len = 1000000 as usize;
+    return 0;
+}

@@ -1,0 +1,145 @@
+// Every arena-taking function's safe `&Arena` entry point, called from safe code: file.zrl,
+// fsys.zrl and proc.zrl. The `_raw` entry points are what compiler and tool internals use.
+// expected exit 0
+
+import "file.zrl";
+import "fsys.zrl";
+import "io.zrl";
+import "mem.zrl";
+import "proc.zrl";
+use file::{read_file, read_stdin, read_to_end, read_to_end_sized, write_file};
+use fsys::{acquire_file_lock, env_var, exe_dir, find_in_path, list_dir, make_dir_all, path_is_executable, rename_path, unlink_path};
+use io::SliceReader;
+use mem::Arena;
+use proc::{Command, run_simple, spawn_simple};
+
+fn format_temp_path(prefix: [u8], pid: u64, suffix: [u8], buf: &mut [u8; 64]) -> [u8] {
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        buf[i] = prefix[i];
+        i = i + 1;
+    }
+    let mut digits: [u8; 20] = [0 as u8; 20];
+    let mut dcount = 0 as usize;
+    let mut n = pid;
+    if n == 0 as u64 {
+        digits[0] = '0' as u8;
+        dcount = 1;
+    } else {
+        while n > 0 as u64 {
+            let rem = (n % 10 as u64) as u8;
+            digits[dcount] = '0' as u8 + rem;
+            dcount = dcount + 1;
+            n = n / 10 as u64;
+        }
+    }
+    let mut d = dcount;
+    while d > 0 {
+        d = d - 1;
+        buf[i] = digits[d];
+        i = i + 1;
+    }
+    let mut s = 0 as usize;
+    while s < suffix.len {
+        buf[i] = suffix[s];
+        i = i + 1;
+        s = s + 1;
+    }
+    buf[i] = 0 as u8;
+    unsafe { return @slice(&buf[0] as *u8, i); }
+}
+
+fn main() -> i32 {
+    let arena = Arena.new(1 << 20).unwrap();
+
+    let pid = unsafe { @syscall(39) } as u64;
+    let mut buf1 = [0 as u8; 64];
+    let file1 = format_temp_path("/tmp/zoril_arena_fns_", pid, ".txt", &mut buf1);
+    let mut buf2 = [0 as u8; 64];
+    let old_file = format_temp_path("/tmp/zoril_arena_fns_old_", pid, ".txt", &mut buf2);
+    let mut buf3 = [0 as u8; 64];
+    let new_file = format_temp_path("/tmp/zoril_arena_fns_new_", pid, ".txt", &mut buf3);
+    let mut buf4 = [0 as u8; 64];
+    let lock_file = format_temp_path("/tmp/zoril_arena_fns_", pid, ".lock", &mut buf4);
+    let mut buf5 = [0 as u8; 64];
+    let dir_path = format_temp_path("/tmp/zoril_arena_fns_dir_", pid, "/sub", &mut buf5);
+
+    // ── file.zrl
+    if write_file(file1, "hello").is_err() { return 1; }
+    let content = match read_file(file1, &arena) {
+        Ok(b) => b,
+        Err(_) => { return 2; },
+    };
+    if content.len != 5 { return 3; }
+
+    let from_stdin = match read_stdin(&arena) {
+        Ok(b) => b,
+        Err(_) => { return 4; },
+    };
+    if from_stdin.len != 0 { return 5; } // the test runner gives tests /dev/null on stdin
+
+    let mut reader = SliceReader.new("abc");
+    let read_all = match read_to_end(&mut reader, &arena) {
+        Ok(b) => b,
+        Err(_) => { return 6; },
+    };
+    if read_all.len != 3 { return 7; }
+
+    let mut reader2 = SliceReader.new("abcd");
+    let sized = match read_to_end_sized(&mut reader2, 2, &arena) {
+        Ok(b) => b,
+        Err(_) => { return 8; },
+    };
+    if sized.len != 4 { return 9; }
+
+    // ── fsys.zrl
+    let names = match list_dir("/tmp", &arena) {
+        Ok(v) => v,
+        Err(_) => { return 10; },
+    };
+    if names.len() == 0 { return 11; }
+
+    if make_dir_all(dir_path, &arena).is_err() { return 12; }
+
+    if write_file(old_file, "x").is_err() { return 13; }
+    if rename_path(old_file, new_file, &arena).is_err() {
+        return 14;
+    }
+    if unlink_path(new_file, &arena).is_err() { return 15; }
+
+    if !path_is_executable("/bin/true", &arena) { return 16; }
+    if exe_dir(&arena).len == 0 { return 17; }
+    if env_var("PATH", &arena).is_none() { return 18; }
+    if find_in_path("sh", &arena).is_none() { return 19; }
+
+    {
+        let lock_res = acquire_file_lock(lock_file);
+        if lock_res.is_err() { return 20; }
+        // lock dropped here
+    }
+    let _ = unlink_path(lock_file, &arena);
+    let _ = unlink_path(file1, &arena);
+
+    // ── proc.zrl
+    let cmd = Command.new("/bin/true", &arena);
+    let st = match cmd.status() {
+        Ok(s) => s,
+        Err(_) => { return 21; },
+    };
+    if !st.is_success() { return 22; }
+
+    let st2 = match run_simple("/bin/true", &arena) {
+        Ok(s) => s,
+        Err(_) => { return 23; },
+    };
+    if !st2.is_success() { return 24; }
+
+    let mut child = match spawn_simple("/bin/true", &arena) {
+        Ok(c) => c,
+        Err(_) => { return 25; },
+    };
+    if child.wait().is_err() { return 26; }
+
+    // The arena is dropped here; every value read out of it above is already dead.
+    return 0;
+}

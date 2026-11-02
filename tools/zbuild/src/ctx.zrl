@@ -1,0 +1,19 @@
+// State shared by the zbuild phases.
+
+import "mem_raw.zrl";
+import "options.zrl";
+import "tools.zrl";
+use mem_raw::ArenaHeader;
+use options::Options;
+use tools::Tools;
+
+pub struct BuildCtx {
+    pub opts: Options,
+    pub tools: Tools,
+    pub cache_dir: [u8],
+    pub iface_dir: [u8],
+    pub obj_dir: [u8],
+    pub tmp_dir: [u8],
+    pub cwd: [u8],
+    pub arena: *mut ArenaHeader,
+}

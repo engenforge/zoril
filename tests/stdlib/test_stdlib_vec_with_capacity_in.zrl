@@ -1,0 +1,37 @@
+// Vec::with_capacity_in(&Arena, cap): reserve an arena-backed buffer up front, then push into it.
+// Exercises the constructor the unsafe-scan reported as unexercised, so the marker it needs around
+// the allocator call is checked through a direct importer of vec.zrl rather than by an allowlist
+// entry.
+// expected exit 0
+
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let arena = Arena.new(65536).unwrap();
+
+    // A reservation starts empty and grows into the reserved room without reallocating.
+    let mut v = Vec::<u64>.with_capacity_in(&arena, 8);
+    if v.len() != 0 { return 1; }
+
+    let mut i = 0 as u64;
+    while i < 8 as u64 {
+        v.push(i * 2 as u64);
+        i = i + 1 as u64;
+    }
+    if v.len() != 8 { return 2; }
+    if *v.get(0).unwrap() != 0 as u64 { return 3; }
+    if *v.get(7).unwrap() != 14 as u64 { return 4; }
+
+    // Past the reservation the buffer grows, still in the same arena.
+    v.push(100 as u64);
+    if v.len() != 9 { return 5; }
+    if *v.get(8).unwrap() != 100 as u64 { return 6; }
+
+    // A zero reservation is the empty case.
+    let empty = Vec::<u64>.with_capacity_in(&arena, 0);
+    if empty.len() != 0 { return 7; }
+    return 0;
+}

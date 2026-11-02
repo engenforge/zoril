@@ -1,0 +1,6 @@
+// The importer calls the exported function without `unsafe`, as it would a Zoril function.
+import "util.zrl";
+
+fn main() -> i32 {
+    return util::zoril_triple(14);
+}

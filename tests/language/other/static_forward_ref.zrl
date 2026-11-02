@@ -1,0 +1,33 @@
+// Statics referenced by functions declared BEFORE the static declaration.
+// Regression: lower_module registered globals in the same single pass that
+// eagerly instantiates functions, so a function body lowered before its
+// static's alloc_global saw a failed by-name lookup and silently compiled
+// the reference to a null place (loads dropped, stores to NULL).
+// expected exit 0
+
+fn get_flag() -> u64 {
+    return FLAG_AFTER;
+}
+
+fn set_flag(v: u64) {
+    FLAG_AFTER = v;
+}
+
+fn bump() -> u64 {
+    COUNTER_AFTER = COUNTER_AFTER + 1;
+    return COUNTER_AFTER;
+}
+
+pub static mut FLAG_AFTER: u64 = 7;
+pub static mut COUNTER_AFTER: u64 = 100;
+
+pub fn main() -> i32 {
+    if get_flag() != 7 { return 1; }
+    set_flag(42);
+    if get_flag() != 42 { return 2; }
+    if FLAG_AFTER != 42 { return 3; }
+    if bump() != 101 { return 4; }
+    if bump() != 102 { return 5; }
+    if COUNTER_AFTER != 102 { return 6; }
+    return 0;
+}

@@ -1,0 +1,28 @@
+// name: Function with empty borrows attribute strips borrow
+// expected: compile_reject
+// Rejected by the interprocedural summary pass, which every build enforces and which reads what a call returns through its aggregate result and through the memory its arguments point at.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+#[borrows()]
+fn launder(s: [i32]) -> [i32] {
+    return s;
+}
+
+fn f(out: &mut [i32]) {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    *out = launder(v.as_slice());
+}
+
+fn main() -> i32 {
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    f(&mut s);
+    let a2 = match Arena.new(65536) { Result.Ok(a2) => a2, Result.Err(_) => { return 1; } };
+    let mut v2 = Vec::<i32>.new_in(&a2);
+    v2.push(77);
+    return s[0];
+}

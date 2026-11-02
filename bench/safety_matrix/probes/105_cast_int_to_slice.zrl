@@ -1,0 +1,9 @@
+// name: Integer cast to a slice type
+// expected: compile_reject
+// `as` made a slice out of an i64 (pointer and length from whatever the cast read) in safe
+// code until 2026-10-05; a cast to a slice is now accepted only from a slice of that element.
+fn main() -> i32 {
+    let x = 5 as i64;
+    let s = x as [u8];
+    return s[0] as i32;
+}

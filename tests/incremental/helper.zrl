@@ -1,0 +1,8 @@
+// Helper module for translation unit testing
+pub fn helper_add(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+
+pub fn helper_sub(a: i64, b: i64) -> i64 {
+    return a - b;
+}

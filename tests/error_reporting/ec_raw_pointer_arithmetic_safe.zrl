@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: error: arithmetic operator not supported on pointer operands (pointer arithmetic needs unsafe)
+// Explicit pointer arithmetic is an unsafe operation, and a safe reference is not a raw pointer.
+fn add_right(p: *mut u64) {
+    let q = p + 1;
+}
+
+fn add_left(p: *mut u64) {
+    let q = 1 + p;
+}
+
+fn main() -> i32 {
+    if false {
+        return 1;
+    }
+    return 0;
+}

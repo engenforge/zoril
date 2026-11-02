@@ -1,0 +1,642 @@
+// Per-module planning and compilation, linking, and cache garbage collection.
+
+import "core.zrl";
+import "clone.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "string.zrl";
+import "vec.zrl";
+import "proc.zrl";
+import "fsys.zrl";
+import "util.zrl";
+import "manifest.zrl";
+import "ctx.zrl";
+import "graph.zrl";
+import "module_path.zrl";
+use ctx::BuildCtx;
+use fsys::{env_var_raw, exe_dir_raw, list_dir_raw, realtime_ns, rename_path_raw, unlink_path_raw};
+use graph::{Graph, deps_of, push_compiler_paths};
+use io::{eprint, exit, print};
+use manifest::{Entry, Manifest, empty_manifest, find_entry, parse_manifest, serialize_manifest};
+use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+use module_path::{bytes_lt, encode_module_key, iface_relative_path, make_absolute};
+use proc::{Command, ExitStatus};
+use string::String;
+use util::{ensure_parent_dir, fail2, fail_reason, file_exists, i64_to_str_in, join_path, path_dir, read_file_to_slice, run_cmd_checked, same_string_set, sha_hex, stat_mtime_size, write_file_slice};
+use vec::Vec;
+
+// A source modified less than this long before we read it could still be modified again within
+// the same filesystem timestamp tick without its mtime changing (git's "racy" entries). Such a
+// row is recorded with mtime 0, which the pre-filter never trusts, so the next build re-hashes it.
+const RACY_NS: i64 = 2000000000;
+
+pub struct ModResult {
+    pub mtime: i64,
+    pub size: i64,
+    pub source_sha: [u8],
+    pub key: [u8],
+    pub object: [u8],
+    pub deps: Vec<[u8]>,
+    pub zri_sha: [u8],
+    pub key_changed: bool,
+    pub compiled: bool,
+}
+
+pub fn empty_result(arena: *mut ArenaHeader) -> ModResult {
+    return ModResult {
+        mtime: 0, size: 0, source_sha: "", key: "", object: "",
+        deps: unsafe {
+            Vec::<[u8]>.new_in_raw(arena)
+        }, zri_sha: "", key_changed: false, compiled: false,
+    };
+}
+
+fn iface_file(ctx: &BuildCtx, module: [u8]) -> [u8] {
+    return join_path(ctx.iface_dir, iface_relative_path(module, ctx.arena), ctx.arena);
+}
+
+fn hash8(sha: [u8]) -> [u8] {
+    if sha.len >= 8 { return sha.sub(0, 8); }
+    return sha;
+}
+
+// Early-cutoff key: SHA256(SHA256(M.zri) || sorted keys of M's direct dependencies). An interface
+// reaches a module through what it imports, so a change propagates exactly as far as it is visible.
+fn compose_key(zri_sha: [u8], dep_keys: &Vec<[u8]>, arena: *mut ArenaHeader) -> [u8] {
+    let mut buf = unsafe { String.new_in_raw(arena) };
+    buf.push_str(zri_sha);
+    let mut sorted = unsafe { Vec::<u32>.new_in_raw(arena) };
+    let mut i = 0 as usize;
+    while i < dep_keys.len() {
+        // insertion sort by string so import order does not affect the key
+        let cand = dep_keys.as_slice()[i];
+        let mut pos = 0 as usize;
+        while pos < sorted.len()
+            && !bytes_lt(cand, dep_keys.as_slice()[sorted.as_slice()[pos] as usize]) {
+            pos = pos + 1;
+        }
+        sorted.push(i as u32);
+        let mut j = sorted.len() - 1;
+        while j > pos {
+            let tmp = sorted.as_slice()[j];
+            sorted.set(j, sorted.as_slice()[j - 1]);
+            sorted.set(j - 1, tmp);
+            j = j - 1;
+        }
+        i = i + 1;
+    }
+    let mut k = 0 as usize;
+    while k < sorted.len() {
+        buf.push_u8(10);
+        buf.push_str(dep_keys.as_slice()[sorted.as_slice()[k] as usize]);
+        k = k + 1;
+    }
+    return sha_hex(buf.as_slice(), arena);
+}
+
+// Compiles one module to an object and writes its interface; returns the object path.
+// Every step's failure ends the build (run_cmd_checked).
+fn compile_to_object(ctx: &BuildCtx, path: [u8], src_file: [u8], action_key: [u8]) -> [u8] {
+    let arena = ctx.arena;
+    let enc = encode_module_key(path, arena);
+    let base = join_path(ctx.tmp_dir, enc, arena);
+    let mut zil = unsafe { String.new_in_raw(arena) };
+    zil.push_str(base);
+    zil.push_str(".zil");
+    let mut ssa = unsafe { String.new_in_raw(arena) };
+    ssa.push_str(base);
+    ssa.push_str(".ssa");
+    let mut asm_src = unsafe { String.new_in_raw(arena) };
+    asm_src.push_str(base);
+    asm_src.push_str(".s");
+    let mut obj = unsafe { String.new_in_raw(arena) };
+    obj.push_str(ctx.obj_dir);
+    obj.push_u8('/' as u8);
+    obj.push_str(enc);
+    obj.push_u8('.' as u8);
+    obj.push_str(hash8(action_key));
+    obj.push_str(".o");
+
+    // 1. zoril -c: the TU's ZIL plus its interface, checked against dependency interfaces only.
+    let mut c1 = unsafe { Command.new_raw(ctx.tools.compiler, arena) };
+    c1.arg("-c");
+    c1.arg(src_file);
+    push_compiler_paths(&mut c1, ctx);
+    c1.arg("--interproc-summary");
+    if ctx.opts.checked { c1.arg("--checked"); }
+    if ctx.opts.hosted { c1.arg("--hosted"); }
+    c1.arg("--write-interface");
+    c1.arg(iface_file(ctx, path));
+    c1.arg("-o");
+    c1.arg(zil.as_slice());
+    run_cmd_checked(c1, "zoril -c");
+
+    // 2. zilc
+    let mut c2 = unsafe { Command.new_raw(ctx.tools.zilc, arena) };
+    c2.arg(zil.as_slice());
+    c2.arg(ssa.as_slice());
+    run_cmd_checked(c2, "zilc");
+
+    // 3. qbe
+    let mut c3 = unsafe { Command.new_raw(ctx.tools.qbe, arena) };
+    c3.arg("-o");
+    c3.arg(asm_src.as_slice());
+    c3.arg(ssa.as_slice());
+    run_cmd_checked(c3, "qbe");
+
+    // 4. as
+    let mut c4 = unsafe { Command.new_raw(ctx.tools.asm_tool, arena) };
+    c4.arg(asm_src.as_slice());
+    c4.arg("-o");
+    c4.arg(obj.as_slice());
+    run_cmd_checked(c4, "as");
+
+    let _ = unsafe { unlink_path_raw(zil.as_slice(), arena) };
+    let _ = unsafe { unlink_path_raw(ssa.as_slice(), arena) };
+    let _ = unsafe { unlink_path_raw(asm_src.as_slice(), arena) };
+    return obj.as_slice();
+}
+
+fn log(ctx: &BuildCtx, tag: [u8], path: [u8]) {
+    if ctx.opts.verbose {
+        print(tag);
+        print(path);
+        print("\n");
+    }
+}
+
+fn dep_paths(g: &Graph, node: usize, arena: *mut ArenaHeader) -> Vec<[u8]> {
+    let idxs = deps_of(g, node, arena);
+    let mut out = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+    let mut i = 0 as usize;
+    while i < idxs.len() {
+        out.push(g.paths.as_slice()[idxs.as_slice()[i]]);
+        i = i + 1;
+    }
+    return out;
+}
+
+// A module whose source is gone is served from the cache: it needs its manifest row, object and
+// interface, and its dependencies are whatever it recorded.
+fn reuse_frozen(ctx: &BuildCtx, path: [u8], prev: Option<Entry>, out: &mut ModResult) -> i32 {
+    match prev {
+        Some(e) => {
+            if !file_exists(e.object, ctx.arena) || !file_exists(iface_file(ctx, path), ctx.arena) {
+                return fail2("source is missing and its cached build is incomplete: ", path);
+            }
+            out.mtime = e.mtime;
+            out.size = e.size;
+            out.source_sha = e.source_sha;
+            out.key = e.iface_key;
+            out.object = e.object;
+            out.zri_sha = e.zri_sha;
+            // `deps` owns storage, so it moves last: a partial move marks the whole `e` moved.
+            out.deps = e.deps;
+            out.key_changed = false;
+            out.compiled = false;
+            log(ctx, "[frozen] ", path);
+            return 0;
+        },
+        None => { return fail2("source file not found: ", path); },
+    }
+}
+
+// Reads the source's identity. The (mtime, size) pre-filter skips hashing only for rows that
+// were not racy when recorded; everything else is decided by content.
+fn source_state(
+    ctx: &BuildCtx,
+    src_file: [u8],
+    prev: &Option<Entry>,
+    out: &mut ModResult
+) -> Option<bool> {
+    let arena = ctx.arena;
+    let ms = match stat_mtime_size(src_file, arena) {
+        Some(v) => v,
+        None => { return Option.None; },
+    };
+    out.mtime = ms.0;
+    out.size = ms.1;
+    let now = realtime_ns();
+    match prev {
+        Some(e) => {
+            if e.mtime != 0 && e.mtime == ms.0 && e.size == ms.1 {
+                out.source_sha = e.source_sha;
+                return Option.Some(true);
+            }
+        },
+        None => {},
+    }
+    let content = match read_file_to_slice(src_file, arena) {
+        Ok(c) => c,
+        Err(_) => { return Option.None; },
+    };
+    out.source_sha = sha_hex(content, arena);
+    if now - ms.0 < RACY_NS { out.mtime = 0; }
+    return match prev {
+        Some(e) => Option.Some(e.source_sha == out.source_sha),
+        None => Option.Some(false),
+    };
+}
+
+// Plans one module and compiles it if stale. `results` holds the dependencies, already processed.
+pub fn process_module(
+    ctx: &BuildCtx,
+    g: &Graph,
+    node: usize,
+    prev: &Manifest,
+    results: &mut Vec<ModResult>,
+    compiled: &mut usize
+) -> i32 {
+    let arena = ctx.arena;
+    let path = g.paths.as_slice()[node];
+    let src_file = g.files.as_slice()[node];
+    let prev_entry = find_entry(prev, path);
+    let mut r = empty_result(arena);
+    if !file_exists(src_file, arena) {
+        let rc = reuse_frozen(ctx, path, prev_entry, &mut r);
+        results.set(node, r);
+        return rc;
+    }
+
+    let unchanged = match source_state(ctx, src_file, &prev_entry, &mut r) {
+        Some(u) => u,
+        None => { return fail2("cannot read source file: ", src_file); },
+    };
+    r.deps = dep_paths(g, node, arena);
+
+    let mut obj_ok = false;
+    let mut deps_same = false;
+    match &prev_entry {
+        Some(e) => {
+            obj_ok = e.object.len > 0 && file_exists(e.object, arena);
+            deps_same = same_string_set(&e.deps, &r.deps);
+        },
+        None => {},
+    }
+    // The interface on disk must be the one this row describes: a failed build may have rewritten it.
+    let mut iface_ok = false;
+    match &prev_entry {
+        Some(e) => {
+            match read_file_to_slice(iface_file(ctx, path), arena) {
+                Ok(z) => { iface_ok = sha_hex(z, arena) == e.zri_sha; },
+                Err(_) => {},
+            }
+        },
+        None => {},
+    }
+
+    let dep_idxs = deps_of(g, node, arena);
+    let mut dep_key_changed = false;
+    let mut dep_keys = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+    let mut i = 0 as usize;
+    while i < dep_idxs.len() {
+        let dr = results.as_slice()[dep_idxs.as_slice()[i]];
+        if dr.key_changed { dep_key_changed = true; }
+        dep_keys.push(dr.key);
+        i = i + 1;
+    }
+
+    let dirty = prev_entry.is_none()
+        || !unchanged
+        || !obj_ok
+        || !iface_ok
+        || !deps_same
+        || dep_key_changed;
+    if !dirty {
+        let e = prev_entry.unwrap();
+        r.key = e.iface_key;
+        r.object = e.object;
+        r.zri_sha = e.zri_sha;
+        r.key_changed = false;
+        r.compiled = false;
+        results.set(node, r);
+        log(ctx, "[up-to-date] ", path);
+        return 0;
+    }
+
+    log(ctx, "[compile] ", path);
+    *compiled = *compiled + 1;
+    let mut action_seed = unsafe { String.new_in_raw(arena) };
+    action_seed.push_str(ctx.tools.toolchain_id);
+    action_seed.push_str(r.source_sha);
+    let action_key = compose_key(action_seed.as_slice(), &dep_keys, arena);
+    r.object = compile_to_object(ctx, path, src_file, action_key);
+    let zri = match read_file_to_slice(iface_file(ctx, path), arena) {
+        Ok(z) => z,
+        Err(err) => {
+            return fail_reason("compiler did not write an interface for ", path, err.message());
+        },
+    };
+    r.zri_sha = sha_hex(zri, arena);
+    r.key = compose_key(r.zri_sha, &dep_keys, arena);
+    r.compiled = true;
+    r.key_changed = true;
+    match &prev_entry {
+        Some(e) => {
+            if e.iface_key == r.key {
+                r.key_changed = false;
+                log(ctx, "[early-cutoff] interface unchanged: ", path);
+            }
+        },
+        None => {},
+    }
+    if ctx.opts.break_cutoff { r.key_changed = false; }
+    results.set(node, r);
+    return 0;
+}
+
+// Runtime object and link line: host `ld` with the host-assembled runtime.o.
+pub fn link_program(ctx: &BuildCtx, g: &Graph, results: &Vec<ModResult>) -> i32 {
+    let arena = ctx.arena;
+    // A hosted program is linked by the C compiler driver (crt files, libc, dynamic linking are its
+    // business) with the hosted runtime, which defines the main crt1 calls.
+    let hosted = ctx.opts.hosted;
+    let rt_name = if hosted { "runtime_hosted.o" } else { "runtime.o" };
+    let mut rt = ctx.opts.runtime;
+    if rt.len == 0 {
+        let exe = unsafe { exe_dir_raw(arena) };
+        if exe.len > 0 {
+            let lib_rt = join_path(join_path(exe, "../lib/zoril", arena), rt_name, arena);
+            if file_exists(lib_rt, arena) {
+                rt = lib_rt;
+            } else {
+                rt = join_path(exe, rt_name, arena);
+            }
+        }
+        if rt.len == 0 || !file_exists(rt, arena) {
+            rt = join_path("build", rt_name, arena);
+        }
+    }
+    if !file_exists(rt, arena) { return fail2("runtime object not found: ", rt); }
+    let linker = if hosted { ctx.tools.cc } else { ctx.tools.ld };
+    if linker.len == 0 {
+        return fail2("could not find the linker: ", if hosted { "cc" } else { "ld" });
+    }
+    // A link input that is not there is an error before anything is linked, naming the file.
+    let mut oi = 0 as usize;
+    while oi < ctx.opts.link_objects.len() {
+        let obj = ctx.opts.link_objects.as_slice()[oi];
+        if !file_exists(obj, arena) { return fail2("link object not found: ", obj); }
+        oi = oi + 1;
+    }
+
+    match ensure_parent_dir(ctx.opts.output, arena) {
+        Ok(_) => {},
+        Err(err) => {
+            return fail_reason("cannot create directory for ", ctx.opts.output, err.message());
+        },
+    }
+    let mut tmp_out_str = unsafe { String.new_in_raw(arena) };
+    tmp_out_str.push_str(ctx.opts.output);
+    tmp_out_str.push_str(".tmp");
+    let tmp_out = tmp_out_str.as_slice();
+
+    let mut cmd = unsafe { Command.new_raw(linker, arena) };
+    if hosted {
+        // A child starts with an empty environment, and cc needs PATH to find ld and its helpers.
+        // Nothing else is passed on: a hosted link names the system's libc, so it is not covered by
+        // the reproducibility claim, but it does not pick up the caller's environment either.
+        let path_value = match unsafe { env_var_raw("PATH", arena) } {
+            Some(v) => v,
+            None => "/usr/bin:/bin",
+        };
+        let mut entry = unsafe { String.new_in_raw(arena) };
+        entry.push_str("PATH=");
+        entry.push_str(path_value);
+        entry.push_u8(0 as u8);
+        let envp = unsafe { zoril_allocator_alloc(arena, 16 as u64) } as *mut *u8;
+        unsafe {
+            *envp = entry.as_slice().ptr;
+            *((envp as usize + 8) as *mut *u8) = 0 as *u8;
+            cmd.set_envp(envp as **u8);
+        }
+    }
+    cmd.arg("-o");
+    cmd.arg(tmp_out);
+    if !hosted { cmd.arg(rt); }
+    let mut i = 0 as usize;
+    while i < g.order.len() {
+        cmd.arg(results.as_slice()[g.order.as_slice()[i]].object);
+        i = i + 1;
+    }
+    if hosted { cmd.arg(rt); }
+    // The extra inputs follow the program's own objects, in the order they were given.
+    let mut k = 0 as usize;
+    while k < ctx.opts.link_items.len() {
+        cmd.arg(ctx.opts.link_items.as_slice()[k]);
+        k = k + 1;
+    }
+    let status_res = cmd.status();
+    match status_res {
+        Result.Ok(st) => {
+            match st {
+                ExitStatus.Exited(code) => {
+                    if code != 0 {
+                        let _ = unsafe { unlink_path_raw(tmp_out, arena) };
+                        exit(code);
+                    }
+                },
+                ExitStatus.Signaled(sig) => {
+                    let _ = unsafe { unlink_path_raw(tmp_out, arena) };
+                    eprint("error: the linker killed by signal ");
+                    eprint(i64_to_str_in(sig as i64, arena));
+                    eprint("\n");
+                    exit(128 + sig);
+                },
+            }
+        },
+        Result.Err(e) => {
+            let _ = unsafe { unlink_path_raw(tmp_out, arena) };
+            eprint("error: failed to execute the linker: ");
+            eprint(e.message());
+            eprint("\n");
+            exit(1);
+        }
+    }
+    let rename_res = unsafe { rename_path_raw(tmp_out, ctx.opts.output, arena) };
+    if rename_res.is_err() {
+        let _ = unsafe { unlink_path_raw(tmp_out, arena) };
+        return fail_reason(
+            "could not rename temporary output to: ",
+            ctx.opts.output,
+            rename_res.err().unwrap().message()
+        );
+    }
+    return 0;
+}
+
+fn entry_of(ctx: &BuildCtx, g: &Graph, results: &Vec<ModResult>, node: usize) -> Entry {
+    let r = &results.as_slice()[node];
+    return Entry {
+        path: g.paths.as_slice()[node], mtime: r.mtime, size: r.size, source_sha: r.source_sha,
+        iface_key: r.key, object: r.object, deps: r.deps.clone(), zri_sha: r.zri_sha,
+        file: make_absolute(g.files.as_slice()[node], ctx.cwd, ctx.arena),
+    };
+}
+
+// The manifest is written to a temporary file and renamed, so an interrupted build can never
+// leave a half-written manifest behind.
+fn entry_source_exists(e: &Entry, arena: *mut ArenaHeader) -> bool {
+    if e.file.len == 0 { return true; }
+    return file_exists(e.file, arena);
+}
+
+// Object paths are stored relative to the cache directory ("obj/<name>") so the same cache works
+// from any working directory; load_manifest resolves them against the cache directory again.
+fn cache_relative(ctx: &BuildCtx, object: [u8]) -> [u8] {
+    let prefix = join_path(ctx.obj_dir, "", ctx.arena);
+    if object.starts_with(prefix) {
+        return join_path("obj", object.sub(prefix.len, object.len - prefix.len), ctx.arena);
+    }
+    return object;
+}
+
+fn save_manifest(ctx: &BuildCtx, m_in: &Manifest) -> i32 {
+    let arena = ctx.arena;
+    let mut m = m_in.clone();
+    m.entries = unsafe { Vec::<Entry>.new_in_raw(arena) };
+    let mut k = 0 as usize;
+    while k < m_in.entries.len() {
+        let mut e = m_in.entries.as_slice()[k].clone();
+        e.object = cache_relative(ctx, e.object);
+        m.entries.push(e);
+        k = k + 1;
+    }
+    let final_path = join_path(ctx.cache_dir, "manifest.tsv", arena);
+    let tmp_path = join_path(ctx.cache_dir, "manifest.tsv.tmp", arena);
+    match write_file_slice(tmp_path, serialize_manifest(&m, arena), arena) {
+        Ok(_) => {},
+        Err(err) => { return fail_reason("cannot write ", tmp_path, err.message()); },
+    }
+    let ren_res = unsafe { rename_path_raw(tmp_path, final_path, arena) };
+    if ren_res.is_err() {
+        let _ = unsafe { unlink_path_raw(tmp_path, arena) };
+        return fail_reason("cannot replace ", final_path, ren_res.err().unwrap().message());
+    }
+    return 0;
+}
+
+// `zbuild --gc` without an entry: drop every row whose source file is gone, then collect the
+// artifacts no remaining row references. Returns the number of rows removed.
+pub fn prune_manifest(ctx: &BuildCtx, manifest: &mut Manifest, removed: &mut usize) -> i32 {
+    let mut kept = unsafe { Vec::<Entry>.new_in_raw(ctx.arena) };
+    let mut i = 0 as usize;
+    while i < manifest.entries.len() {
+        let e = manifest.entries.as_slice()[i].clone();
+        if entry_source_exists(&e, ctx.arena) {
+            kept.push(e);
+        } else {
+            *removed = *removed + 1;
+        }
+        i = i + 1;
+    }
+    manifest.entries = kept;
+    manifest.written_ns = realtime_ns();
+    return save_manifest(ctx, manifest);
+}
+
+pub fn write_manifest(
+    ctx: &BuildCtx,
+    manifest: &mut Manifest,
+    g: &Graph,
+    results: &Vec<ModResult>
+) -> i32 {
+    let arena = ctx.arena;
+    let final_path = join_path(ctx.cache_dir, "manifest.tsv", arena);
+    let disk_manifest = match read_file_to_slice(final_path, arena) {
+        Ok(c) => parse_manifest(c, arena),
+        Err(_) => empty_manifest(arena),
+    };
+    let base = if disk_manifest.toolchain == ctx.tools.toolchain_id {
+        &disk_manifest
+    } else {
+        &*manifest
+    };
+
+    let mut m = empty_manifest(arena);
+    m.written_ns = realtime_ns();
+    m.toolchain = ctx.tools.toolchain_id;
+    m.tools = ctx.tools.recs.clone();
+
+    if base.toolchain == ctx.tools.toolchain_id {
+        let mut i = 0 as usize;
+        while i < base.entries.len() {
+            let old = base.entries.as_slice()[i].clone();
+            let mut in_current = false;
+            let mut k = 0 as usize;
+            while k < g.order.len() {
+                let node = g.order.as_slice()[k];
+                if old.path == g.paths.as_slice()[node] {
+                    in_current = true;
+                    break;
+                }
+                k = k + 1;
+            }
+            // Another program's module: keep it while its source exists, so programs sharing the
+            // cache do not evict each other; drop it once the source is gone (GC then removes its
+            // object and interface). Rows from before the file column cannot be checked and are kept.
+            if !in_current && entry_source_exists(&old, arena) {
+                m.entries.push(old);
+            }
+            i = i + 1;
+        }
+    }
+    let mut j = 0 as usize;
+    while j < g.order.len() {
+        m.entries.push(entry_of(ctx, g, results, g.order.as_slice()[j]));
+        j = j + 1;
+    }
+
+    let rc = save_manifest(ctx, &m);
+    if rc != 0 { return rc; }
+    *manifest = m;
+    return 0;
+}
+
+fn name_in(names: &Vec<[u8]>, name: [u8]) -> bool {
+    let mut i = 0 as usize;
+    while i < names.len() {
+        if names.as_slice()[i] == name { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn sweep(dir: [u8], keep: &Vec<[u8]>, arena: *mut ArenaHeader) {
+    match unsafe { list_dir_raw(dir, arena) } {
+        Ok(names) => {
+            let mut i = 0 as usize;
+            while i < names.len() {
+                let n = names.as_slice()[i];
+                if !name_in(keep, n) {
+                    let _ = unsafe { unlink_path_raw(join_path(dir, n, arena), arena) };
+                }
+                i = i + 1;
+            }
+        },
+        Err(_) => {},
+    }
+}
+
+fn base_name(path: [u8]) -> [u8] {
+    let dir = path_dir(path);
+    return path.sub(dir.len, path.len - dir.len);
+}
+
+// Deletes every cached artifact no entry in the manifest references: superseded objects, the
+// interfaces of modules that left the graph, and leftover intermediates.
+pub fn collect_garbage(ctx: &BuildCtx, manifest: &Manifest) {
+    let arena = ctx.arena;
+    let mut keep_obj = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+    let mut keep_iface = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+    let mut i = 0 as usize;
+    while i < manifest.entries.len() {
+        let e = manifest.entries.as_slice()[i];
+        keep_obj.push(base_name(e.object));
+        keep_iface.push(iface_relative_path(e.path, arena));
+        i = i + 1;
+    }
+    sweep(ctx.obj_dir, &keep_obj, arena);
+    sweep(ctx.iface_dir, &keep_iface, arena);
+    sweep(ctx.tmp_dir, &unsafe { Vec::<[u8]>.new_in_raw(arena) }, arena);
+}

@@ -1,0 +1,16 @@
+// Creating and destroying many arenas in a loop must not double-free or leak.
+// Exercises the single-free path (Drop) repeatedly; a restored explicit free in
+// arena_destroy (mutation M83) double-frees here.
+// expected exit 0
+
+import "mem.zrl";
+use mem::Arena;
+
+fn main() -> i32 {
+    let mut i: u64 = 0;
+    while i < 10000 {
+        let a = Arena.new(4096).unwrap();
+        i = i + 1;
+    }
+    return 0;
+}

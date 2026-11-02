@@ -1,0 +1,8 @@
+// expected exit 134
+// index == len for a fixed-size array, the array half of the off-by-one the
+// mutation harness found. See bounds_slice_boundary.zrl.
+fn main() -> i32 {
+    let mut data = [1 as u8, 2, 7];
+    let i = 3 as usize;
+    return data[i] as i32;
+}

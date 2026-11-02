@@ -1,0 +1,4 @@
+// name: C function pointer forged from an integer
+// expected: compile_reject
+// A code address cannot be made from a number in safe code; it comes from an extern "C" fn or from C.
+fn main() -> i32 { let f = 4096 as extern "C" fn(i32) -> i32; return 0; }

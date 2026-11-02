@@ -1,0 +1,18 @@
+// expected compile fail
+// EXPECT: error: type mismatch
+// Assignment was not type-checked at all: `let x: T = e`, `f(e)` and `return e`
+// each verified the types, but `x = e` verified nothing. A slice is two words
+// (ptr, len) and a raw pointer is one, so this stored a descriptor into an
+// 8-byte slot and produced a wild pointer that faulted far from here.
+import "core.zrl";
+import "mem_raw.zrl";
+use mem_raw::{arena_init, zoril_allocator_alloc};
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(1024 as u64 * 1024) };
+    let raw = unsafe { zoril_allocator_alloc(arena, 16 as u64) } as *mut u8;
+    let s = unsafe { @slice(raw, 16 as usize) };
+    let mut q: *mut u8 = 0 as *mut u8;
+    q = s;
+    return 0;
+}

@@ -1,0 +1,19 @@
+// name: Closure capturing Box payload reference keeps enum borrowed across reassignment
+// expected: compile_reject
+// Reassigning an enum while a closure capturing a reference into its Box payload is live
+// would cause a use-after-free; rejected at compile time.
+enum E {
+    A(Box<i32>),
+    B,
+}
+
+fn main() -> i32 {
+    let mut e = E.A(box 5);
+    let r = match &e {
+        E.A(x) => x,
+        E.B => { return 0; },
+    };
+    let cl = || -> i32 { **r };
+    e = E.B;
+    return cl();
+}

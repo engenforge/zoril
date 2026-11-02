@@ -1,0 +1,21 @@
+// expected compile fail
+// EXPECT: error: cannot mutably borrow 'a' while it is already borrowed
+// A Vec built with `Vec::new_in(&arena)` holds a borrow of the arena: resetting the arena
+// to a mark while the Vec is live is a compile error.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return 1; },
+    };
+    let m = a.mark();
+    let mut v = Vec::<u64>.new_in(&a);
+    v.push(42);
+    a.reset_to(m); // @error "cannot mutably borrow 'a' while it is already borrowed"
+    v.push(99);
+    return 0;
+}

@@ -1,0 +1,21 @@
+// name: A view of a closure's owned Vec stored into another owned capture is rejected
+// expected: compile_reject
+// Storing a view of a closure's owned Vec into another owned captured Vec across calls is rejected.
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(77);
+    let mut w = Vec::<[i32]>.new();
+    let mut f = |k: i32| -> i32 {
+        if k == 0 {
+            w.push(v.as_slice());
+            return 0;
+        }
+        v.free();
+        return (*w.get(0).unwrap())[0];
+    };
+    f(0);
+    return f(1);
+}

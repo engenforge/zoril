@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_char_cast_int.zrl:5:13: error: cannot cast to char: use `unicode::char_from_u32` for a checked conversion
+// `n as char` kept any 32-bit value; `unicode::char_from_u32` is the checked conversion.
+fn main() -> i32 {
+    let c = 0xd800 as u32 as char;
+    return 0;
+}

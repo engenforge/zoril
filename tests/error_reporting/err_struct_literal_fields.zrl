@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_struct_literal_fields.zrl:8:13: error: struct literal names no field of the struct: zz
+// EXPECT: tests/error_reporting/err_struct_literal_fields.zrl:9:13: error: struct literal gives a field twice: x
+// An unknown field name stored its value in the field at its position (`zz` into `y`), and a
+// second `x` overwrote the first.
+struct P { x: i32, y: i32 }
+fn main() -> i32 {
+    let p = P { x: 1, zz: 2, y: 3 };
+    let q = P { x: 1, x: 5, y: 2 };
+    return p.y + q.x;
+}

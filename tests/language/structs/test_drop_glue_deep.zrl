@@ -1,0 +1,68 @@
+// The drop walk follows by-value fields with no depth limit, and the copy question answers "not
+// `Copy`" with no depth limit either, so a value whose `Drop` sits eleven struct levels down is
+// dropped exactly once: at its scope end (the flag the lowering allocates for it is the one
+// `DropIfLive` guards), and on both paths of a conditional move - the case the flag exists for.
+// Before the pair (doc/SAFETY.md §4.4) the same program returned 10: the value
+// was never dropped at all, which is why a loop over such values leaked every mapping.
+// Its one-level sibling is `test_drop_glue.zrl`, whose `conditional_move_of_aggregate` this
+// mirrors at a depth past the old limit.
+static mut DROPS: i32 = 0;
+
+struct D { x: i64 }
+
+trait Drop {
+    fn drop(self: &mut Self);
+}
+
+impl Drop for D {
+    fn drop(self: &mut D) {
+        DROPS = DROPS + 1;
+    }
+}
+
+struct S1 { d: D }
+struct S2 { a: S1 }
+struct S3 { a: S2 }
+struct S4 { a: S3 }
+struct S5 { a: S4 }
+struct S6 { a: S5 }
+struct S7 { a: S6 }
+struct S8 { a: S7 }
+struct S9 { a: S8 }
+struct S10 { a: S9 }
+struct S11 { a: S10 }
+
+fn built() -> S11 {
+    return S11 { a: S10 { a: S9 { a: S8 { a: S7 { a: S6 { a: S5 { a: S4 { a: S3 { a: S2 { a: S1 { d: D { x: 1 } } } } } } } } } } } };
+}
+
+fn take11(v: S11) -> i64 {
+    return v.a.a.a.a.a.a.a.a.a.a.d.x;
+}
+
+fn unconditional() {
+    let v = built();
+}
+
+fn conditional_move(c: bool) {
+    let v = built();
+    if c {
+        let n = take11(v);
+    }
+}
+
+fn main() -> i32 {
+    DROPS = 0;
+    unconditional();
+    if DROPS != 1 { return 10; }
+
+    DROPS = 0;
+    conditional_move(true);
+    if DROPS != 1 { return 20; }
+
+    DROPS = 0;
+    conditional_move(false);
+    if DROPS != 1 { return 21; }
+
+    return 0;
+}

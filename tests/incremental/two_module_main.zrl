@@ -1,0 +1,8 @@
+import "helper.zrl";
+use helper::{helper_add, helper_sub};
+
+pub fn main() -> i32 {
+    let sum = helper_add(30, 12);
+    let diff = helper_sub(sum, 42);
+    return diff as i32;
+}

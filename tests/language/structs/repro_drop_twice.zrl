@@ -1,0 +1,26 @@
+// expected exit 2
+static mut DROPS: i32 = 0;
+
+struct D {
+    x: i64,
+}
+
+trait Drop {
+    fn drop(self: &mut D);
+}
+
+impl Drop for D {
+    fn drop(self: &mut D) {
+        DROPS = DROPS + 1;
+    }
+}
+
+fn scope() {
+    let d = D { x: 1 };
+}
+
+fn main() -> i32 {
+    scope();
+    scope();
+    return DROPS;
+}

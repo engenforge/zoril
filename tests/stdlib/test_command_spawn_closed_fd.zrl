@@ -1,0 +1,25 @@
+import "mem.zrl";
+import "proc.zrl";
+import "io.zrl";
+use mem::Arena;
+use proc::Command;
+use io::Fd;
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return 1; },
+    };
+    let mut cmd = Command.new("/bin/true", &a);
+    let bad_fd = unsafe { Fd.from_unix_raw(999) };
+    cmd.set_stdout(bad_fd);
+    match cmd.spawn() {
+        Ok(_) => { return 2; },
+        Err(e) => {
+            if e.errno != 9 { // EBADF
+                return 3;
+            }
+        },
+    }
+    return 0;
+}

@@ -1,0 +1,11 @@
+// expected exit 0
+// `*rm = x` where that write is the `&mut`'s last use: nothing borrows `x` afterwards, so the read
+// is not a read of a live borrow and the shape is accepted (`x` is unchanged, 3). The owning forms
+// of the same shape are rejected - see err_self_move_through_mut_ref_* - because there the drop of
+// the old place and the move out of it both matter.
+fn main() -> i32 {
+    let mut x: i32 = 3;
+    let rm = &mut x;
+    *rm = x;
+    return x - 3;
+}

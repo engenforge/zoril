@@ -1,0 +1,5 @@
+// name: Unaligned pointer store (inside unsafe)
+// expected: accept
+// The escape hatch half of 24_unaligned_access.zrl. Unaligned access stays
+// unchecked by design; the marker scopes it rather than checking it.
+fn main() -> i32 { let mut b = [0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8]; let q = (&mut b[1] as *mut u8) as *mut i64; unsafe { *q = 7 as i64; } return 0; }

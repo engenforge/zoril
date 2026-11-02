@@ -1,0 +1,9 @@
+// expected exit 0
+import "lib_slice.zrl";
+
+fn main() -> i32 {
+    let a = [1, 2];
+    if lib_slice::sl_run::<i32>(&a) != 42 { return 1; }
+    if lib_slice::sl_pub::<i32>(&a) != 42 { return 2; }
+    return 0;
+}

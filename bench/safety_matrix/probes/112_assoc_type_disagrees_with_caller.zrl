@@ -1,0 +1,9 @@
+// name: Generic caller passes a value of another type as an associated type
+// expected: compile_reject
+// The impl says Out = &i32; a generic body passing an i64 where Self::Out is expected must not
+// have it read as a reference.
+trait Tr { type Out; fn get(self: &Self, o: Self::Out) -> i32; }
+struct S { v: i32 }
+impl Tr for S { type Out = &i32; fn get(self: &S, o: &i32) -> i32 { return *o; } }
+fn call<T: Tr>(t: &T) -> i32 { return t.get(12345 as i64); }
+fn main() -> i32 { return call(&S { v: 1 }); }

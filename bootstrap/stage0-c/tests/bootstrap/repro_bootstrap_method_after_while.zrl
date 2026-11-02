@@ -1,0 +1,18 @@
+pub struct Buf { pub data: u32 }
+impl Buf {
+    pub fn push(self: &mut Buf, b: u8) { self.data = b as u32; }
+}
+
+fn test(buf: *mut Buf, x: u8) {
+    if x == 1u8 {
+        let mut h = 0 as u32;
+        let mut j = 0;
+        while j < 2 {
+            h = h + 1 as u32;
+            j = j + 1;
+        }
+        (*buf).push(h as u8);
+    }
+}
+
+fn main() -> i32 { return 0; }

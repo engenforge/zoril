@@ -1,0 +1,10 @@
+// expected exit code: 0
+struct C { val: u64 }
+struct B<T> { inner: T, c: C }
+struct A { b: B<u32> }
+fn main() -> i32 {
+    let a = A { b: B<u32> { inner: 1, c: C { val: 2 } } };
+    if a.b.inner != 1 { return 1; }
+    if a.b.c.val != 2 { return 2; }
+    return 0;
+}

@@ -1,0 +1,6 @@
+export function $f(w %a, w %b, w %c, w %d, w %e, w %g, w %h) {
+@s
+	call $x(w %g)
+	call $h(w %a, w %b, w %c, w %d, w %e, w %g, w %h)
+	ret
+}

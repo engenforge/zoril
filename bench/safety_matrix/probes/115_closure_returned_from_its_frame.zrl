@@ -1,0 +1,8 @@
+// name: Capturing closure returned from the frame holding its environment
+// expected: compile_reject
+// The closure's environment is a tuple in make_adder's frame; the returned function value
+// would point at it after the frame is gone.
+fn make_adder(k: i32) -> fn(i32) -> i32 {
+    return |x: i32| -> i32 { x + k };
+}
+fn main() -> i32 { return make_adder(5)(2); }

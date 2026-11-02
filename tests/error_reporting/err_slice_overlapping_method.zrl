@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: error: `Su8::slice_m` is defined twice; the other is at
+impl<T> [T] {
+    pub fn slice_m(self: &[T]) -> usize {
+        return self.len;
+    }
+}
+
+impl [u8] {
+    pub fn slice_m(self: &[u8]) -> usize {
+        return self.len * 2 as usize;
+    }
+}
+
+fn main() -> i32 {
+    return 0;
+}

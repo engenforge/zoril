@@ -1,0 +1,4 @@
+pub enum MyEnum {
+    Variant(u32),
+    Other,
+}

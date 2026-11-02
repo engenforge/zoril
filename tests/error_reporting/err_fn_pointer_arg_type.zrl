@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_fn_pointer_arg_type.zrl:8:13: error: cannot implicitly convert between bool and non-bool (use `as`)
+// EXPECT: tests/error_reporting/err_fn_pointer_arg_type.zrl:9:13: error: wrong number of arguments (expected 1
+// A call through a function pointer did not check its arguments against the parameters.
+fn g(x: i64) -> i64 { return x + 1; }
+fn main() -> i32 {
+    let p = g;
+    let a = p(true);
+    let b = p(1, 2);
+    return 0;
+}

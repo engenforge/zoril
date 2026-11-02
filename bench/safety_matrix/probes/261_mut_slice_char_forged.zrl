@@ -1,0 +1,10 @@
+// name: A char written as a number through a [mut T] slice
+// expected: compile_reject
+// `[mut u32]` from `&mut [char; 2]` makes every element a write target of the wrong type, so the
+// slice's element comparison has the same invariant rule as a `&mut` reference.
+fn main() -> i32 {
+    let mut chars: [char; 2] = ['a', 'b'];
+    let s: [mut u32] = &mut chars;
+    s[0] = 0xd800 as u32;
+    return 0;
+}

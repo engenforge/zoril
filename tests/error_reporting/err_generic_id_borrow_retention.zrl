@@ -1,0 +1,28 @@
+// expected compile fail
+// EXPECT: error: cannot assign to 'e' because it is borrowed
+// User generic id function `fn id<T>(t: T) -> T` preserves borrows when T holds a reference.
+import "core.zrl";
+
+enum E {
+    A(Box<i32>),
+    B,
+}
+
+fn id<T>(t: T) -> T {
+    return t;
+}
+
+fn first(e: &E) -> Option<&Box<i32>> {
+    return match e {
+        E.A(x) => Option.Some(x),
+        E.B => Option.None,
+    };
+}
+
+fn main() -> i32 {
+    let mut e = E.A(box 5);
+    let opt = id(first(&e));
+    let r = opt.unwrap();
+    e = E.B;
+    return **r;
+}

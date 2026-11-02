@@ -1,0 +1,22 @@
+// name: An enum directly containing a raw pointer payload is not Copy by default
+// expected: compile_reject
+// Under Copy option A+, an enum with a raw-pointer payload in its declaration is Move-only
+// unless it explicitly declares `impl Copy for T {}`.
+enum RawPtrEnum {
+    None,
+    Ptr(*mut u8),
+}
+
+fn consume(e: RawPtrEnum) -> i32 {
+    return match e {
+        RawPtrEnum.None => 0,
+        RawPtrEnum.Ptr(_) => 1,
+    };
+}
+
+fn main() -> i32 {
+    let e1 = RawPtrEnum.None;
+    let e2 = e1;
+    let _ = consume(e1);
+    return consume(e2);
+}

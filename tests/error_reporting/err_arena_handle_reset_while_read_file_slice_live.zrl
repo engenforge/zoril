@@ -1,0 +1,20 @@
+// expected compile fail
+// EXPECT: error: cannot mutably borrow 'a' while it is already borrowed
+// A `[u8]` that `read_file` hands out borrows the arena, so resetting the arena while it is
+// live is a compile error (Stage 4 for the arena-taking functions).
+import "file.zrl";
+import "mem.zrl";
+use file::{read_file, write_file};
+use mem::Arena;
+
+fn main() -> i32 {
+    let _ = write_file("/tmp/zoril_arena_fn_reset.txt", "hello");
+    let mut a = Arena.new(65536).unwrap();
+    let content = match read_file("/tmp/zoril_arena_fn_reset.txt", &a) {
+        Ok(bytes) => bytes,
+        Err(_) => { return 2; },
+    };
+    a.reset(); // @error "cannot mutably borrow 'a' while it is already borrowed"
+    if content.len == 0 { return 3; }
+    return 0;
+}

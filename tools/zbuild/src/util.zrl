@@ -1,0 +1,210 @@
+// zbuild helpers: paths, files, numbers. Safe Zoril only.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "os/linux.zrl" as os_linux;
+import "file.zrl";
+import "string.zrl";
+import "vec.zrl";
+import "sha256.zrl";
+import "proc.zrl";
+import "fsys.zrl";
+import "fmt.zrl";
+use file::read_file_raw;
+use fsys::make_dir_all_raw;
+use io::{Error, Fd, File, close, eprint, exit, stderr, write_all};
+use os_linux::open;
+use fmt::write_i64;
+use mem_raw::ArenaHeader;
+use proc::Command;
+use os_linux::sys_fstat;
+use sha256::sha256_hex_arr;
+use string::String;
+use vec::Vec;
+
+pub fn file_exists(path: [u8], arena: *mut ArenaHeader) -> bool {
+    match open(path, os_linux::O_RDONLY, 0) {
+        Result.Ok(fd) => {
+            let _ = close(fd);
+            return true;
+        },
+        Result.Err(_) => {
+            return false;
+        },
+    }
+}
+
+pub fn read_file_to_slice(path: [u8], arena: *mut ArenaHeader) -> Result<[u8], Error> {
+    return unsafe { read_file_raw(path, arena) };
+}
+
+pub fn write_file_slice(path: [u8], data: [u8], arena: *mut ArenaHeader) -> Result<(), Error> {
+    return file::write_file(path, data);
+}
+
+// (mtime in ns, size) of a file, or None if it cannot be opened.
+pub fn stat_mtime_size(path: [u8], arena: *mut ArenaHeader) -> Option<(i64, i64)> {
+    let f_handle = match open(path, os_linux::O_RDONLY, 0) {
+        Result.Ok(fd) => fd,
+        Result.Err(_) => { return Option.None; },
+    };
+    defer close(f_handle);
+    let mut size = 0 as i64;
+    let mut mtime = 0 as i64;
+    if sys_fstat(f_handle, &mut size, &mut mtime).is_err() {
+        return Option.None;
+    }
+    return Option.Some((mtime, size));
+}
+
+pub fn u64_to_str_in(mut val: u64, arena: *mut ArenaHeader) -> [u8] {
+    if val == 0 { return "0"; }
+    let mut digits: [u8; 32] = [0; 32];
+    let mut count = 0 as usize;
+    while val > 0 {
+        digits[count] = ((val % 10) as u8) + ('0' as u8);
+        val = val / 10;
+        count = count + 1;
+    }
+    let mut s = unsafe { String.with_capacity_in_raw(arena, count) };
+    let mut j = count;
+    while j > 0 {
+        j = j - 1;
+        s.push_u8(digits[j]);
+    }
+    return s.as_slice();
+}
+
+pub fn i64_to_str_in(val: i64, arena: *mut ArenaHeader) -> [u8] {
+    if val < 0 {
+        let mut s = unsafe { String.with_capacity_in_raw(arena, 32) };
+        s.push_u8('-' as u8);
+        s.push_str(u64_to_str_in((0 as i64 - val) as u64, arena));
+        return s.as_slice();
+    }
+    return u64_to_str_in(val as u64, arena);
+}
+
+pub fn hash_to_str(hash: [u8; 64], arena: *mut ArenaHeader) -> [u8] {
+    let mut s = unsafe { String.with_capacity_in_raw(arena, 64) };
+    let mut i = 0 as usize;
+    while i < 64 {
+        s.push_u8(hash[i]);
+        i = i + 1;
+    }
+    return s.as_slice();
+}
+
+pub fn sha_hex(data: [u8], arena: *mut ArenaHeader) -> [u8] {
+    return hash_to_str(sha256_hex_arr(data), arena);
+}
+
+pub fn path_dir(path: [u8]) -> [u8] {
+    let mut last_slash = -1 as i64;
+    let mut i = 0 as usize;
+    while i < path.len {
+        if path[i] == '/' as u8 {
+            last_slash = i as i64;
+        }
+        i = i + 1;
+    }
+    if last_slash < 0 {
+        return "";
+    }
+    return path.sub(0, (last_slash + 1) as usize);
+}
+
+pub fn ensure_parent_dir(file_path: [u8], arena: *mut ArenaHeader) -> Result<(), Error> {
+    let dir = path_dir(file_path);
+    if dir.len > 0 {
+        return unsafe { make_dir_all_raw(dir, arena) };
+    }
+    return Result.Ok(());
+}
+
+pub fn join_path(dir: [u8], name: [u8], arena: *mut ArenaHeader) -> [u8] {
+    let mut s = unsafe { String.new_in_raw(arena) };
+    s.push_str(dir);
+    if dir.len > 0 && dir[dir.len - 1] != '/' as u8 {
+        s.push_u8('/' as u8);
+    }
+    s.push_str(name);
+    return s.as_slice();
+}
+
+pub fn fail(msg: [u8]) -> i32 {
+    eprint("error: ");
+    eprint(msg);
+    eprint("\n");
+    return 1;
+}
+
+pub fn fail2(msg: [u8], detail: [u8]) -> i32 {
+    eprint("error: ");
+    eprint(msg);
+    eprint(detail);
+    eprint("\n");
+    return 1;
+}
+
+pub fn fail_reason(msg: [u8], detail: [u8], reason: [u8]) -> i32 {
+    eprint("error: ");
+    eprint(msg);
+    eprint(detail);
+    eprint(": ");
+    eprint(reason);
+    eprint("\n");
+    return 1;
+}
+
+pub fn same_string_set(a: &Vec<[u8]>, b: &Vec<[u8]>) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut i = 0 as usize;
+    while i < a.len() {
+        let mut found = false;
+        let mut j = 0 as usize;
+        while j < b.len() {
+            if a.as_slice()[i] == b.as_slice()[j] { found = true; break; }
+            j = j + 1;
+        }
+        if !found { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Runs a build step. A child that exits non-zero ends the build with that same exit code, a
+// child killed by a signal with 128+signal, and a child we failed to start or observe with 1;
+// a step is never reported as successful unless it was seen to exit 0.
+pub fn run_cmd_checked(mut cmd: Command, desc: [u8]) {
+    let status_res = cmd.status();
+    match status_res {
+        Result.Ok(st) => {
+            match st {
+                ExitStatus.Exited(code) => {
+                    if code != 0 {
+                        exit(code);
+                    }
+                },
+                ExitStatus.Signaled(sig) => {
+                    eprint("error: ");
+                    eprint(desc);
+                    eprint(" killed by signal ");
+                    let mut err = stderr();
+                    let _ = write_i64(&mut err, sig as i64);
+                    eprint("\n");
+                    exit(128 + sig);
+                },
+            }
+        },
+        Result.Err(e) => {
+            eprint("error: failed to execute ");
+            eprint(desc);
+            eprint(": ");
+            eprint(e.message());
+            eprint("\n");
+            exit(1);
+        }
+    }
+}

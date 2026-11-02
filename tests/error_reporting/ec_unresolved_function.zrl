@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/ec_unresolved_function.zrl:5:13: error: unresolved symbol: foo
+// Tests that an unresolved function call is reported at the call site.
+fn main() -> i32 {
+    let x = foo(1, 2);  // @error "Unresolved function or variant: foo" :13
+    0
+}

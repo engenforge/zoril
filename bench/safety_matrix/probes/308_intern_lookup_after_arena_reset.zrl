@@ -1,0 +1,27 @@
+// name: An interned string is a view of the table's arena, so it cannot outlive a reset
+// expected: compile_reject
+// `InternTable::lookup` must not be declared `#[borrows()]`: the bytes it returns live in the
+// table's arena, so a slice read after `a.reset()` is a use-after-reset. With the attribute the
+// program compiled and `s[0]` read the reset's poison byte (165); without it the borrow of `a`
+// from `InternTable.new(&a)` is still live at the reset, and the reset is rejected.
+import "mem.zrl";
+import "intern.zrl";
+import "vec.zrl";
+use mem::Arena;
+use intern::InternTable;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536).unwrap();
+    let mut s: [u8] = "";
+    {
+        let t = InternTable.new(&a);
+        let id = t.intern("hello");
+        s = t.lookup(id);
+    }
+    a.reset();
+    let mut v = Vec::<u8>.new_in(&a);
+    let mut i = 0;
+    while i < 64 { v.push(1); i = i + 1; }
+    return s[0] as i32;
+}

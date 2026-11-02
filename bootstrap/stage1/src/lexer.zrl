@@ -1,0 +1,721 @@
+// Lexer implementation for Zoril v1.1
+
+import "core.zrl";
+import "intern.zrl";
+import "bytevec.zrl";
+import "softfp.zrl";
+import "token.zrl";
+import "ast.zrl";
+
+pub struct Lexer {
+    pub source: [u8],
+    pub pos: u64,
+    pub line: u32,
+    pub col: u32,
+    pub intern_table: *mut InternTable,
+    pub arena: *mut Arena,
+    pub pending_block: u32, // accumulated multi-line comment block
+    pub module_doc: u32,    // first comment block (captured at first blank-line reset before any token)
+    pub token_count: u32,   // tokens produced so far; 0 until first next_token() returns
+    pub last_lexed_comment: u32, // pending_block's value when the token just produced by next_token() was lexed, captured before the reset below clears it for non-decl-start tokens
+}
+
+impl Lexer {
+    pub fn new(source: [u8], table: &mut InternTable, arena: *mut Arena) -> Lexer {
+        return Lexer {
+            source: source,
+            pos: 0 as u64,
+            line: 1 as u32,
+            col: 1 as u32,
+            intern_table: table as *mut InternTable,
+            arena: arena,
+            pending_block: 0 as u32,
+            module_doc: 0 as u32,
+            token_count: 0 as u32,
+            last_lexed_comment: 0 as u32,
+        };
+    }
+
+    fn make_token(self: &Lexer, token: Token, start: u64, start_line: u32, start_col: u32) -> TokenWithSpan {
+        return TokenWithSpan {
+            token: token,
+            span: Span { 
+                start: start as u32, 
+                end: self.pos as u32,
+                line: start_line,
+                col: start_col
+            }
+        };
+    }
+
+    fn advance(self: &mut Lexer) -> u8 {
+        if self.pos >= self.source.len { return 0 as u8; }
+        let c = self.source[self.pos];
+        self.pos = self.pos + 1 as u64;
+        if c == '\n' as u8 {
+            self.line = self.line + 1 as u32;
+            self.col = 1 as u32;
+        } else {
+            self.col = self.col + 1 as u32;
+        }
+        return c;
+    }
+
+    pub fn next_token(self: &mut Lexer) -> TokenWithSpan {
+        self.skip_whitespace();
+        let start = self.pos; let s_line = self.line; let s_col = self.col;
+        if self.pos >= self.source.len {
+            self.token_count = self.token_count + 1 as u32;
+            let tok = self.make_token(Token.Eof, start, s_line, s_col);
+            self.last_lexed_comment = self.pending_block;
+            if !self.is_decl_start_token(tok.token.kind()) {
+                self.pending_block = 0 as u32;
+            }
+            return tok;
+        }
+        let c = self.source[self.pos];
+
+        let tok_with_span = match c {
+            '(' => { self.advance(); TokenWithSpan { token: Token.LParen, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } } },
+            ')' => { self.advance(); self.make_token(Token.RParen, start, s_line, s_col) },
+            '{' => { self.advance(); self.make_token(Token.LBrace, start, s_line, s_col) },
+            '}' => { self.advance(); self.make_token(Token.RBrace, start, s_line, s_col) },
+            '[' => { self.advance(); self.make_token(Token.LBracket, start, s_line, s_col) },
+            ']' => { self.advance(); self.make_token(Token.RBracket, start, s_line, s_col) },
+            ',' => { self.advance(); self.make_token(Token.Comma, start, s_line, s_col) },
+            ';' => { self.advance(); self.make_token(Token.Semi, start, s_line, s_col) },
+            '?' => { self.advance(); self.make_token(Token.Question, start, s_line, s_col) },
+            '@' => { self.advance(); self.make_token(Token.At, start, s_line, s_col) },
+            '#' => { self.advance(); self.make_token(Token.Hash, start, s_line, s_col) },
+            '_' => {
+                self.advance();
+                if self.pos >= self.source.len || (!is_alpha(self.source[self.pos]) && !is_digit(self.source[self.pos])) {
+                    self.make_token(Token.Underscore, start, s_line, s_col)
+                } else {
+                    // Backtrack and lex as identifier
+                    self.pos = start; self.col = s_col;
+                    while self.pos < self.source.len && (is_alpha(self.source[self.pos]) || is_digit(self.source[self.pos])) {
+                        self.advance();
+                    }
+                    let len = self.pos - start;
+                    self.match_keyword_or_ident(start, len, s_line, s_col)
+                }
+            },
+            ':' => {
+                self.advance();
+                if self.pos < self.source.len && self.source[self.pos] == ':' as u8 {
+                    self.advance();
+                    self.make_token(Token.DoubleColon, start, s_line, s_col)
+                } else {
+                    self.make_token(Token.Colon, start, s_line, s_col)
+                }
+            },
+            '.' => {
+                self.advance();
+                if self.pos < self.source.len && self.source[self.pos] == '.' as u8 {
+                    self.advance();
+                    if self.pos < self.source.len && self.source[self.pos] == '.' as u8 {
+                        self.advance();
+                        self.make_token(Token.DotDotDot, start, s_line, s_col)
+                    } else {
+                        self.make_token(Token.DotDot, start, s_line, s_col)
+                    }
+                } else {
+                    self.make_token(Token.Dot, start, s_line, s_col)
+                }
+            },
+            '=' => {
+                self.advance();
+                (if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                    self.advance();
+                    self.make_token(Token.EqualEqual, start, s_line, s_col)
+                } else if self.pos < self.source.len && self.source[self.pos] == '>' as u8 {
+                    self.advance();
+                    self.make_token(Token.FatArrow, start, s_line, s_col)
+                } else {
+                    self.make_token(Token.Equal, start, s_line, s_col)
+                })
+            },
+            '!' => {
+                self.advance();
+                (if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                    self.advance();
+                    self.make_token(Token.BangEqual, start, s_line, s_col)
+                } else {
+                    self.make_token(Token.Bang, start, s_line, s_col)
+                })
+            },
+            '+' => {
+                self.advance();
+                (if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                    self.advance();
+                    self.make_token(Token.PlusEqual, start, s_line, s_col)
+                } else if self.pos < self.source.len && self.source[self.pos] == '%' as u8 {
+                    self.advance();
+                    if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                        self.advance();
+                        self.make_token(Token.PlusPercentEqual, start, s_line, s_col)
+                    } else {
+                        self.make_token(Token.PlusPercent, start, s_line, s_col)
+                    }
+                } else {
+                    self.make_token(Token.Plus, start, s_line, s_col)
+                })
+            },
+            '-' => {
+                self.advance();
+                (if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                    self.advance();
+                    self.make_token(Token.MinusEqual, start, s_line, s_col)
+                } else if self.pos < self.source.len && self.source[self.pos] == '>' as u8 {
+                    self.advance();
+                    self.make_token(Token.Arrow, start, s_line, s_col)
+                } else if self.pos < self.source.len && self.source[self.pos] == '%' as u8 {
+                    self.advance();
+                    if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                        self.advance();
+                        self.make_token(Token.MinusPercentEqual, start, s_line, s_col)
+                    } else {
+                        self.make_token(Token.MinusPercent, start, s_line, s_col)
+                    }
+                } else {
+                    self.make_token(Token.Minus, start, s_line, s_col)
+                })
+            },
+            '*' => {
+                self.advance();
+                (if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                    self.advance();
+                    self.make_token(Token.StarEqual, start, s_line, s_col)
+                } else if self.pos < self.source.len && self.source[self.pos] == '%' as u8 {
+                    self.advance();
+                    if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                        self.advance();
+                        self.make_token(Token.StarPercentEqual, start, s_line, s_col)
+                    } else {
+                        self.make_token(Token.StarPercent, start, s_line, s_col)
+                    }
+                } else {
+                    self.make_token(Token.Star, start, s_line, s_col)
+                })
+            },
+            '/' => {
+                self.advance();
+                (if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                    self.advance();
+                    self.make_token(Token.SlashEqual, start, s_line, s_col)
+                } else {
+                    self.make_token(Token.Slash, start, s_line, s_col)
+                })
+            },
+            '%' => {
+                self.advance();
+                (if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                    self.advance();
+                    self.make_token(Token.PercentEqual, start, s_line, s_col)
+                } else {
+                    self.make_token(Token.Percent, start, s_line, s_col)
+                })
+            },
+            '<' => {
+                self.advance();
+                (if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                    self.advance();
+                    self.make_token(Token.LessEqual, start, s_line, s_col)
+                } else if self.pos < self.source.len && self.source[self.pos] == '<' as u8 {
+                    self.advance();
+                    if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                        self.advance();
+                        self.make_token(Token.LessLessEqual, start, s_line, s_col)
+                    } else {
+                        self.make_token(Token.LessLess, start, s_line, s_col)
+                    }
+                } else {
+                    self.make_token(Token.Less, start, s_line, s_col)
+                })
+            },
+            '>' => {
+                self.advance();
+                (if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                    self.advance();
+                    self.make_token(Token.GreaterEqual, start, s_line, s_col)
+                } else if self.pos < self.source.len && self.source[self.pos] == '>' as u8 {
+                    self.advance();
+                    if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                        self.advance();
+                        self.make_token(Token.GreaterGreaterEqual, start, s_line, s_col)
+                    } else {
+                        self.make_token(Token.GreaterGreater, start, s_line, s_col)
+                    }
+                } else {
+                    self.make_token(Token.Greater, start, s_line, s_col)
+                })
+            },
+            '&' => {
+                self.advance();
+                (if self.pos < self.source.len && self.source[self.pos] == '&' as u8 {
+                    self.advance();
+                    self.make_token(Token.AmpAmp, start, s_line, s_col)
+                } else if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                    self.advance();
+                    self.make_token(Token.AmpEqual, start, s_line, s_col)
+                } else {
+                    self.make_token(Token.Amp, start, s_line, s_col)
+                })
+            },
+            '|' => {
+                self.advance();
+                (if self.pos < self.source.len && self.source[self.pos] == '|' as u8 {
+                    self.advance();
+                    self.make_token(Token.PipePipe, start, s_line, s_col)
+                } else if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                    self.advance();
+                    self.make_token(Token.PipeEqual, start, s_line, s_col)
+                } else {
+                    self.make_token(Token.Pipe, start, s_line, s_col)
+                })
+            },
+            '^' => {
+                self.advance();
+                (if self.pos < self.source.len && self.source[self.pos] == '=' as u8 {
+                    self.advance();
+                    self.make_token(Token.CaretEqual, start, s_line, s_col)
+                } else {
+                    self.make_token(Token.Caret, start, s_line, s_col)
+                })
+            },
+            '0'..='9' => {
+                if c == '0' as u8 && self.pos + 1 as u64 < self.source.len {
+                    let next = self.source[self.pos + 1 as u64];
+                    match next {
+                        'x' => {
+                            self.advance(); self.advance();
+                            self.lex_hex_int(start, s_line, s_col)
+                        },
+                        'b' => {
+                            self.advance(); self.advance();
+                            self.lex_bin_int(start, s_line, s_col)
+                        },
+                        'o' => {
+                            self.advance(); self.advance();
+                            self.lex_oct_int(start, s_line, s_col)
+                        },
+                        _ => {
+                            self.lex_dec_int(start, s_line, s_col)
+                        }
+                    }
+                } else {
+                    self.lex_dec_int(start, s_line, s_col)
+                }
+            },
+            'a'..='z' | 'A'..='Z' => {
+                if c == 'r' as u8 && self.pos + 1 as u64 < self.source.len && self.source[self.pos + 1 as u64] == '"' as u8 {
+                    self.advance(); // r
+                    self.advance(); // "
+                    let start_str = self.pos;
+                    while self.pos < self.source.len && self.source[self.pos] != '"' as u8 {
+                        if self.source[self.pos] == '\n' as u8 {
+                            self.line = self.line + 1 as u32;
+                            self.col = 1 as u32;
+                        } else {
+                            self.col = self.col + 1 as u32;
+                        }
+                        self.pos = self.pos + 1 as u64;
+                    }
+                    let end_str = self.pos;
+                    if self.pos >= self.source.len {
+                        self.last_lexed_comment = self.pending_block;
+                        return self.make_token(Token.Invalid(1 as u32), start, s_line, s_col);
+                    }
+                    self.advance(); // "
+                    let id = unsafe { (*self.intern_table).intern(@slice((self.source.ptr as usize + start_str as usize) as *mut u8, (end_str - start_str) as usize)) };
+                    self.last_lexed_comment = self.pending_block;
+                    return self.make_token(Token.String(id), start, s_line, s_col);
+                }
+
+                self.advance();
+                while self.pos < self.source.len && (is_alpha(self.source[self.pos]) || is_digit(self.source[self.pos])) {
+                    self.advance();
+                }
+                let len = self.pos - start;
+                self.match_keyword_or_ident(start, len, s_line, s_col)
+            },
+            '"' => {
+                self.advance();
+                let arena = unsafe { (*self.intern_table).arena };
+                let mut decoded_buf = ByteVec.new(arena);
+                while self.pos < self.source.len && self.source[self.pos] != '"' as u8 {
+                    if self.source[self.pos] == '\\' as u8 {
+                        self.advance();
+                        if self.pos < self.source.len {
+                            let esc = self.source[self.pos];
+                            if esc == 'x' as u8 {
+                                self.advance();
+                                let mut h = 0 as u8;
+                                let mut j = 0;
+                                while j < 2 {
+                                    if self.pos < self.source.len {
+                                        let digit = self.source[self.pos];
+                                        let mut v = 0 as u8;
+                                        if digit >= '0' as u8 && digit <= '9' as u8 { v = digit - '0' as u8; }
+                                        else if digit >= 'a' as u8 && digit <= 'f' as u8 { v = digit - 'a' as u8 + 10 as u8; }
+                                        else if digit >= 'A' as u8 && digit <= 'F' as u8 { v = digit - 'A' as u8 + 10 as u8; }
+                                        h = (h * 16 as u8) + v;
+                                        self.advance();
+                                    }
+                                    j = j + 1;
+                                }
+                                (*decoded_buf).push(h);
+                            } else {
+                                if esc == 'n' as u8 { (*decoded_buf).push(10 as u8); }
+                                else if esc == 't' as u8 { (*decoded_buf).push(9 as u8); }
+                                else if esc == 'r' as u8 { (*decoded_buf).push(13 as u8); }
+                                else if esc == '0' as u8 { (*decoded_buf).push(0 as u8); }
+                                else if esc == '\\' as u8 { (*decoded_buf).push(92 as u8); }
+                                else if esc == '"' as u8 { (*decoded_buf).push(34 as u8); }
+                                else if esc == '\'' as u8 { (*decoded_buf).push(39 as u8); }
+                                else { (*decoded_buf).push(esc); }
+                                self.advance();
+                            }
+                        }
+                    } else {
+                        (*decoded_buf).push(self.source[self.pos]);
+                        self.advance();
+                    }
+                }
+                if self.pos >= self.source.len {
+                    self.last_lexed_comment = self.pending_block;
+                    return self.make_token(Token.Invalid(1 as u32), start, s_line, s_col);
+                }
+                self.advance(); // closing "
+                let id = unsafe { (*self.intern_table).intern((*decoded_buf).as_slice()) };
+                self.make_token(Token.String(id), start, s_line, s_col)
+            },
+            '\'' => {
+                self.advance();
+                let mut val = 0 as u32;
+                if self.pos < self.source.len {
+                    if self.source[self.pos] == '\\' as u8 {
+                        self.advance();
+                        if self.pos < self.source.len {
+                            let c = self.source[self.pos];
+                            if c == 'n' as u8 { val = 10 as u32; }
+                            else if c == 'r' as u8 { val = 13 as u32; }
+                            else if c == 't' as u8 { val = 9 as u32; }
+                            else if c == '0' as u8 { val = 0 as u32; }
+                            else if c == '\'' as u8 { val = 39 as u32; }
+                            else if c == '\\' as u8 { val = 92 as u32; }
+                            else if c == 'x' as u8 {
+                                // Simple hex escape (2 digits)
+                                self.advance();
+                                let mut h = 0 as u32;
+                                let mut j = 0;
+                                while j < 2 {
+                                    if self.pos < self.source.len {
+                                        let digit = self.source[self.pos];
+                                        let mut v = 0 as u32;
+                                        if digit >= '0' as u8 && digit <= '9' as u8 { v = (digit - '0' as u8) as u32; }
+                                        else if digit >= 'a' as u8 && digit <= 'f' as u8 { v = (digit - 'a' as u8 + 10 as u8) as u32; }
+                                        else if digit >= 'A' as u8 && digit <= 'F' as u8 { v = (digit - 'A' as u8 + 10 as u8) as u32; }
+                                        h = (h * 16 as u32) + v;
+                                        self.advance();
+                                    }
+                                    j = j + 1;
+                                }
+                                val = h;
+                                // Need to avoid one extra advance below
+                                if self.pos < self.source.len && self.source[self.pos] == '\'' as u8 {
+                                    self.advance();
+                                }
+                                self.last_lexed_comment = self.pending_block;
+                                return self.make_token(Token.Char(val), start, s_line, s_col);
+                            }
+                            else { val = c as u32; }
+                            self.advance();
+                        }
+                    } else {
+                        val = self.source[self.pos] as u32;
+                        self.advance();
+                    }
+                }
+                if self.pos < self.source.len && self.source[self.pos] == '\'' as u8 {
+                    self.advance();
+                }
+                self.make_token(Token.Char(val), start, s_line, s_col)
+            },
+            _ => {
+                self.advance();
+                self.make_token(Token.Invalid(0 as u32), start, s_line, s_col)
+            },
+        };
+
+        self.token_count = self.token_count + 1 as u32;
+        self.last_lexed_comment = self.pending_block;
+        if !self.is_decl_start_token(tok_with_span.token.kind()) {
+            self.pending_block = 0 as u32;
+        }
+        return tok_with_span;
+    }
+
+    fn lex_numeric_suffix(self: &mut Lexer) -> u32 {
+        if self.pos >= self.source.len { return 0xffffffff as u32; }
+        let c = self.source[self.pos];
+        if !is_alpha(c) { return 0xffffffff as u32; }
+        
+        let start = self.pos;
+        let mut curr = start;
+        while curr < self.source.len && (is_alpha(self.source[curr]) || is_digit(self.source[curr])) {
+            curr = curr + 1 as u64;
+        }
+        let len = curr - start;
+        
+        let mut suffix = 0xffffffff as u32;
+        if self.match_keyword(start, len, "u8") { suffix = 0 as u32; }
+        else if self.match_keyword(start, len, "u16") { suffix = 1 as u32; }
+        else if self.match_keyword(start, len, "u32") { suffix = 2 as u32; }
+        else if self.match_keyword(start, len, "u64") { suffix = 3 as u32; }
+        else if self.match_keyword(start, len, "usize") { suffix = 4 as u32; }
+        else if self.match_keyword(start, len, "i8") { suffix = 5 as u32; }
+        else if self.match_keyword(start, len, "i16") { suffix = 6 as u32; }
+        else if self.match_keyword(start, len, "i32") { suffix = 7 as u32; }
+        else if self.match_keyword(start, len, "i64") { suffix = 8 as u32; }
+        else if self.match_keyword(start, len, "isize") { suffix = 9 as u32; }
+        else if self.match_keyword(start, len, "f32") { suffix = 10 as u32; }
+        else if self.match_keyword(start, len, "f64") { suffix = 11 as u32; }
+        
+        if suffix != 0xffffffff as u32 {
+            let mut i = 0 as u64;
+            while i < len {
+                self.advance();
+                i = i + 1 as u64;
+            }
+        }
+        return suffix;
+    }
+
+    fn lex_dec_int(self: &mut Lexer, start: u64, s_line: u32, s_col: u32) -> TokenWithSpan {
+        let mut val = 0 as u64;
+        while self.pos < self.source.len && (is_digit(self.source[self.pos]) || self.source[self.pos] == '_' as u8) {
+            if self.source[self.pos] != '_' as u8 {
+                val = val * 10 +% (self.source[self.pos] - '0' as u8) as u64;
+            }
+            self.advance();
+        }
+
+        if self.pos < self.source.len && self.source[self.pos] == '.' as u8 {
+            if self.pos + 1 as u64 < self.source.len && self.source[self.pos + 1 as u64] == '.' as u8 {
+                // It's a range operator `..`, don't consume it as a float decimal.
+                let suffix = self.lex_numeric_suffix();
+                return self.make_token(Token.Int((val, 0xffffffff as u32)), start, s_line, s_col);
+            }
+            
+            // Only parse as float if the dot is followed by a digit
+            if self.pos + 1 as u64 < self.source.len && is_digit(self.source[self.pos + 1 as u64]) {
+                self.advance();
+                // Accumulate on raw IEEE bits with the integer-only softfp
+                // helpers: this code also runs inside the flat/bootstrap
+                // compilers, where no float arithmetic exists at runtime
+                // (stdlib/softfp.zrl). Bit-identical to the previous
+                // hardware-float accumulation.
+                let tenth_bits = 0x3FB999999999999A as u64;   // bits of 0.1
+                let mut f_bits = softfp_u64_to_f64_bits(val);
+                let mut fraction_bits = tenth_bits;
+                while self.pos < self.source.len && (is_digit(self.source[self.pos]) || self.source[self.pos] == '_' as u8) {
+                    if self.source[self.pos] != '_' as u8 {
+                        let d_bits = softfp_u64_to_f64_bits((self.source[self.pos] - '0' as u8) as u64);
+                        f_bits = softfp_f64_add_bits(f_bits, softfp_f64_mul_bits(d_bits, fraction_bits));
+                        fraction_bits = softfp_f64_mul_bits(fraction_bits, tenth_bits);
+                    }
+                    self.advance();
+                }
+                let suffix = self.lex_numeric_suffix();
+                let f_val = unsafe { *( (&f_bits as usize) as *f64 ) };
+                return self.make_token(Token.Float(f_val), start, s_line, s_col);
+            }
+        }
+
+        let suffix = self.lex_numeric_suffix();
+        return self.make_token(Token.Int((val, suffix)), start, s_line, s_col);
+    }
+
+    fn lex_hex_int(self: &mut Lexer, start: u64, s_line: u32, s_col: u32) -> TokenWithSpan {
+        let mut val = 0 as u64;
+        while self.pos < self.source.len && (is_hex_digit(self.source[self.pos]) || self.source[self.pos] == '_' as u8) {
+            if self.source[self.pos] != '_' as u8 {
+                let digit = hex_digit_val(self.source[self.pos]);
+                val = val * 16 +% digit as u64;
+            }
+            self.advance();
+        }
+        let suffix = self.lex_numeric_suffix();
+        return self.make_token(Token.Int((val, suffix)), start, s_line, s_col);
+    }
+
+    fn lex_bin_int(self: &mut Lexer, start: u64, s_line: u32, s_col: u32) -> TokenWithSpan {
+        let mut val = 0 as u64;
+        while self.pos < self.source.len && (is_bin_digit(self.source[self.pos]) || self.source[self.pos] == '_' as u8) {
+            if self.source[self.pos] != '_' as u8 {
+                val = val * 2 +% (self.source[self.pos] - '0' as u8) as u64;
+            }
+            self.advance();
+        }
+        let suffix = self.lex_numeric_suffix();
+        return self.make_token(Token.Int((val, suffix)), start, s_line, s_col);
+    }
+
+    fn lex_oct_int(self: &mut Lexer, start: u64, s_line: u32, s_col: u32) -> TokenWithSpan {
+        let mut val = 0 as u64;
+        while self.pos < self.source.len && (is_oct_digit(self.source[self.pos]) || self.source[self.pos] == '_' as u8) {
+            if self.source[self.pos] != '_' as u8 {
+                val = val * 8 +% (self.source[self.pos] - '0' as u8) as u64;
+            }
+            self.advance();
+        }
+        let suffix = self.lex_numeric_suffix();
+        return self.make_token(Token.Int((val, suffix)), start, s_line, s_col);
+    }
+
+    fn match_keyword_or_ident(self: &mut Lexer, start: u64, len: u64, s_line: u32, s_col: u32) -> TokenWithSpan {
+        if self.match_keyword(start, len, "fn") { return TokenWithSpan { token: Token.KFn, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "struct") { return TokenWithSpan { token: Token.KStruct, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "enum") { return TokenWithSpan { token: Token.KEnum, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "trait") { return TokenWithSpan { token: Token.KTrait, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "impl") { return TokenWithSpan { token: Token.KImpl, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "let") { return TokenWithSpan { token: Token.KLet, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "mut") { return TokenWithSpan { token: Token.KMut, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "if") { return TokenWithSpan { token: Token.KIf, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "else") { return TokenWithSpan { token: Token.KElse, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "match") { return TokenWithSpan { token: Token.KMatch, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "while") { return TokenWithSpan { token: Token.KWhile, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "for") { return TokenWithSpan { token: Token.KFor, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "loop") { return TokenWithSpan { token: Token.KLoop, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "unsafe") { return TokenWithSpan { token: Token.KUnsafe, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "in") { return TokenWithSpan { token: Token.KIn, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "return") { return TokenWithSpan { token: Token.KReturn, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "break") { return TokenWithSpan { token: Token.KBreak, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "continue") { return TokenWithSpan { token: Token.KContinue, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "defer") { return TokenWithSpan { token: Token.KDefer, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "type") { return TokenWithSpan { token: Token.KType, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "pub") { return TokenWithSpan { token: Token.KPub, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "extern") { return TokenWithSpan { token: Token.KExtern, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "box") { return TokenWithSpan { token: Token.KBox, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "try") { return TokenWithSpan { token: Token.KTry, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "sizeof") { return TokenWithSpan { token: Token.KSizeof, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "alignof") { return TokenWithSpan { token: Token.KAlignof, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "as") { return TokenWithSpan { token: Token.KAs, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "const") { return TokenWithSpan { token: Token.KConst, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "static") { return TokenWithSpan { token: Token.KStatic, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "import") { return TokenWithSpan { token: Token.KImport, span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "true") { return TokenWithSpan { token: Token.Bool(true), span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+        if self.match_keyword(start, len, "false") { return TokenWithSpan { token: Token.Bool(false), span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } }; }
+
+        let id = unsafe { (*self.intern_table).intern(@slice((self.source.ptr as usize + start as usize) as *mut u8, len as usize)) };
+        return TokenWithSpan { token: Token.Ident(id), span: Span { start: start as u32, end: self.pos as u32, line: s_line, col: s_col } };
+    }
+
+    fn match_keyword(self: &Lexer, start: u64, len: u64, target: [u8]) -> bool {
+        if len != target.len { return false; }
+        let mut i = 0 as u64;
+        while i < len {
+            if self.source[start + i] != target[i] { return false; }
+            i = i + 1 as u64;
+        }
+        return true;
+    }
+
+    fn is_decl_start_token(self: &Lexer, kind: TokenKind) -> bool {
+        return match kind {
+            TokenKind.KFn | TokenKind.KStruct | TokenKind.KEnum | TokenKind.KTrait | TokenKind.KImpl | TokenKind.KType | TokenKind.KPub | TokenKind.KExtern | TokenKind.KConst | TokenKind.KStatic | TokenKind.KImport | TokenKind.Hash | TokenKind.Eof | TokenKind.KLoop => true,
+            _ => false
+        };
+    }
+
+    fn skip_whitespace(self: &mut Lexer) {
+        let mut newlines = 0;
+        while self.pos < self.source.len {
+            let c = self.source[self.pos];
+            match c {
+                ' ' | '\t' | '\r' => {
+                    self.advance();
+                },
+                '\n' => {
+                    self.advance();
+                    newlines = newlines + 1;
+                    if newlines >= 2 {
+                        // Before the first token, save the first comment block as module_doc.
+                        if self.token_count == 0 as u32 && self.module_doc == 0 as u32 && self.pending_block != 0 as u32 {
+                            self.module_doc = self.pending_block;
+                        }
+                        self.pending_block = 0 as u32;
+                    }
+                },
+                '/' => {
+                    if self.pos + 1 as u64 < self.source.len {
+                        let next = self.source[self.pos + 1 as u64];
+                        if next == '/' as u8 {
+                            newlines = 0;
+                            self.advance(); self.advance(); // skip //
+                            // Skip one optional space after //
+                            if self.pos < self.source.len && self.source[self.pos] == ' ' as u8 {
+                                self.advance();
+                            }
+                            let start = self.pos;
+                            while self.pos < self.source.len && self.source[self.pos] != '\n' as u8 {
+                                self.advance();
+                            }
+                            let len = self.pos - start;
+                            let line_slice = unsafe { @slice((self.source.ptr as usize + start as usize) as *u8, len as usize) };
+
+                            // Accumulate into pending_block
+                            let mut bv = if self.pending_block == 0 as u32 {
+                                ByteVec.new(self.arena)
+                            } else {
+                                let mut b = ByteVec.new(self.arena);
+                                unsafe { b.push_slice((*self.intern_table).lookup(self.pending_block)); }
+                                b.push('\n' as u8);
+                                b
+                            };
+                            bv.push_slice(line_slice);
+                            self.pending_block = unsafe { (*self.intern_table).intern(bv.as_slice()) };
+                        } else if next == '*' as u8 {
+                            self.advance(); self.advance();
+                            let mut depth = 1;
+                            while self.pos + 1 as u64 < self.source.len && depth > 0 {
+                                if self.source[self.pos] == '*' as u8 && self.source[self.pos + 1 as u64] == '/' as u8 {
+                                    depth = depth - 1;
+                                    self.advance(); self.advance();
+                                } else if self.source[self.pos] == '/' as u8 && self.source[self.pos + 1 as u64] == '*' as u8 {
+                                    depth = depth + 1;
+                                    self.advance(); self.advance();
+                                } else {
+                                    self.advance();
+                                }
+                            }
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                },
+                _ => {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+pub fn is_bin_digit(c: u8) -> bool {
+    return match c {
+        '0'..='1' => true,
+        _ => false,
+    };
+}
+
+pub fn is_oct_digit(c: u8) -> bool {
+    return match c {
+        '0'..='7' => true,
+        _ => false,
+    };
+}

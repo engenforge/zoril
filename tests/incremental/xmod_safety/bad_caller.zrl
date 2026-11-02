@@ -1,0 +1,12 @@
+import "lib.zrl";
+use lib::{S, stash};
+
+fn leak() -> *mut S {
+    let mut s = S { a: 42 };
+    return stash(&mut s);
+}
+
+pub fn main() -> i32 {
+    let p = leak();
+    return 0;
+}

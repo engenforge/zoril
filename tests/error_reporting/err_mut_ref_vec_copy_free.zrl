@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: error: use of moved value 'a'
+import "vec.zrl";
+use vec::Vec;
+
+fn test_vec_copy(a: &mut Vec<i32>) {
+    let b = a;
+    let r = b.get(0).unwrap();
+    a.free();
+}
+
+fn main() -> i32 {
+    return 0;
+}

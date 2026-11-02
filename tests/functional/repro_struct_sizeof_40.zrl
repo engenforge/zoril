@@ -1,0 +1,12 @@
+// expected exit 40
+struct Forty {
+    a: u64,
+    b: u64,
+    c: u64,
+    d: u64,
+    e: u64,
+}
+
+fn main() -> i32 {
+    return sizeof(Forty) as i32;
+}

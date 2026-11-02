@@ -1,0 +1,20 @@
+// expected compile fail
+// flags: --interproc-summary
+// Cross-module negative test: region escape via callee summary across module boundary.
+// EXPECT: error: region escape: returning a pointer to local stack storage
+// The callee `stash` is imported from stash_lib.zri with summary escape=1 (param 0 escapes).
+// leak() passes &mut s (a stack variable) to stash() and returns the result,
+// so the stack address escapes the function — rejected under --interproc-summary.
+
+import "stash_lib.zrl";
+use stash_lib::{S, stash};
+
+fn leak() -> *mut S {
+    let mut s = S { a: 42 as i32 };
+    return stash(&mut s);
+}
+
+fn main() -> i32 {
+    let p = leak();
+    return 0;
+}

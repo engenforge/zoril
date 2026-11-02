@@ -1,0 +1,26 @@
+// A bare block statement ends at its `}`: the `*r = 5` after it is a statement of its own, not
+// the right operand of a `*` applied to the block's unit value. The bug parsed this as
+// `({ }) * r = 5`, which lowered to a store through `mul(NO_SSA, r)`.
+// expected exit 5
+fn write(r: &mut u64) {
+    { }
+    *r = 5;
+}
+
+fn reread(r: &mut u64) {
+    { }
+    *r = *r;
+}
+
+fn main() -> i32 {
+    let mut x: u64 = 1;
+    write(&mut x);
+    if x != 5 {
+        return 1;
+    }
+    reread(&mut x);
+    if x != 5 {
+        return 2;
+    }
+    return x as i32;
+}

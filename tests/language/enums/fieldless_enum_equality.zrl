@@ -1,0 +1,15 @@
+// expected exit 0
+// Fieldless enums compare by discriminant and stay comparable with == and !=.
+enum Color { Red, Green, Blue }
+
+fn main() -> i32 {
+    let a = Color.Red;
+    let b = Color.Green;
+    let b2 = Color.Green;
+    if a == b { return 1; }
+    if !(b == b2) { return 2; }
+    if a != a { return 3; }
+    if !(a != b) { return 4; }
+    if b != Color.Green { return 5; }
+    return 0;
+}

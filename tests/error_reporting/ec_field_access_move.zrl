@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: error: use of moved value
+struct NonCopy {
+    x: i32,
+    b: Box<i32>,
+}
+
+fn main() -> i32 {
+    let d = NonCopy { x: 42, b: box 10 };
+    let y = d.b; // Moves d (b is non-copy Box)
+    let z = d.x; // @error "use of moved value 'd'"
+    0
+}

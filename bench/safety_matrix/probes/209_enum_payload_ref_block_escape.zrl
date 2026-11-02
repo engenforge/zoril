@@ -1,0 +1,17 @@
+// name: Match on borrowed enum payload marks reference as derived
+// expected: compile_reject
+enum E { Some(u64), None }
+
+fn main() -> i32 {
+    let zero: u64 = 0;
+    let mut out: &u64 = &zero;
+    for i in 0..2 {
+        let e = E.Some(7 + (i as u64) * 92);
+        match &e {
+            E.Some(x) => { if i == 0 { out = x; } },
+            _ => {},
+        }
+    }
+    // *out reads 99 instead of 7
+    return *out as i32;
+}

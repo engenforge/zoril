@@ -1,0 +1,131 @@
+// expected exit 0
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "string.zrl";
+import "file.zrl";
+import "args.zrl";
+use args::Args;
+use file::{append_file, read_file_raw, write_file};
+use mem_raw::{arena_init, zoril_allocator_alloc, ArenaHeader};
+
+fn make_temp_path(prefix: [u8], pid: u64, arena: *mut ArenaHeader) -> [u8] {
+    let p = unsafe { zoril_allocator_alloc(arena, 64 as u64) } as *mut u8;
+    let mut slice = unsafe { @slice(p, 64 as usize) };
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        slice[i] = prefix[i];
+        i = i + 1;
+    }
+    let mut digits: [u8; 20] = [0 as u8; 20];
+    let mut dcount = 0 as usize;
+    let mut n = pid;
+    if n == 0 as u64 {
+        digits[0] = '0' as u8;
+        dcount = 1;
+    } else {
+        while n > 0 as u64 {
+            let rem = (n % 10 as u64) as u8;
+            digits[dcount] = '0' as u8 + rem;
+            dcount = dcount + 1;
+            n = n / 10 as u64;
+        }
+    }
+    let mut d = dcount;
+    while d > 0 {
+        d = d - 1;
+        slice[i] = digits[d];
+        i = i + 1;
+    }
+    let suffix = ".txt\0";
+    let mut s = 0 as usize;
+    while s < suffix.len {
+        slice[i] = suffix[s];
+        i = i + 1;
+        s = s + 1;
+    }
+    unsafe { return @slice(p as *u8, i - 1); }
+}
+
+fn main(argc: i32, argv: **u8) -> i32 {
+    let mut args = args::args();
+    if args.len() < 1 as usize { return 1; }
+
+    let prog = args.program_name();
+    if prog.len == 0 as usize { return 2; }
+
+    let arena = unsafe { arena_init(1024 * 1024) };
+
+    // Test string utilities
+    if !("hello" == "hello") {
+        return 3;
+    }
+    if "hello" == "world" { return 4; }
+    if !"abcdef".starts_with("abc") { return 5; }
+    if !"abcdef".ends_with("def") { return 6; }
+    match "foo:bar".find(":") {
+        Option.Some(idx) => { if idx != 3 as usize { return 7; } },
+        Option.None => { return 7; },
+    }
+    match "foo:bar".find_byte(':' as u8) {
+        Option.Some(idx) => { if idx != 3 as usize { return 7; } },
+        Option.None => { return 7; },
+    }
+    if !"apple pie".contains("pie") { return 8; }
+
+    let sub = "abcdef".sub(2, 3);
+    if sub != "cde" { return 9; }
+
+    let trimmed = "  hi \t\n".trim();
+    if trimmed != "hi" { return 10; }
+
+    let p1 = "-12345".parse_i64();
+    if !p1.is_some() || p1.unwrap() != -12345 as i64 { return 11; }
+
+    let p2 = "9876".parse_u64();
+    if !p2.is_some() || p2.unwrap() != 9876 as u64 { return 12; }
+
+    let parts = unsafe { "a,b,c".split_raw(',' as u8, arena) };
+    if parts.len() != 3 as usize { return 13; }
+    if parts.as_slice()[0] != "a" { return 14; }
+    if parts.as_slice()[1] != "b" { return 15; }
+    if parts.as_slice()[2] != "c" { return 16; }
+
+    // Test file operations
+    let pid = unsafe { @syscall(39) } as u64;
+    let test_file = make_temp_path("/tmp/zrl_stdlib_test_", pid, arena);
+    let empty_file = make_temp_path("/tmp/zrl_empty_test_", pid, arena);
+
+    let ok = write_file(test_file, "testing file write\n");
+    if ok.is_err() { return 17; }
+
+    let read_res = unsafe { read_file_raw(test_file, arena) };
+    if !read_res.is_ok() { return 18; }
+    let content = read_res.unwrap();
+    if content != "testing file write\n" { return 19; }
+
+    let app_ok = append_file(test_file, "appended\n");
+    if app_ok.is_err() { return 20; }
+
+    let read_app = unsafe { read_file_raw(test_file, arena) };
+    if !read_app.is_ok() { return 21; }
+    if read_app.unwrap() != "testing file write\nappended\n" { return 22; }
+
+    // Test non-existent file returns error
+    let bad_read = unsafe { read_file_raw("/tmp/nonexistent_zoril_file_12345.txt", arena) };
+    if !bad_read.is_err() { return 23; }
+
+    // Test empty file returns Ok with empty slice
+    let empty_ok = write_file(empty_file, "");
+    if empty_ok.is_err() { return 24; }
+    let empty_read = unsafe { read_file_raw(empty_file, arena) };
+    if !empty_read.is_ok() { return 25; }
+    if empty_read.unwrap().len != 0 as usize { return 26; }
+
+    unsafe {
+        @syscall(87, test_file.ptr, 0, 0);
+        @syscall(87, empty_file.ptr, 0, 0);
+    }
+
+    return 0;
+}

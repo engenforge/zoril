@@ -1,0 +1,273 @@
+// File handle abstraction (File), OpenOptions, and file helpers
+
+import "core.zrl";
+import "mem.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "os/linux.zrl" as os_linux;
+import "os/unix.zrl" as os_unix;
+use io::{Error, File, Read, Stdin, write_all, write_all_fd};
+use os_linux::{O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_EXCL, O_TRUNC, O_APPEND};
+use os_unix::lseek;
+use mem::{Arena, arena_raw, grow_cap};
+use mem_raw::{ArenaHeader, zoril_allocator_alloc, zoril_allocator_realloc};
+
+// One error type for I/O: FileError aliases io::Error.
+pub type FileError = Error;
+
+// Options and flags configuring how a File handle is opened.
+pub struct OpenOptions {
+    read_flag: bool,
+    write_flag: bool,
+    append_flag: bool,
+    truncate_flag: bool,
+    create_flag: bool,
+    create_new_flag: bool,
+    mode_val: u64,
+}
+
+impl OpenOptions {
+    // Creates a blank set of open options with default settings (read-only).
+    pub fn new() -> OpenOptions {
+        return OpenOptions {
+            read_flag: false,
+            write_flag: false,
+            append_flag: false,
+            truncate_flag: false,
+            create_flag: false,
+            create_new_flag: false,
+            mode_val: 0o644 as u64,
+        };
+    }
+
+    // Configures whether the file will be opened with read access.
+    pub fn read(mut self: OpenOptions, read: bool) -> OpenOptions {
+        self.read_flag = read;
+        return self;
+    }
+
+    // Configures whether the file will be opened with write access.
+    pub fn write(mut self: OpenOptions, write: bool) -> OpenOptions {
+        self.write_flag = write;
+        return self;
+    }
+
+    // Configures whether writes will append to the end of the file.
+    pub fn append(mut self: OpenOptions, append: bool) -> OpenOptions {
+        self.append_flag = append;
+        return self;
+    }
+
+    // Configures whether opening an existing file truncates its length to zero.
+    pub fn truncate(mut self: OpenOptions, truncate: bool) -> OpenOptions {
+        self.truncate_flag = truncate;
+        return self;
+    }
+
+    // Configures whether a new file will be created if it does not already exist.
+    pub fn create(mut self: OpenOptions, create: bool) -> OpenOptions {
+        self.create_flag = create;
+        return self;
+    }
+
+    // Configures whether a new file must be created, failing if it already exists.
+    pub fn create_new(mut self: OpenOptions, create_new: bool) -> OpenOptions {
+        self.create_new_flag = create_new;
+        return self;
+    }
+
+    // Sets the permission bits (mode) applied when a new file is created.
+    pub fn unix_mode(mut self: OpenOptions, mode: u64) -> OpenOptions {
+        self.mode_val = mode;
+        return self;
+    }
+
+    // Opens the file at path with the configured options.
+    pub fn open(self: &OpenOptions, path: [u8]) -> Result<File, Error> {
+        let writable = self.write_flag || self.append_flag;
+        let mut flags: u64 = 0;
+        if self.read_flag && writable {
+            flags = flags | O_RDWR;
+        } else if writable {
+            flags = flags | O_WRONLY;
+        } else {
+            flags = flags | O_RDONLY;
+        }
+        if self.append_flag {
+            flags = flags | O_APPEND;
+        }
+        if self.truncate_flag {
+            flags = flags | O_TRUNC;
+        }
+        if self.create_flag {
+            flags = flags | O_CREAT;
+        }
+        if self.create_new_flag {
+            flags = flags | O_CREAT | O_EXCL;
+        }
+        return os_linux::open_file(path, flags, self.mode_val);
+    }
+}
+
+impl File {
+    // Returns a blank OpenOptions instance for configuring file open options.
+    pub fn options() -> OpenOptions {
+        return OpenOptions.new();
+    }
+
+    // Creates or truncates a file at path for writing with default permissions (0o644).
+    pub fn create(path: [u8]) -> Result<File, Error> {
+        return OpenOptions.new().write(true).create(true).truncate(true).open(path);
+    }
+
+    // Opens a file at path in append-only write mode, creating it if needed.
+    pub fn append(path: [u8]) -> Result<File, Error> {
+        return OpenOptions.new().append(true).create(true).open(path);
+    }
+}
+
+// Reads r until end of input into a buffer grown in the arena. initial_cap sizes
+// the first allocation; 0 picks a default. The bytes are a slice of the arena, so the
+// borrow checker ties the result to the `&Arena` it was read through.
+pub fn read_to_end_sized<R: Read>(r: &mut R, initial_cap: u64, a: &Arena) -> Result<[u8], Error> {
+    // SAFETY: `a` is the live, borrowed arena the returned slice is tied to, which is the raw
+    // entry point's contract.
+    return unsafe { read_to_end_sized_raw(r, initial_cap, arena_raw(a)) };
+}
+
+// Reads all bytes from reader r with an initial buffer hint.
+//
+// CALLER OBLIGATION: arena must be valid and initialized.
+//
+// INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+#[borrows()]
+pub unsafe fn read_to_end_sized_raw<R: Read>(
+    r: &mut R,
+    initial_cap: u64,
+    arena: *mut ArenaHeader
+) -> Result<[u8], Error> {
+    let mut cap = initial_cap;
+    if cap == 0 {
+        cap = 8192;
+    }
+    let mut buf = zoril_allocator_alloc(arena, cap) as *mut u8;
+    let mut total = 0 as usize;
+
+    while true {
+        if total == (cap as usize) {
+            let new_cap = grow_cap(cap as usize) as u64;
+            buf = zoril_allocator_realloc(arena, buf as *u8, cap, new_cap) as *mut u8;
+            cap = new_cap;
+        }
+        let remaining = (cap as usize) - total;
+        let p = (buf as usize + total) as *mut u8;
+        let mut chunk = @slice(p, remaining);
+        match r.read(chunk) {
+            Ok(n) => {
+                if n == 0 as usize {
+                    break;
+                }
+                total = total + n;
+            },
+            Err(e) => {
+                if e.errno == 4 { // EINTR
+                    continue;
+                }
+                return Result.Err(e);
+            },
+        }
+    }
+    return Result.Ok(@slice(buf as *u8, total));
+}
+
+// Reads all remaining bytes from reader r into a newly allocated byte slice in arena a.
+pub fn read_to_end<R: Read>(r: &mut R, a: &Arena) -> Result<[u8], Error> {
+    // SAFETY: as `read_to_end_sized`: the borrowed arena is live for the returned slice's life.
+    return unsafe { read_to_end_raw(r, arena_raw(a)) };
+}
+
+// Reads all bytes from reader r using a raw arena header.
+//
+// CALLER OBLIGATION: arena must be valid and initialized.
+//
+// INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+pub unsafe fn read_to_end_raw<R: Read>(r: &mut R, arena: *mut ArenaHeader) -> Result<[u8], Error> {
+    return read_to_end_sized_raw(r, 0 as u64, arena);
+}
+
+#[borrows(a)]
+// Opens and reads the entire contents of the file at path into a byte slice allocated in arena a.
+pub fn read_file(path: [u8], a: &Arena) -> Result<[u8], Error> {
+    // SAFETY: as `read_to_end_sized`: the borrowed arena is live for the returned slice's life.
+    return unsafe { read_file_raw(path, arena_raw(a)) };
+}
+
+// Reads the entire contents of a file using a raw arena header.
+//
+// CALLER OBLIGATION: arena must be valid and path must contain no interior NUL bytes.
+//
+// INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+pub unsafe fn read_file_raw(path: [u8], arena: *mut ArenaHeader) -> Result<[u8], Error> {
+    let mut f = match os_linux::open_file(path, O_RDONLY, 0) {
+        Ok(file) => file,
+        Err(e) => { return Result.Err(e); },
+    };
+
+    let size = lseek(f.fd(), 0, 2); // SEEK_END
+    let _ = lseek(f.fd(), 0, 0);     // SEEK_SET
+
+    let mut initial_cap = 8192 as u64;
+    if size > 0 {
+        initial_cap = size as u64;
+    }
+
+    return read_to_end_sized_raw(&mut f, initial_cap, arena);
+}
+
+// Reads all available data from standard input into a byte slice allocated in arena a.
+pub fn read_stdin(a: &Arena) -> Result<[u8], Error> {
+    // SAFETY: as `read_to_end_sized`: the borrowed arena is live for the returned slice's life.
+    return unsafe { read_stdin_raw(arena_raw(a)) };
+}
+
+// Reads all data from standard input using a raw arena header.
+//
+// CALLER OBLIGATION: arena must be valid and initialized.
+//
+// INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+pub unsafe fn read_stdin_raw(arena: *mut ArenaHeader) -> Result<[u8], Error> {
+    let mut input = Stdin.new();
+    return read_to_end_raw(&mut input, arena);
+}
+
+// Writes the entire byte buffer data to the file at path, creating or truncating it.
+pub fn write_file(path: [u8], data: [u8]) -> Result<(), Error> {
+    let mut f = match File.create(path) {
+        Ok(file) => file,
+        Err(e) => { return Result.Err(e); },
+    };
+    let res = write_all_fd(f.fd(), data);
+    return match res {
+        Ok(_) => f.close(),
+        Err(e) => {
+            let _ = f.close();
+            Result.Err(e)
+        },
+    };
+}
+
+// Appends the entire byte buffer data to the file at path, creating it if needed.
+pub fn append_file(path: [u8], data: [u8]) -> Result<(), Error> {
+    let mut f = match File.append(path) {
+        Ok(file) => file,
+        Err(e) => { return Result.Err(e); },
+    };
+    let res = write_all_fd(f.fd(), data);
+    return match res {
+        Ok(_) => f.close(),
+        Err(e) => {
+            let _ = f.close();
+            Result.Err(e)
+        },
+    };
+}

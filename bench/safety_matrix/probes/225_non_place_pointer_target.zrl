@@ -1,0 +1,8 @@
+// name: Cast value as assignment target is rejected
+// expected: compile_reject
+// `(4096 as *mut u64)` is a value, not a place: the assignment-target check refuses it before
+// any store through the forged address is emitted.
+fn main() -> i32 {
+    (4096 as *mut u64) = 9 as *mut u64;
+    return 0;
+}

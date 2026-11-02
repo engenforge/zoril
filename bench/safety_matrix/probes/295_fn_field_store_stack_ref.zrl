@@ -1,0 +1,34 @@
+// name: A `fn` value stored in a struct field carries a stashing callee
+// expected: compile_reject
+// The coercion is at the struct literal, not at the call, so a rule written at the indirect call
+// would miss it; refusing the function value itself covers both.
+struct H {
+    p: &i32,
+}
+
+struct Ops {
+    put: fn(&mut H, &i32),
+}
+
+fn put(h: &mut H, p: &i32) {
+    h.p = p;
+}
+
+fn fill(h: &mut H) {
+    let x = 5;
+    let o = Ops { put: put };
+    o.put(h, &x);
+}
+
+fn churn() -> i32 {
+    let a: [i32; 64] = [77; 64];
+    return a[3];
+}
+
+fn main() -> i32 {
+    let dummy = 0;
+    let mut h = H { p: &dummy };
+    fill(&mut h);
+    let _q = churn();
+    return *h.p;
+}

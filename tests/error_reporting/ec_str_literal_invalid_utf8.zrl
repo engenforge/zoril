@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: error: @str literal is not valid UTF-8
+import "str.zrl";
+
+fn main() -> i32 {
+    let s = @str("ok\xff"); // @error "@str literal is not valid UTF-8"
+    return s.len() as i32;
+}

@@ -1,0 +1,7 @@
+extern "C" fn c_add(a: i32, b: i32) -> i32;
+
+pub fn main() -> i32 {
+    let r = unsafe { c_add(40, 2) };
+    if r != 42 { return 1; }
+    return 0;
+}

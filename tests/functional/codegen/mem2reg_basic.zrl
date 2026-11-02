@@ -1,0 +1,17 @@
+// Tests mem2reg alloca promotion.
+// The variables x, y, z should be promoted to copies and register-allocated,
+// leaving zero stack loads/stores for them.
+fn test_mem2reg(a: u64) -> u64 {
+    let x = a + 5 as u64;
+    let y = x * 2 as u64;
+    let z = y - 3 as u64;
+    return z;
+}
+
+fn main() -> i32 {
+    let res = test_mem2reg(10);
+    if res == 27 as u64 {
+        return 0;
+    }
+    return 1;
+}

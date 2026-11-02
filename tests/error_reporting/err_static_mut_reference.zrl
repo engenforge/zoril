@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: a static mut cannot hold a reference or slice (use a raw pointer): G
+static mut G: &i32 = &0;
+fn stash(r: &i32) { G = r; }
+fn main() -> i32 {
+    let x: i32 = 5;
+    stash(&x);
+    return 0;
+}

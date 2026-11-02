@@ -1,0 +1,33 @@
+// Testing #[stores(..)] with multiple pairs and multiple attributes.
+
+struct H { p: &i32, q: &i32 }
+
+#[stores(a -> h, b -> h)]
+fn put_pair(h: &mut H, a: &i32, b: &i32) {
+    h.p = a;
+    h.q = b;
+}
+
+#[stores(a -> h)]
+#[stores(b -> h)]
+fn put_mult(h: &mut H, a: &i32, b: &i32) {
+    h.p = a;
+    h.q = b;
+}
+
+fn main() -> i32 {
+    let x = 1;
+    let y = 2;
+    let mut h = H { p: &x, q: &y };
+    let a = 10;
+    let b = 20;
+    put_pair(&mut h, &a, &b);
+    if *h.p != 10 || *h.q != 20 { return 1; }
+
+    let c = 30;
+    let d = 40;
+    put_mult(&mut h, &c, &d);
+    if *h.p != 30 || *h.q != 40 { return 2; }
+
+    return 0;
+}

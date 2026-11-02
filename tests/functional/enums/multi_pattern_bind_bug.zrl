@@ -1,0 +1,20 @@
+// expected exit code: 0
+enum MyEnum {
+    A(u64),
+    B(u64),
+}
+fn test_match(e: MyEnum) -> u64 {
+    match e {
+        MyEnum.A(v) | MyEnum.B(v) => {
+            return v;
+        },
+    }
+}
+fn main() -> i32 {
+    let val_a = test_match(MyEnum.A(9876543210 as u64));
+    let val_b = test_match(MyEnum.B(1234567890123 as u64));
+    if val_a == 9876543210 as u64 && val_b == 1234567890123 as u64 {
+        return 0;
+    }
+    return 1;
+}

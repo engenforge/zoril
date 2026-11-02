@@ -1,0 +1,4 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_index_reference.zrl:3:34: error: cannot index `&u32`: only arrays, slices, `Vec`s and raw pointers (in `unsafe`) can be indexed
+fn peek(x: &u32) -> u32 { return x[1]; }
+fn main() -> i32 { let a = 5 as u32; return peek(&a) as i32; }

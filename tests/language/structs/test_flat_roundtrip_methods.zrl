@@ -1,0 +1,85 @@
+// Test for Task 7: --emit-flat roundtrip coverage over methods, generic methods, trait impls, and Drop.
+// expected exit code: 0
+
+static mut DROP_COUNT: i32 = 0;
+
+struct Dropper {
+    id: i32,
+}
+
+impl Drop for Dropper {
+    fn drop(self: &mut Dropper) {
+        DROP_COUNT = DROP_COUNT + 1;
+    }
+}
+
+trait Measurable {
+    fn measure(self: &Self) -> i32;
+}
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl Point {
+    fn new(x: i32, y: i32) -> Point {
+        return Point { x: x, y: y };
+    }
+
+    fn add(self: &Point, other: &Point) -> Point {
+        return Point { x: self.x + other.x, y: self.y + other.y };
+    }
+}
+
+impl Measurable for Point {
+    fn measure(self: &Point) -> i32 {
+        return self.x * self.x + self.y * self.y;
+    }
+}
+
+struct Container<T> {
+    val: T,
+}
+
+impl<T> Container<T> {
+    fn new(val: T) -> Container<T> {
+        return Container { val: val };
+    }
+
+    fn get(self: &Container<T>) -> T {
+        return self.val;
+    }
+}
+
+fn test_drop_scope() {
+    let _d1 = Dropper { id: 1 };
+    let _d2 = Dropper { id: 2 };
+}
+
+fn main() -> i32 {
+    // 1. Methods & Trait impl
+    let p1 = Point.new(3, 4);
+    let p2 = Point.new(1, 2);
+    let p3 = p1.add(&p2);
+    if p3.x != 4 || p3.y != 6 {
+        return 1;
+    }
+    if p1.measure() != 25 {
+        return 2;
+    }
+
+    // 2. Generic methods
+    let c = Container::<i32>.new(123);
+    if c.get() != 123 {
+        return 3;
+    }
+
+    // 3. Drop
+    test_drop_scope();
+    if DROP_COUNT != 2 {
+        return 4;
+    }
+
+    return 0;
+}

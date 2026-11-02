@@ -1,0 +1,50 @@
+// expected exit 0
+// An impl's type parameters are its own names: `impl<A> Box2<A>` for `struct Box2<T>` binds A
+// by matching the impl's target against the receiver's type, whatever the struct calls its
+// parameter. Only the struct's names were bound, so A was an unknown type.
+struct Box2<T> { v: T }
+impl<A: Copy> Box2<A> {
+    fn get(self: &Box2<A>) -> A { return self.v; }
+    fn put(self: &mut Box2<A>, a: A) { self.v = a; }
+}
+
+// The names permuted against the struct's.
+struct Pair<K, V> { k: K, v: V }
+impl<X: Copy, Y: Copy> Pair<Y, X> {
+    fn swap(self: &Pair<Y, X>) -> Pair<X, Y> { return Pair { k: self.v, v: self.k }; }
+}
+
+// A trait impl, an associated type and a default method through renamed parameters.
+trait Make {
+    type Out;
+    fn make(self: &Self) -> Self::Out;
+    fn make_twice(self: &Self) -> (Self::Out, Self::Out) { return (self.make(), self.make()); }
+}
+impl<E: Copy> Make for Box2<E> {
+    type Out = E;
+    fn make(self: &Box2<E>) -> E { return self.v; }
+}
+
+// A parameter nested inside the target's arguments.
+struct Outer<T> { inner: T }
+impl<N: Copy> Outer<Box2<N>> {
+    fn peek(self: &Outer<Box2<N>>) -> N { return self.inner.v; }
+}
+
+fn made<T: Make>(t: &T) -> T::Out { return t.make(); }
+
+fn main() -> i32 {
+    let mut b = Box2 { v: 7 };
+    if b.get() != 7 { return 1; }
+    b.put(9);
+    if b.get() != 9 { return 2; }
+    let p = Pair { k: 1 as u8, v: true };
+    let q = p.swap();
+    if !q.k || q.v != 1 { return 3; }
+    if made(&b) != 9 { return 4; }
+    let t = Box2 { v: 3 as i64 }.make_twice();
+    if t.0 + t.1 != 6 { return 5; }
+    let o = Outer { inner: Box2 { v: 'z' } };
+    if o.peek() != 'z' { return 6; }
+    return 0;
+}

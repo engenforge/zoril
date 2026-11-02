@@ -1,0 +1,8 @@
+# Shared tests that stage0-C fails because of a known stage0-C bug that is not a quick fix
+# (doc/stage0-C/language_subset.md §4). Its runners report each as [SKIP] with this reason, so
+# the skip count says what is left to fix. When the bug is fixed, delete the entry and add a
+# test to tests/fixed_bugs/. One entry per line:
+#   <path relative to the repository root>: <reason>
+
+tests/bootstrap/repro_bootstrap_find_impl.zrl: bug #14, a local named `ast` misresolves with src/ast.zrl imported
+corpus/zil/19_fd_io.zil: bug #15, fd_open's literal flags and mode are read as SSA references, so its path and flags are garbage

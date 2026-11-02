@@ -1,0 +1,22 @@
+// name: A reference into a struct field through &mut cannot outlive mutation of the field
+// expected: compile_reject
+// Borrowing a field through a &mut struct parameter keeps that field borrowed; freeing
+// or mutating the field while the reference is live is rejected at compile time.
+import "vec.zrl";
+use vec::Vec;
+
+struct Container {
+    v: Vec<i32>,
+}
+
+fn evil(c: &mut Container) -> i32 {
+    let r = c.v.get(0).unwrap();
+    c.v.free();
+    return *r;
+}
+
+fn main() -> i32 {
+    let mut c = Container { v: Vec::<i32>.new() };
+    c.v.push(42);
+    return evil(&mut c);
+}

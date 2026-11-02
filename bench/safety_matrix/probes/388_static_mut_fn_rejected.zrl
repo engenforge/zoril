@@ -1,0 +1,6 @@
+// name: static mut holding fn value inside enum payload is rejected
+// expected: compile_reject
+// Rule (d): a static mut cannot hold a fn value (which may carry a closure environment).
+enum OptFn { None, Some(fn() -> i32) }
+static mut G: OptFn = OptFn.None;
+fn main() -> i32 { return 0; }

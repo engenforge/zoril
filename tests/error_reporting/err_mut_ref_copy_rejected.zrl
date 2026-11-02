@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: error: use of moved value 'a'
+fn main() -> i32 {
+    let mut x = 0;
+    let a = &mut x;
+    let b = a;
+    *a = 1;
+    *b = 2;
+    return *b;
+}

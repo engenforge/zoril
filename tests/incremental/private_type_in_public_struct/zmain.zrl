@@ -1,0 +1,14 @@
+// The reduced case for the zbuild failure: the interface of `entry.zrl` named `PairEntry`-style private
+// types without declaring them, so separate compilation reported "unknown type" where the whole-program
+// build compiled. Both must agree, which is what this asserts by being compiled both ways.
+import "vec.zrl";
+import "entry.zrl";
+import "use_table.zrl";
+use vec::Vec;
+use entry::Table;
+use use_table::count;
+
+fn main() -> i32 {
+    let t = Table { entries: Vec.new() };
+    return count(&t) as i32;
+}

@@ -1,0 +1,14 @@
+fn main() -> i32 {
+    let mut x: u32 = 0xFFFFFFFF as u32;
+    let y: u32 = @saturating_add(x, 10 as u32);
+    if y != 0xFFFFFFFF as u32 {
+        return 1;
+    }
+
+    let raw_ptr = @ptr_from_int<*u8>(0x1000);
+    // We can't cast raw_ptr directly to a borrow in safe code easily,
+    // but we can use @region_cast to give it a region.
+    let local_ptr = @region_cast<&u8>(raw_ptr);
+
+    return 0;
+}

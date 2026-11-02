@@ -1,0 +1,10 @@
+// name: A carrier built by a call over a static or a used-only local is accepted
+// expected: accept
+// The accepted twin: the carrier holds a static's address, or never leaves the frame.
+struct Carrier { v: &i32 }
+fn ex(co: Carrier) -> &i32 { return co.v; }
+fn mk(r: &i32) -> Carrier { return Carrier { v: r }; }
+static BASE: i32 = 7;
+fn pick() -> &i32 { return ex(mk(&BASE)); }
+fn local_use() -> i32 { let a = 5; let c = mk(&a); return *ex(c); }
+fn main() -> i32 { return *pick() + local_use() - 12; }

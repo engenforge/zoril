@@ -1,0 +1,12 @@
+
+// expected compile fail
+enum Test { A(i32), B(i32) }
+fn main() -> i32 {
+    let t = Test.A(42);
+    // Spec says this is valid: VariantA | VariantB(name) => ...
+    // Bootstrap compiler rejects it.
+    return match t {
+        Test.A | Test.B(v) => v,
+        _ => 0,
+    };
+}

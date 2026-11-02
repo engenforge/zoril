@@ -1,0 +1,9 @@
+// name: Capturing closure returned from its defining function
+// expected: compile_reject
+// The closure's environment (k) lives in the defining frame; returning the closure would
+// leave it dangling. Capturing closures may only be bound with let or called directly.
+fn make() -> fn(i32) -> i32 {
+    let k = 5;
+    return |x: i32| -> i32 { x + k };
+}
+fn main() -> i32 { let f = make(); if f(2) != 7 { return 1; } return 0; }

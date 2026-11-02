@@ -1,0 +1,73 @@
+import "io.zrl";
+import "fmt.zrl";
+import "intern.zrl";
+import "mem_raw.zrl";
+import "bytevec.zrl";
+use bytevec::ByteVec;
+use intern::InternTable;
+use io::{stderr, stdout, write};
+use fmt::write_u64;
+use mem_raw::arena_init;
+
+fn main() -> i32 {
+    let mut arena = unsafe { arena_init(1024 as u64 * 1024) };
+    let mut table = unsafe { InternTable.new_raw(arena) };
+    
+    let mut i = 0 as u64;
+    while i < 1100 {
+        let mut s = unsafe { ByteVec.new_raw(arena) };
+        write_u64_into_bytevec(s, i);
+        let id = table.intern(s.as_slice());
+        if id != (i + 1) as u32 {
+             write(stderr(), "Unexpected ID for ");
+             let mut err = stderr();
+             let _ = write_u64(&mut err, i);
+             write(stderr(), ": expected ");
+             let _ = write_u64(&mut err, i + 1);
+             write(stderr(), ", got ");
+             let _ = write_u64(&mut err, id as u64);
+             write(stderr(), "\n");
+             return 1;
+        }
+        if i % 100 == 0 {
+            write(stdout(), "Interned ");
+            let mut out = stdout();
+            let _ = write_u64(&mut out, i);
+            write(stdout(), "\n");
+        }
+        i = i + 1;
+    }
+    
+    // Check lookups
+    i = 0;
+    while i < 1100 {
+        let s = table.lookup((i + 1) as u32);
+        if s.len == 0 {
+            write(stderr(), "Lookup failed for ");
+            let mut err = stderr();
+            let _ = write_u64(&mut err, i);
+            write(stderr(), "\n");
+            return 2;
+        }
+        i = i + 1;
+    }
+    
+    write(stdout(), "INTERN 1100 OK\n");
+    return 0;
+}
+
+fn write_u64_into_bytevec(bv: &mut ByteVec, v_in: u64) {
+    let mut v = v_in;
+    if v == 0 {
+        bv.push('0' as u8);
+        return;
+    }
+    let mut buf = [0 as u8; 20];
+    let mut pos = 20 as u64;
+    while v > 0 {
+        pos = pos - 1;
+        buf[pos] = ( (v % 10) + 48 ) as u8;
+        v = v / 10;
+    }
+    unsafe { bv.push_range(&buf[0] as *u8, pos as usize, 20 as usize - pos as usize); }
+}

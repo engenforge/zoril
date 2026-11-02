@@ -1,0 +1,7 @@
+struct Vec2 { pub x: f64, pub y: f64 }
+
+fn main() -> i32 {
+    let v = Vec2 { x: 1.0, y: 2.0 };
+    if v.x != 1.0 { return 1; }
+    return 0;
+}

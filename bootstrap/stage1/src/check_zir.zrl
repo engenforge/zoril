@@ -1,0 +1,2342 @@
+// Zoril ZIR Borrow Checker
+
+import "zir.zrl";
+import "ast.zrl";
+import "intern.zrl";
+import "vec.zrl";
+import "mem.zrl";
+import "io.zrl";
+import "il_type.zrl";
+import "il_cfg.zrl";
+import "bytevec.zrl";
+
+pub struct ActiveBorrow {
+    pub base: Place,
+    pub is_mut: bool,
+    pub region: u32,
+    pub borrower: u32,
+    pub span: Span, // where the borrow was taken, for "note: borrow of 'x' taken here"
+    // Inherited by a call's or literal's result from its inputs (inherit_rv_borrows) rather
+    // than taken by `&`/`&mut`. It only counts once a named local holds it: in a compiler
+    // temporary it lives within one statement (`v.set(j, v.as_slice()[k])`).
+    pub derived: bool,
+}
+
+pub struct EnumPayloadAlias {
+    pub local_id: u32,
+    pub source: Place,
+}
+
+pub struct ZirAnalysisState {
+    pub ownership: [mut u8], // len = locals_len + 1
+    pub region_bound: [mut bool], // len = locals_len + 1
+    // Moved, but still owned on some path into here (the merge of a moved and an owned
+    // state). For a linear resource that means it is not closed on every path.
+    pub maybe_live: [mut bool], // len = locals_len + 1
+    pub borrows: Vec<ActiveBorrow>,
+    pub enum_aliases: Vec<EnumPayloadAlias>,
+}
+
+impl ZirAnalysisState {
+    pub fn clone(self: &ZirAnalysisState, arena: *mut Arena, locals_len: usize) -> *mut ZirAnalysisState {
+        let dest = zoril_allocator_alloc(arena, sizeof(ZirAnalysisState)) as *mut ZirAnalysisState;
+        let own_ptr = zoril_allocator_alloc(arena, locals_len + 1) as *mut u8;
+        let rb_ptr = zoril_allocator_alloc(arena, locals_len + 1) as *mut bool;
+        let own = unsafe { @slice(own_ptr, locals_len + 1 as usize) };
+        let rb = unsafe { @slice(rb_ptr, locals_len + 1 as usize) };
+        let ml_ptr = zoril_allocator_alloc(arena, locals_len + 1) as *mut bool;
+        let ml = unsafe { @slice(ml_ptr, locals_len + 1 as usize) };
+        unsafe {
+            memcpy(own_ptr, self.ownership.ptr as *u8, (locals_len + 1) as u64);
+            memcpy(rb_ptr as *mut u8, self.region_bound.ptr as *u8, (locals_len + 1) as u64);
+            memcpy(ml_ptr as *mut u8, self.maybe_live.ptr as *u8, (locals_len + 1) as u64);
+        }
+
+        let mut bor = self.borrows.clone_in(arena);
+        let mut ea = self.enum_aliases.clone_in(arena);
+        
+        unsafe { *dest = ZirAnalysisState {
+            ownership: own,
+            region_bound: rb,
+            maybe_live: ml,
+            borrows: bor,
+            enum_aliases: ea,
+        }; }
+        return dest;
+    }
+}
+
+pub struct ZirVerifier {
+    pub arena: *mut Arena,
+    pub module: &mut ZirModule,
+    pub zil_module: &mut ILModule,
+    pub intern_table: &mut InternTable,
+    pub had_error: bool,
+    pub reporting_enabled: bool,
+    // Set by place_last_deref_is_readonly: the read-only layer was a `[T]` slice.
+    pub readonly_is_slice: bool,
+    pub file_path: [u8],
+    // Non-lexical borrows: which locals are used again after the statement being
+    // checked (bit per local id; null = treat every local as live). A borrow counts only
+    // while its borrower is live, so `let r = v.get(0); use(r); v.push(1);` is accepted.
+    pub live_words: usize,
+    pub live_out: *mut u64,   // per block: live after its terminator's successors begin
+    pub live_rows: *mut u64,  // the current block: row k = live after statement k
+    pub live_rows_cap: usize,
+    pub cur_live: *mut u64,
+}
+
+impl ZirVerifier {
+    pub fn new(arena: *mut Arena, module: &mut ZirModule, zil_module: &mut ILModule, intern_table: &mut InternTable) -> ZirVerifier {
+        return ZirVerifier {
+            arena: arena,
+            module: module,
+            zil_module: zil_module,
+            intern_table: intern_table,
+            had_error: false,
+            reporting_enabled: false,
+            readonly_is_slice: false,
+            file_path: "",
+            live_words: 0 as usize,
+            live_out: 0 as *mut u64,
+            live_rows: 0 as *mut u64,
+            live_rows_cap: 0 as usize,
+            cur_live: 0 as *mut u64,
+        };
+    }
+
+    fn write_file_path(self: &ZirVerifier) {
+        if self.file_path.len > 0 as usize {
+            must_write(2, self.file_path);
+        } else {
+            must_write(2, "unknown");
+        }
+    }
+
+    fn report_error(self: &mut ZirVerifier, msg: [u8], span: Span) {
+        self.had_error = true;
+        if !self.reporting_enabled { return; }
+
+        self.write_file_path();
+        must_write(2, ":");
+        write_u64(2, span.line as usize);
+        must_write(2, ":");
+        write_u64(2, span.col as usize);
+        must_write(2, ": error: ");
+        must_write(2, msg);
+        must_write(2, "\n");
+    }
+
+    fn report_var_error(self: &mut ZirVerifier, msg_pre: [u8], local_id: u32, msg_post: [u8], span: Span, locals: [Local]) {
+        self.had_error = true;
+        if !self.reporting_enabled { return; }
+
+        self.write_file_path();
+        must_write(2, ":");
+        write_u64(2, span.line as usize);
+        must_write(2, ":");
+        write_u64(2, span.col as usize);
+        must_write(2, ": error: ");
+        must_write(2, msg_pre);
+        must_write(2, " '");
+        self.write_local_name(local_id, locals);
+        must_write(2, "'");
+
+        if msg_post.len > 0 as usize {
+            must_write(2, " ");
+            must_write(2, msg_post);
+        }
+        must_write(2, "\n");
+    }
+
+    // Prints a local's declared name, or "variable (id: N)" if it has none (a compiler-generated
+    // temporary). Shared by `report_var_error` and `write_place_path` below so the two spellings
+    // of "which local" never drift apart.
+    fn write_local_name(self: &ZirVerifier, local_id: u32, locals: [Local]) {
+        let mut found = false;
+        let mut name_id = 0 as u32;
+        let mut li = 0 as usize;
+        while li < locals.len {
+            if locals[li].id == local_id {
+                name_id = locals[li].name_id;
+                found = true;
+                break;
+            }
+            li = li + 1 as usize;
+        }
+
+        if found && name_id != 0 as u32 {
+            must_write(2, self.intern_table.lookup(name_id));
+        } else {
+            must_write(2, "variable (id: ");
+            write_u64(2, local_id as usize);
+            must_write(2, ")");
+        }
+    }
+
+    // Prints a place's user-facing path -- the base local's name, followed by a `.field` or `.N`
+    // for each `Field`/`TupleIndex` projection, stopping at the first `Deref`/`Index` (neither has
+    // a stable "friendly" spelling the way a field name does: `*p` and `arr[i]` don't name one
+    // fixed piece of storage). This is what lets a borrow conflict on `self.resolver` read as
+    // exactly that, rather than as `self` -- which reads as if the whole struct conflicted, not
+    // one field of it (see the borrow-conflict messages below, and the reproduction this fixes:
+    // a genuine `self.resolver` conflict in `mono.zrl:371` used to report as just `'self'`).
+    fn write_place_path(self: &ZirVerifier, place: &Place, locals: [Local]) {
+        self.write_local_name(place.base, locals);
+        let mut pi = 0 as usize;
+        while pi < place.projections.len {
+            let proj = &place.projections[pi];
+            let tag = proj.get_tag();
+            if tag == PROJ_FIELD {
+                must_write(2, ".");
+                must_write(2, self.intern_table.lookup(proj.get_Field()));
+            } else if tag == PROJ_TUPLEINDEX {
+                must_write(2, ".");
+                write_u64(2, proj.get_TupleIndex() as usize);
+            } else {
+                return;
+            }
+            pi = pi + 1 as usize;
+        }
+    }
+
+    // Same shape as `report_var_error`, but for a full `&Place` (base + projections) rather than
+    // a bare local id, so a conflict on one field of a struct doesn't get spelled as if the
+    // struct itself were the point of conflict.
+    fn report_place_error(self: &mut ZirVerifier, msg_pre: [u8], place: &Place, msg_post: [u8], span: Span, locals: [Local]) {
+        self.had_error = true;
+        if !self.reporting_enabled { return; }
+
+        self.write_file_path();
+        must_write(2, ":");
+        write_u64(2, span.line as usize);
+        must_write(2, ":");
+        write_u64(2, span.col as usize);
+        must_write(2, ": error: ");
+        must_write(2, msg_pre);
+        must_write(2, " '");
+        self.write_place_path(place, locals);
+        must_write(2, "'");
+
+        if msg_post.len > 0 as usize {
+            must_write(2, " ");
+            must_write(2, msg_post);
+        }
+        must_write(2, "\n");
+    }
+
+    // `report_place_error` plus a second `note:` line naming *where* the conflicting borrow was
+    // taken -- without it, a programmer sees that something conflicts but not which borrow, or
+    // where. `conflicting`/`conflict_span` are the overlapping `ActiveBorrow`'s own `base`/`span`.
+    fn report_borrow_conflict(self: &mut ZirVerifier, msg_pre: [u8], place: &Place, msg_post: [u8], span: Span, conflicting: &Place, conflict_span: Span, locals: [Local]) {
+        self.report_place_error(msg_pre, place, msg_post, span, locals);
+        if !self.reporting_enabled { return; }
+
+        self.write_file_path();
+        must_write(2, ":");
+        write_u64(2, conflict_span.line as usize);
+        must_write(2, ":");
+        write_u64(2, conflict_span.col as usize);
+        must_write(2, ": note: borrow of '");
+        self.write_place_path(conflicting, locals);
+        must_write(2, "' taken here\n");
+    }
+
+    // True if writing to `pl` (or creating a `&mut` through it) means dereferencing a read-only
+    // pointer -- i.e. the *last* pointer layer dereferenced anywhere while resolving `pl` has IL
+    // type `Ptr` (which covers both `&T` and non-mut `*T`; the two erase to the same tag).
+    // `PtrMut` is the only writable pointer type -- option (a), matching Rust's split between
+    // `&T`/`*const T` (read-only) and `&mut T`/`*mut T` (writable). `Boxed`/`BoxedMut` are
+    // deliberately excluded: per `doc/spec/intermediate_language.md` §6.6, both permit stores --
+    // `Box<T>`'s pointee is "always mutable" (`doc/spec/surface_syntax.md` §3.3) regardless of
+    // which of the two constructors names it; `Boxed` vs `BoxedMut` is not a read/write split
+    // the way `Ptr`/`PtrMut` is.
+    //
+    // A pointer is dereferenced at two kinds of point in a place's projection chain, and both
+    // matter here: an explicit `Deref` projection, and a `Field`/`TupleIndex`/`Index` projection
+    // applied to a pointer-typed value, which auto-derefs through it first -- `r.x` and `(*r).x`
+    // reach the same field and are (deliberately) represented differently in ZIR: `r.x` carries
+    // no `Deref` projection at all, the auto-deref living entirely inside `get_field_index`/
+    // `get_field_type`'s own pointer-stripping loop (mirrored below), while `(*r).x` has an
+    // explicit one. A predicate that only looked for an explicit `Deref` would reject `(*r).x`
+    // and accept the semantically identical `r.x` -- so this walks the projection chain itself,
+    // tracking whether each dereference (implicit or explicit) is of a `Ptr`, and keeps only the
+    // verdict from the *last* one. `h.r.x = 5` (base `h: Holder`, field `r: &P`) and `(*p).x = 5`
+    // (base `p: &P`) are the same case at different depths and both dereference a `Ptr` on the
+    // way to `x`: rejected. The escape hatch is unaffected: `(*(*cur).inner).v = 5`, where
+    // `inner: *mut Inner` is a field of the struct behind `cur: &Scope`, dereferences `Ptr<Scope>`
+    // first and then `PtrMut<Inner>` -- the *last* dereference is the `PtrMut` one, so it is
+    // writable regardless of `cur`'s own read-only-ness.
+    //
+    // If `pl` never dereferences a pointer at all, there is nothing to reject here; ordinary
+    // let/let-mut binding rules (checked separately) govern that case.
+    // Writing (or mutably borrowing) a place rooted in an immutable `let` binding is rejected
+    // unless the write goes through a pointer: an explicit Deref projection, or a projection
+    // through a binding whose own type is a pointer, Box or slice (the binding is not changed,
+    // the pointee is).
+    fn writes_immutable_binding(self: &mut ZirVerifier, place: &Place, locals: [Local]) -> bool {
+        let mut li = 0 as usize;
+        while li < locals.len {
+            if locals[li].id == place.base {
+                return locals[li].kind == LOCAL_KIND_LET && !self.place_has_deref(place)
+                    && (place.projections.len == 0 as usize || !self.is_pointer_like_type(locals[li].ty));
+            }
+            li = li + 1 as usize;
+        }
+        return false;
+    }
+
+    fn place_has_deref(self: &mut ZirVerifier, place: &Place) -> bool {
+        let mut pi = 0 as usize;
+        while pi < place.projections.len {
+            if place.projections[pi].get_tag() == PROJ_DEREF { return true; }
+            pi = pi + 1 as usize;
+        }
+        return false;
+    }
+
+    fn is_pointer_like_type(self: &mut ZirVerifier, ty: u32) -> bool {
+        if ty == 0 as u32 || ty as usize > self.zil_module.types.len { return false; }
+        let tag = self.zil_module.types[ty as usize - 1 as usize].def.get_tag();
+        return tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT || tag == ILTYPE_SLICE;
+    }
+
+    // Why the place place_last_deref_is_readonly just judged cannot be written.
+    fn readonly_reason(self: &ZirVerifier) -> [u8] {
+        if self.readonly_is_slice { return "through a read-only slice (`[T]`; writing needs `[mut T]`)"; }
+        return "because it is behind a shared reference";
+    }
+
+    fn place_last_deref_is_readonly(self: &mut ZirVerifier, pl: &Place, locals: [Local]) -> bool {
+        let mut curr_ty = 0 as u32;
+        let mut li = 0 as usize;
+        while li < locals.len {
+            if locals[li].id == (*pl).base {
+                curr_ty = locals[li].ty;
+                break;
+            }
+            li = li + 1 as usize;
+        }
+        if curr_ty == 0 as u32 { return false; }
+
+        let mut saw_deref = false;
+        let mut last_was_readonly = false;
+        self.readonly_is_slice = false;
+
+        let mut i = 0 as usize;
+        while i < (*pl).projections.len {
+            let proj = &(*pl).projections[i];
+            let tag = proj.get_tag();
+
+            if tag == PROJ_DEREF {
+                if curr_ty != 0 as u32 {
+                    let p_ty = self.get_type_decl(curr_ty);
+                    saw_deref = true;
+                    last_was_readonly = p_ty.def.get_tag() == ILTYPE_PTR;
+                    self.readonly_is_slice = false;
+                }
+                curr_ty = self.get_ptr_inner_type(curr_ty);
+            } else if tag == PROJ_FIELD || tag == PROJ_TUPLEINDEX || tag == PROJ_INDEX {
+                // Strip every pointer/box layer before the field/tuple/index access, exactly as
+                // get_field_index/get_field_type/get_slice_element_type do internally -- the
+                // last layer stripped is the one whose dereference actually reaches the
+                // aggregate, so it is the one whose read-only-ness governs this step.
+                if curr_ty != 0 as u32 {
+                    let mut p_ty = self.get_type_decl(curr_ty);
+                    let mut layer_tag = p_ty.def.get_tag();
+                    while layer_tag == ILTYPE_PTR || layer_tag == ILTYPE_PTRMUT || layer_tag == ILTYPE_BOXED || layer_tag == ILTYPE_BOXEDMUT {
+                        saw_deref = true;
+                        last_was_readonly = layer_tag == ILTYPE_PTR;
+                        self.readonly_is_slice = false;
+                        curr_ty = self.get_ptr_inner_type(curr_ty);
+                        if curr_ty == 0 as u32 { break; }
+                        p_ty = self.get_type_decl(curr_ty);
+                        layer_tag = p_ty.def.get_tag();
+                    }
+                }
+
+                if tag == PROJ_FIELD {
+                    let field_idx = self.get_field_index(curr_ty, proj.get_Field());
+                    curr_ty = self.get_field_type(curr_ty, field_idx);
+                } else if tag == PROJ_TUPLEINDEX {
+                    curr_ty = self.get_tuple_elem_type(curr_ty, proj.get_TupleIndex());
+                } else {
+                    // Indexing a slice reaches its elements through the slice's pointer: a
+                    // `[T]` is a read-only view, as a `&T` is; a `[mut T]` may write.
+                    if curr_ty != 0 as u32 {
+                        let p_sl = self.get_type_decl(curr_ty);
+                        if p_sl.def.get_tag() == ILTYPE_SLICE {
+                            saw_deref = true;
+                            last_was_readonly = !p_sl.def.get_Slice().mutable;
+                            self.readonly_is_slice = true;
+                        }
+                    }
+                    curr_ty = self.get_slice_element_type(curr_ty);
+                }
+            }
+            i = i + 1 as usize;
+        }
+
+        if !saw_deref { return false; }
+        return last_was_readonly;
+    }
+
+    fn places_overlap(self: &ZirVerifier, p1: &Place, p2: &Place) -> bool {
+        if p1.base != p2.base { return false; }
+        if p1.projections.len > 0 as usize && p2.projections.len > 0 as usize {
+            let pr1 = &p1.projections[0];
+            let pr2 = &p2.projections[0];
+            let tag1 = pr1.get_tag();
+            let tag2 = pr2.get_tag();
+            if tag1 == 0 as u32 && tag2 == 0 as u32 {
+                if pr1.get_Field() != pr2.get_Field() {
+                    return false;
+                }
+            } else if tag1 == 1 as u32 && tag2 == 1 as u32 {
+                if pr1.get_TupleIndex() != pr2.get_TupleIndex() {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    fn check_place_use(self: &mut ZirVerifier, place: &Place, is_move: bool, span: Span, state: &mut ZirAnalysisState, locals: [Local]) {
+        if place.base == 0 as u32 { return; }
+        // Local ids run 1..=locals.len (the state arrays have locals.len + 1 entries); a
+        // `>=` here skipped the last local of every function, so `fn f(b: &B) -> R {
+        // return b.r; }` moved out of the borrow unchecked.
+        if place.base > locals.len as u32 { return; }
+
+        let p_st_idx = place.base as usize;
+        let st = state.ownership[p_st_idx];
+        if st == 0 as u8 {
+            self.report_var_error("use of uninitialized variable", place.base, "", span, locals);
+            return;
+        }
+        if st == 2 as u8 {
+            self.report_var_error("use of moved value", place.base, "", span, locals);
+            return;
+        }
+        if st == 3 as u8 {
+            self.report_var_error("use of dropped value", place.base, "", span, locals);
+            return;
+        }
+        
+        // Mutable borrow conflicts with any use
+        let mut i = 0 as usize;
+        while i < state.borrows.len {
+            let b = &state.borrows[i];
+            if self.borrow_counts(b, &*state, locals) && b.is_mut && self.places_overlap(place, &b.base) {
+                self.report_borrow_conflict("cannot use", place, "while it is mutably borrowed", span, &b.base, b.span, locals);
+            }
+            i = i + 1 as usize;
+        }
+        
+        // Transition to Moved if it's a Move type and this is a move
+        let mut actual_is_move = is_move;
+        let mut is_temp = false;
+        let mut li = 0 as usize;
+        while li < locals.len {
+            let loc = &locals[li];
+            if loc.id == place.base {
+                if loc.name_id == 0 as u32 && place.projections.len == 0 as usize {
+                    if loc.ty != 0 as u32 {
+                        let p_base_ty = self.get_type_decl(loc.ty);
+                        let ty_tag = p_base_ty.def.get_tag();
+                        if ty_tag == ILTYPE_PTR || ty_tag == ILTYPE_PTRMUT || ty_tag == ILTYPE_BOXED || ty_tag == ILTYPE_BOXEDMUT {
+                            is_temp = true;
+                        }
+                    }
+                }
+                break;
+            }
+            li = li + 1 as usize;
+        }
+
+        if actual_is_move {
+            let ty = self.get_place_type(place, locals);
+            let mut is_copy = self.is_copy_type(ty);
+            if place.projections.len == 0 as usize {
+                let mut li = 0 as usize;
+                while li < locals.len {
+                    if locals[li].id == place.base {
+                        if locals[li].is_raw_ptr || locals[li].is_copy {
+                            is_copy = true;
+                        }
+                        break;
+                    }
+                    li = li + 1 as usize;
+                }
+            }
+            if is_copy && !is_temp {
+                actual_is_move = false;
+            }
+        }
+        if actual_is_move {
+            if place.projections.len > 0 as usize {
+                // Check if the base is a temporary pointer/reference
+                let mut is_temp_ptr = false;
+                let mut li = 0 as usize;
+                while li < locals.len {
+                    let loc = &locals[li];
+                    if loc.id == place.base {
+                        if loc.name_id == 0 as u32 {
+                            let base_ty = loc.ty;
+                            if base_ty != 0 as u32 {
+                                let p_base_ty = self.get_type_decl(base_ty);
+                                let ty_tag = p_base_ty.def.get_tag();
+                                if ty_tag == ILTYPE_PTR || ty_tag == ILTYPE_PTRMUT {
+                                    is_temp_ptr = true;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    li = li + 1 as usize;
+                }
+
+                // Only report move-out-of-borrow when the base local
+                // is a non-temp pointer (reference/borrow). Owned
+                // struct/tuple field access with projections is
+                // destructuring and should be allowed.
+                if !is_temp_ptr {
+                    let mut base_is_ptr = false;
+                    let mut bli = 0 as usize;
+                    while bli < locals.len {
+                        let bloc = &locals[bli];
+                        if bloc.id == place.base {
+                            let bty = bloc.ty;
+                            if bty != 0 as u32 {
+                                let pbty = self.get_type_decl(bty);
+                                let btag = pbty.def.get_tag();
+                                if btag == ILTYPE_PTR || btag == ILTYPE_PTRMUT {
+                                    base_is_ptr = true;
+                                }
+                            }
+                            break;
+                        }
+                        bli = bli + 1 as usize;
+                    }
+                    if base_is_ptr {
+                        self.report_error("cannot move out of borrow", span);
+                        return;
+                    }
+                }
+
+                // Even for temp pointers, reject moves that alias borrowed
+                // memory via EnumPayload. The EnumPayload instruction creates
+                // a pointer into its source place; if that source was
+                // borrowed, moving through this pointer is illegal.
+                if is_temp_ptr {
+                    let mut ei = 0 as usize;
+                    while ei < state.enum_aliases.len {
+                        let ea = &state.enum_aliases[ei];
+                        if ea.local_id == place.base {
+                            // Check if the EnumPayload source overlaps with
+                            // any active borrow
+                            let mut bj = 0 as usize;
+                            let mut src_borrowed = false;
+                            while bj < state.borrows.len {
+                                let b = &state.borrows[bj];
+                                if !(b.derived && self.is_temp_local(b.borrower, locals)) && self.places_overlap(&ea.source, &b.base) {
+                                    src_borrowed = true;
+                                    break;
+                                }
+                                bj = bj + 1 as usize;
+                            }
+                            // Also check: if the source place's base is a
+                            // non-temp pointer (e.g. a parameter of type &T),
+                            // the pointed-to memory is caller-borrowed.
+                            if !src_borrowed {
+                                let mut sli = 0 as usize;
+                                while sli < locals.len {
+                                    let sloc = &locals[sli];
+                                    if sloc.id == ea.source.base {
+                                        if sloc.name_id != 0 as u32 {
+                                            let sbase_ty = sloc.ty;
+                                            if sbase_ty != 0 as u32 {
+                                                let sp_ty = self.get_type_decl(sbase_ty);
+                                                let stag = sp_ty.def.get_tag();
+                                                if stag == ILTYPE_PTR || stag == ILTYPE_PTRMUT {
+                                                    src_borrowed = true;
+                                                }
+                                            }
+                                        }
+                                        break;
+                                    }
+                                    sli = sli + 1 as usize;
+                                }
+                            }
+                            if src_borrowed {
+                                self.report_error("cannot move out of borrow", span);
+                                return;
+                            }
+                            break;
+                        }
+                        ei = ei + 1 as usize;
+                    }
+                }
+            }
+
+            // Check if there are any active borrows of this place (or its parent/children)
+            let mut bi = 0 as usize;
+            let mut is_borrowed = false;
+            while bi < state.borrows.len {
+                let b = &state.borrows[bi];
+                if !(b.derived && self.is_temp_local(b.borrower, locals)) && self.places_overlap(place, &b.base) {
+                    is_borrowed = true;
+                    break;
+                }
+                bi = bi + 1 as usize;
+            }
+            if is_borrowed {
+                self.report_var_error("cannot move borrowed value", place.base, "", span, locals);
+                return;
+            }
+
+            let mut li = 0 as usize;
+            while li < locals.len {
+                let loc = &locals[li];
+                if loc.id == place.base {
+                    if !loc.is_copy || is_temp {
+                        let p_st_mut_idx = place.base as usize;
+                        state.ownership[p_st_mut_idx] = 2 as u8; // Moved
+                        state.maybe_live[p_st_mut_idx] = false;
+                    }
+                    break;
+                }
+                li = li + 1 as usize;
+            }
+        }
+    }
+
+    fn check_borrow_creation(self: &mut ZirVerifier, place: &Place, is_mut: bool, span: Span, state: &mut ZirAnalysisState, locals: [Local], borrower: u32, region: u32) {
+        if place.base == 0 as u32 { return; }
+
+        let p_st_idx = place.base as usize;
+        let st = state.ownership[p_st_idx];
+        if st == 0 as u8 {
+            self.report_var_error("cannot borrow uninitialized variable", place.base, "", span, locals);
+            return;
+        } else if st == 2 as u8 {
+            self.report_var_error("use of moved value", place.base, "", span, locals);
+            return;
+        } else if st == 3 as u8 {
+            self.report_var_error("cannot borrow dropped value", place.base, "", span, locals);
+            return;
+        }
+
+        if is_mut {
+            if self.writes_immutable_binding(place, locals) {
+                self.report_var_error("cannot mutably borrow", place.base, "because it is immutable", span, locals);
+                return;
+            }
+
+            // A `&mut` cannot be created by dereferencing a read-only pointer (`let r: &T =
+            // &expr; &mut *r`, or the same one level deeper through a field, `&mut *h.r`) --
+            // which is what a `&mut self` method call through a `&T` lowers to. Raw pointers
+            // stay the documented unchecked escape hatch. Re-borrowing `r` itself (`&mut r`, no
+            // projections) is a different, permitted concern handled by the conflict check below.
+            if place.projections.len > 0 as usize {
+                if self.place_last_deref_is_readonly(place, locals) {
+                    self.report_var_error("cannot mutably borrow", place.base, self.readonly_reason(), span, locals);
+                    return;
+                }
+            }
+        }
+
+        // Conflict check
+        let mut i = 0 as usize;
+        while i < state.borrows.len {
+            let b = &state.borrows[i];
+            if self.borrow_counts(b, &*state, locals) {
+                if self.places_overlap(place, &b.base) {
+                    if is_mut && b.is_mut {
+                        self.report_borrow_conflict("cannot mutably borrow", place, "more than once", span, &b.base, b.span, locals);
+                    } else if is_mut {
+                        self.report_borrow_conflict("cannot mutably borrow", place, "while it is already borrowed", span, &b.base, b.span, locals);
+                    } else if b.is_mut {
+                        self.report_borrow_conflict("cannot borrow", place, "while it is mutably borrowed", span, &b.base, b.span, locals);
+                    }
+                }
+            }
+            i = i + 1 as usize;
+        }
+
+        state.borrows.push(ActiveBorrow {
+            base: *place,
+            is_mut: is_mut,
+            region: region,
+            borrower: borrower,
+            span: span,
+            derived: false,
+        });
+    }
+
+    fn check_rvalue_use(self: &mut ZirVerifier, rv: &ZirRvalue, span: Span, state: &mut ZirAnalysisState, locals: [Local]) {
+        let tag = rv.get_tag();
+        if tag == ZIR_RV_USE {
+            self.check_place_use(rv.get_Use(), true, span, state, locals);
+        } else if tag == ZIR_RV_REF {
+            self.check_place_use(rv.get_Ref(), false, span, state, locals);
+        } else if tag == ZIR_RV_REFMUT {
+            self.check_place_use(rv.get_RefMut(), false, span, state, locals);
+        } else if tag == ZIR_RV_BINARY {
+            self.check_place_use(rv.get_BinaryOp_lhs(), true, span, state, locals);
+            self.check_place_use(rv.get_BinaryOp_rhs(), true, span, state, locals);
+        } else if tag == ZIR_RV_UNARY {
+            self.check_place_use(rv.get_UnaryOp_arg(), true, span, state, locals);
+        } else if tag == ZIR_RV_CALL {
+            let args = rv.get_Call_args();
+            let mut i = 0 as usize;
+            while i < args.len {
+                self.check_place_use(&args[i], true, span, state, locals);
+                i = i + 1 as usize;
+            }
+            self.check_call_arg_mutability(rv.get_Call_id(), args, span, state, locals);
+        } else if tag == ZIR_RV_CALLPTR {
+            self.check_place_use(rv.get_CallPtr_pl(), false, span, state, locals);
+            let args = rv.get_CallPtr_args();
+            let mut i = 0 as usize;
+            while i < args.len {
+                self.check_place_use(&args[i], true, span, state, locals);
+                i = i + 1 as usize;
+            }
+        } else if tag == ZIR_RV_STRUCT {
+            let args = rv.get_StructLiteral_args();
+            let mut i = 0 as usize;
+            while i < args.len {
+                self.check_place_use(&args[i], true, span, state, locals);
+                i = i + 1 as usize;
+            }
+        } else if tag == ZIR_RV_ENUM {
+            self.check_place_use(rv.get_EnumVariant_payload(), true, span, state, locals);
+        } else if tag == ZIR_RV_FIELD {
+            self.check_place_use(rv.get_Field_pl(), false, span, state, locals);
+        } else if tag == ZIR_RV_INDEX {
+            self.check_place_use(rv.get_Index_pl(), false, span, state, locals);
+            self.check_place_use(rv.get_Index_idx(), false, span, state, locals);
+        } else if tag == ZIR_RV_CAST || tag == ZIR_RV_PTR_FROM_INT {
+            let pl = rv.get_Cast_pl();
+            let mut is_temp = false;
+            if pl.projections.len == 0 as usize {
+                let mut li = 0 as usize;
+                while li < locals.len {
+                    if locals[li].id == pl.base {
+                        if locals[li].name_id == 0 as u32 {
+                            is_temp = true;
+                        }
+                        break;
+                    }
+                    li = li + 1 as usize;
+                }
+            }
+            self.check_place_use(pl, is_temp, span, state, locals);
+        } else if tag == ZIR_RV_SYSCALL {
+            let args = rv.get_Syscall_args();
+            let mut i = 0 as usize;
+            while i < args.len {
+                self.check_place_use(&args[i], true, span, state, locals);
+                i = i + 1 as usize;
+            }
+        } else if tag == ZIR_RV_INTRINSIC {
+            let args = rv.get_Intrinsic_args();
+            let mut i = 0 as usize;
+            while i < args.len {
+                self.check_place_use(&args[i], true, span, state, locals);
+                i = i + 1 as usize;
+            }
+        } else if tag == ZIR_RV_VARIANT_CHECK {
+            self.check_place_use(rv.get_VariantCheck_pl(), false, span, state, locals);
+        } else if tag == ZIR_RV_ENUM_PAYLOAD {
+            self.check_place_use(rv.get_EnumPayload_pl(), false, span, state, locals);
+        } else if tag == 24 as u32 { // Boxed(Place, u32)
+            self.check_place_use(rv.get_Boxed_val(), true, span, state, locals);
+        } else if tag == 25 as u32 { // GetEnv
+            // No places used
+        } else if tag == ZIR_RV_ARRAY_REPEAT {
+            self.check_place_use(rv.get_ArrayRepeat_val(), false, span, state, locals);
+        }
+    }
+
+    pub fn verify(self: &mut ZirVerifier) {
+        let mut i = 0 as usize;
+        while i < self.module.funcs.len {
+            self.verify_function(&self.module.funcs[i]);
+            i = i + 1 as usize;
+        }
+    }
+
+    fn is_never_type(self: &ZirVerifier, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        if ty_id as usize > self.zil_module.types.len { return false; }
+        let p_ty = &self.zil_module.types[ty_id as usize - 1 as usize];
+        if p_ty.def.get_tag() == ILTYPE_PRIMITIVE {
+            return p_ty.def.get_Primitive().get_tag() == ILPRIM_NEVER;
+        }
+        return false;
+    }
+
+    fn func_returns_never(self: &ZirVerifier, func_idx: u32) -> bool {
+        if func_idx as usize >= self.zil_module.functions.len { return false; }
+        let p_func = &self.zil_module.functions[func_idx as usize];
+        return self.is_never_type(p_func.ret_ty);
+    }
+
+    fn call_ptr_returns_never(self: &mut ZirVerifier, pl: &Place, locals: [Local]) -> bool {
+        let fn_ty = self.get_place_type(pl, locals);
+        if fn_ty == 0 as u32 { return false; }
+        let p_ty = self.get_type_decl(fn_ty);
+        let tag = p_ty.def.get_tag();
+        let mut actual_fn_ty = 0 as u32;
+        if tag == ILTYPE_FN {
+            actual_fn_ty = fn_ty;
+        } else if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT {
+            let inner = self.get_ptr_inner_type(fn_ty);
+            if inner != 0 as u32 {
+                let p_inner = self.get_type_decl(inner);
+                if p_inner.def.get_tag() == ILTYPE_FN {
+                    actual_fn_ty = inner;
+                }
+            }
+        }
+        if actual_fn_ty != 0 as u32 {
+            let p_fty = self.get_type_decl(actual_fn_ty);
+            let f_def = p_fty.def.get_Fn();
+            return self.is_never_type(f_def.ret_ty);
+        }
+        return false;
+    }
+
+    fn stmt_terminates_path(self: &mut ZirVerifier, stmt: &ZirStmt, locals: [Local]) -> bool {
+        let tag = stmt.get_tag();
+        if tag == ZIR_STMT_CALL {
+            return self.func_returns_never(stmt.get_Call_id());
+        } else if tag == ZIR_STMT_CALLPTR {
+            return self.call_ptr_returns_never(stmt.get_CallPtr_pl(), locals);
+        } else if tag == ZIR_STMT_LET {
+            let local_id = stmt.get_Let_id();
+            let mut li = 0 as usize;
+            while li < locals.len {
+                if locals[li].id == local_id {
+                    if self.is_never_type(locals[li].ty) { return true; }
+                    break;
+                }
+                li = li + 1 as usize;
+            }
+            let rv = stmt.get_Let_rv();
+            let rv_tag = rv.get_tag();
+            if rv_tag == ZIR_RV_CALL {
+                return self.func_returns_never(rv.get_Call_id());
+            } else if rv_tag == ZIR_RV_CALLPTR {
+                return self.call_ptr_returns_never(rv.get_CallPtr_pl(), locals);
+            }
+        } else if tag == ZIR_STMT_ASSIGN {
+            let rv = stmt.get_Assign_rv();
+            let rv_tag = rv.get_tag();
+            if rv_tag == ZIR_RV_CALL {
+                return self.func_returns_never(rv.get_Call_id());
+            } else if rv_tag == ZIR_RV_CALLPTR {
+                return self.call_ptr_returns_never(rv.get_CallPtr_pl(), locals);
+            }
+        }
+        return false;
+    }
+
+    fn block_terminates_path(self: &mut ZirVerifier, b: &ZirBlock, locals: [Local]) -> bool {
+        let mut si = 0 as usize;
+        while si < b.statements.len {
+            if self.stmt_terminates_path(&b.statements[si], locals) {
+                return true;
+            }
+            si = si + 1 as usize;
+        }
+        return false;
+    }
+
+    // ---- liveness (non-lexical borrows) ------------------------------------------------
+
+    fn is_live(self: &ZirVerifier, id: u32) -> bool {
+        if self.cur_live as usize == 0 as usize { return true; }
+        let w = (id as usize) / 64 as usize;
+        if w >= self.live_words { return true; }
+        let word = unsafe { *((self.cur_live as usize + w * 8) as *u64) };
+        return ((word >> ((id as u64) % 64 as u64)) & 1 as u64) != 0 as u64;
+    }
+
+    fn bits_set(self: &ZirVerifier, set: *mut u64, id: u32) {
+        let w = (id as usize) / 64 as usize;
+        if id == 0 as u32 || w >= self.live_words { return; }
+        let p = (set as usize + w * 8) as *mut u64;
+        unsafe { *p = *p | ((1 as u64) << ((id as u64) % 64 as u64)); }
+    }
+
+    fn bits_clear(self: &ZirVerifier, set: *mut u64, id: u32) {
+        let w = (id as usize) / 64 as usize;
+        if id == 0 as u32 || w >= self.live_words { return; }
+        let p = (set as usize + w * 8) as *mut u64;
+        unsafe { *p = *p & !((1 as u64) << ((id as u64) % 64 as u64)); }
+    }
+
+    fn place_uses(self: &ZirVerifier, pl: &Place, set: *mut u64) {
+        self.bits_set(set, pl.base);
+        let mut i = 0 as usize;
+        while i < pl.projections.len {
+            if pl.projections[i].get_tag() == PROJ_INDEX { self.bits_set(set, pl.projections[i].get_Index()); }
+            i = i + 1 as usize;
+        }
+    }
+
+    fn places_uses(self: &ZirVerifier, pls: [Place], set: *mut u64) {
+        let mut i = 0 as usize;
+        while i < pls.len { self.place_uses(&pls[i], set); i = i + 1 as usize; }
+    }
+
+    fn rv_uses(self: &ZirVerifier, rv: &ZirRvalue, set: *mut u64) {
+        let tag = rv.get_tag();
+        if tag == ZIR_RV_USE { self.place_uses(rv.get_Use(), set); }
+        else if tag == ZIR_RV_REF { self.place_uses(rv.get_Ref(), set); }
+        else if tag == ZIR_RV_REFMUT { self.place_uses(rv.get_RefMut(), set); }
+        else if tag == ZIR_RV_BINARY { self.place_uses(rv.get_BinaryOp_lhs(), set); self.place_uses(rv.get_BinaryOp_rhs(), set); }
+        else if tag == ZIR_RV_UNARY { self.place_uses(rv.get_UnaryOp_arg(), set); }
+        else if tag == ZIR_RV_CALL { self.places_uses(rv.get_Call_args(), set); }
+        else if tag == ZIR_RV_CALLPTR { self.place_uses(rv.get_CallPtr_pl(), set); self.places_uses(rv.get_CallPtr_args(), set); }
+        else if tag == ZIR_RV_STRUCT { self.places_uses(rv.get_StructLiteral_args(), set); }
+        else if tag == ZIR_RV_ENUM { self.place_uses(rv.get_EnumVariant_payload(), set); }
+        else if tag == ZIR_RV_FIELD { self.place_uses(rv.get_Field_pl(), set); }
+        else if tag == ZIR_RV_INDEX { self.place_uses(rv.get_Index_pl(), set); self.place_uses(rv.get_Index_idx(), set); }
+        else if tag == ZIR_RV_CAST { self.place_uses(rv.get_Cast_pl(), set); }
+        else if tag == ZIR_RV_SYSCALL { self.places_uses(rv.get_Syscall_args(), set); }
+        else if tag == ZIR_RV_INTRINSIC { self.places_uses(rv.get_Intrinsic_args(), set); }
+        else if tag == ZIR_RV_VARIANT_CHECK { self.place_uses(rv.get_VariantCheck_pl(), set); }
+        else if tag == ZIR_RV_ENUM_PAYLOAD { self.place_uses(rv.get_EnumPayload_pl(), set); }
+        else if tag == ZIR_RV_TUPLE { self.places_uses(rv.get_Tuple_elements(), set); }
+        else if tag == ZIR_RV_ARRAY { self.places_uses(rv.get_Array_elements(), set); }
+        else if tag == ZIR_RV_ARRAY_REPEAT { self.place_uses(rv.get_ArrayRepeat_val(), set); }
+        else if tag == ZIR_RV_INDEX_ADDR { self.place_uses(rv.get_IndexAddr_base(), set); self.place_uses(rv.get_IndexAddr_idx(), set); }
+        else if tag == ZIR_RV_BOXED { self.place_uses(rv.get_Boxed_val(), set); self.bits_set(set, rv.get_Boxed_alloc()); }
+        else if tag == ZIR_RV_PTR_FROM_INT { self.place_uses(rv.get_PtrFromInt_pl(), set); }
+    }
+
+    // Transfer one statement backwards: live-before = (live-after - def) + uses.
+    fn stmt_live_transfer(self: &ZirVerifier, st: &ZirStmt, set: *mut u64) {
+        let tag = st.get_tag();
+        if tag == ZIR_STMT_LET {
+            self.bits_clear(set, st.get_Let_id());
+            self.rv_uses(st.get_Let_rv(), set);
+        } else if tag == ZIR_STMT_ASSIGN {
+            let pl = st.get_Assign_pl();
+            if (*pl).projections.len == 0 as usize {
+                self.bits_clear(set, (*pl).base);
+            } else {
+                self.place_uses(pl, set);
+            }
+            self.rv_uses(st.get_Assign_rv(), set);
+        } else if tag == ZIR_STMT_DROP || tag == ZIR_STMT_DROP_IF_LIVE {
+            self.place_uses(st.get_Drop_pl(), set);
+        } else if tag == ZIR_STMT_CALL {
+            self.places_uses(st.get_Call_args(), set);
+        } else if tag == ZIR_STMT_CALLPTR {
+            self.place_uses(st.get_CallPtr_pl(), set);
+            self.places_uses(st.get_CallPtr_args(), set);
+        } else if tag == ZIR_STMT_INTRINSIC {
+            self.places_uses(st.get_Intrinsic_args(), set);
+        } else if tag == ZIR_STMT_BORROW {
+            self.bits_clear(set, st.get_Borrow_id());
+            self.place_uses(st.get_Borrow_pl(), set);
+        } else if tag == ZIR_STMT_BORROWMUT {
+            self.bits_clear(set, st.get_BorrowMut_id());
+            self.place_uses(st.get_BorrowMut_pl(), set);
+        }
+    }
+
+    fn term_uses(self: &ZirVerifier, term: &ZirTerminator, set: *mut u64) {
+        let tag = term.get_tag();
+        if tag == 1 as u32 { self.place_uses(term.get_Branch_cond(), set); }
+        else if tag == 2 as u32 { self.place_uses(term.get_Ret(), set); }
+    }
+
+    fn live_out_of(self: &ZirVerifier, block: usize) -> *mut u64 {
+        return (self.live_out as usize + block * self.live_words * 8) as *mut u64;
+    }
+
+    // live-after of the last statement: the terminator's uses plus the block's live-out.
+    fn block_tail_live(self: &ZirVerifier, b: &ZirBlock, block: usize, set: *mut u64) {
+        unsafe { memcpy(set as *mut u8, self.live_out_of(block) as *u8, (self.live_words * 8) as u64); }
+        self.term_uses(&b.terminator, set);
+    }
+
+    // Backward dataflow to a fixpoint: live-out(b) = union of live-in over b's successors.
+    fn compute_liveness(self: &mut ZirVerifier, func: &ZirFunction, locals_len: usize) {
+        let blocks_len = (*func).blocks.len;
+        self.live_words = locals_len / 64 as usize + 1 as usize;
+        let bytes = blocks_len * self.live_words * 8;
+        self.live_out = zoril_allocator_alloc(self.arena, bytes as u64) as *mut u64;
+        let live_in = zoril_allocator_alloc(self.arena, bytes as u64) as *mut u64;
+        unsafe {
+            memset(self.live_out as *mut u8, 0, bytes as u64);
+            memset(live_in as *mut u8, 0, bytes as u64);
+        }
+        let tmp = zoril_allocator_alloc(self.arena, (self.live_words * 8) as u64) as *mut u64;
+        let mut changed = true;
+        let mut iter = 0 as usize;
+        while changed && iter < 200 as usize {
+            changed = false;
+            let mut bi = blocks_len;
+            while bi > 0 as usize {
+                bi = bi - 1 as usize;
+                let b = &(*func).blocks[bi];
+                // live-out = union of the successors' live-in
+                let out = self.live_out_of(bi);
+                let term = &b.terminator;
+                let ttag = term.get_tag();
+                let mut w = 0 as usize;
+                while w < self.live_words {
+                    let mut acc = unsafe { *((out as usize + w * 8) as *u64) };
+                    if ttag == 0 as u32 {
+                        let t = term.get_Jmp() as usize;
+                        if t < blocks_len { acc = acc | unsafe { *((live_in as usize + (t * self.live_words + w) * 8) as *u64) }; }
+                    } else if ttag == 1 as u32 {
+                        let t1 = term.get_Branch_then() as usize;
+                        let t2 = term.get_Branch_else() as usize;
+                        if t1 < blocks_len { acc = acc | unsafe { *((live_in as usize + (t1 * self.live_words + w) * 8) as *u64) }; }
+                        if t2 < blocks_len { acc = acc | unsafe { *((live_in as usize + (t2 * self.live_words + w) * 8) as *u64) }; }
+                    }
+                    unsafe { *((out as usize + w * 8) as *mut u64) = acc; }
+                    w = w + 1 as usize;
+                }
+                // live-in = transfer backwards through the statements
+                self.block_tail_live(b, bi, tmp);
+                let mut si = b.statements.len;
+                while si > 0 as usize {
+                    si = si - 1 as usize;
+                    self.stmt_live_transfer(&b.statements[si], tmp);
+                }
+                let inb = (live_in as usize + bi * self.live_words * 8) as *mut u64;
+                if !is_mem_eq(inb as *u8, tmp as *u8, (self.live_words * 8) as u64) {
+                    unsafe { memcpy(inb as *mut u8, tmp as *u8, (self.live_words * 8) as u64); }
+                    changed = true;
+                }
+            }
+            iter = iter + 1 as usize;
+        }
+    }
+
+    // Rows for the current block: row k (k < n) = live after statement k; row n = the
+    // block's live-out, for its terminator.
+    fn compute_block_rows(self: &mut ZirVerifier, b: &ZirBlock, block: usize) {
+        let n = b.statements.len;
+        let wbytes = self.live_words * 8;
+        let need = (n + 1 as usize) * self.live_words;
+        if need > self.live_rows_cap {
+            self.live_rows = zoril_allocator_alloc(self.arena, (need * 8) as u64) as *mut u64;
+            self.live_rows_cap = need;
+        }
+        unsafe { memcpy(self.live_row(n) as *mut u8, self.live_out_of(block) as *u8, wbytes as u64); }
+        if n == 0 as usize { return; }
+        self.block_tail_live(b, block, self.live_row(n - 1 as usize));
+        let mut k = n - 1 as usize;
+        while k > 0 as usize {
+            // live after statement k-1 = live before statement k
+            unsafe { memcpy(self.live_row(k - 1 as usize) as *mut u8, self.live_row(k) as *u8, wbytes as u64); }
+            self.stmt_live_transfer(&b.statements[k], self.live_row(k - 1 as usize));
+            k = k - 1 as usize;
+        }
+    }
+
+    fn live_row(self: &ZirVerifier, k: usize) -> *mut u64 {
+        return (self.live_rows as usize + k * self.live_words * 8) as *mut u64;
+    }
+
+    fn verify_function(self: &mut ZirVerifier, func: &ZirFunction) {
+        let locals_len = (*func).locals.len;
+        let blocks_len = (*func).blocks.len;
+        if blocks_len == 0 as usize { return; }
+
+        let locals = (*func).locals;
+
+        // 1. Initialize entry state
+        let entry_state = zoril_allocator_alloc(self.arena, sizeof(ZirAnalysisState)) as *mut ZirAnalysisState;
+        let own_ptr = zoril_allocator_alloc(self.arena, locals_len + 1) as *mut u8;
+        let rb_ptr = zoril_allocator_alloc(self.arena, locals_len + 1) as *mut bool;
+        unsafe {
+            memset(own_ptr, 0, (locals_len + 1) as u64);
+            memset(rb_ptr as *mut u8, 0, (locals_len + 1) as u64);
+        }
+        let mut own = unsafe { @slice(own_ptr, locals_len + 1 as usize) };
+        let rb = unsafe { @slice(rb_ptr, locals_len + 1 as usize) };
+        let ml_ptr = zoril_allocator_alloc(self.arena, locals_len + 1) as *mut bool;
+        unsafe { memset(ml_ptr as *mut u8, 0, (locals_len + 1) as u64); }
+        let ml = unsafe { @slice(ml_ptr, locals_len + 1 as usize) };
+
+        // Mark parameters as Owned
+        let mut pi = 0 as usize;
+        while pi < (*func).params.len {
+            let param_id = (*func).params[pi].id;
+            own[param_id as usize] = 1 as u8; // Owned
+            pi = pi + 1 as usize;
+        }
+
+        unsafe { *entry_state = ZirAnalysisState {
+            ownership: own,
+            region_bound: rb,
+            maybe_live: ml,
+            borrows: Vec::<ActiveBorrow>.new_in(self.arena),
+            enum_aliases: Vec::<EnumPayloadAlias>.new_in(self.arena),
+        }; }
+
+        // 2. Block states
+        let entry_states_ptr = zoril_allocator_alloc(self.arena, blocks_len * 8) as *mut *mut ZirAnalysisState;
+        let exit_states_ptr = zoril_allocator_alloc(self.arena, blocks_len * 8) as *mut *mut ZirAnalysisState;
+        unsafe {
+            memset(entry_states_ptr as *mut u8, 0, (blocks_len * 8) as u64);
+            memset(exit_states_ptr as *mut u8, 0, (blocks_len * 8) as u64);
+        }
+        let mut block_entry_states = unsafe { @slice(entry_states_ptr, blocks_len) };
+        let mut block_exit_states = unsafe { @slice(exit_states_ptr, blocks_len) };
+
+        block_entry_states[0] = entry_state;
+
+        // 3. Predecessors map
+        let preds_ptr = zoril_allocator_alloc(self.arena, blocks_len * sizeof(Vec<u32>)) as *mut Vec<u32>;
+        let mut preds = unsafe { @slice(preds_ptr, blocks_len) };
+        let mut bi = 0 as usize;
+        while bi < blocks_len {
+            preds[bi] = Vec::<u32>.new_in(self.arena);
+            bi = bi + 1 as usize;
+        }
+        
+        bi = 0 as usize;
+        while bi < blocks_len {
+            let b = &(*func).blocks[bi];
+            if !self.block_terminates_path(b, locals) {
+                let term = &b.terminator;
+                let tag = term.get_tag();
+                if tag == 0 as u32 { // Jmp
+                    let jmp_id = term.get_Jmp() as usize;
+                    if jmp_id < blocks_len { preds[jmp_id].push(bi as u32); }
+                } else if tag == 1 as u32 { // Branch
+                    let then_id = term.get_Branch_then() as usize;
+                    let else_id = term.get_Branch_else() as usize;
+                    if then_id < blocks_len { preds[then_id].push(bi as u32); }
+                    if else_id < blocks_len { preds[else_id].push(bi as u32); }
+                }
+            }
+            bi = bi + 1 as usize;
+        }
+
+        self.compute_liveness(func, locals_len);
+
+        // 4. Fixed-point iteration
+        self.reporting_enabled = false;
+        let mut changed = true;
+        let mut iter = 0 as usize;
+        while changed && iter < 100 as usize {
+            changed = false;
+            let mut bj = 0 as usize;
+            while bj < blocks_len {
+                if bj > 0 as usize {
+                    let new_entry = self.merge_states(preds[bj], &block_exit_states, locals_len);
+                    // Blocks with no live predecessors (orphan/unreachable blocks)
+                    // have a null entry. Treating a null->null entry as "changed"
+                    // forces `changed` true on every iteration and prevents the
+                    // fixpoint from ever terminating (it burns all 100 iterations
+                    // -> ~40s on the compiler self-compile). Only flag a change
+                    // when there is a real (non-null) entry to compare.
+                    if new_entry as usize != 0 as usize {
+                        let old_entry = block_entry_states[bj];
+                        if old_entry as usize == 0 as usize || !self.states_equal(new_entry, old_entry, locals_len) {
+                            block_entry_states[bj] = new_entry;
+                            changed = true;
+                        }
+                    }
+                }
+
+                let current_entry = block_entry_states[bj];
+                if current_entry as usize != 0 as usize {
+                    let mut state = unsafe { (*current_entry).clone(self.arena, locals_len) };
+                    let b = &(*func).blocks[bj];
+                    self.compute_block_rows(b, bj);
+                    let mut si = 0 as usize;
+                    let stmts_len = b.statements.len;
+                    let mut terminated = false;
+                    while si < stmts_len {
+                        self.cur_live = self.live_row(si);
+                        self.check_stmt(&b.statements[si], unsafe { &mut *state }, locals);
+                        if self.stmt_terminates_path(&b.statements[si], locals) {
+                            terminated = true;
+                            break;
+                        }
+                        si = si + 1 as usize;
+                    }
+                    if !terminated {
+                        self.cur_live = self.live_row(stmts_len);
+                        self.check_terminator(&b.terminator, unsafe { &mut *state }, locals, func);
+                        
+                        let old_exit = block_exit_states[bj];
+                        if old_exit as usize == 0 as usize || !self.states_equal(state, old_exit, locals_len) {
+                            block_exit_states[bj] = state;
+                            changed = true;
+                        }
+                    }
+                }
+                bj = bj + 1 as usize;
+            }
+            iter = iter + 1 as usize;
+        }
+
+        // 5. Final Pass for Error Reporting
+        self.reporting_enabled = true;
+        let mut bk = 0 as usize;
+        while bk < blocks_len {
+            let current_entry = block_entry_states[bk];
+            if current_entry as usize != 0 as usize {
+                let mut state = unsafe { (*current_entry).clone(self.arena, locals_len) };
+                let b = &(*func).blocks[bk];
+                self.compute_block_rows(b, bk);
+                let mut si = 0 as usize;
+                let mut terminated = false;
+                while si < b.statements.len {
+                    self.cur_live = self.live_row(si);
+                    self.check_stmt(&b.statements[si], unsafe { &mut *state }, locals);
+                    if self.stmt_terminates_path(&b.statements[si], locals) {
+                        terminated = true;
+                        break;
+                    }
+                    si = si + 1 as usize;
+                }
+                if !terminated {
+                    self.cur_live = self.live_row(b.statements.len);
+                    self.check_terminator(&b.terminator, unsafe { &mut *state }, locals, func);
+                }
+            }
+            bk = bk + 1 as usize;
+        }
+        self.cur_live = 0 as *mut u64;
+    }
+
+    fn check_rv_region_bound(self: &mut ZirVerifier, rv: &ZirRvalue, span: Span, state: &mut ZirAnalysisState, locals: [Local]) -> bool {
+        let rv_tag = rv.get_tag();
+        if rv_tag == ZIR_RV_USE {
+            let pl = rv.get_Use();
+            return state.region_bound[(*pl).base as usize];
+        } else if rv_tag == ZIR_RV_FIELD {
+            let pl = rv.get_Field_pl();
+            return state.region_bound[(*pl).base as usize];
+        } else if rv_tag == ZIR_RV_INDEX {
+            let pl = rv.get_Index_pl();
+            return state.region_bound[(*pl).base as usize];
+        } else if rv_tag == 24 as u32 { // Boxed
+            if rv.get_Boxed_alloc() != 0 as u32 {
+                return true;
+            }
+        } else if rv_tag == ZIR_RV_CAST || rv_tag == ZIR_RV_PTR_FROM_INT {
+            let pl = rv.get_Cast_pl();
+            let src_rb = state.region_bound[(*pl).base as usize];
+            let target_ty = rv.get_Cast_ty();
+            let mut target_tag = 0 as u32;
+            if target_ty != 0 as u32 {
+                let p_target_ty = self.get_type_decl(target_ty);
+                target_tag = p_target_ty.def.get_tag();
+            }
+            if src_rb {
+                if target_tag == ILTYPE_PTR || target_tag == ILTYPE_PTRMUT {
+                    self.report_error("region escape: cannot cast region-bound pointer to raw pointer", span);
+                } else {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    fn propagate_borrow(self: &mut ZirVerifier, rv: &ZirRvalue, state: &mut ZirAnalysisState, dest_id: u32, locals: [Local]) {
+        if dest_id != 0 as u32 {
+            let mut li = 0 as usize;
+            while li < locals.len {
+                if locals[li].id == dest_id {
+                    if locals[li].is_raw_ptr {
+                        return;
+                    }
+                    break;
+                }
+                li = li + 1 as usize;
+            }
+        }
+
+        let rv_tag = rv.get_tag();
+        let mut src_id = 0 as u32;
+        if rv_tag == ZIR_RV_USE {
+            src_id = (*rv.get_Use()).base;
+        } else if rv_tag == ZIR_RV_FIELD {
+            src_id = (*rv.get_Field_pl()).base;
+        } else if rv_tag == ZIR_RV_INDEX {
+            src_id = (*rv.get_Index_pl()).base;
+        }
+        
+        if src_id != 0 as u32 {
+            let mut i = 0 as usize;
+            let mut found_borrow = false;
+            let mut base = Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+            let mut is_mut = false;
+            let mut region = 0 as u32;
+            let mut orig_span = Span { start: 0, end: 0, line: 0, col: 0 };
+            let mut orig_derived = false;
+            while i < state.borrows.len {
+                let b = &state.borrows[i];
+                if b.borrower == src_id {
+                    base = b.base;
+                    is_mut = b.is_mut;
+                    region = b.region;
+                    orig_span = b.span;
+                    orig_derived = b.derived;
+                    found_borrow = true;
+                    break;
+                }
+                i = i + 1 as usize;
+            }
+            // A borrow follows a value only into something that can hold a reference:
+            // `let y = *r` or `let n = v.as_slice()[i]` copies a value out; it does not keep
+            // the borrowed place borrowed. (Matters now that borrows end at their last use.)
+            if found_borrow && !self.local_holds_reference(dest_id, locals) {
+                found_borrow = false;
+            }
+            if found_borrow {
+                // Propagating an existing borrow to a new borrower (`let x = y;` where `y` was
+                // itself a borrower) does not create a new borrow -- keep the *original* span so
+                // "taken here" still points at the real `&expr`/`&mut expr`, not this statement.
+                state.borrows.push(ActiveBorrow {
+                    base: base,
+                    is_mut: is_mut,
+                    region: region,
+                    borrower: dest_id,
+                    span: orig_span,
+                    derived: orig_derived,
+                });
+            }
+        }
+    }
+
+    fn local_holds_reference(self: &mut ZirVerifier, id: u32, locals: [Local]) -> bool {
+        let mut li = 0 as usize;
+        while li < locals.len {
+            if locals[li].id == id {
+                return !locals[li].is_raw_ptr && self.type_holds_reference(locals[li].ty, 0 as usize);
+            }
+            li = li + 1 as usize;
+        }
+        return false;
+    }
+
+    fn is_temp_local(self: &ZirVerifier, id: u32, locals: [Local]) -> bool {
+        let mut li = 0 as usize;
+        while li < locals.len {
+            if locals[li].id == id { return locals[li].name_id == 0 as u32; }
+            li = li + 1 as usize;
+        }
+        return false;
+    }
+
+    // Does this borrow constrain the borrowed place right now? Its borrower must still own
+    // it, and an inherited borrow counts only once a named local holds it.
+    fn borrow_counts(self: &ZirVerifier, b: &ActiveBorrow, state: &ZirAnalysisState, locals: [Local]) -> bool {
+        if state.ownership[b.borrower as usize] != 1 as u8 { return false; }
+        if !self.is_live(b.borrower) { return false; }
+        return !(b.derived && self.is_temp_local(b.borrower, locals));
+    }
+
+    // DEST gets a copy of every borrow SRC holds (SRC's value now lives on in DEST).
+    fn inherit_borrows(self: &mut ZirVerifier, src: u32, dest: u32, state: &mut ZirAnalysisState) {
+        if src == 0 as u32 || dest == 0 as u32 || src == dest { return; }
+        let n = state.borrows.len;
+        let mut bi = 0 as usize;
+        while bi < n {
+            if state.borrows[bi].borrower == src {
+                let b = state.borrows[bi];
+                state.borrows.push(ActiveBorrow { base: b.base, is_mut: b.is_mut, region: b.region, borrower: dest, span: b.span, derived: true });
+            }
+            bi = bi + 1 as usize;
+        }
+    }
+
+    // A value built by a call or a literal keeps borrowed whatever the inputs it may point
+    // into borrow, when it can hold a reference (a reference, a slice, or a struct, enum or
+    // tuple containing one). For a call, those inputs are the callee's `ret_ties`: the
+    // parameters named by `#[borrows(..)]`, or by default `self` if it is a reference,
+    // otherwise every reference/pointer parameter. Lexical, like every borrow here.
+    fn inherit_rv_borrows(self: &mut ZirVerifier, rv: &ZirRvalue, dest: u32, state: &mut ZirAnalysisState, locals: [Local]) {
+        if dest == 0 as u32 { return; }
+        let tag = rv.get_tag();
+        if tag != ZIR_RV_CALL && tag != ZIR_RV_CALLPTR && tag != ZIR_RV_STRUCT && tag != ZIR_RV_ENUM { return; }
+        if !self.local_holds_reference(dest, locals) { return; }
+        if tag == ZIR_RV_CALL {
+            let args = rv.get_Call_args();
+            let fn_id = rv.get_Call_id();
+            let mut ties = 0xffffffffffffffff as u64;
+            if (fn_id as usize) < self.zil_module.functions.len {
+                ties = self.zil_module.functions[fn_id as usize].ret_ties;
+            }
+            let mut i = 0 as usize;
+            while i < args.len {
+                if i >= 64 as usize || ((ties >> (i as u64)) & 1 as u64) != 0 as u64 {
+                    self.inherit_borrows(args[i].base, dest, state);
+                }
+                i = i + 1 as usize;
+            }
+        } else if tag == ZIR_RV_CALLPTR {
+            // A call through a function pointer: no signature to consult, so every argument.
+            let args = rv.get_CallPtr_args();
+            let mut i = 0 as usize;
+            while i < args.len {
+                self.inherit_borrows(args[i].base, dest, state);
+                i = i + 1 as usize;
+            }
+        } else if tag == ZIR_RV_STRUCT {
+            let args = rv.get_StructLiteral_args();
+            let mut i = 0 as usize;
+            while i < args.len {
+                self.inherit_borrows(args[i].base, dest, state);
+                i = i + 1 as usize;
+            }
+        } else {
+            self.inherit_borrows((*rv.get_EnumVariant_payload()).base, dest, state);
+        }
+    }
+
+    // A compiler temporary lives for the statement that uses it, so once used, its borrows
+    // end (any that matter were passed on to the destination first). Named locals keep
+    // theirs until they go out of scope.
+    fn end_temp_borrows(self: &mut ZirVerifier, base: u32, dest: u32, state: &mut ZirAnalysisState, locals: [Local]) {
+        if base == 0 as u32 || base == dest || !self.is_temp_local(base, locals) { return; }
+        let mut bi = 0 as usize;
+        while bi < state.borrows.len {
+            if state.borrows[bi].borrower == base {
+                let _ = state.borrows.remove(bi);
+            } else {
+                bi = bi + 1 as usize;
+            }
+        }
+    }
+
+    fn end_places_temp_borrows(self: &mut ZirVerifier, places: [Place], dest: u32, state: &mut ZirAnalysisState, locals: [Local]) {
+        let mut i = 0 as usize;
+        while i < places.len {
+            self.end_temp_borrows(places[i].base, dest, state, locals);
+            i = i + 1 as usize;
+        }
+    }
+
+    fn end_rv_temp_borrows(self: &mut ZirVerifier, rv: &ZirRvalue, dest: u32, state: &mut ZirAnalysisState, locals: [Local]) {
+        let tag = rv.get_tag();
+        if tag == ZIR_RV_USE {
+            self.end_temp_borrows((*rv.get_Use()).base, dest, state, locals);
+        } else if tag == ZIR_RV_FIELD {
+            self.end_temp_borrows((*rv.get_Field_pl()).base, dest, state, locals);
+        } else if tag == ZIR_RV_INDEX {
+            self.end_temp_borrows((*rv.get_Index_pl()).base, dest, state, locals);
+        } else if tag == ZIR_RV_CALL {
+            self.end_places_temp_borrows(rv.get_Call_args(), dest, state, locals);
+        } else if tag == ZIR_RV_CALLPTR {
+            self.end_places_temp_borrows(rv.get_CallPtr_args(), dest, state, locals);
+        } else if tag == ZIR_RV_STRUCT {
+            self.end_places_temp_borrows(rv.get_StructLiteral_args(), dest, state, locals);
+        } else if tag == ZIR_RV_ENUM {
+            self.end_temp_borrows((*rv.get_EnumVariant_payload()).base, dest, state, locals);
+        }
+    }
+
+    fn check_stmt(self: &mut ZirVerifier, stmt: &ZirStmt, state: &mut ZirAnalysisState, locals: [Local]) {
+        let tag = stmt.get_tag();
+        let span = stmt.get_span();
+
+        if tag == ZIR_STMT_LET {
+            let local_id = stmt.get_Let_id();
+            let rv = stmt.get_Let_rv();
+            
+            let rv_tag = rv.get_tag();
+            if rv_tag == ZIR_RV_REF {
+                let p = rv.get_Ref();
+                let reg = rv.get_Ref_region();
+                self.check_borrow_creation(p, false, span, state, locals, local_id, reg);
+            } else if rv_tag == ZIR_RV_REFMUT {
+                let p = rv.get_RefMut();
+                let reg = rv.get_RefMut_region();
+                self.check_borrow_creation(p, true, span, state, locals, local_id, reg);
+            } else {
+                self.check_rvalue_use(rv, span, state, locals);
+                // Record EnumPayload aliases: the result local is a pointer
+                // into the source place. Later moves through this pointer
+                // must be checked against borrows of the source.
+                if rv_tag == ZIR_RV_ENUM_PAYLOAD && local_id != 0 {
+                    state.enum_aliases.push(EnumPayloadAlias { local_id: local_id, source: rv.get_EnumPayload_pl() });
+                }
+            }
+            self.inherit_rv_borrows(rv, local_id, state, locals);
+
+            let rv_is_rb = self.check_rv_region_bound(rv, span, state, locals);
+            let p_rb_idx = local_id as usize;
+            state.region_bound[p_rb_idx] = rv_is_rb;
+
+            self.propagate_borrow(rv, state, local_id, locals);
+            self.end_rv_temp_borrows(rv, local_id, state, locals);
+
+            let p_own_idx = local_id as usize;
+            state.ownership[p_own_idx] = 1 as u8; // Owned
+            state.maybe_live[p_own_idx] = false;
+        } else if tag == ZIR_STMT_ASSIGN {
+            let place = stmt.get_Assign_pl();
+            let rv = stmt.get_Assign_rv();
+
+            if self.writes_immutable_binding(place, locals) {
+                self.report_var_error("cannot assign to", (*place).base, "because it is immutable", span, locals);
+                return;
+            }
+
+            // Regardless of whether the base local itself is reassignable, writing to a place
+            // that dereferences a read-only pointer along the way is rejected -- `&T` means
+            // read-only, not just "this binding can't be reassigned", and that holds whether the
+            // `&T` is the place's own base (`(*r).x = 5`) or reached through intervening fields
+            // (`h.r.x = 5`). Raw pointers stay the unchecked escape hatch.
+            if (*place).projections.len > 0 as usize {
+                if self.place_last_deref_is_readonly(place, locals) {
+                    self.report_var_error("cannot assign to", (*place).base, self.readonly_reason(), span, locals);
+                    return;
+                }
+            }
+
+
+            // If the old variable was a borrower, end its borrow first
+            let borrower_id = (*place).base;
+            let mut bi = 0 as usize;
+            while bi < state.borrows.len {
+                if state.borrows[bi].borrower == borrower_id {
+                    state.borrows.remove(bi);
+                    break;
+                }
+                bi = bi + 1 as usize;
+            }
+
+            let rv_tag = rv.get_tag();
+            if rv_tag == ZIR_RV_REF {
+                let p = rv.get_Ref();
+                let reg = rv.get_Ref_region();
+                self.check_borrow_creation(p, false, span, state, locals, borrower_id, reg);
+            } else if rv_tag == ZIR_RV_REFMUT {
+                let p = rv.get_RefMut();
+                let reg = rv.get_RefMut_region();
+                self.check_borrow_creation(p, true, span, state, locals, borrower_id, reg);
+            } else {
+                self.check_rvalue_use(rv, span, state, locals);
+                if (*place).projections.len == 0 as usize {
+                    self.inherit_rv_borrows(rv, borrower_id, state, locals);
+                }
+            }
+            
+            // Verify place is not borrowed
+            let mut i = 0 as usize;
+            while i < state.borrows.len {
+                let b = &state.borrows[i];
+                if self.borrow_counts(b, &*state, locals) {
+                    if self.places_overlap(&(*b).base, place) {
+                        self.report_borrow_conflict("cannot assign to", place, "because it is borrowed", span, &(*b).base, (*b).span, locals);
+                        return;
+                    }
+                }
+                i = i + 1 as usize;
+            }
+
+            let rv_is_rb = self.check_rv_region_bound(rv, span, state, locals);
+            if (*place).projections.len == 0 as usize {
+                let p_rb_idx = (*place).base as usize;
+                state.region_bound[p_rb_idx] = rv_is_rb;
+                
+                self.propagate_borrow(rv, state, (*place).base, locals);
+            }
+            self.end_rv_temp_borrows(rv, (*place).base, state, locals);
+
+            let p_own_idx = (*place).base as usize;
+            state.ownership[p_own_idx] = 1 as u8; // Owned
+            state.maybe_live[p_own_idx] = false;
+        } else if tag == ZIR_STMT_DROP || tag == ZIR_STMT_DROP_IF_LIVE {
+            let place = stmt.get_Drop_pl();
+            
+            // Verify place is Owned or Moved
+            let p_st_idx = (*place).base as usize;
+            let st = state.ownership[p_st_idx];
+            if st == 0 as u8 || st == 3 as u8 {
+                if tag == ZIR_STMT_DROP_IF_LIVE { return; } // the runtime flag is clear on this path
+                self.report_var_error("cannot drop value", (*place).base, "that is not owned", span, locals);
+                return;
+            }
+
+            // A linear resource still owned on some path into a scope-exit drop is not
+            // closed on every path (`if c { close(f); }`).
+            if st == 2 as u8 && state.maybe_live[p_st_idx] {
+                let ty_ml = self.get_place_type(place, locals);
+                if ty_ml != 0 as u32 && self.type_holds_linear(ty_ml, 0 as usize) {
+                    self.report_var_error("linear resource", (*place).base, "is not closed on every path", span, locals);
+                }
+            }
+
+            if st == 1 as u8 { // Owned
+                let ty_id = self.get_place_type(place, locals);
+                if ty_id != 0 as u32 && !self.is_linear_tag(ty_id) && self.type_holds_linear(ty_id, 0 as usize) {
+                    // A struct, tuple or enum holding an fd: dropping it would drop the fd.
+                    self.report_var_error("value", (*place).base, "holds a linear resource (fd or ioring) that must be explicitly closed, not dropped", span, locals);
+                }
+                if ty_id != 0 as u32 {
+                    let p_ty = self.get_type_decl(ty_id);
+                    let ty_tag = p_ty.def.get_tag();
+                    if ty_tag == ILTYPE_FD || ty_tag == ILTYPE_IORING {
+                        let mut found = false;
+                        let mut name_id = 0 as u32;
+                        let mut li = 0 as usize;
+                        while li < locals.len {
+                            if locals[li].id == (*place).base {
+                                name_id = locals[li].name_id;
+                                found = true;
+                                break;
+                            }
+                            li = li + 1 as usize;
+                        }
+                        let mut msg: &mut ByteVec = ByteVec.new(self.arena);
+                        msg.push_slice("linear resource");
+                        if found && name_id != 0 as u32 {
+                            let name_str = self.intern_table.lookup(name_id);
+                            msg.push_slice(" '");
+                            msg.push_slice(name_str);
+                            msg.push_slice("' (type ");
+                        } else {
+                            msg.push_slice(" (type ");
+                        }
+                        if ty_tag == ILTYPE_FD {
+                            msg.push_slice("fd");
+                        } else {
+                            msg.push_slice("ioring");
+                        }
+                        msg.push_slice(") must be explicitly closed, not dropped");
+                        self.report_error(msg.as_slice(), span);
+                    }
+                }
+            }
+            
+            let p_own_idx = (*place).base as usize;
+            state.ownership[p_own_idx] = 3 as u8; // Dropped
+            state.maybe_live[p_own_idx] = false;
+        } else if tag == ZIR_STMT_CALL {
+            let args = stmt.get_Call_args();
+            let mut i = 0 as usize;
+            while i < args.len {
+                self.check_place_use(&args[i], true, span, state, locals);
+                i = i + 1 as usize;
+            }
+            self.check_call_arg_mutability(stmt.get_Call_id(), args, span, &*state, locals);
+            self.end_places_temp_borrows(args, 0 as u32, state, locals);
+        } else if tag == ZIR_STMT_CALLPTR {
+            self.check_place_use(stmt.get_CallPtr_pl(), false, span, state, locals);
+            let args = stmt.get_CallPtr_args();
+            let mut i = 0 as usize;
+            while i < args.len {
+                self.check_place_use(&args[i], true, span, state, locals);
+                i = i + 1 as usize;
+            }
+            self.end_places_temp_borrows(args, 0 as u32, state, locals);
+        } else if tag == ZIR_STMT_INTRINSIC && is_str_eq(self.intern_table.lookup(stmt.get_Intrinsic_id()), "explicit_drop") {
+            // The user's @drop (lowering emits this marker before it): unlike a scope-exit
+            // drop, the value must be definitely live here.
+            let args = stmt.get_Intrinsic_args();
+            if args.len == 1 as usize && args[0].base != 0 as u32 && args[0].base <= locals.len as u32 {
+                let st = state.ownership[args[0].base as usize];
+                if st == 2 as u8 {
+                    self.report_var_error("cannot drop value", args[0].base, "that may have been moved", span, locals);
+                } else if st == 3 as u8 {
+                    self.report_var_error("cannot drop value", args[0].base, "that is already dropped", span, locals);
+                }
+            }
+        } else if tag == ZIR_STMT_INTRINSIC {
+            let args = stmt.get_Intrinsic_args();
+            let mut i = 0 as usize;
+            while i < args.len {
+                self.check_place_use(&args[i], true, span, state, locals);
+                i = i + 1 as usize;
+            }
+        } else if tag == ZIR_STMT_BORROW {
+            let local_id = stmt.get_Borrow_id();
+            let p = stmt.get_Borrow_pl();
+            let reg = stmt.get_Borrow_region();
+            self.check_borrow_creation(p, false, span, state, locals, local_id, reg);
+        } else if tag == ZIR_STMT_BORROWMUT {
+            let local_id = stmt.get_BorrowMut_id();
+            let p = stmt.get_BorrowMut_pl();
+            let reg = stmt.get_BorrowMut_region();
+            self.check_borrow_creation(p, true, span, state, locals, local_id, reg);
+        } else if tag == ZIR_STMT_ENDBORROW {
+            let borrower_id = stmt.get_EndBorrow_id();
+            let mut i = 0 as usize;
+            while i < state.borrows.len {
+                if state.borrows[i].borrower == borrower_id {
+                    state.borrows.remove(i);
+                    return;
+                }
+                i = i + 1 as usize;
+            }
+        }
+    }
+
+    fn check_terminator(self: &mut ZirVerifier, term: &ZirTerminator, state: &mut ZirAnalysisState, locals: [Local], func: &ZirFunction) {
+        let tag = term.get_tag();
+        let span = func.span;
+        if tag == 2 as u32 { // Ret
+            let ret_pl = term.get_Ret();
+            if ret_pl.base == 0 as u32 {
+                let unit_ty = self.get_primitive_type(ILPRIM_UNIT);
+                if func.ret_ty != 0 as u32 && func.ret_ty != unit_ty {
+                    self.report_error("control reaches end of non-void function without a return value", span);
+                }
+            }
+            self.check_place_use(ret_pl, true, span, state, locals);
+            // A linear resource consumed on some paths into this return but not others is
+            // leaked on those others (`if c { close(f); } return 0;`). Lowering emits no
+            // scope-exit drop for a value moved in a branch, so this is checked here.
+            let mut li = 0 as usize;
+            while li < locals.len {
+                let id = locals[li].id;
+                if id != 0 as u32 && id != ret_pl.base && (id as usize) < state.ownership.len {
+                    if state.ownership[id as usize] == 2 as u8 && state.maybe_live[id as usize] && self.type_holds_linear(locals[li].ty, 0 as usize) {
+                        self.report_var_error("linear resource", id, "is not closed on every path", span, locals);
+                    }
+                }
+                li = li + 1 as usize;
+            }
+        } else if tag == 1 as u32 { // Branch
+            self.check_place_use(term.get_Branch_cond(), false, span, state, locals);
+        }
+    }
+
+    fn merge_states(self: &mut ZirVerifier, predecessors: Vec<u32>, exit_states: &[*mut ZirAnalysisState], locals_len: usize) -> *mut ZirAnalysisState {
+        if predecessors.len == 0 as usize { return 0 as *mut ZirAnalysisState; }
+        
+        // Seed the merge from the first predecessor that has a computed exit.
+        // Predecessors whose exit is still null (orphan/unprocessed blocks) are
+        // skipped; previously the merge bailed out entirely if the *first*
+        // predecessor was null, which could permanently skip a reachable block
+        // and leave its borrow/ownership analysis incomplete.
+        let mut seed: *mut ZirAnalysisState = 0 as *mut ZirAnalysisState;
+        let mut si = 0 as usize;
+        while si < predecessors.len {
+            let idx = &predecessors[si];
+            let ex = exit_states[(*idx) as usize];
+            if ex as usize != 0 as usize { seed = ex; break; }
+            si = si + 1 as usize;
+        }
+        if seed as usize == 0 as usize { return 0 as *mut ZirAnalysisState; }
+
+        let seed_ref: &ZirAnalysisState = unsafe { &*seed };
+        let res = seed_ref.clone(self.arena, locals_len);
+        let res_ref: &mut ZirAnalysisState = unsafe { &mut *res };
+        let mut i = 0 as usize;
+        while i < predecessors.len {
+            let pred_idx = &predecessors[i];
+            let pred_exit = exit_states[(*pred_idx) as usize];
+            if pred_exit as usize != 0 as usize {
+                let pred_exit_ref: &ZirAnalysisState = unsafe { &*pred_exit };
+                // Ownership merge
+                let mut j = 0 as usize;
+                while j <= locals_len {
+                    let st1 = res_ref.ownership[j];
+                    let st2 = pred_exit_ref.ownership[j];
+                    let ml = res_ref.maybe_live[j] || pred_exit_ref.maybe_live[j];
+                    if st1 != st2 {
+                        if st1 == 0 as u8 || st2 == 0 as u8 {
+                             res_ref.ownership[j] = 0 as u8;
+                             res_ref.maybe_live[j] = false;
+                        } else {
+                             res_ref.ownership[j] = 2 as u8; // Moved/Dropped confusion -> Moved
+                             res_ref.maybe_live[j] = ml || st1 == 1 as u8 || st2 == 1 as u8;
+                        }
+                    } else {
+                        res_ref.maybe_live[j] = ml;
+                    }
+                    
+                    let rb1 = res_ref.region_bound[j];
+                    let rb2 = pred_exit_ref.region_bound[j];
+                    res_ref.region_bound[j] = rb1 || rb2;
+
+                    j = j + 1 as usize;
+                }
+                
+                // Borrows merge: Intersection
+                let mut k = 0 as usize;
+                while k < res_ref.borrows.len {
+                    let b1 = &res_ref.borrows[k];
+                    let mut found = false;
+                    let mut l = 0 as usize;
+                    while l < pred_exit_ref.borrows.len {
+                        let b2 = &pred_exit_ref.borrows[l];
+                        if b1.borrower == b2.borrower {
+                            found = true;
+                            break;
+                        }
+                        l = l + 1 as usize;
+                    }
+                    if !found {
+                        res_ref.borrows.remove(k);
+                    } else {
+                        k = k + 1 as usize;
+                    }
+                }
+                
+                // EnumPayload aliases merge: Union
+                let mut m = 0 as usize;
+                while m < pred_exit_ref.enum_aliases.len {
+                    let ea = &pred_exit_ref.enum_aliases[m];
+                    let mut found = false;
+                    let mut n = 0 as usize;
+                    while n < res_ref.enum_aliases.len {
+                        if res_ref.enum_aliases[n].local_id == ea.local_id {
+                            found = true;
+                            break;
+                        }
+                        n = n + 1 as usize;
+                    }
+                    if !found {
+                        res_ref.enum_aliases.push(EnumPayloadAlias { local_id: ea.local_id, source: ea.source });
+                    }
+                    m = m + 1 as usize;
+                }
+            }
+            i = i + 1 as usize;
+        }
+        return res;
+    }
+
+    fn states_equal(self: &ZirVerifier, s1: *mut ZirAnalysisState, s2: *mut ZirAnalysisState, locals_len: usize) -> bool {
+        if s1 == s2 { return true; }
+        if s1 as usize == 0 as usize || s2 as usize == 0 as usize { return false; }
+
+        // Both are non-null per the check above; the block states are a nullable
+        // raw array, so this is where the two become references.
+        let a: &ZirAnalysisState = unsafe { &*s1 };
+        let b: &ZirAnalysisState = unsafe { &*s2 };
+
+        if !is_mem_eq(a.ownership.ptr, b.ownership.ptr, (locals_len + 1) as u64) { return false; }
+        if !is_mem_eq(a.region_bound.ptr as *u8, b.region_bound.ptr as *u8, (locals_len + 1) as u64) { return false; }
+        if !is_mem_eq(a.maybe_live.ptr as *u8, b.maybe_live.ptr as *u8, (locals_len + 1) as u64) { return false; }
+
+        if a.borrows.len != b.borrows.len { return false; }
+        let mut i = 0 as usize;
+        while i < a.borrows.len {
+            if a.borrows[i].borrower != b.borrows[i].borrower { return false; }
+            i = i + 1 as usize;
+        }
+        if a.enum_aliases.len != b.enum_aliases.len { return false; }
+        return true;
+    }
+
+    fn get_type_decl(self: &ZirVerifier, ty_id: u32) -> &ILTypeDecl {
+        if ty_id == 0 as u32 {
+            ICE("ZirVerifier.get_type_decl: ty_id is 0");
+        }
+        if ty_id as usize > self.zil_module.types.len {
+            ICE("ZirVerifier.get_type_decl: ty_id out of bounds");
+        }
+        return &self.zil_module.types[ty_id as usize - 1 as usize];
+    }
+
+    // Mirrors ZirLowerer.get_zil_sret_offset (lower_zir/utils.zrl) -- duplicated rather than
+    // shared because the two run over different module handles (ZilModule vs ILModule) despite
+    // the same struct shapes. sret is detected by param name, not by inspecting ret_ty: the
+    // builder stage is what decides whether to insert the slot and names it "__sret" when it
+    // does, so that name is the only authoritative signal here.
+    fn call_get_sret_offset(self: &ZirVerifier, p_func: &ILFunction) -> usize {
+        if p_func.params_len == 0 as usize { return 0 as usize; }
+        let sret_name = self.intern_table.intern("__sret");
+        let p_param0 = &p_func.params[0];
+        if p_param0.name == sret_name { return 1 as usize; }
+        return 0 as usize;
+    }
+
+    // Mirrors ZirLowerer.needs_env_ptr (lower_zir/utils.zrl) -- see call_get_sret_offset above
+    // for why it isn't shared directly.
+    fn needs_env_ptr_fn(self: &ZirVerifier, is_extern: bool, name: u32) -> bool {
+        if is_extern { return false; }
+        if name == self.intern_table.intern("main") { return false; }
+        let name_slice = self.intern_table.lookup(name);
+        if name_slice.len >= 16 as usize {
+            if name_slice[0] == '_' as u8 && name_slice[1] == '_' as u8 && name_slice[2] == 'z' as u8 {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Index into `p_func.params` where the ZIR call's user-visible `args[0]` lands -- i.e. past
+    // the compiler-inserted sret and env-pointer slots. Mirrors the `direct_param_base` /
+    // `param_base_idx` computation in lower_zir/expr.zrl's call-lowering, which is what actually
+    // built the alignment between ZIR args and IL params being relied on here.
+    fn call_param_base(self: &ZirVerifier, p_func: &ILFunction) -> usize {
+        let sret_offset = self.call_get_sret_offset(p_func);
+        let env_offset = if self.needs_env_ptr_fn(p_func.is_extern, p_func.name) { 1 as usize } else { 0 as usize };
+        return sret_offset + env_offset;
+    }
+
+    // Rejects passing a place declared as a non-mut pointer/reference (`&T` / `*T`, IL tags Ptr
+    // or Boxed) where the callee's parameter is declared PtrMut/BoxedMut, when that place's base
+    // local currently holds an active *shared* borrow (`let r: &T = &expr;`). This is the call-
+    // argument counterpart of the assignment/borrow-creation checks above: `&T` must not be
+    // usable to forge a `&mut T` receiver just because it is passed positionally rather than
+    // through an explicit `&mut` or method-call syntax. Unlike the write/borrow-creation checks,
+    // this looks at the argument's own *resolved* type (`get_place_type`, not the type of
+    // something one deref below it) -- passing `h.r` where `h.r: &P` hands the callee the
+    // reference value itself, so what must be checked is that value's type, not a further
+    // dereference of it. Raw pointers obtained via `as *T` or arithmetic stay the documented
+    // unchecked escape hatch; only a place whose resolved type is IL `Ptr` trips this.
+    fn check_call_arg_mutability(self: &mut ZirVerifier, fn_id: u32, args: [Place], span: Span, state: &ZirAnalysisState, locals: [Local]) {
+        if fn_id as usize >= self.zil_module.functions.len { return; }
+        let p_func = &self.zil_module.functions[fn_id as usize];
+        let param_base = self.call_param_base(p_func);
+
+        let mut i = 0 as usize;
+        while i < args.len {
+            let param_idx = param_base + i;
+            if param_idx >= p_func.params_len {
+                i = i + 1 as usize;
+                continue;
+            }
+            let param_ty = p_func.param(param_idx).ty;
+            if param_ty != 0 as u32 {
+                let p_param_ty = self.get_type_decl(param_ty);
+                let param_tag = p_param_ty.def.get_tag();
+                if param_tag == ILTYPE_PTRMUT || param_tag == ILTYPE_BOXEDMUT {
+                    let arg_place = &args[i];
+                    let arg_ty = self.get_place_type(arg_place, locals);
+                    if arg_ty != 0 as u32 {
+                        let p_arg_ty = self.get_type_decl(arg_ty);
+                        if p_arg_ty.def.get_tag() == ILTYPE_PTR {
+                            self.report_var_error("cannot pass", arg_place.base, "as a mutable reference because it is behind a shared reference", span, locals);
+                        }
+                    }
+                }
+            }
+            i = i + 1 as usize;
+        }
+    }
+
+    fn get_usize_type(self: &ZirVerifier) -> u32 {
+        return self.get_primitive_type(ILPRIM_USIZE);
+    }
+
+    fn get_primitive_type(self: &ZirVerifier, prim_tag: u32) -> u32 {
+        let mut i = 0 as usize;
+        while i < self.zil_module.types.len {
+            let p_t = &self.zil_module.types[i];
+            if p_t.def.get_tag() == ILTYPE_PRIMITIVE {
+                if p_t.def.get_Primitive().get_tag() == prim_tag {
+                    return p_t.id;
+                }
+            }
+            i = i + 1 as usize;
+        }
+        return 0 as u32;
+    }
+
+    fn get_ptr_type(self: &mut ZirVerifier, inner: u32) -> u32 {
+        let mut i = 0 as usize;
+        while i < self.zil_module.types.len {
+            let p_t = &self.zil_module.types[i];
+            if p_t.def.get_tag() == ILTYPE_PTR {
+                if p_t.def.get_Ptr() == inner { return p_t.id; }
+            }
+            i = i + 1 as usize;
+        }
+        return self.zil_module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Ptr(inner) , source_file: 0 as u32 });
+    }
+
+    fn get_ptr_inner_type(self: &ZirVerifier, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = &self.zil_module.types[ty_id as usize - 1 as usize];
+        match p_ty.def {
+            ILType.Ptr(inner) | ILType.PtrMut(inner) | ILType.Boxed(inner) | ILType.BoxedMut(inner) => { return inner; },
+            ILType.Slice(s) => { return s.element; },
+            _ => { return 0 as u32; },
+        }
+    }
+
+    fn get_field_index(self: &mut ZirVerifier, ty_id: u32, field_name: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        
+        let mut curr_ty = ty_id;
+        let mut p_ty = self.get_type_decl(curr_ty);
+        let mut tag = p_ty.def.get_tag();
+        
+        while tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT {
+            curr_ty = self.get_ptr_inner_type(curr_ty);
+            if curr_ty == 0 as u32 { break; }
+            p_ty = self.get_type_decl(curr_ty);
+            tag = p_ty.def.get_tag();
+        }
+
+        if tag == ILTYPE_SLICE {
+            let ptr_id = self.intern_table.intern("ptr");
+            let data_id = self.intern_table.intern("data");
+            let len_id = self.intern_table.intern("len");
+            if field_name == ptr_id || field_name == data_id { return 0 as u32; }
+            if field_name == len_id { return 1 as u32; }
+            return 0 as u32;
+        }
+
+        let mut user_id = 0xffffffff as u32;
+        if tag == ILTYPE_USER {
+            user_id = p_ty.def.get_User().id;
+        }
+
+        if user_id != 0xffffffff as u32 {
+            let p_def = &self.zil_module.typedefs[user_id as usize];
+            if p_def.get_tag() == IL_TYPEDEF_STRUCT {
+                let s = p_def.get_Struct();
+                let mut fi = 0 as usize;
+                while fi < s.fields.len {
+                    if s.fields[fi].name == field_name {
+                        return fi as u32;
+                    }
+                    fi = fi + 1 as usize;
+                }
+            }
+        }
+        return 0 as u32;
+    }
+
+    fn get_field_type(self: &mut ZirVerifier, ty_id: u32, field_idx: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        
+        let mut curr_ty = ty_id;
+        let mut p_ty = self.get_type_decl(curr_ty);
+        let mut tag = p_ty.def.get_tag();
+        
+        while tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT {
+            curr_ty = self.get_ptr_inner_type(curr_ty);
+            if curr_ty == 0 as u32 { break; }
+            p_ty = self.get_type_decl(curr_ty);
+            tag = p_ty.def.get_tag();
+        }
+
+        if tag == ILTYPE_SLICE {
+            if field_idx == 0 as u32 {
+                let elem_ty = p_ty.def.get_Slice().element;
+                return self.get_ptr_type(elem_ty);
+            }
+            if field_idx == 1 as u32 { return self.get_usize_type(); }
+            return 0 as u32;
+        }
+
+        let mut user_id = 0xffffffff as u32;
+        if tag == ILTYPE_USER {
+            user_id = p_ty.def.get_User().id;
+        }
+
+        if user_id != 0xffffffff as u32 {
+            let p_def = &self.zil_module.typedefs[user_id as usize];
+            if p_def.get_tag() == IL_TYPEDEF_STRUCT {
+                let s = p_def.get_Struct();
+                if (field_idx as usize) < s.fields.len {
+                    return s.fields[field_idx as usize].ty;
+                }
+            }
+        }
+        return 0 as u32;
+    }
+
+    // Can a value of this type hold a (non-raw) reference? Raw-pointer fields are the
+    // unchecked escape hatch, so a Vec (a raw buffer pointer) does not count.
+    fn type_holds_reference(self: &mut ZirVerifier, ty_id: u32, depth: usize) -> bool {
+        if ty_id == 0 as u32 || depth > 4 as usize { return false; }
+        let p_ty = self.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_SLICE { return true; }
+        if tag == ILTYPE_TUPLE {
+            let elems = p_ty.def.get_Tuple();
+            let mut i = 0 as usize;
+            while i < elems.len {
+                if self.type_holds_reference(elems[i], depth + 1 as usize) { return true; }
+                i = i + 1 as usize;
+            }
+            return false;
+        }
+        if tag != ILTYPE_USER { return false; }
+        let user_id = p_ty.def.get_User().id;
+        if user_id == 0xffffffff as u32 || user_id as usize >= self.zil_module.typedefs.len { return false; }
+        let p_def = &self.zil_module.typedefs[user_id as usize];
+        if p_def.get_tag() == IL_TYPEDEF_STRUCT {
+            let fields = p_def.get_Struct().fields;
+            let mut i = 0 as usize;
+            while i < fields.len {
+                if !fields[i].is_raw_ptr && self.type_holds_reference(fields[i].ty, depth + 1 as usize) { return true; }
+                i = i + 1 as usize;
+            }
+        } else if p_def.get_tag() == IL_TYPEDEF_ENUM {
+            let variants = p_def.get_Enum().variants;
+            let mut i = 0 as usize;
+            while i < variants.len {
+                if self.type_holds_reference(variants[i].payload, depth + 1 as usize) { return true; }
+                i = i + 1 as usize;
+            }
+        }
+        return false;
+    }
+
+    fn is_linear_tag(self: &ZirVerifier, ty_id: u32) -> bool {
+        let tag = self.get_type_decl(ty_id).def.get_tag();
+        return tag == ILTYPE_FD || tag == ILTYPE_IORING;
+    }
+
+    // Is this a linear resource, or an aggregate that holds one by value?
+    fn type_holds_linear(self: &mut ZirVerifier, ty_id: u32, depth: usize) -> bool {
+        if ty_id == 0 as u32 || depth > 4 as usize { return false; }
+        let p_ty = self.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_FD || tag == ILTYPE_IORING { return true; }
+        if tag == ILTYPE_TUPLE {
+            let elems = p_ty.def.get_Tuple();
+            let mut i = 0 as usize;
+            while i < elems.len {
+                if self.type_holds_linear(elems[i], depth + 1 as usize) { return true; }
+                i = i + 1 as usize;
+            }
+            return false;
+        }
+        if tag != ILTYPE_USER { return false; }
+        let user_id = p_ty.def.get_User().id;
+        if user_id == 0xffffffff as u32 || user_id as usize >= self.zil_module.typedefs.len { return false; }
+        let p_def = &self.zil_module.typedefs[user_id as usize];
+        if p_def.get_tag() == IL_TYPEDEF_STRUCT {
+            let fields = p_def.get_Struct().fields;
+            let mut i = 0 as usize;
+            while i < fields.len {
+                if self.type_holds_linear(fields[i].ty, depth + 1 as usize) { return true; }
+                i = i + 1 as usize;
+            }
+        } else if p_def.get_tag() == IL_TYPEDEF_ENUM {
+            let variants = p_def.get_Enum().variants;
+            let mut i = 0 as usize;
+            while i < variants.len {
+                if self.type_holds_linear(variants[i].payload, depth + 1 as usize) { return true; }
+                i = i + 1 as usize;
+            }
+        }
+        return false;
+    }
+
+    fn get_tuple_elem_type(self: &mut ZirVerifier, ty_id: u32, idx: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = self.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        let mut base_ty = p_ty;
+        if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT {
+            let inner_ty = p_ty.def.get_Ptr();
+            if inner_ty != 0 as u32 {
+                base_ty = self.get_type_decl(inner_ty);
+            }
+        }
+        
+        let base_tag = base_ty.def.get_tag();
+        if base_tag == ILTYPE_TUPLE {
+            let elements = base_ty.def.get_Tuple();
+            if (idx as usize) < elements.len {
+                return elements[idx as usize];
+            }
+        }
+        return 0 as u32;
+    }
+
+    fn is_vec_type(self: &mut ZirVerifier, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = self.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_USER {
+            let user = p_ty.def.get_User();
+            let name = self.intern_table.lookup(user.name);
+            let is_vec = (name.len == 3 as usize && name[0] == 'V' as u8 && name[1] == 'e' as u8 && name[2] == 'c' as u8) ||
+                         (name.len > 3 as usize && name[0] == 'V' as u8 && name[1] == 'e' as u8 && name[2] == 'c' as u8 && name[3] == '_' as u8);
+            return is_vec && user.type_args.len > 0 as usize;
+        }
+        return false;
+    }
+
+    fn get_slice_element_type(self: &mut ZirVerifier, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = self.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_SLICE {
+            return p_ty.def.get_Slice().element;
+        } else if tag == ILTYPE_ARRAY {
+            return p_ty.def.get_Array().element;
+        } else if self.is_vec_type(ty_id) {
+            return p_ty.def.get_User().type_args[0];
+        } else if tag == ILTYPE_PTR {
+            let inner = self.get_ptr_inner_type(ty_id);
+            if inner != 0 as u32 {
+                let p_inner = self.get_type_decl(inner);
+                let inner_tag = p_inner.def.get_tag();
+                if inner_tag == ILTYPE_SLICE || inner_tag == ILTYPE_ARRAY || self.is_vec_type(inner) {
+                    return self.get_slice_element_type(inner);
+                }
+                return inner;
+            }
+        } else if tag == ILTYPE_PTRMUT {
+            let inner = self.get_ptr_inner_type(ty_id);
+            if inner != 0 as u32 {
+                let p_inner = self.get_type_decl(inner);
+                let inner_tag = p_inner.def.get_tag();
+                if inner_tag == ILTYPE_SLICE || inner_tag == ILTYPE_ARRAY {
+                    return self.get_slice_element_type(inner);
+                }
+                return inner;
+            }
+        }
+        return ty_id;
+    }
+
+    fn has_drop_impl(self: &mut ZirVerifier, type_name_id: u32) -> bool {
+        if type_name_id == 0 as u32 { return false; }
+        let type_str = self.intern_table.lookup(type_name_id);
+        let mut name_buf: &mut ByteVec = ByteVec.new(self.arena);
+        name_buf.push_slice(type_str);
+        name_buf.push(':' as u8);
+        name_buf.push(':' as u8);
+        name_buf.push_slice("drop");
+        let mangled = self.intern_table.intern(name_buf.as_slice());
+
+        let mut name_buf_us: &mut ByteVec = ByteVec.new(self.arena);
+        name_buf_us.push_slice(type_str);
+        name_buf_us.push('_' as u8);
+        name_buf_us.push_slice("drop");
+        let mangled_us = self.intern_table.intern(name_buf_us.as_slice());
+        
+        let mut fi = 0 as usize;
+        while fi < self.zil_module.functions.len {
+            let p_func = &self.zil_module.functions[fi];
+            if p_func.name == mangled || p_func.name == mangled_us {
+                return true;
+            }
+            fi = fi + 1 as usize;
+        }
+        return false;
+    }
+
+    pub fn is_copy_type(self: &mut ZirVerifier, type_id: u32) -> bool {
+        return self.is_copy_type_internal(type_id, 0 as usize);
+    }
+
+    fn is_copy_type_internal(self: &mut ZirVerifier, type_id: u32, depth: usize) -> bool {
+        if type_id == 0 as u32 { return true; }
+        if depth > 10 as usize { return true; }
+
+        if self.is_implicit_aggregate_ptr(type_id) {
+            let inner = self.get_ptr_inner_type(type_id);
+            return self.is_copy_type_internal(inner, depth + 1 as usize);
+        }
+
+        let p_ty = &self.zil_module.types[type_id as usize - 1 as usize];
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_PRIMITIVE {
+            let prim_tag = p_ty.def.get_Primitive().get_tag();
+            return prim_tag != ILPRIM_NEVER;
+        }
+        if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT { return true; }
+        if tag == ILTYPE_SLICE { return true; }
+        if tag == ILTYPE_FN { return true; }
+        
+        if tag == ILTYPE_ARRAY {
+            return self.is_copy_type_internal(p_ty.def.get_Array().element, depth + 1 as usize);
+        }
+        if tag == ILTYPE_TUPLE {
+            let elements = p_ty.def.get_Tuple();
+            let mut i = 0 as usize;
+            while i < elements.len {
+                if !self.is_copy_type_internal(elements[i], depth + 1 as usize) { return false; }
+                i = i + 1 as usize;
+            }
+            return true;
+        }
+        if tag == ILTYPE_USER {
+            let u = p_ty.def.get_User();
+            if self.has_drop_impl(u.name) { return false; }
+            let user_id = u.id;
+            let p_def = &self.zil_module.typedefs[user_id as usize];
+            let d_tag = p_def.get_tag();
+            if d_tag == IL_TYPEDEF_STRUCT {
+                let s = p_def.get_Struct();
+                let mut i = 0 as usize;
+                while i < s.fields.len {
+                    if !self.is_copy_type_internal(s.fields[i].ty, depth + 1 as usize) { return false; }
+                    i = i + 1 as usize;
+                }
+                return true;
+            } else if d_tag == IL_TYPEDEF_ENUM {
+                let e = p_def.get_Enum();
+                let mut i = 0 as usize;
+                while i < e.variants.len {
+                    if e.variants[i].payload != 0 as u32 {
+                        if !self.is_copy_type_internal(e.variants[i].payload, depth + 1 as usize) { return false; }
+                    }
+                    i = i + 1 as usize;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn is_implicit_aggregate_ptr(self: &mut ZirVerifier, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = &self.zil_module.types[ty_id as usize - 1 as usize];
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_PTR {
+            let inner = self.get_ptr_inner_type(ty_id);
+            if inner == 0 as u32 { return false; }
+            let p_inner = &self.zil_module.types[inner as usize - 1 as usize];
+            let inner_tag = p_inner.def.get_tag();
+            if inner_tag == ILTYPE_USER || inner_tag == ILTYPE_TUPLE {
+                return p_inner.name == 0 as u32;
+            }
+        }
+        return false;
+    }
+
+    fn get_place_type(self: &mut ZirVerifier, pl: &Place, locals: [Local]) -> u32 {
+        if pl.base == 0 as u32 { return 0 as u32; }
+        
+        let mut curr_ty = 0 as u32;
+        let mut li = 0 as usize;
+        while li < locals.len {
+            if locals[li].id == pl.base {
+                curr_ty = locals[li].ty;
+                break;
+            }
+            li = li + 1 as usize;
+        }
+        if curr_ty == 0 as u32 { return 0 as u32; }
+
+        let mut pi = 0 as usize;
+        while pi < pl.projections.len {
+            let proj = &pl.projections[pi];
+            let tag = proj.get_tag();
+            
+            if tag == 0 as u32 { // Field
+                let field_name = proj.get_Field();
+                let field_idx = self.get_field_index(curr_ty, field_name);
+                curr_ty = self.get_field_type(curr_ty, field_idx);
+            } else if tag == 1 as u32 { // TupleIndex
+                let idx = proj.get_TupleIndex();
+                curr_ty = self.get_tuple_elem_type(curr_ty, idx);
+            } else if tag == 2 as u32 { // Deref
+                curr_ty = self.get_ptr_inner_type(curr_ty);
+            } else if tag == 3 as u32 { // Index
+                curr_ty = self.get_slice_element_type(curr_ty);
+            }
+            pi = pi + 1 as usize;
+        }
+        return curr_ty;
+    }
+}

@@ -1,0 +1,13 @@
+fn double(x: i32) -> i32 { return x * 2; }
+
+fn apply(f: fn(i32) -> i32, x: i32) -> i32 {
+    return f(x);
+}
+
+fn main() -> i32 {
+    let res = apply(double, 21);
+    if res == 42 {
+        return 0;
+    }
+    return 1;
+}

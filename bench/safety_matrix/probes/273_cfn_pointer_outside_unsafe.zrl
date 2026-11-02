@@ -1,0 +1,9 @@
+// name: A raw pointer cast to a C function pointer outside unsafe
+// expected: compile_reject
+// The dlsym-style lookup is why the pointer route exists, and the cast itself needs `unsafe`: the
+// code address may be null and nothing checks it.
+fn main() -> i32 {
+    let p = 0 as *mut u8;
+    let f = p as extern "C" fn(i32) -> i32;
+    return 0;
+}

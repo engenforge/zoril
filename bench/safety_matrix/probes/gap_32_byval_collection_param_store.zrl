@@ -1,0 +1,18 @@
+// name: View of by-value collection parameter stored out
+// expected: known_gap
+// gap: By-value collection parameter treated as external instead of frame-owned storage; value is intact because collections are not freed at scope end (a leak, not a read of reused memory)
+// observed: exit 42
+import "vec.zrl";
+use vec::Vec;
+
+fn store_view(out: &mut [i32], v: Vec<i32>) {
+    *out = v.as_slice();
+}
+
+fn main() -> i32 {
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    store_view(&mut s, v);
+    return s[0];
+}

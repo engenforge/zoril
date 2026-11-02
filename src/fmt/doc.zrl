@@ -1,0 +1,272 @@
+// The formatter's layout engine: a document of text, breaks, groups and indentation,
+// rendered to fit a line width. A group is laid out flat (its breaks as spaces, or nothing)
+// when it fits on the rest of the line, else broken (every break of its own a newline). A
+// hard break, a line comment, forces every group around it to break.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+use bytevec::ByteVec;
+use mem_raw::ArenaHeader;
+use vec::Vec;
+
+pub const DOC_TEXT: u32 = 0;
+pub const DOC_LINE: u32 = 1;        // a space when flat, a newline when broken
+pub const DOC_SOFT: u32 = 2;        // nothing when flat, a newline when broken
+pub const DOC_HARD: u32 = 3;        // always a newline
+pub const DOC_FRESH: u32 = 4;       // a newline unless at the start of a line
+pub const DOC_BLANK: u32 = 5;       // an empty line (a newline first unless at a line start)
+pub const DOC_GROUP: u32 = 6;       // a group opens; `width` is its flat width
+pub const DOC_END: u32 = 7;         // the group opened last closes
+pub const DOC_INDENT: u32 = 8;      // the indentation deepens one step
+pub const DOC_DEDENT: u32 = 9;      // ... and comes back
+pub const DOC_TRAIL: u32 = 10;      // a comment ending a line: written, but taking no width; at
+// column `width` (its column in the source) if the code leaves room
+
+pub const LINE_WIDTH: usize = 100;
+const INDENT_STEP: usize = 4;
+// The flat width of a group that cannot be flat.
+const NEVER_FLAT: usize = 1000000;
+
+pub struct DocCmd {
+    pub kind: u32,
+    pub text: [u8],
+    pub width: usize, // DOC_GROUP: the group's flat width, measured by measure()
+}
+
+pub struct Doc {
+    pub cmds: Vec<DocCmd>,
+    open: Vec<usize>, // the DOC_GROUPs not yet closed
+}
+
+impl Doc {
+    pub fn new(arena: *mut ArenaHeader) -> Doc {
+        return Doc {
+            cmds: unsafe { Vec::<DocCmd>.new_in_raw(arena) },
+            open: unsafe { Vec::<usize>.new_in_raw(arena) }
+        };
+    }
+
+    fn push(self: &mut Doc, kind: u32, text: [u8]) {
+        self.cmds.push(DocCmd { kind: kind, text: text, width: 0 as usize });
+    }
+
+    pub fn text(self: &mut Doc, s: [u8]) { if s.len > 0 as usize { self.push(DOC_TEXT, s); } }
+    pub fn trail(self: &mut Doc, s: [u8], column: usize) {
+        self.cmds.push(DocCmd { kind: DOC_TRAIL, text: s, width: column });
+    }
+    pub fn line(self: &mut Doc) { self.push(DOC_LINE, ""); }
+    pub fn soft(self: &mut Doc) { self.push(DOC_SOFT, ""); }
+    pub fn hard(self: &mut Doc) { self.push(DOC_HARD, ""); }
+    pub fn fresh(self: &mut Doc) { self.push(DOC_FRESH, ""); }
+    pub fn blank(self: &mut Doc) { self.push(DOC_BLANK, ""); }
+    pub fn indent(self: &mut Doc) { self.push(DOC_INDENT, ""); }
+    pub fn dedent(self: &mut Doc) { self.push(DOC_DEDENT, ""); }
+    pub fn group(self: &mut Doc) { self.push(DOC_GROUP, ""); }
+    pub fn end(self: &mut Doc) { self.push(DOC_END, ""); }
+
+    // Each group's flat width: its text and line breaks, or NEVER_FLAT when it holds a hard
+    // break or a group that does.
+    // A copy of the command at `i`. A borrow of `self.cmds` lives until the end of the scope that
+    // created it - not until its last use - so a read taken inside `measure`'s loop keeps
+    // `self.cmds` borrowed for the whole loop body, and the `set` there needs it mutably. Copying
+    // here puts the borrow in a scope that ends at this return. (`let c: DocCmd = ...as_slice()[i]`
+    // does not copy: reading an aggregate through a borrowed place is itself a borrow.)
+    // A plain copy: the caller may set it back while its own borrow is live.
+    #[borrows()]
+    fn cmd_at(self: &Doc, i: usize) -> DocCmd {
+        let c_ref = self.cmds.as_slice()[i];
+        return DocCmd { kind: c_ref.kind, text: c_ref.text, width: c_ref.width };
+    }
+
+    fn measure(self: &mut Doc) {
+        let n = self.cmds.len();
+        // The two scratch vectors are on the global heap rather than in the document's arena: a
+        // `Vec<usize>` holds a reference (its `anchor` field), so an arena argument ties it to the
+        // place that argument came from - under the stage1 compiler's coarser return tying,
+        // `self.cmds.raw_arena()` was enough to keep `self.cmds` borrowed, and the `set` below is
+        // then a mutable borrow of an already-borrowed place. They are short-lived scratch space
+        // either way.
+        let mut stack = Vec::<usize>.new();
+        let mut widths = Vec::<usize>.new();
+        for i in 0 as usize..n {
+            let c: DocCmd = self.cmd_at(i);
+            let add = match c.kind {
+                DOC_TEXT => text_width(c.text),
+                DOC_LINE => 1 as usize,
+                DOC_HARD | DOC_FRESH | DOC_BLANK => NEVER_FLAT,
+                _ => 0 as usize,
+            };
+            if c.kind == DOC_GROUP {
+                stack.push(i);
+                widths.push(0 as usize);
+                continue;
+            }
+            if c.kind == DOC_END {
+                if let Option.Some(g) = stack.pop() {
+                    let w = match widths.pop() { Option.Some(x) => x, Option.None => 0 as usize };
+                    let mut cmd: DocCmd = self.cmd_at(g);
+                    cmd.width = w;
+                    self.cmds.set(g, cmd);
+                    if widths.len() > 0 as usize {
+                        let top = widths.len() - 1 as usize;
+                        widths.set(top, sat_add(widths.as_slice()[top], w));
+                    }
+                }
+                continue;
+            }
+            if widths.len() > 0 as usize {
+                let top = widths.len() - 1 as usize;
+                widths.set(top, sat_add(widths.as_slice()[top], add));
+            }
+        }
+    }
+
+    // The text width from command I up to the next break of any kind: what must also fit on
+    // the line after a group that ends at I.
+    fn width_to_break(self: &Doc, from: usize) -> usize {
+        let mut w = 0 as usize;
+        let mut i = from;
+        while i < self.cmds.len() {
+            let c = self.cmds.as_slice()[i];
+            if c.kind == DOC_TEXT {
+                w = w + text_width(c.text);
+            } else if c.kind == DOC_LINE
+                || c.kind == DOC_SOFT
+                || c.kind == DOC_HARD
+                || c.kind == DOC_FRESH
+                || c.kind == DOC_BLANK {
+                return w;
+            }
+            i = i + 1 as usize;
+        }
+        return w;
+    }
+
+    // The document laid out, every line without trailing spaces, ending in one newline.
+    #[borrows()]
+    #[stores(arena -> arena)]
+    pub fn render(self: &mut Doc, arena: *mut ArenaHeader) -> [u8] {
+        self.measure();
+        let mut out = unsafe { ByteVec.new_raw(arena) };
+        let mut col = 0 as usize;
+        let mut at_start = true;       // nothing written on this line yet
+        let mut indent = 0 as usize;
+        // Per open group: whether it is flat. A group inside a flat group is flat.
+        let mut modes = unsafe { Vec::<bool>.new_in_raw(arena) };
+        // The END that closes each open group, to measure what follows it.
+        let ends = self.group_ends(arena);
+        let mut flat_depth = 0 as usize; // how many open groups are flat
+        for i in 0 as usize..self.cmds.len() {
+            let c = self.cmds.as_slice()[i];
+            match c.kind {
+                DOC_TEXT => {
+                    if at_start {
+                        for _k in 0 as usize..indent { out.push(' ' as u8); }
+                        col = indent;
+                        at_start = false;
+                    }
+                    out.push_slice(c.text);
+                    col = col + text_width(c.text);
+                },
+                DOC_LINE | DOC_SOFT => {
+                    if flat_depth > 0 as usize {
+                        if c.kind == DOC_LINE && !at_start {
+                            out.push(' ' as u8);
+                            col = col + 1 as usize;
+                        }
+                    } else if !at_start {
+                        newline(out);
+                        at_start = true;
+                    }
+                },
+                DOC_HARD | DOC_FRESH => {
+                    if !at_start { newline(out); at_start = true; }
+                },
+                DOC_BLANK => {
+                    if !at_start { newline(out); at_start = true; }
+                    if out.len() > 0 as usize && !ends_with_blank(out) { newline(out); }
+                },
+                DOC_GROUP => {
+                    let start_col = if at_start { indent } else { col };
+                    let after = self.width_to_break(ends.as_slice()[i] + 1 as usize);
+                    let flat = flat_depth > 0 as usize
+                        || sat_add(sat_add(start_col, c.width), after) <= LINE_WIDTH;
+                    modes.push(flat);
+                    if flat { flat_depth = flat_depth + 1 as usize; }
+                },
+                DOC_END => {
+                    let was_flat = match modes.pop() { Option.Some(f) => f, Option.None => false };
+                    if was_flat { flat_depth = flat_depth - 1 as usize; }
+                },
+                DOC_TRAIL => {
+                    // ` // comment` after the code: at its source column if the code ends
+                    // before it (so comments aligned in a column stay so), else one space on.
+                    let pad = if col + 1 as usize < c.width { c.width - col } else { 1 as usize };
+                    for _k in 0 as usize..pad { out.push(' ' as u8); }
+                    out.push_slice(c.text);
+                    col = col + pad + text_width(c.text);
+                },
+                DOC_INDENT => { indent = indent + INDENT_STEP; },
+                DOC_DEDENT => { if indent >= INDENT_STEP { indent = indent - INDENT_STEP; } },
+                _ => {},
+            }
+        }
+        if !at_start { newline(out); }
+        return out.as_slice();
+    }
+
+    // For each DOC_GROUP command, the index of its DOC_END (others: 0).
+    fn group_ends(self: &Doc, arena: *mut ArenaHeader) -> Vec<usize> {
+        let mut ends = unsafe { Vec::<usize>.new_in_raw(arena) };
+        ends.resize(self.cmds.len());
+        let mut stack = unsafe { Vec::<usize>.new_in_raw(arena) };
+        for i in 0 as usize..self.cmds.len() {
+            let k = self.cmds.as_slice()[i].kind;
+            if k == DOC_GROUP {
+                stack.push(i);
+            } else if k == DOC_END {
+                if let Option.Some(g) = stack.pop() { ends.set(g, i); }
+            }
+        }
+        // An unclosed group runs to the end.
+        while let Option.Some(g) = stack.pop() {
+            ends.set(g, self.cmds.len() - 1 as usize);
+        }
+        return ends;
+    }
+}
+
+// A newline, dropping the spaces that ended the line.
+fn newline(out: &mut ByteVec) {
+    while out.len() > 0 as usize && out.as_slice()[out.len() - 1 as usize] == ' ' as u8 {
+        unsafe { out.set_len(out.len() - 1 as usize) };
+    }
+    out.push('\n' as u8);
+}
+
+fn ends_with_blank(out: &ByteVec) -> bool {
+    let n = out.len();
+    return n >= 2 as usize
+        && out.as_slice()[n - 1 as usize] == '\n' as u8
+        && out.as_slice()[n - 2 as usize] == '\n' as u8;
+}
+
+// Columns TEXT takes: its bytes, but a multi-line text (a block comment, a string) never fits.
+fn text_width(text: [u8]) -> usize {
+    let mut n = 0 as usize;
+    for b in text {
+        if *b == '\n' as u8 { return NEVER_FLAT; }
+        // UTF-8 continuation bytes take no column.
+        if (*b & 0xc0 as u8) != 0x80 as u8 {
+            n = n + 1 as usize;
+        }
+    }
+    return n;
+}
+
+fn sat_add(a: usize, b: usize) -> usize {
+    let s = a + b;
+    return if s > NEVER_FLAT { NEVER_FLAT } else { s };
+}

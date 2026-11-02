@@ -1,0 +1,14 @@
+// expected exit 0
+struct Handle {
+    ptr: *mut u8,
+}
+
+impl Copy for Handle {}
+
+fn main() -> i32 {
+    let h1 = Handle { ptr: 0 as *mut u8 };
+    let h2 = h1;
+    let h3 = h1;
+    if h2.ptr != h3.ptr { return 1; }
+    return 0;
+}

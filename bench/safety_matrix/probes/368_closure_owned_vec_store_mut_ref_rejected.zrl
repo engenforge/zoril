@@ -1,0 +1,19 @@
+// name: A view of a closure's owned Vec stored through a captured &mut is rejected
+// expected: compile_reject
+// A view of a closure's owned Vec cannot be stored through a captured &mut reference.
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let e: [i32] = @slice(0 as *i32, 0);
+    let mut s = e;
+    let out = &mut s;
+    let mut v = Vec::<i32>.new();
+    v.push(5);
+    let mut f = || {
+        *out = v.as_slice();
+        v.free();
+    };
+    f();
+    return s[0];
+}

@@ -1,0 +1,37 @@
+// A `match` on a computed place of `Copy` aggregate type (here a struct's enum field) is lowered
+// into a temporary that records the place's address - it is an alias, not a copy. A `--checked`
+// build must not poison that address where the temporary's borrow ends, because it is the field's
+// own live storage, not storage the temporary owns.
+//
+// The bug this pins: `is_poisonable_temp` assumed every aggregate temporary owns its slot, so
+// the scrutinee `let _t = h.k` was poisoned on `EndBorrow` and the second `describe` read a
+// type tag that had been overwritten with 0xA5. `tests/unit/test_zil_roundtrip.zrl` hit the same
+// shape inside `ZilPrinter::emit_type` while compiling itself under `--checked`.
+// flags: --checked
+// expected exit 0
+struct Holder {
+    kind: Kind,
+    count: u64,
+}
+
+enum Kind {
+    Number(u64),
+    Empty,
+}
+
+fn describe(h: &Holder) -> u64 {
+    let r = match h.kind {
+        Kind.Number(v) => v,
+        Kind.Empty => 0,
+    };
+    r
+}
+
+fn main() -> i32 {
+    let h = Holder { kind: Kind.Number(7), count: 1 };
+    let first = describe(&h);
+    let second = describe(&h);
+    if first != 7 { return 1; }
+    if second != 7 { return 2; }
+    return 0;
+}

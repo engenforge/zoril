@@ -1,0 +1,17 @@
+// expected compile fail
+// Dropping a closure's owned capture inside the closure is rejected: the environment
+// owns the value across calls, so dropping it in one call would leave it dangling for the next.
+// EXPECT: tests/error_reporting/err_closure_capture_drop_box.zrl:10:13: error: cannot move out of a closure capture
+
+fn main() -> i32 {
+    let b = box 5;
+    let f = |k: i32| -> i32 {
+        if k == 0 {
+            @drop(b);
+            return 0;
+        }
+        return *b;
+    };
+    f(0);
+    return f(1);
+}

@@ -1,0 +1,68 @@
+// expected exit code: 99
+// 21: Custom allocators: the global heap, an arena handle, and Box<T>.
+// Demonstrates: box, Box<T>, arena_create / Vec::new_in(&arena), arena reset.
+
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct Node {
+    value: i32,
+    tag: i32,
+}
+
+fn default_heap_alloc() -> i32 {
+    // box uses the global heap by default
+    let n = box Node { value: 42, tag: 1 };
+    let result = n.value + n.tag;
+    // This release does not free a Box at scope exit: the allocation leaks.
+    return result;
+}
+
+fn arena_alloc_pattern() -> i32 {
+    // An arena is an owning handle, and the constructors that take `&Arena` allocate from it
+    // and tie the value to the arena: resetting the arena while the value is
+    // live is a compile error. (`box(allocator) expr` is not implemented - see
+    // doc/spec/surface_syntax.md §7.4.)
+    let mut arena = Arena.new(4096).unwrap();
+    {
+        let mut scratch = Vec::<i32>.new_in(&arena);
+        scratch.push(50);
+    }
+    arena.reset();
+
+    let m = arena.mark();
+    {
+        let mut temp = Vec::<i32>.new_in(&arena);
+        temp.push(999);
+    }
+    arena.reset_to(m);
+
+    let mut v = Vec::<i32>.new_in(&arena);
+    v.push(100);
+    v.push(200);
+
+    let sum = *v.get(0 as u64).unwrap() + *v.get(1 as u64).unwrap();
+
+    // The handle is dropped here, freeing the region in one call.
+    return sum;
+}
+
+fn nested_boxes() -> i32 {
+    // Box containing a struct with fields
+    let outer = box Node { value: 10, tag: 2 };
+
+    // Access through box dereference
+    let v = outer.value;
+    let t = outer.tag;
+
+    return v + t;
+}
+
+fn main() -> i32 {
+    let a = default_heap_alloc();
+    let b = arena_alloc_pattern();
+    let c = nested_boxes();
+    return a + b + c;
+}

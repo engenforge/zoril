@@ -1,0 +1,20 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_borrow_in_tuple_and_array.zrl:8:5: error: cannot assign to 'x' because it is borrowed
+// EXPECT: tests/error_reporting/err_borrow_in_tuple_and_array.zrl:12:5: error: cannot assign to 'z' because it is borrowed
+// EXPECT: tests/error_reporting/err_borrow_in_tuple_and_array.zrl:17:5: error: cannot assign to 'w' because it is borrowed
+// A tuple or array literal holding a borrow keeps it alive, and so does an array it is copied to.
+fn main() -> i32 {
+    let mut x = 1; let t = (&mut x, 1);
+    x = 5;
+    *t.0 = 7;
+    let mut z = 1;
+    let a = [&mut z];
+    z = 5;
+    *a[0] = 7;
+    let mut w = 1;
+    let c = [&mut w];
+    let d = c;
+    w = 5;
+    *d[0] = 7;
+    return x + z + w;
+}

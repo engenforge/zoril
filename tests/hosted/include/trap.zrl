@@ -1,0 +1,12 @@
+// A bounds trap in hosted mode is libc's abort: status 134, and C stdio is not flushed.
+extern fn printf(fmt: *u8, ...) -> i32;
+
+fn at(v: &[i32], i: usize) -> i32 {
+    return v[i];
+}
+
+fn main() -> i32 {
+    unsafe { printf("buffered, never flushed".ptr); }
+    let a = [1, 2, 3];
+    return at(&a, 9);
+}

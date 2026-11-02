@@ -1,0 +1,23 @@
+// expected exit 0
+// Non-lexical borrows: a borrow lasts until the last use of what holds it, not until the
+// end of its scope (as in Rust since 2018).
+import "vec.zrl";
+import "mem_raw.zrl";
+use mem_raw::arena_init;
+use vec::Vec;
+fn main() -> i32 {
+    let mut x: i32 = 1;
+    let r = &x;
+    let y = *r;          // last use of r
+    x = 5;               // fine: r is dead
+    if y != 1 || x != 5 { return 1; }
+
+    let arena = unsafe { arena_init(4096) };
+    let mut v = unsafe { Vec::<i32>.new_in_raw(arena) };
+    v.push(7);
+    let first = v.get(0);
+    let seven = match first { Option.Some(p) => *p, Option.None => 0 };   // last use of first
+    v.push(8);           // fine: first is dead
+    if seven != 7 || v.len() != 2 { return 2; }
+    return 0;
+}

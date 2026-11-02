@@ -1,0 +1,121 @@
+// Comprehensive test for enum monomorphization and binding.
+
+pub enum Option<T> {
+    None,
+    Some(T),
+}
+
+pub struct Large {
+    pub a: u64,
+    pub b: u64,
+    pub c: u64,
+    pub d: u64,
+}
+
+pub struct Symbol {
+    pub name: u32,
+}
+
+// 1. T is a pointer (The recently fixed bug)
+fn test_pointer(opt: Option<*mut Symbol>) -> u32 {
+    return match opt {
+        Option.Some(s) => unsafe { (*s).name },
+        Option.None => 0,
+    };
+}
+
+// 2. T is a large struct (should be promoted to lvalue if matched by value)
+fn test_large(opt: Option<Large>) -> u64 {
+    return match opt {
+        Option.Some(l) => l.a + l.b + l.c + l.d,
+        Option.None => 0,
+    };
+}
+
+// 3. T is a small primitive (should be rvalue)
+fn test_primitive(opt: Option<u32>) -> u32 {
+    return match opt {
+        Option.Some(v) => v,
+        Option.None => 0,
+    };
+}
+
+// 4. Borrowing a pointer payload
+fn test_borrow_pointer(opt: &Option<*mut Symbol>) -> u32 {
+    return match *opt {
+        Option.Some(s) => unsafe { (*s).name }, // s is &*mut Symbol, so *s is *mut Symbol
+        Option.None => 0,
+    };
+}
+
+// 5. Borrowing a large struct payload
+fn test_borrow_large(opt: &Option<Large>) -> u64 {
+    return match *opt {
+        Option.Some(l) => l.a + l.b + l.c + l.d, // l is &Large, . auto-derefs
+        Option.None => 0,
+    };
+}
+
+// 6. Multi-pattern match with pointer
+fn test_multi_pattern(opt: Option<*mut Symbol>) -> u32 {
+    return match opt {
+        Option.Some(s) | Option.Some(s) => unsafe { (*s).name },
+        Option.None => 0,
+    };
+}
+
+// 7. Nested generic enum
+pub enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+fn test_nested(res: Result<Option<*mut Symbol>, u32>) -> u32 {
+    return match res {
+        Result.Ok(opt) => {
+            match opt {
+                Option.Some(s) => unsafe { (*s).name },
+                Option.None => 1,
+            }
+        },
+        Result.Err(e) => e,
+    };
+}
+
+// 8. T is a tuple
+fn test_tuple(opt: Option<(u64, u64)>) -> u64 {
+    return match opt {
+        Option.Some(t) => t.0 + t.1,
+        Option.None => 0,
+    };
+}
+
+fn main() -> i32 {
+    let mut sym = Symbol { name: 42 };
+    
+    // Test 1
+    if test_pointer(Option.Some(&mut sym)) != 42 { return 1; }
+    
+    // Test 2
+    let l = Large { a: 1, b: 2, c: 3, d: 4 };
+    if test_large(Option.Some(l)) != 10 { return 2; }
+    
+    // Test 3
+    if test_primitive(Option.Some(100)) != 100 { return 3; }
+    
+    // Test 4
+    let opt_ptr = Option.Some(&mut sym);
+    if test_borrow_pointer(&opt_ptr) != 42 { return 4; }
+    
+    // Test 5
+    let opt_large = Option.Some(l);
+    if test_borrow_large(&opt_large) != 10 { return 5; }
+    
+    // Test 6
+    if test_multi_pattern(Option.Some(&mut sym)) != 42 { return 6; }
+    
+    // Test 7 (partial: 7b/7c require expected-type propagation not yet implemented)
+    if test_nested(Result.Ok(Option.Some(&mut sym))) != 42 { return 7; }
+
+    return 0;
+}

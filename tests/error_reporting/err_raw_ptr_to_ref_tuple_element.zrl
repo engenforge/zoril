@@ -1,0 +1,16 @@
+// expected compile fail
+// A raw pointer stored into a *reference-typed* tuple element. The check that catches this used to be
+// guarded by `place_rawness_known`, which admitted only a local or a struct field, so an element on
+// the left of an assignment was skipped - the case `err_raw_ptr_to_ref_struct_field.zrl` (a field) cannot cover. The
+// type mismatch alone already refused the program; what the unguarded check adds is the diagnostic
+// that names the rule and the `&*p` form (see safety_model.md, the conversion list).
+// EXPECT: tests/error_reporting/err_raw_ptr_to_ref_tuple_element.zrl:14:5: error: converting a raw pointer to a reference requires an `unsafe` block and an explicit `&*p`
+// EXPECT: tests/error_reporting/err_raw_ptr_to_ref_tuple_element.zrl:14:5: error: type mismatch: expected `&mut u32`, found `*mut u32`
+
+fn main() -> i32 {
+    let mut x: u32 = 1;
+    let p: *mut u32 = &mut x as *mut u32;
+    let mut t: (&mut u32,) = (&mut x,);
+    t.0 = p;
+    return 0;
+}

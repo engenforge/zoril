@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: error: @syscall requires unsafe block
+// Even a harmless-looking call: the kernel cannot tell an address from a number.
+fn main() -> i32 {
+    let _ = @syscall(39);
+    return 0;
+}

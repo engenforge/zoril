@@ -1,0 +1,11 @@
+// name: Dangling stack ptr — behind a cast
+// expected: compile_reject
+struct S { a: i32 }
+fn dangle() -> *mut S {
+    let mut s = S { a: 1 };
+    return &mut s as *mut S;
+}
+fn main() -> i32 {
+    let p = dangle();
+    return (*p).a;
+}

@@ -1,0 +1,5 @@
+// name: Shift by a constant count >= bit width
+// expected: compile_reject
+// A constant count is range-checked at compile time, so in-range constant shifts carry no
+// run-time check at all.
+fn main() -> i32 { let a: u32 = 1 as u32; let b = a << 32; return b as i32; }

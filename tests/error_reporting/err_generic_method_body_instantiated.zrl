@@ -1,0 +1,16 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_generic_method_body_instantiated.zrl:10:47: error: no field 'nope' on 'i32'
+// The other half of tests/language/generics/uncalled_generic_method_not_checked.zrl: the same
+// generic method, with the one instantiation that makes its body checkable. A generic method's body
+// is checked when it is instantiated (doc/spec/surface_syntax.md §11.1.1), which is why an uncalled
+// generic method can carry an error that nothing sees until someone calls it.
+struct S { a: i32 }
+
+impl S {
+    fn bad<T>(self: &S, x: T) -> i32 { return x.nope; }
+}
+
+fn main() -> i32 {
+    let s = S { a: 3 };
+    return s.bad(7);
+}

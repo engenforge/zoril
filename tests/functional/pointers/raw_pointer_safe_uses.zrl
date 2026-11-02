@@ -1,0 +1,40 @@
+// expected exit code: 0
+// What stays legal in safe code now that raw-pointer field access and raw-to-reference
+// conversions need `unsafe`: null literals, **any** integer cast to a raw pointer (creating one
+// is safe; using it is not), pointers taken from references, raw pointers through type
+// parameters and in slices, and the unsafe forms.
+import "vec.zrl";
+use vec::Vec;
+
+struct Point { x: i32, y: i32 }
+struct W<T> { v: T }
+
+fn id<T>(t: T) -> T { return t; }
+fn wrap<T>(t: T) -> W<T> { let x: T = t; return W { v: x }; }
+fn read_x(p: *Point) -> i32 { return unsafe { p.x }; }
+fn as_ref(p: *Point) -> &Point { return unsafe { &*p }; }
+
+fn main() -> i32 {
+    let a = Point { x: 3, y: 4 };
+    let null = 0 as *Point;
+    if null as usize != 0 { return 1; }
+    let p = &a as *Point;
+
+    // A type parameter instantiated with a raw pointer is not a reference.
+    let q: *Point = id(p);
+    let w = W { v: p };
+    let w2 = wrap(p);
+    let mut v = Vec::<*Point>.new();
+    v.push(p);
+    if q as usize != p as usize || w.v as usize != w2.v as usize { return 2; }
+
+    // A slice element of raw-pointer type takes a raw pointer.
+    let mut slots: [*Point; 2] = [null, null];
+    slots[1] = p;
+
+    if read_x(slots[1]) != 3 { return 3; }
+    if as_ref(p).y != 4 { return 4; }
+    let r: &Point = unsafe { &*p };
+    if r.x != 3 { return 5; }
+    return 0;
+}

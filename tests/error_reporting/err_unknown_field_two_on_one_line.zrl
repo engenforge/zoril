@@ -1,0 +1,14 @@
+// expected compile fail
+// Two different receivers, two different mistakes, one line. A dedupe keyed on the line and the field
+// name reported one of them and swallowed the other; the report is made once per access now, where the
+// projection is built, and neither can hide the other.
+// EXPECT: tests/error_reporting/err_unknown_field_two_on_one_line.zrl:13:12: error: no field 'nope' on 'S'
+// EXPECT: tests/error_reporting/err_unknown_field_two_on_one_line.zrl:13:21: error: no field 'nope' on 'T'
+
+struct S { a: i32 }
+struct T { b: i32 }
+fn main() -> i32 {
+    let s = S { a: 1 };
+    let t = T { b: 2 };
+    return s.nope + t.nope;
+}

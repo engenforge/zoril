@@ -1,0 +1,19 @@
+// flags: -W redundant-cast
+// EXPECT: tests/error_reporting/warn_redundant_cast.zrl:11:18: warning: redundant cast: the literal is a `u32` here already (redundant-cast)
+// EXPECT: tests/error_reporting/warn_redundant_cast.zrl:13:17: warning: redundant cast: the literal is a `usize` here already (redundant-cast)
+// EXPECT: tests/error_reporting/warn_redundant_cast.zrl:14:15: warning: redundant cast: the literal is a `u64` here already (redundant-cast)
+// The redundant-cast lint (off by default): a literal cast to the type its context already
+// expects. Not for a cast nothing constrains (line 15), one that changes the value (line 16),
+// or one whose type the context does not fix (a generic argument, line 17).
+fn f(x: u64) -> u64 { return x; }
+fn id<T>(x: T) -> T { return x; }
+fn main() -> i32 {
+    let a: u32 = 0 as u32;
+    let i: usize = 3;
+    let j = i + 1 as usize;
+    let k = f(7 as u64);
+    let g = 5 as u64;
+    let h: u8 = 300 as u8;
+    let m = id(9 as u16);
+    return (a as i32) + (j as i32) + (k as i32) + (g as i32) + (h as i32) + (m as i32);
+}

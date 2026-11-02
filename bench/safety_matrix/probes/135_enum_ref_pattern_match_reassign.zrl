@@ -1,0 +1,16 @@
+// name: Enum mutated in match arm while a pattern binding through a reference is live
+// expected: compile_reject
+// A pattern binding through a reference (`match &e`) inherits the borrow of `e`,
+// so mutating `e` in a match arm while `x` is live is rejected.
+enum E { A(Box<i32>), B }
+fn main() -> i32 {
+    let mut e = E.A(box 5);
+    match &e {
+        E.A(x) => {
+            e = E.B;
+            return **x;
+        },
+        E.B => { return 1; },
+    }
+    return 0;
+}

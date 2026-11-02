@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: error: this function stores the parameter 'b' where #[stores] does not declare it; add `#[stores(b -> h)]`
+
+struct H { p: &i32, q: &i32 }
+
+#[stores(a -> h)]
+fn put2(h: &mut H, a: &i32, b: &i32) {
+    h.p = a;
+    h.q = b;
+}
+
+fn main() -> i32 { return 0; }

@@ -1,0 +1,26 @@
+enum List<T> {
+    Nil,
+    Cons((T, Box<List<T>>)),
+}
+
+fn length(list: &List<i32>) -> i32 {
+    return match list {
+        Nil => 0,
+        Cons(pair) => 1 + length(&*pair.1),
+    };
+}
+
+fn main() -> i32 {
+    // Was `return 0;` -- the test could not fail. Asserts the recursion actually
+    // walks the list rather than merely compiling. See the note in
+    // repro_linked_list_head.zrl.
+    //
+    // Two independent lists rather than reusing one: `length(&a)` followed by
+    // `box a` would trip "cannot move borrowed value", which is unrelated to
+    // what this test is for.
+    let a = List.Cons((10, box List.Nil));
+    if length(&a) != 1 { return 1; }
+    let b = List.Cons((20, box List.Cons((30, box List.Nil))));
+    if length(&b) != 2 { return 2; }
+    return 0;
+}

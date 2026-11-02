@@ -1,0 +1,868 @@
+import "ast.zrl";
+import "diag.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "parser.zrl";
+import "resolve.zrl";
+import "mono.zrl";
+import "builder.zrl";
+import "driver.zrl";
+import "verify.zrl";
+import "summary_pass.zrl";
+import "zil_print.zrl";
+import "interface_print.zrl";
+import "intern.zrl";
+import "io.zrl";
+import "os/linux.zrl" as os_linux;
+import "mem_raw.zrl";
+import "bytevec.zrl";
+import "core.zrl";
+import "vec.zrl";
+import "il_cfg.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "module_path.zrl";
+import "driver/module.zrl";
+import "driver/state.zrl";
+import "parser/base.zrl";
+import "progress.zrl";
+import "sys.zrl";
+import "fmt/fmt.zrl";
+import "version.zrl";
+import "file.zrl";
+import "fsys.zrl";
+use ast::AST;
+use file::read_file_raw;
+use base::{LoadState, Parser};
+use bytevec::ByteVec;
+use diag::{lint_named, set_lint};
+use fmt::fmt_main;
+use fsys::exe_dir_raw;
+use il_cfg::{ILModule, canonical_module_stem, extract_module_name};
+use interface_print::InterfacePrinter;
+use intern::InternTable;
+use io::{close, eprint, print, read, stdout, write_all};
+use os_linux::open;
+use lexer::Lexer;
+use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
+use module::driver_lower_fn_instance;
+use module_path::{ModuleResolution, basename, derive_module_identity, get_cwd, is_designated_stdlib_file, join_two_paths, make_absolute, module_resolution_new, normalize_path, path_exists, sorted_unique_ids, split_include_arg};
+use mono::{Monomorphizer, mono_instantiate_type, mono_project_assoc_type};
+use progress::{VERBOSE, progress};
+use resolve::Resolver;
+use state::Driver;
+use summary_pass::{FuncSummary, InterprocSummaryPass};
+use sys::arg_to_slice;
+use vec::Vec;
+use version::version;
+use verify::Verifier;
+use zil_print::ZilPrinter;
+
+// `zoril: error: MSG NAME`, for an error with no source location.
+fn cli_error(msg: [u8], name: [u8]) {
+    eprint("zoril: error: ");
+    eprint(msg);
+    eprint(name);
+    eprint("\n");
+}
+
+fn cli_error_reason(msg: [u8], name: [u8], reason: [u8]) {
+    eprint("zoril: error: ");
+    eprint(msg);
+    eprint(name);
+    eprint(": ");
+    eprint(reason);
+    eprint("\n");
+}
+
+fn write_interface_file(
+    path: [u8],
+    ast: &AST,
+    table: &mut InternTable,
+    arena: *mut ArenaHeader,
+    m: &mut ILModule,
+    summaries: [FuncSummary],
+    input_mod_id: [u8],
+    input_is_stdlib: bool
+) -> bool {
+    let out_res = open(path, 577, 420);
+    let out_fd = match out_res {
+        Result.Ok(fd) => fd,
+        Result.Err(err) => {
+            cli_error_reason("cannot write the output file ", path, err.message());
+            return false;
+        }
+    };
+    defer { let _ = close(out_fd); };
+    let target_sf = table.intern(input_mod_id);
+    let mut ip = InterfacePrinter.new(
+        ast,
+        table,
+        out_fd,
+        arena,
+        target_sf,
+        m as *mut ILModule,
+        summaries,
+        input_is_stdlib
+    );
+    ip.emit_interface();
+    return true;
+}
+
+// The command line.
+struct Options {
+    input_path: [u8],
+    output_path: [u8],
+    compile_only: bool,
+    emit_interface: bool,
+    emit_deps: bool,
+    emit_zir_stats: bool,
+    write_interface_path: [u8],
+    iface_dir: [u8],
+    require_interface: bool,
+    root: [u8],
+    include_ids: Vec<u32>,
+    bad_args: bool,
+    // Internal, so not in the usage text: skip the ZIL
+    // verifier; run the interprocedural summary pass and fail on its errors (and report its
+    // statistics).
+    no_verify: bool,
+    interproc_summary: bool,
+    interproc_stats: bool,
+    show_help: bool,
+    // Instrument the build for memory-safety testing (a test instrument, not a shipped mode):
+    // the stdlib's CHECKED_BUILD constant reads as true, so released arena space stays poisoned
+    // and is never reused, and the lowering poisons a dead local's slot and a dropped value.
+    checked: bool,
+    // `--hosted`: the program is linked into a libc process (see the HOSTED branch of rt/runtime.s). The only
+    // difference in the output is the entry's name, `zoril_main` instead of `main`: the hosted
+    // runtime defines `main` itself and calls it.
+    hosted: bool,
+}
+
+// Hosted mode: the program's entry `main` becomes `zoril_main`, because the hosted runtime defines the
+// `main` crt1 calls and tail-calls this one.
+fn name_entry_for_hosted_link(m: &mut ILModule, table: &mut InternTable) {
+    let main_id = table.intern("main");
+    let entry_id = table.intern("zoril_main");
+    let mut i = 0 as usize;
+    while i < m.functions.len() {
+        let p_f = &mut m.functions[i];
+        if p_f.name == main_id && p_f.blocks_len > 0 as usize { p_f.name = entry_id; }
+        i = i + 1 as usize;
+    }
+}
+
+fn print_usage() {
+    print("Usage: zoril [options] <input.zrl>\n");
+    print(
+        "       zoril fmt [--check] <file.zrl>...   Format files in place (--check: list unformatted ones)\n"
+    );
+    print("  -h, --help               Display this help text and exit\n");
+    print("  -V, --version            Display version and exit\n");
+    print("  -o <file>                Output file (default: out.zil)\n");
+    print(
+        "  -I <dir> | -I name=dir   Add an include root (named roots anchor module identities)\n"
+    );
+    print("  --root <dir>             Set the project root directory\n");
+    print("  --emit-zil               Emit textual ZIL (the default)\n");
+    print("  -c, --compile-only       Compile only the target module (separate compilation)\n");
+    print("  --emit-interface         Write the module's interface (.zri) instead of ZIL\n");
+    print("  --write-interface <file> Also write the module's interface to <file>\n");
+    print(
+        "  --iface-dir <dir>        Read imported modules' interfaces from <dir>
+  --require-interface      An import with no interface under <dir> is an error, not a fall back\n"
+    );
+    print("  --emit-deps              Print the import graph reachable from the input\n");
+    print(
+        "  --emit-zir-stats         Print the ZIR constructs and CFG shape the input lowers to (no ZIL)\n"
+    );
+    print("  -v, --verbose            Report each phase, file and function as it is compiled\n");
+    print("  -W <lint> | -A <lint>    Turn a lint on (warn) or off (allow): wildcard-arm,\n");
+    print("                           redundant-cast (off by default)\n");
+    print(
+        "  --checked                Developer option: instrument the emitted program for memory-safety\n"
+    );
+    print(
+        "                           testing (poison dead storage, trap on a second drop or release).\n"
+    );
+    print("                           Not a safety mode; release builds are unaffected\n");
+    print(
+        "  --hosted                 Link the program into a libc process: name its entry zoril_main\n"
+    );
+    print(
+        "                           (link with rt/runtime_hosted.o through cc; see doc/design)\n"
+    );
+}
+
+fn min_u64(a: u64, b: u64) -> u64 {
+    if a < b { a } else { b }
+}
+
+fn levenshtein(a: [u8], b: [u8]) -> u64 {
+    if a.len == 0 as usize { return b.len as u64; }
+    if b.len == 0 as usize { return a.len as u64; }
+    if a.len > 31 as usize || b.len > 31 as usize { return 99 as u64; }
+
+    let mut prev: [u64; 32] = [0 as u64; 32];
+    let mut curr: [u64; 32] = [0 as u64; 32];
+
+    let mut j = 0 as usize;
+    while j <= b.len {
+        prev[j] = j as u64;
+        j = j + 1 as usize;
+    }
+
+    let mut i = 0 as usize;
+    while i < a.len {
+        curr[0] = (i + 1 as usize) as u64;
+        let mut k = 0 as usize;
+        while k < b.len {
+            let cost = if a[i] == b[k] { 0 as u64 } else { 1 as u64 };
+            let del = prev[k + 1 as usize] + 1 as u64;
+            let ins = curr[k] + 1 as u64;
+            let sub = prev[k] + cost;
+            curr[k + 1 as usize] = min_u64(del, min_u64(ins, sub));
+            k = k + 1 as usize;
+        }
+        let mut copy_idx = 0 as usize;
+        while copy_idx <= b.len {
+            prev[copy_idx] = curr[copy_idx];
+            copy_idx = copy_idx + 1 as usize;
+        }
+        i = i + 1 as usize;
+    }
+    return prev[b.len];
+}
+
+fn suggest_option(arg: [u8]) -> [u8] {
+    if arg == "--" { return ""; }
+    let opts: [[u8]; 24] = [
+        "-h",
+        "--help",
+        "-V",
+        "--version",
+        "-o",
+        "-I",
+        "--root",
+        "--emit-zil",
+        "-c",
+        "--compile-only",
+        "--emit-interface",
+        "--write-interface",
+        "--iface-dir",
+        "--require-interface",
+        "--emit-deps",
+        "--emit-zir-stats",
+        "-v",
+        "--verbose",
+        "-W",
+        "-A",
+        "--checked",
+        "--hosted",
+        "--no-verify",
+        "--interproc-summary"
+    ];
+    let mut best_dist = 99 as u64;
+    let mut best_opt: [u8] = "";
+    let mut i = 0 as usize;
+    while i < 24 as usize {
+        let opt = opts[i];
+        let d = levenshtein(arg, opt);
+        if d < best_dist {
+            best_dist = d;
+            best_opt = opt;
+        }
+        i = i + 1 as usize;
+    }
+    if best_dist <= 2 as u64 || (best_dist <= 3 as u64 && arg.len >= 8 as usize) {
+        return best_opt;
+    }
+    return "";
+}
+
+fn report_unknown_option(arg: [u8]) {
+    let sugg = suggest_option(arg);
+    if sugg.len > 0 as usize {
+        eprint("zoril: error: unrecognized option `");
+        eprint(arg);
+        eprint("`; did you mean `");
+        eprint(sugg);
+        eprint("`?\n");
+    } else {
+        eprint("zoril: error: unrecognized option `");
+        eprint(arg);
+        eprint("`\n");
+    }
+}
+
+// The result's slices and its include list are arena data read through `arena`, not `table`/`argv`.
+#[borrows(arena)]
+fn parse_args(argc: i32, argv: **u8, table: &mut InternTable, arena: *mut ArenaHeader) -> Options {
+    let mut o = Options {
+        input_path: "", output_path: "",
+        compile_only: false, emit_interface: false, emit_deps: false,
+        emit_zir_stats: false,
+        write_interface_path: "", iface_dir: "", require_interface: false, root: "",
+        include_ids: unsafe { Vec::<u32>.new_in_raw(arena) },
+        bad_args: false,
+        no_verify: false, interproc_summary: false, interproc_stats: false,
+        show_help: false, checked: false, hosted: false,
+    };
+    let mut end_of_options = false;
+    let mut i = 1 as i32;
+    while i < argc {
+        let arg = unsafe { arg_to_slice(argv, i) };
+        if !end_of_options && arg == "--" {
+            end_of_options = true;
+        } else if !end_of_options && (arg == "-h" || arg == "--help") {
+            o.show_help = true;
+        } else if !end_of_options && (arg == "-W" || arg == "-A") {
+            i = i + 1 as i32;
+            if i < argc {
+                let lint_name = unsafe { arg_to_slice(argv, i) };
+                match lint_named(lint_name) {
+                    Option.Some(lint) => { set_lint(lint, arg == "-W"); },
+                    Option.None => { cli_error("unknown lint ", lint_name); o.bad_args = true; },
+                }
+            } else {
+                cli_error("option requires an argument: ", arg);
+                o.bad_args = true;
+            }
+        } else if !end_of_options
+            && (arg == "-o"
+                || arg == "-I"
+                || arg == "--root"
+                || arg == "--write-interface"
+                || arg == "--iface-dir") {
+            i = i + 1 as i32;
+            if i < argc {
+                let value = unsafe { arg_to_slice(argv, i) };
+                if arg == "-o" {
+                    o.output_path = value;
+                } else if arg == "-I" {
+                    o.include_ids.push(table.intern(value));
+                } else if arg == "--root" {
+                    o.root = value;
+                } else if arg == "--write-interface" {
+                    o.write_interface_path = value;
+                } else {
+                    o.iface_dir = value;
+                }
+            } else {
+                cli_error("option requires an argument: ", arg);
+                o.bad_args = true;
+            }
+        } else if !end_of_options && (arg == "-c" || arg == "--compile-only") {
+            o.compile_only = true;
+        } else if !end_of_options && arg == "--emit-interface" {
+            o.emit_interface = true;
+        } else if !end_of_options && arg == "--require-interface" {
+            o.require_interface = true;
+        } else if !end_of_options && arg == "--emit-deps" {
+            o.emit_deps = true;
+        } else if !end_of_options && arg == "--emit-zir-stats" {
+            o.emit_zir_stats = true;
+        } else if !end_of_options && arg == "--emit-zil" {
+            // ZIL is the default output.
+        } else if !end_of_options && (arg == "-v" || arg == "--verbose") {
+            unsafe { VERBOSE = true; }
+        } else if !end_of_options && arg == "--checked" {
+            o.checked = true;
+        } else if !end_of_options && arg == "--hosted" {
+            o.hosted = true;
+        } else if !end_of_options && arg == "--no-verify" {
+            o.no_verify = true;
+        } else if !end_of_options && arg == "--interproc-summary" {
+            o.interproc_summary = true;
+        } else if !end_of_options && arg == "--interproc-stats" {
+            o.interproc_summary = true;
+            o.interproc_stats = true;
+        } else if !end_of_options && (arg == "-V" || arg == "--version") {
+            // Handled in main() before parse_args; recognized here to prevent treating as an error.
+        } else if !end_of_options && arg.len > 0 as usize && arg[0] == '-' as u8 {
+            report_unknown_option(arg);
+            o.bad_args = true;
+        } else if o.input_path.len > 0 as usize {
+            cli_error("more than one input file: ", arg);
+            o.bad_args = true;
+        } else {
+            o.input_path = arg;
+        }
+        i = i + 1 as i32;
+    }
+    return o;
+}
+
+// Without `-o`: `<module>.zri` for an interface, `<module>.zil` when compiling one module, else
+// out.zil.
+fn default_output_path(o: &Options, arena: *mut ArenaHeader) -> [u8] {
+    if !o.emit_interface && !o.compile_only { return "out.zil"; }
+    let mut bv = unsafe { ByteVec.new_raw(arena) };
+    bv.push_slice(extract_module_name(o.input_path));
+    bv.push_slice(if o.emit_interface { ".zri" } else { ".zil" });
+    bv.push(0 as u8);
+    return subslice(bv.as_slice(), 0 as usize, bv.len() - 1 as usize);
+}
+
+// The file's contents; empty when it cannot be read.
+// The input's text, and the path it was read from: with `--root`, a path not found as given
+// is tried under the root.
+fn read_source(path: [u8], root: [u8], arena: *mut ArenaHeader) -> (Result<[u8], io::Error>, [u8]) {
+    let res = unsafe { read_file_raw(path, arena) };
+    match res {
+        Result.Ok(source) => (Result.Ok(source), path),
+        Result.Err(err) => {
+            if root.len == 0 as usize {
+                return (Result.Err(err), path);
+            }
+            let under_root = make_absolute(path, root, arena);
+            let res2 = unsafe { read_file_raw(under_root, arena) };
+            return (res2, under_root);
+        }
+    }
+}
+
+// The input's directory, searched for imports; none for a bare file name.
+fn input_dir(path: [u8]) -> Option<[u8]> {
+    let mut found = false;
+    let mut end = 0 as usize;
+    for k in 0 as usize..path.len {
+        if path[k] == '/' as u8 { found = true; end = k; }
+    }
+    return if found { Option.Some(subslice(path, 0 as usize, end)) } else { Option.None };
+}
+
+// The input and everything it imports, parsed; null after a syntax error.
+fn parse_program(
+    o: &Options,
+    source: [u8],
+    mr: ModuleResolution,
+    input_mod_id: [u8],
+    table: &mut InternTable,
+    arena: *mut ArenaHeader,
+    input_is_stdlib: bool
+) -> *mut AST {
+    let ast = AST.new(arena);
+    let lexer = Lexer.new(source, table, arena);
+    // The parser and its load state keep the module resolution, so it moves into the arena
+    // with them rather than staying in this frame.
+    let mr_owned = unsafe {
+        zoril_allocator_alloc(arena, sizeof(ModuleResolution))
+    } as *mut ModuleResolution;
+    unsafe { *mr_owned = mr; }
+    // `ast` is fresh arena storage (AST.new), the parser its only user while it parses.
+    let parser = Parser.new_modular(
+        lexer,
+        unsafe { &mut *ast },
+        table,
+        o.input_path,
+        input_mod_id,
+        o.include_ids.as_ptr(),
+        o.include_ids.len(),
+        0 as *mut LoadState,
+        mr_owned,
+        input_is_stdlib
+    );
+    // Dependency discovery reads the sources that exist; compilation prefers interfaces.
+    unsafe {
+        (*(*parser).state).iface_dir = o.iface_dir;
+        (*(*parser).state).iface_shadows = !o.emit_deps;
+        (*(*parser).state).require_interface = o.require_interface;
+        (*(*parser).state).verbose = unsafe { VERBOSE };
+        (*(*parser).state).deps_only = o.emit_deps;
+        (*parser).parse_module();
+        if (*parser).had_error { return 0 as *mut AST; }
+    }
+    return ast;
+}
+
+// Prints every import edge reachable from the entry as "<importer>\t<module>\t<file>", sorted
+// and de-duplicated: the compiler is the single authority on what an import names.
+fn emit_deps(
+    ast: &AST,
+    output_path: [u8],
+    table: &mut InternTable,
+    arena: *mut ArenaHeader
+) -> i32 {
+    let mut raw = unsafe { Vec::<u32>.new_in_raw(arena) };
+    for e in ast.import_edges.as_slice() {
+        let mut line = unsafe { ByteVec.new_raw(arena) };
+        line.push_slice(table.lookup(e.from_module));
+        line.push('\t' as u8);
+        line.push_slice(table.lookup(e.to_module));
+        line.push('\t' as u8);
+        line.push_slice(table.lookup(e.to_file));
+        raw.push(table.intern(line.as_slice()));
+    }
+    let edges = sorted_unique_ids(&raw, table, arena);
+    let mut out_fd = stdout();
+    let mut opened = false;
+    if output_path.len > 0 as usize {
+        let out_res = open(output_path, 577, 420);
+        out_fd = match out_res {
+            Result.Ok(fd) => {
+                opened = true;
+                fd
+            },
+            Result.Err(err) => {
+                cli_error_reason("cannot write the output file ", output_path, err.message());
+                return 1;
+            }
+        };
+    }
+    for id in edges.as_slice() {
+        let mut out = out_fd;
+        write_all(&mut out, table.lookup(*id)).expect("cannot write dependency list");
+        write_all(&mut out, "\n").expect("cannot write dependency list");
+    }
+    if opened { let _ = close(out_fd); }
+    return 0;
+}
+
+// Resolves, lowers and checks the program, then writes its ZIL, or its interface.
+fn compile(
+    o: &Options,
+    ast: &mut AST,
+    input_mod_id: [u8],
+    table: &mut InternTable,
+    arena: *mut ArenaHeader,
+    input_is_stdlib: bool
+) -> i32 {
+    progress("PROGRESS: Resolving...\n");
+    // The resolver, monomorphizer and driver form a cycle: each holds the next and calls back
+    // through it (mono_instantiate_type, driver_lower_fn_instance). They are arena objects that
+    // live for the whole compilation, and only one of them runs at a time, so the aliased
+    // `&mut`s handed out below are never used at once.
+    let m: &mut ILModule = unsafe { &mut *ILModule.new(arena, ast.decls.len()) };
+    let resolver = Resolver.new(arena, ast, m, table, o.input_path);
+    let monomorphizer = unsafe { Monomorphizer.new(arena, m, &mut *resolver, table) };
+    unsafe {
+        (*resolver).set_type_instantiator(mono_instantiate_type, monomorphizer as *mut u8);
+        (*resolver).set_assoc_projector(mono_project_assoc_type);
+        if (*resolver).had_error { return 1; }
+    }
+
+    progress("PROGRESS: Lowering...\n");
+    let driver = unsafe { Driver.new(arena, &mut *resolver, m, table, &mut *monomorphizer) };
+    let compile_only = o.compile_only || o.emit_interface;
+    let target_source_file = table.intern(input_mod_id);
+    unsafe {
+        (*driver).compile_only = compile_only;
+        (*driver).target_source_file = target_source_file;
+        (*driver).checked = o.checked;
+        (*driver).hosted = o.hosted;
+        (*driver).collect_zir_stats = o.emit_zir_stats;
+        (*monomorphizer).set_lowerer(driver_lower_fn_instance, driver as *mut u8);
+        (*driver).lower_module();
+        if o.emit_zir_stats {
+            // A rejected probe still contributes the routes its lowered functions walked: the
+            // route population is "a program the checker rejected contains this construct", so
+            // the census has to survive the verdict. Print it before the checks run; the verdict
+            // is the last line of this mode's stdout.
+            progress("PROGRESS: ZIR stats...\n");
+            (*driver).zir_stats.print();
+        }
+        if (*driver).had_error || (*resolver).had_error {
+            if o.emit_zir_stats { print("verdict reject\n"); }
+            return 1;
+        }
+    }
+
+    progress("PROGRESS: Verifying...\n");
+    let verified = verify_module(o, m, table, arena, compile_only, target_source_file);
+    if o.emit_zir_stats {
+        if verified.ok {
+            print("verdict accept\n");
+            return 0;
+        }
+        print("verdict reject\n");
+        return 1;
+    }
+    if !verified.ok { return 1; }
+
+    // The methods nothing calls were lowered to be checked, and the checks above are what read
+    // those bodies (the IL verifier and the summary pass); the driver's own lowering checks ran
+    // over each body as it was lowered. With both done, drop what the check added, so the ZIL, the
+    // interface and the object are exactly what the program's *called* code lowers to
+    // (ILModule.drop_check_only_code).
+    unsafe { (*driver).module.drop_check_only_code(); }
+
+    if o.write_interface_path.len > 0 as usize {
+        // Written alongside the ZIL, so one compiler run yields both.
+        if !write_interface_file(
+            o.write_interface_path,
+            ast,
+            table,
+            arena,
+            m,
+            verified.summaries,
+            input_mod_id,
+            input_is_stdlib
+        ) {
+            return 1;
+        }
+    }
+    if o.emit_interface {
+        progress("PROGRESS: Emitting interface...\n");
+        if !write_interface_file(
+            o.output_path,
+            ast,
+            table,
+            arena,
+            m,
+            verified.summaries,
+            input_mod_id,
+            input_is_stdlib
+        ) {
+            return 1;
+        }
+        progress("PROGRESS: Done.\n");
+        return 0;
+    }
+
+    progress("PROGRESS: Emitting...\n");
+    if !write_zil(o, m, table, input_mod_id) { return 1; }
+    progress("PROGRESS: Done.\n");
+    return 0;
+}
+
+// The verifier and the summary pass in a scope of their own: the pass holds the module and the table
+// mutably, so it must be gone before the emitters borrow both again. The summaries are arena data.
+struct VerifyOutcome {
+    ok: bool,
+    summaries: [FuncSummary],
+}
+
+#[borrows(arena)]
+fn verify_module(
+    o: &Options,
+    m: &mut ILModule,
+    table: &mut InternTable,
+    arena: *mut ArenaHeader,
+    compile_only: bool,
+    target_source_file: u32
+) -> VerifyOutcome {
+    let mut summary_pass = InterprocSummaryPass.new(arena, m, table, o.input_path);
+    summary_pass.apply_conservative_defaults(compile_only, target_source_file);
+    let ok = check_module(o, &mut summary_pass, arena, compile_only);
+    return VerifyOutcome { ok: ok, summaries: summary_pass.summaries };
+}
+
+// The ZIL verifier (unless --no-verify), then the summary pass when an interface is written
+// or --interproc-summary asks for it. False after an error. The module and table come from the pass.
+fn check_module(
+    o: &Options,
+    summary_pass: &mut InterprocSummaryPass,
+    arena: *mut ArenaHeader,
+    compile_only: bool
+) -> bool {
+    let wants_summaries = o.emit_interface || o.write_interface_path.len > 0 as usize;
+    if o.no_verify {
+        if wants_summaries { summary_pass.run(false); }
+        return true;
+    }
+    let mut verifier = Verifier.new(
+        arena,
+        summary_pass.module,
+        summary_pass.intern_table,
+        o.input_path
+    );
+    verifier.verify();
+    if verifier.had_error { return false; }
+    // A whole-program build sees every body, so it enforces the summaries as a separate build
+    // does (`zbuild` passes the flag): both modes then accept the same programs.
+    let enforce = o.interproc_summary || !compile_only;
+    if enforce || wants_summaries {
+        summary_pass.verbose = o.interproc_stats;
+        let pass_ok = summary_pass.run(enforce);
+        if enforce && (!pass_ok || summary_pass.had_error) { return false; }
+    }
+    return true;
+}
+
+fn write_zil(o: &Options, m: &mut ILModule, table: &mut InternTable, input_mod_id: [u8]) -> bool {
+    let out_res = open(o.output_path, 577, 420);
+    let out_fd = match out_res {
+        Result.Ok(fd) => fd,
+        Result.Err(err) => {
+            cli_error_reason("cannot write the output file ", o.output_path, err.message());
+            return false;
+        }
+    };
+    defer { let _ = close(out_fd); };
+    let target_source_file = table.intern(input_mod_id);
+    if o.hosted { name_entry_for_hosted_link(m, table); }
+    let module_stem = canonical_module_stem(m.arena, extract_module_name(input_mod_id));
+    let mut zil = ZilPrinter.new(m, table, out_fd);
+    zil.compile_only = o.compile_only;
+    zil.target_source_file = target_source_file;
+    zil.module_name = module_stem;
+    zil.entry_path = input_mod_id;
+    zil.fn_values = true;
+    zil.emit_module();
+    return true;
+}
+
+// The standard library the compiler was installed with: `<exe dir>/../share/zoril/stdlib`. A
+// release install needs no `-I` for it, and because the root is added in the *named* form
+// `stdlib=<dir>`, it carries the same designation `-I stdlib=<dir>` does - identity is designated,
+// never inferred from a directory's name (`loaded_from_stdlib_root`). It also gives the import
+// search a root, which makes the documented `../share/zoril/stdlib` discovery real for `zoril`
+// itself rather than only for `zbuild`.
+//
+// Nothing is added when the directory is absent (a tree that was never installed) or when the
+// command line already names some *other* root `stdlib`: two roots may not share a name, and the
+// explicit choice wins. An `-I` that already points at the installed directory is rewritten into
+// the named form in place, because designation is what makes the standard library's own `Arena`
+// methods work.
+fn add_installed_stdlib(o: &mut Options, table: &mut InternTable, arena: *mut ArenaHeader) {
+    let exe = unsafe { exe_dir_raw(arena) };
+    if exe.len == 0 as usize { return; }
+    let share = normalize_path(
+        join_two_paths(join_two_paths(exe, "../share/zoril", arena), "stdlib", arena),
+        arena
+    );
+    if !path_exists(join_two_paths(share, "core.zrl", arena), arena) { return; }
+    let cwd = get_cwd(arena);
+    let mut k = 0 as usize;
+    while k < o.include_ids.len() {
+        let (named, given_name, dir) = split_include_arg(table.lookup(o.include_ids.as_slice()[k]));
+        if make_absolute(dir, cwd, arena) == share {
+            if named && given_name == "stdlib" { return; }
+            let mut root = unsafe { ByteVec.new_raw(arena) };
+            root.push_slice("stdlib=");
+            root.push_slice(dir);
+            o.include_ids.set(k, table.intern(root.as_slice()));
+            return;
+        }
+        let root_name = if named { given_name } else { basename(dir) };
+        // Named `stdlib=DIR`, or a directory that holds core.zrl: the standard library. A project's own
+        // directory that is merely called stdlib is not, and must not hide the installed one.
+        if root_name == "stdlib"
+            && (named
+                || path_exists(
+                    join_two_paths(make_absolute(dir, cwd, arena), "core.zrl", arena),
+                    arena
+                )) {
+            return;
+        }
+        k = k + 1 as usize;
+    }
+    let mut root = unsafe { ByteVec.new_raw(arena) };
+    root.push_slice("stdlib=");
+    root.push_slice(share);
+    o.include_ids.push(table.intern(root.as_slice()));
+}
+
+// Whether the input file was loaded from a root the compiler was told is the standard library.
+// This is what an interface records (`// zri-stdlib: 1`): a consumer cannot re-derive it from an
+// interface's location or its module identity, so the compile that knows says it
+// (doc/spec/modular_compilation.md).
+fn input_is_stdlib(
+    o: &Options,
+    mr: &ModuleResolution,
+    table: &mut InternTable,
+    arena: *mut ArenaHeader
+) -> bool {
+    let abs = make_absolute(o.input_path, mr.cwd, arena);
+    let mut k = 0 as usize;
+    while k < o.include_ids.len() {
+        if is_designated_stdlib_file(
+            table.lookup(o.include_ids.as_slice()[k]),
+            mr.cwd,
+            abs,
+            arena
+        ) {
+            return true;
+        }
+        k = k + 1 as usize;
+    }
+    return false;
+}
+
+fn main(argc: i32, argv: **u8) -> i32 {
+    let mut v_i = 1 as i32;
+    while v_i < argc {
+        let v_arg = unsafe { arg_to_slice(argv, v_i) };
+        if v_arg == "--" {
+            break;
+        }
+        if v_arg == "-V" || v_arg == "--version" {
+            print("zoril ");
+            print(version());
+            print("\n");
+            return 0;
+        }
+        v_i = v_i + 1 as i32;
+    }
+    if argc < 2 as i32 {
+        print_usage();
+        return 1;
+    }
+    // Lazily paged (see arena_init): a reservation of address space, not memory. Compiling
+    // the compiler as one flat file needed more than 2GB.
+    // SAFETY: main compiler pipeline arena allocation.
+    let arena = unsafe { arena_init((1024 as u64) * 1024 * 4096) };
+    let table: &mut InternTable = unsafe { InternTable.new_raw(arena) };
+    if unsafe { arg_to_slice(argv, 1 as i32) } == "fmt" {
+        return fmt_main(argc, argv, table, arena);
+    }
+
+    let mut o = parse_args(argc, argv, table, arena);
+    if o.show_help {
+        print_usage();
+        return 0;
+    }
+    if o.bad_args { return 1; }
+    if o.input_path.len == 0 as usize {
+        eprint("zoril: error: no input file\n");
+        return 1;
+    }
+    if o.output_path.len == 0 as usize && !o.emit_deps && !o.emit_zir_stats {
+        o.output_path = default_output_path(&o, arena);
+    }
+    let (res, input_path) = read_source(o.input_path, o.root, arena);
+    let source = match res {
+        Result.Ok(s) => s,
+        Result.Err(err) => {
+            cli_error_reason("cannot read the input file ", input_path, err.message());
+            return 1;
+        }
+    };
+    o.input_path = input_path;
+
+    // Module identity is derived from the explicit roots only; the input's own directory
+    // (added after, for import search) must not become an unnamed include root of its own.
+    add_installed_stdlib(&mut o, table, arena);
+    let mr = module_resolution_new(
+        o.input_path,
+        o.root,
+        &o.include_ids,
+        table as *mut InternTable,
+        arena
+    );
+    if mr.had_error { return 1; }
+    if let Option.Some(dir) = input_dir(o.input_path) { o.include_ids.push(table.intern(dir)); }
+    let input_mod_id = derive_module_identity(
+        &mr,
+        make_absolute(o.input_path, mr.cwd, arena),
+        arena
+    );
+    if input_mod_id.len == 0 as usize {
+        cli_error("the input is outside every include root: ", o.input_path);
+        return 1;
+    }
+
+    progress("PROGRESS: Parsing...\n");
+    // Asked before the parse: the parser records the answer on every declaration it makes, and
+    // the interface the compile may write records it for the next compile
+    // (`// zri-stdlib: 1`).
+    let stdlib_input = input_is_stdlib(&o, &mr, table, arena);
+    let ast = parse_program(&o, source, mr, input_mod_id, table, arena, stdlib_input);
+    if ast as usize == 0 as usize { return 1; }
+    // Non-null (checked above): the AST parse_program built in the arena.
+    let ast = unsafe { &mut *ast };
+    if o.emit_deps { return emit_deps(ast, o.output_path, table, arena); }
+    return compile(&o, ast, input_mod_id, table, arena, stdlib_input);
+}

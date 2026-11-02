@@ -1,0 +1,8 @@
+import "vec.zrl";
+use vec::Vec;
+pub struct ArenaMark { off: u64 }
+pub struct Arena { pub v: Vec<u64> }
+impl Arena {
+    pub fn mark(self: &Arena) -> ArenaMark { return ArenaMark { off: 0 }; }
+    pub fn reset_to(self: &mut Arena, m: ArenaMark) { self.v = Vec::<u64>.new(); }
+}

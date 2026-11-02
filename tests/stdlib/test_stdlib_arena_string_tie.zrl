@@ -1,0 +1,29 @@
+// Safe arena handle: a String built with new_in(&arena) is tied to its arena, so it must be
+// used and dropped before the arena is reset or destroyed. Both are accepted here because
+// no String from `arena` is live at either point.
+// expected exit 0
+
+import "mem.zrl";
+import "string.zrl";
+use mem::Arena;
+use string::String;
+
+// The String lives in this frame and is dropped when the function returns, releasing its
+// borrow of `a`.
+fn greeting_len(a: &Arena) -> usize {
+    let mut s = String.new_in(a);
+    s.push_str("hello");
+    return s.len();
+}
+
+fn main() -> i32 {
+    let mut arena = Arena.new(65536).unwrap();
+    if greeting_len(&arena) != 5 {
+        return 1;
+    }
+    arena.reset(); // no String from `arena` is live
+    if greeting_len(&arena) != 5 {
+        return 2;
+    }
+    return 0;
+}

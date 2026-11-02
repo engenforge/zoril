@@ -1,0 +1,14 @@
+// expected exit 134
+// i's address is taken, so a write through the pointer may change it after the guard: no
+// elision, and the check traps.
+fn main() -> i32 {
+    let a: [u8; 4] = [1, 2, 3, 4];
+    let mut i: usize = 0;
+    let p = &mut i as *mut usize;
+    let mut s: u8 = 0;
+    while i < 4 {
+        unsafe { *p = 9; }
+        s = s + a[i];
+    }
+    return s as i32;
+}

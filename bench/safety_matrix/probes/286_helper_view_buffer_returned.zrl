@@ -1,0 +1,20 @@
+// name: A reference a helper view derived from a local Vec, returned from the frame
+// expected: compile_reject
+// `first(&v)` hands back a reference into `v`'s buffer; the borrow the call derived is the
+// local's, so the return is the same escape as `v.get(0)` (probe 278).
+import "vec.zrl";
+use vec::Vec;
+
+fn first(v: &Vec<i32>) -> &i32 {
+    return v.get(0).unwrap();
+}
+
+fn view() -> &i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(77);
+    return first(&v);
+}
+
+fn main() -> i32 {
+    return *view();
+}

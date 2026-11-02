@@ -1,0 +1,66 @@
+# Smoke suite for `make test-fast` (scripts/test.sh --smoke): a few seconds of coverage
+# across the pipeline while editing. `make test` runs everything, these included.
+# One path per line; each must also be in a group of scripts/test.sh.
+
+# Lexing and parsing
+tests/language/basic/precedence_golden.zrl
+tests/language/basic/test_literals.zrl
+tests/language/basic/hex_escape_strings.zrl
+tests/language/basic/test_numeric_invalid_suffix.zrl
+tests/error_reporting/err_syn_missing_semi.zrl
+tests/error_reporting/ec_block_comment_col.zrl
+
+# Lowering and code generation
+tests/language/basic/test_arithmetic.zrl
+tests/language/basic/wrapping_arithmetic.zrl
+tests/language/control_flow/test_control_flow.zrl
+tests/language/control_flow/test_for_loops.zrl
+tests/language/control_flow/defer_basic.zrl
+tests/language/other/test_tuples.zrl
+tests/language/other/test_fn_ptrs.zrl
+tests/language/other/test_try_operator.zrl
+tests/language/structs/test_large_struct_return.zrl
+tests/functional/codegen/regalloc_loop.zrl
+tests/functional/phi/match_sret_phi.zrl
+
+# Types, generics and type checking
+tests/language/generics/test_generics_basic.zrl
+tests/language/generics/infer_from_trait_bound.zrl
+tests/language/traits/test_traits.zrl
+tests/language/enums/test_enum.zrl
+tests/language/match/test_match.zrl
+tests/language/match/or_pattern_bindings.zrl
+tests/language/slices/slice_equality.zrl
+tests/error_reporting/ec_type_mismatch.zrl
+tests/error_reporting/ec_bound_not_implemented.zrl
+tests/error_reporting/err_match_non_exhaustive_enum.zrl
+
+# Ownership and memory safety
+tests/language/memory/test_ownership.zrl
+tests/language/memory/test_move.zrl
+tests/language/memory/borrow_error_01.zrl
+tests/language/memory/bounds_slice_oob.zrl
+tests/language/memory/region_return_param_ptr.zrl
+tests/language/structs/test_drop_glue.zrl
+tests/language/closures/test_closures.zrl
+tests/language/pointers/ptr_to_aggregate_compare.zrl
+tests/interproc_summary/escape_slice_store.zrl
+tests/error_reporting/ec_moved_value.zrl
+tests/error_reporting/ec_borrow_aliasing.zrl
+tests/error_reporting/ec_region_escape.zrl
+tests/error_reporting/err_saf_must_use_discard.zrl
+
+# Stdlib
+tests/stdlib/test_vec.zrl
+tests/stdlib/test_stdlib_str.zrl
+tests/stdlib/test_stdlib_hashmap.zrl
+tests/stdlib/test_stdlib_arena.zrl
+tests/stdlib/test_stdlib_iter.zrl
+tests/functional/stdlib/result_map.zrl
+
+# Integration
+tests/integration/test_import_simple.zrl
+tests/integration/test_ffi.zrl
+corpus/zrl/06_enums_and_match.zrl
+corpus/zrl/25_linked_list.zrl
+corpus/zil/05_ownership_move.zil

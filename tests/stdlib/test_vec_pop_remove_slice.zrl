@@ -1,0 +1,28 @@
+// expected exit code: 0
+// Vec.pop, Vec.remove and Vec.as_mut_slice: their raw element work was not exercised by any
+// test (the unsafe-removal scan found their markers removable without a compile error).
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v = Vec::<u64>.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    v.push(40);
+
+    if v.pop().unwrap() != 40 { return 1; }
+    if v.len() != 3 { return 2; }
+
+    if v.remove(0) != 10 { return 3; }
+    if v.len() != 2 || *v.get(0).unwrap() != 20 || *v.get(1).unwrap() != 30 { return 4; }
+
+    let s = v.as_mut_slice();
+    s[1] = 33;
+    if *v.get(1).unwrap() != 33 { return 5; }
+
+    let _ = v.pop();
+    let _ = v.pop();
+    if v.pop().is_some() { return 6; }
+    return 0;
+}

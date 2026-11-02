@@ -1,0 +1,19 @@
+pub fn is_prime(n: i32) -> bool {
+    if n <= 1 { return false; }
+    let mut d: i32 = 2;
+    while d * d <= n {
+        if n % d == 0 { return false; }
+        d = d + 1;
+    }
+    return true;
+}
+
+pub fn count_primes(limit: i32) -> i32 {
+    let mut count: i32 = 0;
+    let mut n: i32 = 2;
+    while n <= limit {
+        if is_prime(n) { count = count + 1; }
+        n = n + 1;
+    }
+    return count;
+}

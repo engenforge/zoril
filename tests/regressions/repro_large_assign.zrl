@@ -1,0 +1,22 @@
+enum Large {
+    A((u64, u64, u64, u64, u64, u64, u64, u64)),
+    B((u64, u64, u64, u64, u64, u64, u64, u64)),
+}
+
+fn test(l: Large, p: *mut Large) {
+    unsafe { *p = l; }
+}
+
+fn main() -> i32 {
+    let mut storage = Large.B((0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64));
+    let val = Large.A((1 as u64, 2 as u64, 3 as u64, 4 as u64, 5 as u64, 6 as u64, 7 as u64, 8 as u64));
+    test(val, &mut storage);
+    
+    match storage {
+        Large.A(t) => {
+            if t.0 == 1 && t.7 == 8 { return 0; }
+            return 1;
+        },
+        _ => return 2,
+    }
+}

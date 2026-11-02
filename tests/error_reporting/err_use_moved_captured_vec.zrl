@@ -1,0 +1,14 @@
+// expected compile fail
+// An owning capture moved into a closure leaves the outer binding unusable.
+// EXPECT: error: use of moved value 'v'
+
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    let mut add = |x: i32| { v.push(x); };
+    add(1);
+    v.push(2);
+    return 0;
+}

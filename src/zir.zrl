@@ -1,0 +1,508 @@
+import "core0.zrl";
+import "ast.zrl";
+import "resolve.zrl";
+use ast::Span;
+
+// Zoril Intermediate Representation (ZIR)
+// A mid-level IR between AST and ZIL, suitable for borrow checking.
+
+pub type LocalId = u32;
+
+pub enum Projection {
+    Field(u32),        // interned field name
+    TupleIndex(u32),   // tuple element index
+    Deref,             // pointer dereference
+    Index(u32),        // local variable index
+}
+
+impl Projection {
+    pub fn get_tag(self: &Projection) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Field(self: &Projection) -> u32 {
+        return match self {
+            Projection.Field(x) | Projection.TupleIndex(x) | Projection.Index(x) => *x,
+            _ => ICE("Projection.get_Field on another variant")
+        };
+    }
+    pub fn get_TupleIndex(self: &Projection) -> u32 {
+        return match self {
+            Projection.Field(x) | Projection.TupleIndex(x) | Projection.Index(x) => *x,
+            _ => ICE("Projection.get_TupleIndex on another variant")
+        };
+    }
+    pub fn get_Index(self: &Projection) -> u32 {
+        return match self {
+            Projection.Field(x) | Projection.TupleIndex(x) | Projection.Index(x) => *x,
+            _ => ICE("Projection.get_Index on another variant")
+        };
+    }
+}
+
+pub struct Place {
+    pub base: u32, // LocalId (variable index)
+    pub projections: [Projection],
+}
+
+pub const PROJ_FIELD: u32 = 0;
+pub const PROJ_TUPLEINDEX: u32 = 1;
+pub const PROJ_DEREF: u32 = 2;
+pub const PROJ_INDEX: u32 = 3;
+
+pub struct Local {
+    pub id: u32,       // LocalId (variable index)
+    pub name_id: u32,  // Interned name ID (0 if temporary)
+    pub ty: u32,       // Type index
+    pub kind: u32,     // LOCAL_KIND_*
+    pub is_copy: bool, // Copy or Move type
+    // `true` for the `bool` the lowering keeps beside a value that needs dropping ("does this
+    // local hold something to drop on this path?"). It is compiler bookkeeping, not a user's
+    // storage: a checked build must not poison it, or scope exit reads 0xA5 as "yes, drop it".
+    pub is_drop_flag: bool,
+    // A closure body's read-through alias for a value its environment owns (load_captures). It
+    // never owns the value, so a move out of it is rejected rather than copied (which would leave
+    // two owners and drop the value twice).
+    pub is_capture_alias: bool,
+    // For the compiler-generated local holding a closure's environment: the span of the closure
+    // expression, so a diagnostic can name it ("the environment of the closure created at
+    // line:col") instead of "variable (id: N)". Zero for every other local.
+    pub closure_span: Span,
+}
+
+pub const LOCAL_KIND_ARG: u32 = 0;
+pub const LOCAL_KIND_TMP: u32 = 1;
+pub const LOCAL_KIND_LET: u32 = 2;
+pub const LOCAL_KIND_LETMUT: u32 = 3;
+
+// @ptr_from_int<T>(x): identical in shape to Cast, but carries the authorization
+// that the pointer-forgery check looks for. Kept distinct from Cast so the marker
+// survives AST -> ZIR -> IL instead of being erased at lowering time.
+
+pub enum ZirRvalue {
+    Use(Place),
+    Ref(Place, u32),     // Place, Region ID
+    RefMut(Place, u32),  // Place, Region ID
+    Const(u64, u32),     // value, type index
+    BinaryOp(u32, Place, Place), // op tag, lhs, rhs
+    UnaryOp(u32, Place), // op tag, operand
+    Call(u32, [Place]),  // fn_id, args
+    CallPtr(Place, [Place]), // fn place, args
+    StructLiteral(u32, [Place]), // struct type index, values
+    EnumVariant(u32, u32, Place), // enum type index, variant index, payload place
+    Cast(Place, u32),    // place, target type index
+    Sizeof(u32),         // type index
+    Syscall([Place]),   // args[0]=num, args[1..]=args
+    Intrinsic(u32, [Place]), // id, args
+    StringConst(u32),        // interned string ID
+    VariantCheck(Place, u32, u32), // enum place, type_id, variant_idx → bool
+    EnumPayload(Place, u32, u32),  // enum place, type_id, variant_idx → payload
+    GlobalAddr(u32), // global index in module
+    FuncAddr(u32, u32), // function index in module, closure env local ID (0 if none)
+    Tuple([Place]),  // element values
+    Array(u32, [Place]), // element type, element values
+    Boxed(Place),          // value place; the allocator form is not implemented (see lower_boxed_expr)
+    GetEnv,
+    PtrFromInt(Place, u32), // place, target pointer type index (@ptr_from_int<T>)
+    ArrayRepeat(Place, u32, u32), // `[v; n]` for large n: value, element type, count (lowered to a loop)
+}
+
+impl ZirRvalue {
+    pub fn get_Use(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.Use(x) => x,
+            _ => ICE("ZirRvalue.get_Use on another variant")
+        };
+    }
+    pub fn get_Ref(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.Ref(x, _) | ZirRvalue.RefMut(x, _) => x,
+            _ => ICE("ZirRvalue.get_Ref on another variant")
+        };
+    }
+    pub fn get_RefMut(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.RefMut(x, _) | ZirRvalue.Ref(x, _) => x,
+            _ => ICE("ZirRvalue.get_RefMut on another variant")
+        };
+    }
+    pub fn get_Const_val(self: &ZirRvalue) -> u64 {
+        return match self {
+            ZirRvalue.Const(x, _) => *x,
+            _ => ICE("ZirRvalue.get_Const_val on another variant")
+        };
+    }
+    pub fn get_Const_ty(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.Const(_, x) => *x,
+            _ => ICE("ZirRvalue.get_Const_ty on another variant")
+        };
+    }
+    pub fn get_BinaryOp_op(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.BinaryOp(x, _, _) => *x,
+            _ => ICE("ZirRvalue.get_BinaryOp_op on another variant")
+        };
+    }
+    pub fn get_BinaryOp_lhs(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.BinaryOp(_, x, _) => x,
+            _ => ICE("ZirRvalue.get_BinaryOp_lhs on another variant")
+        };
+    }
+    pub fn get_BinaryOp_rhs(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.BinaryOp(_, _, x) => x,
+            _ => ICE("ZirRvalue.get_BinaryOp_rhs on another variant")
+        };
+    }
+    pub fn get_UnaryOp_op(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.UnaryOp(x, _) => *x,
+            _ => ICE("ZirRvalue.get_UnaryOp_op on another variant")
+        };
+    }
+    pub fn get_UnaryOp_arg(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.UnaryOp(_, x) => x,
+            _ => ICE("ZirRvalue.get_UnaryOp_arg on another variant")
+        };
+    }
+    pub fn get_Call_id(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.Call(x, _) => *x,
+            _ => ICE("ZirRvalue.get_Call_id on another variant")
+        };
+    }
+    pub fn get_Call_args(self: &ZirRvalue) -> [Place] {
+        return match self {
+            ZirRvalue.Call(_, x) => *x,
+            _ => ICE("ZirRvalue.get_Call_args on another variant")
+        };
+    }
+    pub fn get_CallPtr_pl(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.CallPtr(x, _) => x,
+            _ => ICE("ZirRvalue.get_CallPtr_pl on another variant")
+        };
+    }
+    pub fn get_CallPtr_args(self: &ZirRvalue) -> [Place] {
+        return match self {
+            ZirRvalue.CallPtr(_, x) => *x,
+            _ => ICE("ZirRvalue.get_CallPtr_args on another variant")
+        };
+    }
+    pub fn get_StructLiteral_ty(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.StructLiteral(x, _) => *x,
+            _ => ICE("ZirRvalue.get_StructLiteral_ty on another variant")
+        };
+    }
+    pub fn get_StructLiteral_args(self: &ZirRvalue) -> [Place] {
+        return match self {
+            ZirRvalue.StructLiteral(_, x) => *x,
+            _ => ICE("ZirRvalue.get_StructLiteral_args on another variant")
+        };
+    }
+    pub fn get_EnumVariant_ty(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.EnumVariant(x, _, _) => *x,
+            _ => ICE("ZirRvalue.get_EnumVariant_ty on another variant")
+        };
+    }
+    pub fn get_EnumVariant_idx(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.EnumVariant(_, x, _) => *x,
+            _ => ICE("ZirRvalue.get_EnumVariant_idx on another variant")
+        };
+    }
+    pub fn get_EnumVariant_payload(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.EnumVariant(_, _, x) => x,
+            _ => ICE("ZirRvalue.get_EnumVariant_payload on another variant")
+        };
+    }
+    pub fn get_Cast_pl(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.Cast(x, _) | ZirRvalue.PtrFromInt(x, _) => x,
+            _ => ICE("ZirRvalue.get_Cast_pl on another variant")
+        };
+    }
+    pub fn get_Cast_ty(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.Cast(_, x) | ZirRvalue.PtrFromInt(_, x) => *x,
+            _ => ICE("ZirRvalue.get_Cast_ty on another variant")
+        };
+    }
+    pub fn get_Sizeof_ty(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.Sizeof(x) => *x,
+            _ => ICE("ZirRvalue.get_Sizeof_ty on another variant")
+        };
+    }
+    pub fn get_Syscall_args(self: &ZirRvalue) -> [Place] {
+        return match self {
+            ZirRvalue.Syscall(x) => *x,
+            _ => ICE("ZirRvalue.get_Syscall_args on another variant")
+        };
+    }
+    pub fn get_StringConst_id(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.StringConst(x) => *x,
+            _ => ICE("ZirRvalue.get_StringConst_id on another variant")
+        };
+    }
+    pub fn get_VariantCheck_pl(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.VariantCheck(x, _, _) => x,
+            _ => ICE("ZirRvalue.get_VariantCheck_pl on another variant")
+        };
+    }
+    pub fn get_VariantCheck_ty(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.VariantCheck(_, x, _) => *x,
+            _ => ICE("ZirRvalue.get_VariantCheck_ty on another variant")
+        };
+    }
+    pub fn get_VariantCheck_idx(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.VariantCheck(_, _, x) => *x,
+            _ => ICE("ZirRvalue.get_VariantCheck_idx on another variant")
+        };
+    }
+    pub fn get_EnumPayload_pl(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.EnumPayload(x, _, _) => x,
+            _ => ICE("ZirRvalue.get_EnumPayload_pl on another variant")
+        };
+    }
+    pub fn get_EnumPayload_ty(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.EnumPayload(_, x, _) => *x,
+            _ => ICE("ZirRvalue.get_EnumPayload_ty on another variant")
+        };
+    }
+    pub fn get_EnumPayload_idx(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.EnumPayload(_, _, x) => *x,
+            _ => ICE("ZirRvalue.get_EnumPayload_idx on another variant")
+        };
+    }
+    pub fn get_Intrinsic_id(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.Intrinsic(x, _) => *x,
+            _ => ICE("ZirRvalue.get_Intrinsic_id on another variant")
+        };
+    }
+    pub fn get_Intrinsic_args(self: &ZirRvalue) -> [Place] {
+        return match self {
+            ZirRvalue.Intrinsic(_, x) => *x,
+            _ => ICE("ZirRvalue.get_Intrinsic_args on another variant")
+        };
+    }
+    pub fn get_GlobalAddr_id(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.GlobalAddr(x) => *x,
+            _ => ICE("ZirRvalue.get_GlobalAddr_id on another variant")
+        };
+    }
+    pub fn get_FuncAddr_id(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.FuncAddr(x, _) => *x,
+            _ => ICE("ZirRvalue.get_FuncAddr_id on another variant")
+        };
+    }
+    pub fn get_FuncAddr_env(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.FuncAddr(_, env) => *env,
+            _ => ICE("ZirRvalue.get_FuncAddr_env on another variant")
+        };
+    }
+    pub fn get_Tuple_elements(self: &ZirRvalue) -> [Place] {
+        return match self {
+            ZirRvalue.Tuple(x) => *x,
+            _ => ICE("ZirRvalue.get_Tuple_elements on another variant")
+        };
+    }
+    pub fn get_Array_ty(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.Array(x, _) => *x,
+            _ => ICE("ZirRvalue.get_Array_ty on another variant")
+        };
+    }
+    pub fn get_Array_elements(self: &ZirRvalue) -> [Place] {
+        return match self {
+            ZirRvalue.Array(_, x) => *x,
+            _ => ICE("ZirRvalue.get_Array_elements on another variant")
+        };
+    }
+    pub fn get_Boxed_val(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.Boxed(x) => x,
+            _ => ICE("ZirRvalue.get_Boxed_val on another variant")
+        };
+    }
+    pub fn get_PtrFromInt_pl(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.PtrFromInt(x, _) | ZirRvalue.Cast(x, _) => x,
+            _ => ICE("ZirRvalue.get_PtrFromInt_pl on another variant")
+        };
+    }
+    pub fn get_PtrFromInt_ty(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.PtrFromInt(_, x) | ZirRvalue.Cast(_, x) => *x,
+            _ => ICE("ZirRvalue.get_PtrFromInt_ty on another variant")
+        };
+    }
+    pub fn get_ArrayRepeat_val(self: &ZirRvalue) -> &Place {
+        return match self {
+            ZirRvalue.ArrayRepeat(x, _, _) => x,
+            _ => ICE("ZirRvalue.get_ArrayRepeat_val on another variant")
+        };
+    }
+    pub fn get_ArrayRepeat_ty(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.ArrayRepeat(_, x, _) => *x,
+            _ => ICE("ZirRvalue.get_ArrayRepeat_ty on another variant")
+        };
+    }
+    pub fn get_ArrayRepeat_count(self: &ZirRvalue) -> u32 {
+        return match self {
+            ZirRvalue.ArrayRepeat(_, _, x) => *x,
+            _ => ICE("ZirRvalue.get_ArrayRepeat_count on another variant")
+        };
+    }
+}
+
+pub enum ZirStmt {
+    Let(u32, ZirRvalue, Span),       // LocalId, Rvalue, Span
+    Assign(Place, ZirRvalue, Span),  // Place, Rvalue, Span
+    Drop(Place, Span),               // Place to drop, Span
+    Intrinsic(u32, [Place], Span),   // name ID, args, Span
+    EndBorrow(u32, Span),            // LocalId, Span
+    // Scope-exit drop guarded by a runtime drop flag (lower_zir emits it inside `if flag { ... }`).
+    // Statically the value may already be moved or dropped on some paths; the checker treats it as
+    // "drop if still owned" instead of reporting a double drop.
+    DropIfLive(Place, Span),
+}
+
+impl ZirStmt {
+    pub fn get_Let_id(self: &ZirStmt) -> u32 {
+        return match self {
+            ZirStmt.Let(x, _, _) => *x,
+            _ => ICE("ZirStmt.get_Let_id on another variant")
+        };
+    }
+    pub fn get_Let_rv(self: &ZirStmt) -> &ZirRvalue {
+        return match self {
+            ZirStmt.Let(_, x, _) => x,
+            _ => ICE("ZirStmt.get_Let_rv on another variant")
+        };
+    }
+    pub fn get_Assign_pl(self: &ZirStmt) -> &Place {
+        return match self {
+            ZirStmt.Assign(x, _, _) => x,
+            _ => ICE("ZirStmt.get_Assign_pl on another variant")
+        };
+    }
+    pub fn get_Assign_rv(self: &ZirStmt) -> &ZirRvalue {
+        return match self {
+            ZirStmt.Assign(_, x, _) => x,
+            _ => ICE("ZirStmt.get_Assign_rv on another variant")
+        };
+    }
+    pub fn get_Drop_pl(self: &ZirStmt) -> &Place {
+        return match self {
+            ZirStmt.Drop(x, _) | ZirStmt.DropIfLive(x, _) => x,
+            _ => ICE("ZirStmt.get_Drop_pl on another variant")
+        };
+    }
+    pub fn get_Intrinsic_id(self: &ZirStmt) -> u32 {
+        return match self {
+            ZirStmt.Intrinsic(x, _, _) => *x,
+            _ => ICE("ZirStmt.get_Intrinsic_id on another variant")
+        };
+    }
+    pub fn get_Intrinsic_args(self: &ZirStmt) -> [Place] {
+        return match self {
+            ZirStmt.Intrinsic(_, x, _) => *x,
+            _ => ICE("ZirStmt.get_Intrinsic_args on another variant")
+        };
+    }
+    pub fn get_EndBorrow_id(self: &ZirStmt) -> u32 {
+        return match self {
+            ZirStmt.EndBorrow(x, _) => *x,
+            _ => ICE("ZirStmt.get_EndBorrow_id on another variant")
+        };
+    }
+
+    pub fn get_span(self: &ZirStmt) -> Span {
+        match *self {
+            ZirStmt.Let(a, b, span) => { return span; },
+            ZirStmt.Assign(a, b, span) => { return span; },
+            ZirStmt.Drop(a, span) => { return span; },
+            ZirStmt.DropIfLive(a, span) => { return span; },
+            ZirStmt.Intrinsic(a, b, span) => { return span; },
+            ZirStmt.EndBorrow(a, span) => { return span; },
+        }
+    }
+}
+
+pub struct ZirBlock {
+    pub id: u32,
+    pub statements: [ZirStmt],
+    pub literal_comments: [u32], // parallel to statements: literal source comment in effect when each was emitted, 0 if none
+    pub terminator: ZirTerminator,
+    pub name_hint: u32, // Interned label hint based on the construct that created this block (0 if none)
+}
+
+pub enum ZirTerminator {
+    Jmp(u32),
+    Branch(Place, u32, u32), // cond, then, else
+    Ret(Place),
+    Unreachable,
+}
+
+impl ZirTerminator {
+    pub fn get_Jmp(self: &ZirTerminator) -> u32 {
+        return match self {
+            ZirTerminator.Jmp(x) => *x,
+            _ => ICE("ZirTerminator.get_Jmp on another variant")
+        };
+    }
+    pub fn get_Branch_cond(self: &ZirTerminator) -> &Place {
+        return match self {
+            ZirTerminator.Branch(x, _, _) => x,
+            _ => ICE("ZirTerminator.get_Branch_cond on another variant")
+        };
+    }
+    pub fn get_Branch_then(self: &ZirTerminator) -> u32 {
+        return match self {
+            ZirTerminator.Branch(_, x, _) => *x,
+            _ => ICE("ZirTerminator.get_Branch_then on another variant")
+        };
+    }
+    pub fn get_Branch_else(self: &ZirTerminator) -> u32 {
+        return match self {
+            ZirTerminator.Branch(_, _, x) => *x,
+            _ => ICE("ZirTerminator.get_Branch_else on another variant")
+        };
+    }
+    pub fn get_Ret(self: &ZirTerminator) -> &Place {
+        return match self {
+            ZirTerminator.Ret(x) => x,
+            _ => ICE("ZirTerminator.get_Ret on another variant")
+        };
+    }
+}
+
+pub struct ZirFunction {
+    pub name: u32,
+    pub params: [Local],
+    pub locals: [Local],
+    pub blocks: [ZirBlock],
+    pub ret_ty: u32,
+    pub doc_comment: u32,
+    pub span: Span,
+}
+
+pub struct ZirModule {
+    pub funcs: [ZirFunction],
+}

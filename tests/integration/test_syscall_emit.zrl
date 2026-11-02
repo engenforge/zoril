@@ -1,0 +1,3 @@
+fn main() {
+    unsafe { @syscall(60, 0) }; // exit(0)
+}

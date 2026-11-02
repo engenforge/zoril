@@ -1,0 +1,26 @@
+// name: Referent mutated while closure capturing reference is live
+// expected: compile_reject
+// A closure capturing a reference (r = &x) keeps x borrowed across the closure's
+// lifetime; safe code cannot reassign or mutate x while the closure is live.
+enum Data {
+    Text([u8; 16]),
+    Num(u64),
+}
+
+static dummy: u8 = 0;
+
+fn get_first(d: &Data) -> &u8 {
+    return match d {
+        Data.Text(t) => &t[0],
+        Data.Num(_) => &dummy,
+    };
+}
+
+fn main() -> i32 {
+    let mut d = Data.Text([65 as u8; 16]);
+    let r = get_first(&d);
+    let cl = || -> u8 { *r };
+    d = Data.Num(999);
+    let _ = cl();
+    return 0;
+}

@@ -1,0 +1,27 @@
+// expected exit code: 0
+// 34: Drop trait for automatic resource management.
+// Demonstrates: trait Drop, automatic destructor call when value goes out of scope.
+
+struct Resource {
+    id: i32
+}
+
+trait Drop {
+    fn drop(self: Resource);
+}
+
+impl Drop for Resource {
+    fn drop(self: Resource) {
+        // No syscall
+    }
+}
+
+fn test_drop() {
+    let r = Resource { id: 1 };
+    // r is dropped here
+}
+
+fn main() -> i32 {
+    test_drop();
+    return 0;
+}

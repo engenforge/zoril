@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: arena allocation with box(allocator) is not implemented
+import "lib.zrl";
+
+fn main() -> i32 {
+    let b = lib::box_in::<i32>(0, 42);
+    return *b - 42;
+}

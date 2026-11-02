@@ -1,0 +1,7 @@
+import "a/util.zrl";
+use util::{P, parse};
+pub fn main() -> i32 {
+    let p = P { x: 5 };
+    if parse() == 1 && p.get() == 5 { return 0; }
+    return 1;
+}

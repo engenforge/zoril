@@ -1,0 +1,573 @@
+// Operand types of ZIL instructions: a stored value against the pointee, arithmetic operands
+// against each other and the result, a comparison's operands against each other, a loaded value
+// against the pointee, a returned value against the function's result, and call arguments against
+// the callee's parameters. Only primitives are compared exactly; pointers, aggregates and functions
+// are left to the other checks (a pointer's pointee type is not tracked precisely enough in the IL
+// to compare). Used by the compiler's verifier and by zilc on the ZIL it reads.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "il_cfg.zrl";
+use bytevec::ByteVec;
+use il_cfg::{ILFunction, ILModule};
+use il_instr::{ILInstr, NO_SSA, SSAId};
+use il_type::{ILPrimitive, IL_TYPEDEF_STRUCT};
+use mem_raw::ArenaHeader;
+use vec::Vec;
+
+// A type error in one instruction: which, and what is wrong.
+pub struct TypeIssue {
+    pub instr_idx: u32,   // index into the module's instructions
+    pub message: [u8],
+}
+
+// The operand type errors in F, in order. The list is arena data, so a caller may keep it while
+// running its own checks.
+#[borrows(arena)]
+#[stores(arena -> arena)]
+pub fn type_check_function(
+    m: &ILModule,
+    f: &ILFunction,
+    arena: *mut ArenaHeader
+) -> Vec<TypeIssue> {
+    let mut issues = unsafe { Vec::<TypeIssue>.new_in_raw(arena) };
+    for bi in 0 as usize..f.blocks_len {
+        let b = &m.blocks[f.block_ids()[bi] as usize];
+        for ii in 0 as usize..b.instructions_len {
+            let idx = b.instr_ids()[ii];
+            let ssa = b.ssa_result_ids()[ii];
+            let undef = undefined_operand_issue(f, m.instrs[idx as usize], arena);
+            if undef.len > 0 as usize {
+                issues.push(TypeIssue { instr_idx: idx, message: undef });
+                continue;
+            }
+            let msg = instr_type_issue(m, f, m.instrs[idx as usize], ssa, arena);
+            if msg.len > 0 as usize { issues.push(TypeIssue { instr_idx: idx, message: msg }); }
+        }
+    }
+    return issues;
+}
+
+// Append V in decimal.
+fn push_dec(out: &mut ByteVec, v: u64) {
+    if v >= 10 as u64 { push_dec(out, v / 10 as u64); }
+    out.push(('0' as u8) + (v % 10 as u64) as u8);
+}
+
+// Whether SSA names a value: a parameter or an instruction result with a type. 0 is the "no
+// operand" spelling, and an id the parser left without a type names nothing.
+fn operand_defined(f: &ILFunction, ssa: SSAId) -> bool {
+    if ssa == 0 as u32 || ssa == NO_SSA as u32 { return false; }
+    if ssa as usize >= f.result_types_len { return false; }
+    return f.get_ssa_type(ssa) != 0 as u32;
+}
+
+// The first operand of INSTR that names no value, or 0 when all of them name one.
+fn check_operand(f: &ILFunction, ssa: SSAId) -> SSAId {
+    if ssa == 0 as u32 { return 0 as SSAId; }
+    if operand_defined(f, ssa) { return 0 as SSAId; }
+    return ssa;
+}
+
+fn check_operand_pair(f: &ILFunction, a: SSAId, b: SSAId) -> SSAId {
+    let bad = check_operand(f, a);
+    if bad != 0 as u32 { return bad; }
+    return check_operand(f, b);
+}
+
+fn check_operand_triple(f: &ILFunction, a: SSAId, b: SSAId, c: SSAId) -> SSAId {
+    let bad = check_operand_pair(f, a, b);
+    if bad != 0 as u32 { return bad; }
+    return check_operand(f, c);
+}
+
+fn check_operand_list(f: &ILFunction, ssas: [SSAId]) -> SSAId {
+    let mut i = 0 as usize;
+    while i < ssas.len {
+        let bad = check_operand(f, ssas[i]);
+        if bad != 0 as u32 { return bad; }
+        i = i + 1 as usize;
+    }
+    return 0 as SSAId;
+}
+
+// Every required operand of INSTR. The two optional slots (`alloc`'s allocator and a sum's
+// payload) and a value-less `ret` spell "none" as NO_SSA, so they are skipped; everywhere else
+// NO_SSA is an operand that names nothing.
+fn first_undefined_operand(f: &ILFunction, instr: ILInstr) -> SSAId {
+    return match instr {
+        ILInstr.Add(op)
+            | ILInstr.Sub(op)
+            | ILInstr.Mul(op)
+            | ILInstr.Div(op)
+            | ILInstr.Rem(op)
+            | ILInstr.And(op)
+            | ILInstr.Or(op)
+            | ILInstr.Xor(op)
+            | ILInstr.Shl(op)
+            | ILInstr.Shr(op)
+            | ILInstr.CmpLt(op)
+            | ILInstr.CmpLe(op)
+            | ILInstr.CmpGt(op)
+            | ILInstr.CmpGe(op)
+            | ILInstr.CmpEq(op)
+            | ILInstr.CmpNe(op)
+            | ILInstr.WrappingAdd(op)
+            | ILInstr.WrappingSub(op)
+            | ILInstr.WrappingMul(op)
+            | ILInstr.SaturatingAdd(op)
+            | ILInstr.CheckedAdd(op)
+            | ILInstr.CheckedSub(op)
+            | ILInstr.CheckedMul(op) => check_operand_pair(f, op.lhs, op.rhs),
+        ILInstr.Neg(ssa)
+            | ILInstr.Not(ssa)
+            | ILInstr.Load(ssa)
+            | ILInstr.Drop(ssa)
+            | ILInstr.SliceLen(ssa)
+            | ILInstr.IsSome(ssa)
+            | ILInstr.Unwrap(ssa)
+            | ILInstr.Move(ssa)
+            | ILInstr.FDClose(ssa)
+            | ILInstr.IORingSetup(ssa)
+            | ILInstr.IORingClose(ssa)
+            | ILInstr.Likely(ssa)
+            | ILInstr.Unlikely(ssa)
+            | ILInstr.EndBorrow(ssa)
+            | ILInstr.Release(ssa) => check_operand(f, ssa),
+        ILInstr.Ret(ssa) => {
+            if ssa == NO_SSA as u32 { 0 as SSAId } else { check_operand(f, ssa) }
+        },
+        ILInstr.Borrow(b) => check_operand(f, b.val),
+        ILInstr.Store(s) => check_operand_pair(f, s.ptr, s.val),
+        ILInstr.Alloc(a) => {
+            if a.allocator == NO_SSA as u32 { 0 as SSAId } else { check_operand(f, a.allocator) }
+        },
+        ILInstr.BoundsCheck(b) => check_operand_pair(f, b.idx, b.len),
+        ILInstr.RegionCast(rc) => check_operand(f, rc.val),
+        ILInstr.SliceLoad(i) => check_operand_pair(f, i.base, i.idx),
+        ILInstr.SliceStore(is) => check_operand_triple(f, is.base, is.idx, is.val),
+        ILInstr.SliceConstruct(sc) => check_operand_pair(f, sc.ptr, sc.len),
+        ILInstr.ArrayConstruct(ssas) | ILInstr.TupleConstruct(ssas) => {
+            check_operand_list(f, ssas)
+        },
+        ILInstr.ArrayLoad(i) => check_operand_pair(f, i.base, i.idx),
+        ILInstr.ArrayStore(is) => check_operand_triple(f, is.base, is.idx, is.val),
+        ILInstr.VariantMatch(vm) => check_operand(f, vm.val),
+        ILInstr.SumConstruct(sc) => {
+            if sc.payload == NO_SSA as u32 { 0 as SSAId } else { check_operand(f, sc.payload) }
+        },
+        ILInstr.Call(c) => check_operand_list(f, c.args),
+        ILInstr.CallPtr(c) => {
+            let bad = check_operand(f, c.func_ptr);
+            if bad != 0 as u32 { return bad; }
+            check_operand_list(f, c.args)
+        },
+        ILInstr.Branch(b) => check_operand(f, b.cond),
+        ILInstr.FieldAddr(fa) => check_operand(f, fa.val),
+        ILInstr.StructConstruct(sc) => check_operand_list(f, sc.fields),
+        ILInstr.Syscall(s) => check_operand_list(f, s.args),
+        ILInstr.Phi(p) => {
+            let mut i = 0 as usize;
+            while i < p.preds.len {
+                let bad = check_operand(f, p.preds[i].val);
+                if bad != 0 as u32 { return bad; }
+                i = i + 1 as usize;
+            }
+            0 as SSAId
+        },
+        ILInstr.FDOpen(o) => check_operand(f, o.path),
+        ILInstr.FDRead(io) | ILInstr.FDWrite(io) => check_operand_pair(f, io.fd, io.buf),
+        ILInstr.IORingEnter(ie) => check_operand(f, ie.ring),
+        ILInstr.Cast(c) => check_operand(f, c.val),
+        ILInstr.Jmp(_)
+            | ILInstr.Unreachable
+            | ILInstr.Const(_)
+            | ILInstr.GlobalAddr(_)
+            | ILInstr.FuncAddr(_)
+            | ILInstr.StringConst(_)
+            | ILInstr.Param(_)
+            | ILInstr.GetEnv => 0 as SSAId,
+    };
+}
+
+// The ZIL spelling of INSTR, for a diagnostic that names what carried the bad operand.
+fn instr_opcode(instr: ILInstr) -> [u8] {
+    return match instr {
+        ILInstr.Add(_) => "add",
+        ILInstr.Sub(_) => "sub",
+        ILInstr.Mul(_) => "mul",
+        ILInstr.Div(_) => "div",
+        ILInstr.Rem(_) => "rem",
+        ILInstr.And(_) => "and",
+        ILInstr.Or(_) => "or",
+        ILInstr.Xor(_) => "xor",
+        ILInstr.Shl(_) => "shl",
+        ILInstr.Shr(_) => "shr",
+        ILInstr.CmpLt(_) => "cmp_lt",
+        ILInstr.CmpLe(_) => "cmp_le",
+        ILInstr.CmpGt(_) => "cmp_gt",
+        ILInstr.CmpGe(_) => "cmp_ge",
+        ILInstr.CmpEq(_) => "cmp_eq",
+        ILInstr.CmpNe(_) => "cmp_ne",
+        ILInstr.WrappingAdd(_) => "wrapping_add",
+        ILInstr.WrappingSub(_) => "wrapping_sub",
+        ILInstr.WrappingMul(_) => "wrapping_mul",
+        ILInstr.SaturatingAdd(_) => "saturating_add",
+        ILInstr.CheckedAdd(_) => "checked_add",
+        ILInstr.CheckedSub(_) => "checked_sub",
+        ILInstr.CheckedMul(_) => "checked_mul",
+        ILInstr.Alloc(_) => "alloc",
+        ILInstr.Load(_) => "load",
+        ILInstr.Store(_) => "store",
+        ILInstr.Drop(_) => "drop",
+        ILInstr.BoundsCheck(_) => "bounds_check",
+        ILInstr.SliceLoad(_) => "slice_load",
+        ILInstr.SliceStore(_) => "slice_store",
+        ILInstr.SliceLen(_) => "slice_len",
+        ILInstr.SliceConstruct(_) => "slice_construct",
+        ILInstr.ArrayConstruct(_) => "array_construct",
+        ILInstr.ArrayLoad(_) => "array_load",
+        ILInstr.ArrayStore(_) => "array_store",
+        ILInstr.Move(_) => "move",
+        ILInstr.RegionCast(_) => "region_cast",
+        ILInstr.IsSome(_) => "is_some",
+        ILInstr.Unwrap(_) => "unwrap",
+        ILInstr.Call(_) => "call",
+        ILInstr.Ret(_) => "ret",
+        ILInstr.Branch(_) => "branch",
+        ILInstr.Jmp(_) => "jmp",
+        ILInstr.GlobalAddr(_) => "global_addr",
+        ILInstr.FieldAddr(_) => "field_addr",
+        ILInstr.VariantMatch(_) => "variant_match",
+        ILInstr.SumConstruct(_) => "sum_construct",
+        ILInstr.Syscall(_) => "syscall",
+        ILInstr.Const(_) => "const",
+        ILInstr.Phi(_) => "phi",
+        ILInstr.StringConst(_) => "string_const",
+        ILInstr.CallPtr(_) => "call_ptr",
+        ILInstr.FuncAddr(_) => "func_addr",
+        ILInstr.FDOpen(_) => "fd_open",
+        ILInstr.FDClose(_) => "fd_close",
+        ILInstr.FDRead(_) => "fd_read",
+        ILInstr.FDWrite(_) => "fd_write",
+        ILInstr.IORingSetup(_) => "ioring_setup",
+        ILInstr.IORingEnter(_) => "ioring_enter",
+        ILInstr.IORingClose(_) => "ioring_close",
+        ILInstr.Param(_) => "param",
+        ILInstr.Likely(_) => "likely",
+        ILInstr.Unlikely(_) => "unlikely",
+        ILInstr.Cast(_) => "cast",
+        ILInstr.GetEnv => "get_env",
+        ILInstr.EndBorrow(_) => "end_borrow",
+        ILInstr.Release(_) => "release",
+        ILInstr.Neg(_) => "neg",
+        ILInstr.Not(_) => "not",
+        ILInstr.StructConstruct(_) => "struct_construct",
+        ILInstr.TupleConstruct(_) => "tuple_construct",
+        ILInstr.Borrow(_) => "borrow",
+        ILInstr.Unreachable => "unreachable",
+    };
+}
+
+// Why INSTR carries an operand that names no value; empty when every operand is defined.
+fn undefined_operand_issue(f: &ILFunction, instr: ILInstr, arena: *mut ArenaHeader) -> [u8] {
+    let bad = first_undefined_operand(f, instr);
+    if bad == 0 as u32 { return ""; }
+    let mut out = unsafe { ByteVec.new_raw(arena) };
+    out.push_slice("operand v");
+    push_dec(out, bad as u64);
+    out.push_slice(" names no defined value (in `");
+    out.push_slice(instr_opcode(instr));
+    out.push_slice("`)");
+    return out.as_slice();
+}
+
+// What is wrong with the operand types of INSTR (result SSA) in F; empty if nothing.
+fn instr_type_issue(
+    m: &ILModule,
+    f: &ILFunction,
+    instr: ILInstr,
+    ssa: SSAId,
+    arena: *mut ArenaHeader
+) -> [u8] {
+    let res = f.get_ssa_type(ssa);
+    match instr {
+        ILInstr.Store(st) => {
+            let pt = f.get_ssa_type(st.ptr);
+            // The address operand must be pointer-typed. `{ } *r = 5` once lowered to a store
+            // whose address was the result of an integer multiplication; nothing checked the
+            // address, so zilc emitted the store and the program faulted.
+            if st.ptr != NO_SSA as u32 && pt != 0 as u32 && pointee(m, pt) == 0 as u32 {
+                let mut out = unsafe { ByteVec.new_raw(arena) };
+                out.push_slice("store through ");
+                push_type_name(m, pt, out);
+                out.push_slice(
+                    ", which is not a pointer (the address operand must be pointer-typed)"
+                );
+                return out.as_slice();
+            }
+            let vt = f.get_ssa_type(st.val);
+            if !prim_eq(m, pointee(m, pt), vt) {
+                return describe2(m, "store of ", vt, " through ", pt, arena);
+            }
+        },
+        ILInstr.FieldAddr(fa) => {
+            // A field address is taken from a pointer to a struct or tuple. A pointer to a pointer, a
+            // box or a number is a lowering that skipped a dereference (`r.y` on `&Box<S>` once took its
+            // offset from the slot that holds the box), and a field index past the aggregate reads or
+            // writes beside it; both are a compiler bug, refused here instead of compiled.
+            let pt = f.get_ssa_type(fa.val);
+            if fa.val != NO_SSA as u32 && pt != 0 as u32 {
+                let base = pointee(m, pt);
+                if base != 0 as u32 && !field_base_ok(m, base, fa.field_idx) {
+                    let mut out = unsafe { ByteVec.new_raw(arena) };
+                    out.push_slice("field_addr ");
+                    push_dec(out, fa.field_idx as u64);
+                    out.push_slice(" of ");
+                    push_type_name(m, pt, out);
+                    out.push_slice(
+                        ", which does not point at a struct or tuple with that field (the address operand must point at the aggregate itself)"
+                    );
+                    return out.as_slice();
+                }
+            }
+        },
+        ILInstr.Load(src) => {
+            let pt = f.get_ssa_type(src);
+            if !prim_eq(m, pointee(m, pt), res) {
+                return describe2(m, "load of ", res, " through ", pt, arena);
+            }
+        },
+        ILInstr.Add(op)
+            | ILInstr.Sub(op)
+            | ILInstr.Mul(op)
+            | ILInstr.Div(op)
+            | ILInstr.Rem(op)
+            | ILInstr.And(op)
+            | ILInstr.Or(op)
+            | ILInstr.Xor(op)
+            | ILInstr.WrappingAdd(op)
+            | ILInstr.WrappingSub(op)
+            | ILInstr.WrappingMul(op)
+            | ILInstr.SaturatingAdd(op)
+            | ILInstr.CheckedAdd(op)
+            | ILInstr.CheckedSub(op)
+            | ILInstr.CheckedMul(op) => {
+            let lt = f.get_ssa_type(op.lhs);
+            let rt = f.get_ssa_type(op.rhs);
+            if !prim_eq(m, lt, rt) {
+                return describe2(m, "arithmetic on ", lt, " and ", rt, arena);
+            }
+            if !prim_eq(m, lt, res) {
+                return describe2(m, "arithmetic on ", lt, " giving ", res, arena);
+            }
+        },
+        ILInstr.Shl(op) | ILInstr.Shr(op) => {
+            let lt = f.get_ssa_type(op.lhs);
+            if !prim_eq(m, lt, res) {
+                return describe2(m, "a shift of ", lt, " giving ", res, arena);
+            }
+        },
+        ILInstr.CmpEq(op)
+            | ILInstr.CmpNe(op)
+            | ILInstr.CmpLt(op)
+            | ILInstr.CmpLe(op)
+            | ILInstr.CmpGt(op)
+            | ILInstr.CmpGe(op) => {
+            let lt = f.get_ssa_type(op.lhs);
+            let rt = f.get_ssa_type(op.rhs);
+            if !prim_eq(m, lt, rt) {
+                return describe2(m, "comparison of ", lt, " with ", rt, arena);
+            }
+        },
+        ILInstr.Ret(v) => {
+            if v != NO_SSA as u32 && v != 0 as u32 {
+                let vt = f.get_ssa_type(v);
+                if !prim_eq(m, vt, f.ret_ty) {
+                    return describe2(
+                        m,
+                        "return of ",
+                        vt,
+                        " from a function returning ",
+                        f.ret_ty,
+                        arena
+                    );
+                }
+            }
+        },
+        ILInstr.Call(c) => {
+            if (c.func_idx as usize) < m.functions.len() {
+                let callee = &m.functions[c.func_idx as usize];
+                if !callee.is_variadic {
+                    for i in 0 as usize..c.args.len {
+                        if i >= callee.params_len { break; }
+                        let at = f.get_ssa_type(c.args[i]);
+                        let pt = callee.param(i).ty;
+                        if !prim_eq(m, at, pt) {
+                            return describe2(
+                                m,
+                                "argument of ",
+                                at,
+                                " for a parameter of ",
+                                pt,
+                                arena
+                            );
+                        }
+                    }
+                }
+            }
+        },
+        _ => {},
+    }
+    return "";
+}
+
+// Whether A and B agree as far as this check compares. Integers of one width agree (`usize`
+// is a `u64`, and a sign change is the language's own rule for implicit conversions); floats,
+// `bool`, `char` and `unit` only with themselves. A type that is not a primitive (or no type) is
+// not compared.
+fn prim_eq(m: &ILModule, a: u32, b: u32) -> bool {
+    let pa = prim_tag(m, a);
+    let pb = prim_tag(m, b);
+    if pa == 0xffffffff as u32 || pb == 0xffffffff as u32 { return true; }
+    let wa = int_width(m.types[a as usize - 1 as usize].def.get_Primitive());
+    let wb = int_width(m.types[b as usize - 1 as usize].def.get_Primitive());
+    if wa != 0 as u32 || wb != 0 as u32 { return wa == wb; }
+    return pa == pb;
+}
+
+// An integer primitive's width in bits; 0 for any other primitive.
+fn int_width(p: ILPrimitive) -> u32 {
+    return match p {
+        ILPrimitive.U8 | ILPrimitive.I8 => 8 as u32,
+        ILPrimitive.U16 | ILPrimitive.I16 => 16 as u32,
+        ILPrimitive.U32 | ILPrimitive.I32 => 32 as u32,
+        ILPrimitive.U64 | ILPrimitive.I64 | ILPrimitive.USize | ILPrimitive.ISize => 64 as u32,
+        ILPrimitive.F32
+            | ILPrimitive.F64
+            | ILPrimitive.Bool
+            | ILPrimitive.Char
+            | ILPrimitive.Unit
+            | ILPrimitive.Never => 0 as u32,
+    };
+}
+
+// The primitive tag of type TY; 0xffffffff for anything else (or no type).
+fn prim_tag(m: &ILModule, ty: u32) -> u32 {
+    if ty == 0 as u32 || ty as usize > m.types.len() { return 0xffffffff as u32; }
+    return match m.types[ty as usize - 1 as usize].def {
+        ILType.Primitive(p) => p.get_tag(),
+        _ => 0xffffffff as u32,
+    };
+}
+
+// Whether BASE (the pointee of a field_addr operand) can have a field IDX: false for a pointer, a box or
+// a primitive, and for an index past the fields of a tuple or a struct. Every other shape (a slice, an
+// array, an enum payload, an unresolved type) is left to the other checks.
+fn field_base_ok(m: &ILModule, base: u32, idx: u32) -> bool {
+    if base == 0 as u32 || base as usize > m.types.len() { return true; }
+    return match m.types[base as usize - 1 as usize].def {
+        ILType.Ptr(_)
+            | ILType.PtrMut(_)
+            | ILType.Boxed(_)
+            | ILType.BoxedMut(_)
+            | ILType.RawPtr(_)
+            | ILType.RawPtrMut(_)
+            | ILType.Primitive(_) => false,
+        ILType.Tuple(elems) => (idx as usize) < elems.len,
+        ILType.User(u) => {
+            if u.id as usize >= m.typedefs.len() { return true; }
+            if m.typedefs[u.id as usize].get_tag() != IL_TYPEDEF_STRUCT { return true; }
+            (idx as usize) < m.typedefs[u.id as usize].get_Struct().fields.len
+        },
+        _ => true,
+    };
+}
+
+// What pointer type TY points at; 0 if it is not a pointer.
+fn pointee(m: &ILModule, ty: u32) -> u32 {
+    if ty == 0 as u32 || ty as usize > m.types.len() { return 0 as u32; }
+    return match m.types[ty as usize - 1 as usize].def {
+        ILType.Ptr(x)
+            | ILType.PtrMut(x)
+            | ILType.Boxed(x)
+            | ILType.BoxedMut(x)
+            | ILType.RawPtr(x)
+            | ILType.RawPtrMut(x) => x,
+        _ => 0 as u32,
+    };
+}
+
+// "A`X`B`Y`", naming types X and Y.
+fn describe2(m: &ILModule, a: [u8], x: u32, b: [u8], y: u32, arena: *mut ArenaHeader) -> [u8] {
+    let mut out = unsafe { ByteVec.new_raw(arena) };
+    out.push_slice(a);
+    push_type_name(m, x, out);
+    out.push_slice(b);
+    push_type_name(m, y, out);
+    return out.as_slice();
+}
+
+fn push_type_name(m: &ILModule, ty: u32, out: &mut ByteVec) {
+    out.push('`' as u8);
+    if ty == 0 as u32 || ty as usize > m.types.len() {
+        out.push_slice("?");
+    } else {
+        match m.types[ty as usize - 1 as usize].def {
+            ILType.Primitive(p) => { out.push_slice(il_prim_name(p)); },
+            ILType.Ptr(x) | ILType.Boxed(x) => {
+                out.push_slice("Ptr<");
+                push_inner_name(m, x, out);
+                out.push('>' as u8);
+            },
+            ILType.PtrMut(x) | ILType.BoxedMut(x) => {
+                out.push_slice("PtrMut<");
+                push_inner_name(m, x, out);
+                out.push('>' as u8);
+            },
+            ILType.RawPtr(x) => {
+                out.push_slice("RawPtr<");
+                push_inner_name(m, x, out);
+                out.push('>' as u8);
+            },
+            ILType.RawPtrMut(x) => {
+                out.push_slice("RawPtrMut<");
+                push_inner_name(m, x, out);
+                out.push('>' as u8);
+            },
+            _ => { out.push_slice("an aggregate"); },
+        }
+    }
+    out.push('`' as u8);
+}
+
+fn push_inner_name(m: &ILModule, ty: u32, out: &mut ByteVec) {
+    let t = prim_tag(m, ty);
+    if t == 0xffffffff as u32 { out.push_slice(".."); return; }
+    out.push_slice(il_prim_name(m.types[ty as usize - 1 as usize].def.get_Primitive()));
+}
+
+fn il_prim_name(p: ILPrimitive) -> [u8] {
+    return match p {
+        ILPrimitive.U8 => "u8",
+        ILPrimitive.U16 => "u16",
+        ILPrimitive.U32 => "u32",
+        ILPrimitive.U64 => "u64",
+        ILPrimitive.USize => "usize",
+        ILPrimitive.I8 => "i8",
+        ILPrimitive.I16 => "i16",
+        ILPrimitive.I32 => "i32",
+        ILPrimitive.I64 => "i64",
+        ILPrimitive.ISize => "isize",
+        ILPrimitive.F32 => "f32",
+        ILPrimitive.F64 => "f64",
+        ILPrimitive.Bool => "bool",
+        ILPrimitive.Char => "char",
+        ILPrimitive.Unit => "unit",
+        ILPrimitive.Never => "never",
+    };
+}

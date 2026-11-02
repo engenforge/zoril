@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_array_repeat_len_not_const.zrl:6:43: error: the length of an array repeat `[v; n]` must be a constant
+// The length fixes the array's type, so it must be known at compile time: a literal or a
+// `const`. A variable was an internal compiler error before.
+fn main() -> i32 {
+    let n = 3 as usize; let a = [0 as u8; n];
+    return a[0] as i32;
+}

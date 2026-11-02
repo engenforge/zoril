@@ -1,0 +1,43 @@
+// Repro for potential bootstrap compiler bug: miscompilation of large match statements.
+
+enum Kind {
+    A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+}
+
+fn test(k: Kind) -> i32 {
+    return match k {
+        Kind.A => 1,
+        Kind.B => 2,
+        Kind.C => 3,
+        Kind.D => 4,
+        Kind.E => 5,
+        Kind.F => 6,
+        Kind.G => 7,
+        Kind.H => 8,
+        Kind.I => 9,
+        Kind.J => 10,
+        Kind.K => 11,
+        Kind.L => 12,
+        Kind.M => 13,
+        Kind.N => 14,
+        Kind.O => 15,
+        Kind.P => 16,
+        Kind.Q => 17,
+        Kind.R => 18,
+        Kind.S => 19,
+        Kind.T => 20,
+        Kind.U => 21,
+        Kind.V => 22,
+        Kind.W => 23,
+        Kind.X => 24,
+        Kind.Y => 25,
+        Kind.Z => 26,
+    };
+}
+
+fn main() -> i32 {
+    if test(Kind.Z) == 26 {
+        return 0;
+    }
+    return 1;
+}

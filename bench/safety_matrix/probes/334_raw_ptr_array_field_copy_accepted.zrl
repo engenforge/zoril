@@ -1,0 +1,21 @@
+// name: A struct with a raw pointer in an array field is Copy when Copy is declared
+// expected: accept
+// Under Copy option A+, `impl Copy for Buf {}` opts back into Copy for a raw-pointer array struct.
+struct Buf {
+    slots: [*mut u8; 2],
+    n: usize,
+}
+
+impl Copy for Buf {}
+
+fn consume(b: Buf) -> usize {
+    return b.n;
+}
+
+fn main() -> i32 {
+    let b1 = Buf { slots: [0 as *mut u8, 0 as *mut u8], n: 2 };
+    let b2 = b1;
+    if consume(b1) != 2 { return 1; }
+    if consume(b2) != 2 { return 2; }
+    return 0;
+}

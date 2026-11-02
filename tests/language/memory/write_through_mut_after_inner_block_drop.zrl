@@ -1,0 +1,41 @@
+// The fuzzer's original shape (seed 23, program 4): a `&mut` local, an inner block that declares
+// a local before the write, the write through the reference, and a later `Drop` local. Parsed as
+// `({ } * rm2) = 5`, the write went through a wild address before the `Drop` value was built.
+// expected exit 1
+static mut DROPS: i32 = 0;
+
+struct D {
+    v: u64
+}
+
+trait Drop {
+    fn drop(self: &mut D);
+}
+
+impl Drop for D {
+    fn drop(self: &mut D) {
+        DROPS = DROPS + 1;
+    }
+}
+
+fn main() -> i32 {
+    let mut x: i32 = 3;
+    {
+        let rm2: &mut i32 = &mut x;
+        {
+            let q: i32 = 3;
+            if q != 3 {
+                return 97;
+            }
+        }
+        *rm2 = 5;
+        let d = D { v: 1 };
+        if d.v != 1 {
+            return 98;
+        }
+    }
+    if x != 5 {
+        return 99;
+    }
+    return DROPS;
+}

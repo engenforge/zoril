@@ -1,0 +1,22 @@
+// name: A reference into a raw arena's Vec buffer returned from the frame
+// expected: accept
+// The `unsafe` constructor takes the caller's arena pointer, so the buffer is not this frame's;
+// non-null and liveness are the constructor's stated obligation.
+import "mem.zrl";
+import "mem_raw.zrl";
+import "vec.zrl";
+use mem::{Arena, arena_raw};
+use mem_raw::ArenaHeader;
+use vec::Vec;
+
+fn view(arena: *mut ArenaHeader) -> &i32 {
+    let mut v = unsafe { Vec::<i32>.new_in_raw(arena) };
+    v.push(77);
+    return v.get(0).unwrap();
+}
+
+fn main() -> i32 {
+    let a = Arena.new(65536).unwrap();
+    let h = unsafe { arena_raw(&a) };
+    return *view(h) - 77;
+}

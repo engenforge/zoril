@@ -1,0 +1,25 @@
+// expected compile fail
+// The `static mut` rule walks the declared type through the shapes a reference or slice can hide
+// in. Its own copy looked through struct fields, arrays and tuples only, so a slice behind a `Box`
+// was accepted - the helper task (2026-10-12) made the walk one function, and it looks through
+// boxes and enum payloads the way the other two callers always had. The two sibling shapes this
+// file used to record as unpinnable are pinned below: the static-initializer task (2026-10-13)
+// turned the `extract_const_u64` internal compiler error they hit into a located error, so an
+// enum-payload initializer and a slice initializer are now reported for what they are (the
+// declaration first; the slice one has no constant form at all, a slice's data pointer being a
+// relocation a data image cannot hold).
+// EXPECT: tests/error_reporting/err_static_mut_slice_behind_box.zrl:19:31: error: a static mut cannot hold a reference or slice (use a raw pointer): BOXED
+// EXPECT: tests/error_reporting/err_static_mut_slice_behind_box.zrl:19:31: error: cannot cast to a slice, array, tuple, struct or box: `as` converts numbers and pointers, it does not make one value out of another
+// EXPECT: tests/error_reporting/err_static_mut_slice_behind_box.zrl:20:34: error: a static mut cannot hold a reference or slice (use a raw pointer): BOXED_ENUM
+// EXPECT: tests/error_reporting/err_static_mut_slice_behind_box.zrl:21:27: error: a static mut cannot hold a reference or slice (use a raw pointer): SLICED
+// EXPECT: tests/error_reporting/err_static_mut_slice_behind_box.zrl:21:27: error: a static or constant initializer must be a constant: an integer, float, char, bool, byte string or enum variant
+
+enum Payload { Nothing, Data([u8]) }
+
+static mut BOXED: Box<[u8]> = 0 as Box<[u8]>;
+static mut BOXED_ENUM: Payload = Payload.Nothing;
+static mut SLICED: [u8] = "x".as_slice();
+
+fn main() -> i32 {
+    return 0;
+}

@@ -1,0 +1,10 @@
+// expected compile fail
+// Tests that use of a moved value is reported at the second use.
+// EXPECT: error: use of moved value 'p'
+struct Point { x: i32, y: i32 }
+fn main() -> i32 {
+    let p = box Point { x: 1, y: 2 };
+    let q = p;
+    let r = p;  // @error "use of moved value 'p'" :13
+    0
+}

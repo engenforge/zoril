@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_float_narrowing.zrl:6:31: error: cannot implicitly convert `f64` to `f32` (it can lose information; write `as` to ask for it)
+// EXPECT: tests/error_reporting/err_float_narrowing.zrl:7:34: error: cannot implicitly convert `f32` to `i32` (it can lose information; write `as` to ask for it)
+// EXPECT: tests/error_reporting/err_float_narrowing.zrl:8:36: error: cannot implicitly convert `i64` to `f64` (it can lose information; write `as` to ask for it)
+fn main() -> i32 {
+    let w = 2.5; let n: f32 = w;
+    let g = 1.5f32; let j: i32 = g;
+    let k = 3 as i64; let m: f64 = k;
+    return 0;
+}

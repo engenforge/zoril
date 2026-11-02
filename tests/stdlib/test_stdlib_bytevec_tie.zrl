@@ -1,0 +1,29 @@
+// Safe arena handle: a ByteVec from new(&arena) is tied to its arena, so it must be used and
+// dropped before the arena is reset or destroyed.
+// expected exit 0
+
+import "mem.zrl";
+import "bytevec.zrl";
+use bytevec::ByteVec;
+use mem::Arena;
+
+// The ByteVec lives in this frame and is dropped when the function returns, releasing its
+// borrow of `a`.
+fn push_two(a: &Arena) -> usize {
+    let bv = ByteVec.new(a);
+    bv.push('o' as u8);
+    bv.push('k' as u8);
+    return bv.len();
+}
+
+fn main() -> i32 {
+    let mut arena = Arena.new(4096).unwrap();
+    if push_two(&arena) != 2 {
+        return 1;
+    }
+    arena.reset(); // no ByteVec from `arena` is live
+    if push_two(&arena) != 2 {
+        return 2;
+    }
+    return 0;
+}

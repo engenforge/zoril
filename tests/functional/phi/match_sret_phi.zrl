@@ -1,0 +1,29 @@
+// expected exit code: 0
+struct BigStruct { a: u64, b: u64, c: u64, d: u64 }
+
+fn make_struct(x: u64) -> BigStruct {
+    return BigStruct { a: x, b: x + 1, c: x + 2, d: x + 3 };
+}
+
+fn match_test(c: u8) -> BigStruct {
+    return match c {
+        1 => make_struct(10),
+        _ => make_struct(20),
+    };
+}
+
+fn main() -> i32 {
+    let r1 = match_test(1);
+    if r1.a != 10 as u64 { return 1; }
+    if r1.b != 11 as u64 { return 2; }
+    if r1.c != 12 as u64 { return 3; }
+    if r1.d != 13 as u64 { return 4; }
+
+    let r2 = match_test(2);
+    if r2.a != 20 as u64 { return 5; }
+    if r2.b != 21 as u64 { return 6; }
+    if r2.c != 22 as u64 { return 7; }
+    if r2.d != 23 as u64 { return 8; }
+
+    return 0;
+}

@@ -1,0 +1,85 @@
+// Test for ByteVec in stdlib/bytevec.zrl
+// [PASS] stdlib ByteVec new and push
+
+import "bytevec.zrl";
+import "io.zrl";
+import "mem.zrl";
+use bytevec::ByteVec;
+use io::{write, stdout};
+use mem::Arena;
+
+fn main() -> i32 {
+    let arena = Arena.new(4096).unwrap();
+    let mut bv = ByteVec.new(&arena);
+    
+    if bv.cap() != 0 as u64 {
+        return 99;
+    }
+    
+    // Push some bytes
+    bv.push('H' as u8);
+    
+    if bv.as_slice()[0] != 'H' as u8 {
+        return 88;
+    }
+    
+    bv.push('e' as u8);
+    bv.push('l' as u8);
+    bv.push('l' as u8);
+    bv.push('o' as u8);
+    
+    if bv.len() != 5 as u64 {
+        return 1;
+    }
+    
+    if bv.as_slice()[0] != 'H' as u8 {
+        return 9;
+    }
+
+    // Verify content before resize
+    let s_pre = bv.as_slice();
+    if s_pre[0] != 'H' as u8 {
+        return 10;
+    }
+    
+    // Force a resize (initial cap is 16)
+    let mut i = 0 as u64;
+    while i < 20 {
+        bv.push('!' as u8);
+        if bv.len() == 17 as u64 {
+            // Right after the resize from 16 to 32
+            if bv.as_slice()[0] != 'H' as u8 {
+                return 77;
+            }
+        }
+        i = i + 1;
+    }
+    
+    if bv.len() != 25 as u64 {
+        return 2;
+    }
+    
+    if bv.cap() < 25 as u64 {
+        return 3;
+    }
+
+    // Verify content
+    let s = bv.as_slice();
+    if s[0] != 'H' as u8 {
+        return 4;
+    }
+    if s[4] != 'o' as u8 {
+        return 5;
+    }
+    if s[24] != '!' as u8 {
+        return 6;
+    }
+
+    bv.push_slice(" more");
+    if bv.len() != 30 as u64 {
+        return 7;
+    }
+    
+    write(stdout(), "ByteVec test passed\n");
+    return 0;
+}

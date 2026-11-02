@@ -1,0 +1,13 @@
+// expected exit 0
+// #[borrows(b)]: the result points into b only, so a stays free to mutate while it is held.
+struct T { v: i32 }
+#[borrows(b)]
+fn pick(a: &T, b: &T) -> &i32 { return &b.v; }
+fn main() -> i32 {
+    let mut x = T { v: 1 };
+    let y = T { v: 2 };
+    let r = pick(&x, &y);
+    x.v = 10;            // fine: r does not borrow x
+    if *r != 2 || x.v != 10 { return 1; }
+    return 0;
+}

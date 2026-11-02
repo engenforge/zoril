@@ -1,0 +1,171 @@
+import "parser.zrl";
+import "ast.zrl";
+import "intern.zrl";
+import "io.zrl";
+import "fmt.zrl";
+import "lexer.zrl";
+import "mem_raw.zrl";
+import "parser/base.zrl";
+use ast::AST;
+use base::{LoadState, Parser};
+use intern::InternTable;
+use io::{write, stdout};
+use fmt::write_u64;
+use lexer::Lexer;
+use mem_raw::{ArenaHeader, arena_init};
+
+fn test_minimal_parser() -> i32 {
+    let arena_box = unsafe { arena_init(1024 * 1024) };
+    let arena = arena_box as *mut ArenaHeader;
+    let mut ast = AST.new(arena);
+
+    let source = "import \"std.zrl\";";
+    let mut table = unsafe { InternTable.new_raw(arena) };
+    let lex = Lexer.new(source, table, arena);
+    let mut parser = unsafe { &mut *Parser.new(lex, &mut *ast, table, "test_minimal", 0 as *mut u32, 0, 0 as *mut LoadState) };
+
+    write(stdout(), "Minimal test with Parser passed\n");
+    return 0;
+}
+
+fn test_v11_parser_driver() -> i64 {
+    write(stdout(), "Starting test_v11_parser_driver...\n");
+    let arena_box = unsafe { arena_init(1024 * 1024) };
+    let arena = arena_box as *mut ArenaHeader;
+    let mut intern_table = unsafe { InternTable.new_raw(arena) };
+    let mut ast = AST.new(arena);
+
+    let source = "pub struct Point { pub x: i32, pub y: i32 } fn add(a: i32, b: i32) -> i32 { } pub enum Color { Red, Green, Blue } impl Point { fn get_x(self: &Point) -> i32 { return 0; } }";
+
+    let lexer = Lexer.new(source, intern_table, arena);
+    let mut parser = unsafe { &mut *Parser.new(lexer, &mut *ast, intern_table, "test", 0 as *mut u32, 0, 0 as *mut LoadState) };
+
+    let decls = parser.parse_module();
+
+    write(stdout(), "decls.len=");
+    let mut out = stdout();
+    let _ = write_u64(&mut out, decls.len);
+    write(stdout(), "\n");
+
+    if decls.len == 4 as u64 {
+        write(stdout(), "Pass\n");
+        return 0;
+    }
+    write(stdout(), "Fail: expected 4 declarations\n");
+    return 1;
+}
+
+fn test_v11_parser() -> i32 {
+    let arena_box = unsafe { arena_init(4096 * 100) };
+    let arena = arena_box as *mut ArenaHeader;
+    let mut table = unsafe { InternTable.new_raw(arena) };
+    let mut ast = AST.new(arena);
+
+    let source = "const X: u32 = 0; static mut Y: u32 = 0; pub fn printf(fmt: *u8) -> i32 { } enum Option { None, Some(u32) }";
+    let lex = Lexer.new(source, table, arena);
+    let mut parser = unsafe { &mut *Parser.new(lex, &mut *ast, table, "test", 0 as *mut u32, 0, 0 as *mut LoadState) };
+
+    let decls = parser.parse_module();
+
+    if decls.len != 4 as u64 {
+        write(stdout(), "Expected 4 declarations\n");
+        return 1;
+    }
+
+    // 0: Const
+    match decls[0] {
+        Decl.Const(c) => { },
+        _ => { return 5; },
+    }
+
+    // 1: Static
+    match decls[1] {
+        Decl.Static(s) => { },
+        _ => { return 7; },
+    }
+
+    // 2: Fn
+    match decls[2] {
+        Decl.Fn(f) => { },
+        _ => { return 9; },
+    }
+
+    // 3: Enum
+    match decls[3] {
+        Decl.Enum(e) => { },
+        _ => { return 13; },
+    }
+
+    write(stdout(), "Parser v1.1 full test passed\n");
+    return 0;
+}
+
+fn test_parser_errors() -> i32 {
+    let arena_box = unsafe { arena_init(1024 * 1024 * 2) };
+    let arena = arena_box as *mut ArenaHeader;
+    let mut table = unsafe { InternTable.new_raw(arena) };
+    let mut ast = AST.new(arena);
+
+    // Invalid syntax: 'const' missing '='
+    let source = "const X: u32 42;";
+    let lexer = Lexer.new(source, table, arena);
+    let mut parser = unsafe { &mut *Parser.new(lexer, &mut *ast, table, "test", 0 as *mut u32, 0, 0 as *mut LoadState) };
+
+    write(stdout(), "Testing error reporting (expected error at line 1, col 14):\n");
+    let decls = parser.parse_module();
+
+    return 0;
+}
+
+fn test_lexer() -> i32 {
+    let arena_box = unsafe { arena_init(131072) };
+    let arena = arena_box as *mut ArenaHeader;
+    let mut table = unsafe { InternTable.new_raw(arena) };
+
+    let source = "fn main() { let x = 42; return x; }";
+    let mut lex = Lexer.new(source, table, arena);
+
+    match lex.next_token().token { Token.KFn => {}, _ => { return 1; }, };
+    match lex.next_token().token { Token.Ident(id) => { if id != 1 { return 2; } }, _ => { return 2; }, };
+    match lex.next_token().token { Token.LParen => {}, _ => { return 3; }, };
+    match lex.next_token().token { Token.RParen => {}, _ => { return 4; }, };
+    match lex.next_token().token { Token.LBrace => {}, _ => { return 5; }, };
+    match lex.next_token().token { Token.KLet => {}, _ => { return 6; }, };
+    match lex.next_token().token { Token.Ident(id) => { if id != 2 { return 7; } }, _ => { return 7; }, };
+    match lex.next_token().token { Token.Equal => {}, _ => { return 8; }, };
+    match lex.next_token().token { Token.Int(v) => { if v.0 != 42 { return 9; } }, _ => { return 9; }, };
+    match lex.next_token().token { Token.Semi => {}, _ => { return 10; }, };
+    match lex.next_token().token { Token.KReturn => {}, _ => { return 11; }, };
+    match lex.next_token().token { Token.Ident(id) => { if id != 2 { return 12; } }, _ => { return 12; }, };
+    match lex.next_token().token { Token.Semi => {}, _ => { return 13; }, };
+    match lex.next_token().token { Token.RBrace => {}, _ => { return 14; }, };
+    match lex.next_token().token { Token.Eof => {}, _ => { return 15; }, };
+
+    write(stdout(), "Lexer full test passed\n");
+    return 0;
+}
+
+fn main() -> i32 {
+    let mut r = 0;
+    write(stdout(), "test_minimal_parser...\n");
+    r = test_minimal_parser();
+    if r != 0 { return r; }
+
+    write(stdout(), "test_v11_parser_driver...\n");
+    r = test_v11_parser_driver() as i32;
+    if r != 0 { return r; }
+
+    write(stdout(), "test_v11_parser...\n");
+    r = test_v11_parser();
+    if r != 0 { return r; }
+
+    write(stdout(), "test_parser_errors...\n");
+    r = test_parser_errors();
+    if r != 0 { return r; }
+
+    write(stdout(), "test_lexer...\n");
+    r = test_lexer();
+    if r != 0 { return r; }
+
+    return 0;
+}

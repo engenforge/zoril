@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: error: cannot access private field: bytes
+// A Str's bytes field is private to str.zrl, so no other module can build a
+// Str around unchecked bytes (or read its field directly).
+import "str.zrl";
+use str::Str;
+
+fn main() -> i32 {
+    let forged = Str { bytes: "\xff" }; // @error "cannot access private field: bytes"
+    return forged.len() as i32;
+}

@@ -1,0 +1,13 @@
+// expected exit 2
+import "lib.zrl";
+
+fn main() -> i32 {
+    let a = 1;
+    let b = 2;
+    let mut r: &i32 = &a;
+    {
+        let c = 3;
+        r = lib::gen_borrows(&c, &b);
+    }
+    return *r;
+}

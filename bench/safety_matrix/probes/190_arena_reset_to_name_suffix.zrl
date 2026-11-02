@@ -1,0 +1,27 @@
+// name: Name-suffix match on reset_to does not exempt non-mem::Arena types
+// expected: compile_reject
+// The epoch exemption for `Arena.reset_to(m)` belongs strictly to `mem::Arena`.
+// A user-defined type ending with `Arena` that implements `mark` and `reset_to`
+// cannot bypass borrow checking when mutably borrowing the container.
+import "mem.zrl";
+import "vec.zrl";
+use mem::{Arena, ArenaMark};
+use vec::Vec;
+
+struct MyArena { inner: Arena }
+
+impl MyArena {
+    fn mark(self: &MyArena) -> ArenaMark { return self.inner.mark(); }
+    fn reset_to(self: &mut MyArena, m: ArenaMark) { self.inner.reset(); }
+}
+
+fn main() -> i32 {
+    let mut ma = MyArena { inner: Arena.new(65536 as u64).unwrap() };
+    let mut v = Vec::<u64>.new_in(&ma.inner);
+    v.push(7 as u64);
+    let m = ma.mark();
+    ma.reset_to(m);
+    let mut w = Vec::<u64>.new_in(&ma.inner);
+    w.push(99 as u64);
+    return v.as_slice()[0] as i32;
+}

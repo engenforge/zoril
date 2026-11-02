@@ -1,0 +1,21 @@
+// expected exit 0
+import "lib_spec.zrl";
+use lib_spec::{SpDrop, SpImplicit, SpPair, SpPub, SpWrap};
+
+fn main() -> i32 {
+    let w = SpWrap::<i32> { v: 40 };
+    if w.f() != 41 { return 1; }
+    if w.inh() != 43 { return 2; }
+    if lib_spec::sp_priv(&w) != 42 { return 3; }
+    {
+        let _d = SpDrop::<i32> { v: 0 };
+    }
+    if lib_spec::sp_drops() != 1 { return 4; }
+    let p = SpPair::<(i32, u64)> { v: (1, 2) };
+    if p.total() != 3 { return 5; }
+    let im = SpImplicit::<i32> { x: 42 };
+    if im.get() != 42 { return 6; }
+    if *im.at() != 42 { return 8; }
+    if im.five() != 5 { return 7; }
+    return 0;
+}

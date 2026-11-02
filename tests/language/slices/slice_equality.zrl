@@ -1,0 +1,34 @@
+// expected exit 0
+// `==` / `!=` on slices compare length and contents. Before, they compared the slice
+// descriptors, so two equal string literals were unequal.
+fn same(a: [u8], b: [u8]) -> bool { return a == b; }
+
+fn main() -> i32 {
+    let hello = "hello";
+    let hello2 = "hello";
+    if !(hello == hello2) { return 1; }
+    if hello != hello2 { return 2; }
+    if hello == "world" { return 3; }
+    if !(hello != "world") { return 4; }
+    if hello == "hell" { return 5; }
+    if hello == "helloo" { return 6; }
+    if !("" == "") { return 7; }
+    if "" == "a" { return 8; }
+    if !same(hello, "hello") { return 9; }
+    if same(hello, "hellO") { return 10; }
+
+    // Sub-slices compare by contents, not by address.
+    let hel = unsafe { @slice(hello.ptr, 3 as usize) };
+    if !(hel == "hel") { return 11; }
+
+    // Wider elements compare every byte of every element.
+    let a: [u32; 3] = [1, 2, 70000];
+    let b: [u32; 3] = [1, 2, 70000];
+    let c: [u32; 3] = [1, 2, 4464];
+    let sa: [u32] = &a;
+    let sb: [u32] = &b;
+    let sc: [u32] = &c;
+    if !(sa == sb) { return 12; }
+    if sa == sc { return 13; }
+    return 0;
+}

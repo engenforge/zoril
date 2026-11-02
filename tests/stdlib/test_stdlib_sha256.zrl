@@ -1,0 +1,137 @@
+// Test for SHA-256 in stdlib/sha256.zrl
+// NIST FIPS 180-4 vector coverage and streaming validation.
+// [PASS] stdlib SHA-256 NIST vectors and streaming
+
+import "core.zrl";
+import "sha256.zrl";
+use sha256::{Sha256, sha256_hex, sha256_hex_arr};
+
+fn eq_hex(actual: &[u8; 64], expected: [u8]) -> bool {
+    if expected.len != 64 {
+        return false;
+    }
+    let mut i = 0 as usize;
+    while i < 64 {
+        if actual[i] != expected[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn test_nist_empty() -> bool {
+    let mut hex: [u8; 64] = [0; 64];
+    sha256_hex("", &mut hex);
+    return eq_hex(&hex, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+}
+
+fn test_nist_abc() -> bool {
+    let mut hex: [u8; 64] = [0; 64];
+    sha256_hex("abc", &mut hex);
+    return eq_hex(&hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+}
+
+fn test_nist_448() -> bool {
+    let mut hex: [u8; 64] = [0; 64];
+    sha256_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", &mut hex);
+    return eq_hex(&hex, "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+}
+
+fn test_nist_896() -> bool {
+    let mut hex: [u8; 64] = [0; 64];
+    sha256_hex("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu", &mut hex);
+    return eq_hex(&hex, "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1");
+}
+
+fn test_nist_million_a() -> bool {
+    let mut h = Sha256.new();
+    let hundred_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let mut i = 0 as usize;
+    while i < 10000 {
+        h.update(hundred_a);
+        i = i + 1;
+    }
+    let mut hex: [u8; 64] = [0; 64];
+    h.finalize_hex(&mut hex);
+    return eq_hex(&hex, "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+}
+
+fn test_streaming_1byte_chunks() -> bool {
+    let msg = "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu";
+    let mut h = Sha256.new();
+    let mut i = 0 as usize;
+    while i < msg.len {
+        let chunk = subslice(msg, i, 1);
+        h.update(chunk);
+        i = i + 1;
+    }
+    let mut hex: [u8; 64] = [0; 64];
+    h.finalize_hex(&mut hex);
+    return eq_hex(&hex, "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1");
+}
+
+fn test_streaming_7byte_chunks() -> bool {
+    let msg = "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu";
+    let mut h = Sha256.new();
+    let mut i = 0 as usize;
+    while i < msg.len {
+        let mut rem = msg.len - i;
+        if rem > 7 {
+            rem = 7;
+        }
+        let chunk = subslice(msg, i, rem);
+        h.update(chunk);
+        i = i + rem;
+    }
+    let mut hex: [u8; 64] = [0; 64];
+    h.finalize_hex(&mut hex);
+    return eq_hex(&hex, "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1");
+}
+
+fn test_hasher_reset() -> bool {
+    let mut h = Sha256.new();
+    h.update("junk data that should be discarded after reset");
+    h.reset();
+
+    h.update("abc");
+    let mut hex: [u8; 64] = [0; 64];
+    h.finalize_hex(&mut hex);
+    return eq_hex(&hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+}
+
+fn test_hex_arr() -> bool {
+    let hex = sha256_hex_arr("abc");
+    return eq_hex(&hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+}
+
+fn main() -> i32 {
+    if !test_nist_empty() {
+        return 1;
+    }
+    if !test_nist_abc() {
+        return 2;
+    }
+    if !test_nist_448() {
+        return 3;
+    }
+    if !test_nist_896() {
+        return 4;
+    }
+    if !test_nist_million_a() {
+        return 5;
+    }
+    if !test_streaming_1byte_chunks() {
+        return 6;
+    }
+    if !test_streaming_7byte_chunks() {
+        return 7;
+    }
+    if !test_hasher_reset() {
+        return 8;
+    }
+    if !test_hex_arr() {
+        return 9;
+    }
+    return 0;
+}

@@ -1,0 +1,13 @@
+// name: A borrow held in an array literal keeps the place borrowed
+// expected: compile_reject
+// `[&mut z]` builds an array out of a borrowed operand, so the array holds the borrow of `z`
+// and writing `z` while it is live is rejected. This is the program that walks `rv:Array`; the
+// tuple-and-array test (tests/error_reporting/err_borrow_in_tuple_and_array.zrl) exercised the
+// same route, but a cited `compile_reject` probe could not name it.
+fn main() -> i32 {
+    let mut z: i32 = 1;
+    let a = [&mut z];
+    z = 5;
+    *a[0] = 7;
+    return z;
+}

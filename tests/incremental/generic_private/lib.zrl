@@ -1,0 +1,9 @@
+fn helper(x: i64) -> i64 { return x + 1; }
+pub struct Box1 { pub v: i64 }
+impl Box1 {
+    fn bump(v: i64) -> i64 { return v + 1; }
+}
+// Reaches one private free function and one private method (by static path); both must link.
+pub fn wrap<T>(v: T, x: i64) -> i64 { return Box1.bump(helper(x)) - 1; }
+fn unrelated() -> i64 { return 7; }
+pub fn plain() -> i64 { return unrelated(); }

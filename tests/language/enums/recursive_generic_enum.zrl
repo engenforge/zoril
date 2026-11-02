@@ -1,0 +1,7 @@
+// expected exit 1
+// Self-recursive GENERIC enum traversed recursively. Fixed: the monomorphizer
+// now correctly sizes types containing Box<Self>, so depth() returns 1 and the
+// test exits 1 as expected.
+enum List<T> { Nil, Cons((T, Box<List<T>>)) }
+fn depth(l: &List<i32>) -> i32 { return match l { Cons(p) => depth(&*p.1) + 1, Nil => 0 }; }
+fn main() -> i32 { let a = List.Cons((7, box List.Nil)); return depth(&a); }

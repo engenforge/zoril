@@ -1,0 +1,26 @@
+// name: An element type whose size wraps past 2^64, written through a Vec
+// expected: compile_reject
+// With the element size computed as 0, the `Vec` allocated 0 bytes per element and every index
+// into an element passed its bounds check: a safe write through `get_mut(0)` reached about 2^34
+// bytes past the allocation (exit 139). The type is rejected where it is written now.
+import "mem_raw.zrl";
+import "vec.zrl";
+use mem_raw::arena_init;
+use vec::Vec;
+
+struct S {
+    a: [[[[u8; 65536]; 65536]; 65536]; 65536],
+    b: u64,
+}
+
+fn main(argc: i32, argv: &[u8]) -> i32 {
+    let mut v = Vec::<S>.new();
+    v.resize(1);
+    let mut r = match v.get_mut(0) {
+        Option.Some(x) => x,
+        Option.None => return 3
+    };
+    let i = argc as usize + 3 as usize;
+    r.a[0][i][0][0] = 9;
+    return 0;
+}

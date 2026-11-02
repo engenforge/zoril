@@ -1,0 +1,822 @@
+// The parser: expressions.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "intern.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "ast.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "module_path.zrl";
+import "base.zrl";
+use ast::{ArrayLiteralExpr, ArrayRepeatExpr, BinaryExpr, BinaryOp, BlockExpr, BoxExpr, CallExpr, CastExpr, ClosureExpr, EXPR_GENERIC, Expr, ExprId, FieldValue, GenericExpr, IfExpr, IndexExpr, IntrinsicExpr, Literal, MatchArm, MatchExpr, MemberAccessExpr, PAREN_EXPR, Param, Pattern, PatternId, Span, Stmt, StmtId, StructLiteralExpr, TupleAccessExpr, TupleLiteralExpr, TypeId, UnaryExpr, UnaryOp};
+use base::Parser;
+use bytevec::ByteVec;
+use token::{Token, TokenKind};
+use vec::Vec;
+
+// Binding power of the prefix operators: above every binary operator.
+const UNARY_PRECEDENCE: i32 = 95;
+
+impl Parser {
+    pub fn parse_if(self: &mut Parser) -> ExprId {
+        let span = self.cur.span;
+        self.expect(Token.KIf);
+        if self.is_kind(TokenKind.KLet) {
+            return self.parse_if_let(span);
+        }
+        let cond = self.parse_expr_full(0 as u32, false);
+        let then_b = self.parse_block();
+        let then_block = self.ast.alloc_expr(Expr.Block(then_b), span);
+
+        let mut else_block = 0 as ExprId;
+        if self.is_kind(TokenKind.KElse) {
+            self.next_token();
+            if self.is_kind(TokenKind.KIf) {
+                else_block = self.parse_if();
+            } else {
+                let else_b = self.parse_block();
+                else_block = self.ast.alloc_expr(Expr.Block(else_b), span);
+            }
+        }
+        return self.ast.alloc_expr(
+            Expr.If(IfExpr { cond: cond, then_block: then_block, else_block: else_block }),
+            span
+        );
+    }
+
+    // `if let PAT = EXPR { A } else { B }` is `match EXPR { PAT => { A }, _ => { B } }`: the
+    // match machinery gives it the same bindings, borrows and moves. `if` already consumed.
+    fn parse_if_let(self: &mut Parser, span: Span) -> ExprId {
+        self.expect(Token.KLet);
+        let pattern = self.parse_pattern();
+        self.expect(Token.Equal);
+        let scrut = self.parse_expr_full(0 as u32, false);
+        let then_b = self.parse_block();
+        let then_block = self.ast.alloc_expr(Expr.Block(then_b), span);
+        let mut else_block = 0 as ExprId;
+        if self.is_kind(TokenKind.KElse) {
+            self.next_token();
+            if self.is_kind(TokenKind.KIf) {
+                else_block = self.parse_if();
+            } else {
+                let else_b = self.parse_block();
+                else_block = self.ast.alloc_expr(Expr.Block(else_b), span);
+            }
+        } else {
+            else_block = self.empty_block_expr(span);
+        }
+        return self.two_arm_match(scrut, pattern, then_block, else_block, span);
+    }
+
+    // `match SCRUT { PAT => YES, _ => NO }`.
+    pub fn two_arm_match(
+        self: &mut Parser,
+        scrut: ExprId,
+        pattern: PatternId,
+        yes: ExprId,
+        no: ExprId,
+        span: Span
+    ) -> ExprId {
+        let mut arms = unsafe { Vec::<MatchArm>.new_in_raw(self.arena) };
+        arms.push(MatchArm { pattern: pattern, guard: 0 as ExprId, body: yes });
+        let wild = self.ast.alloc_pattern(Pattern.Wildcard, span);
+        arms.push(MatchArm { pattern: wild, guard: 0 as ExprId, body: no });
+        return self.ast.alloc_expr(
+            Expr.Match(MatchExpr { expr: scrut, arms: arms.as_slice(), desugared: true }),
+            span
+        );
+    }
+
+    fn empty_block_expr(self: &mut Parser, span: Span) -> ExprId {
+        return self.ast.alloc_expr(
+            Expr.Block(BlockExpr {
+                stmts: @slice(0 as *mut StmtId, 0 as usize),
+                tail_expr: 0 as ExprId,
+                is_unsafe: false,
+                end_span: Span { start: 0, end: 0, line: 0, col: 0 }
+            }),
+            span
+        );
+    }
+
+    pub fn parse_match(self: &mut Parser) -> ExprId {
+        let span = self.cur.span;
+        self.expect(Token.KMatch);
+        let expr = self.parse_expr_full(0, false); // Don't allow struct literal in match expr
+        self.expect(Token.LBrace);
+
+        let mut arms = unsafe { Vec::<MatchArm>.new_in_raw(self.arena) };
+
+        while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+            let pattern = self.parse_pattern();
+            if pattern == 0 as u32 {
+                self.report_error("expected pattern", self.cur.span);
+                self.next_token();
+                continue;
+            }
+            let mut guard = 0 as ExprId;
+            if self.is_kind(TokenKind.KIf) {
+                self.next_token();
+                guard = self.parse_expr_full(0 as u32, false);
+            }
+            self.expect(Token.FatArrow);
+            let body = self.parse_expr_full(0, false);
+
+            arms.push(MatchArm {
+                pattern: pattern,
+                guard: guard,
+                body: body,
+            });
+
+            if self.is_kind(TokenKind.Comma) { self.next_token(); }
+        }
+        self.expect(Token.RBrace);
+        let arms_slice = arms.as_slice();
+        return self.ast.alloc_expr(
+            Expr.Match(MatchExpr { expr: expr, arms: arms_slice, desugared: false }),
+            span
+        );
+    }
+
+    // `|a: A, b: B| -> R { .. }`, or `|| ..` (one token) with no parameters.
+    fn parse_closure(self: &mut Parser) -> ExprId {
+        let span = self.cur.span;
+        let mut params = unsafe { Vec::<Param>.new_in_raw(self.arena) };
+        if self.is_kind(TokenKind.PipePipe) {
+            self.next_token();
+            return self.parse_closure_rest(params.as_slice(), span);
+        }
+        self.expect(Token.Pipe);
+        while !self.is_kind(TokenKind.Pipe) && !self.is_kind(TokenKind.Eof) {
+            let p_name = self.cur.token.get_ident_id();
+            self.expect(Token.Ident(0 as u32));
+            // `x` alone takes its type from the function type the context expects (0 here).
+            let mut p_ty = 0 as TypeId;
+            if self.is_kind(TokenKind.Colon) {
+                self.next_token();
+                p_ty = self.parse_type();
+            }
+
+            params.push(Param { name: p_name, ty: p_ty, is_mut: false });
+
+            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+        }
+        self.expect(Token.Pipe);
+        return self.parse_closure_rest(params.as_slice(), span);
+    }
+
+    // A closure's `-> R` and body, after its parameters: a block, or one expression (`|x| x + 1`),
+    // held as a block with that expression as its tail.
+    fn parse_closure_rest(self: &mut Parser, params: [Param], span: Span) -> ExprId {
+        let mut ret_ty = 0 as TypeId;
+        if self.is_kind(TokenKind.Arrow) {
+            self.next_token();
+            ret_ty = self.parse_type();
+        }
+
+        let mut body = 0 as ExprId;
+        if self.is_kind(TokenKind.LBrace) {
+            let body_b = self.parse_block();
+            body = self.ast.alloc_expr(Expr.Block(body_b), span);
+        } else {
+            let tail = self.parse_expr(0);
+            body = self.ast.alloc_expr(
+                Expr.Block(BlockExpr {
+                    stmts: @slice(0 as *mut StmtId, 0 as usize),
+                    tail_expr: tail,
+                    is_unsafe: false,
+                    end_span: Span { start: 0, end: 0, line: 0, col: 0 }
+                }),
+                self.ast.expr_spans[tail as usize]
+            );
+        }
+
+        return self.ast.alloc_expr(
+            Expr.Closure(ClosureExpr {
+                params: params,
+                ret_ty: ret_ty,
+                body: body
+            }),
+            span
+        );
+    }
+
+    fn parse_intrinsic(self: &mut Parser) -> ExprId {
+        let span = self.cur.span;
+        self.expect(Token.At);
+        let name_id = self.cur.token.get_ident_id();
+        self.expect(Token.Ident(0 as u32));
+
+        // Optional type argument list: @intrinsic<T1, T2, ...>(args)
+        let mut type_args = unsafe { Vec::<TypeId>.new_in_raw(self.arena) };
+        if self.is_kind(TokenKind.Less) {
+            self.next_token();
+            while !self.is_kind(TokenKind.Greater) && !self.is_kind(TokenKind.Eof) {
+                type_args.push(self.parse_type());
+                if self.is_kind(TokenKind.Comma) { self.next_token(); }
+            }
+            self.expect(Token.Greater);
+        }
+
+        self.expect(Token.LParen);
+
+        let mut args = unsafe { Vec::<ExprId>.new_in_raw(self.arena) };
+
+        while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+            args.push(self.parse_expr(0));
+            if self.is_kind(TokenKind.Comma) { self.next_token(); }
+        }
+        self.expect(Token.RParen);
+
+        return self.ast.alloc_expr(
+            Expr.Intrinsic(IntrinsicExpr {
+                name: name_id,
+                args: args.as_slice(),
+                type_args: type_args.as_slice()
+            }),
+            span
+        );
+    }
+
+    pub fn parse_expr(self: &mut Parser, prec: i32) -> ExprId {
+        return self.parse_expr_full(prec, true);
+    }
+
+    pub fn parse_expr_full(self: &mut Parser, prec: i32, allow_struct: bool) -> ExprId {
+        let mut lhs = self.parse_primary_full(allow_struct);
+        while prec < self.get_precedence(&self.cur.token, allow_struct) {
+            let kind = self.cur.token.kind();
+            if kind == TokenKind.Eof { break; }
+
+            // In a condition, `{` starts the body, not a struct literal.
+            if !allow_struct && kind == TokenKind.LBrace {
+                break;
+            }
+
+            // A `(` or `[` after an `if`, `match` or block starts the next statement: `if c { .. }
+            // (x)` is not a call. `(if c { .. })(x)` still is.
+            if kind == TokenKind.LParen || kind == TokenKind.LBracket {
+                let ends_in_brace = match self.ast.exprs[lhs as usize] {
+                    Expr.If(_) | Expr.Match(_) | Expr.Block(_) => true,
+                    _ => false,
+                };
+                if ends_in_brace { break; }
+            }
+
+            self.next_token();
+            lhs = self.parse_infix_full(lhs, kind, allow_struct);
+        }
+
+        return lhs;
+    }
+
+    // A block-like expression in statement position (`{ ... }` or `unsafe { ... }`). It is one
+    // expression only as far as a cast or a postfix step: `unsafe { b } as *mut T` and
+    // `{ x }.field` keep working, while a binary operator ends the statement, so `{ } *r = 5` is
+    // the block and then the dereference assignment, never `({ }) * r = 5` (which lowered the
+    // multiplication of unit by the pointer and stored through the result).
+    pub fn parse_block_statement_expr(self: &mut Parser) -> ExprId {
+        let allow_struct = true;
+        let mut lhs = self.parse_primary_full(allow_struct);
+        loop {
+            let kind = self.cur.token.kind();
+            // `(` and `[` directly after the block start a new statement (`{ } (x)` is not a
+            // call), but after a field or method step they are the call's or index's brackets:
+            // `unsafe { f() }.method(x)` stays one expression.
+            if kind == TokenKind.LParen || kind == TokenKind.LBracket {
+                let ends_in_brace = match self.ast.exprs[lhs as usize] {
+                    Expr.If(_) | Expr.Match(_) | Expr.Block(_) => true,
+                    _ => false,
+                };
+                if ends_in_brace { return lhs; }
+            } else if kind != TokenKind.KAs
+                && kind != TokenKind.Dot
+                && kind != TokenKind.Question
+                && kind != TokenKind.DoubleColon {
+                return lhs;
+            }
+            self.next_token();
+            lhs = self.parse_infix_full(lhs, kind, allow_struct);
+        }
+    }
+
+    // A primary expression: a literal, a name or path, a prefix operator and its operand,
+    // or a form that starts with a keyword or a bracket.
+    fn parse_primary_full(self: &mut Parser, allow_struct: bool) -> ExprId {
+        let span = self.cur.span;
+        let kind = self.cur.token.kind();
+        return match kind {
+            TokenKind.Star => self.parse_prefix(UnaryOp.Deref, allow_struct, span),
+            TokenKind.Minus => self.parse_prefix(UnaryOp.Neg, allow_struct, span),
+            TokenKind.Bang => self.parse_prefix(UnaryOp.Not, allow_struct, span),
+            TokenKind.Amp => self.parse_reference(allow_struct, span),
+            TokenKind.AmpAmp => {
+                // `&&x` lexes as one `&&` token: a reference to a reference.
+                let inner = self.parse_reference(allow_struct, span);
+                self.ast.alloc_expr(Expr.Unary(UnaryExpr { op: UnaryOp.Ref, expr: inner }), span)
+            },
+            TokenKind.At => self.parse_intrinsic(),
+            TokenKind.KIf => self.parse_if(),
+            TokenKind.KMatch => self.parse_match(),
+            TokenKind.Pipe | TokenKind.PipePipe => self.parse_closure(),
+            TokenKind.KBox => self.parse_box(allow_struct, span),
+            TokenKind.KWhile => { let s = self.parse_while(); self.stmt_as_expr(s, span) },
+            TokenKind.KLoop => { let s = self.parse_loop(); self.stmt_as_expr(s, span) },
+            TokenKind.KFor => { let s = self.parse_for(); self.stmt_as_expr(s, span) },
+            TokenKind.KReturn => {
+                self.next_token();
+                let e = self.parse_expr_full(0, allow_struct);
+                self.ast.alloc_expr(Expr.Return(e), span)
+            },
+            TokenKind.KBreak => { self.next_token(); self.ast.alloc_expr(Expr.Break, span) },
+            TokenKind.KContinue => { self.next_token(); self.ast.alloc_expr(Expr.Continue, span) },
+            TokenKind.KTry => {
+                self.next_token();
+                let e = self.parse_expr_full(UNARY_PRECEDENCE, allow_struct);
+                self.ast.alloc_expr(Expr.Try(e), span)
+            },
+            TokenKind.KSizeof => {
+                let ty = self.parse_parenthesized_type();
+                self.ast.alloc_expr(Expr.Sizeof(ty), span)
+            },
+            TokenKind.KAlignof => {
+                let ty = self.parse_parenthesized_type();
+                self.ast.alloc_expr(Expr.Alignof(ty), span)
+            },
+            TokenKind.KUnsafe => {
+                self.next_token();
+                let mut b = self.parse_block();
+                b.is_unsafe = true;
+                self.ast.alloc_expr(Expr.Block(b), span)
+            },
+            TokenKind.LBrace => {
+                let b = self.parse_block();
+                self.ast.alloc_expr(Expr.Block(b), span)
+            },
+            TokenKind.LBracket => self.parse_array_literal(span),
+            TokenKind.LParen => self.parse_paren_or_tuple(span),
+            TokenKind.Ident => self.parse_name_expr(allow_struct, span),
+            TokenKind.Int
+                | TokenKind.Float
+                | TokenKind.String
+                | TokenKind.Char
+                | TokenKind.Bool => self.parse_literal(span),
+            _ => {
+                if kind == TokenKind.Invalid {
+                    self.report_error(self.token_message(&self.cur.token), span);
+                } else {
+                    let mut msg = unsafe { ByteVec.new_raw(self.arena) };
+                    msg.push_slice("unexpected token in expression: ");
+                    msg.push_slice(self.token_kind_str(kind));
+                    self.report_error(msg.as_slice(), span);
+                }
+                self.next_token();
+                0 as ExprId
+            },
+        };
+    }
+
+    // OP applied to the operand after it, the operator being the current token.
+    fn parse_prefix(self: &mut Parser, op: UnaryOp, allow_struct: bool, span: Span) -> ExprId {
+        self.next_token();
+        let e = self.parse_expr_full(UNARY_PRECEDENCE, allow_struct);
+        return self.ast.alloc_expr(Expr.Unary(UnaryExpr { op: op, expr: e }), span);
+    }
+
+    // `&e` or `&mut e`, the `&` (or the first `&` of `&&`) being the current token.
+    fn parse_reference(self: &mut Parser, allow_struct: bool, span: Span) -> ExprId {
+        self.next_token();
+        let op = if self.is_kind(TokenKind.KMut) {
+            self.next_token();
+            UnaryOp.RefMut
+        } else {
+            UnaryOp.Ref
+        };
+        let e = self.parse_expr_full(UNARY_PRECEDENCE, allow_struct);
+        return self.ast.alloc_expr(Expr.Unary(UnaryExpr { op: op, expr: e }), span);
+    }
+
+    // `box e` or `box(allocator) e`.
+    fn parse_box(self: &mut Parser, allow_struct: bool, span: Span) -> ExprId {
+        self.next_token();
+        let mut allocator = 0 as ExprId;
+        if self.is_kind(TokenKind.LParen) {
+            self.next_token();
+            allocator = self.parse_expr(0);
+            self.expect(Token.RParen);
+        }
+        let e = self.parse_expr_full(UNARY_PRECEDENCE, allow_struct);
+        return self.ast.alloc_expr(Expr.Boxed(BoxExpr { expr: e, allocator: allocator }), span);
+    }
+
+    // A loop statement in expression position: a block holding just that statement.
+    fn stmt_as_expr(self: &mut Parser, s: Stmt, span: Span) -> ExprId {
+        let mut stmts = unsafe { Vec::<StmtId>.new_in_raw(self.arena) };
+        stmts.push(self.ast.alloc_stmt(s, span, 0 as u32));
+        return self.block_of(stmts.as_slice(), span);
+    }
+
+    // `(T)` after `sizeof` or `alignof`, the keyword being the current token.
+    fn parse_parenthesized_type(self: &mut Parser) -> TypeId {
+        self.next_token();
+        self.expect(Token.LParen);
+        let ty = self.parse_type();
+        self.expect(Token.RParen);
+        return ty;
+    }
+
+    fn parse_literal(self: &mut Parser, span: Span) -> ExprId {
+        let token = self.cur.token;
+        let lit = match token {
+            Token.Int(v) => Literal.Int(v),
+            Token.Float(v) => {
+                // The source text too, so a `.zri` reproduces the literal exactly.
+                let text = self.intern_table.intern(
+                    subslice(
+                        self.lexer.source,
+                        span.start as usize,
+                        (span.end - span.start) as usize
+                    )
+                );
+                Literal.Float((v.0, v.1, text))
+            },
+            Token.String(id) => Literal.String(id),
+            Token.Char(c) => Literal.Char(c),
+            Token.Bool(b) => Literal.Bool(b),
+            _ => { ICE("parse_literal: not a literal token"); Literal.Bool(false) },
+        };
+        self.next_token();
+        return self.ast.alloc_expr(Expr.Literal(lit), span);
+    }
+
+    // `[a, b, c]` (a trailing comma allowed) or `[value; len]`.
+    fn parse_array_literal(self: &mut Parser, span: Span) -> ExprId {
+        self.next_token();
+        let first = self.parse_expr(0);
+        if self.is_kind(TokenKind.Semi) {
+            self.next_token();
+            let len_expr = self.parse_expr(0);
+            self.expect(Token.RBracket);
+            return self.ast.alloc_expr(
+                Expr.ArrayRepeat(ArrayRepeatExpr { value: first, len: len_expr }),
+                span
+            );
+        }
+        let mut exprs = unsafe { Vec::<ExprId>.new_in_raw(self.arena) };
+        exprs.push(first);
+        while self.is_kind(TokenKind.Comma) {
+            self.next_token();
+            if self.is_kind(TokenKind.RBracket) { break; }
+            exprs.push(self.parse_expr(0));
+        }
+        self.expect(Token.RBracket);
+        return self.ast.alloc_expr(
+            Expr.ArrayLiteral(ArrayLiteralExpr { elements: exprs.as_slice() }),
+            span
+        );
+    }
+
+    // `()`, `(e)` (just `e`), or a tuple `(a, b)` / `(a,)`.
+    fn parse_paren_or_tuple(self: &mut Parser, span: Span) -> ExprId {
+        self.next_token();
+        if self.is_kind(TokenKind.RParen) {
+            self.next_token();
+            return self.ast.alloc_expr(
+                Expr.TupleLiteral(TupleLiteralExpr {
+                    elements: @slice(0 as *mut ExprId, 0 as usize)
+                }),
+                span
+            );
+        }
+        let first = self.parse_expr(0);
+        if !self.is_kind(TokenKind.Comma) {
+            self.expect(Token.RParen);
+            self.ast.add_paren(PAREN_EXPR, first);
+            return first;
+        }
+        let mut exprs = unsafe { Vec::<ExprId>.new_in_raw(self.arena) };
+        exprs.push(first);
+        while self.is_kind(TokenKind.Comma) {
+            self.next_token();
+            if self.is_kind(TokenKind.RParen) { break; }
+            exprs.push(self.parse_expr(0));
+        }
+        self.expect(Token.RParen);
+        return self.ast.alloc_expr(
+            Expr.TupleLiteral(TupleLiteralExpr { elements: exprs.as_slice() }),
+            span
+        );
+    }
+
+    // An expression starting with a name: `x`, `T::f`, `T::<A>`, `T::<A> { .. }`, `T<A> { .. }`
+    // or `T { .. }` (struct literals only where ALLOW_STRUCT, i.e. not in a condition).
+    fn parse_name_expr(self: &mut Parser, allow_struct: bool, span: Span) -> ExprId {
+        let first = self.cur.token.get_ident_id();
+        self.next_token();
+        let no_type_args = @slice(0 as *mut TypeId, 0 as usize);
+        // `m::T::member` is the single name "m::T::member".
+        let id = self.parse_path_rest(first);
+
+        if self.is_kind(TokenKind.DoubleColon) {
+            self.next_token();
+            if !self.is_kind(TokenKind.Less) {
+                self.expect(Token.Ident(0 as u32));
+                return self.ast.alloc_expr(Expr.Ident(id), span);
+            }
+            let type_args = self.parse_type_arg_list();
+            if allow_struct && self.is_kind(TokenKind.LBrace) {
+                return self.parse_struct_literal(id, type_args, span);
+            }
+            let name = self.ast.alloc_expr(Expr.Ident(id), span);
+            return self.ast.alloc_expr(
+                Expr.Generic(GenericExpr { expr: name, type_args: type_args }),
+                span
+            );
+        }
+
+        if allow_struct && self.is_kind(TokenKind.Less) {
+            let literal = self.try_generic_struct_literal(id, span);
+            if literal != 0 as ExprId { return literal; }
+        }
+        if allow_struct && self.is_kind(TokenKind.LBrace) {
+            return self.parse_struct_literal(id, no_type_args, span);
+        }
+        return self.ast.alloc_expr(Expr.Ident(id), span);
+    }
+
+    // `Name<A, B> { .. }`, the `<` being the current token; or, when what follows the name is
+    // not that (`a < b`), 0 with the parser and lexer put back where they were.
+    fn try_generic_struct_literal(self: &mut Parser, id: u32, span: Span) -> ExprId {
+        let saved_cur = self.cur;
+        let saved_peek = self.peek;
+        let saved_lex_pos = self.lexer.pos;
+        let saved_lex_line = self.lexer.line;
+        let saved_lex_col = self.lexer.col;
+        let saved_quiet = self.quiet;
+        self.quiet = true;
+        self.quiet_error = false;
+        self.next_token();
+        let mut type_args = unsafe { Vec::<TypeId>.new_in_raw(self.arena) };
+        while !self.is_kind(TokenKind.Greater) && !self.is_kind(TokenKind.Eof) {
+            type_args.push(self.parse_type());
+            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+        }
+        // `a < (b << c)` is a comparison: what follows `<` did not parse as types.
+        let failed = self.quiet_error;
+        self.quiet = saved_quiet;
+        if !failed && self.is_kind(TokenKind.Greater) && self.peek_is_kind(TokenKind.LBrace) {
+            self.next_token();
+            return self.parse_struct_literal(id, type_args.as_slice(), span);
+        }
+        self.cur = saved_cur;
+        self.peek = saved_peek;
+        self.lexer.pos = saved_lex_pos;
+        self.lexer.line = saved_lex_line;
+        self.lexer.col = saved_lex_col;
+        return 0 as ExprId;
+    }
+
+    // `<A, B>`, the `<` being the current token.
+    // The list is arena data, so a caller may keep it while parsing further.
+    #[borrows()]
+    fn parse_type_arg_list(self: &mut Parser) -> [TypeId] {
+        self.next_token();
+        let mut type_args = unsafe { Vec::<TypeId>.new_in_raw(self.arena) };
+        while !self.is_kind(TokenKind.Greater) && !self.is_kind(TokenKind.Eof) {
+            type_args.push(self.parse_type());
+            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+        }
+        self.expect(Token.Greater);
+        return type_args.as_slice();
+    }
+
+    // `{ field: value, .. }` after the struct's name and type arguments.
+    fn parse_struct_literal(
+        self: &mut Parser,
+        name: u32,
+        type_args: [TypeId],
+        span: Span
+    ) -> ExprId {
+        self.expect(Token.LBrace);
+        let mut fields = unsafe { Vec::<FieldValue>.new_in_raw(self.arena) };
+        while !self.is_kind(TokenKind.RBrace) && !self.is_kind(TokenKind.Eof) {
+            let f_name = self.cur.token.get_ident_id();
+            self.expect(Token.Ident(0 as u32));
+            self.expect(Token.Colon);
+            fields.push(FieldValue { name: f_name, value: self.parse_expr(0) });
+            if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+        }
+        self.expect(Token.RBrace);
+        return self.ast.alloc_expr(
+            Expr.StructLiteral(StructLiteralExpr {
+                struct_name: name,
+                type_args: type_args,
+                fields: fields.as_slice()
+            }),
+            span
+        );
+    }
+
+    fn parse_infix_full(
+        self: &mut Parser,
+        lhs: ExprId,
+        kind: TokenKind,
+        allow_struct: bool
+    ) -> ExprId {
+        let span = unsafe {
+            *((self.ast.expr_spans.as_ptr() as usize + lhs as usize * sizeof(Span)) as *mut Span)
+        };
+        match kind {
+            TokenKind.Dot => {
+                if self.is_kind(TokenKind.Int) {
+                    let index = self.cur.token.get_int_val();
+                    self.next_token();
+                    return self.ast.alloc_expr(
+                        Expr.TupleAccess(TupleAccessExpr { expr: lhs, index: index }),
+                        span
+                    );
+                }
+                let member = self.cur.token.get_ident_id();
+                self.expect(Token.Ident(0 as u32));
+                return self.ast.alloc_expr(
+                    Expr.MemberAccess(MemberAccessExpr { expr: lhs, member: member }),
+                    span
+                );
+            },
+            TokenKind.KAs => {
+                let target = self.parse_type();
+                return self.ast.alloc_expr(
+                    Expr.Cast(CastExpr { expr: lhs, target_ty: target }),
+                    span
+                );
+            },
+            TokenKind.LBracket => {
+                let index = self.parse_expr(0);
+                self.expect(Token.RBracket);
+                return self.ast.alloc_expr(Expr.Index(IndexExpr { expr: lhs, index: index }), span);
+            },
+            TokenKind.Question => {
+                return self.ast.alloc_expr(Expr.Try(lhs), span);
+            },
+            TokenKind.LParen => {
+                let mut args = unsafe { Vec::<ExprId>.new_in_raw(self.arena) };
+                while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+                    args.push(self.parse_expr(0));
+                    if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+                }
+                self.expect(Token.RParen);
+
+                let mut callee = lhs;
+                let mut type_args = @slice(0 as *mut TypeId, 0 as usize);
+                let p_lhs: Expr = self.ast.exprs[lhs as usize];
+                let lhs_tag = p_lhs.get_tag();
+                if lhs_tag == EXPR_GENERIC { // Generic
+                    let g = p_lhs.get_Generic();
+                    callee = g.expr;
+                    type_args = g.type_args;
+                }
+
+                return self.ast.alloc_expr(
+                    Expr.Call(CallExpr {
+                        callee: callee,
+                        args: args.as_slice(),
+                        type_args: type_args
+                    }),
+                    span
+                );
+            },
+            TokenKind.DoubleColon => {
+                self.expect(Token.Less);
+                let mut types = unsafe { Vec::<TypeId>.new_in_raw(self.arena) };
+                while !self.is_kind(TokenKind.Greater) && !self.is_kind(TokenKind.Eof) {
+                    types.push(self.parse_type());
+                    if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
+                }
+                self.expect(Token.Greater);
+                return self.ast.alloc_expr(
+                    Expr.Generic(GenericExpr { expr: lhs, type_args: types.as_slice() }),
+                    span
+                );
+            },
+            _ => {
+                let op = self.get_binary_op(kind);
+                let rhs = self.parse_expr_full(self.get_precedence_from_kind(kind), allow_struct);
+                // Comparisons are non-associative: `a < b < c` is rejected
+                // rather than parsed as `(a < b) < c`. Parenthesized
+                // groupings like `(a < b) == (c < d)` are unaffected since
+                // the paren restarts at parse_primary.
+                if self.is_comparison_kind(kind) && self.is_comparison_kind(self.cur.token.kind()) {
+                    self.report_error(
+                        "comparison operators cannot be chained; use `a < b && b < c`",
+                        self.cur.span
+                    );
+                }
+                return self.ast.alloc_expr(
+                    Expr.Binary(BinaryExpr { lhs: lhs, rhs: rhs, op: op }),
+                    span
+                );
+            }
+        }
+    }
+
+    fn is_comparison_kind(self: &Parser, t: TokenKind) -> bool {
+        return t == TokenKind.EqualEqual
+            || t == TokenKind.BangEqual
+            || t == TokenKind.Less
+            || t == TokenKind.Greater
+            || t == TokenKind.LessEqual
+            || t == TokenKind.GreaterEqual;
+    }
+
+    fn get_precedence(self: &Parser, kind: &Token, allow_struct: bool) -> i32 {
+        let k = kind.kind();
+        if k == TokenKind.LBrace {
+            return 0;
+        }
+        return self.get_precedence_from_kind(k);
+    }
+
+    // Binding power of the binary or postfix operator T (-1 for a token that is none). As in
+    // Rust, `&`, `^` and `|` bind tighter than comparisons.
+    fn get_precedence_from_kind(self: &Parser, t: TokenKind) -> i32 {
+        return match t {
+            TokenKind.Dot
+                | TokenKind.Question
+                | TokenKind.LParen
+                | TokenKind.LBracket
+                | TokenKind.DoubleColon => 100,
+            TokenKind.KAs => 90,
+            TokenKind.Star | TokenKind.Slash | TokenKind.Percent | TokenKind.StarPercent => 40,
+            TokenKind.Plus | TokenKind.Minus | TokenKind.PlusPercent | TokenKind.MinusPercent => 30,
+            TokenKind.LessLess | TokenKind.GreaterGreater => 25,
+            TokenKind.Amp => 18,
+            TokenKind.Caret => 16,
+            TokenKind.Pipe => 14,
+            TokenKind.EqualEqual
+                | TokenKind.BangEqual
+                | TokenKind.Less
+                | TokenKind.Greater
+                | TokenKind.LessEqual
+                | TokenKind.GreaterEqual => 12,
+            TokenKind.AmpAmp => 5,
+            TokenKind.PipePipe => 2,
+            TokenKind.Equal
+                | TokenKind.PlusEqual
+                | TokenKind.MinusEqual
+                | TokenKind.StarEqual
+                | TokenKind.SlashEqual
+                | TokenKind.PercentEqual
+                | TokenKind.PlusPercentEqual
+                | TokenKind.MinusPercentEqual
+                | TokenKind.StarPercentEqual
+                | TokenKind.AmpEqual
+                | TokenKind.PipeEqual
+                | TokenKind.CaretEqual
+                | TokenKind.LessLessEqual
+                | TokenKind.GreaterGreaterEqual => 1,
+            _ => -1,
+        };
+    }
+
+    fn get_binary_op(self: &Parser, t: TokenKind) -> BinaryOp {
+        if t == TokenKind.Plus { return BinaryOp.Add; }
+        if t == TokenKind.Minus { return BinaryOp.Sub; }
+        if t == TokenKind.Star { return BinaryOp.Mul; }
+        if t == TokenKind.Slash { return BinaryOp.Div; }
+        if t == TokenKind.Percent { return BinaryOp.Mod; }
+        if t == TokenKind.PlusEqual { return BinaryOp.AddAssign; }
+        if t == TokenKind.MinusEqual { return BinaryOp.SubAssign; }
+        if t == TokenKind.StarEqual { return BinaryOp.MulAssign; }
+        if t == TokenKind.SlashEqual { return BinaryOp.DivAssign; }
+        if t == TokenKind.PercentEqual { return BinaryOp.ModAssign; }
+        if t == TokenKind.PlusPercent { return BinaryOp.AddWrap; }
+        if t == TokenKind.MinusPercent { return BinaryOp.SubWrap; }
+        if t == TokenKind.StarPercent { return BinaryOp.MulWrap; }
+        if t == TokenKind.PlusPercentEqual { return BinaryOp.AddWrapAssign; }
+        if t == TokenKind.MinusPercentEqual { return BinaryOp.SubWrapAssign; }
+        if t == TokenKind.StarPercentEqual { return BinaryOp.MulWrapAssign; }
+        if t == TokenKind.EqualEqual { return BinaryOp.Eq; }
+        if t == TokenKind.BangEqual { return BinaryOp.Ne; }
+        if t == TokenKind.Less { return BinaryOp.Lt; }
+        if t == TokenKind.Greater { return BinaryOp.Gt; }
+        if t == TokenKind.LessEqual { return BinaryOp.Le; }
+        if t == TokenKind.GreaterEqual { return BinaryOp.Ge; }
+        if t == TokenKind.Equal { return BinaryOp.Assign; }
+        if t == TokenKind.AmpAmp { return BinaryOp.LAnd; }
+        if t == TokenKind.PipePipe { return BinaryOp.LOr; }
+        if t == TokenKind.Amp { return BinaryOp.And; }
+        if t == TokenKind.Pipe { return BinaryOp.Or; }
+        if t == TokenKind.Caret { return BinaryOp.Xor; }
+        if t == TokenKind.AmpEqual { return BinaryOp.BitAndAssign; }
+        if t == TokenKind.PipeEqual { return BinaryOp.BitOrAssign; }
+        if t == TokenKind.CaretEqual { return BinaryOp.BitXorAssign; }
+        if t == TokenKind.LessLess { return BinaryOp.Shl; }
+        if t == TokenKind.GreaterGreater { return BinaryOp.Shr; }
+        if t == TokenKind.LessLessEqual { return BinaryOp.ShlAssign; }
+        if t == TokenKind.GreaterGreaterEqual { return BinaryOp.ShrAssign; }
+        return BinaryOp.Add;
+    }
+}

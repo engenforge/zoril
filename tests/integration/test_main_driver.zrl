@@ -1,0 +1,23 @@
+import "repro_mod.zrl";
+use repro_mod::Table;
+
+struct Runner {
+    table_ptr: *mut Table,
+}
+
+impl Runner {
+    fn run(self: &mut Runner) -> u32 {
+        return unsafe { (*self.table_ptr).next_id() };
+    }
+}
+
+fn main() -> i32 {
+    let mut t = Table { count: 0 };
+    let mut r = Runner { table_ptr: &mut t as *mut Table };
+    
+    let id = r.run();
+    if id != 1 {
+        return id as i32;
+    }
+    return 0;
+}

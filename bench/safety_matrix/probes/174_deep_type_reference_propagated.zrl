@@ -1,0 +1,27 @@
+// name: Reference into a dead local reached nine levels deep in a type
+// expected: compile_reject
+// `type_holds_reference` stops recursing past eight levels and answered *false* there - "cannot
+// hold a reference" for a type it could not finish reading - so the borrow of `x` was not propagated
+// out of the value and nothing was live at `x`'s scope end. The program compiled and returned 7 from
+// its dead slot. Past the limit the answer is *unknown* now, and unknown reads as "it does hold
+// one": the same borrow is propagated and the scope-end rule rejects it (the row's other two sites,
+// the driver's copies of the predicate, took the same rule in the same change). The depth is the
+// whole point here: one, three and eight levels are rejected both before and after.
+struct S1 { r: &i32 }
+struct S2 { s: S1 }
+struct S3 { s: S2 }
+struct S4 { s: S3 }
+struct S5 { s: S4 }
+struct S6 { s: S5 }
+struct S7 { s: S6 }
+struct S8 { s: S7 }
+struct S9 { s: S8 }
+fn main() -> i32 {
+    let mut out: &i32 = &0;
+    {
+        let x: i32 = 7;
+        let deep = S9 { s: S8 { s: S7 { s: S6 { s: S5 { s: S4 { s: S3 { s: S2 { s: S1 { r: &x } } } } } } } } };
+        out = deep.s.s.s.s.s.s.s.s.r;
+    }
+    return *out;
+}

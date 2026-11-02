@@ -1,0 +1,8 @@
+// expected compile fail
+fn use_both(p: &mut i32, s: [mut i32]) { *p = 100; }
+fn test_unsafe(s: [mut i32]) {
+    let p = &mut s[0];
+    let s2 = s; 
+    use_both(p, s2);
+}
+fn main() -> i32 { let mut arr = [1, 2, 3]; test_unsafe(@slice(&mut arr[0], 3)); return 0; }

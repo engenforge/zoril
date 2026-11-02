@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_trait_method_signature_param.zrl:8:5: error: method `same` does not match trait `Same`: parameter 2 is `i32`, the trait's `&P`
+// EXPECT: tests/error_reporting/err_trait_method_signature_param.zrl:9:5: error: method `count` does not match trait `Same`: it takes 2 parameters, the trait's 1
+trait Same { fn same(self: &Self, other: &Self) -> bool; fn count(self: &Self) -> i32; }
+struct P { v: i32 }
+fn main() -> i32 { return 0; }
+impl Same for P {
+    fn same(self: &P, other: i32) -> bool { return self.v == other; }
+    fn count(self: &P, extra: i32) -> i32 { return extra; }
+}

@@ -1,0 +1,29 @@
+// Safe arena handle: a HashMap from new(&arena) is tied to its arena, so it must be used and
+// dropped before the arena is reset or destroyed.
+// expected exit 0
+
+import "hashmap.zrl";
+import "mem.zrl";
+use hashmap::HashMap;
+use mem::Arena;
+
+// The map lives in this frame and is dropped when the function returns, releasing its borrow
+// of `a`.
+fn look_up(a: &Arena) -> u64 {
+    let mut m = HashMap::<u64, u64>.new(a);
+    let k = 7 as u64;
+    m.insert(k, 42 as u64);
+    return *m.get(&k).unwrap();
+}
+
+fn main() -> i32 {
+    let mut arena = Arena.new(65536).unwrap();
+    if look_up(&arena) != 42 {
+        return 1;
+    }
+    arena.reset(); // no HashMap from `arena` is live
+    if look_up(&arena) != 42 {
+        return 2;
+    }
+    return 0;
+}

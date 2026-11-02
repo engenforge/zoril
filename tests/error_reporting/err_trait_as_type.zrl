@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_trait_as_type.zrl:5:27: error: `Tr` is a trait, not a type: a value has a type that implements it (`T: Tr`)
+// A trait names no type (an internal compiler error once traits became module names).
+trait Tr { fn f(self: &Self) -> i32; }
+fn main() -> i32 { let x: Tr = 5; return 0; }

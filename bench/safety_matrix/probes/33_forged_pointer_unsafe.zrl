@@ -1,0 +1,11 @@
+// name: Pointer forged from integer (inside unsafe)
+// expected: runtime_fault
+// The escape hatch half of 13_forged_pointer.zrl: raw pointers remain the
+// documented unchecked boundary (unsafe_policy.md), now with a syntactic marker.
+fn main() -> i32 {
+    unsafe {
+        let p = 4096 as *mut u8;
+        *p = 65 as u8;
+    }
+    return 0;
+}

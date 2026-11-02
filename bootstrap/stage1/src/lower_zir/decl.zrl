@@ -1,0 +1,737 @@
+import "zir.zrl";
+import "ast.zrl";
+import "resolve.zrl";
+import "intern.zrl";
+import "mono.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "il_cfg.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "core.zrl";
+import "mem.zrl";
+import "io.zrl";
+
+pub struct ZirSymbolMapEntry {
+    pub sym: *mut Symbol,
+    pub local_id: u32,
+}
+
+pub struct ZirBlockBuilder {
+    pub id: u32,
+    pub stmts: Vec<ZirStmt>,
+    pub literal_comments: Vec<u32>, // parallel to stmts: literal source comment in effect when each was emitted, 0 if none
+    pub terminator: ZirTerminator,
+    pub is_terminated: bool,
+    pub name_hint: u32,
+}
+
+impl ZirBlockBuilder {
+    pub fn new(arena: *mut Arena, id: u32, name_hint: u32) -> ZirBlockBuilder {
+        return ZirBlockBuilder {
+            id: id,
+            stmts: Vec::<ZirStmt>.new_in(arena),
+            literal_comments: Vec::<u32>.new_in(arena),
+            terminator: ZirTerminator.Ret(Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) }),
+            is_terminated: false,
+            name_hint: name_hint,
+        };
+    }
+}
+
+pub struct ZirLoopEntry {
+    pub cond_block: u32,
+    pub exit_block: u32,
+    pub scope_depth: usize,
+}
+
+pub struct ZirLowerer {
+    pub arena: *mut Arena,
+    pub persistent_arena: *mut Arena,
+    pub resolver: &mut Resolver,
+    pub intern_table: &mut InternTable,
+    pub mono: &mut Monomorphizer,
+    pub module: &mut ILModule,
+    pub next_region_id: u32,
+    // Set while lowering a `let` pattern: its bindings shadow same-named locals of the
+    // enclosing scope instead of joining them (which only or-pattern alternatives do).
+    pub pattern_binds_fresh: bool,
+    pub had_error: bool,
+
+    pub locals: Vec<Local>,
+    pub local_consumed: Vec<bool>,
+    // Per local: id of a bool local that is true while the value is live and must be dropped
+    // (0 = none). Only locals whose type has a `drop` function get one; see needs_drop_flag.
+    pub local_drop_flag: Vec<u32>,
+    // Capturing closures carry their environment only through direct calls in the defining
+    // function, so a capturing closure may only be bound with `let` or called directly.
+    // closure_use_ok is set for exactly the next lower_expr call by those two sites.
+    pub local_is_capturing_closure: Vec<bool>,
+    pub closure_use_ok: bool,
+    pub cur_span: Span,
+    pub blocks: Vec<ZirBlockBuilder>,
+    pub symbol_map: Vec<ZirSymbolMapEntry>,
+    pub loop_stack: Vec<ZirLoopEntry>,
+    pub scope_locals: Vec<Vec<u32>>,
+    pub scope_defers: Vec<Vec<ExprId>>,
+    pub current_block_idx: usize,
+    pub next_local_id: u32,
+    pub next_block_id: u32,
+    pub current_ret_ty: u32,
+    pub is_void_main: bool,
+    pub current_literal_comment: u32, // ambient: the AST-level literal comment for the statement currently being lowered, 0 if none
+    pub unsafe_depth: u32,
+    // Path reported by `report_prefix`. Set per-function from the `FnDecl`'s own `source_file`,
+    // for the same reason `ZirVerifier.file_path` is (see src/lower/decl.zrl): `Resolver` is
+    // shared across every imported file and its `file_path` is the *entry* file's, so using it
+    // here named one file for errors originating anywhere in the tree, at a line number computed
+    // against a different file's line table. Empty means "fall back to the resolver's".
+    pub file_path: [u8],
+    pub current_source_file: u32,
+    pub implicit_self_ty: u32,
+}
+
+impl ZirLowerer {
+    pub fn new(arena: *mut Arena, persistent_arena: *mut Arena, resolver: &mut Resolver, intern_table: &mut InternTable, mono: &mut Monomorphizer, module: &mut ILModule) -> ZirLowerer {
+        return ZirLowerer {
+            arena: arena,
+            persistent_arena: persistent_arena,
+            resolver: resolver,
+            intern_table: intern_table,
+            mono: mono,
+            module: module,
+            next_region_id: 1 as u32,
+            pattern_binds_fresh: false,
+            had_error: false,
+            locals: Vec::<Local>.new_in(arena),
+            local_consumed: Vec::<bool>.new_in(arena),
+            local_drop_flag: Vec::<u32>.new_in(arena),
+            local_is_capturing_closure: Vec::<bool>.new_in(arena),
+            closure_use_ok: false,
+            cur_span: Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 },
+            blocks: Vec::<ZirBlockBuilder>.new_in(arena),
+            symbol_map: Vec::<ZirSymbolMapEntry>.new_in(arena),
+            loop_stack: Vec::<ZirLoopEntry>.new_in(arena),
+            scope_locals: Vec::<Vec<u32>>.new_in(arena),
+            scope_defers: Vec::<Vec<ExprId>>.new_in(arena),
+            current_block_idx: 0 as usize,
+            next_local_id: 1 as u32,
+            next_block_id: 0 as u32,
+            current_ret_ty: 0 as u32,
+            is_void_main: false,
+            current_literal_comment: 0 as u32,
+            unsafe_depth: 0 as u32,
+            file_path: "",
+            current_source_file: 0 as u32,
+            implicit_self_ty: 0 as u32,
+        };
+    }
+
+    pub fn report_prefix(self: &mut ZirLowerer, span: Span) {
+        self.had_error = true;
+        self.resolver.had_error = true;
+        if self.file_path.len > 0 as usize {
+            must_write(2, self.file_path);
+        } else {
+            must_write(2, self.resolver.file_path);
+        }
+        must_write(2, ":");
+        write_u64(2, span.line as usize);
+        must_write(2, ":");
+        write_u64(2, span.col as usize);
+        must_write(2, ": error: ");
+    }
+
+    pub fn report_error(self: &mut ZirLowerer, msg: [u8], span: Span) {
+        self.report_prefix(span);
+        must_write(2, msg);
+        must_write(2, "\n");
+    }
+
+    pub fn report_error_with_symbol(self: &mut ZirLowerer, msg_pre: [u8], sym_name: u32, span: Span) {
+        self.report_prefix(span);
+        must_write(2, msg_pre);
+        must_write(2, self.intern_table.lookup(sym_name));
+        must_write(2, "\n");
+    }
+
+    pub fn report_error_with_args(self: &mut ZirLowerer, prefix: [u8], expected: usize, actual: usize, span: Span) {
+        self.report_prefix(span);
+        must_write(2, prefix);
+        write_u64(2, expected);
+        must_write(2, ", got ");
+        write_u64(2, actual);
+        must_write(2, ")\n");
+    }
+
+    pub fn report_type_mismatch(self: &mut ZirLowerer, expected_ty: u32, actual_ty: u32, span: Span) {
+        // A slice argument travels by a hidden pointer (`[u8]` and `&[u8]` parameters lower
+        // alike): name the slices, as the source does.
+        let mut exp = expected_ty;
+        let mut act = actual_ty;
+        let exp_inner = self.get_ptr_inner_type(exp);
+        let act_inner = self.get_ptr_inner_type(act);
+        if exp_inner != 0 as u32 && act_inner != 0 as u32
+            && self.get_type_decl(exp_inner).def.get_tag() == ILTYPE_SLICE
+            && self.get_type_decl(act_inner).def.get_tag() == ILTYPE_SLICE {
+            exp = exp_inner;
+            act = act_inner;
+        }
+        self.report_prefix(span);
+        must_write(2, "type mismatch: expected `");
+        must_write(2, self.mono.type_display(exp));
+        must_write(2, "`, found `");
+        must_write(2, self.mono.type_display(act));
+        must_write(2, "`\n");
+        if self.get_type_decl(exp).def.get_tag() == ILTYPE_SLICE && self.get_type_decl(act).def.get_tag() == ILTYPE_SLICE
+            && self.get_type_decl(exp).def.get_Slice().mutable && !self.get_type_decl(act).def.get_Slice().mutable {
+            must_write(2, if self.file_path.len > 0 as usize { self.file_path } else { self.resolver.file_path });
+            must_write(2, ":");
+            write_u64(2, span.line as usize);
+            must_write(2, ":");
+            write_u64(2, span.col as usize);
+            must_write(2, ": note: a `[T]` is read-only; a `[mut T]` comes from `&mut` or another `[mut T]`\n");
+        }
+    }
+
+    pub fn report_return_type_mismatch(self: &mut ZirLowerer, expected_ty: u32, actual_ty: u32, span: Span) {
+        self.report_prefix(span);
+        must_write(2, "type mismatch: the function returns `");
+        must_write(2, self.mono.type_display(expected_ty));
+        must_write(2, "`, found `");
+        must_write(2, self.mono.type_display(actual_ty));
+        must_write(2, "`\n");
+    }
+
+    pub fn push_scope(self: &mut ZirLowerer) {
+        self.resolver.push_scope();
+        self.scope_locals.push(Vec::<u32>.new_in(self.arena));
+        self.scope_defers.push(Vec::<StmtId>.new_in(self.arena));
+    }
+
+    pub fn pop_scope(self: &mut ZirLowerer, span: Span) {
+        if !self.blocks[self.current_block_idx].is_terminated {
+            self.emit_scope_cleanup(self.scope_locals.len - 1 as usize, span, 0 as u32);
+        }
+        self.scope_locals.pop();
+        self.scope_defers.pop();
+        self.resolver.pop_scope();
+    }
+
+    pub fn pop_scope_exclude(self: &mut ZirLowerer, span: Span, exclude_id: u32) {
+        if !self.blocks[self.current_block_idx].is_terminated {
+            self.emit_scope_cleanup(self.scope_locals.len - 1 as usize, span, exclude_id);
+        }
+        self.scope_locals.pop();
+        self.scope_defers.pop();
+        self.resolver.pop_scope();
+    }
+
+    pub fn emit_scope_cleanup(self: &mut ZirLowerer, target_depth: usize, span: Span, exclude_id: u32) {
+        let mut depth = self.scope_locals.len;
+        while depth > target_depth {
+            depth = depth - 1 as usize;
+            
+            // 1. Emit defers in reverse order
+            let defers = &self.scope_defers[depth];
+            let mut j = defers.len;
+            while j > 0 as usize {
+                j = j - 1 as usize;
+                let defer_expr_id = (*defers)[j];
+                self.lower_expr(defer_expr_id, 0 as u32);
+            }
+
+            // 2. Emit drops for locals
+            let locals = &self.scope_locals[depth];
+            let mut i = locals.len;
+            while i > 0 as usize {
+                i = i - 1 as usize;
+                let local_id = (*locals)[i];
+                if local_id == 0 as u32 { // consumed by @drop
+                    continue;
+                }
+                if exclude_id != 0 as u32 && local_id == exclude_id {
+                    continue;
+                }
+                if self.drop_flag_of(local_id) != 0 as u32 {
+                    self.emit_flagged_drop(local_id, span);
+                    continue;
+                }
+                if self.is_local_consumed(local_id) {
+                    continue; // consumed by move or drop
+                }
+                {
+                    let p_local = &self.locals[local_id as usize - 1 as usize];
+                    let ty = p_local.ty;
+                    let is_copy = p_local.is_copy;
+
+                    if !is_copy {
+                        self.emit(ZirStmt.Drop(Place { base: local_id, projections: @slice(0 as *mut Projection, 0 as usize) }, span));
+                    }
+
+                    let t_tag = self.get_type_tag(ty);
+                    if t_tag == 1 as u32 || t_tag == 2 as u32 { // ILTYPE_PTR, ILTYPE_PTRMUT
+                        self.emit(ZirStmt.EndBorrow(local_id, span));
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn new_block(self: &mut ZirLowerer, hint: [u8]) -> u32 {
+        let id = self.next_block_id;
+        self.next_block_id = self.next_block_id + 1 as u32;
+        let mut name_hint = 0 as u32;
+        if hint.len > 0 as usize {
+            name_hint = self.intern_table.intern(hint);
+        }
+        self.blocks.push(ZirBlockBuilder.new(self.arena, id, name_hint));
+        return id;
+    }
+
+    pub fn switch_to_block(self: &mut ZirLowerer, id: u32) {
+        self.current_block_idx = id as usize;
+    }
+
+    pub fn emit(self: &mut ZirLowerer, stmt: ZirStmt) {
+        let mut init_local = 0 as u32;
+        let mut init_span = Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 };
+        match stmt {
+            ZirStmt.Let(id, _, sp) => { init_local = id; init_span = sp; },
+            ZirStmt.Assign(pl, _, sp) => {
+                if pl.projections.len == 0 as usize { init_local = pl.base; init_span = sp; }
+            },
+            _ => {},
+        }
+        let p_block = &mut self.blocks[self.current_block_idx];
+        p_block.stmts.push(stmt);
+        p_block.literal_comments.push(self.current_literal_comment);
+        if init_local != 0 as u32 && self.drop_flag_of(init_local) != 0 as u32 {
+            self.set_drop_flag(init_local, 1 as u64, init_span);
+        }
+    }
+
+    pub fn terminate(self: &mut ZirLowerer, term: ZirTerminator) {
+        let p_block = &mut self.blocks[self.current_block_idx];
+        p_block.terminator = term;
+        p_block.is_terminated = true;
+    }
+
+    pub fn is_primitive_type(self: &ZirLowerer, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        return p_ty.def.get_tag() == ILTYPE_PRIMITIVE;
+    }
+
+    pub fn is_unit_type(self: &ZirLowerer, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return true; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        if p_ty.def.get_tag() != ILTYPE_PRIMITIVE { return false; }
+        return p_ty.def.get_Primitive().get_tag() == ILPRIM_UNIT;
+    }
+
+    pub fn is_never_type(self: &ZirLowerer, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        if ty_id as usize > self.module.types.len { return false; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        if p_ty.def.get_tag() != ILTYPE_PRIMITIVE { return false; }
+        return p_ty.def.get_Primitive().get_tag() == ILPRIM_NEVER;
+    }
+
+    pub fn define_local(self: &mut ZirLowerer, sym: *mut Symbol, ty: u32, kind: u32) -> u32 {
+        let local_id = self.next_local_id;
+        self.next_local_id = self.next_local_id + 1 as u32;
+
+        let is_copy = self.is_copy_type(ty);
+        
+        let name_id = if sym as usize != 0 as usize { unsafe { (*sym).name } } else { 0 as u32 };
+        
+        self.locals.push(Local {
+            id: local_id,
+            name_id: name_id,
+            ty: ty,
+            kind: kind,
+            is_copy: is_copy,
+            is_raw_ptr: false,
+        });
+        self.local_consumed.push(false);
+        self.local_drop_flag.push(0 as u32);
+        self.local_is_capturing_closure.push(false);
+
+        self.symbol_map.push(ZirSymbolMapEntry {
+            sym: sym,
+            local_id: local_id,
+        });
+        
+        if self.scope_locals.len > 0 as usize {
+            let p_locals = &mut self.scope_locals[self.scope_locals.len - 1 as usize];
+            p_locals.push(local_id);
+        }
+
+        // Drop flag: false where the local is declared, set true once it holds a value (Let /
+        // assignment, or on entry for a parameter), cleared when the value is moved out. Scope exit
+        // drops only when the flag is set, so a move on one path cannot suppress the drop on another.
+        if !is_copy && self.needs_drop_flag(ty) {
+            let bool_ty = self.get_primitive_type(ILPrimitive.Bool);
+            let flag = self.define_local(0 as *mut Symbol, bool_ty, LOCAL_KIND_LETMUT);
+            self.local_drop_flag[local_id as usize - 1 as usize] = flag;
+            if kind != LOCAL_KIND_ARG {
+                self.emit_flag_init(flag, 0 as u64);
+            }
+        }
+
+        return local_id;
+    }
+
+    fn needs_drop_flag(self: &mut ZirLowerer, ty: u32) -> bool {
+        return self.type_needs_drop(ty);
+    }
+
+    // Storage that is never an owned value (the slot behind `@alloca<T>`): never dropped.
+    pub fn exempt_from_drop(self: &mut ZirLowerer, local_id: u32) {
+        self.set_local_consumed(local_id, true);
+        if local_id != 0 as u32 && local_id as usize <= self.local_drop_flag.len {
+            self.local_drop_flag[local_id as usize - 1 as usize] = 0 as u32;
+        }
+    }
+
+    pub fn drop_flag_of(self: &ZirLowerer, local_id: u32) -> u32 {
+        if local_id == 0 as u32 || local_id as usize > self.local_drop_flag.len { return 0 as u32; }
+        return self.local_drop_flag[local_id as usize - 1 as usize];
+    }
+
+    fn emit_flag_init(self: &mut ZirLowerer, flag: u32, value: u64) {
+        if self.blocks.len == 0 as usize || self.blocks[self.current_block_idx].is_terminated { return; }
+        let bool_ty = self.get_primitive_type(ILPrimitive.Bool);
+        self.emit(ZirStmt.Let(flag, ZirRvalue.Const(value, bool_ty), Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 }));
+    }
+
+    pub fn set_drop_flag(self: &mut ZirLowerer, local_id: u32, value: u64, span: Span) {
+        let flag = self.drop_flag_of(local_id);
+        if flag == 0 as u32 { return; }
+        if self.blocks[self.current_block_idx].is_terminated { return; }
+        let bool_ty = self.get_primitive_type(ILPrimitive.Bool);
+        self.emit(ZirStmt.Assign(Place { base: flag, projections: @slice(0 as *mut Projection, 0 as usize) }, ZirRvalue.Const(value, bool_ty), span));
+    }
+
+    // `if flag { drop(local) }`, continuing in a join block.
+    pub fn emit_flagged_drop(self: &mut ZirLowerer, local_id: u32, span: Span) {
+        let flag = self.drop_flag_of(local_id);
+        let then_b = self.new_block("drop_live");
+        let join_b = self.new_block("drop_join");
+        self.terminate(ZirTerminator.Branch(Place { base: flag, projections: @slice(0 as *mut Projection, 0 as usize) }, then_b, join_b));
+        self.switch_to_block(then_b);
+        self.emit(ZirStmt.DropIfLive(Place { base: local_id, projections: @slice(0 as *mut Projection, 0 as usize) }, span));
+        self.terminate(ZirTerminator.Jmp(join_b));
+        self.switch_to_block(join_b);
+    }
+
+    // A return value read through a projection of a local (`d.x`) is copied out before the scope's
+    // drops run, so the local itself is still dropped. A non-copy projection is a partial move and
+    // keeps excluding its base, as before.
+    pub fn materialize_return(self: &mut ZirLowerer, ret_place: Place, span: Span) -> Place {
+        if ret_place.base == 0 as u32 || ret_place.projections.len == 0 as usize { return ret_place; }
+        let ty = self.get_place_type(&ret_place);
+        if ty == 0 as u32 || !self.is_copy_type(ty) { return ret_place; }
+        let tmp = self.define_local(0 as *mut Symbol, ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.Use(ret_place), span));
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    pub fn is_local_consumed(self: &ZirLowerer, local_id: u32) -> bool {
+        if local_id == 0 as u32 || local_id as usize > self.local_consumed.len {
+            return false;
+        }
+        return self.local_consumed[local_id as usize - 1 as usize];
+    }
+
+    pub fn set_local_consumed(self: &mut ZirLowerer, local_id: u32, consumed: bool) {
+        if local_id == 0 as u32 || local_id as usize > self.local_consumed.len {
+            return;
+        }
+        self.local_consumed[local_id as usize - 1 as usize] = consumed;
+    }
+
+    pub fn consume_place_if_move(self: &mut ZirLowerer, place: &Place) {
+        if place.base == 0 as u32 { return; }
+        if place.projections.len > 0 as usize {
+            self.reject_partial_move(place);
+            return;
+        }
+        if place.base as usize > self.locals.len { return; }
+        let p_local = &self.locals[place.base as usize - 1 as usize];
+        if !p_local.is_copy {
+            if self.drop_flag_of(place.base) != 0 as u32 {
+                self.set_drop_flag(place.base, 0 as u64, Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 });
+            } else {
+                self.set_local_consumed(place.base, true);
+            }
+        }
+    }
+
+    // Moving a field that needs dropping out of a local (`let x = w.d;`) would leave the local's drop
+    // glue to drop it a second time. Partial moves are not tracked per field, so reject them; move the
+    // whole value, or swap a replacement into the field.
+    fn reject_partial_move(self: &mut ZirLowerer, place: &Place) {
+        if place.base as usize > self.locals.len { return; }
+        let mut pi = 0 as usize;
+        while pi < place.projections.len {
+            let t = place.projections[pi].get_tag();
+            if t != 0 as u32 && t != 1 as u32 { return; } // only Field / TupleIndex out of the local itself
+            pi = pi + 1 as usize;
+        }
+        let ty = self.get_place_type(place);
+        if ty == 0 as u32 || !self.type_needs_drop(ty) { return; }
+        let p_local = &self.locals[place.base as usize - 1 as usize];
+        if p_local.kind == LOCAL_KIND_TMP { return; } // a temporary aggregate is consumed whole
+        let sp = self.cur_span;
+        self.report_error("cannot move a field that needs dropping out of a value (partial moves are not tracked); move the whole value instead", sp);
+    }
+
+    pub fn handle_assign_drop_and_move(self: &mut ZirLowerer, lhs_place: Place, lhs_ty: u32, rhs_place: &Place, span: Span) {
+        if !self.is_copy_type(lhs_ty) {
+            if lhs_place.base != 0 as u32 && lhs_place.projections.len == 0 as usize && self.drop_flag_of(lhs_place.base) != 0 as u32 {
+                // The old value is dropped only if still live; the flag is set again by the
+                // assignment below (handled in the caller's Assign via set_drop_flag).
+                self.emit_flagged_drop(lhs_place.base, span);
+            } else if lhs_place.base != 0 as u32 && lhs_place.projections.len == 0 as usize {
+                if !self.is_local_consumed(lhs_place.base) {
+                    self.emit(ZirStmt.Drop(lhs_place, span));
+                }
+                self.set_local_consumed(lhs_place.base, false);
+            } else if lhs_place.projections.len > 0 as usize {
+                self.emit(ZirStmt.Drop(lhs_place, span));
+            }
+            self.consume_place_if_move(rhs_place);
+        }
+    }
+
+    pub fn consume_arg_if_move(self: &mut ZirLowerer, param_ty: u32, arg_place: &Place) {
+        self.consume_place_if_move(arg_place);
+    }
+
+    pub fn emit_cast(self: &mut ZirLowerer, src: Place, target_ty: u32, span: Span) -> Place {
+        let tmp = self.define_local(0 as *mut Symbol, target_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp, ZirRvalue.Cast(src, target_ty), span));
+        self.consume_place_if_move(&src);
+        return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    pub fn get_local_by_symbol(self: &ZirLowerer, sym: *mut Symbol) -> u32 {
+        let mut i = 0 as usize;
+        while i < self.symbol_map.len {
+            let entry = &self.symbol_map[i];
+            if entry.sym == sym {
+                return entry.local_id;
+            }
+            i = i + 1 as usize;
+        }
+        return 0 as u32;
+    }
+
+    pub fn get_local_by_symbol_ref(self: &ZirLowerer, sym: &Symbol) -> u32 {
+        let mut i = 0 as usize;
+        let target = sym as usize;
+        while i < self.symbol_map.len {
+            let entry = &self.symbol_map[i];
+            if entry.sym as usize == target {
+                return entry.local_id;
+            }
+            i = i + 1 as usize;
+        }
+        return 0 as u32;
+    }
+
+    // `expr_id`/`stmt_id` are 1-based; slot 0 is the reserved dummy `AST.new`
+    // pushes, so an absent id reads that slot instead of yielding a null
+    // pointer no caller ever checked.
+    pub fn get_expr(self: &ZirLowerer, expr_id: ExprId) -> &Expr {
+        return &self.resolver.ast.exprs[expr_id as usize];
+    }
+
+    pub fn get_stmt(self: &ZirLowerer, stmt_id: StmtId) -> &Stmt {
+        return &self.resolver.ast.stmts[stmt_id as usize];
+    }
+
+    pub fn get_expr_span(self: &ZirLowerer, expr_id: ExprId) -> Span {
+        if expr_id == 0 as ExprId { return Span { start: 0, end: 0, line: 0, col: 0 }; }
+        let off = expr_id as usize * sizeof(Span);
+        return unsafe { *( ((*self.resolver.ast).expr_spans.data as usize + off) as *mut Span ) };
+    }
+
+    pub fn get_stmt_span(self: &ZirLowerer, stmt_id: StmtId) -> Span {
+        if stmt_id == 0 as StmtId { return Span { start: 0, end: 0, line: 0, col: 0 }; }
+        let off = stmt_id as usize * sizeof(Span);
+        return unsafe { *( ((*self.resolver.ast).stmt_spans.data as usize + off) as *mut Span ) };
+    }
+
+    pub fn get_stmt_comment(self: &ZirLowerer, stmt_id: StmtId) -> u32 {
+        if stmt_id == 0 as StmtId { return 0 as u32; }
+        let off = stmt_id as usize * sizeof(u32);
+        return unsafe { *( ((*self.resolver.ast).stmt_comments.data as usize + off) as *mut u32 ) };
+    }
+
+    // The function's blocks and locals are allocated in the module's arena, which outlives
+    // this lowerer; nothing in the result points into `self`.
+    #[borrows()]
+    pub fn lower_function(self: &mut ZirLowerer, f: &FnDecl, mangled_name: u32) -> ZirFunction {
+        if f.source_file != 0 as u32 {
+            self.current_source_file = f.source_file;
+        } else {
+            if self.file_path.len > 0 as usize {
+                self.current_source_file = self.intern_table.intern(self.file_path);
+            }
+        }
+        let resolved_ret = self.resolver.resolve_type(f.ret_ty);
+        self.current_ret_ty = resolved_ret;
+        let mut f_span = self.get_expr_span(f.body);
+        let tail_chk_expr = self.get_expr(f.body);
+        if tail_chk_expr as usize != 0 as usize && unsafe { (*tail_chk_expr).get_tag() } == EXPR_BLOCK {
+            let b = unsafe { (*tail_chk_expr).get_Block() };
+            if b.tail_expr != 0 as ExprId {
+                f_span = self.get_expr_span(b.tail_expr);
+            }
+        }
+        
+        self.push_scope();
+
+        let mut i = 0 as usize;
+        while i < f.params.len {
+            let p = &f.params[i];
+            let mut p_ty = self.resolver.resolve_type(p.ty);
+            if p_ty == 0 as u32 && self.implicit_self_ty != 0 as u32 {
+                p_ty = self.implicit_self_ty;
+            }
+            let sym = self.resolver.define(p.name, SymbolKind.Param(i as u32), false);
+            let arg_id = self.define_local(sym, p_ty, LOCAL_KIND_ARG);
+            let is_raw = self.resolver.is_raw_ptr_type(p.ty);
+            self.locals[arg_id as usize - 1 as usize].is_raw_ptr = is_raw;
+            i = i + 1 as usize;
+        }
+
+        let entry_blk = self.new_block("entry");
+        self.switch_to_block(entry_blk);
+
+        // By-value parameters are owned by the callee: live (flag set) on entry.
+        let mut pi = 0 as usize;
+        while pi < self.locals.len {
+            let pl = &self.locals[pi];
+            if pl.kind == LOCAL_KIND_ARG {
+                let flag = self.drop_flag_of(pl.id);
+                if flag != 0 as u32 { self.emit_flag_init(flag, 1 as u64); }
+            }
+            pi = pi + 1 as usize;
+        }
+
+        // If this is a capturing closure, load captured vars from %env
+        if self.mono.pending_cap_len > 0 as usize {
+            let env_ptr_ty = self.mono.pending_cap_env_ty;
+            let env_tmp = self.define_local(0 as *mut Symbol, env_ptr_ty, LOCAL_KIND_TMP);
+            self.emit(ZirStmt.Let(env_tmp, ZirRvalue.GetEnv, f_span));
+            
+            let mut ci = 0 as usize;
+            while ci < self.mono.pending_cap_len {
+                let cap_name = unsafe { *((self.mono.pending_cap_names as usize + ci * 4) as *mut u32) };
+                let cap_ty = unsafe { *((self.mono.pending_cap_tys as usize + ci * 4) as *mut u32) };
+                
+                let cap_sym = self.resolver.define(cap_name, SymbolKind.Local(0 as StmtId), false);
+                let cap_local_id = self.define_local(cap_sym, cap_ty, LOCAL_KIND_LET);
+                
+                let proj_ptr = zoril_allocator_alloc(self.arena, 2 * sizeof(Projection)) as *mut Projection;
+                let mut proj_arr = unsafe { @slice(proj_ptr, 2 as usize) };
+                proj_arr[0] = Projection.Deref;
+                proj_arr[1] = Projection.TupleIndex(ci as u32);
+                let src_place = Place { base: env_tmp, projections: proj_arr };
+                
+                self.emit(ZirStmt.Let(cap_local_id, ZirRvalue.Use(src_place), f_span));
+                ci = ci + 1 as usize;
+            }
+            self.mono.pending_cap_len = 0 as usize;
+        }
+
+        let body_expr = self.get_expr(f.body);
+        let mut ret_place = if body_expr as usize != 0 as usize {
+            self.lower_expr(f.body, self.current_ret_ty)
+        } else {
+            Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) }
+        };
+
+        // Handle main return type if void
+        let fn_name = self.intern_table.lookup(mangled_name);
+        let unit_ty = self.get_primitive_type(ILPrimitive.Unit);
+        let i32_ty = self.get_primitive_type(ILPrimitive.I32);
+        self.is_void_main = is_str_eq(fn_name, "main") && (resolved_ret == unit_ty || resolved_ret == 0 as u32);
+        let actual_ret_ty = if self.is_void_main {
+            i32_ty
+        } else {
+            resolved_ret
+        };
+
+        if actual_ret_ty != 0 as u32 && ret_place.base != 0 as u32 {
+            let actual_ty = self.get_place_type(&ret_place);
+            if actual_ty != 0 as u32 && !self.types_match(actual_ret_ty, actual_ty) {
+                if self.implicit_conv_ok(actual_ret_ty, actual_ty) {
+                    ret_place = self.emit_cast(ret_place, actual_ret_ty, f_span);
+                } else {
+                    self.report_return_type_mismatch(actual_ret_ty, actual_ty, f_span);
+                }
+            }
+        }
+
+        // void main() is converted to i32; emit return 0 when body produced no value
+        if self.is_void_main && ret_place.base == 0 as u32 && actual_ret_ty == i32_ty {
+            let zero_local = self.define_local(0 as *mut Symbol, i32_ty, LOCAL_KIND_TMP);
+            self.emit(ZirStmt.Let(zero_local, ZirRvalue.Const(0 as u64, i32_ty), f_span));
+            ret_place = Place { base: zero_local, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+
+        ret_place = self.materialize_return(ret_place, f_span);
+        self.pop_scope_exclude(f_span, ret_place.base);
+
+        if !self.blocks[self.current_block_idx].is_terminated {
+            self.terminate(ZirTerminator.Ret(ret_place));
+        }
+
+        // Collect blocks into raw slice
+        let mut zblocks = zoril_allocator_alloc(self.arena, self.blocks.len * sizeof(ZirBlock)) as *mut ZirBlock;
+        
+        let mut bi = 0 as usize;
+        while bi < self.blocks.len {
+            let p_b = &self.blocks[bi];
+            
+            let dst = (zblocks as usize + bi * sizeof(ZirBlock)) as *mut ZirBlock;
+            unsafe {
+                (*dst).id = p_b.id;
+                (*dst).statements = @slice(p_b.stmts.data, p_b.stmts.len);
+                (*dst).literal_comments = @slice(p_b.literal_comments.data, p_b.literal_comments.len);
+                (*dst).terminator = p_b.terminator;
+                (*dst).name_hint = p_b.name_hint;
+            }
+            bi = bi + 1 as usize;
+        }
+
+        let fn_span = if f.body != 0 as ExprId {
+            self.get_expr_span(f.body)
+        } else {
+            Span { start: 0, end: 0, line: 0, col: 0 }
+        };
+
+        // `self.locals`/`zblocks` are the arena buffers this function has been
+        // filling; handing them out as slices is the boundary where they become
+        // safe, bounds-checked storage for the rest of the pipeline.
+        let params_s = unsafe { @slice(self.locals.data, f.params.len) };
+        let locals_s = unsafe { @slice(self.locals.data, self.locals.len) };
+        let blocks_s = unsafe { @slice(zblocks, self.blocks.len) };
+        return ZirFunction {
+            name: mangled_name,
+            params: params_s,
+            locals: locals_s,
+            blocks: blocks_s,
+            ret_ty: actual_ret_ty,
+            doc_comment: f.doc_comment,
+            span: fn_span,
+        };
+    }
+
+
+}

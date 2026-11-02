@@ -1,0 +1,6 @@
+# Programs whose result differs between the whole-program build and an installed zbuild, one per line:
+#   <path> <reason> (KNOWN_ISSUES.md <entry that documents it>)
+# scripts/test_zbuild_diff.sh fails on a program that differs and is not listed, and on a listed one that
+# no longer differs. Every other runnable program of tests/ and corpus/zrl/ agrees.
+tests/compiler/minimal_frontend_test.zrl imports the compiler's own source, whose impls form a mutual cycle that -c cannot build (KNOWN_ISSUES.md section 4: "A method's impl must be reachable through imports, not just through the type")
+tests/compiler/test_frontend.zrl imports the compiler's own source, whose impls form a mutual cycle that -c cannot build (KNOWN_ISSUES.md section 4: "A method's impl must be reachable through imports, not just through the type")

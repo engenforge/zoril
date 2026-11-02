@@ -1,0 +1,626 @@
+// Direct kernel I/O, typed file descriptors (Fd), and streaming traits
+
+import "core0.zrl";
+import "core.zrl";
+
+// A portable category of I/O error. Match with a wildcard arm: more categories may be added.
+pub enum ErrorKind {
+    NotFound,
+    PermissionDenied,
+    AlreadyExists,
+    Interrupted,
+    InvalidInput,
+    WouldBlock,
+    BrokenPipe,
+    Other,
+}
+
+// Standard I/O error type wrapping an operating-system errno value.
+pub struct Error {
+    pub errno: i32,
+}
+
+static mut UNKNOWN_ERRNO_ADDR: usize = 0 as usize;
+static mut UNKNOWN_ERRNO_SLOT: usize = 0 as usize;
+
+fn get_unknown_errno_buf() -> *mut u8 {
+    // SAFETY: mmap(2) with MAP_ANONYMOUS allocates 4096 bytes; UNKNOWN_ERRNO_ADDR holds the base address.
+    unsafe {
+        if UNKNOWN_ERRNO_ADDR == 0 as usize {
+            let ret = @syscall(
+                9,
+                0 as u64,
+                4096 as u64,
+                3 as u64,
+                34 as u64,
+                -1 as i64 as u64,
+                0 as u64
+            );
+            if !(ret < 0 as i64 && ret > -4096 as i64) {
+                UNKNOWN_ERRNO_ADDR = ret as usize;
+            }
+        }
+        return UNKNOWN_ERRNO_ADDR as *mut u8;
+    }
+}
+
+fn format_unknown_errno(errno: i32) -> [u8] {
+    let buf = get_unknown_errno_buf();
+    if buf == 0 as *mut u8 {
+        return "unknown errno";
+    }
+    // SAFETY: buf points to a 4096-byte mmap-allocated buffer divided into 64 64-byte slots.
+    unsafe {
+        let slot = UNKNOWN_ERRNO_SLOT & 63 as usize;
+        UNKNOWN_ERRNO_SLOT = UNKNOWN_ERRNO_SLOT + 1 as usize;
+        let slot_base = buf as usize + slot * 64 as usize;
+
+        let prefix = "errno ";
+        let mut i = 0 as usize;
+        while i < prefix.len {
+            *((slot_base + i) as *mut u8) = prefix[i];
+            i = i + 1 as usize;
+        }
+        let mut idx = 6 as usize;
+        let mut temp: u64 = 0 as u64;
+        if errno < 0 {
+            let p_neg = (slot_base + idx) as *mut u8;
+            *p_neg = '-' as u8;
+            idx = idx + 1 as usize;
+            temp = (0 as u32 -% (errno as u32)) as u64;
+        } else {
+            temp = errno as u64;
+        }
+        if temp == 0 as u64 {
+            let p_zero = (slot_base + idx) as *mut u8;
+            *p_zero = '0' as u8;
+            return @slice((slot_base) as *u8, idx + 1 as usize);
+        }
+        let mut d_count = 0 as usize;
+        let mut digits = [0 as u8; 16];
+        while temp > 0 as u64 {
+            digits[d_count] = ((temp % 10 as u64) as u8) + '0' as u8;
+            d_count = d_count + 1 as usize;
+            temp = temp / 10 as u64;
+        }
+        while d_count > 0 as usize {
+            d_count = d_count - 1 as usize;
+            let p_d = (slot_base + idx) as *mut u8;
+            *p_d = digits[d_count];
+            idx = idx + 1 as usize;
+        }
+        return @slice((slot_base) as *u8, idx);
+    }
+}
+
+impl Error {
+    // Constructs an Error from a Linux errno number. The number is a Linux fact: other systems
+    // number their errors differently, so portable code reads `kind()` instead.
+    pub fn from_linux_errno(errno: i32) -> Error {
+        return Error { errno: errno };
+    }
+
+    // Returns the Linux errno number.
+    pub fn linux_errno(self: &Error) -> i32 {
+        return self.errno;
+    }
+
+    // Returns the portable category of the error; `ErrorKind.Other` covers every code without one.
+    pub fn kind(self: &Error) -> ErrorKind {
+        return match self.errno {
+            1 => ErrorKind.PermissionDenied,
+            2 => ErrorKind.NotFound,
+            4 => ErrorKind.Interrupted,
+            11 => ErrorKind.WouldBlock,
+            13 => ErrorKind.PermissionDenied,
+            17 => ErrorKind.AlreadyExists,
+            22 => ErrorKind.InvalidInput,
+            32 => ErrorKind.BrokenPipe,
+            _ => ErrorKind.Other,
+        };
+    }
+
+    // Returns the symbolic Linux name of the error code (e.g., ENOENT, EACCES).
+    pub fn linux_name(self: &Error) -> [u8] {
+        return match self.errno {
+            1 => "EPERM",
+            2 => "ENOENT",
+            3 => "ESRCH",
+            4 => "EINTR",
+            5 => "EIO",
+            6 => "ENXIO",
+            7 => "E2BIG",
+            8 => "ENOEXEC",
+            9 => "EBADF",
+            10 => "ECHILD",
+            11 => "EAGAIN",
+            12 => "ENOMEM",
+            13 => "EACCES",
+            14 => "EFAULT",
+            16 => "EBUSY",
+            17 => "EEXIST",
+            18 => "EXDEV",
+            19 => "ENODEV",
+            20 => "ENOTDIR",
+            21 => "EISDIR",
+            22 => "EINVAL",
+            23 => "ENFILE",
+            24 => "EMFILE",
+            25 => "ENOTTY",
+            26 => "ETXTBSY",
+            27 => "EFBIG",
+            28 => "ENOSPC",
+            29 => "ESPIPE",
+            30 => "EROFS",
+            31 => "EMLINK",
+            32 => "EPIPE",
+            36 => "ENAMETOOLONG",
+            38 => "ENOSYS",
+            39 => "ENOTEMPTY",
+            40 => "ELOOP",
+            111 => "ECONNREFUSED",
+            115 => "EINPROGRESS",
+            _ => "UNKNOWN",
+        };
+    }
+
+    // Returns the descriptive text explanation of the error code.
+    pub fn detail(self: &Error) -> [u8] {
+        return match self.errno {
+            1 => "EPERM (Operation not permitted)",
+            2 => "ENOENT (No such file or directory)",
+            3 => "ESRCH (No such process)",
+            4 => "EINTR (Interrupted system call)",
+            5 => "EIO (Input/output error)",
+            6 => "ENXIO (No such device or address)",
+            7 => "E2BIG (Argument list too long)",
+            8 => "ENOEXEC (Exec format error)",
+            9 => "EBADF (Bad file descriptor)",
+            10 => "ECHILD (No child processes)",
+            11 => "EAGAIN (Resource temporarily unavailable)",
+            12 => "ENOMEM (Cannot allocate memory)",
+            13 => "EACCES (Permission denied)",
+            14 => "EFAULT (Bad address)",
+            16 => "EBUSY (Device or resource busy)",
+            17 => "EEXIST (File exists)",
+            18 => "EXDEV (Invalid cross-device link)",
+            19 => "ENODEV (No such device)",
+            20 => "ENOTDIR (Not a directory)",
+            21 => "EISDIR (Is a directory)",
+            22 => "EINVAL (Invalid argument)",
+            23 => "ENFILE (Too many open files in system)",
+            24 => "EMFILE (Too many open files)",
+            25 => "ENOTTY (Inappropriate ioctl for device)",
+            26 => "ETXTBSY (Text file busy)",
+            27 => "EFBIG (File too large)",
+            28 => "ENOSPC (No space left on device)",
+            29 => "ESPIPE (Illegal seek)",
+            30 => "EROFS (Read-only file system)",
+            31 => "EMLINK (Too many links)",
+            32 => "EPIPE (Broken pipe)",
+            36 => "ENAMETOOLONG (File name too long)",
+            38 => "ENOSYS (Function not implemented)",
+            39 => "ENOTEMPTY (Directory not empty)",
+            40 => "ELOOP (Too many levels of symbolic links)",
+            111 => "ECONNREFUSED (Connection refused)",
+            115 => "EINPROGRESS (Operation now in progress)",
+            _ => format_unknown_errno(self.errno),
+        };
+    }
+}
+
+impl core::Error for Error {
+    // Returns the descriptive error message as a byte slice.
+    pub fn message(self: &Error) -> [u8] {
+        return match self.errno {
+            1 => "Operation not permitted",
+            2 => "No such file or directory",
+            3 => "No such process",
+            4 => "Interrupted system call",
+            5 => "Input/output error",
+            6 => "No such device or address",
+            7 => "Argument list too long",
+            8 => "Exec format error",
+            9 => "Bad file descriptor",
+            10 => "No child processes",
+            11 => "Resource temporarily unavailable",
+            12 => "Cannot allocate memory",
+            13 => "Permission denied",
+            14 => "Bad address",
+            16 => "Device or resource busy",
+            17 => "File exists",
+            18 => "Invalid cross-device link",
+            19 => "No such device",
+            20 => "Not a directory",
+            21 => "Is a directory",
+            22 => "Invalid argument",
+            23 => "Too many open files in system",
+            24 => "Too many open files",
+            25 => "Inappropriate ioctl for device",
+            26 => "Text file busy",
+            27 => "File too large",
+            28 => "No space left on device",
+            29 => "Illegal seek",
+            30 => "Read-only file system",
+            31 => "Too many links",
+            32 => "Broken pipe",
+            36 => "File name too long",
+            38 => "Function not implemented",
+            39 => "Directory not empty",
+            40 => "Too many levels of symbolic links",
+            111 => "Connection refused",
+            115 => "Operation now in progress",
+            _ => format_unknown_errno(self.errno),
+        };
+    }
+}
+
+impl core::ErrorMessage for Error {
+    // Returns the formatted error message for diagnostic display.
+    pub fn error_message(self: &Error) -> [u8] {
+        return self.detail();
+    }
+}
+
+// Raw syscall wrappers
+fn raw_write(fd: u64, buf: [u8]) -> i64 {
+    let p = buf.ptr;
+    let l = buf.len;
+    // SAFETY: `buf` is the caller's own slice, live and readable for the call; write(1) takes its
+    // address and length.
+    return unsafe { @syscall(1, fd, p, l) } as i64;
+}
+
+fn raw_read(fd: u64, buf: [mut u8]) -> i64 {
+    let p = buf.ptr;
+    let l = buf.len;
+    // SAFETY: `buf` is the caller's own mutable slice; the kernel writes at most `l` bytes into
+    // it, and the caller's slice is live for the call. read(0).
+    return unsafe { @syscall(0, fd, p, l) } as i64;
+}
+
+fn raw_close(fd: u64) -> i64 {
+    // SAFETY: closing a descriptor is only reachable as a raw syscall. close(3).
+    return unsafe { @syscall(3, fd) } as i64;
+}
+
+fn result_from_syscall_usize(ret: i64) -> Result<usize, Error> {
+    if ret < 0 as i64 && ret > -4096 as i64 {
+        return Result.Err(Error.from_linux_errno((0 - ret) as i32));
+    }
+    return Result.Ok(ret as usize);
+}
+
+// A typed operating-system file descriptor wrapping a raw integer handle.
+//
+// Forging an arbitrary descriptor requires `unsafe` with `Fd.from_unix_raw(...)` because its
+// inner `raw` field is private. Safe code obtains valid descriptors from `open`, `File`,
+// or standard streams (`stdin()`, `stdout()`, `stderr()`).
+pub struct Fd {
+    raw: i32,
+}
+
+impl Fd {
+    // Unsafely constructs an Fd wrapping an arbitrary integer descriptor.
+    //
+    // CALLER OBLIGATION: caller must ensure raw is a valid, open operating-system file descriptor.
+    pub unsafe fn from_unix_raw(raw: i32) -> Fd {
+        return Fd { raw: raw };
+    }
+
+    // Returns the underlying integer file descriptor.
+    pub fn unix_raw(self: Fd) -> i32 {
+        return self.raw;
+    }
+}
+
+impl Eq for Fd {
+    // Returns true if both Fd handles wrap the same underlying integer descriptor.
+    fn eq(self: &Fd, other: &Fd) -> bool {
+        return self.raw == other.raw;
+    }
+}
+
+fn result_from_syscall_fd(ret: i64) -> Result<Fd, Error> {
+    if ret < 0 as i64 && ret > -4096 as i64 {
+        return Result.Err(Error.from_linux_errno((0 - ret) as i32));
+    }
+    // SAFETY: the kernel returned a valid file descriptor in ret.
+    return Result.Ok(unsafe { Fd.from_unix_raw(ret as i32) });
+}
+
+fn result_from_syscall_unit(ret: i64) -> Result<(), Error> {
+    if ret < 0 as i64 && ret > -4096 as i64 {
+        return Result.Err(Error.from_linux_errno((0 - ret) as i32));
+    }
+    return Result.Ok(());
+}
+
+// Returns a typed file descriptor (Fd) for standard output (fd 1).
+//
+// SAFETY: stdout descriptor (1) is inherited from host runtime.
+pub fn stdout() -> Fd { return unsafe { Fd.from_unix_raw(1) }; }
+
+// Returns a typed file descriptor (Fd) for standard error (fd 2).
+//
+// SAFETY: stderr descriptor (2) is inherited from host runtime.
+pub fn stderr() -> Fd { return unsafe { Fd.from_unix_raw(2) }; }
+
+// Returns a typed file descriptor (Fd) for standard input (fd 0).
+//
+// SAFETY: stdin descriptor (0) is inherited from host runtime.
+pub fn stdin() -> Fd { return unsafe { Fd.from_unix_raw(0) }; }
+
+// Writes bytes from buf to descriptor fd, returning the number of bytes written.
+pub fn write(fd: Fd, buf: [u8]) -> Result<usize, Error> {
+    return result_from_syscall_usize(raw_write(fd.raw as u64, buf));
+}
+
+// Reads bytes from descriptor fd into buf, returning the number of bytes read.
+pub fn read(fd: Fd, buf: [mut u8]) -> Result<usize, Error> {
+    return result_from_syscall_usize(raw_read(fd.raw as u64, buf));
+}
+
+// Closes the open file descriptor fd.
+pub fn close(fd: Fd) -> Result<(), Error> {
+    return result_from_syscall_unit(raw_close(fd.raw as u64));
+}
+
+// Immediately terminates the current process with exit status code.
+pub fn exit(code: i32) -> never {
+    // SAFETY: exit_group(231) is a raw process operation with no pointer argument. It ends every
+    // thread: exit(60) would end only the calling one, which in a program with C threads (a hosted
+    // program) leaves the process running.
+    unsafe { @syscall(231, code as u64); }
+    while true {}
+}
+
+// Writes string s to standard output.
+pub fn print(s: [u8]) {
+    let mut out = Stdout.new();
+    match write_all(&mut out, s) {
+        Ok(_) => {},
+        Err(e) => {
+            zoril_user_panic_error("print failed", e.detail());
+        },
+    }
+}
+
+// Writes string s followed by a newline to standard output.
+pub fn println(s: [u8]) {
+    print(s);
+    print("\n");
+}
+
+// Writes string s to standard error.
+pub fn eprint(s: [u8]) {
+    let mut err = Stderr.new();
+    match write_all(&mut err, s) {
+        Ok(_) => {},
+        Err(_) => {
+            // Exit with status 2 if stderr itself fails; avoid recursive panic
+            // SAFETY: exit_group(231) is a raw syscall.
+            unsafe { @syscall(231, 2 as u64); }
+            zoril_abort();
+        },
+    }
+}
+
+// Writes string s followed by a newline to standard error.
+pub fn eprintln(s: [u8]) {
+    eprint(s);
+    eprint("\n");
+}
+
+// Writes all bytes from buf to file descriptor fd, looping until completion.
+pub fn write_all_fd(fd: Fd, buf: [u8]) -> Result<(), Error> {
+    let mut total = 0 as usize;
+    while total < buf.len {
+        let p = (buf.ptr as usize + total) as *u8;
+        // SAFETY: `total < buf.len`, so the remaining length is a valid extent of `buf`.
+        let rest = unsafe { @slice(p, buf.len - total) };
+        match write(fd, rest) {
+            Ok(n) => {
+                if n == 0 as usize {
+                    return Result.Err(Error.from_linux_errno(28)); // ENOSPC
+                }
+                total = total + n;
+            },
+            Err(e) => {
+                if e.errno == 4 { // EINTR
+                    continue;
+                }
+                return Result.Err(e);
+            },
+        }
+    }
+    return Result.Ok(());
+}
+
+// Trait for synchronous stream readers.
+//
+// Byte sources and sinks. Generic code written against these traits handles
+// files, the standard streams, and in-memory buffers alike. Both return the
+// byte count transferred, or an Error.
+pub trait Read {
+    // Reads bytes from descriptor fd into buf, returning the number of bytes read.
+    fn read(self: &mut Self, buf: [mut u8]) -> Result<usize, Error>;
+}
+
+// Trait for synchronous stream writers.
+pub trait Write {
+    // Writes bytes from buf to descriptor fd, returning the number of bytes written.
+    fn write(self: &mut Self, buf: [u8]) -> Result<usize, Error>;
+}
+
+// Writes all bytes from buf to stream w, looping until completion or error.
+pub fn write_all<W: Write>(w: &mut W, buf: [u8]) -> Result<(), Error> {
+    let mut total = 0 as usize;
+    while total < buf.len {
+        let p = (buf.ptr as usize + total) as *u8;
+        // SAFETY: `total < buf.len`, so the remaining length is a valid extent of `buf`.
+        let rest = unsafe { @slice(p, buf.len - total) };
+        match w.write(rest) {
+            Ok(n) => {
+                if n == 0 as usize {
+                    return Result.Err(Error.from_linux_errno(28)); // ENOSPC
+                }
+                total = total + n;
+            },
+            Err(e) => {
+                if e.errno == 4 { // EINTR
+                    continue;
+                }
+                return Result.Err(e);
+            },
+        }
+    }
+    return Result.Ok(());
+}
+
+// Safe file handle wrapping an Fd with automatic closing on drop.
+pub struct File {
+    fd: Fd,
+}
+
+impl File {
+    // Wraps an existing descriptor in an owned File that closes it on drop.
+    //
+    // CALLER OBLIGATION: `fd` must be an open, exclusively-owned descriptor; ownership passes to
+    // the File, which closes it on drop.
+    pub unsafe fn from_fd(fd: Fd) -> File {
+        return File { fd: fd };
+    }
+
+    // Returns an immutable reference to the wrapped Fd.
+    pub fn fd(self: &File) -> Fd {
+        return self.fd;
+    }
+
+    // Explicitly closes the file handle, returning any error encountered during close.
+    //
+    // Explicitly closes the file, returning any error.
+    // Callers who care about close errors (e.g. NFS flushes) call this; Drop ignores errors.
+    pub fn close(mut self: File) -> Result<(), Error> {
+        if self.fd.raw >= 0 {
+            let ret = raw_close(self.fd.raw as u64);
+            // SAFETY: -1 is the sentinel invalid descriptor representing a closed file.
+            self.fd = unsafe { Fd.from_unix_raw(-1) };
+            return result_from_syscall_unit(ret);
+        }
+        return Result.Ok(());
+    }
+}
+
+impl Read for File {
+    // Reads bytes from the file into buf.
+    fn read(self: &mut File, buf: [mut u8]) -> Result<usize, Error> {
+        return read(self.fd, buf);
+    }
+}
+
+impl Write for File {
+    // Writes bytes from buf into the file.
+    fn write(self: &mut File, buf: [u8]) -> Result<usize, Error> {
+        return write(self.fd, buf);
+    }
+}
+
+impl Drop for File {
+    // Closes the underlying file descriptor if open.
+    pub fn drop(self: File) {
+        if self.fd.raw >= 0 {
+            let _ = raw_close(self.fd.raw as u64);
+        }
+    }
+}
+
+impl Read for Fd {
+    // Reads bytes from descriptor fd into buf, returning the number of bytes read.
+    fn read(self: &mut Fd, buf: [mut u8]) -> Result<usize, Error> {
+        return read(*self, buf);
+    }
+}
+
+impl Write for Fd {
+    // Writes bytes from buf to descriptor fd, returning the number of bytes written.
+    fn write(self: &mut Fd, buf: [u8]) -> Result<usize, Error> {
+        return write(*self, buf);
+    }
+}
+
+// Standard input stream reader.
+//
+// The standard streams. Unlike File they do not own their descriptor, so
+// dropping one never closes it.
+pub struct Stdin {}
+// Standard output stream writer.
+pub struct Stdout {}
+// Standard error stream writer.
+pub struct Stderr {}
+
+impl Stdin {
+    // Constructs a new Stdin stream reader.
+    pub fn new() -> Stdin { return Stdin {}; }
+}
+
+impl Stdout {
+    // Constructs a new Stdout stream writer.
+    pub fn new() -> Stdout { return Stdout {}; }
+}
+
+impl Stderr {
+    // Constructs a new Stderr stream writer.
+    pub fn new() -> Stderr { return Stderr {}; }
+}
+
+impl Read for Stdin {
+    // Reads bytes from standard input into buf.
+    fn read(self: &mut Stdin, buf: [mut u8]) -> Result<usize, Error> {
+        return read(stdin(), buf);
+    }
+}
+
+impl Write for Stdout {
+    // Writes bytes from buf to standard output.
+    fn write(self: &mut Stdout, buf: [u8]) -> Result<usize, Error> {
+        return write(stdout(), buf);
+    }
+}
+
+impl Write for Stderr {
+    // Writes bytes from buf to standard error.
+    fn write(self: &mut Stderr, buf: [u8]) -> Result<usize, Error> {
+        return write(stderr(), buf);
+    }
+}
+
+// In-memory stream reader over a byte slice.
+pub struct SliceReader {
+    pub data: [u8],
+    pub pos: usize,
+}
+
+impl SliceReader {
+    // Constructs a SliceReader wrapping data.
+    pub fn new(data: [u8]) -> SliceReader {
+        return SliceReader { data: data, pos: 0 as usize };
+    }
+}
+
+impl Read for SliceReader {
+    // Reads bytes from the underlying slice into buf.
+    fn read(self: &mut SliceReader, buf: [mut u8]) -> Result<usize, Error> {
+        let mut n = self.data.len - self.pos;
+        if n > buf.len {
+            n = buf.len;
+        }
+        let mut i = 0 as usize;
+        while i < n {
+            buf[i] = self.data[self.pos + i];
+            i = i + 1 as usize;
+        }
+        self.pos = self.pos + n;
+        return Result.Ok(n);
+    }
+}

@@ -1,0 +1,16 @@
+Zoril Programming Language
+Copyright (c) 2026 Engenforge LLC
+
+This product includes software developed by Engenforge LLC.
+
+All components of the Zoril toolchain contained in this repository—including
+the self-hosted compiler (`src/`), standard library (`stdlib/`), intermediate
+language compiler (`tools/zilc/`), runtime support (`rt/`), C-based bootstrap
+compiler (`bootstrap/stage0-c/`), and frozen bootstrap compiler (`bootstrap/stage1/`)—are licensed
+under the MIT License as described in the LICENSE file.
+
+Third-Party Dependencies & Acknowledgments:
+- QBE Compiler Backend (https://c9x.me/compile/):
+  Zoril emits intermediate representation processed by QBE. QBE is developed
+  by Quentin Carbonneaux and contributors under the MIT License. QBE is invoked as an
+  external host toolchain dependency and is not vendored in this repository.

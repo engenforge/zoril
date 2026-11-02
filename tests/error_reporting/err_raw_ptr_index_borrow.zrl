@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: error: indexing raw pointer requires unsafe block
+// Through a struct field, as HashMapIter.next borrows `&self.map.entries[i]`.
+struct Table { entries: *mut u64 }
+fn entry(t: &Table, i: usize) -> &u64 { return &t.entries[i]; }
+fn main() -> i32 { let t = Table { entries: 0 as *mut u64 }; return *entry(&t, 1) as i32; }

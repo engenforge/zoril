@@ -1,0 +1,23 @@
+// expected exit 6
+// Reading a Copy field out of a non-Copy tuple (`pair.0` where pair holds a Box) marked the
+// whole tuple moved, so the next use of `pair` was rejected as "use of moved value".
+enum List { Nil, Cons((i32, Box<List>)) }
+
+fn sum(list: List) -> i32 {
+    return match list {
+        Nil => 0,
+        Cons(pair) => {
+            let a = pair.0;
+            let again = pair.0;
+            let tail = *pair.1;
+            return a + again - pair_first(again) + sum(tail);
+        },
+    };
+}
+
+fn pair_first(x: i32) -> i32 { return x; }
+
+fn main() -> i32 {
+    let l = List.Cons((1, box List.Cons((2, box List.Cons((3, box List.Nil))))));
+    return sum(l);
+}

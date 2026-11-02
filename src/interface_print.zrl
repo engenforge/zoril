@@ -1,0 +1,1528 @@
+// src/interface_print.zrl
+// Module interface emitter (.zri): serializes public declarations and generic templates
+// from the AST of the target module into deterministic, body-independent interface syntax.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "ast.zrl";
+import "intern.zrl";
+import "bytevec.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "il_cfg.zrl";
+import "summary_pass.zrl";
+import "vec.zrl";
+import "module_path.zrl";
+import "io.zrl";
+import "fmt.zrl";
+use ast::{AST, AssocType, BinaryOp, ConstDecl, EnumDecl, Expr, ExprId, FnDecl, ImplDecl, LITERAL_INT, Literal, Param, PatternId, PrimitiveType, StaticDecl, StmtId, StructDecl, TYPE_PATH, TYPE_PRIMITIVE, TYPE_SLICE, TYPE_SLICE_MUT, TraitDecl, Type, TypeAliasDecl, TypeId, TypeParam, UnaryOp};
+use bytevec::ByteVec;
+use il_cfg::{ILFunction, ILModule};
+use intern::InternTable;
+use io::{Fd, write_all};
+use fmt::write_u64;
+use mem_raw::ArenaHeader;
+use module_path::sorted_unique_ids;
+use summary_pass::FuncSummary;
+use vec::Vec;
+
+pub struct InterfacePrinter {
+    pub ast: &AST,
+    pub table: &mut InternTable,
+    pub fd: Fd,
+    pub arena: *mut ArenaHeader,
+    pub target_source_file: u32,
+    pub module: *mut ILModule,
+    pub summaries: [FuncSummary],
+    // Names used by this module's public generic bodies (see AST.collect_generic_body_refs).
+    pub generic_refs: Vec<u32>,
+    // This module was compiled from a root the compiler was told is the standard library
+    // (`loaded_from_stdlib_root`, src/main.zrl): the interface records it as `// zri-stdlib: 1`, so
+    // a consumer of the interface trusts its declarations for the arena lifecycle contract without
+    // re-deriving that from a name (doc/spec/modular_compilation.md).
+    pub source_is_stdlib: bool,
+}
+
+// Precedence an operand is printed at: a binary operand, a cast's operand, a unary operator's
+// operand, and the receiver of `.`, `[]`, a call or `?`.
+const PREC_BINARY: u32 = 1;
+const PREC_CAST: u32 = 50;
+const PREC_UNARY: u32 = 100;
+const PREC_POSTFIX: u32 = 110;
+
+impl InterfacePrinter {
+    pub fn new(
+        ast: &AST,
+        table: &mut InternTable,
+        fd: Fd,
+        arena: *mut ArenaHeader,
+        target_source_file: u32,
+        module: *mut ILModule,
+        summaries: [FuncSummary],
+        source_is_stdlib: bool
+    ) -> InterfacePrinter {
+        return InterfacePrinter {
+            ast: ast,
+            table: table,
+            fd: fd,
+            arena: arena,
+            target_source_file: target_source_file,
+            module: module,
+            summaries: summaries,
+            generic_refs: unsafe { Vec::<u32>.new_in_raw(arena) },
+            source_is_stdlib: source_is_stdlib,
+        };
+    }
+
+    fn append_type_arg_name(self: &InterfacePrinter, ty_id: TypeId, buf: &mut ByteVec) {
+        if ty_id == 0 as TypeId || (ty_id as usize) >= self.ast.types.len() { return; }
+        let p_ty = &self.ast.types[ty_id as usize];
+        match *p_ty {
+            Type.Primitive(p) => {
+                buf.push_slice(primitive_type_name(p));
+            },
+            Type.Path((name, args)) => {
+                buf.push_slice(self.table.lookup(name));
+                if args.len > 0 as usize {
+                    buf.push_slice("_T");
+                    for a in args {
+                        self.append_type_arg_name(*a, buf);
+                    }
+                }
+            },
+            Type.Slice(inner) => {
+                buf.push_slice("S");
+                self.append_type_arg_name(inner, buf);
+            },
+            Type.SliceMut(inner) => {
+                buf.push_slice("M");
+                self.append_type_arg_name(inner, buf);
+            },
+            _ => {},
+        }
+    }
+
+    fn slice_target_name_bytes(self: &InterfacePrinter, p_ty: &Type) -> [u8] {
+        let tag = p_ty.get_tag();
+        let prefix: [u8] = if tag == TYPE_SLICE { "S" } else { "M" };
+        let elem_id = p_ty.get_Slice();
+        if elem_id == 0 as TypeId || (elem_id as usize) >= self.ast.types.len() { return ""; }
+        let p_elem = &self.ast.types[elem_id as usize];
+        let elem_tag = p_elem.get_tag();
+        let elem_bytes: [u8] = if elem_tag == TYPE_PRIMITIVE {
+            primitive_type_name(p_elem.get_Primitive())
+        } else if elem_tag == TYPE_PATH {
+            let path = p_elem.get_Path();
+            let mut pbuf = unsafe { ByteVec.new_raw(self.arena) };
+            pbuf.push_slice(self.table.lookup(path.0));
+            if path.1.len > 0 as usize {
+                pbuf.push_slice("_T");
+                for a in path.1 {
+                    self.append_type_arg_name(*a, pbuf);
+                }
+            }
+            pbuf.as_slice()
+        } else if elem_tag == TYPE_SLICE || elem_tag == TYPE_SLICE_MUT {
+            self.slice_target_name_bytes(p_elem)
+        } else {
+            ""
+        };
+        if elem_bytes.len == 0 as usize { return ""; }
+        let mut buf = unsafe { ByteVec.new_raw(self.arena) };
+        buf.push_slice(prefix);
+        buf.push_slice(elem_bytes);
+        return buf.as_slice();
+    }
+
+    // Methods are named from generic bodies either as `x.m()` or, via the parser, as `T_m`.
+    fn is_generic_method_ref(self: &InterfacePrinter, target_ty: TypeId, method: u32) -> bool {
+        if self.is_generic_ref(method) { return true; }
+        let p_ty = &self.ast.types[target_ty as usize];
+        let tag = p_ty.get_tag();
+        let type_name_bytes: [u8] = if tag == TYPE_PATH {
+            self.table.lookup(p_ty.get_Path().0)
+        } else if tag == TYPE_PRIMITIVE {
+            primitive_type_name(p_ty.get_Primitive())
+        } else if tag == TYPE_SLICE || tag == TYPE_SLICE_MUT {
+            let s_bytes = self.slice_target_name_bytes(p_ty);
+            if s_bytes.len == 0 as usize { return false; }
+            s_bytes
+        } else {
+            return false;
+        };
+        let mut full = unsafe { ByteVec.new_raw(self.arena) };
+        full.push_slice(type_name_bytes);
+        full.push(':' as u8);
+        full.push(':' as u8);
+        full.push_slice(self.table.lookup(method));
+        return self.is_generic_ref(self.table.intern(full.as_slice()));
+    }
+
+    fn is_generic_ref(self: &InterfacePrinter, name: u32) -> bool {
+        let mut i = 0 as usize;
+        while i < self.generic_refs.len() {
+            if self.generic_refs.as_slice()[i] == name { return true; }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
+    // The IL function a declaration lowered to. Identity is (name, declaring file): two modules can
+    // each have an `init`, and only the one from this file is the declaration being described.
+    fn find_il_function(self: &InterfacePrinter, name: u32, source_file: u32) -> *mut ILFunction {
+        if self.module == 0 as *mut ILModule { return 0 as *mut ILFunction; }
+        let fn_count = unsafe { (*self.module).functions.len() };
+        let mut fi = 0 as usize;
+        while fi < fn_count {
+            let p_f = unsafe { &(*self.module).functions[fi] };
+            if p_f.name == name && p_f.source_file == source_file && p_f.owner_len == 0 as u32 {
+                return p_f as *mut ILFunction;
+            }
+            fi = fi + 1 as usize;
+        }
+        return 0 as *mut ILFunction;
+    }
+
+    fn write_summary_attr(self: &InterfacePrinter, p_f: *mut ILFunction, indent: [u8]) {
+        if p_f == 0 as *mut ILFunction { return; }
+        let tid = unsafe { (*p_f).id as usize };
+        if tid >= self.summaries.len { return; }
+        let summary = &self.summaries[tid];
+        let alloc = unsafe { (*p_f).arena_alloc_bytes };
+        self.write(indent);
+        self.write("#[summary(escape = ");
+        self.write_dec(summary.returns_param_mask);
+        self.write(", stash = ");
+        self.write_dec(summary.stashes_param_mask);
+        self.write(", escape_via = ");
+        self.write_dec(summary.returns_via_mask);
+        self.write(", stash_via = ");
+        self.write_dec(summary.stashes_via_mask);
+        self.write(", ret_stack = ");
+        if summary.returns_local_stack { self.write("true"); } else { self.write("false"); }
+        // `alloc` (constant arena bytes the body allocates) is part of the interface on purpose: the
+        // verifier's interprocedural arena-capacity check reads it from imported functions, so a
+        // body edit that changes it must invalidate dependants (doc/spec/modular_compilation.md §2.3).
+        self.write(", alloc = ");
+        self.write_dec(alloc as u64);
+        // `storage`: parameters whose own storage the result may point into (ret_storage,
+        // from the body); an importer ties a stack argument's frame to the result by it.
+        self.write(", storage = ");
+        self.write_dec(unsafe { (*p_f).ret_storage });
+        self.write(", stores = ");
+        self.write_dec(unsafe { (*p_f).stores_storage });
+        self.write(", into = ");
+        self.write_dec(unsafe { (*p_f).store_targets });
+        self.write(")]\n");
+        // An explicit #[borrows(..)] is part of the signature's contract: importers check
+        // their calls against it. (The default rule is derived from the signature itself.)
+        if unsafe { (*p_f).has_borrows } {
+            self.write(indent);
+            self.write("#[borrows(");
+            let ties = unsafe { (*p_f).ret_ties };
+            let sret_name = self.table.intern("__sret");
+            let env_name = self.table.intern("__env");
+            let n = unsafe { (*p_f).params_len };
+            let mut user = 0 as usize;
+            let mut first = true;
+            let mut pi = 0 as usize;
+            while pi < n {
+                let nm = unsafe { (*p_f).param(pi).name };
+                if nm != sret_name && nm != env_name {
+                    if user < 64 as usize && ((ties >> (user as u64)) & 1 as u64) != 0 as u64 {
+                        if !first { self.write(", "); }
+                        self.write_ident(nm);
+                        first = false;
+                    }
+                    user = user + 1 as usize;
+                }
+                pi = pi + 1 as usize;
+            }
+            self.write(")]\n");
+        }
+    }
+
+    // The contracts the author wrote as `#[borrows(..)]` and `#[stores(..)]` on a body this
+    // interface carries (a generic function, a generic method, a trait method): the importer
+    // instantiates the body and checks it against them. A non-generic function carries them as
+    // a `#[summary]` instead (`write_summary_attr`).
+    fn write_declared_contracts(self: &InterfacePrinter, f: &FnDecl, indent: [u8]) {
+        if f.has_borrows {
+            self.write(indent);
+            self.write("#[borrows(");
+            let mut i = 0 as usize;
+            while i < f.borrows.len {
+                if i > 0 as usize { self.write(", "); }
+                self.write_ident(f.borrows[i]);
+                i = i + 1 as usize;
+            }
+            self.write(")]\n");
+        }
+        if f.has_stores {
+            self.write(indent);
+            self.write("#[stores(");
+            let mut i = 0 as usize;
+            while i < f.stores_from.len {
+                if i > 0 as usize { self.write(", "); }
+                self.write_ident(f.stores_from[i]);
+                self.write(" -> ");
+                if f.stores_static[i] {
+                    self.write("static");
+                } else {
+                    self.write_ident(f.stores_to[i]);
+                }
+                i = i + 1 as usize;
+            }
+            self.write(")]\n");
+        }
+    }
+
+    fn write(self: &InterfacePrinter, s: [u8]) {
+        if s.len > 0 as usize {
+            let mut out = self.fd;
+            write_all(&mut out, s).expect("cannot write interface output");
+        }
+    }
+
+    fn write_dec(self: &InterfacePrinter, v: u64) {
+        let mut out = self.fd;
+        write_u64(&mut out, v).expect("cannot write interface output");
+    }
+
+    fn write_ident(self: &InterfacePrinter, id: u32) {
+        if id != 0 as u32 {
+            let s = self.table.lookup(id);
+            self.write(s);
+        }
+    }
+
+    fn emit_escaped_string(self: &InterfacePrinter, s: [u8]) {
+        self.write("\"");
+        let hex_digits = "0123456789abcdef";
+        let mut i = 0 as usize;
+        while i < s.len {
+            let c = s[i];
+            if c == '\n' as u8 {
+                self.write("\\n");
+            } else if c == '\t' as u8 {
+                self.write("\\t");
+            } else if c == '\r' as u8 {
+                self.write("\\r");
+            } else if c == '\\' as u8 {
+                self.write("\\\\");
+            } else if c == '"' as u8 {
+                self.write("\\\"");
+            } else if c < 32 as u8 || c >= 127 as u8 {
+                self.write("\\x");
+                let hi = (c / 16 as u8) as usize;
+                let lo = (c % 16 as u8) as usize;
+                self.write(subslice(hex_digits, hi, 1 as usize));
+                self.write(subslice(hex_digits, lo, 1 as usize));
+            } else {
+                self.write(subslice(s, i, 1 as usize));
+            }
+            i = i + 1 as usize;
+        }
+        self.write("\"");
+    }
+
+    // --- Types ---
+
+    fn emit_type(self: &InterfacePrinter, ty_id: TypeId) {
+        if ty_id == 0 as TypeId {
+            self.write("unit");
+            return;
+        }
+        match self.ast.types[ty_id as usize] {
+            Type.Primitive(p) => { self.write(primitive_type_name(p)); },
+            Type.Ptr(inner) => { self.write("*"); self.emit_type(inner); },
+            Type.PtrMut(inner) => { self.write("*mut "); self.emit_type(inner); },
+            Type.Ref(inner) => { self.write("&"); self.emit_type(inner); },
+            Type.RefMut(inner) => { self.write("&mut "); self.emit_type(inner); },
+            Type.Slice(inner) => { self.write("["); self.emit_type(inner); self.write("]"); },
+            Type.SliceMut(inner) => {
+                self.write("[mut ");
+                self.emit_type(inner);
+                self.write("]");
+            },
+            Type.Array(arr) => {
+                self.write("[");
+                self.emit_type(arr.0);
+                self.write("; ");
+                self.write_dec(arr.1 as u64);
+                self.write("]");
+            },
+            Type.Tuple(types) => {
+                self.write("(");
+                self.emit_type_list(types);
+                if types.len == 1 as usize { self.write(","); }
+                self.write(")");
+            },
+            Type.Fn(ft) => {
+                if ft.is_c { self.write("extern \"C\" "); }
+                self.write("fn(");
+                self.emit_type_list(ft.params);
+                if ft.is_variadic {
+                    if ft.params.len > 0 as usize { self.write(", "); }
+                    self.write("...");
+                }
+                self.write(")");
+                if ft.ret_ty != 0 as TypeId {
+                    self.write(" -> ");
+                    self.emit_type(ft.ret_ty);
+                }
+            },
+            Type.Path(path) => {
+                self.write_ident(path.0);
+                if path.1.len > 0 as usize {
+                    self.write("<");
+                    self.emit_type_list(path.1);
+                    self.write(">");
+                }
+            },
+        }
+    }
+
+    fn emit_type_list(self: &InterfacePrinter, types: [TypeId]) {
+        for k in 0 as usize..types.len {
+            if k > 0 as usize { self.write(", "); }
+            self.emit_type(types[k]);
+        }
+    }
+
+    fn emit_type_params(self: &InterfacePrinter, tps: [TypeParam]) {
+        if tps.len == 0 as usize { return; }
+        self.write("<");
+        let mut i = 0 as usize;
+        while i < tps.len {
+            if i > 0 as usize { self.write(", "); }
+            self.write_ident(tps[i].name);
+            if tps[i].bounds.len > 0 as usize {
+                self.write(": ");
+                let mut b = 0 as usize;
+                while b < tps[i].bounds.len {
+                    if b > 0 as usize { self.write(" + "); }
+                    self.emit_type(tps[i].bounds[b]);
+                    b = b + 1 as usize;
+                }
+            }
+            i = i + 1 as usize;
+        }
+        self.write(">");
+    }
+
+    fn emit_params(self: &InterfacePrinter, params: [Param], is_variadic: bool) {
+        self.write("(");
+        let mut i = 0 as usize;
+        while i < params.len {
+            if i > 0 as usize { self.write(", "); }
+            let p_name = self.table.lookup(params[i].name);
+            if p_name == "self" && params[i].ty == 0 as TypeId {
+                if params[i].is_mut { self.write("mut self"); } else { self.write("self"); }
+            } else {
+                if params[i].is_mut { self.write("mut "); }
+                self.write(p_name);
+                self.write(": ");
+                self.emit_type(params[i].ty);
+            }
+            i = i + 1 as usize;
+        }
+        if is_variadic {
+            if params.len > 0 as usize { self.write(", "); }
+            self.write("...");
+        }
+        self.write(")");
+    }
+
+    // --- Expressions & Statements for Generic Bodies ---
+
+    fn emit_indent(self: &InterfacePrinter, indent: usize) {
+        let mut i = 0 as usize;
+        while i < indent {
+            self.write("    ");
+            i = i + 1 as usize;
+        }
+    }
+
+    // A pattern's integer is the bits of a negative number when it was written `-N`; printed
+    // that way (the bits are the same either way, so a `u64` pattern above 2^63 is fine too).
+    fn emit_pattern_literal(self: &InterfacePrinter, l: &Literal) {
+        if l.get_tag() == LITERAL_INT && l.get_Int() >= (1 as u64 << 63) {
+            self.write("-");
+            self.write_dec(0 as u64 -% l.get_Int());
+            return;
+        }
+        self.emit_literal(l);
+    }
+
+    fn emit_literal(self: &InterfacePrinter, l: &Literal) {
+        let tag = l.get_tag();
+        match tag {
+            0 => {
+                let v = l.get_Int_full();
+                self.write_dec(v.0);
+                let sfx = v.1;
+                if sfx != 0xffffffff as u32 {
+                    match sfx {
+                        0 => self.write("u8"),
+                        1 => self.write("u16"),
+                        2 => self.write("u32"),
+                        3 => self.write("u64"),
+                        4 => self.write("usize"),
+                        5 => self.write("i8"),
+                        6 => self.write("i16"),
+                        7 => self.write("i32"),
+                        8 => self.write("i64"),
+                        9 => self.write("isize"),
+                        _ => {},
+                    }
+                }
+            },
+            1 => { self.write(self.table.lookup(l.get_Float_text())); },
+            2 => {
+                let s_id = l.get_String();
+                let s = self.table.lookup(s_id);
+                self.emit_escaped_string(s);
+            },
+            3 => {
+                self.emit_char(l.get_Char());
+            },
+            4 => {
+                if l.get_Bool() { self.write("true"); } else { self.write("false"); }
+            },
+            _ => {},
+        }
+    }
+
+    fn emit_char(self: &InterfacePrinter, code: u32) {
+        self.write("'");
+        let hex_digits = "0123456789abcdef";
+        if code == 10 as u32 {
+            self.write("\\n");
+        } else if code == 9 as u32 {
+            self.write("\\t");
+        } else if code == 13 as u32 {
+            self.write("\\r");
+        } else if code == 92 as u32 {
+            self.write("\\\\");
+        } else if code == 39 as u32 {
+            self.write("\\'");
+        } else if code < 32 as u32 || code >= 127 as u32 {
+            self.write("\\x");
+            let c = (code & 0xff as u32) as u8;
+            let hi = (c / 16 as u8) as usize;
+            let lo = (c % 16 as u8) as usize;
+            self.write(subslice(hex_digits, hi, 1 as usize));
+            self.write(subslice(hex_digits, lo, 1 as usize));
+        } else {
+            let mut b = [code as u8];
+            self.write(unsafe { @slice(&b[0] as *u8, 1 as usize) });
+        }
+        self.write("'");
+    }
+
+    fn emit_pattern_list(self: &InterfacePrinter, pats: [PatternId]) {
+        let mut i = 0 as usize;
+        while i < pats.len {
+            if i > 0 as usize { self.write(", "); }
+            self.emit_pattern(pats[i]);
+            i = i + 1 as usize;
+        }
+    }
+
+    fn emit_pattern(self: &InterfacePrinter, pat_id: PatternId) {
+        if pat_id == 0 as PatternId { return; }
+        let p_pat = &self.ast.patterns[pat_id as usize];
+        match *p_pat {
+            Pattern.Literal(l) => {
+                self.emit_pattern_literal(&l);
+            },
+            Pattern.Ident(name) => {
+                self.write_ident(name);
+            },
+            Pattern.MutIdent(name) => {
+                self.write("mut ");
+                self.write_ident(name);
+            },
+            Pattern.Wildcard => {
+                self.write("_");
+            },
+            Pattern.EnumVariant(ev) => {
+                if ev.type_name != 0 as u32 {
+                    self.write_ident(ev.type_name);
+                    self.write(".");
+                }
+                self.write_ident(ev.variant_name);
+                if ev.payload.len > 0 as usize {
+                    self.write("(");
+                    self.emit_pattern_list(ev.payload);
+                    self.write(")");
+                }
+            },
+            Pattern.Tuple(elems) => {
+                self.write("(");
+                self.emit_pattern_list(elems);
+                if elems.len == 1 as usize { self.write(","); }
+                self.write(")");
+            },
+            Pattern.Struct(sp) => {
+                self.write_ident(sp.type_name);
+                self.write(" { ");
+                let mut i = 0 as usize;
+                while i < sp.fields.len {
+                    if i > 0 as usize { self.write(", "); }
+                    self.write_ident(sp.fields[i].name);
+                    self.write(": ");
+                    self.emit_pattern(sp.fields[i].pattern);
+                    i = i + 1 as usize;
+                }
+                if sp.has_rest {
+                    if sp.fields.len > 0 as usize { self.write(", "); }
+                    self.write("..");
+                }
+                self.write(" }");
+            },
+            Pattern.Range(r) => {
+                self.emit_pattern_literal(&r.start);
+                if r.inclusive { self.write("..="); } else { self.write(".."); }
+                self.emit_pattern_literal(&r.end);
+            },
+            Pattern.Or(pats) => {
+                let mut i = 0 as usize;
+                while i < pats.len {
+                    if i > 0 as usize { self.write(" | "); }
+                    self.emit_pattern(pats[i]);
+                    i = i + 1 as usize;
+                }
+            },
+        }
+    }
+
+    fn emit_binary_op(self: &InterfacePrinter, op: BinaryOp) {
+        let tag = op.get_tag();
+        match tag {
+            0 => self.write(" + "),
+            1 => self.write(" - "),
+            2 => self.write(" * "),
+            3 => self.write(" / "),
+            4 => self.write(" % "),
+            5 => self.write(" +% "),
+            6 => self.write(" -% "),
+            7 => self.write(" *% "),
+            8 => self.write(" == "),
+            9 => self.write(" != "),
+            10 => self.write(" < "),
+            11 => self.write(" <= "),
+            12 => self.write(" > "),
+            13 => self.write(" >= "),
+            14 => self.write(" & "),
+            15 => self.write(" | "),
+            16 => self.write(" ^ "),
+            17 => self.write(" << "),
+            18 => self.write(" >> "),
+            19 => self.write(" = "),
+            20 => self.write(" += "),
+            21 => self.write(" -= "),
+            22 => self.write(" *= "),
+            23 => self.write(" /= "),
+            24 => self.write(" %= "),
+            25 => self.write(" +%= "),
+            26 => self.write(" -%= "),
+            27 => self.write(" *%= "),
+            28 => self.write(" &= "),
+            29 => self.write(" |= "),
+            30 => self.write(" ^= "),
+            31 => self.write(" <<= "),
+            32 => self.write(" >>= "),
+            33 => self.write(" && "),
+            34 => self.write(" || "),
+            _ => self.write(" ? "),
+        }
+    }
+
+    fn emit_unary_op(self: &InterfacePrinter, op: UnaryOp) {
+        let tag = op.get_tag();
+        match tag {
+            0 => self.write("-"),
+            1 => self.write("!"),
+            2 => self.write("*"),
+            3 => self.write("&"),
+            4 => self.write("&mut "),
+            _ => {},
+        }
+    }
+
+    fn emit_expr_prec(self: &InterfacePrinter, expr_id: ExprId, indent: usize, min_prec: u32) {
+        if expr_id == 0 as ExprId { return; }
+        let p_expr = &self.ast.exprs[expr_id as usize];
+        // A form that extends as far right as it can (`box`, `return`, a closure, `if`,
+        // `match`) is parenthesized as an operand.
+        let open = match *p_expr {
+            Expr.Boxed(_)
+                | Expr.Return(_)
+                | Expr.Closure(_)
+                | Expr.If(_)
+                | Expr.Match(_) => min_prec > 0 as u32,
+            _ => false,
+        };
+        if open { self.write("("); }
+        self.emit_expr_kind(p_expr, indent, min_prec);
+        if open { self.write(")"); }
+    }
+
+    // The head of an `if`, `match`, `while` or `for` is parsed with struct literals off, so one that
+    // is the head itself, or sits in an operand of it, is parenthesized.
+    fn emit_head_expr(self: &InterfacePrinter, expr_id: ExprId, indent: usize) {
+        let is_literal = match self.ast.exprs[expr_id as usize] {
+            Expr.StructLiteral(_) => true,
+            _ => false,
+        };
+        if is_literal { self.write("("); }
+        self.emit_expr_prec(expr_id, indent, 0 as u32);
+        if is_literal { self.write(")"); }
+    }
+
+    fn emit_expr_kind(self: &InterfacePrinter, p_expr: &Expr, indent: usize, min_prec: u32) {
+        match *p_expr {
+            Expr.Literal(l) => {
+                self.emit_literal(&l);
+            },
+            Expr.Ident(name) => {
+                self.write_ident(name);
+            },
+            Expr.Unary(u) => {
+                let need_paren = min_prec > PREC_UNARY;
+                if need_paren { self.write("("); }
+                self.emit_unary_op(u.op);
+                self.emit_expr_prec(u.expr, indent, PREC_UNARY);
+                if need_paren { self.write(")"); }
+            },
+            Expr.Binary(b) => {
+                let need_paren = min_prec > 0 as u32;
+                if need_paren { self.write("("); }
+                self.emit_expr_prec(b.lhs, indent, PREC_BINARY);
+                self.emit_binary_op(b.op);
+                self.emit_expr_prec(b.rhs, indent, PREC_BINARY);
+                if need_paren { self.write(")"); }
+            },
+            Expr.Call(c) => {
+                self.emit_expr_prec(c.callee, indent, PREC_POSTFIX);
+                self.emit_type_args(c.type_args);
+                self.write("(");
+                self.emit_expr_list(c.args, indent);
+                self.write(")");
+            },
+            Expr.Generic(g) => {
+                self.emit_expr_prec(g.expr, indent, PREC_POSTFIX);
+                self.emit_type_args(g.type_args);
+            },
+            Expr.Intrinsic(intr) => {
+                self.write("@");
+                self.write_ident(intr.name);
+                self.emit_type_args(intr.type_args);
+                self.write("(");
+                self.emit_expr_list(intr.args, indent);
+                self.write(")");
+            },
+            Expr.Block(b) => {
+                if b.is_unsafe { self.write("unsafe "); }
+                self.write("{\n");
+                let mut i = 0 as usize;
+                while i < b.stmts.len {
+                    self.emit_stmt(b.stmts[i], indent + 1 as usize);
+                    i = i + 1 as usize;
+                }
+                if b.tail_expr != 0 as ExprId {
+                    self.emit_indent(indent + 1 as usize);
+                    self.emit_expr_prec(b.tail_expr, indent + 1 as usize, 0 as u32);
+                    self.write("\n");
+                }
+                self.emit_indent(indent);
+                self.write("}");
+            },
+            Expr.If(ife) => {
+                self.write("if ");
+                self.emit_head_expr(ife.cond, indent);
+                self.write(" ");
+                self.emit_expr_prec(ife.then_block, indent, 0 as u32);
+                if ife.else_block != 0 as ExprId {
+                    self.write(" else ");
+                    self.emit_expr_prec(ife.else_block, indent, 0 as u32);
+                }
+            },
+            Expr.Match(m) => {
+                // A desugared two-arm match (`if let`, `while let`, `for`) written as a `match` loses its mark,
+                // and the importer lints the `_` arm nobody wrote: write the `if let` it was.
+                if m.desugared && m.arms.len == 2 as usize {
+                    self.write("if let ");
+                    self.emit_pattern(m.arms[0].pattern);
+                    self.write(" = ");
+                    self.emit_head_expr(m.expr, indent);
+                    self.write(" ");
+                    self.emit_expr_prec(m.arms[0].body, indent, 0 as u32);
+                    self.write(" else ");
+                    let else_is_chain = match self.ast.exprs[m.arms[1].body as usize] {
+                        Expr.Block(_) => true,
+                        Expr.Match(inner) => inner.desugared,
+                        _ => false,
+                    };
+                    if !else_is_chain { self.write("{ "); }
+                    self.emit_expr_prec(m.arms[1].body, indent, 0 as u32);
+                    let else_diverges = match self.ast.exprs[m.arms[1].body as usize] {
+                        Expr.Break => true,
+                        Expr.Continue => true,
+                        Expr.Return(_) => true,
+                        _ => false,
+                    };
+                    if !else_is_chain { self.write(if else_diverges { "; }" } else { " }" }); }
+                } else {
+                    self.write("match ");
+                    self.emit_head_expr(m.expr, indent);
+                    self.write(" {\n");
+                    let mut i = 0 as usize;
+                    while i < m.arms.len {
+                        self.emit_indent(indent + 1 as usize);
+                        self.emit_pattern(m.arms[i].pattern);
+                        if m.arms[i].guard != 0 as ExprId {
+                            self.write(" if ");
+                            self.emit_expr_prec(m.arms[i].guard, indent + 1 as usize, 0 as u32);
+                        }
+                        self.write(" => ");
+                        self.emit_expr_prec(m.arms[i].body, indent + 1 as usize, 0 as u32);
+                        self.write(",\n");
+                        i = i + 1 as usize;
+                    }
+                    self.emit_indent(indent);
+                    self.write("}");
+                }
+            },
+            Expr.StructLiteral(sl) => {
+                if min_prec > 0 as u32 { self.write("("); }
+                self.write_ident(sl.struct_name);
+                self.emit_type_args(sl.type_args);
+                self.write(" { ");
+                let mut i = 0 as usize;
+                while i < sl.fields.len {
+                    if i > 0 as usize { self.write(", "); }
+                    self.write_ident(sl.fields[i].name);
+                    self.write(": ");
+                    self.emit_expr_prec(sl.fields[i].value, indent, 0 as u32);
+                    i = i + 1 as usize;
+                }
+                self.write(" }");
+                if min_prec > 0 as u32 { self.write(")"); }
+            },
+            Expr.MemberAccess(ma) => {
+                self.emit_expr_prec(ma.expr, indent, PREC_POSTFIX);
+                self.write(".");
+                self.write_ident(ma.member);
+            },
+            Expr.TupleAccess(ta) => {
+                self.emit_expr_prec(ta.expr, indent, PREC_POSTFIX);
+                self.write(".");
+                self.write_dec(ta.index);
+            },
+            Expr.Index(idx) => {
+                self.emit_expr_prec(idx.expr, indent, PREC_POSTFIX);
+                self.write("[");
+                self.emit_expr_prec(idx.index, indent, 0 as u32);
+                self.write("]");
+            },
+            Expr.Boxed(bx) => {
+                self.write("box");
+                if bx.allocator != 0 as ExprId {
+                    self.write("(");
+                    self.emit_expr_prec(bx.allocator, indent, 0 as u32);
+                    self.write(")");
+                }
+                self.write(" ");
+                self.emit_expr_prec(bx.expr, indent, 0 as u32);
+            },
+            Expr.Cast(c) => {
+                let need_paren = min_prec > PREC_CAST;
+                if need_paren { self.write("("); }
+                self.emit_expr_prec(c.expr, indent, PREC_CAST);
+                self.write(" as ");
+                self.emit_type(c.target_ty);
+                if need_paren { self.write(")"); }
+            },
+            Expr.ArrayLiteral(al) => {
+                self.write("[");
+                self.emit_expr_list(al.elements, indent);
+                self.write("]");
+            },
+            Expr.ArrayRepeat(ar) => {
+                self.write("[");
+                self.emit_expr_prec(ar.value, indent, 0 as u32);
+                self.write("; ");
+                self.emit_expr_prec(ar.len, indent, 0 as u32);
+                self.write("]");
+            },
+            Expr.TupleLiteral(tl) => {
+                self.write("(");
+                self.emit_expr_list(tl.elements, indent);
+                if tl.elements.len == 1 as usize { self.write(","); }
+                self.write(")");
+            },
+            Expr.Closure(cl) => {
+                self.write("|");
+                let mut i = 0 as usize;
+                while i < cl.params.len {
+                    if i > 0 as usize { self.write(", "); }
+                    self.write_ident(cl.params[i].name);
+                    if cl.params[i].ty != 0 as TypeId {
+                        self.write(": ");
+                        self.emit_type(cl.params[i].ty);
+                    }
+                    i = i + 1 as usize;
+                }
+                self.write("| ");
+                if cl.ret_ty != 0 as TypeId {
+                    self.write("-> ");
+                    self.emit_type(cl.ret_ty);
+                    self.write(" ");
+                }
+                self.emit_expr_prec(cl.body, indent, 0 as u32);
+            },
+            Expr.Try(e) => {
+                self.emit_expr_prec(e, indent, PREC_POSTFIX);
+                self.write("?");
+            },
+            Expr.Return(e) => {
+                self.write("return");
+                if e != 0 as ExprId {
+                    self.write(" ");
+                    self.emit_expr_prec(e, indent, 0 as u32);
+                }
+            },
+            Expr.Break => { self.write("break"); },
+            Expr.Continue => { self.write("continue"); },
+            Expr.Sizeof(ty) => {
+                self.write("sizeof(");
+                self.emit_type(ty);
+                self.write(")");
+            },
+            Expr.Alignof(ty) => {
+                self.write("alignof(");
+                self.emit_type(ty);
+                self.write(")");
+            },
+        }
+    }
+
+    // `::<A, B>`, or nothing for no type arguments.
+    fn emit_type_args(self: &InterfacePrinter, types: [TypeId]) {
+        if types.len == 0 as usize { return; }
+        self.write("::<");
+        for k in 0 as usize..types.len {
+            if k > 0 as usize { self.write(", "); }
+            self.emit_type(types[k]);
+        }
+        self.write(">");
+    }
+
+    fn emit_expr_list(self: &InterfacePrinter, exprs: [ExprId], indent: usize) {
+        for k in 0 as usize..exprs.len {
+            if k > 0 as usize { self.write(", "); }
+            self.emit_expr_prec(exprs[k], indent, 0 as u32);
+        }
+    }
+
+    fn emit_stmt(self: &InterfacePrinter, stmt_id: StmtId, indent: usize) {
+        if stmt_id == 0 as StmtId { return; }
+        self.emit_indent(indent);
+        let p_stmt = &self.ast.stmts[stmt_id as usize];
+        match *p_stmt {
+            Stmt.Let(l) => {
+                self.write("let ");
+                if l.pattern != 0 as PatternId {
+                    self.emit_pattern(l.pattern);
+                } else if l.name == 0 as u32 {
+                    self.write("_");
+                } else {
+                    if l.is_mut { self.write("mut "); }
+                    self.write_ident(l.name);
+                }
+                if l.ty != 0 as TypeId {
+                    self.write(": ");
+                    self.emit_type(l.ty);
+                }
+                if l.init != 0 as ExprId {
+                    self.write(" = ");
+                    self.emit_expr_prec(l.init, indent, 0 as u32);
+                }
+                self.write(";\n");
+            },
+            Stmt.Expr(e) => {
+                self.emit_expr_prec(e, indent, 0 as u32);
+                self.write(";\n");
+            },
+            Stmt.While(w) => {
+                self.write("while ");
+                self.emit_head_expr(w.cond, indent);
+                self.write(" ");
+                self.emit_expr_prec(w.body, indent, 0 as u32);
+                self.write("\n");
+            },
+            Stmt.For(f) => {
+                self.write("for ");
+                if f.end == 0 as ExprId {
+                    self.emit_pattern(f.pattern);
+                } else {
+                    self.write_ident(f.var);
+                }
+                self.write(" in ");
+                self.emit_head_expr(f.start, indent);
+                if f.end != 0 as ExprId {
+                    self.write("..");
+                    self.emit_head_expr(f.end, indent);
+                }
+                self.write(" ");
+                self.emit_expr_prec(f.body, indent, 0 as u32);
+                self.write("\n");
+            },
+            Stmt.Defer(e) => {
+                self.write("defer ");
+                self.emit_expr_prec(e, indent, 0 as u32);
+                self.write(";\n");
+            },
+            Stmt.Return(e) => {
+                self.write("return");
+                if e != 0 as ExprId {
+                    self.write(" ");
+                    self.emit_expr_prec(e, indent, 0 as u32);
+                }
+                self.write(";\n");
+            },
+            Stmt.Break => {
+                self.write("break;\n");
+            },
+            Stmt.Continue => {
+                self.write("continue;\n");
+            },
+        }
+    }
+
+    // --- Declarations ---
+
+    fn emit_struct(self: &InterfacePrinter, s: &StructDecl) {
+        // A type declaration is written whether or not it is `pub`: an exported struct or signature may
+        // name a private type (`pub struct PairMap { entries: Vec<PairEntry> }` with `struct PairEntry`
+        // private), and the reader has to be able to resolve that name. The flag decides what an importer
+        // may name, which is checked when the interface is parsed, so writing it is what makes separate
+        // compilation agree with the whole-program build.
+        if s.must_use {
+            self.write("#[must_use]\n");
+        }
+        if s.is_pub { self.write("pub "); }
+        self.write("struct ");
+        self.write_ident(s.name);
+        self.emit_type_params(s.type_params);
+        self.write(" {\n");
+        let mut i = 0 as usize;
+        while i < s.fields.len {
+            self.write("    ");
+            if s.fields[i].is_pub { self.write("pub "); }
+            self.write_ident(s.fields[i].name);
+            self.write(": ");
+            self.emit_type(s.fields[i].ty);
+            self.write(",\n");
+            i = i + 1 as usize;
+        }
+        self.write("}\n\n");
+    }
+
+    fn emit_enum(self: &InterfacePrinter, e: &EnumDecl) {
+        // A type declaration is written whether or not it is `pub`: an exported struct or signature may
+        // name a private type (`pub struct PairMap { entries: Vec<PairEntry> }` with `struct PairEntry`
+        // private), and the reader has to be able to resolve that name. The flag decides what an importer
+        // may name, which is checked when the interface is parsed, so writing it is what makes separate
+        // compilation agree with the whole-program build.
+        if e.must_use {
+            self.write("#[must_use]\n");
+        }
+        if e.is_pub { self.write("pub "); }
+        self.write("enum ");
+        self.write_ident(e.name);
+        self.emit_type_params(e.type_params);
+        self.write(" {\n");
+        let mut i = 0 as usize;
+        while i < e.variants.len {
+            self.write("    ");
+            self.write_ident(e.variants[i].name);
+            if e.variants[i].payload != 0 as TypeId {
+                self.write("(");
+                self.emit_type(e.variants[i].payload);
+                self.write(")");
+            }
+            if e.variants[i].has_discriminant {
+                self.write(" = ");
+                self.write_dec(e.variants[i].discriminant as u64);
+            }
+            self.write(",\n");
+            i = i + 1 as usize;
+        }
+        self.write("}\n\n");
+    }
+
+    fn emit_type_alias(self: &InterfacePrinter, ta: &TypeAliasDecl) {
+        // A type declaration is written whether or not it is `pub`: an exported struct or signature may
+        // name a private type (`pub struct PairMap { entries: Vec<PairEntry> }` with `struct PairEntry`
+        // private), and the reader has to be able to resolve that name. The flag decides what an importer
+        // may name, which is checked when the interface is parsed, so writing it is what makes separate
+        // compilation agree with the whole-program build.
+        if ta.is_pub {
+            self.write("pub ");
+        }
+        self.write("type ");
+        self.write_ident(ta.name);
+        self.write(" = ");
+        self.emit_type(ta.target);
+        self.write(";\n\n");
+    }
+
+    // Written whether or not `pub`, like a type: a generic body instantiated in the importer may use
+    // a private constant. The flag still decides what an importer may name.
+    fn emit_const(self: &InterfacePrinter, c: &ConstDecl) {
+        if c.is_pub { self.write("pub "); }
+        self.write("const ");
+        self.write_ident(c.name);
+        if c.ty != 0 as TypeId {
+            self.write(": ");
+            self.emit_type(c.ty);
+        }
+        self.write(" = ");
+        self.emit_expr_prec(c.value, 0 as usize, 0 as u32);
+        self.write(";\n\n");
+    }
+
+    fn emit_static(self: &InterfacePrinter, st: &StaticDecl) {
+        // A private static a generic body uses is written too, as private.
+        if !st.is_pub && !self.is_generic_ref(st.name) {
+            return;
+        }
+        if st.is_pub { self.write("pub "); }
+        self.write("static ");
+        if st.is_mut { self.write("mut "); }
+        self.write_ident(st.name);
+        if st.ty != 0 as TypeId {
+            self.write(": ");
+            self.emit_type(st.ty);
+        }
+        if st.value != 0 as ExprId {
+            self.write(" = ");
+            self.emit_expr_prec(st.value, 0 as usize, 0 as u32);
+        }
+        self.write(";\n\n");
+    }
+
+    // A private function the interface carries as a signature alone (see `emit_fn`).
+    fn is_private_signature_fn(self: &InterfacePrinter, f: &FnDecl) -> bool {
+        return !f.is_pub
+            && !self.is_generic_ref(f.name)
+            && (f.is_export || (f.type_params.len == 0 as usize && !f.is_extern));
+    }
+
+    fn emit_fn(self: &InterfacePrinter, f: &FnDecl) {
+        // A private function that a public generic body mentions is part of the interface too: the
+        // body is instantiated in the consumer, which must be able to resolve and link the callee
+        // (it stays unnameable from outside: the resolver rejects direct cross-module use).
+        let mut exported_private = false;
+        if !f.is_pub { exported_private = self.is_generic_ref(f.name); }
+        // A private function is still written, as a signature: an importer that names it is told it
+        // is private rather than that it does not exist, and one that defines the same name (an
+        // exported `extern "C"` symbol) is told so. Nothing else of it is part of the interface.
+        let private_signature = self.is_private_signature_fn(f);
+        if !f.is_pub && !exported_private && !private_signature { return; }
+        let is_gen = f.type_params.len > 0 as usize;
+        if !is_gen && !private_signature {
+            let p_fn = self.find_il_function(f.name, f.source_file);
+            self.write_summary_attr(p_fn, "");
+        }
+        // `#[must_use]` is part of the contract an importer needs: without it a compile-only
+        // consumer never warns on a discarded result (`io::lseek` is the only stdlib case, and it
+        // used to be restored by reading the source, which is a reader of the wrong file).
+        if f.must_use {
+            self.write("#[must_use]\n");
+        }
+        if is_gen { self.write_declared_contracts(f, ""); }
+        if f.is_export {
+            self.write("#[export]\n");
+        }
+        if f.is_pub { self.write("pub "); }
+        if f.is_extern { self.write("extern "); }
+        if f.is_unsafe { self.write("unsafe "); }
+        self.write("fn ");
+        self.write_ident(f.name);
+        self.emit_type_params(f.type_params);
+        self.emit_params(f.params, f.is_variadic);
+        if f.ret_ty != 0 as TypeId {
+            self.write(" -> ");
+            self.emit_type(f.ret_ty);
+        }
+        if is_gen && f.body != 0 as ExprId {
+            // Generic function template: preserve body!
+            self.write(" ");
+            self.emit_expr_prec(f.body, 0 as usize, 0 as u32);
+            self.write("\n\n");
+        } else {
+            // Non-generic function or extern function: signature only!
+            self.write(";\n\n");
+        }
+    }
+
+    // Written whether or not `pub`, like a type: the interface carries this module's trait impls, and an
+    // impl of a private trait names it (A7.4). The flag still decides what an importer may name.
+    fn emit_trait(self: &InterfacePrinter, t: &TraitDecl) {
+        if t.is_pub { self.write("pub "); }
+        self.write("trait ");
+        self.write_ident(t.name);
+        self.emit_type_params(t.type_params);
+        self.write(" {\n");
+        self.emit_assoc_types(t.assoc_types);
+        let mut i = 0 as usize;
+        while i < t.methods.len {
+            if t.methods[i].must_use { self.write("    #[must_use]\n"); }
+            self.write_declared_contracts(&t.methods[i], "    ");
+            self.write("    ");
+            if t.methods[i].is_unsafe { self.write("unsafe "); }
+            self.write("fn ");
+            self.write_ident(t.methods[i].name);
+            self.emit_type_params(t.methods[i].type_params);
+            self.emit_params(t.methods[i].params, t.methods[i].is_variadic);
+            if t.methods[i].ret_ty != 0 as TypeId {
+                self.write(" -> ");
+                self.emit_type(t.methods[i].ret_ty);
+            }
+            if t.methods[i].body != 0 as ExprId {
+                self.write(" ");
+                self.emit_expr_prec(t.methods[i].body, 1 as usize, 0 as u32);
+                self.write("\n");
+            } else {
+                self.write(";\n");
+            }
+            i = i + 1 as usize;
+        }
+        self.write("}\n\n");
+    }
+
+    // IL name of a non-generic method is "<Type>_<method>"; look it up by file-scoped identity.
+    fn find_method_func(
+        self: &InterfacePrinter,
+        target_ty: TypeId,
+        method_name: u32,
+        source_file: u32
+    ) -> *mut ILFunction {
+        if target_ty == 0 as TypeId { return 0 as *mut ILFunction; }
+        let p_ty = &self.ast.types[target_ty as usize];
+        let tag = p_ty.get_tag();
+        let type_name_bytes: [u8] = if tag == TYPE_PATH {
+            let type_name_id = p_ty.get_Path().0;
+            if type_name_id == 0 as u32 { return 0 as *mut ILFunction; }
+            self.table.lookup(type_name_id)
+        } else if tag == TYPE_PRIMITIVE {
+            primitive_type_name(p_ty.get_Primitive())
+        } else if tag == TYPE_SLICE || tag == TYPE_SLICE_MUT {
+            let s_bytes = self.slice_target_name_bytes(p_ty);
+            if s_bytes.len == 0 as usize { return 0 as *mut ILFunction; }
+            s_bytes
+        } else {
+            return 0 as *mut ILFunction;
+        };
+        let mut full = unsafe { ByteVec.new_raw(self.arena) };
+        full.push_slice(type_name_bytes);
+        full.push(':' as u8);
+        full.push(':' as u8);
+        full.push_slice(self.table.lookup(method_name));
+        let mangled = self.table.intern(full.as_slice());
+        if self.module == 0 as *mut ILModule { return 0 as *mut ILFunction; }
+        let fn_count = unsafe { (*self.module).functions.len() };
+        let mut fi = 0 as usize;
+        while fi < fn_count {
+            let p_f = unsafe { &(*self.module).functions[fi] };
+            if p_f.name == mangled && p_f.source_file == source_file && p_f.owner_len > 0 as u32 {
+                return p_f as *mut ILFunction;
+            }
+            fi = fi + 1 as usize;
+        }
+        return 0 as *mut ILFunction;
+    }
+
+    // `type Name;` (no type: a trait's) or `type Name = T;` (an impl's), one per line.
+    fn emit_assoc_types(self: &InterfacePrinter, assoc_types: [AssocType]) {
+        for a in assoc_types {
+            self.write("    type ");
+            self.write_ident(a.name);
+            if a.ty != 0 as TypeId {
+                self.write(" = ");
+                self.emit_type(a.ty);
+            }
+            self.write(";\n");
+        }
+    }
+
+    // Whether M, a method of IM, is in the interface: a public one, any one of a trait impl, one a
+    // generic body uses, and a private non-generic one as a signature alone (see `emit_fn`).
+    fn method_is_written(self: &InterfacePrinter, im: &ImplDecl, m: &FnDecl) -> bool {
+        if m.default_of != 0 as u32 { return false; }
+        if m.is_pub
+            || im.trait_name != 0 as u32
+            || self.is_generic_method_ref(im.target_ty, m.name) {
+            return true;
+        }
+        return m.type_params.len == 0 as usize && !self.ast.impl_is_generic(im);
+    }
+
+    fn emit_impl(self: &InterfacePrinter, im: &ImplDecl) {
+        let mut pub_method_count = im.assoc_types.len;
+        let mut i = 0 as usize;
+        while i < im.methods.len {
+            // A trait's default method copied in is the importer's to copy again.
+            if im.methods[i].default_of != 0 as u32 {
+                i = i + 1 as usize;
+                continue;
+            }
+            if self.method_is_written(im, &im.methods[i]) {
+                pub_method_count = pub_method_count + 1 as usize;
+            }
+            i = i + 1 as usize;
+        }
+        let pub_const_count = im.constants.len;
+        // An impl of a trait is public, and with no method it is still a fact (`impl Copy for T {}`).
+        if pub_method_count == 0 as usize
+            && pub_const_count == 0 as usize
+            && im.trait_name == 0 as u32 {
+            return;
+        }
+
+        self.write("impl");
+        self.emit_type_params(im.type_params);
+        self.write(" ");
+        if im.trait_name != 0 as u32 {
+            self.write_ident(im.trait_name);
+            if im.trait_type_args.len > 0 as usize {
+                self.write("<");
+                let mut a = 0 as usize;
+                while a < im.trait_type_args.len {
+                    if a > 0 as usize { self.write(", "); }
+                    self.emit_type(im.trait_type_args[a]);
+                    a = a + 1 as usize;
+                }
+                self.write(">");
+            }
+            self.write(" for ");
+        }
+        self.emit_type(im.target_ty);
+        self.write(" {\n");
+        self.emit_assoc_types(im.assoc_types);
+        for c in im.constants {
+            self.write("    ");
+            if c.is_pub { self.write("pub "); }
+            self.write("const ");
+            self.write_ident(c.name);
+            if c.ty != 0 as TypeId {
+                self.write(": ");
+                self.emit_type(c.ty);
+            }
+            self.write(" = ");
+            self.emit_expr_prec(c.value, 0 as usize, 0 as u32);
+            self.write(";\n");
+        }
+        i = 0 as usize;
+        while i < im.methods.len {
+            let m = &im.methods[i];
+            if self.method_is_written(im, m) && !self.method_is_private_signature(im, m) {
+                self.emit_method(im, m);
+            }
+            i = i + 1 as usize;
+        }
+        // The private signatures last and by name, so an edit that only reorders private methods
+        // leaves the interface as it was (the early-cutoff property, tests/incremental).
+        let mut order = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+        i = 0 as usize;
+        while i < im.methods.len {
+            if self.method_is_written(im, &im.methods[i])
+                && self.method_is_private_signature(im, &im.methods[i]) {
+                order.push(i as u32);
+            }
+            i = i + 1 as usize;
+        }
+        let mut a = 1 as usize;
+        while a < order.len() {
+            let mut b = a;
+            while b > 0 as usize
+                && self.name_less(
+                    im.methods[order[b] as usize].name,
+                    im.methods[order[b - 1 as usize] as usize].name
+                ) {
+                let t = order[b];
+                order[b] = order[b - 1 as usize];
+                order[b - 1 as usize] = t;
+                b = b - 1 as usize;
+            }
+            a = a + 1 as usize;
+        }
+        for oi in order.as_slice() {
+            self.emit_method(im, &im.methods[*oi as usize]);
+        }
+        self.write("}\n\n");
+    }
+
+    fn method_is_private_signature(self: &InterfacePrinter, im: &ImplDecl, m: &FnDecl) -> bool {
+        return !m.is_pub
+            && im.trait_name == 0 as u32
+            && !self.is_generic_method_ref(im.target_ty, m.name);
+    }
+
+    // Whether the name A sorts before B (bytewise); equal names keep their source order.
+    fn name_less(self: &InterfacePrinter, a: u32, b: u32) -> bool {
+        let sa = self.table.lookup(a);
+        let sb = self.table.lookup(b);
+        let mut i = 0 as usize;
+        while i < sa.len && i < sb.len {
+            if sa[i] != sb[i] { return sa[i] < sb[i]; }
+            i = i + 1 as usize;
+        }
+        return sa.len < sb.len;
+    }
+
+    fn emit_method(self: &InterfacePrinter, im: &ImplDecl, m: &FnDecl) {
+        let is_gen = m.type_params.len > 0 as usize || self.ast.impl_is_generic(im);
+        let private_signature = self.method_is_private_signature(im, m);
+        if !is_gen && !private_signature {
+            let p_method = self.find_method_func(im.target_ty, m.name, im.source_file);
+            self.write_summary_attr(p_method, "    ");
+        }
+        if m.must_use { self.write("    #[must_use]\n"); }
+        if is_gen { self.write_declared_contracts(m, "    "); }
+        self.write("    ");
+        if m.is_pub { self.write("pub "); }
+        if m.is_unsafe { self.write("unsafe "); }
+        self.write("fn ");
+        self.write_ident(m.name);
+        self.emit_type_params(m.type_params);
+        self.emit_params(m.params, m.is_variadic);
+        if m.ret_ty != 0 as TypeId {
+            self.write(" -> ");
+            self.emit_type(m.ret_ty);
+        }
+        if is_gen && m.body != 0 as ExprId {
+            self.write(" ");
+            self.emit_expr_prec(m.body, 1 as usize, 0 as u32);
+            self.write("\n");
+        } else {
+            self.write(";\n");
+        }
+    }
+
+    pub fn emit_interface(self: &mut InterfacePrinter) {
+        self.ast.collect_generic_body_refs(self.target_source_file, &mut self.generic_refs);
+        self.write("// zri-module: ");
+        self.write(self.table.lookup(self.target_source_file));
+        self.write("\n");
+        // Where the module came from, for the one question a consumer cannot answer from an
+        // interface's location or its module identity: is this standard library code?
+        if self.source_is_stdlib {
+            self.write("// zri-stdlib: 1\n");
+        }
+        // The imports this module resolved, so the interface is self-contained: a consumer can
+        // resolve the types it mentions, and the interface's hash covers what it depends on.
+        // Each as `import "PATH"[ as NAME];`, then the module's `use` declarations: the
+        // interface's names resolve as the module's own did.
+        let mut raw = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+        for e in self.ast.import_edges.as_slice() {
+            if e.from_module != self.target_source_file { continue; }
+            let mut line = unsafe { ByteVec.new_raw(self.arena) };
+            line.push_slice("import \"");
+            line.push_slice(self.table.lookup(e.to_module));
+            line.push('"' as u8);
+            if e.alias != 0 as u32 {
+                line.push_slice(" as ");
+                line.push_slice(self.table.lookup(e.alias));
+            }
+            line.push_slice(";\n");
+            raw.push(self.table.intern(line.as_slice()));
+        }
+        for u in self.ast.uses.as_slice() {
+            if u.module != self.target_source_file { continue; }
+            let mut line = unsafe { ByteVec.new_raw(self.arena) };
+            line.push_slice("use ");
+            line.push_slice(self.table.lookup(u.ns));
+            line.push_slice("::");
+            line.push_slice(self.table.lookup(u.name));
+            line.push_slice(";\n");
+            raw.push(self.table.intern(line.as_slice()));
+        }
+        for line in sorted_unique_ids(&raw, self.table, self.arena).as_slice() {
+            self.write(self.table.lookup(*line));
+        }
+        let target = self.target_source_file;
+        for d in self.ast.decls.as_slice() {
+            if d.source_file() != target { continue; }
+            match *d {
+                Decl.Fn(f) => {
+                    if !self.is_private_signature_fn(&f) { self.emit_fn(&f); }
+                },
+                Decl.Struct(st) => { self.emit_struct(&st); },
+                Decl.Enum(e) => { self.emit_enum(&e); },
+                Decl.Trait(tr) => { self.emit_trait(&tr); },
+                Decl.Impl(im) => { self.emit_impl(&im); },
+                Decl.TypeAlias(ta) => { self.emit_type_alias(&ta); },
+                Decl.Const(c) => { self.emit_const(&c); },
+                Decl.Static(st) => { self.emit_static(&st); },
+                Decl.Import(_) | Decl.None => {},
+            }
+        }
+        // The private function signatures last and by name (see `emit_impl`).
+        let mut order = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+        let mut di = 0 as usize;
+        while di < self.ast.decls.len() {
+            if self.ast.decls[di].source_file() == target {
+                if let Decl.Fn(f) = self.ast.decls[di] {
+                    if self.is_private_signature_fn(&f) { order.push(di as u32); }
+                }
+            }
+            di = di + 1 as usize;
+        }
+        let mut a = 1 as usize;
+        while a < order.len() {
+            let mut b = a;
+            while b > 0 as usize
+                && self.name_less(
+                    self.ast.decls[order[b] as usize].get_Fn().name,
+                    self.ast.decls[order[b - 1 as usize] as usize].get_Fn().name
+                ) {
+                let t = order[b];
+                order[b] = order[b - 1 as usize];
+                order[b - 1 as usize] = t;
+                b = b - 1 as usize;
+            }
+            a = a + 1 as usize;
+        }
+        for oi in order.as_slice() {
+            if let Decl.Fn(f) = self.ast.decls[*oi as usize] { self.emit_fn(&f); }
+        }
+    }
+}
+
+fn primitive_type_name(p: PrimitiveType) -> [u8] {
+    return match p {
+        PrimitiveType.U8 => "u8",
+        PrimitiveType.U16 => "u16",
+        PrimitiveType.U32 => "u32",
+        PrimitiveType.U64 => "u64",
+        PrimitiveType.USize => "usize",
+        PrimitiveType.I8 => "i8",
+        PrimitiveType.I16 => "i16",
+        PrimitiveType.I32 => "i32",
+        PrimitiveType.I64 => "i64",
+        PrimitiveType.ISize => "isize",
+        PrimitiveType.F32 => "f32",
+        PrimitiveType.F64 => "f64",
+        PrimitiveType.Bool => "bool",
+        PrimitiveType.Char => "char",
+        PrimitiveType.Unit => "unit",
+        PrimitiveType.Never => "never",
+    };
+}

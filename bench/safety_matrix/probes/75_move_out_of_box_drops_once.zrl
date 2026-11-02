@@ -1,0 +1,14 @@
+// name: Moving a value out of a Box drops it exactly once
+// expected: accept
+static mut DROPS: i32 = 0;
+struct R { v: i32 }
+impl Drop for R { fn drop(self: &mut R) { DROPS = DROPS + 1; } }
+fn run() {
+    let pair = (1, box R { v: 1 });
+    let inner = *pair.1;
+}
+fn main() -> i32 {
+    run();
+    if DROPS != 1 { return 10 + DROPS; }
+    return 0;
+}

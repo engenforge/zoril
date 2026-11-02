@@ -1,0 +1,7 @@
+// expected compile fail
+// flags: stdlib/core.zrl
+// EXPECT: zoril: error: more than one input file:
+
+fn main() -> i32 {
+    return 0;
+}

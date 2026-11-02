@@ -1,0 +1,8 @@
+# Instructions executed by each workload's Zoril build at gate size (scripts/perf_gap.sh).
+# Re-record after an intended change: scripts/perf_gap.sh --gate-record
+array_loop	143420511	211
+fib	7202389	50
+particles	86149530	216
+qsort	42893691	108
+sha	71158539	227
+vm	84900187	199

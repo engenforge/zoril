@@ -1,0 +1,265 @@
+// Zoril Standard Library: I/O and System primitives
+
+import "core0.zrl";
+
+#[must_use]
+pub fn stdout() -> u64 { return 1 as u64; }
+
+#[must_use]
+pub fn stderr() -> u64 { return 2 as u64; }
+
+#[must_use]
+pub fn stdin() -> u64 { return 0 as u64; }
+
+#[must_use]
+pub fn write(fd: u64, buf: [u8]) -> i64 {
+    // Linux syscall for write is 1
+    let p = buf.ptr;
+    let l = buf.len;
+    return @syscall(1, fd, p, l) as i64;
+}
+
+#[must_use]
+pub fn read(fd: u64, buf: [mut u8]) -> i64 {
+    // Linux syscall for read is 0
+    let p = buf.ptr;
+    let l = buf.len;
+    return @syscall(0, fd, p, l) as i64;
+}
+
+#[must_use]
+pub fn open(path: [u8], flags: u64, mode: u64) -> i64 {
+    // Linux syscall for open is 2
+    return @syscall(2, path.ptr, flags, mode) as i64;
+}
+
+#[must_use]
+pub fn close(fd: u64) -> i64 {
+    // Linux syscall for close is 3
+    return @syscall(3, fd) as i64;
+}
+
+#[must_use]
+pub fn lseek(fd: u64, offset: i64, whence: u64) -> i64 {
+    // Linux syscall for lseek is 8; SEEK_SET=0, SEEK_CUR=1, SEEK_END=2
+    return @syscall(8, fd, offset as u64, whence) as i64;
+}
+
+pub fn must_write(fd: u64, buf: [u8]) {
+    if write(fd, buf) < 0 as i64 {
+        zoril_user_panic("must_write: syscall failed");
+    }
+}
+
+pub fn must_read(fd: u64, buf: [mut u8]) -> u64 {
+    let n = read(fd, buf);
+    if n < 0 as i64 {
+        zoril_user_panic("must_read: syscall failed");
+    }
+    return n as u64;
+}
+
+pub fn must_open(path: [u8], flags: u64, mode: u64) -> u64 {
+    let fd = open(path, flags, mode);
+    if fd < 0 as i64 {
+        zoril_user_panic("must_open: syscall failed");
+    }
+    return fd as u64;
+}
+
+pub fn must_close(fd: u64) {
+    if close(fd) < 0 as i64 {
+        zoril_user_panic("must_close: syscall failed");
+    }
+}
+
+pub fn exit(code: u64) {
+    @syscall(60, code);
+}
+
+pub fn write_u64(fd: u64, v: u64) {
+    if v == 0 as u64 {
+        must_write(fd, "0");
+        return;
+    }
+
+    let mut buf = [0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8];
+    let mut temp = v;
+    let mut i = 20 as u64;
+
+    while temp > 0 as u64 {
+        i = i - 1 as u64;
+        buf[i] = ((temp % 10 as u64) + 48 as u64) as u8;
+        temp = temp / 10 as u64;
+    }
+
+    let slice = unsafe { @slice(&buf[i] as *u8, 20 as u64 - i) } as [u8];
+    must_write(fd, slice);
+}
+
+// Byte sources and sinks. Generic code written against these traits handles
+// files, the standard streams, and in-memory buffers alike. Both return the
+// byte count transferred, or a negative value on error; a short count is not
+// an error, so callers that need everything use write_all / read_to_end.
+pub trait Read {
+    fn read(self: &mut Self, buf: [mut u8]) -> i64;
+}
+
+pub trait Write {
+    fn write(self: &mut Self, buf: [u8]) -> i64;
+}
+
+// Writes every byte of buf, retrying after short writes.
+pub fn write_all<W: Write>(w: &mut W, buf: [u8]) -> bool {
+    let mut total = 0 as usize;
+    while total < buf.len {
+        let p = (buf.ptr as usize + total) as *u8;
+        let rest = unsafe { @slice(p, buf.len - total) };
+        let n = w.write(rest);
+        if n <= 0 as i64 {
+            return false;
+        }
+        total = total + (n as usize);
+    }
+    return true;
+}
+
+// An owned file descriptor that closes on drop.
+pub struct File {
+    pub fd: i64,
+}
+
+impl File {
+    // Returns a File wrapping the fd; check is_valid() before use.
+    pub fn open(path: [u8], flags: u64, mode: u64) -> File {
+        return File { fd: open(path, flags, mode) };
+    }
+
+    // Opens path for writing, creating it or truncating it (mode 0644).
+    pub fn create(path: [u8]) -> File {
+        return File.open(path, 577 as u64, 420 as u64); // O_WRONLY|O_CREAT|O_TRUNC
+    }
+
+    // Opens path for writing at its end, creating it if needed (mode 0644).
+    pub fn append(path: [u8]) -> File {
+        return File.open(path, 1089 as u64, 420 as u64); // O_WRONLY|O_CREAT|O_APPEND
+    }
+
+    pub fn is_valid(self: &File) -> bool { return self.fd >= 0 as i64; }
+}
+
+impl Read for File {
+    fn read(self: &mut File, buf: [mut u8]) -> i64 {
+        return read(self.fd as u64, buf);
+    }
+}
+
+impl Write for File {
+    fn write(self: &mut File, buf: [u8]) -> i64 {
+        return write(self.fd as u64, buf);
+    }
+}
+
+impl Drop for File {
+    pub fn drop(self: File) {
+        if self.fd >= 0 as i64 { must_close(self.fd as u64); }
+    }
+}
+
+// The standard streams. Unlike File they do not own their descriptor, so
+// dropping one never closes it.
+pub struct Stdin {}
+pub struct Stdout {}
+pub struct Stderr {}
+
+impl Stdin {
+    pub fn new() -> Stdin { return Stdin {}; }
+}
+
+impl Stdout {
+    pub fn new() -> Stdout { return Stdout {}; }
+}
+
+impl Stderr {
+    pub fn new() -> Stderr { return Stderr {}; }
+}
+
+impl Read for Stdin {
+    fn read(self: &mut Stdin, buf: [mut u8]) -> i64 {
+        return read(stdin(), buf);
+    }
+}
+
+impl Write for Stdout {
+    fn write(self: &mut Stdout, buf: [u8]) -> i64 {
+        return write(stdout(), buf);
+    }
+}
+
+impl Write for Stderr {
+    fn write(self: &mut Stderr, buf: [u8]) -> i64 {
+        return write(stderr(), buf);
+    }
+}
+
+// Reads from an in-memory byte slice, advancing through it.
+pub struct SliceReader {
+    pub data: [u8],
+    pub pos: usize,
+}
+
+impl SliceReader {
+    pub fn new(data: [u8]) -> SliceReader {
+        return SliceReader { data: data, pos: 0 as usize };
+    }
+}
+
+impl Read for SliceReader {
+    fn read(self: &mut SliceReader, buf: [mut u8]) -> i64 {
+        let mut n = self.data.len - self.pos;
+        if n > buf.len {
+            n = buf.len;
+        }
+        let mut i = 0 as usize;
+        while i < n {
+            buf[i] = self.data[self.pos + i];
+            i = i + 1 as usize;
+        }
+        self.pos = self.pos + n;
+        return n as i64;
+    }
+}
+
+pub fn write_i64(fd: u64, v: i64) {
+    if v < 0 as i64 {
+        must_write(fd, "-");
+        write_u64(fd, (0 as i64 - v) as u64);
+    } else {
+        write_u64(fd, v as u64);
+    }
+}
+
+pub fn write_u64_hex(fd: u64, v: u64) {
+    if v == 0 as u64 {
+        must_write(fd, "0");
+        return;
+    }
+
+    let mut buf = [0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8];
+    let mut temp = v;
+    let mut i = 16 as u64;
+
+    while temp > 0 as u64 {
+        i = i - 1 as u64;
+        let rem = (temp % 16 as u64) as u8;
+        if rem < 10 as u8 {
+            buf[i] = (rem + 48 as u8);
+        } else {
+            buf[i] = (rem - 10 as u8 + 97 as u8);
+        }
+        temp = temp / 16 as u64;
+    }
+
+    let slice = unsafe { @slice(&buf[i] as *u8, 16 as u64 - i) } as [u8];
+    must_write(fd, slice);
+}

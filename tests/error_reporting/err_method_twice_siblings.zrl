@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: error: `C::get` is defined twice; the other is at tests/error_reporting/include/method_twice_a.zrl
+// Two modules each add `C::get` to a type a third defines, and neither imports the other: the program
+// that imports both is where they meet. Separate builds read both from interfaces, which carry no
+// line of the source, so the message names files and no line.
+import "include/method_twice_t.zrl";
+import "include/method_twice_a.zrl";
+import "include/method_twice_b.zrl";
+use method_twice_t::C;
+fn main() -> i32 { let c = C { n: 1 }; return c.get(); }

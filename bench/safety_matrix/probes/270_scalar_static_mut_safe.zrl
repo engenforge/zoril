@@ -1,0 +1,22 @@
+// name: A scalar static mut stays readable, writable and borrowable in safe code
+// expected: accept
+// The exemption in the static rule: an integer, a float, a bool, a char or a raw pointer. A write
+// cannot retype one, so a borrow of it cannot be invalidated the way a non-scalar's can.
+static mut I: i32 = 0;
+static mut F: f64 = 0.0;
+static mut B: bool = false;
+static mut C: char = 'a';
+static mut P: *mut u8 = 0 as *mut u8;
+
+fn main() -> i32 {
+    I = 1;
+    F = 1.0;
+    B = true;
+    C = 'b';
+    P = 0 as *mut u8;
+    let r = &mut I;
+    *r = 2;
+    if *r != 2 { return 1; }
+    if !B { return 2; }
+    return 0;
+}

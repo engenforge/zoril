@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_if_branch_no_value.zrl:5:5: error: this `if` branch produces no value, but `i32` was expected
+// An `if` branch without a value cannot satisfy a non-unit expected type.
+fn f(c: bool) -> i32 {
+    if c {
+        let _ = 1;
+    } else {
+        42
+    }
+}
+fn main() -> i32 {
+    return f(true);
+}

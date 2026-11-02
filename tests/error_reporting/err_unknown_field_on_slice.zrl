@@ -1,0 +1,7 @@
+// expected compile fail
+// A slice has no field named `nope`. This used to compile: the lookup answered `0xffffffff` for an
+// unknown name and the ZIL used that value as a real field index, so the program read at a garbage
+// offset - from safe code. It is a located error now.
+// EXPECT: tests/error_reporting/err_unknown_field_on_slice.zrl:7:47: error: no field 'nope' on '[u8]'
+
+fn main() -> i32 { let s: [u8] = "ab"; return s.nope as i32; }

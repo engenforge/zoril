@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: constant definition is cyclic
+const A: i32 = B + 1;
+const B: i32 = A + 1;
+
+fn main() -> i32 {
+    return A;
+}

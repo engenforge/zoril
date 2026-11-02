@@ -1,0 +1,23 @@
+// expected exit 0
+// Module namespaces: an item written through its module's stem or `as` name, in a type, an
+// expression and a pattern, and one brought in bare by `use`.
+import "string.zrl";
+import "vec.zrl" as v;
+import "core.zrl";
+use string::String;
+
+fn first(xs: &v::Vec<i32>) -> i32 {
+    return match xs.get(0 as usize) { core::Option.Some(x) => *x, core::Option.None => -1 };
+}
+
+fn main() -> i32 {
+    let mut s = String.new();
+    s.push_u8('a');
+    let mut t = string::String.new();
+    t.push_u8('b');
+    let mut xs = v::Vec::<i32>.new();
+    xs.push(7);
+    if s.len() + t.len() != 2 as usize { return 1; }
+    if first(&xs) != 7 { return 2; }
+    return 0;
+}

@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: error: use of dropped value 'x'
+
+struct Resource { id: i32 }
+
+fn main() -> i32 {
+    let x = Resource { id: 1 };
+    @drop(x);
+    let y = x;
+    return 0;
+}

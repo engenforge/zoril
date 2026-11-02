@@ -1,0 +1,26 @@
+// name: Arena identity cannot be spoofed by a user module named mem.zrl
+// expected: compile_reject
+// The arena epoch exemption belongs to the functions of the standard library's own `mem` module -
+// identity by where the declaration was loaded from, never by a name. A user library whose file is
+// named `mem.zrl`, defining its own `Arena` with `mark` and `reset_to`, claims nothing: its
+// `reset_to` is an ordinary `&mut self` method and conflicts with the live slice. Matching the
+// callee by name, or by a path ending in `/mem.zrl`, instead accepts this program, which reads 99
+// out of a buffer the fake `reset_to` released (third-pass item 1;
+// tests/error_reporting/err_arena_spoof_user_mem_module.zrl pins it).
+import "mylib_fake_mem/mem.zrl";
+import "vec.zrl";
+use mem::{Arena, ArenaMark};
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = Arena { v: Vec::<u64>.new() };
+    let mut i = 0 as u64;
+    while i < 64 { a.v.push(7); i = i + 1; }
+    let s = a.v.as_slice();
+    let m = a.mark();
+    a.reset_to(m);
+    let mut b = Vec::<u64>.new();
+    let mut j = 0 as u64;
+    while j < 64 { b.push(99); j = j + 1; }
+    return s[0] as i32;
+}

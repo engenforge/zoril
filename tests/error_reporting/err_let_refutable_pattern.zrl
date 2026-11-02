@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_let_refutable_pattern.zrl:6:5: error: this pattern does not match every value (`None` is left out); use `if let` or `match`
+import "core.zrl";
+fn main() -> i32 {
+    let o = Option.Some(3);
+    let Option.Some(x) = o;
+    return x;
+}

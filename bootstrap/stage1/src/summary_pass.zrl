@@ -1,0 +1,647 @@
+import "core.zrl";
+import "mem.zrl";
+import "io.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "il_cfg.zrl";
+import "intern.zrl";
+import "vec.zrl";
+
+pub struct FuncSummary {
+    pub name: u32,
+    pub returns_param_mask: u64,
+    pub stashes_param_mask: u64,
+    pub returns_local_stack: bool,
+    pub is_extern: bool,
+}
+
+pub struct InterprocSummaryPass {
+    pub arena: *mut Arena,
+    pub module: &mut ILModule,
+    pub intern_table: &mut InternTable,
+    pub file_path: [u8],
+    pub summaries: [mut FuncSummary],
+    pub had_error: bool,
+    pub error_count: usize,
+    pub max_ssa: usize,
+    pub prov_is_stack: [mut bool],
+    pub prov_param_mask: [mut u64],
+    pub borrowed_from: [mut u32],
+    pub slot_holds_stack: [mut bool],
+    pub slot_holds_param: [mut u64],
+    pub is_stack_slot: [mut bool],
+    pub is_global_addr: [mut bool],
+    pub addr_taken_func_ids: [u32],
+    pub addr_taken_count: usize,
+    pub total_direct_calls: usize,
+    pub total_indirect_calls: usize,
+    pub indirect_candidate_evals: usize,
+    pub fixpoint_iterations: usize,
+    pub verbose: bool,
+}
+
+impl InterprocSummaryPass {
+    pub fn new(arena: *mut Arena, module: &mut ILModule, table: &mut InternTable, file_path: [u8]) -> InterprocSummaryPass {
+        let fn_count = module.functions.len;
+        let mut max_ssa = 64 as usize;
+        let mut fi = 0 as usize;
+        while fi < fn_count {
+            let p_f = &module.functions[fi];
+            let ssa_len = p_f.result_types_len;
+            if ssa_len > max_ssa { max_ssa = ssa_len; }
+            fi = fi + 1 as usize;
+        }
+        max_ssa = max_ssa + 256 as usize;
+
+        let summaries_ptr = zoril_allocator_alloc(arena, fn_count * sizeof(FuncSummary)) as *mut FuncSummary;
+        let mut summaries = unsafe { @slice(summaries_ptr, fn_count) };
+        fi = 0 as usize;
+        while fi < fn_count {
+            let p_f = &module.functions[fi];
+            let mut ret_mask = 0 as u64;
+            let mut stash_mask = 0 as u64;
+            let mut ret_stack = false;
+            if p_f.has_summary {
+                ret_mask = p_f.summary_escape;
+                stash_mask = p_f.summary_stash;
+                ret_stack = p_f.summary_ret_stack;
+            }
+            let p_summary = (summaries_ptr as usize + fi * sizeof(FuncSummary)) as *mut FuncSummary;
+            unsafe {
+                (*p_summary).name = p_f.name;
+                (*p_summary).returns_param_mask = ret_mask;
+                (*p_summary).stashes_param_mask = stash_mask;
+                (*p_summary).returns_local_stack = ret_stack;
+                (*p_summary).is_extern = p_f.is_extern;
+            }
+            fi = fi + 1 as usize;
+        }
+
+        // Seven parallel per-SSA provenance arrays, all allocated and sized here.
+        let prov_is_stack = unsafe { @slice(zoril_allocator_alloc(arena, max_ssa * 1) as *mut bool, max_ssa) };
+        let prov_param_mask = unsafe { @slice(zoril_allocator_alloc(arena, max_ssa * 8) as *mut u64, max_ssa) };
+        let borrowed_from = unsafe { @slice(zoril_allocator_alloc(arena, max_ssa * 4) as *mut u32, max_ssa) };
+        let slot_holds_stack = unsafe { @slice(zoril_allocator_alloc(arena, max_ssa * 1) as *mut bool, max_ssa) };
+        let slot_holds_param = unsafe { @slice(zoril_allocator_alloc(arena, max_ssa * 8) as *mut u64, max_ssa) };
+        let is_stack_slot = unsafe { @slice(zoril_allocator_alloc(arena, max_ssa * 1) as *mut bool, max_ssa) };
+        let is_global_addr = unsafe { @slice(zoril_allocator_alloc(arena, max_ssa * 1) as *mut bool, max_ssa) };
+
+        let mut at_cap = 256 as usize;
+        if at_cap < fn_count { at_cap = fn_count; }
+        let at_buf = zoril_allocator_alloc(arena, at_cap * 4 as usize) as *mut u32;
+        let mut at_count = 0 as usize;
+        let mut direct_calls = 0 as usize;
+        let mut indirect_calls = 0 as usize;
+
+        fi = 0 as usize;
+        while fi < fn_count {
+            let p_f = &module.functions[fi];
+            let mut bi = 0 as usize;
+            while bi < p_f.blocks_len {
+                let blocks_slice = p_f.block_ids();
+                let block_id = blocks_slice[bi];
+                let p_b = &module.blocks[block_id as usize];
+                let mut ii = 0 as usize;
+                while ii < p_b.instructions_len {
+                    let instrs_slice = p_b.instr_ids();
+                    let instr_idx = instrs_slice[ii];
+                    let p_in = &module.instrs[instr_idx as usize];
+                    match *p_in {
+                        ILInstr.FuncAddr(name_id) => {
+                            let p_target = module.find_function_by_name(name_id);
+                            if p_target != 0 as *mut ILFunction {
+                                let tid = (*p_target).id;
+                                let mut already = false;
+                                let mut at = unsafe { @slice(at_buf, at_cap) };
+                                let mut k = 0 as usize;
+                                while k < at_count {
+                                    if at[k] == tid { already = true; break; }
+                                    k = k + 1 as usize;
+                                }
+                                if !already && at_count < at_cap {
+                                    at[at_count] = tid;
+                                    at_count = at_count + 1 as usize;
+                                }
+                            }
+                        },
+                        ILInstr.Call(_) => {
+                            direct_calls = direct_calls + 1 as usize;
+                        },
+                        ILInstr.CallPtr(_) => {
+                            indirect_calls = indirect_calls + 1 as usize;
+                        },
+                        _ => {}
+                    }
+                    ii = ii + 1 as usize;
+                }
+                bi = bi + 1 as usize;
+            }
+            fi = fi + 1 as usize;
+        }
+
+        let addr_taken_slice = unsafe { @slice(at_buf, at_count) };
+
+        return InterprocSummaryPass {
+            arena: arena,
+            module: module,
+            intern_table: table,
+            file_path: file_path,
+            summaries: summaries,
+            had_error: false,
+            error_count: 0 as usize,
+            max_ssa: max_ssa,
+            prov_is_stack: prov_is_stack,
+            prov_param_mask: prov_param_mask,
+            borrowed_from: borrowed_from,
+            slot_holds_stack: slot_holds_stack,
+            slot_holds_param: slot_holds_param,
+            is_stack_slot: is_stack_slot,
+            is_global_addr: is_global_addr,
+            addr_taken_func_ids: addr_taken_slice,
+            addr_taken_count: at_count,
+            total_direct_calls: direct_calls,
+            total_indirect_calls: indirect_calls,
+            indirect_candidate_evals: 0 as usize,
+            fixpoint_iterations: 0 as usize,
+            verbose: false,
+        };
+    }
+
+    // An imported Zoril function whose interface carried no #[summary] is an unknown callee, and an
+    // unknown callee must be assumed to do the worst with every pointer it is handed: stash each
+    // pointer-like parameter into long-lived memory and return any of them. All-zero ("nothing
+    // escapes") is the optimistic reading and would silently weaken the safety analysis.
+    pub fn apply_conservative_defaults(self: &mut InterprocSummaryPass, compile_only: bool, target_sf: u32) {
+        let env_id = self.intern_table.intern("__env");
+        let sret_id = self.intern_table.intern("__sret");
+        let mut fi = 0 as usize;
+        while fi < self.module.functions.len {
+            let p_f = &self.module.functions[fi];
+            if p_f.is_zoril_extern(compile_only, target_sf) && !p_f.has_summary {
+                let mut ptr_mask = 0 as u64;
+                let mut k = 0 as usize;
+                while k < p_f.params_len && k < 64 as usize {
+                    let p = &p_f.params[k];
+                    if p.name != env_id && p.name != sret_id {
+                        if self.is_pointer_like(p.ty) || self.is_aggregate(p.ty) {
+                            ptr_mask = ptr_mask | ((1 as u64) << (k as u64));
+                        }
+                    }
+                    k = k + 1 as usize;
+                }
+                self.summaries[fi].stashes_param_mask = ptr_mask;
+                if self.is_pointer_like(p_f.ret_ty) || self.is_aggregate(p_f.ret_ty) {
+                    self.summaries[fi].returns_param_mask = ptr_mask;
+                }
+            }
+            fi = fi + 1 as usize;
+        }
+    }
+
+    fn get_base(self: &InterprocSummaryPass, ssa: SSAId, max_ssa: usize) -> SSAId {
+        let mut curr = ssa;
+        let mut depth = 0 as usize;
+        while curr != 0 as u32 && (curr as usize) < max_ssa && depth < 50 as usize {
+            let parent = self.borrowed_from[curr as usize];
+            if parent == 0 as u32 { break; }
+            curr = parent;
+            depth = depth + 1 as usize;
+        }
+        return curr;
+    }
+
+    fn matches_signature(self: &InterprocSummaryPass, target: &ILFunction, args_len: usize) -> bool {
+        return target.params_len == args_len;
+    }
+
+    fn get_ssa_type(self: &InterprocSummaryPass, f: &ILFunction, ssa: SSAId) -> u32 {
+        if ssa == 0 as u32 || ssa as usize >= f.result_types_len { return 0 as u32; }
+        return f.result_type_ids()[ssa as usize];
+    }
+
+    fn is_pointer_like(self: &InterprocSummaryPass, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        let tag = p_ty.def.get_tag();
+        return tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_SLICE || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT;
+    }
+
+    fn is_aggregate(self: &InterprocSummaryPass, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = &self.module.types[ty_id as usize - 1 as usize];
+        let tag = p_ty.def.get_tag();
+        return tag == ILTYPE_ARRAY || tag == ILTYPE_TUPLE || tag == ILTYPE_USER;
+    }
+
+    fn report_error(self: &mut InterprocSummaryPass, msg: [u8], span: Span) {
+        self.had_error = true;
+        self.error_count = self.error_count + 1 as usize;
+        must_write(2, self.file_path);
+        must_write(2, ":");
+        write_u64(2, span.line as u64);
+        must_write(2, ":");
+        write_u64(2, span.col as u64);
+        must_write(2, ": error: ");
+        must_write(2, msg);
+        must_write(2, "\n");
+    }
+
+    fn analyze_function(self: &mut InterprocSummaryPass, f: &ILFunction, check_errors: bool) -> bool {
+        let ssa_count = f.result_types_len;
+        if ssa_count == 0 as usize { return false; }
+        let clear_len = if ssa_count > self.max_ssa { self.max_ssa } else { ssa_count };
+
+        let saved_file_path = self.file_path;
+        if f.source_file != 0 as u32 {
+            self.file_path = self.intern_table.lookup(f.source_file);
+        }
+
+        unsafe {
+            memset(self.prov_is_stack.ptr as *mut u8, 0, clear_len as u64);
+            memset(self.prov_param_mask.ptr as *mut u8, 0, (clear_len * 8) as u64);
+            memset(self.borrowed_from.ptr as *mut u8, 0, (clear_len * 4) as u64);
+            memset(self.slot_holds_stack.ptr as *mut u8, 0, clear_len as u64);
+            memset(self.slot_holds_param.ptr as *mut u8, 0, (clear_len * 8) as u64);
+            memset(self.is_stack_slot.ptr as *mut u8, 0, clear_len as u64);
+            memset(self.is_global_addr.ptr as *mut u8, 0, clear_len as u64);
+        }
+
+        // Parameters
+        let mut k_p = 0 as usize;
+        while k_p < f.params_len {
+            let p_ssa = f.param(k_p).ssa;
+            if (p_ssa as usize) < clear_len {
+                if k_p < 64 as usize {
+                    self.prov_param_mask[p_ssa as usize] = (1 as u64) << (k_p as u64);
+                }
+            }
+            k_p = k_p + 1 as usize;
+        }
+
+        let mut new_returns_param_mask = 0 as u64;
+        let mut new_returns_local_stack = false;
+        let mut new_stashes_param_mask = 0 as u64;
+
+        // Run 2 local iterations for loop / branch propagation
+        let mut pass_iter = 0 as usize;
+        while pass_iter < 2 as usize {
+            let is_final_pass = (pass_iter == 1 as usize);
+            let mut bi = 0 as usize;
+            while bi < f.blocks_len {
+                let blocks_slice = f.block_ids();
+                let block_id = blocks_slice[bi];
+                let p_b = &self.module.blocks[block_id as usize];
+                let mut ii = 0 as usize;
+                while ii < p_b.instructions_len {
+                    let instrs_slice = p_b.instr_ids();
+                    let ssa_slice = p_b.ssa_result_ids();
+                    let instr_idx = instrs_slice[ii];
+                    let ssa = ssa_slice[ii];
+                    let p_in = &self.module.instrs[instr_idx as usize];
+                    let p_span = &self.module.instr_spans[instr_idx as usize];
+                    let span = *p_span;
+
+                    self.transfer_instr(f, p_in, ssa, span, clear_len, check_errors && is_final_pass, &mut new_returns_param_mask, &mut new_returns_local_stack, &mut new_stashes_param_mask);
+
+                    ii = ii + 1 as usize;
+                }
+                bi = bi + 1 as usize;
+            }
+            pass_iter = pass_iter + 1 as usize;
+        }
+
+        let fid = f.id as usize;
+        let old_ret_mask = self.summaries[fid].returns_param_mask;
+        let old_stack = self.summaries[fid].returns_local_stack;
+        let old_stash = self.summaries[fid].stashes_param_mask;
+
+        self.file_path = saved_file_path;
+        if new_returns_param_mask != old_ret_mask || new_returns_local_stack != old_stack || new_stashes_param_mask != old_stash {
+            self.summaries[fid].returns_param_mask = new_returns_param_mask;
+            self.summaries[fid].returns_local_stack = new_returns_local_stack;
+            self.summaries[fid].stashes_param_mask = new_stashes_param_mask;
+            return true;
+        }
+        return false;
+    }
+
+    fn transfer_instr(self: &mut InterprocSummaryPass,
+                      f: &ILFunction,
+                      instr: &ILInstr,
+                      ssa: SSAId,
+                      span: Span,
+                      max_ssa: usize,
+                      check_errors: bool,
+                      out_ret_mask: &mut u64,
+                      out_ret_stack: &mut bool,
+                      out_stash_mask: &mut u64) {
+        let valid_ssa = (ssa != 0 as u32 && ssa != NO_SSA && (ssa as usize) < max_ssa);
+        match *instr {
+            ILInstr.Alloc(a) => {
+                if valid_ssa {
+                    match a.region {
+                        Region.Local => {
+                            if a.allocator == 0xffffffff as u32 {
+                                self.is_stack_slot[ssa as usize] = true;
+                                self.prov_is_stack[ssa as usize] = true;
+                            }
+                        },
+                        _ => {}
+                    }
+                }
+            },
+            ILInstr.GlobalAddr(_) => {
+                if valid_ssa {
+                    self.is_global_addr[ssa as usize] = true;
+                }
+            },
+            ILInstr.Param(idx) => {
+                if valid_ssa && idx < 64 as u32 {
+                    self.prov_param_mask[ssa as usize] = (1 as u64) << (idx as u64);
+                }
+            },
+            ILInstr.FieldAddr(fa) => {
+                if valid_ssa && (fa.val as usize) < max_ssa {
+                    self.borrowed_from[ssa as usize] = fa.val;
+                    self.prov_is_stack[ssa as usize] = self.prov_is_stack[ssa as usize] || self.prov_is_stack[fa.val as usize];
+                    self.prov_param_mask[ssa as usize] = self.prov_param_mask[ssa as usize] | self.prov_param_mask[fa.val as usize];
+                }
+            },
+            ILInstr.ElemAddr(ea) => {
+                if valid_ssa && (ea.base as usize) < max_ssa {
+                    self.borrowed_from[ssa as usize] = ea.base;
+                    self.prov_is_stack[ssa as usize] = self.prov_is_stack[ssa as usize] || self.prov_is_stack[ea.base as usize];
+                    self.prov_param_mask[ssa as usize] = self.prov_param_mask[ssa as usize] | self.prov_param_mask[ea.base as usize];
+                }
+            },
+            ILInstr.Add(op) => {
+                if valid_ssa && (op.lhs as usize) < max_ssa {
+                    self.borrowed_from[ssa as usize] = op.lhs;
+                    self.prov_is_stack[ssa as usize] = self.prov_is_stack[ssa as usize] || self.prov_is_stack[op.lhs as usize];
+                    self.prov_param_mask[ssa as usize] = self.prov_param_mask[ssa as usize] | self.prov_param_mask[op.lhs as usize];
+                }
+            },
+            ILInstr.Bitcast(src) | ILInstr.Move(src) => {
+                if valid_ssa && (src as usize) < max_ssa {
+                    self.borrowed_from[ssa as usize] = src;
+                    self.prov_is_stack[ssa as usize] = self.prov_is_stack[ssa as usize] || self.prov_is_stack[src as usize];
+                    self.prov_param_mask[ssa as usize] = self.prov_param_mask[ssa as usize] | self.prov_param_mask[src as usize];
+                }
+            },
+            ILInstr.RegionCast(rc) => {
+                if valid_ssa && (rc.val as usize) < max_ssa {
+                    self.borrowed_from[ssa as usize] = rc.val;
+                    self.prov_is_stack[ssa as usize] = self.prov_is_stack[ssa as usize] || self.prov_is_stack[rc.val as usize];
+                    self.prov_param_mask[ssa as usize] = self.prov_param_mask[ssa as usize] | self.prov_param_mask[rc.val as usize];
+                }
+            },
+            ILInstr.Cast(c) => {
+                if valid_ssa && (c.val as usize) < max_ssa {
+                    self.borrowed_from[ssa as usize] = c.val;
+                    self.prov_is_stack[ssa as usize] = self.prov_is_stack[ssa as usize] || self.prov_is_stack[c.val as usize];
+                    self.prov_param_mask[ssa as usize] = self.prov_param_mask[ssa as usize] | self.prov_param_mask[c.val as usize];
+                }
+            },
+            ILInstr.SliceConstruct(sc) => {
+                if valid_ssa && (sc.ptr as usize) < max_ssa {
+                    self.borrowed_from[ssa as usize] = sc.ptr;
+                    self.prov_is_stack[ssa as usize] = self.prov_is_stack[ssa as usize] || self.prov_is_stack[sc.ptr as usize];
+                    self.prov_param_mask[ssa as usize] = self.prov_param_mask[ssa as usize] | self.prov_param_mask[sc.ptr as usize];
+                }
+            },
+            ILInstr.SliceData(s) => {
+                if valid_ssa && (s as usize) < max_ssa {
+                    self.borrowed_from[ssa as usize] = s;
+                    self.prov_is_stack[ssa as usize] = self.prov_is_stack[ssa as usize] || self.prov_is_stack[s as usize];
+                    self.prov_param_mask[ssa as usize] = self.prov_param_mask[ssa as usize] | self.prov_param_mask[s as usize];
+                }
+            },
+            ILInstr.Phi(phi) => {
+                if valid_ssa {
+                    let mut pi = 0 as usize;
+                    while pi < phi.preds.len {
+                        let pv = phi.preds[pi].val;
+                        if (pv as usize) < max_ssa {
+                            self.prov_is_stack[ssa as usize] = self.prov_is_stack[ssa as usize] || self.prov_is_stack[pv as usize];
+                            self.prov_param_mask[ssa as usize] = self.prov_param_mask[ssa as usize] | self.prov_param_mask[pv as usize];
+                        }
+                        pi = pi + 1 as usize;
+                    }
+                }
+            },
+            ILInstr.Store(s) => {
+                if (s.ptr as usize) < max_ssa && (s.val as usize) < max_ssa {
+                    let base = self.get_base(s.ptr, max_ssa);
+                    if (base as usize) < max_ssa {
+                        if self.is_stack_slot[base as usize] {
+                            self.slot_holds_stack[base as usize] = self.slot_holds_stack[base as usize] || self.prov_is_stack[s.val as usize];
+                            self.slot_holds_param[base as usize] = self.slot_holds_param[base as usize] | self.prov_param_mask[s.val as usize];
+                        } else if self.is_global_addr[base as usize] {
+                            if check_errors && self.prov_is_stack[s.val as usize] {
+                                self.report_error("region escape: storing local stack pointer into global variable", span);
+                            }
+                            let p_mask = self.prov_param_mask[s.val as usize];
+                            if p_mask != 0 as u64 {
+                                *out_stash_mask = *out_stash_mask | p_mask;
+                            }
+                        } else {
+                            // Target is memory pointed to by a parameter
+                            let p_mask_target = self.prov_param_mask[base as usize];
+                            if p_mask_target != 0 as u64 {
+                                if check_errors && self.prov_is_stack[s.val as usize] {
+                                    self.report_error("region escape: storing local stack pointer into caller memory", span);
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            ILInstr.Load(src) => {
+                if valid_ssa && (src as usize) < max_ssa {
+                    let val_ty = self.get_ssa_type(f, ssa);
+                    if self.is_pointer_like(val_ty) || self.is_aggregate(val_ty) {
+                        let base = self.get_base(src, max_ssa);
+                        if (base as usize) < max_ssa {
+                            if self.is_stack_slot[base as usize] {
+                                self.prov_is_stack[ssa as usize] = self.prov_is_stack[ssa as usize] || self.slot_holds_stack[base as usize];
+                                self.prov_param_mask[ssa as usize] = self.prov_param_mask[ssa as usize] | self.slot_holds_param[base as usize];
+                            } else {
+                                let p_mask = self.prov_param_mask[base as usize];
+                                if p_mask != 0 as u64 {
+                                    self.prov_param_mask[ssa as usize] = self.prov_param_mask[ssa as usize] | p_mask;
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            ILInstr.Call(c) => {
+                let call_name = self.intern_table.lookup(c.name_id);
+                if is_str_eq(call_name, "memcpy") && c.args.len >= 2 as usize {
+                    let dst = c.args[0];
+                    let src = c.args[1];
+                    let base_dst = self.get_base(dst, max_ssa);
+                    let base_src = self.get_base(src, max_ssa);
+                    if (base_dst as usize) < max_ssa && self.is_stack_slot[base_dst as usize] {
+                        if (base_src as usize) < max_ssa && self.is_stack_slot[base_src as usize] {
+                            self.slot_holds_stack[base_dst as usize] = self.slot_holds_stack[base_dst as usize] || self.slot_holds_stack[base_src as usize];
+                            self.slot_holds_param[base_dst as usize] = self.slot_holds_param[base_dst as usize] | self.slot_holds_param[base_src as usize];
+                        } else if (base_src as usize) < max_ssa {
+                            self.slot_holds_stack[base_dst as usize] = self.slot_holds_stack[base_dst as usize] || self.prov_is_stack[base_src as usize];
+                            self.slot_holds_param[base_dst as usize] = self.slot_holds_param[base_dst as usize] | self.prov_param_mask[base_src as usize];
+                        }
+                    } else if (base_dst as usize) < max_ssa {
+                        let p_mask = self.prov_param_mask[base_dst as usize];
+                        if p_mask != 0 as u64 {
+                            let src_has_stack = if (base_src as usize) < max_ssa && self.is_stack_slot[base_src as usize] {
+                                self.slot_holds_stack[base_src as usize]
+                            } else if (base_src as usize) < max_ssa {
+                                self.prov_is_stack[base_src as usize]
+                            } else {
+                                false
+                            };
+                            if check_errors && src_has_stack {
+                                self.report_error("region escape: returning a pointer to local stack storage via sret", span);
+                            }
+                        }
+                    }
+                } else {
+                    let p_target = self.module.find_function_by_name(c.name_id);
+                    if p_target != 0 as *mut ILFunction {
+                        let tid = (*p_target).id as usize;
+                        let ret_mask = self.summaries[tid].returns_param_mask;
+                        let stash_mask = self.summaries[tid].stashes_param_mask;
+                        let ret_stack = self.summaries[tid].returns_local_stack;
+                        if ret_stack && valid_ssa {
+                            self.prov_is_stack[ssa as usize] = true;
+                        }
+                        let mut p_idx = 0 as usize;
+                        while p_idx < c.args.len && p_idx < 64 as usize {
+                            let arg_ssa = c.args[p_idx];
+                            if (arg_ssa as usize) < max_ssa {
+                                if (ret_mask & ((1 as u64) << (p_idx as u64))) != 0 as u64 && valid_ssa {
+                                    self.prov_is_stack[ssa as usize] = self.prov_is_stack[ssa as usize] || self.prov_is_stack[arg_ssa as usize];
+                                    self.prov_param_mask[ssa as usize] = self.prov_param_mask[ssa as usize] | self.prov_param_mask[arg_ssa as usize];
+                                }
+                                if check_errors && (stash_mask & ((1 as u64) << (p_idx as u64))) != 0 as u64 {
+                                    if self.prov_is_stack[arg_ssa as usize] {
+                                        self.report_error("region escape: callee stashes local stack pointer into global memory", span);
+                                    }
+                                }
+                            }
+                            p_idx = p_idx + 1 as usize;
+                        }
+                    }
+                }
+            },
+            ILInstr.CallPtr(c) => {
+                let mut cand_i = 0 as usize;
+                while cand_i < self.addr_taken_count {
+                    let tid = self.addr_taken_func_ids[cand_i] as usize;
+                    let p_target = &self.module.functions[tid];
+                    if self.matches_signature(p_target, c.args.len) {
+                        self.indirect_candidate_evals = self.indirect_candidate_evals + 1 as usize;
+                        let ret_mask = self.summaries[tid].returns_param_mask;
+                        let stash_mask = self.summaries[tid].stashes_param_mask;
+                        let ret_stack = self.summaries[tid].returns_local_stack;
+                        if ret_stack && valid_ssa {
+                            self.prov_is_stack[ssa as usize] = true;
+                        }
+                        let mut p_idx = 0 as usize;
+                        while p_idx < c.args.len && p_idx < 64 as usize {
+                            let arg_ssa = c.args[p_idx];
+                            if (arg_ssa as usize) < max_ssa {
+                                if (ret_mask & ((1 as u64) << (p_idx as u64))) != 0 as u64 && valid_ssa {
+                                    self.prov_is_stack[ssa as usize] = self.prov_is_stack[ssa as usize] || self.prov_is_stack[arg_ssa as usize];
+                                    self.prov_param_mask[ssa as usize] = self.prov_param_mask[ssa as usize] | self.prov_param_mask[arg_ssa as usize];
+                                }
+                                if check_errors && (stash_mask & ((1 as u64) << (p_idx as u64))) != 0 as u64 {
+                                    if self.prov_is_stack[arg_ssa as usize] {
+                                        self.report_error("region escape: callee stashes local stack pointer via indirect call", span);
+                                    }
+                                }
+                            }
+                            p_idx = p_idx + 1 as usize;
+                        }
+                    }
+                    cand_i = cand_i + 1 as usize;
+                }
+            },
+            ILInstr.Ret(res) => {
+                if res != 0 as u32 && res != NO_SSA && (res as usize) < max_ssa {
+                    let ret_ty = f.ret_ty;
+                    if self.is_pointer_like(ret_ty) || self.is_aggregate(ret_ty) {
+                        *out_ret_mask = *out_ret_mask | self.prov_param_mask[res as usize];
+                        if self.prov_is_stack[res as usize] {
+                            *out_ret_stack = true;
+                            if check_errors {
+                                self.report_error("region escape: returning a pointer to local stack storage", span);
+                            }
+                        }
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+
+    pub fn run(self: &mut InterprocSummaryPass, check_errors: bool) -> bool {
+        if self.verbose {
+            must_write(2, "PROGRESS: Running interprocedural summary pass...\n");
+        }
+
+        let mut changed = true;
+        let mut iter = 0 as usize;
+        let max_iters = 20 as usize;
+
+        while changed && iter < max_iters {
+            changed = false;
+            iter = iter + 1 as usize;
+
+            let mut fi = 0 as usize;
+            while fi < self.module.functions.len {
+                let p_f = &self.module.functions[fi];
+                if !p_f.is_extern && p_f.blocks_len > 0 as usize {
+                    let func_changed = self.analyze_function(p_f, false);
+                    if func_changed {
+                        changed = true;
+                    }
+                }
+                fi = fi + 1 as usize;
+            }
+        }
+        self.fixpoint_iterations = iter;
+
+        // Final verification pass with error reporting
+        if check_errors {
+            let mut fi2 = 0 as usize;
+            while fi2 < self.module.functions.len {
+                let p_f = &self.module.functions[fi2];
+                if !p_f.is_extern && p_f.blocks_len > 0 as usize {
+                    self.analyze_function(p_f, true);
+                }
+                fi2 = fi2 + 1 as usize;
+            }
+        }
+
+        if self.verbose {
+            must_write(2, "SUMMARY PASS: functions=");
+            write_u64(2, self.module.functions.len as u64);
+            must_write(2, ", direct_calls=");
+            write_u64(2, self.total_direct_calls as u64);
+            must_write(2, ", indirect_calls=");
+            write_u64(2, self.total_indirect_calls as u64);
+            must_write(2, ", addr_taken=");
+            write_u64(2, self.addr_taken_count as u64);
+            must_write(2, ", candidate_evals=");
+            write_u64(2, self.indirect_candidate_evals as u64);
+            must_write(2, ", iters=");
+            write_u64(2, self.fixpoint_iterations as u64);
+            must_write(2, ", errors=");
+            write_u64(2, self.error_count as u64);
+            must_write(2, "\n");
+        }
+
+        return !self.had_error;
+    }
+}

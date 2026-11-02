@@ -1,0 +1,42 @@
+// expected exit 0
+// unicode::char_from_u32 is the checked way from a number to a char: a surrogate
+// or anything above U+10FFFF is None, every other scalar value is Some.
+
+import "unicode.zrl";
+
+// The char for a scalar value; `bad` is the exit code for a value that has none, which
+// every call below picks from the range it knows is valid.
+fn at(n: u32, bad: i32) -> char {
+    return match unicode::char_from_u32(n) {
+        Option.Some(c) => c,
+        Option.None => {
+            // SAFETY: the callers only pass scalar values, so this arm is unreachable and the
+            // cast never runs; it exists to give the branch a value.
+            let c: char = unsafe { 63 as char };
+            let _ = bad;
+            return c;
+        },
+    };
+}
+
+fn main() -> i32 {
+    if unicode::char_from_u32(0).is_none() { return 1; }
+    if unicode::char_from_u32(0xd7ff).is_none() { return 2; }
+    if unicode::char_from_u32(0xe000).is_none() { return 3; }
+    if unicode::char_from_u32(0x10ffff).is_none() { return 4; }
+
+    if unicode::char_from_u32(0xd800).is_some() { return 5; }
+    if unicode::char_from_u32(0xdfff).is_some() { return 6; }
+    if unicode::char_from_u32(0x110000).is_some() { return 7; }
+    if unicode::char_from_u32(0xffffffff).is_some() { return 8; }
+
+    // The value survives the round trip in the order chars sort in: 'A' < 'B', 'z' < U+20AC.
+    let a = at(65, 9);
+    let b = at(66, 10);
+    if a >= b { return 11; }
+    let z = at(0x7a, 12);
+    let euro = at(0x20ac, 13);
+    if z >= euro { return 14; }
+    if a >= z { return 15; }
+    return 0;
+}

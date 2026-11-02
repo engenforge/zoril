@@ -1,0 +1,434 @@
+// Growable byte strings (String) and inherent methods on [u8]
+
+import "core.zrl";
+import "vec.zrl";
+import "io.zrl";
+import "str.zrl";
+import "mem.zrl";
+import "mem_raw.zrl";
+use io::Write;
+use mem::Arena;
+use mem_raw::ArenaHeader;
+use str::Str;
+use vec::Vec;
+
+// Growable byte string buffer with dynamic reallocation support.
+pub struct String {
+    vec: Vec<u8>,
+}
+
+impl String {
+    // Creates an empty String.
+    pub fn new() -> String {
+        return String {
+            vec: Vec::<u8>.new(),
+        };
+    }
+
+    // Creates an empty String allocated in the specified arena.
+    //
+    // Safe: a `String` wraps a `Vec`, whose `anchor` field borrows the arena, so the
+    // borrow checker rejects destroying or resetting the arena while the String is live.
+    pub fn new_in(a: &Arena) -> String {
+        return String {
+            vec: Vec::<u8>.new_in(a),
+        };
+    }
+
+    // Creates an empty String using a raw arena header.
+    //
+    // CALLER OBLIGATION: arena must be valid and initialized.
+    //
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    pub unsafe fn new_in_raw(arena: *mut ArenaHeader) -> String {
+        return String {
+            vec: Vec::<u8>.new_in_raw(arena),
+        };
+    }
+
+    // Creates an empty String with pre-allocated capacity in arena a.
+    pub fn with_capacity(a: &Arena, cap: usize) -> String {
+        return String {
+            vec: Vec::<u8>.with_capacity_in(a, cap),
+        };
+    }
+
+    // Creates an empty String with pre-allocated capacity using a raw arena header.
+    //
+    // CALLER OBLIGATION: arena must be valid and initialized.
+    //
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    pub unsafe fn with_capacity_in_raw(arena: *mut ArenaHeader, cap: usize) -> String {
+        return String {
+            vec: Vec::<u8>.with_capacity_in_raw(arena, cap),
+        };
+    }
+
+    // Appends a single byte to the string.
+    pub fn push_u8(self: &mut String, c: u8) {
+        self.vec.push(c);
+    }
+
+    // Appends a byte slice to the string.
+    pub fn push_str(self: &mut String, s: [u8]) {
+        self.vec.extend_from_slice(s);
+    }
+
+    // Formats an unsigned 64-bit integer as decimal digits and appends it to the string.
+    pub fn push_u64(self: &mut String, v: u64) {
+        if v == 0 as u64 {
+            self.vec.push('0' as u8);
+            return;
+        }
+        let mut buf = [
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+        ];
+        let mut temp = v;
+        let mut i = 20 as usize;
+        while temp > 0 as u64 {
+            i = i - 1 as usize;
+            buf[i] = ((temp % 10 as u64) + 48 as u64) as u8;
+            temp = temp / 10 as u64;
+        }
+        // SAFETY: i is between 0 and 19 inclusive; 20 - i is length.
+        let slice = unsafe { @slice(&buf[i] as *u8, 20 as usize - i) };
+        self.vec.extend_from_slice(slice);
+    }
+
+    // Formats a signed 64-bit integer as decimal digits and appends it to the string.
+    pub fn push_i64(self: &mut String, v: i64) {
+        if v < 0 as i64 {
+            self.vec.push('-' as u8);
+            self.push_u64(0 as u64 -% (v as u64));
+        } else {
+            self.push_u64(v as u64);
+        }
+    }
+
+    // Formats an unsigned 64-bit integer as hexadecimal digits and appends it to the string.
+    pub fn push_u64_hex(self: &mut String, v: u64) {
+        if v == 0 as u64 {
+            self.vec.push('0' as u8);
+            return;
+        }
+        let mut buf = [
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+            0 as u8,
+        ];
+        let mut temp = v;
+        let mut i = 16 as usize;
+        while temp > 0 as u64 {
+            i = i - 1 as usize;
+            let rem = (temp % 16 as u64) as u8;
+            if rem < 10 as u8 {
+                buf[i] = rem + '0' as u8;
+            } else {
+                buf[i] = rem - 10 as u8 + 'a' as u8;
+            }
+            temp = temp / 16 as u64;
+        }
+        // SAFETY: i is between 0 and 15 inclusive; 16 - i is length.
+        let slice = unsafe { @slice(&buf[i] as *u8, 16 as usize - i) };
+        self.vec.extend_from_slice(slice);
+    }
+
+    // Returns a mutable reference to the underlying byte vector.
+    pub fn as_mut_vec(self: &mut String) -> &mut Vec<u8> {
+        return &mut self.vec;
+    }
+
+    // The arena this String allocates from (0 for the global heap).
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    pub unsafe fn raw_arena(self: &String) -> *mut ArenaHeader {
+        return self.vec.raw_arena();
+    }
+
+    // Clones a String using a raw arena header.
+    //
+    // CALLER OBLIGATION: arena must be valid and initialized.
+    //
+    // The same-arena clone the `Clone` impl in clone.zrl needs: it holds only the raw header the
+    // String already allocates from, not an `&Arena`.
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    pub unsafe fn clone_in_raw(self: &String, arena: *mut ArenaHeader) -> String {
+        return String { vec: self.vec.clone_in_raw(arena) };
+    }
+
+    // Returns the current length of the string in bytes.
+    pub fn len(self: &String) -> usize {
+        return self.vec.len();
+    }
+
+    // Truncates the string to zero length, preserving allocated capacity.
+    pub fn clear(self: &mut String) {
+        self.vec.clear();
+    }
+
+    // Returns the string contents as an immutable byte slice.
+    pub fn as_slice(self: &String) -> [u8] {
+        return self.vec.as_slice();
+    }
+
+    // Converts a validated Str into an allocated String.
+    pub fn from_str(s: Str) -> String {
+        let mut out = String.new();
+        out.push_s(s);
+        return out;
+    }
+
+    // Appends a validated Str to the string.
+    pub fn push_s(self: &mut String, s: Str) {
+        self.push_str(s.as_bytes());
+    }
+
+    // Returns a validated Str view of the string if it contains valid UTF-8.
+    //
+    // The contents as a Str, or None if push_u8/push_str have left them
+    // invalid UTF-8.
+    pub fn as_str(self: &String) -> Option<Str> {
+        return Str.from_utf8(self.as_slice());
+    }
+}
+
+// A String is an in-memory Write sink: writes append and never come up short.
+impl Write for String {
+    // Implements Write trait for String, appending bytes to the buffer.
+    fn write(self: &mut String, buf: [u8]) -> Result<usize, io::Error> {
+        self.push_str(buf);
+        return Result.Ok(buf.len);
+    }
+}
+
+// Returns true if byte c is an ASCII whitespace character (' ', '\t', '\n', '\r').
+pub fn is_whitespace(c: u8) -> bool {
+    return c == ' ' as u8 || c == '\t' as u8 || c == '\n' as u8 || c == '\r' as u8;
+}
+
+impl [u8] {
+    // Returns true if the byte slice begins with prefix.
+    pub fn starts_with(self: &[u8], prefix: [u8]) -> bool {
+        if self.len < prefix.len { return false; }
+        let mut i = 0 as usize;
+        while i < prefix.len {
+            if self[i] != prefix[i] { return false; }
+            i = i + 1 as usize;
+        }
+        return true;
+    }
+
+    // Returns true if the byte slice ends with suffix.
+    pub fn ends_with(self: &[u8], suffix: [u8]) -> bool {
+        if self.len < suffix.len { return false; }
+        let offset = self.len - suffix.len;
+        let mut i = 0 as usize;
+        while i < suffix.len {
+            if self[offset + i] != suffix[i] { return false; }
+            i = i + 1 as usize;
+        }
+        return true;
+    }
+
+    // Returns a subslice of length len starting at byte offset start.
+    pub fn sub(self: &[u8], start: usize, len: usize) -> [u8] {
+        if start >= self.len {
+            return @slice(0 as *u8, 0 as usize);
+        }
+        // Compare against the rest of the string rather than computing `start + len`: that sum wrapped
+        // for a `len` near usize's maximum, which skipped the clamp and returned a slice claiming
+        // 2^64-1 bytes over a few bytes of real storage (probe/test). `core0::subslice` reads the same
+        // way.
+        let mut actual_len = len;
+        if actual_len > self.len - start {
+            actual_len = self.len - start;
+        }
+        // SAFETY: start < self.len was checked above and actual_len <= self.len - start, so the address and
+        // the slice built from it both stay inside the caller's string.
+        return unsafe { @slice((self.ptr as usize + start) as *u8, actual_len) };
+    }
+
+    // Returns a slice with leading and trailing ASCII whitespace removed.
+    pub fn trim(self: &[u8]) -> [u8] {
+        if self.len == 0 as usize { return *self; }
+        let mut start = 0 as usize;
+        while start < self.len && is_whitespace(self[start]) {
+            start = start + 1 as usize;
+        }
+        if start == self.len {
+            return @slice(0 as *u8, 0 as usize);
+        }
+        let mut end = self.len;
+        while end > start && is_whitespace(self[end - 1 as usize]) {
+            end = end - 1 as usize;
+        }
+        return self.sub(start, end - start);
+    }
+
+    // Splits `self` on `delim`, appending each piece (including the last) to `res`.
+    fn split_into(self: &[u8], delim: u8, res: &mut Vec<[u8]>) {
+        let mut start = 0 as usize;
+        let mut i = 0 as usize;
+        while i < self.len {
+            if self[i] == delim {
+                res.push(self.sub(start, i - start));
+                start = i + 1 as usize;
+            }
+            i = i + 1 as usize;
+        }
+        res.push(self.sub(start, self.len - start));
+    }
+
+    #[borrows(self, a)]
+    // Splits a slice on delimiter byte delim, returning a Vec of sub-slices in arena a.
+    pub fn split(self: &[u8], delim: u8, a: &Arena) -> Vec<[u8]> {
+        let mut res = Vec::<[u8]>.new_in(a);
+        self.split_into(delim, &mut res);
+        return res;
+    }
+
+    // Splits a slice using a raw arena header.
+    //
+    // CALLER OBLIGATION: arena must be valid and initialized.
+    //
+    // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    pub unsafe fn split_raw(self: &[u8], delim: u8, arena: *mut ArenaHeader) -> Vec<[u8]> {
+        let mut res = Vec::<[u8]>.new_in_raw(arena);
+        self.split_into(delim, &mut res);
+        return res;
+    }
+
+    // Returns the index of the first occurrence of needle in the slice, or None.
+    pub fn find(self: &[u8], needle: [u8]) -> Option<usize> {
+        if needle.len == 0 as usize { return Option.Some(0 as usize); }
+        if self.len < needle.len { return Option.None; }
+        let limit = self.len - needle.len;
+        let mut i = 0 as usize;
+        while i <= limit {
+            let mut is_match = true;
+            let mut j = 0 as usize;
+            while j < needle.len {
+                if self[i + j] != needle[j] {
+                    is_match = false;
+                    break;
+                }
+                j = j + 1 as usize;
+            }
+            if is_match { return Option.Some(i); }
+            i = i + 1 as usize;
+        }
+        return Option.None;
+    }
+
+    // Returns the index of the first occurrence of byte ch in the slice, or None.
+    pub fn find_byte(self: &[u8], ch: u8) -> Option<usize> {
+        let mut i = 0 as usize;
+        while i < self.len {
+            if self[i] == ch { return Option.Some(i); }
+            i = i + 1 as usize;
+        }
+        return Option.None;
+    }
+
+    // Returns true if the byte slice contains needle.
+    pub fn contains(self: &[u8], needle: [u8]) -> bool {
+        return self.find(needle).is_some();
+    }
+
+    // Parses decimal ASCII digits into a signed 64-bit integer, or None on overflow or invalid character.
+    pub fn parse_i64(self: &[u8]) -> Option<i64> {
+        if self.len == 0 as usize { return Option.None; }
+        let mut i = 0 as usize;
+        let mut negative = false;
+        if self[0] == '-' as u8 {
+            negative = true;
+            i = 1 as usize;
+        } else if self[0] == '+' as u8 {
+            i = 1 as usize;
+        }
+        if i >= self.len { return Option.None; }
+        let max_mag: u64 = if negative {
+            9223372036854775808 as u64
+        } else {
+            9223372036854775807 as u64
+        };
+        let limit_div = max_mag / 10 as u64;
+        let limit_rem = max_mag % 10 as u64;
+        let mut mag = 0 as u64;
+        while i < self.len {
+            let c = self[i];
+            if c < '0' as u8 || c > '9' as u8 {
+                return Option.None;
+            }
+            let digit = (c - '0' as u8) as u64;
+            if mag > limit_div || (mag == limit_div && digit > limit_rem) {
+                return Option.None;
+            }
+            mag = mag * 10 as u64 + digit;
+            i = i + 1 as usize;
+        }
+        let res = if negative {
+            (0 as u64 -% mag) as i64
+        } else {
+            mag as i64
+        };
+        return Option.Some(res);
+    }
+
+    // Parses decimal ASCII digits into an unsigned 64-bit integer, or None on overflow or invalid character.
+    pub fn parse_u64(self: &[u8]) -> Option<u64> {
+        if self.len == 0 as usize { return Option.None; }
+        let mut i = 0 as usize;
+        if self[0] == '+' as u8 {
+            i = 1 as usize;
+        }
+        if i >= self.len { return Option.None; }
+        let limit_div = 1844674407370955161 as u64;
+        let limit_rem = 5 as u64;
+        let mut res = 0 as u64;
+        while i < self.len {
+            let c = self[i];
+            if c < '0' as u8 || c > '9' as u8 {
+                return Option.None;
+            }
+            let digit = (c - '0' as u8) as u64;
+            if res > limit_div || (res == limit_div && digit > limit_rem) {
+                return Option.None;
+            }
+            res = res * 10 as u64 + digit;
+            i = i + 1 as usize;
+        }
+        return Option.Some(res);
+    }
+}

@@ -1,0 +1,8 @@
+// name: Callee stores a pointer to a local in a global
+// expected: compile_reject
+// keep writes its argument into a static; main's s is gone once main's frame is.
+struct S { a: i32 }
+static mut G: *mut S = 0 as *mut S;
+fn keep(p: *mut S) { G = p; }
+fn use_it() -> i32 { let mut s = S { a: 1 }; keep(&mut s); return s.a; }
+fn main() -> i32 { return use_it() + unsafe { (*G).a }; }

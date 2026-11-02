@@ -1,0 +1,379 @@
+// IL Type System
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+
+pub const ILTYPE_PRIMITIVE: u32 = 0;
+pub const ILTYPE_PTR: u32 = 1;
+pub const ILTYPE_PTRMUT: u32 = 2;
+pub const ILTYPE_BOXED: u32 = 3;
+pub const ILTYPE_BOXEDMUT: u32 = 4;
+pub const ILTYPE_SLICE: u32 = 5;
+pub const ILTYPE_ARRAY: u32 = 6;
+pub const ILTYPE_FN: u32 = 7;
+pub const ILTYPE_TUPLE: u32 = 8;
+pub const ILTYPE_FD: u32 = 9;
+pub const ILTYPE_IORING: u32 = 10;
+pub const ILTYPE_USER: u32 = 11;
+pub const ILTYPE_VAR: u32 = 12;
+// Raw pointers, distinct from `&T`/`&mut T` (`ILTYPE_PTR`/`ILTYPE_PTRMUT`) at the type level since
+// Phase D. Today only `tools/zilc` and hand-written IL name them: the
+// lowering still builds the reference tags and carries raw-ness as a side flag, and the migration's
+// next step is what makes a raw-provenance value come out as one of these.
+pub const ILTYPE_RAWPTR: u32 = 13;
+pub const ILTYPE_RAWPTRMUT: u32 = 14;
+
+// Is TAG a pointer-like tag - a reference or a raw pointer? The four are one class for everything
+// that only cares about "this is an address" (layout, mutability, codegen) and distinct for the two
+// questions Phase D is about: whether a dereference needs `unsafe`, and whether an implicit
+// conversion to a reference is allowed.
+pub fn is_any_pointer_tag(tag: u32) -> bool {
+    return tag == ILTYPE_PTR
+        || tag == ILTYPE_PTRMUT
+        || tag == ILTYPE_RAWPTR
+        || tag == ILTYPE_RAWPTRMUT;
+}
+
+// Is TAG a reference (`&T` / `&mut T`)?
+pub fn is_reference_tag(tag: u32) -> bool {
+    return tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT;
+}
+
+// Is TAG a raw pointer (`*T` / `*mut T`)?
+pub fn is_raw_pointer_tag(tag: u32) -> bool {
+    return tag == ILTYPE_RAWPTR || tag == ILTYPE_RAWPTRMUT;
+}
+
+// Is TAG a *shared* pointer (`&T` / `*T`)? The two branches that walk a slice-like thing apart
+// differ in what they look through, so they ask for the shared and the mutable half separately
+// rather than for "a pointer".
+pub fn is_shared_pointer_tag(tag: u32) -> bool {
+    return tag == ILTYPE_PTR || tag == ILTYPE_RAWPTR;
+}
+
+// Is TAG a *mutable* pointer (`&mut T` / `*mut T`)? The sites that ask this are the ones that
+// decide whether a write is allowed through the pointer (a slice forged from it, a method receiver,
+// a mutable binding). Getting one of these wrong is silent - a `*mut T` that reads as immutable
+// produces an immutable slice out of a writable buffer - so they ask by name rather than by a
+// tag-test that would have to be kept in sync with the pointer pair.
+pub fn is_mut_pointer_tag(tag: u32) -> bool {
+    return tag == ILTYPE_PTRMUT || tag == ILTYPE_RAWPTRMUT;
+}
+
+// Whether an interned type name is BASE, or BASE with a specialization suffix (`Vec_i32`). The
+// owning collections are recognized by name because their buffer sits behind a raw-pointer field,
+// so a structural walk cannot see that the value owns storage.
+pub fn type_name_is(s: [u8], base: [u8]) -> bool {
+    if s.len < base.len { return false; }
+    if subslice(s, 0 as usize, base.len) != base { return false; }
+    return s.len == base.len || s[base.len] == '_' as u8;
+}
+
+pub const ILPRIM_U8: u32 = 0;
+pub const ILPRIM_U16: u32 = 1;
+pub const ILPRIM_U32: u32 = 2;
+pub const ILPRIM_U64: u32 = 3;
+pub const ILPRIM_USIZE: u32 = 4;
+pub const ILPRIM_I8: u32 = 5;
+pub const ILPRIM_I16: u32 = 6;
+pub const ILPRIM_I32: u32 = 7;
+pub const ILPRIM_I64: u32 = 8;
+pub const ILPRIM_ISIZE: u32 = 9;
+pub const ILPRIM_F32: u32 = 10;
+pub const ILPRIM_F64: u32 = 11;
+pub const ILPRIM_BOOL: u32 = 12;
+pub const ILPRIM_CHAR: u32 = 13;
+pub const ILPRIM_UNIT: u32 = 14;
+pub const ILPRIM_NEVER: u32 = 15;
+
+pub const ENUM_TAG_SIZE: u64 = 4;
+pub const ENUM_PAYLOAD_OFFSET: u64 = 8;
+
+pub const IL_TYPEDEF_STRUCT: u32 = 0;
+pub const IL_TYPEDEF_ENUM: u32 = 1;
+pub const IL_TYPEDEF_FN: u32 = 2;
+
+pub enum Region {
+    Static,
+    Local,
+    Heap,
+    Custom([u8]),
+}
+
+impl Region {
+    pub fn get_tag(self: &Region) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Custom(self: &Region) -> [u8] {
+        return match self {
+            Region.Custom(x) => *x,
+            _ => ICE("Region.get_Custom on another variant")
+        };
+    }
+}
+
+pub enum FDCap {
+    R,
+    W,
+    RW,
+}
+
+impl FDCap {
+    pub fn get_tag(self: &FDCap) -> u32 { return unsafe { *(self as *u32) }; }
+}
+
+pub enum ILTypeDef {
+    Struct(ILStruct),
+    Enum(ILEnum),
+    Fn(ILFn),
+}
+
+impl ILTypeDef {
+    pub fn get_tag(self: &ILTypeDef) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Struct(self: &ILTypeDef) -> &ILStruct {
+        return match self {
+            ILTypeDef.Struct(x) => x,
+            _ => ICE("ILTypeDef.get_Struct on another variant")
+        };
+    }
+    pub fn get_Enum(self: &ILTypeDef) -> &ILEnum {
+        return match self {
+            ILTypeDef.Enum(x) => x,
+            _ => ICE("ILTypeDef.get_Enum on another variant")
+        };
+    }
+}
+
+pub struct ILStruct {
+    pub fields: [ILField],
+    pub is_copy_opt_out: bool,
+}
+
+pub struct ILField {
+    pub name: u32,
+    pub ty: u32, // Index to ILType
+}
+
+pub struct ILEnum {
+    pub variants: [ILVariant],
+    pub is_copy_opt_out: bool,
+}
+
+pub struct ILVariant {
+    pub name: u32,
+    pub payload: u32, // Index to ILType, 0 if none
+    pub discriminant: u32,
+}
+
+pub enum ILPrimitive {
+    U8, U16, U32, U64, USize,
+    I8, I16, I32, I64, ISize,
+    F32, F64,
+    Bool, Char,
+    Unit, Never,
+}
+
+impl ILPrimitive {
+    pub fn get_tag(self: &ILPrimitive) -> u32 { return unsafe { *(self as *u32) }; }
+}
+
+pub struct ILSlice {
+    pub element: u32, // Index to ILType
+    pub mutable: bool, // [mut T]: its holder may write the elements
+}
+
+pub struct ILArray {
+    pub element: u32, // Index to ILType
+    pub size: u32,
+}
+
+pub struct ILFn {
+    pub params: [u32], // Indices to ILType
+    pub ret_ty: u32,    // Index to ILType
+    pub is_variadic: bool,
+    // The signature of a C function pointer (`extern "C" fn(..)`): the type that holds it is a raw
+    // pointer to this, so it is told apart from a pointer to a Zoril function value.
+    pub c_abi: bool,
+}
+
+pub struct ILUser {
+    pub id: u32,
+    pub name: u32,
+    pub type_args: [u32], // Indices to ILType
+}
+
+pub struct ILVar {
+    pub name: u32,
+    pub bounds: [u32], // Indices to ILType
+}
+
+pub struct ILTypeDecl {
+    pub id: u32,
+    pub name: u32,
+    pub def: ILType,
+    pub source_file: u32,
+}
+
+pub enum ILType {
+    Primitive(ILPrimitive),
+    Ptr(u32),    // Index to ILType
+    PtrMut(u32), // Index to ILType
+    Boxed(u32),
+    BoxedMut(u32),
+    Slice(ILSlice),
+    Array(ILArray),
+    Fn(ILFn),
+    Tuple([u32]),
+    FD(FDCap),
+    IORing,
+    User(ILUser),
+    Var(ILVar), // type parameter with optional bounds
+    RawPtr(u32),    // `*T`: index to ILType (Phase D; see ILTYPE_RAWPTR)
+    RawPtrMut(u32), // `*mut T`
+}
+
+impl ILType {
+    pub fn get_tag(self: &ILType) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Primitive(self: &ILType) -> ILPrimitive {
+        return match self {
+            ILType.Primitive(x) => *x,
+            _ => ICE("ILType.get_Primitive on another variant")
+        };
+    }
+    pub fn get_Ptr(self: &ILType) -> u32 {
+        return match self {
+            ILType.Ptr(x)
+                | ILType.PtrMut(x)
+                | ILType.RawPtr(x)
+                | ILType.RawPtrMut(x)
+                | ILType.Boxed(x)
+                | ILType.BoxedMut(x) => *x,
+            _ => ICE("ILType.get_Ptr on another variant")
+        };
+    }
+    pub fn get_PtrMut(self: &ILType) -> u32 {
+        return match self {
+            ILType.PtrMut(x) | ILType.RawPtrMut(x) | ILType.Boxed(x) | ILType.BoxedMut(x) => *x,
+            _ => ICE("ILType.get_PtrMut on another variant")
+        };
+    }
+    pub fn get_Boxed(self: &ILType) -> u32 {
+        return match self {
+            ILType.Ptr(x) | ILType.PtrMut(x) | ILType.Boxed(x) | ILType.BoxedMut(x) => *x,
+            _ => ICE("ILType.get_Boxed on another variant")
+        };
+    }
+    pub fn get_BoxedMut(self: &ILType) -> u32 {
+        return match self {
+            ILType.Ptr(x) | ILType.PtrMut(x) | ILType.Boxed(x) | ILType.BoxedMut(x) => *x,
+            _ => ICE("ILType.get_BoxedMut on another variant")
+        };
+    }
+    pub fn get_Slice(self: &ILType) -> &ILSlice {
+        return match self { ILType.Slice(x) => x, _ => ICE("ILType.get_Slice on another variant") };
+    }
+    pub fn get_Array(self: &ILType) -> &ILArray {
+        return match self { ILType.Array(x) => x, _ => ICE("ILType.get_Array on another variant") };
+    }
+    pub fn get_Fn(self: &ILType) -> &ILFn {
+        return match self { ILType.Fn(x) => x, _ => ICE("ILType.get_Fn on another variant") };
+    }
+    pub fn get_Tuple(self: &ILType) -> [u32] {
+        return match self {
+            ILType.Tuple(x) => *x,
+            _ => ICE("ILType.get_Tuple on another variant")
+        };
+    }
+    pub fn get_User(self: &ILType) -> &ILUser {
+        return match self { ILType.User(x) => x, _ => ICE("ILType.get_User on another variant") };
+    }
+}
+
+pub fn is_type_eq(a: ILType, b: ILType) -> bool {
+    return match (a, b) {
+        (ILType.Primitive(p1), ILType.Primitive(p2)) => p1.get_tag() == p2.get_tag(),
+        (ILType.Ptr(i1), ILType.Ptr(i2)) => i1 == i2,
+        (ILType.PtrMut(i1), ILType.PtrMut(i2)) => i1 == i2,
+        (ILType.RawPtr(i1), ILType.RawPtr(i2)) => i1 == i2,
+        (ILType.RawPtrMut(i1), ILType.RawPtrMut(i2)) => i1 == i2,
+        (ILType.Boxed(i1), ILType.Boxed(i2)) => i1 == i2,
+        (ILType.BoxedMut(i1), ILType.BoxedMut(i2)) => i1 == i2,
+        (ILType.Slice(s1), ILType.Slice(s2)) => s1.element == s2.element
+            && s1.mutable == s2.mutable,
+        (ILType.Array(a1), ILType.Array(a2)) => a1.element == a2.element && a1.size == a2.size,
+        (ILType.Fn(f1), ILType.Fn(f2)) => f1.ret_ty == f2.ret_ty
+            && f1.is_variadic == f2.is_variadic
+            && f1.c_abi == f2.c_abi
+            && f1.params == f2.params,
+        (ILType.Tuple(t1), ILType.Tuple(t2)) => t1 == t2,
+        (ILType.User(u1), ILType.User(u2)) => u1.id == u2.id
+            && u1.name == u2.name
+            && u1.type_args == u2.type_args,
+        (ILType.Var(v1), ILType.Var(v2)) => v1.name == v2.name,
+        (ILType.FD(c1), ILType.FD(c2)) => c1.get_tag() == c2.get_tag(),
+        (ILType.IORing, ILType.IORing) => true,
+        _ => false,
+    };
+}
+
+pub fn hash_type(ty: ILType) -> u64 {
+    let h1 = 0xcbf2 as u64 << 48;
+    let h2 = 0x9ce4 as u64 << 32;
+    let h3 = 0x8422 as u64 << 16;
+    let h4 = 0x2325 as u64;
+    let mut h = h1 | h2 | h3 | h4;
+
+    let p_high = 0x100 as u64 << 32;
+    let p_low = 0x1b3 as u64;
+    let prime = p_high | p_low;
+
+    let tag = ty.get_tag();
+    h = (h ^ (tag as u64)) * prime;
+
+    match ty {
+        ILType.Primitive(p) => { h = (h ^ (p.get_tag() as u64)) * prime; },
+        ILType.Ptr(inner)
+            | ILType.PtrMut(inner)
+            | ILType.RawPtr(inner)
+            | ILType.RawPtrMut(inner)
+            | ILType.Boxed(inner)
+            | ILType.BoxedMut(inner) => {
+            h = (h ^ (inner as u64)) * prime;
+        },
+        ILType.Slice(s) => {
+            h = (h ^ (s.element as u64)) * prime;
+            if s.mutable { h = (h ^ 1 as u64) * prime; }
+        },
+        ILType.Array(a) => {
+            h = (h ^ (a.element as u64)) * prime;
+            h = (h ^ (a.size as u64)) * prime;
+        },
+        ILType.Fn(f) => {
+            h = (h ^ (f.ret_ty as u64)) * prime;
+            if f.c_abi { h = (h ^ 1 as u64) * prime; }
+            let mut i = 0 as usize;
+            while i < f.params.len {
+                h = (h ^ (f.params[i] as u64)) * prime;
+                i = i + 1 as usize;
+            }
+        },
+        ILType.Tuple(types) => {
+            let mut i = 0 as usize;
+            while i < types.len {
+                h = (h ^ (types[i] as u64)) * prime;
+                i = i + 1 as usize;
+            }
+        },
+        ILType.User(u) => {
+            h = (h ^ (u.id as u64)) * prime;
+            let mut i = 0 as usize;
+            while i < u.type_args.len {
+                h = (h ^ (u.type_args[i] as u64)) * prime;
+                i = i + 1 as usize;
+            }
+        },
+        ILType.FD(c) => { h = (h ^ (c.get_tag() as u64)) * prime; },
+        ILType.IORing => {},
+        ILType.Var(v) => { h = (h ^ (v.name as u64)) * prime; },
+    }
+    return h;
+}

@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/include/err_cycle_helper.zrl:1:1: error: circular import detected: tests/error_reporting/err_circular_import.zrl -> tests/error_reporting/include/err_cycle_helper.zrl -> tests/error_reporting/err_circular_import.zrl
+import "include/err_cycle_helper.zrl";
+
+pub fn main() -> i32 {
+    return helper();
+}

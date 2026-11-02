@@ -1,0 +1,1137 @@
+// src/interface_print.zrl
+// Module interface emitter (.zri): serializes public declarations and generic templates
+// from the AST of the target module into deterministic, body-independent interface syntax.
+
+import "core.zrl";
+import "mem.zrl";
+import "io.zrl";
+import "ast.zrl";
+import "intern.zrl";
+import "bytevec.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "il_cfg.zrl";
+import "summary_pass.zrl";
+import "vec.zrl";
+import "module_path.zrl";
+
+pub struct InterfacePrinter {
+    pub ast: &AST,
+    pub table: &mut InternTable,
+    pub fd: u32,
+    pub arena: *mut Arena,
+    pub target_source_file: u32,
+    pub module: *mut ILModule,
+    pub summaries: [FuncSummary],
+    // Names used by this module's public generic bodies (see AST.collect_generic_body_refs).
+    pub generic_refs: Vec<u32>,
+}
+
+impl InterfacePrinter {
+    pub fn new(ast: &AST, table: &mut InternTable, fd: u32, arena: *mut Arena, target_source_file: u32, module: *mut ILModule, summaries: [FuncSummary]) -> InterfacePrinter {
+        return InterfacePrinter {
+            ast: ast,
+            table: table,
+            fd: fd,
+            arena: arena,
+            target_source_file: target_source_file,
+            module: module,
+            summaries: summaries,
+            generic_refs: Vec::<u32>.new_in(arena),
+        };
+    }
+
+    // Methods are named from generic bodies either as `x.m()` or, via the parser, as `T_m`.
+    fn is_generic_method_ref(self: &InterfacePrinter, target_ty: TypeId, method: u32) -> bool {
+        if self.is_generic_ref(method) { return true; }
+        let p_ty = &self.ast.types[target_ty as usize];
+        if p_ty.get_tag() != TYPE_PATH { return false; }
+        let mut full = ByteVec.new(self.arena);
+        full.push_slice(self.table.lookup(p_ty.get_Path().0));
+        full.push(':' as u8);
+        full.push(':' as u8);
+        full.push_slice(self.table.lookup(method));
+        if self.is_generic_ref(self.table.intern(full.as_slice())) { return true; }
+        let mut full_us = ByteVec.new(self.arena);
+        full_us.push_slice(self.table.lookup(p_ty.get_Path().0));
+        full_us.push('_' as u8);
+        full_us.push_slice(self.table.lookup(method));
+        return self.is_generic_ref(self.table.intern(full_us.as_slice()));
+    }
+
+    fn is_generic_ref(self: &InterfacePrinter, name: u32) -> bool {
+        let mut i = 0 as usize;
+        while i < self.generic_refs.len {
+            if self.generic_refs.as_slice()[i] == name { return true; }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
+    // The IL function a declaration lowered to. Identity is (name, declaring file): two modules can
+    // each have an `init`, and only the one from this file is the declaration being described.
+    fn find_il_function(self: &InterfacePrinter, name: u32, source_file: u32) -> *mut ILFunction {
+        if self.module == 0 as *mut ILModule { return 0 as *mut ILFunction; }
+        let fn_count = unsafe { (*self.module).functions.len };
+        let mut fi = 0 as usize;
+        while fi < fn_count {
+            let p_f = unsafe { &(*self.module).functions[fi] };
+            if p_f.name == name && p_f.source_file == source_file && p_f.owner_len == 0 as u32 { return p_f as *mut ILFunction; }
+            fi = fi + 1 as usize;
+        }
+        return 0 as *mut ILFunction;
+    }
+
+    fn write_summary_attr(self: &InterfacePrinter, p_f: *mut ILFunction, indent: [u8]) {
+        if p_f == 0 as *mut ILFunction { return; }
+        let tid = unsafe { (*p_f).id as usize };
+        if tid >= self.summaries.len { return; }
+        let summary = &self.summaries[tid];
+        let alloc = unsafe { (*p_f).arena_alloc_bytes };
+        self.write(indent);
+        self.write("#[summary(escape = ");
+        self.write_dec(summary.returns_param_mask);
+        self.write(", stash = ");
+        self.write_dec(summary.stashes_param_mask);
+        self.write(", ret_stack = ");
+        if summary.returns_local_stack { self.write("true"); } else { self.write("false"); }
+        // `alloc` (constant arena bytes the body allocates) is part of the interface on purpose: the
+        // verifier's interprocedural arena-capacity check reads it from imported functions, so a
+        // body edit that changes it must invalidate dependants (doc/spec/modular_compilation.md §2.3).
+        self.write(", alloc = ");
+        self.write_dec(alloc as u64);
+        // `storage`: parameters whose own storage the result may point into (ret_storage,
+        // from the body); an importer ties a stack argument's frame to the result by it.
+        self.write(", storage = ");
+        self.write_dec(unsafe { (*p_f).ret_storage });
+        self.write(", stores = ");
+        self.write_dec(unsafe { (*p_f).stores_storage });
+        self.write(", into = ");
+        self.write_dec(unsafe { (*p_f).store_targets });
+        self.write(")]\n");
+        // An explicit #[borrows(..)] is part of the signature's contract: importers check
+        // their calls against it. (The default rule is derived from the signature itself.)
+        if unsafe { (*p_f).has_borrows } {
+            self.write(indent);
+            self.write("#[borrows(");
+            let ties = unsafe { (*p_f).ret_ties };
+            let sret_name = self.table.intern("__sret");
+            let env_name = self.table.intern("__env");
+            let n = unsafe { (*p_f).params_len };
+            let mut user = 0 as usize;
+            let mut first = true;
+            let mut pi = 0 as usize;
+            while pi < n {
+                let nm = unsafe { (*p_f).param(pi).name };
+                if nm != sret_name && nm != env_name {
+                    if user < 64 as usize && ((ties >> (user as u64)) & 1 as u64) != 0 as u64 {
+                        if !first { self.write(", "); }
+                        self.write_ident(nm);
+                        first = false;
+                    }
+                    user = user + 1 as usize;
+                }
+                pi = pi + 1 as usize;
+            }
+            self.write(")]\n");
+        }
+    }
+
+    fn write(self: &InterfacePrinter, s: [u8]) {
+        if s.len > 0 as usize {
+            must_write(self.fd as u64, s);
+        }
+    }
+
+    fn write_dec(self: &InterfacePrinter, v: u64) {
+        write_u64(self.fd as u64, v);
+    }
+
+    fn write_ident(self: &InterfacePrinter, id: u32) {
+        if id != 0 as u32 {
+            let s = self.table.lookup(id);
+            self.write(s);
+        }
+    }
+
+    fn emit_escaped_string(self: &InterfacePrinter, s: [u8]) {
+        self.write("\"");
+        let hex_digits = "0123456789abcdef";
+        let mut i = 0 as usize;
+        while i < s.len {
+            let c = s[i];
+            if c == '\n' as u8 { self.write("\\n"); }
+            else if c == '\t' as u8 { self.write("\\t"); }
+            else if c == '\r' as u8 { self.write("\\r"); }
+            else if c == '\\' as u8 { self.write("\\\\"); }
+            else if c == '"' as u8 { self.write("\\\""); }
+            else if c < 32 as u8 || c >= 127 as u8 {
+                self.write("\\x");
+                let hi = (c / 16 as u8) as usize;
+                let lo = (c % 16 as u8) as usize;
+                self.write(subslice(hex_digits, hi, 1 as usize));
+                self.write(subslice(hex_digits, lo, 1 as usize));
+            } else {
+                self.write(subslice(s, i, 1 as usize));
+            }
+            i = i + 1 as usize;
+        }
+        self.write("\"");
+    }
+
+    // --- Types ---
+
+    fn emit_type(self: &InterfacePrinter, ty_id: TypeId) {
+        if ty_id == 0 as TypeId {
+            self.write("unit");
+            return;
+        }
+        let p_ty = &self.ast.types[ty_id as usize];
+        match *p_ty {
+            Type.Primitive(p) => {
+                let ptag = p.get_tag();
+                match ptag {
+                    0 => self.write("u8"),
+                    1 => self.write("u16"),
+                    2 => self.write("u32"),
+                    3 => self.write("u64"),
+                    4 => self.write("usize"),
+                    5 => self.write("i8"),
+                    6 => self.write("i16"),
+                    7 => self.write("i32"),
+                    8 => self.write("i64"),
+                    9 => self.write("isize"),
+                    10 => self.write("f32"),
+                    11 => self.write("f64"),
+                    12 => self.write("bool"),
+                    13 => self.write("char"),
+                    14 => self.write("unit"),
+                    15 => self.write("never"),
+                    _ => self.write("?"),
+                }
+            },
+            Type.Ptr(inner) => {
+                self.write("*");
+                self.emit_type(inner);
+            },
+            Type.PtrMut(inner) => {
+                self.write("*mut ");
+                self.emit_type(inner);
+            },
+            Type.Ref(inner) => {
+                self.write("&");
+                self.emit_type(inner);
+            },
+            Type.RefMut(inner) => {
+                self.write("&mut ");
+                self.emit_type(inner);
+            },
+            Type.Slice(inner) => {
+                self.write("[");
+                self.emit_type(inner);
+                self.write("]");
+            },
+            Type.SliceMut(inner) => {
+                self.write("[mut ");
+                self.emit_type(inner);
+                self.write("]");
+            },
+            Type.Array(arr) => {
+                self.write("[");
+                self.emit_type(arr.0);
+                self.write("; ");
+                self.write_dec(arr.1 as u64);
+                self.write("]");
+            },
+            Type.Tuple(types) => {
+                self.write("(");
+                let mut i = 0 as usize;
+                while i < types.len {
+                    if i > 0 as usize { self.write(", "); }
+                    self.emit_type(types[i]);
+                    i = i + 1 as usize;
+                }
+                self.write(")");
+            },
+            Type.Fn(ft) => {
+                self.write("fn(");
+                let mut i = 0 as usize;
+                while i < ft.params.len {
+                    if i > 0 as usize { self.write(", "); }
+                    self.emit_type(ft.params[i]);
+                    i = i + 1 as usize;
+                }
+                if ft.is_variadic {
+                    if ft.params.len > 0 as usize { self.write(", "); }
+                    self.write("...");
+                }
+                self.write(")");
+                if ft.ret_ty != 0 as TypeId {
+                    self.write(" -> ");
+                    self.emit_type(ft.ret_ty);
+                }
+            },
+            Type.Path(p) => {
+                self.write_ident(p.0);
+                if p.1.len > 0 as usize {
+                    self.write("<");
+                    let mut i = 0 as usize;
+                    while i < p.1.len {
+                        if i > 0 as usize { self.write(", "); }
+                        self.emit_type(p.1[i]);
+                        i = i + 1 as usize;
+                    }
+                    self.write(">");
+                }
+            },
+            Type.Var(name) => {
+                self.write_ident(name);
+            },
+        }
+    }
+
+    fn emit_type_params(self: &InterfacePrinter, tps: [TypeParam]) {
+        if tps.len == 0 as usize { return; }
+        self.write("<");
+        let mut i = 0 as usize;
+        while i < tps.len {
+            if i > 0 as usize { self.write(", "); }
+            self.write_ident(tps[i].name);
+            if tps[i].bounds.len > 0 as usize {
+                self.write(": ");
+                let mut b = 0 as usize;
+                while b < tps[i].bounds.len {
+                    if b > 0 as usize { self.write(" + "); }
+                    self.emit_type(tps[i].bounds[b]);
+                    b = b + 1 as usize;
+                }
+            }
+            i = i + 1 as usize;
+        }
+        self.write(">");
+    }
+
+    fn emit_params(self: &InterfacePrinter, params: [Param], is_variadic: bool) {
+        self.write("(");
+        let mut i = 0 as usize;
+        while i < params.len {
+            if i > 0 as usize { self.write(", "); }
+            let p_name = self.table.lookup(params[i].name);
+            if is_str_eq(p_name, "self") && params[i].ty == 0 as TypeId {
+                if params[i].is_mut { self.write("mut self"); }
+                else { self.write("self"); }
+            } else {
+                if params[i].is_mut { self.write("mut "); }
+                self.write(p_name);
+                self.write(": ");
+                self.emit_type(params[i].ty);
+            }
+            i = i + 1 as usize;
+        }
+        if is_variadic {
+            if params.len > 0 as usize { self.write(", "); }
+            self.write("...");
+        }
+        self.write(")");
+    }
+
+    // --- Expressions & Statements for Generic Bodies ---
+
+    fn emit_indent(self: &InterfacePrinter, indent: usize) {
+        let mut i = 0 as usize;
+        while i < indent {
+            self.write("    ");
+            i = i + 1 as usize;
+        }
+    }
+
+    fn emit_literal(self: &InterfacePrinter, l: &Literal) {
+        let tag = l.get_tag();
+        match tag {
+            0 => {
+                let v = l.get_Int_full();
+                self.write_dec(v.0);
+                let sfx = v.1;
+                if sfx != 0xffffffff as u32 {
+                    match sfx {
+                        0 => self.write("u8"),
+                        1 => self.write("u16"),
+                        2 => self.write("u32"),
+                        3 => self.write("u64"),
+                        4 => self.write("usize"),
+                        5 => self.write("i8"),
+                        6 => self.write("i16"),
+                        7 => self.write("i32"),
+                        8 => self.write("i64"),
+                        9 => self.write("isize"),
+                        _ => {},
+                    }
+                }
+            },
+            1 => {
+                // Float literal
+                self.write("0.0");
+            },
+            2 => {
+                let s_id = l.get_String();
+                let s = self.table.lookup(s_id);
+                self.emit_escaped_string(s);
+            },
+            3 => {
+                let c_id = l.get_Char();
+                let c = self.table.lookup(c_id);
+                self.write("'");
+                self.write(c);
+                self.write("'");
+            },
+            4 => {
+                if l.get_Bool() { self.write("true"); }
+                else { self.write("false"); }
+            },
+            _ => {},
+        }
+    }
+
+    fn emit_pattern_list(self: &InterfacePrinter, pats: [PatternId]) {
+        let mut i = 0 as usize;
+        while i < pats.len {
+            if i > 0 as usize { self.write(", "); }
+            self.emit_pattern(pats[i]);
+            i = i + 1 as usize;
+        }
+    }
+
+    fn emit_pattern(self: &InterfacePrinter, pat_id: PatternId) {
+        if pat_id == 0 as PatternId { return; }
+        let p_pat = &self.ast.patterns[pat_id as usize];
+        match *p_pat {
+            Pattern.Literal(l) => {
+                self.emit_literal(&l);
+            },
+            Pattern.Ident(name) => {
+                self.write_ident(name);
+            },
+            Pattern.MutIdent(name) => {
+                self.write("mut ");
+                self.write_ident(name);
+            },
+            Pattern.Wildcard => {
+                self.write("_");
+            },
+            Pattern.EnumVariant(ev) => {
+                if ev.type_name != 0 as u32 {
+                    self.write_ident(ev.type_name);
+                    self.write(".");
+                }
+                self.write_ident(ev.variant_name);
+                if ev.payload.len > 0 as usize {
+                    self.write("(");
+                    self.emit_pattern_list(ev.payload);
+                    self.write(")");
+                }
+            },
+            Pattern.Tuple(elems) => {
+                self.write("(");
+                self.emit_pattern_list(elems);
+                if elems.len == 1 as usize { self.write(","); }
+                self.write(")");
+            },
+            Pattern.Struct(sp) => {
+                self.write_ident(sp.type_name);
+                self.write(" { ");
+                let mut i = 0 as usize;
+                while i < sp.fields.len {
+                    if i > 0 as usize { self.write(", "); }
+                    self.write_ident(sp.fields[i].name);
+                    self.write(": ");
+                    self.emit_pattern(sp.fields[i].pattern);
+                    i = i + 1 as usize;
+                }
+                if sp.has_rest {
+                    if sp.fields.len > 0 as usize { self.write(", "); }
+                    self.write("..");
+                }
+                self.write(" }");
+            },
+            Pattern.Range(r) => {
+                self.emit_literal(&r.start);
+                if r.inclusive { self.write("..="); }
+                else { self.write(".."); }
+                self.emit_literal(&r.end);
+            },
+            Pattern.Or(pats) => {
+                let mut i = 0 as usize;
+                while i < pats.len {
+                    if i > 0 as usize { self.write(" | "); }
+                    self.emit_pattern(pats[i]);
+                    i = i + 1 as usize;
+                }
+            },
+        }
+    }
+
+    fn emit_binary_op(self: &InterfacePrinter, op: BinaryOp) {
+        let tag = op.get_tag();
+        match tag {
+            0 => self.write(" + "),
+            1 => self.write(" - "),
+            2 => self.write(" * "),
+            3 => self.write(" / "),
+            4 => self.write(" % "),
+            5 => self.write(" +% "),
+            6 => self.write(" -% "),
+            7 => self.write(" *% "),
+            8 => self.write(" == "),
+            9 => self.write(" != "),
+            10 => self.write(" < "),
+            11 => self.write(" <= "),
+            12 => self.write(" > "),
+            13 => self.write(" >= "),
+            14 => self.write(" & "),
+            15 => self.write(" | "),
+            16 => self.write(" ^ "),
+            17 => self.write(" << "),
+            18 => self.write(" >> "),
+            19 => self.write(" = "),
+            20 => self.write(" += "),
+            21 => self.write(" -= "),
+            22 => self.write(" *= "),
+            23 => self.write(" /= "),
+            24 => self.write(" %= "),
+            25 => self.write(" +%= "),
+            26 => self.write(" -%= "),
+            27 => self.write(" *%= "),
+            28 => self.write(" &= "),
+            29 => self.write(" |= "),
+            30 => self.write(" ^= "),
+            31 => self.write(" <<= "),
+            32 => self.write(" >>= "),
+            33 => self.write(" && "),
+            34 => self.write(" || "),
+            _ => self.write(" ? "),
+        }
+    }
+
+    fn emit_unary_op(self: &InterfacePrinter, op: UnaryOp) {
+        let tag = op.get_tag();
+        match tag {
+            0 => self.write("-"),
+            1 => self.write("!"),
+            2 => self.write("*"),
+            3 => self.write("&"),
+            4 => self.write("&mut "),
+            _ => {},
+        }
+    }
+
+    fn emit_expr_prec(self: &InterfacePrinter, expr_id: ExprId, indent: usize, min_prec: u32) {
+        if expr_id == 0 as ExprId { return; }
+        let p_expr = &self.ast.exprs[expr_id as usize];
+        match *p_expr {
+            Expr.Literal(l) => {
+                self.emit_literal(&l);
+            },
+            Expr.Ident(name) => {
+                self.write_ident(name);
+            },
+            Expr.Unary(u) => {
+                self.emit_unary_op(u.op);
+                self.emit_expr_prec(u.expr, indent, 100 as u32);
+            },
+            Expr.Binary(b) => {
+                let need_paren = min_prec > 0 as u32;
+                if need_paren { self.write("("); }
+                self.emit_expr_prec(b.lhs, indent, 1 as u32);
+                self.emit_binary_op(b.op);
+                self.emit_expr_prec(b.rhs, indent, 1 as u32);
+                if need_paren { self.write(")"); }
+            },
+            Expr.Call(c) => {
+                self.emit_expr_prec(c.callee, indent, 100 as u32);
+                if c.type_args.len > 0 as usize {
+                    self.write("::<");
+                    let mut i = 0 as usize;
+                    while i < c.type_args.len {
+                        if i > 0 as usize { self.write(", "); }
+                        self.emit_type(c.type_args[i]);
+                        i = i + 1 as usize;
+                    }
+                    self.write(">");
+                }
+                self.write("(");
+                let mut i = 0 as usize;
+                while i < c.args.len {
+                    if i > 0 as usize { self.write(", "); }
+                    self.emit_expr_prec(c.args[i], indent, 0 as u32);
+                    i = i + 1 as usize;
+                }
+                self.write(")");
+            },
+            Expr.Generic(g) => {
+                self.emit_expr_prec(g.expr, indent, 100 as u32);
+                self.write("::<");
+                let mut i = 0 as usize;
+                while i < g.type_args.len {
+                    if i > 0 as usize { self.write(", "); }
+                    self.emit_type(g.type_args[i]);
+                    i = i + 1 as usize;
+                }
+                self.write(">");
+            },
+            Expr.Intrinsic(intr) => {
+                self.write("@");
+                self.write_ident(intr.name);
+                if intr.type_args.len > 0 as usize {
+                    self.write("::<");
+                    let mut i = 0 as usize;
+                    while i < intr.type_args.len {
+                        if i > 0 as usize { self.write(", "); }
+                        self.emit_type(intr.type_args[i]);
+                        i = i + 1 as usize;
+                    }
+                    self.write(">");
+                }
+                self.write("(");
+                let mut i = 0 as usize;
+                while i < intr.args.len {
+                    if i > 0 as usize { self.write(", "); }
+                    self.emit_expr_prec(intr.args[i], indent, 0 as u32);
+                    i = i + 1 as usize;
+                }
+                self.write(")");
+            },
+            Expr.Block(b) => {
+                if b.is_unsafe { self.write("unsafe "); }
+                self.write("{\n");
+                let mut i = 0 as usize;
+                while i < b.stmts.len {
+                    self.emit_stmt(b.stmts[i], indent + 1 as usize);
+                    i = i + 1 as usize;
+                }
+                if b.tail_expr != 0 as ExprId {
+                    self.emit_indent(indent + 1 as usize);
+                    self.emit_expr_prec(b.tail_expr, indent + 1 as usize, 0 as u32);
+                    self.write("\n");
+                }
+                self.emit_indent(indent);
+                self.write("}");
+            },
+            Expr.If(ife) => {
+                self.write("if ");
+                self.emit_expr_prec(ife.cond, indent, 0 as u32);
+                self.write(" ");
+                self.emit_expr_prec(ife.then_block, indent, 0 as u32);
+                if ife.else_block != 0 as ExprId {
+                    self.write(" else ");
+                    self.emit_expr_prec(ife.else_block, indent, 0 as u32);
+                }
+            },
+            Expr.Match(m) => {
+                self.write("match ");
+                self.emit_expr_prec(m.expr, indent, 0 as u32);
+                self.write(" {\n");
+                let mut i = 0 as usize;
+                while i < m.arms.len {
+                    self.emit_indent(indent + 1 as usize);
+                    self.emit_pattern(m.arms[i].pattern);
+                    if m.arms[i].guard != 0 as ExprId {
+                        self.write(" if ");
+                        self.emit_expr_prec(m.arms[i].guard, indent + 1 as usize, 0 as u32);
+                    }
+                    self.write(" => ");
+                    self.emit_expr_prec(m.arms[i].body, indent + 1 as usize, 0 as u32);
+                    self.write(",\n");
+                    i = i + 1 as usize;
+                }
+                self.emit_indent(indent);
+                self.write("}");
+            },
+            Expr.StructLiteral(sl) => {
+                self.write_ident(sl.struct_name);
+                if sl.type_args.len > 0 as usize {
+                    self.write("::<");
+                    let mut i = 0 as usize;
+                    while i < sl.type_args.len {
+                        if i > 0 as usize { self.write(", "); }
+                        self.emit_type(sl.type_args[i]);
+                        i = i + 1 as usize;
+                    }
+                    self.write(">");
+                }
+                self.write(" { ");
+                let mut i = 0 as usize;
+                while i < sl.fields.len {
+                    if i > 0 as usize { self.write(", "); }
+                    self.write_ident(sl.fields[i].name);
+                    self.write(": ");
+                    self.emit_expr_prec(sl.fields[i].value, indent, 0 as u32);
+                    i = i + 1 as usize;
+                }
+                self.write(" }");
+            },
+            Expr.MemberAccess(ma) => {
+                self.emit_expr_prec(ma.expr, indent, 100 as u32);
+                self.write(".");
+                self.write_ident(ma.member);
+            },
+            Expr.TupleAccess(ta) => {
+                self.emit_expr_prec(ta.expr, indent, 100 as u32);
+                self.write(".");
+                self.write_dec(ta.index);
+            },
+            Expr.Index(idx) => {
+                self.emit_expr_prec(idx.expr, indent, 100 as u32);
+                self.write("[");
+                self.emit_expr_prec(idx.index, indent, 0 as u32);
+                self.write("]");
+            },
+            Expr.Boxed(bx) => {
+                self.write("box ");
+                self.emit_expr_prec(bx.expr, indent, 0 as u32);
+            },
+            Expr.Cast(c) => {
+                self.emit_expr_prec(c.expr, indent, 50 as u32);
+                self.write(" as ");
+                self.emit_type(c.target_ty);
+            },
+            Expr.ArrayLiteral(al) => {
+                self.write("[");
+                let mut i = 0 as usize;
+                while i < al.elements.len {
+                    if i > 0 as usize { self.write(", "); }
+                    self.emit_expr_prec(al.elements[i], indent, 0 as u32);
+                    i = i + 1 as usize;
+                }
+                self.write("]");
+            },
+            Expr.ArrayRepeat(ar) => {
+                self.write("[");
+                self.emit_expr_prec(ar.value, indent, 0 as u32);
+                self.write("; ");
+                self.emit_expr_prec(ar.len, indent, 0 as u32);
+                self.write("]");
+            },
+            Expr.TupleLiteral(tl) => {
+                self.write("(");
+                let mut i = 0 as usize;
+                while i < tl.elements.len {
+                    if i > 0 as usize { self.write(", "); }
+                    self.emit_expr_prec(tl.elements[i], indent, 0 as u32);
+                    i = i + 1 as usize;
+                }
+                self.write(")");
+            },
+            Expr.Closure(cl) => {
+                self.write("|");
+                let mut i = 0 as usize;
+                while i < cl.params.len {
+                    if i > 0 as usize { self.write(", "); }
+                    self.write_ident(cl.params[i].name);
+                    if cl.params[i].ty != 0 as TypeId {
+                        self.write(": ");
+                        self.emit_type(cl.params[i].ty);
+                    }
+                    i = i + 1 as usize;
+                }
+                self.write("| ");
+                self.emit_expr_prec(cl.body, indent, 0 as u32);
+            },
+            Expr.Try(e) => {
+                self.emit_expr_prec(e, indent, 100 as u32);
+                self.write("?");
+            },
+            Expr.Return(e) => {
+                self.write("return");
+                if e != 0 as ExprId {
+                    self.write(" ");
+                    self.emit_expr_prec(e, indent, 0 as u32);
+                }
+            },
+            Expr.Break => { self.write("break"); },
+            Expr.Continue => { self.write("continue"); },
+            Expr.Sizeof(ty) => {
+                self.write("sizeof(");
+                self.emit_type(ty);
+                self.write(")");
+            },
+            Expr.Alignof(ty) => {
+                self.write("alignof(");
+                self.emit_type(ty);
+                self.write(")");
+            },
+        }
+    }
+
+    fn emit_stmt(self: &InterfacePrinter, stmt_id: StmtId, indent: usize) {
+        if stmt_id == 0 as StmtId { return; }
+        self.emit_indent(indent);
+        let p_stmt = &self.ast.stmts[stmt_id as usize];
+        match *p_stmt {
+            Stmt.Let(l) => {
+                self.write("let ");
+                if l.pattern != 0 as PatternId {
+                    self.emit_pattern(l.pattern);
+                } else {
+                    if l.is_mut { self.write("mut "); }
+                    self.write_ident(l.name);
+                }
+                if l.ty != 0 as TypeId {
+                    self.write(": ");
+                    self.emit_type(l.ty);
+                }
+                if l.init != 0 as ExprId {
+                    self.write(" = ");
+                    self.emit_expr_prec(l.init, indent, 0 as u32);
+                }
+                self.write(";\n");
+            },
+            Stmt.Expr(e) => {
+                self.emit_expr_prec(e, indent, 0 as u32);
+                self.write(";\n");
+            },
+            Stmt.While(w) => {
+                self.write("while ");
+                self.emit_expr_prec(w.cond, indent, 0 as u32);
+                self.write(" ");
+                self.emit_expr_prec(w.body, indent, 0 as u32);
+                self.write("\n");
+            },
+            Stmt.For(f) => {
+                self.write("for ");
+                if f.end == 0 as ExprId { self.emit_pattern(f.pattern); } else { self.write_ident(f.var); }
+                self.write(" in ");
+                self.emit_expr_prec(f.start, indent, 0 as u32);
+                if f.end != 0 as ExprId {
+                    self.write("..");
+                    self.emit_expr_prec(f.end, indent, 0 as u32);
+                }
+                self.write(" ");
+                self.emit_expr_prec(f.body, indent, 0 as u32);
+                self.write("\n");
+            },
+            Stmt.Defer(e) => {
+                self.write("defer ");
+                self.emit_expr_prec(e, indent, 0 as u32);
+                self.write(";\n");
+            },
+            Stmt.Return(e) => {
+                self.write("return");
+                if e != 0 as ExprId {
+                    self.write(" ");
+                    self.emit_expr_prec(e, indent, 0 as u32);
+                }
+                self.write(";\n");
+            },
+            Stmt.Break => {
+                self.write("break;\n");
+            },
+            Stmt.Continue => {
+                self.write("continue;\n");
+            },
+        }
+    }
+
+    // --- Declarations ---
+
+    fn emit_struct(self: &InterfacePrinter, s: &StructDecl) {
+        if !s.is_pub { return; }
+        self.write("pub struct ");
+        self.write_ident(s.name);
+        self.emit_type_params(s.type_params);
+        self.write(" {\n");
+        let mut i = 0 as usize;
+        while i < s.fields.len {
+            self.write("    ");
+            if s.fields[i].is_pub { self.write("pub "); }
+            self.write_ident(s.fields[i].name);
+            self.write(": ");
+            self.emit_type(s.fields[i].ty);
+            self.write(",\n");
+            i = i + 1 as usize;
+        }
+        self.write("}\n\n");
+    }
+
+    fn emit_enum(self: &InterfacePrinter, e: &EnumDecl) {
+        if !e.is_pub { return; }
+        self.write("pub enum ");
+        self.write_ident(e.name);
+        self.emit_type_params(e.type_params);
+        self.write(" {\n");
+        let mut i = 0 as usize;
+        while i < e.variants.len {
+            self.write("    ");
+            self.write_ident(e.variants[i].name);
+            if e.variants[i].payload != 0 as TypeId {
+                self.write("(");
+                self.emit_type(e.variants[i].payload);
+                self.write(")");
+            }
+            if e.variants[i].has_discriminant {
+                self.write(" = ");
+                self.write_dec(e.variants[i].discriminant as u64);
+            }
+            self.write(",\n");
+            i = i + 1 as usize;
+        }
+        self.write("}\n\n");
+    }
+
+    fn emit_type_alias(self: &InterfacePrinter, ta: &TypeAliasDecl) {
+        if !ta.is_pub { return; }
+        self.write("pub type ");
+        self.write_ident(ta.name);
+        self.write(" = ");
+        self.emit_type(ta.target);
+        self.write(";\n\n");
+    }
+
+    fn emit_const(self: &InterfacePrinter, c: &ConstDecl) {
+        if !c.is_pub { return; }
+        self.write("pub const ");
+        self.write_ident(c.name);
+        if c.ty != 0 as TypeId {
+            self.write(": ");
+            self.emit_type(c.ty);
+        }
+        self.write(" = ");
+        self.emit_expr_prec(c.value, 0 as usize, 0 as u32);
+        self.write(";\n\n");
+    }
+
+    fn emit_static(self: &InterfacePrinter, st: &StaticDecl) {
+        if !st.is_pub { return; }
+        self.write("pub static ");
+        if st.is_mut { self.write("mut "); }
+        self.write_ident(st.name);
+        if st.ty != 0 as TypeId {
+            self.write(": ");
+            self.emit_type(st.ty);
+        }
+        if st.value != 0 as ExprId {
+            self.write(" = ");
+            self.emit_expr_prec(st.value, 0 as usize, 0 as u32);
+        }
+        self.write(";\n\n");
+    }
+
+    fn emit_fn(self: &InterfacePrinter, f: &FnDecl) {
+        // A private function that a public generic body mentions is part of the interface too: the
+        // body is instantiated in the consumer, which must be able to resolve and link the callee
+        // (it stays unnameable from outside: the resolver rejects direct cross-module use).
+        let mut exported_private = false;
+        if !f.is_pub { exported_private = self.is_generic_ref(f.name); }
+        if !f.is_pub && !exported_private { return; }
+        let is_gen = f.type_params.len > 0 as usize;
+        if !is_gen {
+            let p_fn = self.find_il_function(f.name, f.source_file);
+            self.write_summary_attr(p_fn, "");
+        }
+        if f.is_pub { self.write("pub "); }
+        if f.is_extern { self.write("extern "); }
+        self.write("fn ");
+        self.write_ident(f.name);
+        self.emit_type_params(f.type_params);
+        self.emit_params(f.params, f.is_variadic);
+        if f.ret_ty != 0 as TypeId {
+            self.write(" -> ");
+            self.emit_type(f.ret_ty);
+        }
+        if is_gen && f.body != 0 as ExprId {
+            // Generic function template: preserve body!
+            self.write(" ");
+            self.emit_expr_prec(f.body, 0 as usize, 0 as u32);
+            self.write("\n\n");
+        } else {
+            // Non-generic function or extern function: signature only!
+            self.write(";\n\n");
+        }
+    }
+
+    fn emit_trait(self: &InterfacePrinter, t: &TraitDecl) {
+        if !t.is_pub { return; }
+        self.write("pub trait ");
+        self.write_ident(t.name);
+        self.emit_type_params(t.type_params);
+        self.write(" {\n");
+        let mut i = 0 as usize;
+        while i < t.methods.len {
+            self.write("    fn ");
+            self.write_ident(t.methods[i].name);
+            self.emit_type_params(t.methods[i].type_params);
+            self.emit_params(t.methods[i].params, t.methods[i].is_variadic);
+            if t.methods[i].ret_ty != 0 as TypeId {
+                self.write(" -> ");
+                self.emit_type(t.methods[i].ret_ty);
+            }
+            if t.methods[i].body != 0 as ExprId {
+                self.write(" ");
+                self.emit_expr_prec(t.methods[i].body, 1 as usize, 0 as u32);
+                self.write("\n");
+            } else {
+                self.write(";\n");
+            }
+            i = i + 1 as usize;
+        }
+        self.write("}\n\n");
+    }
+
+    // IL name of a non-generic method is "<Type>_<method>"; look it up by file-scoped identity.
+    fn find_method_func(self: &InterfacePrinter, target_ty: TypeId, method_name: u32, source_file: u32) -> *mut ILFunction {
+        if target_ty == 0 as TypeId { return 0 as *mut ILFunction; }
+        let p_ty = &self.ast.types[target_ty as usize];
+        if p_ty.get_tag() != TYPE_PATH { return 0 as *mut ILFunction; }
+        let type_name_id = p_ty.get_Path().0;
+        if type_name_id == 0 as u32 { return 0 as *mut ILFunction; }
+        let mut full = ByteVec.new(self.arena);
+        full.push_slice(self.table.lookup(type_name_id));
+        full.push(':' as u8);
+        full.push(':' as u8);
+        full.push_slice(self.table.lookup(method_name));
+        let mangled = self.table.intern(full.as_slice());
+        if self.module == 0 as *mut ILModule { return 0 as *mut ILFunction; }
+        let fn_count = unsafe { (*self.module).functions.len };
+        let mut fi = 0 as usize;
+        while fi < fn_count {
+            let p_f = unsafe { &(*self.module).functions[fi] };
+            if p_f.name == mangled && p_f.source_file == source_file && p_f.owner_len > 0 as u32 { return p_f as *mut ILFunction; }
+            fi = fi + 1 as usize;
+        }
+        return 0 as *mut ILFunction;
+    }
+
+    fn emit_impl(self: &InterfacePrinter, im: &ImplDecl) {
+        let mut pub_method_count = 0 as usize;
+        let mut i = 0 as usize;
+        while i < im.methods.len {
+            if im.methods[i].is_pub || im.trait_name != 0 as u32 || self.is_generic_method_ref(im.target_ty, im.methods[i].name) {
+                pub_method_count = pub_method_count + 1 as usize;
+            }
+            i = i + 1 as usize;
+        }
+        if pub_method_count == 0 as usize && im.constants.len == 0 as usize {
+            return;
+        }
+
+        self.write("impl");
+        self.emit_type_params(im.type_params);
+        self.write(" ");
+        if im.trait_name != 0 as u32 {
+            self.write_ident(im.trait_name);
+            if im.trait_type_args.len > 0 as usize {
+                self.write("<");
+                let mut a = 0 as usize;
+                while a < im.trait_type_args.len {
+                    if a > 0 as usize { self.write(", "); }
+                    self.emit_type(im.trait_type_args[a]);
+                    a = a + 1 as usize;
+                }
+                self.write(">");
+            }
+            self.write(" for ");
+        }
+        self.emit_type(im.target_ty);
+        self.write(" {\n");
+        i = 0 as usize;
+        while i < im.methods.len {
+            let m = &im.methods[i];
+            if m.is_pub || im.trait_name != 0 as u32 || self.is_generic_method_ref(im.target_ty, m.name) {
+                let is_gen = m.type_params.len > 0 as usize || im.type_params.len > 0 as usize;
+                if !is_gen {
+                    let p_method = self.find_method_func(im.target_ty, m.name, im.source_file);
+                    self.write_summary_attr(p_method, "    ");
+                }
+                self.write("    ");
+                if m.is_pub { self.write("pub "); }
+                self.write("fn ");
+                self.write_ident(m.name);
+                self.emit_type_params(m.type_params);
+                self.emit_params(m.params, m.is_variadic);
+                if m.ret_ty != 0 as TypeId {
+                    self.write(" -> ");
+                    self.emit_type(m.ret_ty);
+                }
+                if is_gen && m.body != 0 as ExprId {
+                    self.write(" ");
+                    self.emit_expr_prec(m.body, 1 as usize, 0 as u32);
+                    self.write("\n");
+                } else {
+                    self.write(";\n");
+                }
+            }
+            i = i + 1 as usize;
+        }
+        self.write("}\n\n");
+    }
+
+    pub fn emit_interface(self: &mut InterfacePrinter) {
+        self.ast.collect_generic_body_refs(self.target_source_file, &mut self.generic_refs);
+        self.write("// zri-module: ");
+        self.write(self.table.lookup(self.target_source_file));
+        self.write("\n");
+        // The imports this module resolved, so the interface is self-contained: a consumer can
+        // resolve the types it mentions, and the interface's hash covers what it depends on.
+        let mut raw = Vec::<u32>.new_in(self.arena);
+        let mut ei = 0 as usize;
+        while ei < self.ast.import_edges.len {
+            let e = self.ast.import_edges.as_slice()[ei];
+            if e.from_module == self.target_source_file { raw.push(e.to_module); }
+            ei = ei + 1 as usize;
+        }
+        let imports = sorted_unique_ids(&raw, self.table, self.arena);
+        let mut ii = 0 as usize;
+        while ii < imports.len {
+            self.write("import \"");
+            self.write(self.table.lookup(imports.as_slice()[ii]));
+            self.write("\";\n");
+            ii = ii + 1 as usize;
+        }
+        let mut i = 0 as usize;
+        while i < self.ast.decls.len {
+            let p_decl = &self.ast.decls[i];
+            let tag = p_decl.get_tag();
+            if tag == 0 as u32 { // DECL_FN
+                let f = p_decl.get_Fn();
+                if f.source_file == self.target_source_file {
+                    self.emit_fn(f);
+                }
+            } else if tag == 1 as u32 { // DECL_STRUCT
+                let s = p_decl.get_Struct();
+                if s.source_file == self.target_source_file {
+                    self.emit_struct(s);
+                }
+            } else if tag == 2 as u32 { // DECL_ENUM
+                let e = p_decl.get_Enum();
+                if e.source_file == self.target_source_file {
+                    self.emit_enum(e);
+                }
+            } else if tag == 3 as u32 { // DECL_TRAIT
+                let tr = p_decl.get_Trait();
+                if tr.source_file == self.target_source_file {
+                    self.emit_trait(tr);
+                }
+            } else if tag == 4 as u32 { // DECL_IMPL
+                let im = p_decl.get_Impl();
+                if im.source_file == self.target_source_file {
+                    self.emit_impl(im);
+                }
+            } else if tag == 5 as u32 { // DECL_TYPE_ALIAS
+                let ta = p_decl.get_TypeAlias();
+                if ta.source_file == self.target_source_file {
+                    self.emit_type_alias(ta);
+                }
+            } else if tag == 6 as u32 { // DECL_CONST
+                let c = p_decl.get_Const();
+                if c.source_file == self.target_source_file {
+                    self.emit_const(c);
+                }
+            } else if tag == 7 as u32 { // DECL_STATIC
+                let st = p_decl.get_Static();
+                if st.source_file == self.target_source_file {
+                    self.emit_static(st);
+                }
+            }
+            i = i + 1 as usize;
+        }
+    }
+}

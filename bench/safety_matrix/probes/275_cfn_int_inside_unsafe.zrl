@@ -1,0 +1,8 @@
+// name: An integer cast to a C function pointer inside unsafe
+// expected: compile_reject
+// `unsafe` opens the pointer route, not the number route: a number is not an address in this
+// language, so a raw pointer (which may legally hold an address) is the spelling.
+fn main() -> i32 {
+    let f = unsafe { (5 as usize) as extern "C" fn(i32) -> i32 };
+    return 0;
+}

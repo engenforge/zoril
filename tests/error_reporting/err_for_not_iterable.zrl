@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_for_not_iterable.zrl:4:14: error: `for` runs over a slice, an array or an iterator (a value with a `next()` method), not `i32`
+fn main() -> i32 {
+    for y in 5 { }
+    return 0;
+}

@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_deref_non_pointer.zrl:5:34: error: cannot dereference a value of type `i32`: only references, raw pointers and boxes can be
+// A dereference follows an address. One of an integer was accepted: `**x` with `x: &i32` read
+// whatever the integer named, in safe code.
+fn big(x: &i32) -> bool { return **x > 1; }
+fn main() -> i32 { let a: i32 = 5; if big(&a) { return 1; } return 0; }

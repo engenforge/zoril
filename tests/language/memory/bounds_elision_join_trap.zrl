@@ -1,0 +1,9 @@
+// expected exit 134
+// A fact from one branch does not hold after the branches join.
+fn pick(c: bool) -> usize { if c { return 2; } return 7; }
+fn main() -> i32 {
+    let a: [u8; 4] = [1, 2, 3, 4];
+    let mut i: usize = pick(false);
+    if i < 4 { i = 1; } else { i = i + 0; }
+    return a[i] as i32;
+}

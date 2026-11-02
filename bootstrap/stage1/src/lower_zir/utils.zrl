@@ -1,0 +1,2388 @@
+import "zir.zrl";
+import "ast.zrl";
+import "resolve.zrl";
+import "intern.zrl";
+import "mono.zrl";
+import "il_type.zrl";
+import "il_instr.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "core.zrl";
+import "mem.zrl";
+import "io.zrl";
+
+pub struct ShiftConst {
+    pub value: u64,
+    pub negative: bool,
+}
+
+impl ZirLowerer {
+
+    pub fn get_variant_index(self: &mut ZirLowerer, ty_id: u32, variant_name: u32) -> Option<u32> {
+        if ty_id == 0 as u32 { return Option.None; }
+        let p_ty = self.get_type_decl(ty_id);
+        
+        let mut user_id = 0xffffffff as u32;
+        match p_ty.def {
+            ILType.User(u) => { user_id = u.id; },
+            ILType.Ptr(inner) | ILType.PtrMut(inner) | ILType.Boxed(inner) | ILType.BoxedMut(inner) => {
+                let p_inner = self.get_type_decl(inner);
+                match p_inner.def {
+                    ILType.User(u_inner) => { user_id = u_inner.id; },
+                    _ => {},
+                }
+            },
+            _ => {},
+        }
+
+        if user_id == 0xffffffff as u32 { return Option.None; }
+
+        let p_def = &self.module.typedefs[user_id as usize];
+        match p_def.get_tag() {
+            IL_TYPEDEF_ENUM => {
+                let e = p_def.get_Enum();
+                let mut i = 0 as usize;
+                while i < e.variants.len {
+                    if e.variants[i].name == variant_name {
+                        return Option.Some(i as u32);
+                    }
+                    i = i + 1 as usize;
+                }
+            },
+            _ => {},
+        }
+        return Option.None;
+    }
+
+    pub fn get_variant_payload_type(self: &mut ZirLowerer, ty_id: u32, variant_idx: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = self.get_type_decl(ty_id);
+        
+        let mut user_id = 0xffffffff as u32;
+        match p_ty.def {
+            ILType.User(u) => { user_id = u.id; },
+            ILType.Ptr(inner) | ILType.PtrMut(inner) | ILType.Boxed(inner) | ILType.BoxedMut(inner) => {
+                let p_inner = self.get_type_decl(inner);
+                match p_inner.def {
+                    ILType.User(u_inner) => { user_id = u_inner.id; },
+                    _ => {},
+                }
+            },
+            _ => {},
+        }
+
+        if user_id == 0xffffffff as u32 { return 0 as u32; }
+
+        let p_def = &self.module.typedefs[user_id as usize];
+        match p_def.get_tag() {
+            IL_TYPEDEF_ENUM => {
+                let e = p_def.get_Enum();
+                if variant_idx as usize < e.variants.len {
+                    return e.variants[variant_idx as usize].payload;
+                }
+            },
+            _ => {},
+        }
+        return 0 as u32;
+    }
+
+    pub fn extract_literal_u64(self: &ZirLowerer, lit: &Literal) -> u64 {
+        let tag = lit.get_tag();
+        if tag == LITERAL_INT { return lit.get_Int(); }
+        if tag == LITERAL_BOOL { return if lit.get_Bool() { 1 as u64 } else { 0 as u64 }; }
+        if tag == LITERAL_CHAR { return lit.get_Char() as u64; }
+        return 0 as u64;
+    }
+
+    pub fn is_literal_true(self: &ZirLowerer, expr_id: ExprId) -> bool {
+        let p_expr = self.get_expr(expr_id);
+        if p_expr as usize == 0 as usize { return false; }
+        match *p_expr {
+            Expr.Literal(lit) => {
+                if lit.get_tag() == LITERAL_BOOL {
+                    return lit.get_Bool();
+                }
+            },
+            _ => {},
+        }
+        return false;
+    }
+
+    pub fn get_literal_type(self: &mut ZirLowerer, lit: &Literal) -> u32 {
+        let tag = lit.get_tag();
+        if tag == LITERAL_INT { return self.get_primitive_type(ILPrimitive.I64); }
+        if tag == LITERAL_BOOL { return self.get_primitive_type(ILPrimitive.Bool); }
+        if tag == LITERAL_CHAR { return self.get_primitive_type(ILPrimitive.U8); }
+        return 0 as u32;
+    }
+
+    // Declared type of a struct-literal field, to hand to the field value as its
+    // expected type so `dummy: 1` on a `u8` field types the literal u8 rather than
+    // defaulting to i32. Yields 0 (no expectation) for a generic literal whose type
+    // args are still being inferred *from* these very values.
+    pub fn struct_field_expected_ty(self: &mut ZirLowerer, generic_payload: u32, resolved_ty: u32, field_name: u32) -> u32 {
+        let mut ty = resolved_ty;
+        if generic_payload != 0 as u32 {
+            // A struct literal with no explicit type args takes the deferred path
+            // whether or not the struct is generic. When it has no type parameters
+            // there is nothing to infer, so instantiate it now -- `instantiate_type`
+            // is memoized, so the deferred call later returns the same type.
+            let p_decl: &Decl = &self.resolver.ast.decls[generic_payload as usize];
+            let nparams = unsafe { match *p_decl {
+                Decl.Struct(sd) => sd.type_params.len,
+                _ => 1 as usize,
+            } };
+            if nparams != 0 as usize { return 0 as u32; }
+            ty = self.mono.instantiate_type(generic_payload, @slice(0 as *mut u32, 0 as usize));
+        }
+        if ty == 0 as u32 { return 0 as u32; }
+        let fidx = self.get_field_index(ty, field_name);
+        if fidx == 0xffffffff as u32 { return 0 as u32; }
+        return self.get_field_type(ty, fidx);
+    }
+
+    // A struct literal that omits a declared field left that field's `args`
+    // slot at the `base == 0` sentinel it was pre-filled with, no diagnostic,
+    // and the codegen that later reads the slot has no way to tell "the
+    // programmer meant this" from "nobody ever wrote here" -- it moves
+    // whatever is in local id 0 (nothing, by construction) into the field.
+    // `AST::new()` had exactly this shape for `module_doc` (see
+    // doc/tasks/active.tm.md). `args` holds one `Place` per DECLARED field,
+    // in declaration order (see the struct-literal lowering in expr.zrl),
+    // so a slot still at the sentinel after every literal field has been
+    // placed names a field the literal never wrote.
+    pub fn check_struct_literal_complete(self: &mut ZirLowerer, ty_id: u32, args: *mut Place, field_count: usize, span: Span) {
+        let p_ty: &ILTypeDecl = self.get_type_decl(ty_id);
+        match p_ty.def {
+            ILType.User(u) => {
+                let p_def = &self.module.typedefs[u.id as usize];
+                match *p_def {
+                    ILTypeDef.Struct(sd) => {
+                        let mut i = 0 as usize;
+                        while i < field_count && i < sd.fields.len {
+                            let p_arg = (args as usize + i * sizeof(Place)) as *mut Place;
+                            if unsafe { (*p_arg).base } == 0 as u32 {
+                                self.report_error_with_symbol("struct literal is missing field: ", sd.fields[i].name, span);
+                            }
+                            i = i + 1 as usize;
+                        }
+                    },
+                    _ => {},
+                }
+            },
+            _ => {},
+        }
+    }
+
+    pub fn get_type_tag(self: &ZirLowerer, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = self.get_type_decl(ty_id);
+        return p_ty.def.get_tag();
+    }
+
+    pub fn get_ptr_inner_type(self: &ZirLowerer, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = self.get_type_decl(ty_id);
+        match p_ty.def {
+            ILType.Ptr(inner) | ILType.PtrMut(inner) | ILType.Boxed(inner) | ILType.BoxedMut(inner) => { return inner; },
+            ILType.Slice(s) => { return s.element; },
+            _ => { return 0 as u32; },
+        }
+    }
+
+    pub fn has_drop_impl(self: &mut ZirLowerer, type_name_id: u32) -> bool {
+        if type_name_id == 0 as u32 { return false; }
+        let type_str = self.intern_table.lookup(type_name_id);
+        let mut name_buf = ByteVec.new(self.arena);
+        name_buf.push_slice(type_str);
+        name_buf.push(':' as u8);
+        name_buf.push(':' as u8);
+        name_buf.push_slice("drop");
+        let mangled = self.intern_table.intern(name_buf.as_slice());
+
+        let mut name_buf_us = ByteVec.new(self.arena);
+        name_buf_us.push_slice(type_str);
+        name_buf_us.push('_' as u8);
+        name_buf_us.push_slice("drop");
+        let mangled_us = self.intern_table.intern(name_buf_us.as_slice());
+        
+        let mut fi = 0 as usize;
+        while fi < self.module.functions.len {
+            let p_func = &self.module.functions[fi];
+            if p_func.name == mangled || p_func.name == mangled_us {
+                return true;
+            }
+            fi = fi + 1 as usize;
+        }
+        return false;
+    }
+
+    pub fn is_copy_type(self: &mut ZirLowerer, type_id: u32) -> bool {
+        return self.is_copy_type_internal(type_id, 0 as usize);
+    }
+
+    pub fn is_copy_type_internal(self: &mut ZirLowerer, type_id: u32, depth: usize) -> bool {
+        if type_id == 0 as u32 { return true; }
+        if depth > 10 as usize { return true; }
+
+        if self.is_implicit_aggregate_ptr(type_id) {
+            let inner = self.get_ptr_inner_type(type_id);
+            return self.is_copy_type_internal(inner, depth + 1 as usize);
+        }
+
+        let p_ty = self.get_type_decl(type_id);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_PRIMITIVE {
+            let prim_tag = p_ty.def.get_Primitive().get_tag();
+            return prim_tag != ILPRIM_NEVER;
+        }
+        if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT { return true; }
+        if tag == ILTYPE_SLICE { return true; }
+        if tag == ILTYPE_FN { return true; }
+        
+        if tag == ILTYPE_ARRAY {
+            return self.is_copy_type_internal(p_ty.def.get_Array().element, depth + 1 as usize);
+        }
+        if tag == ILTYPE_TUPLE {
+            let elements = p_ty.def.get_Tuple();
+            let mut i = 0 as usize;
+            while i < elements.len {
+                if !self.is_copy_type_internal(elements[i], depth + 1 as usize) { return false; }
+                i = i + 1 as usize;
+            }
+            return true;
+        }
+        if tag == ILTYPE_USER {
+            let u = p_ty.def.get_User();
+            if self.has_drop_impl(u.name) { return false; }
+            let user_id = u.id;
+            let p_def = &self.module.typedefs[user_id as usize];
+            let d_tag = p_def.get_tag();
+            if d_tag == IL_TYPEDEF_STRUCT {
+                let s = p_def.get_Struct();
+                let mut i = 0 as usize;
+                while i < s.fields.len {
+                    if !self.is_copy_type_internal(s.fields[i].ty, depth + 1 as usize) { return false; }
+                    i = i + 1 as usize;
+                }
+                return true;
+            } else if d_tag == IL_TYPEDEF_ENUM {
+                let e = p_def.get_Enum();
+                let mut i = 0 as usize;
+                while i < e.variants.len {
+                    if e.variants[i].payload != 0 as u32 {
+                        if !self.is_copy_type_internal(e.variants[i].payload, depth + 1 as usize) { return false; }
+                    }
+                    i = i + 1 as usize;
+                }
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    // A value of this type must be dropped: it has its own `drop` function, or it owns (by value) a
+    // field, enum payload, tuple element or array element that does. Pointers own nothing.
+    pub fn type_needs_drop(self: &mut ZirLowerer, type_id: u32) -> bool {
+        return self.type_needs_drop_internal(type_id, 0 as usize);
+    }
+
+    fn type_needs_drop_internal(self: &mut ZirLowerer, type_id: u32, depth: usize) -> bool {
+        if type_id == 0 as u32 || depth > 10 as usize { return false; }
+        let p_ty = self.get_type_decl(type_id);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_ARRAY {
+            return self.type_needs_drop_internal(p_ty.def.get_Array().element, depth + 1 as usize);
+        }
+        if tag == ILTYPE_TUPLE {
+            let elements = p_ty.def.get_Tuple();
+            let mut i = 0 as usize;
+            while i < elements.len {
+                if self.type_needs_drop_internal(elements[i], depth + 1 as usize) { return true; }
+                i = i + 1 as usize;
+            }
+            return false;
+        }
+        if tag != ILTYPE_USER { return false; }
+        let u = p_ty.def.get_User();
+        if self.has_drop_impl(u.name) { return true; }
+        if u.id as usize >= self.module.typedefs.len { return false; }
+        let p_def = &self.module.typedefs[u.id as usize];
+        let d_tag = p_def.get_tag();
+        if d_tag == IL_TYPEDEF_STRUCT {
+            let s = p_def.get_Struct();
+            let mut i = 0 as usize;
+            while i < s.fields.len {
+                if self.type_needs_drop_internal(s.fields[i].ty, depth + 1 as usize) { return true; }
+                i = i + 1 as usize;
+            }
+        } else if d_tag == IL_TYPEDEF_ENUM {
+            let e = p_def.get_Enum();
+            let mut i = 0 as usize;
+            while i < e.variants.len {
+                if e.variants[i].payload != 0 as u32 {
+                    if self.type_needs_drop_internal(e.variants[i].payload, depth + 1 as usize) { return true; }
+                }
+                i = i + 1 as usize;
+            }
+        }
+        return false;
+    }
+
+    pub fn is_implicit_aggregate_ptr(self: &mut ZirLowerer, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = self.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_PTR {
+            let inner = self.get_ptr_inner_type(ty_id);
+            if inner == 0 as u32 { return false; }
+            let p_inner = self.get_type_decl(inner);
+            let inner_tag = p_inner.def.get_tag();
+            if inner_tag == ILTYPE_USER || inner_tag == ILTYPE_TUPLE {
+                return p_inner.name == 0 as u32;
+            }
+        }
+        return false;
+    }
+
+    pub fn get_type_decl(self: &ZirLowerer, ty_id: u32) -> &ILTypeDecl {
+        if ty_id == 0 as u32 { ICE("ZirLowerer.get_type_decl: ty_id is 0"); }
+        if ty_id as usize > self.module.types.len { ICE("ZirLowerer.get_type_decl: ty_id out of bounds"); }
+        return &self.module.types[ty_id as usize - 1 as usize];
+    }
+
+    pub fn get_place_type(self: &mut ZirLowerer, pl: &Place) -> u32 {
+        if pl.base == 0 as u32 { return 0 as u32; }
+        if pl.base as usize > self.locals.len { return 0 as u32; }
+        let p_local = &self.locals[pl.base as usize - 1 as usize];
+        let mut curr_ty = p_local.ty;
+
+        let mut pi = 0 as usize;
+        while pi < pl.projections.len {
+            let proj = &pl.projections[pi];
+            let tag = proj.get_tag();
+            
+            if tag == 0 as u32 { // Field
+                let field_name = proj.get_Field();
+                let field_idx = self.get_field_index(curr_ty, field_name);
+                curr_ty = self.get_field_type(curr_ty, field_idx);
+            } else if tag == 1 as u32 { // TupleIndex
+                let idx = proj.get_TupleIndex();
+                curr_ty = self.get_tuple_elem_type(curr_ty, idx);
+            } else if tag == 2 as u32 { // Deref
+                curr_ty = self.get_ptr_inner_type(curr_ty);
+            } else if tag == 3 as u32 { // Index
+                curr_ty = self.get_slice_element_type(curr_ty);
+            }
+            pi = pi + 1 as usize;
+        }
+        return curr_ty;
+    }
+
+    pub fn get_field_is_raw_ptr(self: &mut ZirLowerer, ty_id: u32, field_name: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = self.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        let mut user_id = 0xffffffff as u32;
+        if tag == ILTYPE_USER {
+            user_id = p_ty.def.get_User().id;
+        } else if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT {
+            let inner_ty = self.get_ptr_inner_type(ty_id);
+            if inner_ty != 0 as u32 {
+                let p_inner = self.get_type_decl(inner_ty);
+                let inner_tag = p_inner.def.get_tag();
+                if inner_tag == ILTYPE_USER {
+                    user_id = p_inner.def.get_User().id;
+                }
+            }
+        }
+        if user_id != 0xffffffff as u32 && (user_id as usize) < self.module.typedefs.len {
+            let p_def = &self.module.typedefs[user_id as usize];
+            if p_def.get_tag() == IL_TYPEDEF_STRUCT {
+                let s = p_def.get_Struct();
+                let mut i = 0 as usize;
+                while i < s.fields.len {
+                    if s.fields[i].name == field_name {
+                        return s.fields[i].is_raw_ptr;
+                    }
+                    i = i + 1 as usize;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Calling an `extern` function crosses the FFI boundary: the callee is not verified by this
+    // compiler, so its preconditions are the caller's to uphold -- one of the enumerated
+    // operations `unsafe` enables (doc/spec/unsafe_policy.md §2). `zoril_abort` is exempt: it is
+    // the runtime's own diverging trap, emitted by the compiler itself for bounds/overflow checks,
+    // so requiring a marker on it would tag generated code rather than user code.
+    //
+    // Factored out because call lowering reaches this point down four separate paths (static
+    // method, instance method, adjusted-receiver method, plain direct call) that each recompute
+    // the sret/env parameter offsets; the check was originally inline on one of them, which left
+    // the other three unenforced.
+    pub fn check_extern_call_is_marked(self: &mut ZirLowerer, is_extern: bool, name: u32, span: Span) {
+        if !is_extern { return; }
+        if self.unsafe_depth > 0 as u32 { return; }
+        if name == self.intern_table.intern("zoril_abort") { return; }
+        self.report_error("call to extern function requires unsafe block", span);
+    }
+
+    // True if `expr_id` is a literal integer 0, looking through an `as` cast (`0 as usize` is
+    // how every empty-slice site in the tree spells it). Deliberately syntactic rather than a
+    // constant folder: the only thing it needs to recognise is the provably-empty slice, and a
+    // conservative `false` just means a marker is required.
+    pub fn expr_is_literal_zero(self: &mut ZirLowerer, expr_id: ExprId) -> bool {
+        if expr_id == 0 as ExprId { return false; }
+        let p_expr: &Expr = &self.resolver.ast.exprs()[expr_id as usize];
+        match *p_expr {
+            Expr.Literal(l) => {
+                if l.get_tag() != 0 as u32 { return false; }
+                return l.get_Int() == 0 as u64;
+            },
+            Expr.Cast(c) => { return self.expr_is_literal_zero(c.expr); },
+            _ => { return false; },
+        }
+    }
+
+    // `@slice(ptr, len)` forges a bounds-checked slice out of a pointer and a length the compiler
+    // cannot verify: if `len` is wrong, every later `s[i]` is a memory-safety bug while reading as
+    // perfectly safe code. That is the same class as a raw dereference, and Rust agrees --
+    // `slice::from_raw_parts` is unsafe. Enumerated in doc/spec/unsafe_policy.md §1.
+    //
+    // Exempt when the length is a literal 0: a zero-length slice permits no access at all, so
+    // there is no unchecked operation to enable. Every one of the 173 empty-slice sites in
+    // `src/` + `stdlib/` spells it `@slice(0 as *T, 0 as usize)`, and a null pointer is never
+    // paired with a nonzero length -- so this exempts exactly the harmless form and nothing else.
+    //
+    // A reference is no better than a raw pointer here: `@slice(&mut a[0], 1000)` over a
+    // three-element array let safe code write past the array until 2026-10-02, because the
+    // length, not the pointer, is what nothing checks.
+    pub fn check_slice_forge_is_marked(self: &mut ZirLowerer, ptr_place: &Place, len_expr: ExprId, span: Span) {
+        if self.unsafe_depth > 0 as u32 { return; }
+        if self.expr_is_literal_zero(len_expr) { return; }
+        if self.place_is_raw_ptr(ptr_place) {
+            self.report_error("forging a slice from a raw pointer requires unsafe block", span);
+        } else {
+            self.report_error("forging a slice with @slice requires unsafe block: its length is not checked", span);
+        }
+    }
+
+    // Receiver auto-deref: `q.method()` where `q` is a raw pointer implicitly dereferences it,
+    // exactly as `(*q).method()` does explicitly. The explicit form goes through `UnaryOp.Deref`
+    // and was checked; the implicit one peels the pointer inside method-call lowering and was not,
+    // so `q.get()` escaped while `(*q).get()` was caught.
+    pub fn check_raw_deref_is_marked(self: &mut ZirLowerer, pl: &Place, span: Span) {
+        if self.unsafe_depth > 0 as u32 { return; }
+        if !self.place_is_raw_ptr(pl) { return; }
+        self.report_error("dereference of raw pointer requires unsafe block", span);
+    }
+
+    pub fn place_is_raw_ptr(self: &mut ZirLowerer, pl: &Place) -> bool {
+        if pl.base == 0 as u32 { return false; }
+        if pl.base as usize > self.locals.len { return false; }
+        let p_local = &self.locals[pl.base as usize - 1 as usize];
+        let mut curr_ty = p_local.ty;
+        let mut is_raw = p_local.is_raw_ptr;
+
+        let mut pi = 0 as usize;
+        while pi < pl.projections.len {
+            let proj = &pl.projections[pi];
+            let tag = proj.get_tag();
+
+            if tag == 0 as u32 { // Field
+                let field_name = proj.get_Field();
+                is_raw = self.get_field_is_raw_ptr(curr_ty, field_name);
+                let field_idx = self.get_field_index(curr_ty, field_name);
+                curr_ty = self.get_field_type(curr_ty, field_idx);
+            } else if tag == 1 as u32 { // TupleIndex
+                let idx = proj.get_TupleIndex();
+                curr_ty = self.get_tuple_elem_type(curr_ty, idx);
+                let tag_ty = self.get_type_tag(curr_ty);
+                if tag_ty != ILTYPE_PTR && tag_ty != ILTYPE_PTRMUT {
+                    is_raw = false;
+                }
+            } else if tag == 2 as u32 { // Deref
+                curr_ty = self.get_ptr_inner_type(curr_ty);
+                let tag_ty = self.get_type_tag(curr_ty);
+                if tag_ty != ILTYPE_PTR && tag_ty != ILTYPE_PTRMUT {
+                    is_raw = false;
+                }
+            } else if tag == 3 as u32 { // Index
+                curr_ty = self.get_slice_element_type(curr_ty);
+                let tag_ty = self.get_type_tag(curr_ty);
+                if tag_ty != ILTYPE_PTR && tag_ty != ILTYPE_PTRMUT {
+                    is_raw = false;
+                }
+            }
+            pi = pi + 1 as usize;
+        }
+        return is_raw;
+    }
+
+    pub fn get_field_index(self: &mut ZirLowerer, ty_id: u32, field_name: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = self.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+
+        if tag == ILTYPE_SLICE {
+            let ptr_id = self.intern_table.intern("ptr");
+            let data_id = self.intern_table.intern("data");
+            let len_id = self.intern_table.intern("len");
+            if field_name == ptr_id || field_name == data_id { return 0 as u32; }
+            if field_name == len_id { return 1 as u32; }
+            return 0xffffffff as u32;
+        }
+
+        let mut user_id = 0xffffffff as u32;
+        if tag == ILTYPE_USER {
+            user_id = p_ty.def.get_User().id;
+        } else if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT {
+            let inner_ty = self.get_ptr_inner_type(ty_id);
+            let p_inner = self.get_type_decl(inner_ty);
+            let inner_tag = p_inner.def.get_tag();
+            if inner_tag == ILTYPE_USER {
+                user_id = p_inner.def.get_User().id;
+            } else if inner_tag == ILTYPE_SLICE {
+                let ptr_id = self.intern_table.intern("ptr");
+                let data_id = self.intern_table.intern("data");
+                let len_id = self.intern_table.intern("len");
+                if field_name == ptr_id || field_name == data_id { return 0 as u32; }
+                if field_name == len_id { return 1 as u32; }
+                return 0xffffffff as u32;
+            }
+        }
+
+        if user_id != 0xffffffff as u32 {
+            let p_def = &self.module.typedefs[user_id as usize];
+            if p_def.get_tag() == IL_TYPEDEF_STRUCT {
+                let s = p_def.get_Struct();
+                let mut i = 0 as usize;
+                while i < s.fields.len {
+                    if s.fields[i].name == field_name {
+                        return i as u32;
+                    }
+                    i = i + 1 as usize;
+                }
+            }
+        }
+        return 0xffffffff as u32;
+    }
+
+    pub fn get_usize_type(self: &ZirLowerer) -> u32 {
+        return self.resolver.primitive_type(ILPRIM_USIZE);
+    }
+
+
+    pub fn get_field_type(self: &mut ZirLowerer, ty_id: u32, field_idx: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = self.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+
+        if tag == ILTYPE_SLICE {
+            if field_idx == 0 as u32 {
+                let elem_ty = p_ty.def.get_Slice().element;
+                return self.get_ptr_type(elem_ty);
+            }
+            if field_idx == 1 as u32 { return self.get_usize_type(); }
+            return 0 as u32;
+        }
+
+        let mut user_id = 0xffffffff as u32;
+        if tag == ILTYPE_USER {
+            user_id = p_ty.def.get_User().id;
+        } else if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT {
+            let inner_ty = self.get_ptr_inner_type(ty_id);
+            let p_inner = self.get_type_decl(inner_ty);
+            let inner_tag = p_inner.def.get_tag();
+            if inner_tag == ILTYPE_USER {
+                user_id = p_inner.def.get_User().id;
+            } else if inner_tag == ILTYPE_SLICE {
+                if field_idx == 0 as u32 {
+                    let elem_ty = p_inner.def.get_Slice().element;
+                    return self.get_ptr_type(elem_ty);
+                }
+                if field_idx == 1 as u32 { return self.get_usize_type(); }
+                return 0 as u32;
+            }
+        }
+
+        if user_id != 0xffffffff as u32 {
+            let p_def = &self.module.typedefs[user_id as usize];
+            if p_def.get_tag() == IL_TYPEDEF_STRUCT {
+                let s = p_def.get_Struct();
+                if (field_idx as usize) < s.fields.len {
+                    return s.fields[field_idx as usize].ty;
+                }
+            }
+        }
+        return 0 as u32;
+    }
+
+    pub fn get_tuple_elem_type(self: &mut ZirLowerer, ty_id: u32, idx: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = self.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        let mut base_ty = p_ty;
+        if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT {
+            let inner_ty = p_ty.def.get_Ptr();
+            base_ty = self.get_type_decl(inner_ty);
+        }
+        
+        let base_tag = base_ty.def.get_tag();
+        if base_tag == ILTYPE_TUPLE {
+            let elements = base_ty.def.get_Tuple();
+            if (idx as usize) < elements.len {
+                let p_elem = (elements.ptr as usize + idx as usize * 4) as *mut u32;
+                return unsafe { *p_elem };
+            }
+        }
+        return 0 as u32;
+    }
+
+    pub fn is_vec_type(self: &mut ZirLowerer, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = self.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_USER {
+            let user = p_ty.def.get_User();
+            let name = self.intern_table.lookup(user.name);
+            let is_vec = (name.len == 3 as usize && name[0] == 'V' as u8 && name[1] == 'e' as u8 && name[2] == 'c' as u8) ||
+                         (name.len > 3 as usize && name[0] == 'V' as u8 && name[1] == 'e' as u8 && name[2] == 'c' as u8 && name[3] == '_' as u8);
+            return is_vec && user.type_args.len > 0 as usize;
+        }
+        return false;
+    }
+
+    pub fn get_slice_element_type(self: &mut ZirLowerer, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = self.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_SLICE {
+            return p_ty.def.get_Slice().element;
+        } else if tag == ILTYPE_ARRAY {
+            return p_ty.def.get_Array().element;
+        } else if self.is_vec_type(ty_id) {
+            return p_ty.def.get_User().type_args[0];
+        } else if tag == ILTYPE_PTR {
+            let inner = self.get_ptr_inner_type(ty_id);
+            if inner != 0 as u32 {
+                let p_inner = self.get_type_decl(inner);
+                let inner_tag = p_inner.def.get_tag();
+                if inner_tag == ILTYPE_SLICE || inner_tag == ILTYPE_ARRAY || self.is_vec_type(inner) {
+                    return self.get_slice_element_type(inner);
+                }
+                return inner;
+            }
+        } else if tag == ILTYPE_PTRMUT {
+            let inner = self.get_ptr_inner_type(ty_id);
+            if inner != 0 as u32 {
+                let p_inner = self.get_type_decl(inner);
+                let inner_tag = p_inner.def.get_tag();
+                if inner_tag == ILTYPE_SLICE || inner_tag == ILTYPE_ARRAY {
+                    return self.get_slice_element_type(inner);
+                }
+                return inner;
+            }
+        }
+        return ty_id;
+    }
+
+    pub fn is_aggregate(self: &mut ZirLowerer, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = self.get_type_decl(ty_id);
+        let tag = p_ty.def.get_tag();
+        if tag == ILTYPE_USER {
+            let user_id = p_ty.def.get_User().id;
+            let p_def = &self.module.typedefs[user_id as usize];
+            let def_tag = p_def.get_tag();
+            return def_tag == IL_TYPEDEF_STRUCT || def_tag == IL_TYPEDEF_ENUM;
+        }
+        return tag == ILTYPE_TUPLE || tag == ILTYPE_ARRAY || tag == ILTYPE_SLICE;
+    }
+
+    pub fn get_type_size(self: &mut ZirLowerer, ty_id: u32) -> u64 {
+        if ty_id == 0 as u32 { return 0 as u64; }
+        let p_ty = self.get_type_decl(ty_id);
+
+        match p_ty.def {
+            ILType.Primitive(p) => {
+                match p {
+                    ILPrimitive.U8 => { return 1 as u64; },
+                    ILPrimitive.U16 => { return 2 as u64; },
+                    ILPrimitive.U32 => { return 4 as u64; },
+                    ILPrimitive.U64 => { return 8 as u64; },
+                    ILPrimitive.USize => { return 8 as u64; },
+                    ILPrimitive.I8 => { return 1 as u64; },
+                    ILPrimitive.I16 => { return 2 as u64; },
+                    ILPrimitive.I32 => { return 4 as u64; },
+                    ILPrimitive.I64 => { return 8 as u64; },
+                    ILPrimitive.ISize => { return 8 as u64; },
+                    ILPrimitive.F32 => { return 4 as u64; },
+                    ILPrimitive.F64 => { return 8 as u64; },
+                    ILPrimitive.Bool => { return 1 as u64; },
+                    ILPrimitive.Char => { return 4 as u64; },
+                    ILPrimitive.Unit => { return 0 as u64; },
+                    ILPrimitive.Never => { return 0 as u64; },
+                }
+            },
+            ILType.Ptr(_) => { return 8 as u64; },
+            ILType.PtrMut(_) => { return 8 as u64; },
+            ILType.Boxed(_) => { return 8 as u64; },
+            ILType.BoxedMut(_) => { return 8 as u64; },
+            ILType.Slice(_) => { return 16 as u64; },
+            ILType.Array(a) => {
+                return (a.size as u64) * self.get_type_size(a.element);
+            },
+            ILType.Fn(_) => { return 8 as u64; },
+            ILType.Tuple(types) => {
+                let mut size = 0 as u64;
+                let mut align = 1 as u64;
+                let mut i = 0 as usize;
+                while i < types.len {
+                    let f_ty = types[i];
+                    let f_size = self.get_type_size(f_ty);
+                    let f_align = self.get_type_align(f_ty);
+                    if f_align > align { align = f_align; }
+                    size = (size + f_align - 1 as u64) / f_align * f_align;
+                    size = size + f_size;
+                    i = i + 1 as usize;
+                }
+                size = (size + align - 1 as u64) / align * align;
+                return size;
+            },
+            ILType.User(u) => {
+                let p_def = &self.module.typedefs[u.id as usize];
+                match *p_def {
+                    ILTypeDef.Struct(s) => {
+                        let mut size = 0 as u64;
+                        let mut align = 1 as u64;
+                        let mut i = 0 as usize;
+                        while i < s.fields.len {
+                            let f_ty = s.fields[i].ty;
+                            let f_size = self.get_type_size(f_ty);
+                            let f_align = self.get_type_align(f_ty);
+                            if f_align > align { align = f_align; }
+                            size = (size + f_align - 1 as u64) / f_align * f_align;
+                            size = size + f_size;
+                            i = i + 1 as usize;
+                        }
+                        size = (size + align - 1 as u64) / align * align;
+                        return size;
+                    },
+                    ILTypeDef.Enum(e) => {
+                        let mut max_payload_size = 0 as u64;
+                        let mut max_payload_align = 1 as u64;
+                        let mut i = 0 as usize;
+                        while i < e.variants.len {
+                            let p_var = &e.variants[i];
+                            if p_var.payload != 0 as u32 {
+                                let v_size = self.get_type_size(p_var.payload);
+                                let v_align = self.get_type_align(p_var.payload);
+                                if v_size > max_payload_size { max_payload_size = v_size; }
+                                if v_align > max_payload_align { max_payload_align = v_align; }
+                            }
+                            i = i + 1 as usize;
+                        }
+
+                        if max_payload_size == 0 as u64 { return ENUM_TAG_SIZE; }
+                        let enum_align = if max_payload_align > ENUM_TAG_SIZE { max_payload_align } else { ENUM_TAG_SIZE };
+                        let total_size = enum_align + max_payload_size;
+                        return (total_size + enum_align - 1 as u64) / enum_align * enum_align;
+                    },
+                    ILTypeDef.Fn(_) => { return 8 as u64; },
+                }
+            },
+            ILType.FD(_) => { return 8 as u64; },
+            ILType.IORing => { return 8 as u64; },
+            ILType.Var(_) => { return 8 as u64; },
+        }
+    }
+
+    pub fn get_type_align(self: &mut ZirLowerer, ty_id: u32) -> u64 {
+        if ty_id == 0 as u32 { return 1 as u64; }
+        let p_ty = self.get_type_decl(ty_id);
+
+        match p_ty.def {
+            ILType.Primitive(p) => {
+                match p {
+                    ILPrimitive.U8 => { return 1 as u64; },
+                    ILPrimitive.U16 => { return 2 as u64; },
+                    ILPrimitive.U32 => { return 4 as u64; },
+                    ILPrimitive.U64 => { return 8 as u64; },
+                    ILPrimitive.USize => { return 8 as u64; },
+                    ILPrimitive.I8 => { return 1 as u64; },
+                    ILPrimitive.I16 => { return 2 as u64; },
+                    ILPrimitive.I32 => { return 4 as u64; },
+                    ILPrimitive.I64 => { return 8 as u64; },
+                    ILPrimitive.ISize => { return 8 as u64; },
+                    ILPrimitive.F32 => { return 4 as u64; },
+                    ILPrimitive.F64 => { return 8 as u64; },
+                    ILPrimitive.Bool => { return 1 as u64; },
+                    ILPrimitive.Char => { return 4 as u64; },
+                    ILPrimitive.Unit => { return 1 as u64; },
+                    ILPrimitive.Never => { return 1 as u64; },
+                }
+            },
+            ILType.Ptr(_) => { return 8 as u64; },
+            ILType.PtrMut(_) => { return 8 as u64; },
+            ILType.Boxed(_) => { return 8 as u64; },
+            ILType.BoxedMut(_) => { return 8 as u64; },
+            ILType.Slice(_) => { return 8 as u64; },
+            ILType.Array(a) => { return self.get_type_align(a.element); },
+            ILType.Fn(_) => { return 8 as u64; },
+            ILType.Tuple(types) => {
+                let mut align = 1 as u64;
+                let mut i = 0 as usize;
+                while i < types.len {
+                    let f_align = self.get_type_align(types[i]);
+                    if f_align > align { align = f_align; }
+                    i = i + 1 as usize;
+                }
+                return align;
+            },
+            ILType.User(u) => {
+                let p_def = &self.module.typedefs[u.id as usize];
+                match *p_def {
+                    ILTypeDef.Struct(s) => {
+                        let mut align = 1 as u64;
+                        let mut i = 0 as usize;
+                        while i < s.fields.len {
+                            let f_align = self.get_type_align(s.fields[i].ty);
+                            if f_align > align { align = f_align; }
+                            i = i + 1 as usize;
+                        }
+                        return align;
+                    },
+                    ILTypeDef.Enum(e) => {
+                        let mut max_payload_align = 1 as u64;
+                        let mut i = 0 as usize;
+                        while i < e.variants.len {
+                            let p_var = &e.variants[i];
+                            if p_var.payload != 0 as u32 {
+                                let a = self.get_type_align(p_var.payload);
+                                if a > max_payload_align { max_payload_align = a; }
+                            }
+                            i = i + 1 as usize;
+                        }
+                        if max_payload_align < ENUM_TAG_SIZE { return ENUM_TAG_SIZE; }
+                        return max_payload_align;
+                    },
+                    ILTypeDef.Fn(_) => { return 8 as u64; },
+                }
+            },
+            ILType.FD(_) => { return 8 as u64; },
+            ILType.IORing => { return 8 as u64; },
+            ILType.Var(_) => { return 8 as u64; },
+        }
+    }
+
+    pub fn get_ptr_type(self: &mut ZirLowerer, inner: u32) -> u32 {
+        let mut i = 0 as usize;
+        while i < self.module.types.len {
+            let p_t = &self.module.types[i];
+            if p_t.def.get_tag() == ILTYPE_PTR {
+                if p_t.def.get_Ptr() == inner { return p_t.id; }
+            }
+            i = i + 1 as usize;
+        }
+        return self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Ptr(inner) , source_file: 0 as u32 });
+    }
+
+    pub fn get_ptr_mut_type(self: &mut ZirLowerer, inner: u32) -> u32 {
+        let mut i = 0 as usize;
+        while i < self.module.types.len {
+            let p_t = &self.module.types[i];
+            if p_t.def.get_tag() == ILTYPE_PTRMUT {
+                if p_t.def.get_PtrMut() == inner { return p_t.id; }
+            }
+            i = i + 1 as usize;
+        }
+        return self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.PtrMut(inner) , source_file: 0 as u32 });
+    }
+
+    pub fn get_fn_type(self: &mut ZirLowerer, f: &ILFunction) -> u32 {
+        // Strip env_ptr and sret to expose only the source-visible parameters
+        let sret_offset = if self.requires_pass_by_ref(f.ret_ty) { 1 as usize } else { 0 as usize };
+        let env_offset = if self.needs_env_ptr(f.is_extern, f.name) { 1 as usize } else { 0 as usize };
+        let param_base = sret_offset + env_offset;
+        let visible_count = if f.params_len >= param_base { f.params_len - param_base } else { 0 as usize };
+        // Persistent, not self.arena: a new type is stored in the module, and self.arena is the
+        // per-function scratch arena, reset after each function. A scratch-allocated parameter
+        // list became garbage once later allocations reused it (fold's `f` turned into
+        // fn(u8, unit), then fn(?, unit) once the compiler was rebuilt).
+        let param_tys_ptr = zoril_allocator_alloc(self.persistent_arena, (visible_count + 1 as usize) * 4) as *mut u32;
+        let mut param_tys = unsafe { @slice(param_tys_ptr, visible_count) };
+        let mut i = 0 as usize;
+        while i < visible_count {
+            param_tys[i] = f.param(param_base + i).ty;
+            i = i + 1 as usize;
+        }
+
+        let fn_def = ILFn {
+            params: param_tys,
+            ret_ty: f.ret_ty,
+            is_variadic: f.is_variadic,
+        };
+        
+        // Find existing fn type or allocate new
+        let mut j = 0 as usize;
+        while j < self.module.types.len {
+            let p_t = &self.module.types[j];
+            if p_t.def.get_tag() == ILTYPE_FN {
+                let existing = p_t.def.get_Fn();
+                if existing.ret_ty == fn_def.ret_ty {
+                    if existing.is_variadic == fn_def.is_variadic {
+                        if existing.params.len == fn_def.params.len {
+                            let mut is_match = true;
+                            let mut k = 0 as usize;
+                            while k < existing.params.len {
+                                if existing.params[k] != fn_def.params[k] { is_match = false; break; }
+                                k = k + 1 as usize;
+                            }
+                            if is_match { return p_t.id; }
+                        }
+                    }
+                }
+            }
+            j = j + 1 as usize;
+        }
+
+        return self.module.alloc_type(ILTypeDecl { id: 0 as u32, name: 0 as u32, def: ILType.Fn(fn_def) , source_file: 0 as u32 });
+    }
+
+    pub fn try_infer_type_arg(self: &mut ZirLowerer, ast_ty_id: u32, actual_il_ty: u32, type_params: [TypeParam], inferred: *mut u32) {
+        if ast_ty_id == 0 as u32 || actual_il_ty == 0 as u32 { return; }
+        
+        let ast = self.resolver.ast;
+        let p_ast_ty: &Type = &ast.types[ast_ty_id as usize];
+        let tag = p_ast_ty.get_tag();
+        if tag == TYPE_PATH {
+            let path = p_ast_ty.get_Path();
+            let path_name = path.0;
+            let path_type_args = path.1;
+            
+            if path_type_args.len == 0 as usize {
+                let mut slots = unsafe { @slice(inferred, type_params.len) };
+                let mut ti = 0 as usize;
+                while ti < type_params.len {
+                    if type_params[ti].name == path_name {
+                        if slots[ti] == 0 as u32 { slots[ti] = actual_il_ty; }
+                        return;
+                    }
+                    ti = ti + 1 as usize;
+                }
+            } else if actual_il_ty != 0 as u32 {
+                let p_actual = self.get_type_decl(actual_il_ty);
+                let act_tag = p_actual.def.get_tag();
+                if act_tag == ILTYPE_USER {
+                    let u = p_actual.def.get_User();
+                    if u.type_args.len == path_type_args.len {
+                        let mut ti = 0 as usize;
+                        while ti < path_type_args.len {
+                            self.try_infer_type_arg(path_type_args[ti], u.type_args[ti], type_params, inferred);
+                            ti = ti + 1 as usize;
+                        }
+                    }
+                } else if act_tag == ILTYPE_BOXED || act_tag == ILTYPE_BOXEDMUT {
+                    let inner = if act_tag == ILTYPE_BOXED { p_actual.def.get_Boxed() } else { p_actual.def.get_BoxedMut() };
+                    if path_type_args.len > 0 as usize {
+                        self.try_infer_type_arg(path_type_args[0], inner, type_params, inferred);
+                    }
+                }
+            }
+        } else if tag == TYPE_REF || tag == TYPE_REFMUT || tag == TYPE_PTR || tag == TYPE_PTRMUT {
+            let inner_ast_ty = p_ast_ty.get_Ref();
+            let inner_il_ty = self.get_ptr_inner_type(actual_il_ty);
+            self.try_infer_type_arg(inner_ast_ty, inner_il_ty, type_params, inferred);
+        } else if tag == TYPE_SLICE || tag == TYPE_SLICE_MUT {
+            let inner_ast_ty = p_ast_ty.get_Slice();
+            if actual_il_ty != 0 as u32 {
+                let p_actual = self.get_type_decl(actual_il_ty);
+                let act_tag = p_actual.def.get_tag();
+                if act_tag == ILTYPE_SLICE {
+                    let elem_ty = p_actual.def.get_Slice().element;
+                    self.try_infer_type_arg(inner_ast_ty, elem_ty, type_params, inferred);
+                } else if act_tag == ILTYPE_PTR || act_tag == ILTYPE_PTRMUT {
+                    // `&[X; N]` coerces to `[X]`.
+                    let pointee = self.get_ptr_inner_type(actual_il_ty);
+                    if pointee != 0 as u32 && self.get_type_decl(pointee).def.get_tag() == ILTYPE_ARRAY {
+                        self.try_infer_type_arg(inner_ast_ty, self.get_type_decl(pointee).def.get_Array().element, type_params, inferred);
+                    }
+                }
+            }
+        } else if tag == TYPE_TUPLE {
+            let ast_elems = p_ast_ty.get_Tuple();
+            if actual_il_ty != 0 as u32 {
+                let p_actual = self.get_type_decl(actual_il_ty);
+                if p_actual.def.get_tag() == ILTYPE_TUPLE {
+                    let actual_elems = p_actual.def.get_Tuple();
+                    let mut ti = 0 as usize;
+                    while ti < ast_elems.len && ti < actual_elems.len {
+                        self.try_infer_type_arg(ast_elems[ti], actual_elems[ti], type_params, inferred);
+                        ti = ti + 1 as usize;
+                    }
+                }
+            }
+        } else if tag == TYPE_ARRAY {
+            let inner_ast_ty = p_ast_ty.get_Array().0;
+            if actual_il_ty != 0 as u32 {
+                let p_actual = self.get_type_decl(actual_il_ty);
+                if p_actual.def.get_tag() == ILTYPE_ARRAY {
+                    let elem_ty = p_actual.def.get_Array().element;
+                    self.try_infer_type_arg(inner_ast_ty, elem_ty, type_params, inferred);
+                }
+            }
+        } else if tag == TYPE_FN {
+            self.try_infer_fn_type_args(p_ast_ty.get_Fn(), actual_il_ty, type_params, inferred);
+        }
+    }
+
+    // Unifies `fn(A, B) -> R` with a function value's type. A by-value aggregate
+    // parameter is lowered to a pointer, so a bare type variable facing a pointer to
+    // an aggregate is ambiguous (`T` or `&T`'s pointee) and is left for another
+    // argument to decide.
+    fn try_infer_fn_type_args(self: &mut ZirLowerer, ast_fn: &FnType, actual_il_ty: u32, type_params: [TypeParam], inferred: *mut u32) {
+        let mut fn_ty = actual_il_ty;
+        let p_outer = self.get_type_decl(fn_ty);
+        let outer_tag = p_outer.def.get_tag();
+        if outer_tag == ILTYPE_PTR || outer_tag == ILTYPE_PTRMUT {
+            fn_ty = self.get_ptr_inner_type(fn_ty);
+        }
+        if fn_ty == 0 as u32 { return; }
+        let p_fn = self.get_type_decl(fn_ty);
+        if p_fn.def.get_tag() != ILTYPE_FN { return; }
+        let il_fn = p_fn.def.get_Fn();
+        if il_fn.params.len != ast_fn.params.len { return; }
+        let ast = self.resolver.ast;
+        let mut pi = 0 as usize;
+        while pi < ast_fn.params.len {
+            let ast_param = ast_fn.params[pi];
+            let il_param = il_fn.params[pi];
+            let param_is_var = ast.types[ast_param as usize].get_tag() == TYPE_PATH
+                && ast.types[ast_param as usize].get_Path().1.len == 0 as usize;
+            let pointee = self.get_ptr_inner_type(il_param);
+            let ambiguous = param_is_var && pointee != 0 as u32 && self.is_aggregate(pointee);
+            if !ambiguous {
+                self.try_infer_type_arg(ast_param, il_param, type_params, inferred);
+            }
+            pi = pi + 1 as usize;
+        }
+        self.try_infer_type_arg(ast_fn.ret_ty, il_fn.ret_ty, type_params, inferred);
+    }
+
+    // A type parameter used only in another parameter's trait bound
+    // (`fn first<T, S: Source<T>>(s: &mut S) -> T`) is read off the impl of that
+    // trait for the bounded parameter's inferred type.
+    fn infer_type_args_from_bounds(self: &mut ZirLowerer, type_params: [TypeParam], inferred: *mut u32) {
+        let slots = unsafe { @slice(inferred, type_params.len) };
+        let ast = self.resolver.ast;
+        let mut ti = 0 as usize;
+        while ti < type_params.len {
+            let bounded_ty = slots[ti];
+            let mut bi = 0 as usize;
+            while bounded_ty != 0 as u32 && bi < type_params[ti].bounds.len {
+                let p_bound: &Type = &ast.types[type_params[ti].bounds[bi] as usize];
+                if p_bound.get_tag() == TYPE_PATH {
+                    let bound = p_bound.get_Path();
+                    if bound.1.len > 0 as usize {
+                        let impl_args = self.trait_impl_type_args(bound.0, bounded_ty);
+                        let mut ai = 0 as usize;
+                        while ai < bound.1.len && ai < impl_args.len {
+                            self.try_infer_type_arg(bound.1[ai], impl_args[ai], type_params, inferred);
+                            ai = ai + 1 as usize;
+                        }
+                    }
+                }
+                bi = bi + 1 as usize;
+            }
+            ti = ti + 1 as usize;
+        }
+    }
+
+    // The trait type arguments of `impl<..> Trait<Args> for Target` where Target
+    // matches ty_id, resolved with the impl's own type parameters bound from ty_id.
+    // Empty when no such impl exists or a parameter cannot be bound.
+    fn trait_impl_type_args(self: &mut ZirLowerer, trait_name: u32, ty_id: u32) -> [u32] {
+        let none = @slice(0 as *mut u32, 0 as usize);
+        let ast: &AST = self.resolver.ast;
+        let p_ty: &ILTypeDecl = self.get_type_decl(ty_id);
+        let ty_name = p_ty.name;
+        let mut di = 0 as usize;
+        while di < ast.decls.len {
+            let p_decl: &Decl = &ast.decls[di];
+            if p_decl.get_tag() == DECL_IMPL {
+                let imp = p_decl.get_Impl();
+                if imp.trait_name == trait_name && imp.trait_type_args.len > 0 as usize {
+                    let impl_params = imp.type_params;
+                    let bound = zoril_allocator_alloc(self.arena, (impl_params.len + 1 as usize) * 4) as *mut u32;
+                    let mut bound_slots = unsafe { @slice(bound, impl_params.len) };
+                    let mut pi = 0 as usize;
+                    while pi < impl_params.len {
+                        bound_slots[pi] = 0 as u32;
+                        pi = pi + 1 as usize;
+                    }
+                    if self.impl_target_matches(imp.target_ty, ty_id, ty_name) {
+                        self.try_infer_type_arg(imp.target_ty, ty_id, impl_params, bound);
+                        let mut complete = true;
+                        pi = 0 as usize;
+                        while pi < impl_params.len {
+                            if bound_slots[pi] == 0 as u32 { complete = false; }
+                            pi = pi + 1 as usize;
+                        }
+                        if !complete { return none; }
+                        return self.resolve_types_with_params(imp.trait_type_args, impl_params, bound_slots);
+                    }
+                }
+            }
+            di = di + 1 as usize;
+        }
+        return none;
+    }
+
+    // Whether an impl's target type names ty_id: the same primitive, or the same
+    // user type (whose monomorphized name extends the declared one with `_<args>`).
+    fn impl_target_matches(self: &mut ZirLowerer, target_ty: u32, ty_id: u32, ty_name: u32) -> bool {
+        let ast: &AST = self.resolver.ast;
+        let p_target: &Type = &ast.types[target_ty as usize];
+        let t_tag = p_target.get_tag();
+        if t_tag == TYPE_PRIMITIVE {
+            return self.resolver.primitive_type(p_target.get_Primitive().get_tag()) == ty_id;
+        }
+        if t_tag != TYPE_PATH || ty_name == 0 as u32 { return false; }
+        let target_name = p_target.get_Path().0;
+        if target_name == ty_name { return true; }
+        let target_str = self.intern_table.lookup(target_name);
+        let ty_str = self.intern_table.lookup(ty_name);
+        if ty_str.len <= target_str.len || ty_str[target_str.len] != '_' as u8 { return false; }
+        let mut i = 0 as usize;
+        while i < target_str.len {
+            if ty_str[i] != target_str[i] { return false; }
+            i = i + 1 as usize;
+        }
+        return true;
+    }
+
+    // Resolves AST types with the given type parameters bound to IL types.
+    fn resolve_types_with_params(self: &mut ZirLowerer, tys: [TypeId], params: [TypeParam], args: [u32]) -> [u32] {
+        self.resolver.push_scope();
+        let saved_bypass = self.resolver.bypass_cache;
+        self.resolver.bypass_cache = true;
+        let mut pi = 0 as usize;
+        while pi < params.len {
+            self.resolver.define(params[pi].name, SymbolKind.Type(args[pi]), false);
+            pi = pi + 1 as usize;
+        }
+        let out = zoril_allocator_alloc(self.arena, (tys.len + 1 as usize) * 4) as *mut u32;
+        let mut resolved = unsafe { @slice(out, tys.len) };
+        let mut i = 0 as usize;
+        while i < tys.len {
+            resolved[i] = self.resolver.resolve_type(tys[i]);
+            i = i + 1 as usize;
+        }
+        self.resolver.bypass_cache = saved_bypass;
+        self.resolver.pop_scope();
+        return resolved;
+    }
+
+    // Every bound on a generic function's type parameters must hold for the types
+    // it is instantiated with. Copy needs no impl: it holds exactly when the type
+    // owns nothing that implements Drop. Returns whether they all hold.
+    pub fn check_fn_type_arg_bounds(self: &mut ZirLowerer, decl_id: u32, type_args: [u32], span: Span) -> bool {
+        let p_decl: &Decl = &self.resolver.ast.decls[decl_id as usize];
+        if p_decl.get_tag() != DECL_FN { return true; }
+        let mut all_hold = true;
+        let type_params = p_decl.get_Fn().type_params;
+        let copy_name = self.intern_table.intern("Copy");
+        let mut ti = 0 as usize;
+        while ti < type_params.len && ti < type_args.len {
+            let ty = type_args[ti];
+            let mut bi = 0 as usize;
+            while ty != 0 as u32 && bi < type_params[ti].bounds.len {
+                let p_bound: &Type = &self.resolver.ast.types[type_params[ti].bounds[bi] as usize];
+                if p_bound.get_tag() == TYPE_PATH {
+                    let trait_name = p_bound.get_Path().0;
+                    let holds = if trait_name == copy_name { self.is_copy_type(ty) } else { self.type_may_implement(trait_name, ty, 0 as usize) };
+                    if !holds {
+                        all_hold = false;
+                        self.report_prefix(span);
+                        must_write(2, "type `");
+                        must_write(2, self.mono.type_display(ty));
+                        must_write(2, "` does not implement trait `");
+                        must_write(2, self.intern_table.lookup(trait_name));
+                        must_write(2, "`\n");
+                    }
+                }
+                bi = bi + 1 as usize;
+            }
+            ti = ti + 1 as usize;
+        }
+        return all_hold;
+    }
+
+    // Whether some impl of the trait targets ty and the impl's own bounds hold
+    // (`impl<T: Wrap> Wrap for W<T>` covers W<X> only when X: Wrap). Only nominal
+    // types (structs, enums, primitives) are decided; references, slices, tuples
+    // and the like are given the benefit of the doubt, as are bounds nested too deep.
+    fn type_may_implement(self: &mut ZirLowerer, trait_name: u32, ty: u32, depth: usize) -> bool {
+        if depth > 8 as usize { return true; }
+        let p_ty: &ILTypeDecl = self.get_type_decl(ty);
+        let tag = p_ty.def.get_tag();
+        if tag != ILTYPE_USER && tag != ILTYPE_PRIMITIVE { return true; }
+        let ty_name = p_ty.name;
+        let ast: &AST = self.resolver.ast;
+        let mut di = 0 as usize;
+        while di < ast.decls.len {
+            let p_decl: &Decl = &ast.decls[di];
+            if p_decl.get_tag() == DECL_IMPL {
+                let imp = p_decl.get_Impl();
+                if imp.trait_name == trait_name && self.impl_target_matches(imp.target_ty, ty, ty_name)
+                    && self.impl_bounds_hold(imp, ty, depth) {
+                    return true;
+                }
+            }
+            di = di + 1 as usize;
+        }
+        return false;
+    }
+
+    // Whether the bounds on an impl's type parameters hold for the type arguments
+    // ty instantiates them with. A parameter is bound where the impl's target names
+    // it directly as a type argument (`W<T>`); others are not checked.
+    fn impl_bounds_hold(self: &mut ZirLowerer, imp: &ImplDecl, ty: u32, depth: usize) -> bool {
+        if imp.type_params.len == 0 as usize { return true; }
+        let p_ty: &ILTypeDecl = self.get_type_decl(ty);
+        if p_ty.def.get_tag() != ILTYPE_USER { return true; }
+        let ty_args = p_ty.def.get_User().type_args;
+        let p_target: &Type = &self.resolver.ast.types[imp.target_ty as usize];
+        if p_target.get_tag() != TYPE_PATH { return true; }
+        let target_args = p_target.get_Path().1;
+        let copy_name = self.intern_table.intern("Copy");
+        let mut ai = 0 as usize;
+        while ai < target_args.len && ai < ty_args.len {
+            let p_arg: &Type = &self.resolver.ast.types[target_args[ai] as usize];
+            let a_tag = p_arg.get_tag();
+            let mut arg_name = 0 as u32;
+            if a_tag == TYPE_VAR { arg_name = p_arg.get_Var(); }
+            if a_tag == TYPE_PATH && p_arg.get_Path().1.len == 0 as usize { arg_name = p_arg.get_Path().0; }
+            let mut pi = 0 as usize;
+            while arg_name != 0 as u32 && pi < imp.type_params.len {
+                if imp.type_params[pi].name == arg_name {
+                    let bounds = imp.type_params[pi].bounds;
+                    let mut bi = 0 as usize;
+                    while bi < bounds.len {
+                        let p_bound: &Type = &self.resolver.ast.types[bounds[bi] as usize];
+                        if p_bound.get_tag() == TYPE_PATH {
+                            let bound_name = p_bound.get_Path().0;
+                            let holds = if bound_name == copy_name { self.is_copy_type(ty_args[ai]) }
+                                        else { self.type_may_implement(bound_name, ty_args[ai], depth + 1 as usize) };
+                            if !holds { return false; }
+                        }
+                        bi = bi + 1 as usize;
+                    }
+                }
+                pi = pi + 1 as usize;
+            }
+            ai = ai + 1 as usize;
+        }
+        return true;
+    }
+
+    pub fn infer_generic_type_args_for_fn(self: &mut ZirLowerer, decl_id: u32, args: *mut Place, args_len: usize) -> [u32] {
+        let ast = self.resolver.ast;
+        let p_decl: &Decl = &ast.decls[decl_id as usize];
+        unsafe { match *p_decl {
+            Decl.Fn(f) => {
+                if f.type_params.len == 0 as usize {
+                    return @slice(0 as *mut u32, 0 as usize);
+                }
+                let inferred = zoril_allocator_alloc(self.arena, f.type_params.len * 4) as *mut u32;
+                let mut i = 0 as usize;
+                while i < f.type_params.len {
+                    *((inferred as usize + i * 4) as *mut u32) = 0 as u32;
+                    i = i + 1 as usize;
+                }
+                let mut pi = 0 as usize;
+                while pi < f.params.len && pi < args_len {
+                    let p_arg = (args as usize + pi * sizeof(Place)) as *mut Place;
+                    let actual_ty = self.get_place_type(&*p_arg);
+                    self.try_infer_type_arg(f.params[pi].ty, actual_ty, f.type_params, inferred);
+                    pi = pi + 1 as usize;
+                }
+                self.infer_type_args_from_bounds(f.type_params, inferred);
+                return @slice(inferred, f.type_params.len);
+            },
+            _ => {
+                return @slice(0 as *mut u32, 0 as usize);
+            }
+        } }
+    }
+
+    pub fn infer_generic_type_args_for_enum_variant(self: &mut ZirLowerer, decl_id: u32, variant_name: u32, payload_place: Place) -> [u32] {
+        let ast = self.resolver.ast;
+        let p_decl: &Decl = &ast.decls[decl_id as usize];
+        unsafe { match *p_decl {
+            Decl.Enum(e) => {
+                if e.type_params.len == 0 as usize {
+                    return @slice(0 as *mut u32, 0 as usize);
+                }
+                let inferred = zoril_allocator_alloc(self.arena, e.type_params.len * 4) as *mut u32;
+                let mut i = 0 as usize;
+                while i < e.type_params.len {
+                    *((inferred as usize + i * 4) as *mut u32) = 0 as u32;
+                    i = i + 1 as usize;
+                }
+                if payload_place.base != 0 as u32 {
+                    let mut v_idx = 0 as usize;
+                    while v_idx < e.variants.len {
+                        if e.variants[v_idx].name == variant_name {
+                            if e.variants[v_idx].payload != 0 as u32 {
+                                let actual_ty = self.get_place_type(&payload_place);
+                                self.try_infer_type_arg(e.variants[v_idx].payload, actual_ty, e.type_params, inferred);
+                            }
+                            break;
+                        }
+                        v_idx = v_idx + 1 as usize;
+                    }
+                }
+                return @slice(inferred, e.type_params.len);
+            },
+            _ => {
+                return @slice(0 as *mut u32, 0 as usize);
+            }
+        } }
+    }
+
+    pub fn infer_generic_type_args_for_struct(self: &mut ZirLowerer, decl_id: u32, lit_fields: [FieldValue], val_places: *mut Place, fields_len: usize) -> [u32] {
+        let ast = self.resolver.ast;
+        let p_decl: &Decl = &ast.decls[decl_id as usize];
+        unsafe { match *p_decl {
+            Decl.Struct(s) => {
+                if s.type_params.len == 0 as usize {
+                    return @slice(0 as *mut u32, 0 as usize);
+                }
+                let inferred = zoril_allocator_alloc(self.arena, s.type_params.len * 4) as *mut u32;
+                let mut i = 0 as usize;
+                while i < s.type_params.len {
+                    *((inferred as usize + i * 4) as *mut u32) = 0 as u32;
+                    i = i + 1 as usize;
+                }
+                let mut fi = 0 as usize;
+                while fi < fields_len {
+                    let field_name = lit_fields[fi].name;
+                    let p_val = (val_places as usize + fi * sizeof(Place)) as *mut Place;
+                    let actual_ty = self.get_place_type(&*p_val);
+                    // Find the matching struct field to get its AST type
+                    let mut si = 0 as usize;
+                    while si < s.fields.len {
+                        if s.fields[si].name == field_name {
+                            self.try_infer_type_arg(s.fields[si].ty, actual_ty, s.type_params, inferred);
+                            break;
+                        }
+                        si = si + 1 as usize;
+                    }
+                    fi = fi + 1 as usize;
+                }
+                return @slice(inferred, s.type_params.len);
+            },
+            _ => {
+                return @slice(0 as *mut u32, 0 as usize);
+            }
+        }
+        }
+    }
+
+    pub fn types_match(self: &mut ZirLowerer, expected: u32, actual: u32) -> bool {
+        return self.types_match_internal(expected, actual, 0 as usize);
+    }
+
+    pub fn is_fn_type(self: &mut ZirLowerer, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty = self.get_type_decl(ty_id);
+        return p_ty.def.get_tag() == ILTYPE_FN;
+    }
+
+    pub fn is_capturing_closure_place(self: &ZirLowerer, place: &Place) -> bool {
+        if place.base == 0 as u32 || place.projections.len != 0 as usize { return false; }
+        if place.base as usize > self.local_is_capturing_closure.len() { return false; }
+        return self.local_is_capturing_closure[place.base as usize - 1 as usize];
+    }
+
+    pub fn check_capturing_closure_coerce(self: &mut ZirLowerer, target_ty: u32, src_place: &Place, span: Span) -> bool {
+        if target_ty != 0 as u32 && self.is_fn_type(target_ty) && self.is_capturing_closure_place(src_place) {
+            self.report_error("capturing closure is not assignable to fn type", span);
+            return false;
+        }
+        return true;
+    }
+
+    pub fn types_match_internal(self: &mut ZirLowerer, expected: u32, actual: u32, depth: usize) -> bool {
+        if expected == actual { return true; }
+        if expected == 0 as u32 || actual == 0 as u32 { return true; }
+
+        if depth == 0 as usize {
+            let inner_act = self.get_ptr_inner_type(actual);
+            if inner_act != 0 as u32 && self.types_match_internal(expected, inner_act, depth + 1 as usize) && (self.is_aggregate(expected) || self.is_fn_type(expected)) { return true; }
+
+            let inner_exp = self.get_ptr_inner_type(expected);
+            if inner_exp != 0 as u32 && self.types_match_internal(inner_exp, actual, depth + 1 as usize) && (self.is_aggregate(actual) || self.is_fn_type(actual)) { return true; }
+        }
+
+        let p_ty_exp = self.get_type_decl(expected);
+        let p_ty_act = self.get_type_decl(actual);
+        let tag_exp = p_ty_exp.def.get_tag();
+        let tag_act = p_ty_act.def.get_tag();
+        
+        if (tag_exp >= 1 as u32 && tag_exp <= 4 as u32) && (tag_act >= 1 as u32 && tag_act <= 4 as u32) { // ILTYPE_PTR, ILTYPE_PTRMUT, ILTYPE_BOXED, ILTYPE_BOXEDMUT
+            let inner_exp = self.get_ptr_inner_type(expected);
+            let inner_act = self.get_ptr_inner_type(actual);
+            if self.types_match_internal(inner_exp, inner_act, depth + 1 as usize) { return true; }
+        }
+
+        if tag_exp == 0 as u32 && tag_act == 0 as u32 { // ILTYPE_PRIMITIVE
+            if self.get_type_size(expected) == self.get_type_size(actual) { return true; }
+        }
+
+        if tag_exp == ILTYPE_SLICE && tag_act == ILTYPE_SLICE { // Two slice types
+            // A `[mut T]` is accepted where a `[T]` is expected, not the reverse.
+            if p_ty_exp.def.get_Slice().mutable && !p_ty_act.def.get_Slice().mutable { return false; }
+            let inner_exp = p_ty_exp.def.get_Slice().element;
+            let inner_act = p_ty_act.def.get_Slice().element;
+            if self.types_match_internal(inner_exp, inner_act, depth + 1 as usize) { return true; }
+        }
+
+        if tag_exp == ILTYPE_ARRAY && tag_act == ILTYPE_ARRAY { // Two array types
+            let arr_exp = p_ty_exp.def.get_Array();
+            let arr_act = p_ty_act.def.get_Array();
+            if arr_exp.size == arr_act.size && self.types_match_internal(arr_exp.element, arr_act.element, depth + 1 as usize) { return true; }
+        }
+
+
+        if tag_exp == ILTYPE_FN && tag_act == ILTYPE_FN {
+            let fn_exp = p_ty_exp.def.get_Fn();
+            let fn_act = p_ty_act.def.get_Fn();
+            if fn_exp.params.len == fn_act.params.len {
+                if self.types_match_internal(fn_exp.ret_ty, fn_act.ret_ty, depth + 1 as usize) {
+                    let mut all_match = true;
+                    let mut pi = 0 as usize;
+                    while pi < fn_exp.params.len {
+                        if !self.types_match_internal(fn_exp.params[pi], fn_act.params[pi], depth + 1 as usize) {
+                            all_match = false;
+                            break;
+                        }
+                        pi = pi + 1 as usize;
+                    }
+                    if all_match { return true; }
+                }
+            }
+        }
+
+        if tag_exp == ILTYPE_USER && tag_act == ILTYPE_USER {
+            let u_exp = p_ty_exp.def.get_User();
+            let u_act = p_ty_act.def.get_User();
+            let orig_exp = self.mono.get_typedef_origin(u_exp.id);
+            let orig_act = self.mono.get_typedef_origin(u_act.id);
+            // Match by common origin OR by same typedef base name (ILUser.name holds mangled name,
+            // but u_exp.id and u_act.id may share origin if both are instantiations of same decl).
+            // Also match if both have the same ILUser.name (same monomorphization mangled name).
+            let user_names_match = u_exp.name != 0 as u32 && u_exp.name == u_act.name;
+            if (orig_exp == orig_act && orig_exp != 0 as u32) || user_names_match {
+                if u_exp.type_args.len == u_act.type_args.len {
+                    let mut matched = true;
+                    let mut i = 0 as usize;
+                    while i < u_exp.type_args.len {
+                        let ta_exp = u_exp.type_args[i];
+                        let ta_act = u_act.type_args[i];
+                        if ta_exp != ta_act {
+                            let mut ok = false;
+                            if self.is_unit_type(ta_act) || self.is_unit_type(ta_exp) {
+                                ok = true;
+                            }
+                            if !ok && !self.types_match_internal(ta_exp, ta_act, depth + 1 as usize) {
+                                matched = false;
+                                break;
+                            }
+                        }
+                        i = i + 1 as usize;
+                    }
+                    if matched { return true; }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    pub fn requires_pass_by_ref(self: &mut ZirLowerer, ty_id: u32) -> bool {
+        return self.is_aggregate(ty_id);
+    }
+
+    // Returns 1 if the ZIL function was lowered with an sret (hidden return pointer) param.
+    // This is needed because sret functions have ret_ty=unit in the ZIL, hiding the real return type.
+    pub fn get_zil_sret_offset(self: &mut ZirLowerer, p_func: &ILFunction) -> usize {
+        if p_func.params_len == 0 as usize { return 0 as usize; }
+        let sret_name = self.intern_table.intern("__sret");
+        if p_func.param(0).name == sret_name { return 1 as usize; }
+        return 0 as usize;
+    }
+
+    // Returns the source-level return type of a ZIL function (handling sret).
+    pub fn get_zil_effective_ret_ty(self: &mut ZirLowerer, p_func: &ILFunction) -> u32 {
+        let sret_offset = self.get_zil_sret_offset(p_func);
+        if sret_offset > 0 as usize {
+            return self.get_ptr_inner_type(p_func.param(0).ty);
+        }
+        return p_func.ret_ty;
+    }
+
+    pub fn needs_env_ptr(self: &mut ZirLowerer, is_extern: bool, name: u32) -> bool {
+        if is_extern { return false; }
+        if name == self.intern_table.intern("main") { return false; }
+        let name_slice = self.intern_table.lookup(name);
+        if name_slice.len >= 16 as usize {
+            if name_slice[0] == '_' as u8 && name_slice[1] == '_' as u8 && name_slice[2] == 'z' as u8 {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // `pl` with one more projection appended. The projection list is a raw arena
+    // buffer, so growing it is the unsafe interior of this function: a raw copy,
+    // a raw store past the copied tail, and the slice that hands both back as
+    // safe storage.
+    pub fn append_projection(self: &mut ZirLowerer, pl: &Place, proj: Projection) -> Place {
+        let new_len = pl.projections.len + 1 as usize;
+        let new_projs = zoril_allocator_alloc(self.arena, new_len * sizeof(Projection)) as *mut Projection;
+        unsafe {
+            if pl.projections.len > 0 as usize {
+                memcpy(new_projs as *mut u8, pl.projections.ptr as *u8, pl.projections.len * sizeof(Projection));
+            }
+            let p_last = (new_projs as usize + pl.projections.len * sizeof(Projection)) as *mut Projection;
+            *p_last = proj;
+            return Place {
+                base: pl.base,
+                projections: @slice(new_projs, new_len),
+            };
+        }
+    }
+
+    // A field not marked `pub` is private to the file that declares its struct.
+    pub fn check_field_visible(self: &mut ZirLowerer, base_ty: u32, field: u32, span: Span) {
+        let mut ty = base_ty;
+        let mut depth = 0 as usize;
+        while ty != 0 as u32 && depth < 4 as usize {
+            let tag = self.get_type_decl(ty).def.get_tag();
+            if tag != ILTYPE_PTR && tag != ILTYPE_PTRMUT && tag != ILTYPE_BOXED && tag != ILTYPE_BOXEDMUT { break; }
+            ty = self.get_ptr_inner_type(ty);
+            depth = depth + 1 as usize;
+        }
+        if ty == 0 as u32 { return; }
+        let p_ty: &ILTypeDecl = self.get_type_decl(ty);
+        if p_ty.def.get_tag() != ILTYPE_USER { return; }
+        let decl_id = self.mono.get_typedef_origin(p_ty.def.get_User().id);
+        if decl_id == 0 as u32 || decl_id as usize >= self.resolver.ast.decls.len { return; }
+        let p_decl: &Decl = &self.resolver.ast.decls[decl_id as usize];
+        if p_decl.get_tag() != DECL_STRUCT { return; }
+        let sd = p_decl.get_Struct();
+        if sd.source_file == 0 as u32 || self.current_source_file == 0 as u32 || sd.source_file == self.current_source_file { return; }
+        let mut fi = 0 as usize;
+        while fi < sd.fields.len {
+            if sd.fields[fi].name == field {
+                if !sd.fields[fi].is_pub {
+                    self.report_error_with_symbol("cannot access private field: ", field, span);
+                }
+                return;
+            }
+            fi = fi + 1 as usize;
+        }
+    }
+
+    pub fn append_deref(self: &mut ZirLowerer, pl: &Place) -> Place {
+        return self.append_projection(pl, Projection.Deref);
+    }
+
+    // Borrows a method receiver for a callee declaring `self: &T` / `self: &mut T`.
+    // The temporary is consumed by the call like an explicit `&mut x` argument,
+    // so a mutable receiver borrow ends when the call returns.
+    pub fn emit_receiver_ref(self: &mut ZirLowerer, recv: Place, recv_ty: u32, expected_recv_ty: u32, span: Span) -> Place {
+        let p_recv_ty: &ILTypeDecl = self.get_type_decl(expected_recv_ty);
+        let recv_tag = p_recv_ty.def.get_tag();
+        let is_mut = recv_tag == ILTYPE_PTRMUT || recv_tag == ILTYPE_BOXEDMUT;
+        let ptr_ty = if is_mut { self.get_ptr_mut_type(recv_ty) } else { self.get_ptr_type(recv_ty) };
+        let tmp = self.define_local(0 as *mut Symbol, ptr_ty, LOCAL_KIND_TMP);
+        let reg = self.next_region_id;
+        self.next_region_id = self.next_region_id + 1 as u32;
+        if is_mut {
+            self.emit(ZirStmt.Let(tmp, ZirRvalue.RefMut(recv, reg), span));
+        } else {
+            self.emit(ZirStmt.Let(tmp, ZirRvalue.Ref(recv, reg), span));
+        }
+        let ref_place = Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
+        self.consume_place_if_move(&ref_place);
+        return ref_place;
+    }
+
+    pub fn find_method_in_impls(self: &mut ZirLowerer, ty_id: u32, method_name: u32) -> Option<u32> {
+        if ty_id == 0 as u32 { return Option.None; }
+
+        let p_ty: &ILTypeDecl = self.get_type_decl(ty_id);
+        let struct_name_id = p_ty.name;
+
+        let ast: &AST = self.resolver.ast;
+        let mut i = 0 as usize;
+        while i < ast.decls.len {
+            let p_decl: &Decl = &ast.decls[i];
+            if p_decl.get_tag() == DECL_IMPL {
+                let imp = p_decl.get_Impl();
+                let p_target_ty: &Type = &ast.types[imp.target_ty as usize];
+
+                let t_tag = p_target_ty.get_tag();
+                let mut target_name = 0 as u32;
+                let mut matched = false;
+
+                if t_tag == TYPE_PATH {
+                    target_name = p_target_ty.get_Path().0;
+                } else if t_tag >= TYPE_PTR && t_tag <= TYPE_REFMUT {
+                    let inner = p_target_ty.get_Ptr();
+                    let p_inner: &Type = &ast.types[inner as usize];
+                    let inner_tag = p_inner.get_tag();
+                    if inner_tag == TYPE_PATH {
+                        target_name = p_inner.get_Path().0;
+                    } else if inner_tag == TYPE_PRIMITIVE {
+                        let prim_tag = p_inner.get_Primitive().get_tag();
+                        if self.resolver.primitive_type(prim_tag) == ty_id { matched = true; }
+                    }
+                } else if t_tag == TYPE_PRIMITIVE {
+                    let prim_tag = p_target_ty.get_Primitive().get_tag();
+                    if self.resolver.primitive_type(prim_tag) == ty_id { matched = true; }
+                }
+
+                if target_name != 0 as u32 {
+                    if target_name == struct_name_id {
+                        matched = true;
+                    } else if struct_name_id != 0 as u32 {
+                        let target_str = self.intern_table.lookup(target_name);
+                        let struct_str = self.intern_table.lookup(struct_name_id);
+                        if struct_str.len >= target_str.len {
+                            let mut prefix_match = true;
+                            let mut pi = 0 as usize;
+                            while pi < target_str.len {
+                                if struct_str[pi] != target_str[pi] {
+                                    prefix_match = false;
+                                    break;
+                                }
+                                pi = pi + 1 as usize;
+                            }
+                            if prefix_match && (struct_str.len == target_str.len || struct_str[target_str.len] == '_' as u8) {
+                                matched = true;
+                            }
+                        }
+                    }
+                }
+
+                if matched {
+                    let mut k = 0 as usize;
+                    while k < imp.methods.len {
+                        if imp.methods[k].name == method_name {
+                            return Option.Some(i as u32);
+                        }
+                        k = k + 1 as usize;
+                    }
+                }
+            }
+            i = i + 1 as usize;
+        }
+        return Option.None;
+    }
+
+    pub fn get_primitive_type(self: &ZirLowerer, prim: ILPrimitive) -> u32 {
+        let mut i = 0 as usize;
+        let prim_tag = prim.get_tag();
+        while i < self.module.types.len {
+            let p_t: &ILTypeDecl = &self.module.types[i];
+            if p_t.def.get_tag() == ILTYPE_PRIMITIVE {
+                if p_t.def.get_Primitive().get_tag() == prim_tag {
+                    return p_t.id;
+                }
+            }
+            i = i + 1 as usize;
+        }
+        ICE("ZirLowerer.get_primitive_type: primitive type not found");
+    }
+
+    pub fn is_integer_primitive_type(self: &ZirLowerer, ty: u32) -> bool {
+        if ty == 0 as u32 { return false; }
+        if ty as usize > self.module.types.len { return false; }
+        let p_t: &ILTypeDecl = &self.module.types[ty as usize - 1 as usize];
+        if p_t.def.get_tag() != ILTYPE_PRIMITIVE { return false; }
+        return p_t.def.get_Primitive().get_tag() <= ILPRIM_ISIZE;
+    }
+
+    // Implicit primitive adjustments (let/return/arg/match-arm) must not
+    // bridge bool and non-bool: that pair requires an explicit `as`.
+    // Integer-width narrowing (e.g. u64→u8) is currently allowed at these
+    // positions via silent bitcast. A 2026-07-11 experiment requiring exact
+    // width match broke the self-hosted tool builds (pervasive), so the
+    // adjustment rule is documented in the spec rather than made an error.
+    // Prefer explicit `as` for width changes in new code.
+    // Symmetric: can these two primitives convert to each other at all? Bool
+    // never bridges to non-bool. Direction-dependent rules belong in
+    // `implicit_conv_ok`, NOT here -- callers pass the two types in both orders.
+    pub fn primitives_compatible(self: &ZirLowerer, a: u32, b: u32) -> bool {
+        if !self.is_primitive_type(a) || !self.is_primitive_type(b) { return false; }
+        return self.is_bool_type(a) == self.is_bool_type(b);
+    }
+
+    // Whether `src` may convert to `dst` *implicitly*, i.e. with no `as` written.
+    // Directional, so the argument order matters: a conversion that drops bits is
+    // a lossy change of value with no syntactic signal, and is rejected. An
+    // explicit `as` still truncates -- that is the programmer asking for it.
+    pub fn implicit_conv_ok(self: &ZirLowerer, dst: u32, src: u32) -> bool {
+        if !self.primitives_compatible(dst, src) { return false; }
+        return !self.is_narrowing_conversion(dst, src);
+    }
+
+    // Bit width of an integer primitive; 0 for anything else.
+    pub fn int_prim_bits(self: &ZirLowerer, ty: u32) -> u32 {
+        if ty == 0 as u32 { return 0 as u32; }
+        if ty as usize > self.module.types.len { return 0 as u32; }
+        let p_t: &ILTypeDecl = &self.module.types[ty as usize - 1 as usize];
+        if p_t.def.get_tag() != ILTYPE_PRIMITIVE { return 0 as u32; }
+        let tag = p_t.def.get_Primitive().get_tag();
+        if tag == ILPRIM_U8  || tag == ILPRIM_I8  { return 8 as u32; }
+        if tag == ILPRIM_U16 || tag == ILPRIM_I16 { return 16 as u32; }
+        if tag == ILPRIM_U32 || tag == ILPRIM_I32 { return 32 as u32; }
+        if tag == ILPRIM_U64 || tag == ILPRIM_I64 { return 64 as u32; }
+        if tag == ILPRIM_USIZE || tag == ILPRIM_ISIZE { return 64 as u32; }
+        return 0 as u32;
+    }
+
+    // True when converting `src` to `dst` would drop bits. Only meaningful for
+    // *implicit* conversions: an explicit `as` is the programmer asking for the
+    // truncation, and keeps working.
+    pub fn is_narrowing_conversion(self: &ZirLowerer, dst: u32, src: u32) -> bool {
+        let db = self.int_prim_bits(dst);
+        let sb = self.int_prim_bits(src);
+        if db == 0 as u32 || sb == 0 as u32 { return false; }
+        return db < sb;
+    }
+
+    // Report why an implicit conversion was rejected. The two rejection reasons
+    // want different wording, and guessing wrong sends the reader looking for a
+    // bool they do not have.
+    pub fn report_implicit_conv_error(self: &mut ZirLowerer, dst: u32, src: u32, span: Span) {
+        if self.is_narrowing_conversion(dst, src) {
+            self.report_prefix(span);
+            must_write(2, "cannot implicitly narrow ");
+            write_u64(2, self.int_prim_bits(src) as u64);
+            must_write(2, "-bit value to ");
+            write_u64(2, self.int_prim_bits(dst) as u64);
+            must_write(2, " bits (truncation is silent; write `as` to ask for it)\n");
+            return;
+        }
+        self.report_error("cannot implicitly convert between bool and non-bool (use `as`)", span);
+    }
+
+    // Pick the right message for a rejected implicit conversion. `implicit_conv_ok`
+    // says no for three different reasons and only two of them are conversion
+    // reasons: when either side is not a primitive the types simply do not match,
+    // and `report_implicit_conv_error` would then invent a bool problem the reader
+    // does not have. Every site that rejects on `!implicit_conv_ok` should route
+    // through here -- the narrowing check landed on 2026-09-28 at five sites but
+    // only the three call-argument ones named narrowing in the message, so `let`,
+    // assignment, `return` and struct-literal fields reported raw type ids for the
+    // very error surface_syntax.md 11.2.6 documents by its wording.
+    pub fn report_conv_or_type_mismatch(self: &mut ZirLowerer, dst: u32, src: u32, span: Span) {
+        if self.is_primitive_type(dst) && self.is_primitive_type(src) {
+            self.report_implicit_conv_error(dst, src, span);
+            return;
+        }
+        self.report_type_mismatch(dst, src, span);
+    }
+
+    pub fn is_bool_type(self: &ZirLowerer, ty: u32) -> bool {
+        if ty == 0 as u32 { return false; }
+        if ty as usize > self.module.types.len { return false; }
+        let p_t: &ILTypeDecl = &self.module.types[ty as usize - 1 as usize];
+        if p_t.def.get_tag() != ILTYPE_PRIMITIVE { return false; }
+        return p_t.def.get_Primitive().get_tag() == ILPRIM_BOOL;
+    }
+
+    // True when the expression is an assignment or compound assignment.
+    pub fn is_assignment_expr(self: &ZirLowerer, expr_id: ExprId) -> bool {
+        if expr_id == 0 as u32 { return false; }
+        let p_e = self.get_expr(expr_id);
+        if p_e as usize == 0 as usize { return false; }
+        if (*p_e).get_tag() != EXPR_BINARY { return false; }
+        let b = (*p_e).get_Binary();
+        let t = b.op.get_tag();
+        return t == BINARY_ASSIGN || (t >= BINARY_ADD_ASSIGN && t <= BINARY_SHR_ASSIGN);
+    }
+
+    // Conditions of `if`/`while` must be bool-typed values. Gives a targeted
+    // message for `if x = y` (assignment is a statement, not an expression).
+    pub fn check_condition(self: &mut ZirLowerer, cond_expr: ExprId, cond_place: &Place) {
+        let span = self.get_expr_span(cond_expr);
+        if self.is_assignment_expr(cond_expr) {
+            self.report_error("assignment in a condition yields no value; did you mean `==`?", span);
+            return;
+        }
+        if cond_place.base == 0 as u32 {
+            self.report_error("condition must be a bool expression", span);
+            return;
+        }
+        let ty = self.get_place_type(cond_place);
+        if ty != 0 as u32 && !self.is_bool_type(ty) {
+            self.report_error("condition must be bool; use a comparison or cast explicitly", span);
+        }
+    }
+
+    // Bit width of an integer type, or 0 for anything else.
+    pub fn integer_bit_width(self: &mut ZirLowerer, ty: u32) -> u64 {
+        if ty == 0 as u32 || !self.is_integer_primitive_type(ty) { return 0 as u64; }
+        return self.get_type_size(ty) * 8 as u64;
+    }
+
+    // The value of a temporary defined, in the block being built, by a constant (or a
+    // cast or negation of one). Returns false when it is not such a temporary.
+    pub fn const_temp_value(self: &mut ZirLowerer, local_id: u32, out: *mut ShiftConst, depth: usize) -> bool {
+        if local_id == 0 as u32 || depth > 8 as usize { return false; }
+        let p_block = &self.blocks[self.current_block_idx];
+        let mut i = p_block.stmts.len;
+        while i > 0 as usize {
+            i = i - 1 as usize;
+            let st = &p_block.stmts[i];
+            if st.get_tag() == ZIR_STMT_LET && st.get_Let_id() == local_id {
+                let rv = st.get_Let_rv();
+                let tag = rv.get_tag();
+                if tag == ZIR_RV_CONST {
+                    unsafe { (*out).value = rv.get_Const_val(); }
+                    return true;
+                }
+                if tag == ZIR_RV_CAST {
+                    let pl = rv.get_Cast_pl();
+                    if (*pl).projections.len == 0 as usize { return self.const_temp_value((*pl).base, out, depth + 1 as usize); }
+                    return false;
+                }
+                if tag == ZIR_RV_UNARY && rv.get_UnaryOp_op() == 0 as u32 { // Neg
+                    let pl = rv.get_UnaryOp_arg();
+                    if (*pl).projections.len == 0 as usize && self.const_temp_value((*pl).base, out, depth + 1 as usize) {
+                        unsafe { (*out).negative = !(*out).negative; }
+                        return true;
+                    }
+                    return false;
+                }
+                return false;
+            }
+        }
+        return false;
+    }
+
+    // A shift by a constant count outside [0, width) is a compile error: the hardware
+    // would mask it to the register width and quietly produce a different answer. A
+    // variable count is checked at run time (lower_zir_to_zil.zrl).
+    pub fn check_shift_count(self: &mut ZirLowerer, op_tag: u32, lhs_ty: u32, rhs_place: &Place, span: Span) {
+        if op_tag != BINARY_SHL && op_tag != BINARY_SHR { return; }
+        let width = self.integer_bit_width(lhs_ty);
+        if width == 0 as u64 || rhs_place.projections.len != 0 as usize { return; }
+        let mut c = ShiftConst { value: 0 as u64, negative: false };
+        if !self.const_temp_value(rhs_place.base, &mut c, 0 as usize) { return; }
+        if c.negative && c.value != 0 as u64 {
+            self.report_error("shift count is negative", span);
+        } else if !c.negative && c.value >= width {
+            self.report_error_with_args("shift count out of range (bit width ", width as usize, c.value as usize, span);
+        }
+    }
+
+    // bool does not coerce to integers: for the value-producing binary ops
+    // (arithmetic, comparison, bitwise, shift) reject operands where exactly
+    // one side is bool, and reject the ops that have no meaning on bool
+    // (arithmetic, shifts, relational comparison). bool == != & | ^ remain
+    // legal on two bools.
+    pub fn check_bool_operands(self: &mut ZirLowerer, op_tag: u32, lhs_ty: u32, rhs_ty: u32, span: Span) {
+        if op_tag > BINARY_SHR { return; }
+        if lhs_ty == 0 as u32 || rhs_ty == 0 as u32 { return; }
+        let lhs_bool = self.is_bool_type(lhs_ty);
+        let rhs_bool = self.is_bool_type(rhs_ty);
+        if lhs_bool != rhs_bool {
+            self.report_error("type mismatch: cannot mix bool and non-bool operands (cast with `as`)", span);
+            return;
+        }
+        if !lhs_bool { return; }
+        if op_tag <= BINARY_MULWRAP || op_tag == BINARY_SHL || op_tag == BINARY_SHR {
+            self.report_error("arithmetic operator not supported on bool operands", span);
+        } else if op_tag >= BINARY_LT && op_tag <= BINARY_GE {
+            self.report_error("relational comparison not supported on bool operands (use == or !=)", span);
+        }
+    }
+
+    // The ILFn type of a lowered function, with parameters exactly as declared
+    // (unlike `get_fn_type`, which strips the env/sret prefix).
+    pub fn lowered_fn_type(self: &mut ZirLowerer, func_idx: usize) -> u32 {
+        let params_len = self.module.functions[func_idx].params_len;
+        let ret_ty = self.module.functions[func_idx].ret_ty;
+        let is_variadic = self.module.functions[func_idx].is_variadic;
+        let params_ptr = zoril_allocator_alloc(self.persistent_arena, params_len * 4) as *mut u32; // stored in the module: see get_fn_type
+        let mut params = unsafe { @slice(params_ptr, params_len) };
+        let mut pi = 0 as usize;
+        while pi < params_len {
+            params[pi] = self.module.functions[func_idx].param(pi).ty;
+            pi = pi + 1 as usize;
+        }
+        return self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Fn(ILFn { params: params, ret_ty: ret_ty, is_variadic: is_variadic }), source_file: 0 });
+    }
+
+    // Whether the symbol names a type (as opposed to a value of one).
+    pub fn sym_names_type(self: &ZirLowerer, sym: &Symbol) -> bool {
+        let k_tag = sym.kind_tag as u32;
+        if k_tag == SYM_TYPE || k_tag == SYM_PRIMITIVE { return true; }
+        if k_tag != SYM_GLOBAL { return false; }
+        let d_tag = self.resolver.ast.decls[sym.kind_payload as usize].get_tag();
+        return d_tag == DECL_STRUCT || d_tag == DECL_ENUM || d_tag == DECL_TYPE_ALIAS;
+    }
+
+    pub fn resolve_sym_type(self: &mut ZirLowerer, sym: &Symbol) -> u32 {
+        let k_tag = sym.kind_tag as u32;
+        let k_payload = sym.kind_payload as u32;
+        match k_tag {
+            SYM_TYPE => {
+                return k_payload;
+            },
+            SYM_GLOBAL => {
+                let p_decl: &Decl = &self.resolver.ast.decls[k_payload as usize];
+                match *p_decl {
+                    Decl.Fn(f) => {
+                        if f.type_params.len == 0 as usize {
+                            let func_idx = self.mono.instantiate_function(k_payload, @slice(0 as *mut u32, 0 as usize));
+                            let fn_ty = self.lowered_fn_type(func_idx as usize);
+                            return self.get_ptr_type(fn_ty);
+                        }
+                        return self.resolver.resolve_type(f.ret_ty);
+                    },
+                    Decl.Const(c) => {
+                        return self.resolver.resolve_type(c.ty);
+                    },
+                    Decl.Static(s) => {
+                        return self.resolver.resolve_type(s.ty);
+                    },
+                    Decl.Struct(_) => {
+                        return self.mono.instantiate_type(k_payload, @slice(0 as *mut u32, 0 as usize));
+                    },
+                    Decl.Enum(_) => {
+                        return self.mono.instantiate_type(k_payload, @slice(0 as *mut u32, 0 as usize));
+                    },
+                    Decl.TypeAlias(ta) => {
+                        return self.resolver.resolve_type(ta.target);
+                    },
+                    Decl.Trait(_) | Decl.Impl(_) | Decl.Import(_) | Decl.None => {
+                        ICE("resolve_sym_type: unhandled decl type");
+                    },
+                }
+            },
+            SYM_METHOD => {
+                let impl_decl_id = k_payload >> 16;
+                let item_idx = k_payload & 0xffff as u32;
+                let p_decl: &Decl = &self.resolver.ast.decls[impl_decl_id as usize];
+                let imp = p_decl.get_Impl();
+                if item_idx as usize < imp.methods.len {
+                    let f = &imp.methods[item_idx as usize];
+                    if f.type_params.len == 0 as usize {
+                        let self_ty = self.resolver.resolve_type(imp.target_ty);
+                        let func_idx = self.mono.instantiate_method(f, @slice(0 as *mut u32, 0 as usize), 0 as u32, f.name, imp, self_ty);
+                        let fn_ty = self.lowered_fn_type(func_idx as usize);
+                        return self.get_ptr_type(fn_ty);
+                    }
+                    return self.resolver.resolve_type(f.ret_ty);
+                } else {
+                    let c = &imp.constants[item_idx as usize];
+                    return self.resolver.resolve_type(c.ty);
+                }
+            },
+            SYM_FUNCTION => {
+                return self.lowered_fn_type(k_payload as usize);
+            },
+            SYM_LOCAL | SYM_PARAM => {
+                let local_id = self.get_local_by_symbol_ref(sym);
+                if local_id != 0 as u32 {
+                    return self.locals[local_id as usize - 1 as usize].ty;
+                }
+                ICE("resolve_sym_type: missing symbol for LOCAL/PARAM");
+            },
+            SYM_TYPE => {
+                return k_payload;
+            },
+            SYM_PRIMITIVE => {
+                let mut res = 0 as u32;
+                if k_payload == ILPRIM_U8 { res = self.get_primitive_type(ILPrimitive.U8); }
+                else if k_payload == ILPRIM_U16 { res = self.get_primitive_type(ILPrimitive.U16); }
+                else if k_payload == ILPRIM_U32 { res = self.get_primitive_type(ILPrimitive.U32); }
+                else if k_payload == ILPRIM_U64 { res = self.get_primitive_type(ILPrimitive.U64); }
+                else if k_payload == ILPRIM_USIZE { res = self.get_primitive_type(ILPrimitive.USize); }
+                else if k_payload == ILPRIM_I8 { res = self.get_primitive_type(ILPrimitive.I8); }
+                else if k_payload == ILPRIM_I16 { res = self.get_primitive_type(ILPrimitive.I16); }
+                else if k_payload == ILPRIM_I32 { res = self.get_primitive_type(ILPrimitive.I32); }
+                else if k_payload == ILPRIM_I64 { res = self.get_primitive_type(ILPrimitive.I64); }
+                else if k_payload == ILPRIM_ISIZE { res = self.get_primitive_type(ILPrimitive.ISize); }
+                else if k_payload == ILPRIM_F32 { res = self.get_primitive_type(ILPrimitive.F32); }
+                else if k_payload == ILPRIM_F64 { res = self.get_primitive_type(ILPrimitive.F64); }
+                else if k_payload == ILPRIM_BOOL { res = self.get_primitive_type(ILPrimitive.Bool); }
+                else if k_payload == ILPRIM_CHAR { res = self.get_primitive_type(ILPrimitive.Char); }
+                else if k_payload == ILPRIM_UNIT { res = self.get_primitive_type(ILPrimitive.Unit); }
+                else if k_payload == ILPRIM_NEVER { res = self.get_primitive_type(ILPrimitive.Never); }
+                return res;
+            },
+            _ => { ICE("resolve_sym_type: unhandled symbol kind"); },
+        }
+    }
+
+    pub fn lower_expr_as_type(self: &mut ZirLowerer, expr_id: ExprId) -> u32 {
+        let p_expr = self.get_expr(expr_id);
+        if p_expr as usize == 0 as usize { return 0 as u32; }
+        match *p_expr {
+            Expr.Ident(id) => {
+                let opt_sym = self.resolver.resolve_ptr(id);
+                match opt_sym {
+                    Some(sym) => {
+                        let k_tag = sym.kind_tag as u32;
+                        if k_tag == SYM_TYPE || k_tag == SYM_PRIMITIVE {
+                            return self.resolve_sym_type(sym);
+                        }
+                        if k_tag == SYM_GLOBAL {
+                            let p_decl: &Decl = &self.resolver.ast.decls[sym.kind_payload as usize];
+                            match *p_decl {
+                                Decl.Struct(_) | Decl.Enum(_) | Decl.TypeAlias(_) => {
+                                    return self.resolve_sym_type(sym);
+                                },
+                                _ => {},
+                            }
+                        }
+                    },
+                    None => {}
+                }
+            },
+            Expr.Generic(g) => {
+                let p_base = self.get_expr(g.expr);
+                match *p_base {
+                    Expr.Ident(id) => {
+                        let opt_sym = self.resolver.resolve_ptr(id);
+                        match opt_sym {
+                            Some(sym) => {
+                                let k_tag = sym.kind_tag as u32;
+                                let mut decl_id = NO_SSA as u32;
+                                if k_tag == SYM_GLOBAL {
+                                     let p_decl: &Decl = &self.resolver.ast.decls[sym.kind_payload as usize];
+                                     match *p_decl {
+                                         Decl.Struct(_) | Decl.Enum(_) => {
+                                             decl_id = sym.kind_payload;
+                                         },
+                                         _ => {},
+                                     }
+                                }
+
+                                if decl_id != NO_SSA as u32 {
+                                    let resolved_type_args = self.resolver.resolve_type_list(g.type_args.ptr, g.type_args.len);
+                                    return self.mono.instantiate_type(decl_id, resolved_type_args);
+                                }
+                            },
+                            None => {}
+                        }
+                    },
+                    _ => {}
+                }
+            },
+            _ => {}
+        }
+        return 0 as u32;
+    }
+
+    // `&a` / `&mut a` on an array `[T; N]` passed for a slice parameter: the argument becomes
+    // a pointer to the slice (slices are passed by a hidden pointer).
+    pub fn maybe_coerce_array_to_slice(self: &mut ZirLowerer, p_arg: &mut Place, arg_ty: u32, param_ty: u32, span: Span) {
+        if arg_ty == 0 as u32 || param_ty == 0 as u32 { return; }
+        let param_tag = self.get_type_decl(param_ty).def.get_tag();
+        if param_tag != ILTYPE_PTR && param_tag != ILTYPE_PTRMUT { return; }
+        let param_inner = self.get_ptr_inner_type(param_ty);
+        if param_inner == 0 as u32 || self.get_type_decl(param_inner).def.get_tag() != ILTYPE_SLICE { return; }
+        let slice_place = self.array_ref_as_slice(*p_arg, arg_ty, span);
+        if slice_place.base == 0 as u32 { return; }
+        let ptr_slice_ty = self.get_ptr_type(self.get_place_type(&slice_place));
+        let reg = self.next_region_id;
+        self.next_region_id = self.next_region_id + 1 as u32;
+        let tmp_ref = self.define_local(0 as *mut Symbol, ptr_slice_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp_ref, ZirRvalue.Ref(slice_place, reg), span));
+        *p_arg = Place { base: tmp_ref, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // `&a` / `&mut a` stored where a slice is expected (`let`, assignment, struct field):
+    // the value becomes the slice itself. Returns place unchanged when it is not one.
+    pub fn coerce_array_ref_to_slice(self: &mut ZirLowerer, place: Place, src_ty: u32, dst_ty: u32, span: Span) -> Place {
+        if src_ty == 0 as u32 || dst_ty == 0 as u32 { return place; }
+        if self.get_type_decl(dst_ty).def.get_tag() != ILTYPE_SLICE { return place; }
+        let slice_place = self.array_ref_as_slice(place, src_ty, span);
+        if slice_place.base == 0 as u32 { return place; }
+        return slice_place;
+    }
+
+    // The whole-array slice of `ref_place`, a `&[T; N]` (giving `[T]`) or `&mut [T; N]`
+    // (giving `[mut T]`); an empty place when ref_ty is neither. The slice keeps the
+    // reference's borrow.
+    fn array_ref_as_slice(self: &mut ZirLowerer, ref_place: Place, ref_ty: u32, span: Span) -> Place {
+        let none = Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+        let ref_tag = self.get_type_decl(ref_ty).def.get_tag();
+        if ref_tag != ILTYPE_PTR && ref_tag != ILTYPE_PTRMUT { return none; }
+        let arr_ty = self.get_ptr_inner_type(ref_ty);
+        if arr_ty == 0 as u32 { return none; }
+        let arr_p: &ILTypeDecl = self.get_type_decl(arr_ty);
+        if arr_p.def.get_tag() != ILTYPE_ARRAY { return none; }
+        let arr = arr_p.def.get_Array();
+        let usize_ty = self.get_primitive_type(ILPrimitive.USize);
+        let slice_ty = self.module.alloc_type(ILTypeDecl { id: 0, name: 0, def: ILType.Slice(ILSlice { element: arr.element, mutable: ref_tag == ILTYPE_PTRMUT }) , source_file: 0 as u32 });
+        let tmp_len = self.define_local(0 as *mut Symbol, usize_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp_len, ZirRvalue.Const(arr.size as u64, usize_ty), span));
+        let sl_args_ptr = zoril_allocator_alloc(self.arena, 2 as usize * sizeof(Place)) as *mut Place;
+        let mut sl_args = unsafe { @slice(sl_args_ptr, 2 as usize) };
+        sl_args[0] = ref_place;
+        sl_args[1] = Place { base: tmp_len, projections: @slice(0 as *mut Projection, 0 as usize) };
+        let tmp_slice = self.define_local(0 as *mut Symbol, slice_ty, LOCAL_KIND_TMP);
+        self.emit(ZirStmt.Let(tmp_slice, ZirRvalue.StructLiteral(slice_ty, sl_args), span));
+        return Place { base: tmp_slice, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    pub fn is_parent_local(self: &ZirLowerer, sym: &Symbol) -> bool {
+        return self.get_local_by_symbol_ref(sym) != 0 as u32;
+    }
+
+    pub fn collect_free_idents_expr(self: &ZirLowerer, expr_id: ExprId, params: [Param], out: [mut u32], out_len: &mut usize, max: usize) {
+        if expr_id == 0 as ExprId { return; }
+        let p_expr: &Expr = &self.resolver.ast.exprs[expr_id as usize];
+        match *p_expr {
+            Expr.Ident(id) => {
+                let mut is_param = false;
+                let mut pi = 0 as usize;
+                while pi < params.len {
+                    if params[pi].name == id { is_param = true; break; }
+                    pi = pi + 1 as usize;
+                }
+                if !is_param {
+                    let opt_sym = self.resolver.resolve_ptr(id);
+                    match opt_sym {
+                        Some(sym) => {
+                            let k_tag = sym.kind_tag as u32;
+                            if k_tag == SYM_LOCAL || k_tag == SYM_PARAM {
+                                if self.is_parent_local(sym) {
+                                    let mut found = false;
+                                    let mut ci = 0 as usize;
+                                    while ci < *out_len {
+                                        if out[ci] == id { found = true; break; }
+                                        ci = ci + 1 as usize;
+                                    }
+                                    if !found && *out_len < max {
+                                        out[*out_len] = id;
+                                        *out_len = *out_len + 1 as usize;
+                                    }
+                                }
+                            }
+                        },
+                        None => {}
+                    }
+                }
+            },
+            Expr.Binary(b) => {
+                self.collect_free_idents_expr(b.lhs, params, out, out_len, max);
+                self.collect_free_idents_expr(b.rhs, params, out, out_len, max);
+            },
+            Expr.Unary(u) => {
+                self.collect_free_idents_expr(u.expr, params, out, out_len, max);
+            },
+            Expr.Block(blk) => {
+                let mut si = 0 as usize;
+                while si < blk.stmts.len {
+                    self.collect_free_idents_stmt(blk.stmts[si], params, out, out_len, max);
+                    si = si + 1 as usize;
+                }
+                if blk.tail_expr != 0 as ExprId {
+                    self.collect_free_idents_expr(blk.tail_expr, params, out, out_len, max);
+                }
+            },
+            Expr.If(ie) => {
+                self.collect_free_idents_expr(ie.cond, params, out, out_len, max);
+                self.collect_free_idents_expr(ie.then_block, params, out, out_len, max);
+                if ie.else_block != 0 as ExprId {
+                    self.collect_free_idents_expr(ie.else_block, params, out, out_len, max);
+                }
+            },
+            Expr.Call(c) => {
+                self.collect_free_idents_expr(c.callee, params, out, out_len, max);
+                let mut ai = 0 as usize;
+                while ai < c.args.len {
+                    self.collect_free_idents_expr(c.args[ai], params, out, out_len, max);
+                    ai = ai + 1 as usize;
+                }
+            },
+            Expr.Return(re) => {
+                if re != 0 as ExprId {
+                    self.collect_free_idents_expr(re, params, out, out_len, max);
+                }
+            },
+            Expr.MemberAccess(me) => {
+                self.collect_free_idents_expr(me.expr, params, out, out_len, max);
+            },
+            Expr.TupleAccess(ta) => {
+                self.collect_free_idents_expr(ta.expr, params, out, out_len, max);
+            },
+            Expr.Index(ie2) => {
+                self.collect_free_idents_expr(ie2.expr, params, out, out_len, max);
+                self.collect_free_idents_expr(ie2.index, params, out, out_len, max);
+            },
+            _ => {}
+        }
+    }
+
+    pub fn collect_free_idents_stmt(self: &ZirLowerer, stmt_id: StmtId, params: [Param], out: [mut u32], out_len: &mut usize, max: usize) {
+        if stmt_id == 0 as StmtId { return; }
+        let p_stmt: &Stmt = &self.resolver.ast.stmts[stmt_id as usize];
+        match *p_stmt {
+            Stmt.Expr(e) => { self.collect_free_idents_expr(e, params, out, out_len, max); },
+            Stmt.Let(l) => { self.collect_free_idents_expr(l.init, params, out, out_len, max); },
+            Stmt.Return(re) => { if re != 0 as ExprId { self.collect_free_idents_expr(re, params, out, out_len, max); } },
+            Stmt.While(w) => {
+                self.collect_free_idents_expr(w.cond, params, out, out_len, max);
+                self.collect_free_idents_expr(w.body, params, out, out_len, max);
+            },
+            _ => {}
+        }
+    }
+
+    fn is_user_value_type(self: &ZirLowerer, ty: u32) -> bool {
+        if ty == 0 as u32 { return false; }
+        return self.get_type_tag(ty) == ILTYPE_USER;
+    }
+
+    // A fieldless enum is its discriminant, so `e as u8` is defined; any other user type
+    // (struct, or an enum carrying payloads such as Option<T>) has no scalar reading.
+    fn is_fieldless_enum_type(self: &ZirLowerer, ty: u32) -> bool {
+        if !self.is_user_value_type(ty) { return false; }
+        let p_ty = self.get_type_decl(ty);
+        let user = p_ty.def.get_User();
+        if user.id == 0 as u32 || user.id as usize >= self.module.typedefs.len { return false; }
+        let def = &self.module.typedefs[user.id as usize];
+        return match *def {
+            ILTypeDef.Enum(e) => {
+                let mut i = 0 as usize;
+                let mut fieldless = true;
+                while i < e.variants.len {
+                    if e.variants[i].payload != 0 as u32 { fieldless = false; }
+                    i = i + 1 as usize;
+                }
+                fieldless
+            },
+            _ => false,
+        };
+    }
+
+    fn is_scalar_primitive_type(self: &ZirLowerer, ty: u32) -> bool {
+        if ty == 0 as u32 || ty as usize > self.module.types.len { return false; }
+        let p_t: &ILTypeDecl = &self.module.types[ty as usize - 1 as usize];
+        if p_t.def.get_tag() != ILTYPE_PRIMITIVE { return false; }
+        let prim = p_t.def.get_Primitive().get_tag();
+        return prim != ILPRIM_UNIT && prim != ILPRIM_NEVER;
+    }
+
+    // An enum or struct value is not a number: `opt != 0` and `opt as u64` read whatever the
+    // tag/payload layout happens to be. Reject mixed operands rather than compile the layout.
+    pub fn check_aggregate_scalar_operands(self: &mut ZirLowerer, lhs_ty: u32, rhs_ty: u32, span: Span) {
+        if (self.is_user_value_type(lhs_ty) && self.is_scalar_primitive_type(rhs_ty))
+            || (self.is_scalar_primitive_type(lhs_ty) && self.is_user_value_type(rhs_ty)) {
+            self.report_error("cannot use an enum or struct value as a scalar operand (match on it or compare its fields instead)", span);
+        }
+    }
+
+    // `==` / `!=` lower to a single word comparison, which is only meaningful for scalars,
+    // pointers and fieldless enums (whose value is the discriminant), or to a length-and-bytes
+    // compare for slices (emit_slice_eq). On any other aggregate a word comparison would
+    // compare an address or the tag alone, so it is rejected rather than miscompiled.
+    pub fn check_equality_operands(self: &mut ZirLowerer, op_tag: u32, lhs_ty: u32, rhs_ty: u32, span: Span) {
+        if op_tag != 8 as u32 && op_tag != 9 as u32 { return; }
+        let lhs_slice = lhs_ty != 0 as u32 && self.get_type_tag(lhs_ty) == ILTYPE_SLICE;
+        let rhs_slice = rhs_ty != 0 as u32 && self.get_type_tag(rhs_ty) == ILTYPE_SLICE;
+        if lhs_slice || rhs_slice {
+            if !lhs_slice || !rhs_slice || !(self.types_match(lhs_ty, rhs_ty) || self.types_match(rhs_ty, lhs_ty)) {
+                self.report_error("== and != on slices require two slices of the same element type", span);
+            } else if !self.is_byte_comparable_type(self.get_slice_element_type(lhs_ty)) {
+                self.report_error("== and != on slices require integer, bool, char or pointer elements", span);
+            }
+            return;
+        }
+        if self.is_word_comparable_type(lhs_ty) && self.is_word_comparable_type(rhs_ty) { return; }
+        self.report_error("cannot compare structs, tuples, arrays or payload-carrying enums with == or != (match on them or compare fields instead)", span);
+    }
+
+    // Element types whose equality is exactly byte equality: no padding, no float NaN/-0.
+    fn is_byte_comparable_type(self: &ZirLowerer, ty: u32) -> bool {
+        if ty == 0 as u32 { return false; }
+        let tag = self.get_type_tag(ty);
+        if tag == ILTYPE_PTR || tag == ILTYPE_PTRMUT { return true; }
+        if tag != ILTYPE_PRIMITIVE { return false; }
+        if self.is_integer_primitive_type(ty) { return true; }
+        let prim = self.get_type_decl(ty).def.get_Primitive().get_tag();
+        return prim == ILPRIM_BOOL || prim == ILPRIM_CHAR;
+    }
+
+    fn is_word_comparable_type(self: &ZirLowerer, ty: u32) -> bool {
+        if ty == 0 as u32 { return true; }
+        let tag = self.get_type_tag(ty);
+        if tag == ILTYPE_USER { return self.is_fieldless_enum_type(ty); }
+        return tag != ILTYPE_TUPLE && tag != ILTYPE_ARRAY && tag != ILTYPE_SLICE;
+    }
+
+    pub fn check_cast_validity(self: &mut ZirLowerer, c: &CastExpr, inner_place: &Place, target_ty: u32, span: Span) {
+        let is_target_enum = self.resolver.is_enum_type(c.target_ty);
+        if is_target_enum {
+            self.report_error("cannot cast to enum type: enum discriminants must be constructed via variant constructors", span);
+            return;
+        }
+        let cast_src_ty = self.get_place_type(inner_place);
+        // A file descriptor's capability (r, w, rw) is fixed when it is opened: `f as fd<w>`
+        // on an `fd<r>` would forge write access, and `3 as fd<w>` a descriptor.
+        let target_tag = self.get_type_tag(target_ty);
+        if (target_tag == ILTYPE_FD || target_tag == ILTYPE_IORING) && cast_src_ty != target_ty {
+            self.report_error("cannot cast to a file descriptor or ioring type: its capability is fixed when it is opened", span);
+            return;
+        }
+        if self.is_scalar_primitive_type(target_ty) && self.is_user_value_type(cast_src_ty) && !self.is_fieldless_enum_type(cast_src_ty) {
+            self.report_error("cannot cast a struct or payload-carrying enum value to a scalar type (match on it instead)", span);
+            return;
+        }
+        let is_target_ref = self.resolver.is_ref_type(c.target_ty);
+        let is_target_fn = self.resolver.is_fn_type(c.target_ty) || self.is_fn_type(target_ty);
+        let is_target_param = self.resolver.is_type_param(c.target_ty) || (target_ty != 0 as u32 && self.get_type_tag(target_ty) == ILTYPE_VAR);
+        if is_target_ref {
+            let src_ty = self.get_place_type(inner_place);
+            if self.is_integer_primitive_type(src_ty) {
+                self.report_error("cannot cast integer to reference type: references cannot be null", span);
+            } else if self.get_type_tag(src_ty) == ILTYPE_PTR || self.get_type_tag(src_ty) == ILTYPE_PTRMUT {
+                self.report_error("cannot cast raw pointer directly to reference (dereference and borrow instead)", span);
+            } else {
+                self.report_error("cannot cast to reference type: references cannot be null", span);
+            }
+        } else if is_target_fn {
+            let src_ty = self.get_place_type(inner_place);
+            if self.is_integer_primitive_type(src_ty) {
+                self.report_error("cannot cast integer to function pointer: function pointers cannot be null", span);
+            } else if self.get_type_tag(src_ty) == ILTYPE_PTR || self.get_type_tag(src_ty) == ILTYPE_PTRMUT {
+                self.report_error("cannot cast pointer to function pointer: function pointers cannot be null", span);
+            } else {
+                self.report_error("cannot cast to function pointer: function pointers cannot be null", span);
+            }
+        } else if is_target_param {
+            let src_ty = self.get_place_type(inner_place);
+            if self.is_integer_primitive_type(src_ty) {
+                self.report_error("cannot cast integer to type parameter: type parameters may be reference types", span);
+            }
+        }
+    }
+
+}

@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: error: use of moved value 'v'
+
+import "vec.zrl";
+use vec::Vec;
+
+fn consume_vec(v: Vec<i32>) {}
+
+fn main() -> i32 {
+    let mut i = 0 as usize;
+    let v = Vec::<i32>.new();
+    while i < 5 as usize {
+        consume_vec(v);
+        i = i + 1 as usize;
+    }
+    return 0;
+}

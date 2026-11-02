@@ -1,0 +1,9 @@
+// expected exit code: 0
+fn main() -> i32 {
+    let mut arr: [u8; 2] = [0, 0];
+    arr[0] = 1;
+    arr[1] = 2;
+    if arr[0] != 1 { return 1; }
+    if arr[1] != 2 { return 2; }
+    return 0;
+}

@@ -1,0 +1,18 @@
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+    pub line: u32,
+    pub col: u32,
+}
+
+fn test_generic_sizeof<T>() -> i32 {
+    return sizeof(T) as i32;
+}
+
+fn main(argc: i32, argv: **u8) -> i32 {
+    let direct = sizeof(Span) as i32;
+    let generic = test_generic_sizeof::<Span>();
+    if direct != generic { return 1; }
+    if direct != 16 { return 2; } // Span: 4*u32 = 16 bytes
+    return 0;
+}

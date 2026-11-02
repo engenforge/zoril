@@ -1,0 +1,39 @@
+// name: A frame-owned view stored through a trait method taking reference is rejected
+// expected: compile_reject
+// Storing a frame-owned view through a trait method that copies from a reference parameter is rejected.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct Slot {
+    s: [i32],
+}
+
+trait CopySlot {
+    fn copy_from(self: &mut Self, src: &Slot);
+}
+
+impl CopySlot for Slot {
+    fn copy_from(self: &mut Slot, src: &Slot) {
+        self.s = src.s;
+    }
+}
+
+fn f(out: &mut Slot) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(7);
+    let local = Slot { s: v.as_slice() };
+    out.copy_from(&local);
+}
+
+fn main() -> i32 {
+    let e: [i32] = @slice(0 as *i32, 0);
+    let mut out = Slot { s: e };
+    f(&mut out);
+    return out.s[0];
+}

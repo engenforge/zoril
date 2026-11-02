@@ -1,0 +1,16 @@
+// expected exit 0
+// `[mut T]` is a slice its holder may write through; it is accepted where a `[T]` is.
+fn first(s: [u8]) -> u8 { return s[0]; }
+fn fill(s: [mut u8], v: u8) {
+    let mut i = 0 as usize;
+    while i < s.len { s[i] = v; i = i + 1; }
+}
+struct Buf { data: [mut u8] }
+fn main() -> i32 {
+    let mut a: [u8; 4] = [0, 0, 0, 0];
+    let b = Buf { data: unsafe { @slice(&mut a[0] as *mut u8, 4 as usize) } };
+    fill(b.data, 7);
+    if first(b.data) != 7 { return 1; }
+    if a[3] != 7 { return 2; }
+    return 0;
+}

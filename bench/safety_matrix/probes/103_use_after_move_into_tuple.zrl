@@ -1,0 +1,12 @@
+// name: Use after move into a tuple literal
+// expected: compile_reject
+// Tuple and array literals move their elements. Using a moved value in one was not checked,
+// so `r` was dropped twice.
+struct R { x: i32 }
+impl Drop for R { fn drop(self: &mut R) { } }
+fn main() -> i32 {
+    let r = R { x: 1 };
+    let w = r;
+    let t = (r, 2);
+    return t.1;
+}

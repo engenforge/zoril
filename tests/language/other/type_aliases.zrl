@@ -1,0 +1,35 @@
+// expected exit code: 0
+// Tests type aliases for primitives and struct types.
+
+type Byte = u8;
+type Word = u32;
+type Count = usize;
+
+struct Matrix {
+    rows: i32,
+    cols: i32,
+}
+
+type Grid = Matrix;
+
+fn byte_to_word(b: Byte) -> Word {
+    return b as Word;
+}
+
+fn grid_cells(g: &Grid) -> i32 {
+    return g.rows * g.cols;
+}
+
+fn main() -> i32 {
+    let b: Byte = 0xFF;
+    let w = byte_to_word(b);
+    if w != 255 { return 1; }
+
+    let g = Grid { rows: 4, cols: 5 };
+    if grid_cells(&g) != 20 { return 2; }
+
+    let n: Count = 42;
+    if n != 42 { return 3; }
+
+    return 0;
+}

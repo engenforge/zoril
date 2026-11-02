@@ -1,0 +1,13 @@
+// expected exit code: 0
+enum E { Tuple(u64, u32) }
+fn match_tuple(p: *E) -> u64 {
+    return match unsafe { *p } {
+        E.Tuple(a, b) => a + b as u64,
+    };
+}
+fn main() -> i32 {
+    let e = E.Tuple(100 as u64, 42 as u32);
+    let res = match_tuple(&e);
+    if res != 142 as u64 { return 1; }
+    return 0;
+}

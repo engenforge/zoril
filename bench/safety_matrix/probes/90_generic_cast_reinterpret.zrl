@@ -1,0 +1,8 @@
+// name: Generic cast used to reinterpret an integer as a slice
+// expected: compile_reject
+fn reinterpret<T, U>(t: T) -> U { return t as U; }
+fn main() -> i32 {
+    let x: i64 = 5;
+    let y: [u8] = reinterpret::<i64, [u8]>(x);
+    return 0;
+}

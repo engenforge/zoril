@@ -1,0 +1,128 @@
+// Safe region-based arena memory management (Arena, ArenaMark)
+
+import "mem_raw.zrl";
+import "io.zrl";
+import "core0.zrl";
+
+use io::Error;
+use mem_raw::{ArenaHeader, arena_free, arena_init_result, arena_reset,};
+
+// Opaque snapshot mark recording the allocation state of an arena.
+pub struct ArenaMark {
+    header: *mut ArenaHeader,
+    generation: u64,
+    offset: u64,
+}
+
+// Region-based memory arena allocator that allocates memory linearly and frees all objects in bulk.
+pub struct Arena {
+    header: *mut ArenaHeader,
+}
+
+impl Arena {
+    // Creates a new memory arena with the requested byte capacity using mmap.
+    pub fn new(capacity: u64) -> Result<Arena, Error> {
+        // SAFETY: arena_init_result maps a dedicated memory region and verifies the syscall result.
+        let res = unsafe { arena_init_result(capacity) };
+        let hdr = match res {
+            Ok(h) => h,
+            Err(e) => return Result.Err(e),
+        };
+        return Result.Ok(Arena { header: hdr });
+    }
+
+    // Resets the arena allocation offset back to zero, invalidating all previously allocated objects.
+    pub fn reset(self: &mut Arena) {
+        // SAFETY: `self` is a live `&mut Arena`, so `self.header` is a live arena mapping.
+        unsafe {
+            (*self.header).generation = (*self.header).generation + 1 as u64;
+            arena_reset(self.header, 0 as u64);
+        }
+    }
+
+    // Returns a mark recording the current allocation position in the arena.
+    pub fn mark(self: &Arena) -> ArenaMark {
+        // SAFETY: `self` is a live `&Arena`.
+        let off = unsafe { (*self.header).offset };
+        let gen = unsafe { (*self.header).generation };
+        return ArenaMark {
+            header: self.header,
+            generation: gen,
+            offset: off,
+        };
+    }
+
+    // Rewinds the arena allocation offset back to mark, freeing objects allocated after that mark.
+    //
+    // Rewinds the arena to `mark.offset` within the current generation. Pre-mark allocations
+    // remain valid across reset_to unless mutated after `mark`. If nested marks were taken,
+    // rewinding to an earlier mark leaves later marks usable only up to their recorded offset;
+    // allocations made after rewinding have later borrow epochs and cannot be freed by stale
+    // inner marks while live.
+    pub fn reset_to(self: &mut Arena, mark: ArenaMark) {
+        if mark.header != self.header {
+            bounds_trap("cross-arena mark");
+        }
+        // SAFETY: `self` is a live `&mut Arena`.
+        let cur_gen = unsafe { (*self.header).generation };
+        if mark.generation != cur_gen {
+            bounds_trap("stale arena mark");
+        }
+        // SAFETY: `self` is a live `&mut Arena`.
+        let cur = unsafe { (*self.header).offset };
+        if mark.offset > cur {
+            bounds_trap("invalid arena mark");
+        }
+        // SAFETY: mark.offset <= cur, rewinding within the previously allocated prefix.
+        unsafe {
+            arena_reset(self.header, mark.offset);
+        }
+    }
+}
+
+impl Drop for Arena {
+    // Releases the arena's memory back to the operating system.
+    pub fn drop(self: Arena) {
+        // SAFETY: Drop is the single free path for an Arena handle.
+        unsafe { arena_free(self.header); }
+    }
+}
+
+// --- Internal / raw API ---
+
+// Extracts the raw arena header pointer from an Arena.
+//
+// CALLER OBLIGATION: caller must ensure arena lives as long as the returned header pointer.
+//
+// INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+pub unsafe fn arena_raw(a: &Arena) -> *mut ArenaHeader {
+    return a.header;
+}
+
+// Internal panic handler triggered on an out-of-bounds memory access.
+pub fn bounds_trap(msg: [u8]) -> never {
+    zoril_user_trap(msg);
+}
+
+// Internal panic handler triggered when an allocation size exceeds capacity.
+pub fn capacity_overflow() -> never {
+    bounds_trap("capacity overflow");
+}
+
+const USIZE_MAX: usize = 18446744073709551615;
+
+// Computes count * element_size with integer overflow trapping.
+pub fn size_of_n(count: usize, elem_size: usize) -> usize {
+    if elem_size != 0 as usize && count > USIZE_MAX / elem_size {
+        capacity_overflow();
+    }
+    return count * elem_size;
+}
+
+// Computes geometric capacity growth for dynamically-resized buffers.
+pub fn grow_cap(cap: usize) -> usize {
+    if cap > USIZE_MAX / 2 as usize {
+        capacity_overflow();
+    }
+    return cap * 2 as usize;
+}

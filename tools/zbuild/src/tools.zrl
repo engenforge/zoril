@@ -1,0 +1,259 @@
+// Locating the toolchain and fingerprinting it. Object files depend on the exact compiler, zilc,
+// qbe and assembler that produced them (doc/spec/abi.md: objects only link with objects of the
+// same emitter generation), so their identity is part of every cache key.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "string.zrl";
+import "vec.zrl";
+import "fsys.zrl";
+import "proc.zrl";
+import "file.zrl";
+import "util.zrl";
+import "manifest.zrl";
+import "options.zrl";
+use fsys::{env_var_raw, exe_dir_raw, find_in_path_raw};
+use io::{File, eprint};
+use manifest::{Manifest, ToolRec, find_tool_rec};
+use mem_raw::ArenaHeader;
+use options::Options;
+use string::String;
+use proc::Command;
+use util::{file_exists, join_path, read_file_to_slice, sha_hex, stat_mtime_size, write_file_slice};
+use vec::Vec;
+
+pub struct Tools {
+    pub compiler: [u8],
+    pub zilc: [u8],
+    pub qbe: [u8],
+    pub asm_tool: [u8],
+    pub ld: [u8],
+    pub cc: [u8],
+    pub recs: Vec<ToolRec>,
+    pub toolchain_id: [u8],
+}
+
+// Sibling-first for zoril and zilc: explicit flag wins; then sibling next to zbuild; then $PATH.
+// Internal test environment variables (ZORIL_CC, ZILC_BIN) are NOT read.
+fn locate_sibling_first(
+    override_path: [u8],
+    name: [u8],
+    exe_dir: [u8],
+    arena: *mut ArenaHeader
+) -> [u8] {
+    if override_path.len > 0 {
+        return override_path;
+    }
+    if exe_dir.len > 0 {
+        let sibling = join_path(exe_dir, name, arena);
+        if file_exists(sibling, arena) { return sibling; }
+    }
+    return match unsafe { find_in_path_raw(name, arena) } {
+        Some(p) => p,
+        None => if file_exists(name, arena) { name } else { "" },
+    };
+}
+
+// Canonical toolchain tools (qbe, as, ld): explicit flag wins; then environment variable
+// (BACKEND_BIN, ASSEMBLER_BIN, LINKER_BIN); then $PATH.
+fn locate_toolchain(
+    override_path: [u8],
+    name: [u8],
+    env_name: [u8],
+    arena: *mut ArenaHeader
+) -> [u8] {
+    let candidate = if override_path.len > 0 {
+        override_path
+    } else {
+        match unsafe { env_var_raw(env_name, arena) } {
+            Some(val) => if val.len > 0 { val } else { name },
+            None => name,
+        }
+    };
+
+    return match unsafe { find_in_path_raw(candidate, arena) } {
+        Some(p) => p,
+        None => if file_exists(candidate, arena) { candidate } else { "" },
+    };
+}
+
+fn tool_rec(name: [u8], path: [u8], prev: &Manifest, arena: *mut ArenaHeader) -> Option<ToolRec> {
+    let ms = match stat_mtime_size(path, arena) {
+        Some(v) => v,
+        None => { return Option.None; },
+    };
+    // Re-hash the binary only if its identity on disk changed since the last build.
+    match find_tool_rec(prev, name, path) {
+        Some(old) => {
+            if old.mtime == ms.0 && old.size == ms.1 && old.sha.len > 0 {
+                return Option.Some(old);
+            }
+        },
+        None => {},
+    }
+    let content = match read_file_to_slice(path, arena) {
+        Ok(c) => c,
+        Err(_) => { return Option.None; },
+    };
+    return Option.Some(ToolRec {
+        name: name,
+        path: path,
+        mtime: ms.0,
+        size: ms.1,
+        sha: sha_hex(content, arena)
+    });
+}
+
+fn missing_tool(name: [u8], flag: [u8]) -> i32 {
+    eprint("error: could not find ");
+    eprint(name);
+    eprint("; install it, put it on PATH, or pass ");
+    eprint(flag);
+    eprint(" <path>\n");
+    return 1;
+}
+
+// QBE has no --version. Releases before 1.3 stop at "identifier too long" on a symbol of 80 bytes or
+// more (which a module path makes ordinary) and 1.0 lacks `blit`, so a one-function probe with a long
+// symbol and a `blit` says whether this QBE can compile what zilc writes. `make` runs the same probe
+// (scripts/check_deps.sh); a prebuilt release has no `make`, so zbuild asks too. Only QBE's own two
+// refusals mean "too old": any other failure (a broken wrapper, a QBE built for another target) is
+// reported as what it printed. The answer is kept under the QBE's hash, so an unchanged QBE is asked once.
+// Returns 0 when this QBE can be used.
+fn check_qbe_version(qbe: [u8], qbe_sha: [u8], cache_dir: [u8], arena: *mut ArenaHeader) -> i32 {
+    let ok_path = join_path(cache_dir, "qbe-probe.ok", arena);
+    match read_file_to_slice(ok_path, arena) {
+        Ok(text) => {
+            if text == qbe_sha { return 0; }
+        },
+        Err(_) => {},
+    }
+    let mut probe = unsafe { String.new_in_raw(arena) };
+    probe.push_str("export function $zoril_probe_");
+    let mut i = 0 as usize;
+    while i < 120 {
+        probe.push_u8('0' as u8);
+        i = i + 1;
+    }
+    probe.push_str("(l %a, l %b) {\n@s\n\tblit %a, %b, 8\n\thlt\n}\n");
+    let path = join_path(cache_dir, "qbe-probe.ssa", arena);
+    match write_file_slice(path, probe.as_slice(), arena) {
+        Ok(_) => {},
+        Err(_) => { return 0; },
+    }
+    let out_path = join_path(cache_dir, "qbe-probe.out", arena);
+    let out_file = match File.create(out_path) {
+        Ok(f) => f,
+        Err(_) => { return 0; },
+    };
+    let mut cmd = unsafe { Command.new_raw(qbe, arena) };
+    cmd.arg("-o");
+    cmd.arg("/dev/null");
+    cmd.arg(path);
+    cmd.set_stdout(out_file.fd());
+    cmd.set_stderr(out_file.fd());
+    let ran = cmd.status();
+    let _ = out_file.close();
+    let success = match ran {
+        Ok(st) => st.is_success(),
+        Err(_) => false,
+    };
+    if success {
+        let _ = write_file_slice(ok_path, qbe_sha, arena);
+        return 0;
+    }
+    let said = match read_file_to_slice(out_path, arena) {
+        Ok(t) => t,
+        Err(_) => "",
+    };
+    eprint("error: ");
+    eprint(qbe);
+    if said.find("identifier too long").is_some() || said.find("unknown keyword").is_some() {
+        eprint(
+            " is too old: QBE 1.3 or newer is required (earlier releases refuse the long symbols Zoril writes); install a newer one from https://c9x.me/compile/ or pass --qbe <path>\n"
+        );
+    } else {
+        eprint(" could not compile zbuild's probe program");
+        if said.len > 0 as usize {
+            eprint(": ");
+            eprint(said.trim());
+        }
+        eprint("\n");
+    }
+    return 1;
+}
+
+// Resolves every tool and fingerprints the ones that shape object bytes. Returns 0 on success.
+#[stores(arena -> out)]
+pub fn resolve_tools(
+    opts: &Options,
+    prev: &Manifest,
+    out: &mut Tools,
+    arena: *mut ArenaHeader
+) -> i32 {
+    let exe = unsafe { exe_dir_raw(arena) };
+    out.compiler = locate_sibling_first(opts.compiler, "zoril", exe, arena);
+    out.zilc = locate_sibling_first(opts.zilc, "zilc", exe, arena);
+    out.qbe = locate_toolchain(opts.qbe, "qbe", "BACKEND_BIN", arena);
+    out.asm_tool = locate_toolchain(opts.asm_tool, "as", "ASSEMBLER_BIN", arena);
+    out.ld = locate_toolchain(opts.ld, "ld", "LINKER_BIN", arena);
+    if opts.hosted { out.cc = locate_toolchain(opts.cc, "cc", "LINK_CC", arena); }
+    if out.compiler.len == 0 { return missing_tool("zoril", "--compiler"); }
+    if out.zilc.len == 0 { return missing_tool("zilc", "--zilc"); }
+    if out.qbe.len == 0 { return missing_tool("qbe", "--qbe"); }
+    if out.asm_tool.len == 0 { return missing_tool("as", "--as"); }
+    if opts.hosted && out.cc.len == 0 { return missing_tool("cc", "--cc"); }
+
+    out.recs = unsafe { Vec::<ToolRec>.new_in_raw(arena) };
+    let mut names = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+    names.push("zoril");
+    names.push("zilc");
+    names.push("qbe");
+    names.push("as");
+    let mut paths = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+    paths.push(out.compiler);
+    paths.push(out.zilc);
+    paths.push(out.qbe);
+    paths.push(out.asm_tool);
+    let mut id_input = unsafe { String.new_in_raw(arena) };
+    let mut i = 0 as usize;
+    while i < 4 {
+        match tool_rec(names.as_slice()[i], paths.as_slice()[i], prev, arena) {
+            Some(r) => {
+                out.recs.push(r);
+                id_input.push_str(r.name);
+                id_input.push_u8('=' as u8);
+                id_input.push_str(r.sha);
+                id_input.push_u8('\n' as u8);
+            },
+            None => {
+                eprint("error: cannot read tool binary: ");
+                eprint(paths.as_slice()[i]);
+                eprint("\n");
+                return 1;
+            },
+        }
+        i = i + 1;
+    }
+    if check_qbe_version(out.qbe, out.recs.as_slice()[2].sha, opts.cache_dir, arena) != 0 {
+        return 1;
+    }
+    // Flags that change what the compiler emits. The include list is deliberately not part of the
+    // toolchain: it affects an object only through module identities and each module's resolved
+    // dependency set, both of which are checked per module. Keeping it out lets programs with
+    // different -I lists share one cache without discarding each other's manifest.
+    id_input.push_str("flags=-c --interproc-summary --write-interface");
+    // A checked build emits different code for the same source, so the two modes must never share
+    // an object.
+    if opts.checked {
+        id_input.push_str(" --checked");
+    }
+    // A hosted build names the entry differently, so it never shares an object with a default one.
+    if opts.hosted {
+        id_input.push_str(" --hosted");
+    }
+    id_input.push_u8('\n' as u8);
+    out.toolchain_id = sha_hex(id_input.as_slice(), arena);
+    return 0;
+}

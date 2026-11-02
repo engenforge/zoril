@@ -1,0 +1,20 @@
+// A module for the namespace tests.
+pub struct Point { pub x: i32, pub y: i32 }
+
+impl Point {
+    pub const ORIGIN_X: i32 = 0;
+    pub fn new(x: i32, y: i32) -> Point { return Point { x: x, y: y }; }
+    pub fn sum(self: &Point) -> i32 { return self.x + self.y; }
+}
+
+pub enum Shape { Dot(Point), Empty }
+
+pub const SIDES: i32 = 4;
+
+pub fn weight(s: Shape) -> i32 {
+    return match s { Shape.Dot(p) => p.sum(), Shape.Empty => 0 };
+}
+
+fn hidden() -> i32 { return 7; }
+
+pub fn twice_hidden() -> i32 { return hidden() * 2; }

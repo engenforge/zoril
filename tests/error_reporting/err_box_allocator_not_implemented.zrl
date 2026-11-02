@@ -1,0 +1,16 @@
+// expected compile fail
+// `box(allocator) expr` is rejected rather than silently mis-compiled. It never reached the
+// arena: the lowering marked the value frame-local and dropped the allocator operand, and the
+// emitted call goes to the runtime's mmap stub, which ignores the arena operand
+// (doc/spec/surface_syntax.md §7.4). The real feature - a value boxed into an arena and tied to
+// it - is planned; until then an arena's own constructors are the way.
+// EXPECT: tests/error_reporting/err_box_allocator_not_implemented.zrl:14:13: error: arena allocation with box(allocator) is not implemented; use Vec, String or HashMap with new_in(&arena)
+import "mem.zrl";
+use mem::{Arena, arena_raw};
+
+fn main() -> i32 {
+    let a = Arena.new(65536).unwrap();
+    let h = unsafe { arena_raw(&a) };
+    let p = box(h) 42;
+    return *p;
+}

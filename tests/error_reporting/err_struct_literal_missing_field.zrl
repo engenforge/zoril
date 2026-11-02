@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: error: struct literal is missing field
+// A struct literal that omits a declared field must trigger a diagnostic.
+struct Holder { pub a: u32, pub b: u8 }
+
+fn main() -> i32 {
+    let h = Holder { a: 1 };
+    return h.b as i32;
+}

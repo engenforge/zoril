@@ -1,0 +1,2 @@
+extern "C" fn dup_sym() -> i32 { return 2; }
+pub fn from_b() -> i32 { return dup_sym(); }

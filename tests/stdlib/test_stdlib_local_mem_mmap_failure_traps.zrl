@@ -1,0 +1,14 @@
+// expected exit 134
+// The fixture `stdlib/local_mem.zrl` has the same mmap wrapper as `stdlib/mem.zrl`, and it tested the
+// result for a *null* pointer - which a failed mmap is not, since the kernel returns -errno. Its old
+// behaviour was worse than the shipped wrapper's crash: the test missed -ENOMEM, so the arena was
+// built around a forged `start` pointer and the program **exited 0** with the bad mapping in hand,
+// failing only when something later used it. With `sys::syscall_failed` it reports the failure the
+// same way the other wrapper does: `panic: arena_init: mmap failed`, exit 134 (`zoril_user_trap`).
+import "local_mem.zrl";
+use local_mem::arena_init;
+
+fn main() -> i32 {
+    let a = arena_init(2305843009213693952);
+    return 0;
+}

@@ -1,0 +1,14 @@
+// expected compile fail
+// A raw pointer laundered through a generic instantiation, dereferenced: the instantiation keeps
+// the raw IL type, so the dereference needs `unsafe`.
+// EXPECT: tests/error_reporting/err_raw_deref_after_generic.zrl:12:5: error: dereference of raw pointer requires unsafe block
+
+fn id<T>(t: T) -> T { return t; }
+
+fn main() -> i32 {
+    let mut x: u32 = 7;
+    let p: *mut u32 = &mut x as *mut u32;
+    let q = id(p);
+    *q = 9;
+    return 0;
+}

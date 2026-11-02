@@ -1,0 +1,18 @@
+// name: Container pre-mark growth rejected on Arena.reset_to
+// expected: compile_reject
+// A Vec allocated in an arena before a mark that is grown/mutated after the mark
+// reallocates into memory after the mark's offset. Resetting the arena to that mark
+// while the mutated Vec remains live must be rejected at compile time.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536 as u64).unwrap();
+    let mut v = Vec::<u64>.new_in(&a);
+    let m = a.mark();
+    v.push(42);
+    a.reset_to(m);
+    return v.len() as i32;
+}

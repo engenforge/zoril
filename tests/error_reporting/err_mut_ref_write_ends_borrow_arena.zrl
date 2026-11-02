@@ -1,0 +1,22 @@
+// expected compile fail
+// A write through a `&mut` used to end the borrow that reference itself holds, so a *second*
+// borrow of the same place was accepted while the `&mut` went on being used.
+// EXPECT: tests/error_reporting/err_mut_ref_write_ends_borrow_arena.zrl:18:35: error: cannot borrow 's.a' while it is mutably borrowed
+// EXPECT: tests/error_reporting/err_mut_ref_write_ends_borrow_arena.zrl:16:21: note: borrow of 's' taken here
+
+import "mem.zrl";
+use mem::Arena;
+import "vec.zrl";
+use vec::Vec;
+
+struct S { a: Arena, n: i32 }
+
+fn main() -> i32 {
+    let mut s = S { a: Arena.new(65536).unwrap(), n: 1 };
+    let m: &mut S = &mut s;
+    m.n = 2;
+    let mut l = Vec::<u64>.new_in(&s.a);
+    m.a = Arena.new(65536).unwrap();
+    l.push(42);
+    return 0;
+}

@@ -1,0 +1,12 @@
+// expected exit code: 134
+import "vec.zrl";
+import "mem_raw.zrl";
+use mem_raw::arena_init;
+use vec::Vec;
+
+pub fn main() -> i32 {
+    let arena = unsafe { arena_init(65536) };
+    let mut v = unsafe { Vec::<i32>.new_in_raw(arena) };
+    v.push(10);
+    return v[5];
+}

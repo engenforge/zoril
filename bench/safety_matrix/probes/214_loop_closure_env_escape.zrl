@@ -1,0 +1,13 @@
+// name: Capturing closure escaping loop body reads overwritten stack env
+// expected: compile_reject
+fn main() -> i32 {
+    let zero: u64 = 0;
+    let mut f = || -> u64 { return zero; };
+    for i in 0..2 {
+        let x: u64 = 7 + (i as u64) * 92;
+        let cur = || -> u64 { return x; };
+        if i == 0 { f = cur; }
+    }
+    // f() reads 99 instead of 7
+    return f() as i32;
+}

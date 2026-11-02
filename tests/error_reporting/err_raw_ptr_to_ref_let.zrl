@@ -1,0 +1,4 @@
+// expected compile fail
+// EXPECT: error: converting a raw pointer to a reference requires an `unsafe` block and an explicit `&*p`
+struct Point { x: i32, y: i32 }
+fn main() -> i32 { let p = 0 as *Point; let r: &Point = p; return r.x; }

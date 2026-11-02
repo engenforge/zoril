@@ -1,0 +1,51 @@
+// expected exit 0
+import "core.zrl";
+
+fn double(x: i32) -> i32 {
+    return x * 2;
+}
+
+fn add_one(x: i32) -> i32 {
+    return x + 1;
+}
+
+fn main() -> i32 {
+    let r1: Result<i32, i32> = Result.Ok(21);
+    let r2 = r1.map::<i32>(double);
+    
+    match r2 {
+        Ok(val) => {
+            if val != 42 { return 1; }
+        },
+        Err(_) => { return 2; },
+    }
+
+    let r3: Result<i32, i32> = Result.Err(10);
+    let r4 = r3.map::<i32>(double);
+    match r4 {
+        Ok(_) => { return 3; },
+        Err(e) => {
+            if e != 10 { return 4; }
+        },
+    }
+
+    let r5: Result<i32, i32> = Result.Err(5);
+    let r6 = r5.map_err::<i32>(add_one);
+    match r6 {
+        Ok(_) => { return 5; },
+        Err(e) => {
+            if e != 6 { return 6; }
+        },
+    }
+
+    let r7: Result<i32, i32> = Result.Ok(100);
+    let r8 = r7.map_err::<i32>(add_one);
+    match r8 {
+        Ok(val) => {
+            if val != 100 { return 7; }
+        },
+        Err(_) => { return 8; },
+    }
+
+    return 0;
+}

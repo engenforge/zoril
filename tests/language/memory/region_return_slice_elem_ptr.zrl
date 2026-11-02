@@ -1,0 +1,16 @@
+// expected exit 0
+// Returning a pointer derived from a mutable slice parameter (e.g. &mut s[0] as *mut T)
+// must be accepted. The slice descriptor lives in a local stack slot, but its
+// pointee data was passed in by the caller and is not local stack storage. The parameter is
+// `[mut i64]`: `&mut s[0]` out of a read-only `[i64]` is a mutability error, not this test's
+// subject (Unified Solution A).
+fn first(s: [mut i64]) -> *mut i64 {
+    return &mut s[0] as *mut i64;
+}
+
+fn main() -> i32 {
+    let mut buf: [i64; 2] = [42, 84];
+    let p = unsafe { first(@slice(&mut buf[0] as *mut i64, 2 as usize)) };
+    if unsafe { *p } != 42 { return 1; }
+    return 0;
+}

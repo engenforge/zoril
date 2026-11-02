@@ -1,0 +1,16 @@
+// name: A view of a closure's owned capture used and dropped within one call is accepted
+// expected: accept
+// A view of a closure's owned Vec that is read and dropped entirely within one call is accepted.
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut f = || -> i32 {
+        let s = v.as_slice();
+        let x = s[0];
+        return x;
+    };
+    return if f() == 42 { 0 } else { 1 };
+}

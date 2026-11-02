@@ -1,0 +1,12 @@
+// name: Reference into a local's storage returned through a method call
+// expected: compile_reject
+// get's body returns an address into self's own storage, so c.get() on a local c points into
+// this frame. (v.as_slice() on a local Vec points into the Vec's buffer and stays accepted.)
+struct C { v: i32 }
+impl C { fn get(self: &C) -> &i32 { return &self.v; } }
+fn leak() -> &i32 { let c = C { v: 7 }; return c.get(); }
+fn main() -> i32 {
+    let r = leak();
+    if *r != 7 { return 0; }
+    return 0;
+}

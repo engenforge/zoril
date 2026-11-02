@@ -1,0 +1,327 @@
+// tools/zman/src/render.zrl
+//
+// Page rendering: one `zoril-<module>.3.scd` per standard library module, in the layout the man
+// pages use (NAME, SYNOPSIS, DESCRIPTION, ITEMS, INTERNAL, RETURN VALUES AND ERRORS, SEE ALSO).
+//
+// Two rules decide what goes where. An item is INTERNAL when it is an `unsafe fn` or a `raw_*` /
+// `*_raw` escape hatch, decided per item rather than per module. An item with no description in its
+// module is an error naming it, so a new standard library item fails the page build instead of
+// shipping a placeholder.
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "string.zrl";
+import "vec.zrl";
+import "parse.zrl";
+use mem_raw::ArenaHeader;
+use parse::{Item, KIND_CONST, KIND_ENUM, KIND_FN, KIND_STRUCT, KIND_TRAIT, Method, Source};
+use string::String;
+use vec::Vec;
+
+fn put_line(out: &mut String, text: [u8]) {
+    out.push_str(text);
+    out.push_u8('\n' as u8);
+}
+
+fn blank_line(out: &mut String) {
+    out.push_u8('\n' as u8);
+}
+
+pub fn is_internal(item: &Item) -> bool {
+    if item.is_unsafe { return true; }
+    if item.name.ends_with("_raw") { return true; }
+    return item.name.starts_with("raw_");
+}
+
+// The description of one item: its comment block keyed by the impl or trait it lives under, or by
+// the item name alone when the comment was written above a top-level declaration.
+fn lookup(source: &Source, owner: [u8], name: [u8]) -> [u8] {
+    let docs = source.docs.as_slice();
+    let mut i = 0 as usize;
+    while i < docs.len {
+        let doc = docs[i];
+        if doc.owner == owner && doc.name == name { return doc.text; }
+        i = i + 1;
+    }
+    i = 0;
+    while i < docs.len {
+        let doc = docs[i];
+        if doc.owner.len == 0 && doc.name == name { return doc.text; }
+        i = i + 1;
+    }
+    return "";
+}
+
+// One description line, escaped for scdoc: `*` and `_` are markup there, a backtick is quoted text
+// this page does not underline, and a bare `-` would start a list.
+fn put_description_line(out: &mut String, line: [u8]) {
+    let mut text = line;
+    if text.starts_with("-") && !text.starts_with("- ") {
+        let mut k = 0 as usize;
+        while k < text.len && (text[k] == '-' as u8 || text[k] == ' ' as u8) {
+            k = k + 1;
+        }
+        text = text.sub(k, text.len - k);
+    }
+    out.push_u8('\t' as u8);
+    let mut i = 0 as usize;
+    while i < text.len {
+        let c = text[i];
+        if c != '`' as u8 {
+            if c == '*' as u8 || c == '_' as u8 { out.push_u8('\\' as u8); }
+            out.push_u8(c);
+        }
+        i = i + 1;
+    }
+    out.push_u8('\n' as u8);
+}
+
+fn put_description(out: &mut String, text: [u8]) {
+    let mut start = 0 as usize;
+    let mut i = 0 as usize;
+    while i <= text.len {
+        if i == text.len || text[i] == '\n' as u8 {
+            let line = text.sub(start, i - start);
+            if line.len == 0 {
+                blank_line(out);
+            } else {
+                put_description_line(out, line);
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    blank_line(out);
+}
+
+fn put_declaration(out: &mut String, item: &Item, must_use: bool) {
+    if must_use { put_line(out, "#[must_use]"); }
+    let lines = item.lines.as_slice();
+    let mut i = 0 as usize;
+    while i < lines.len {
+        put_line(out, lines[i]);
+        i = i + 1;
+    }
+}
+
+// One `*name*` entry: its declaration in a code block, then its description. Returns the item name
+// when the module has no description for it, and "" on success.
+fn put_item(out: &mut String, item: &Item, doc_owner: [u8], source: &Source) -> [u8] {
+    out.push_u8('*' as u8);
+    out.push_str(item.name);
+    out.push_u8('*' as u8);
+    out.push_u8('\n' as u8);
+    put_line(out, "```");
+    put_declaration(out, item, item.must_use);
+    put_line(out, "```");
+    blank_line(out);
+    let text = lookup(source, doc_owner, item.name);
+    if text.len == 0 { return item.name; }
+    put_description(out, text);
+    return "";
+}
+
+fn owner_already_listed(items: &Vec<Item>, stop: usize, owner: [u8]) -> bool {
+    let all = items.as_slice();
+    let mut i = 0 as usize;
+    while i < stop {
+        let item = all[i];
+        if item.kind == KIND_FN && !is_internal(&item) && item.owner == owner { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn put_synopsis(out: &mut String, items: &Vec<Item>) {
+    put_line(out, "```");
+    let all = items.as_slice();
+    let mut i = 0 as usize;
+    // Types and traits first, then constants, then one block per impl, then free functions.
+    while i < all.len {
+        let item = all[i];
+        if !is_internal(&item)
+            && (item.kind == KIND_STRUCT || item.kind == KIND_ENUM || item.kind == KIND_TRAIT) {
+            put_declaration(out, &item, false);
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < all.len {
+        let item = all[i];
+        if !is_internal(&item) && item.kind == KIND_CONST {
+            put_line(out, item.lines.as_slice()[0]);
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < all.len {
+        let item = all[i];
+        if !is_internal(&item)
+            && item.kind == KIND_FN
+            && item.owner.len > 0
+            && !owner_already_listed(items, i, item.owner) {
+            out.push_str(item.owner);
+            put_line(out, " {");
+            let mut j = 0 as usize;
+            while j < all.len {
+                let method = all[j];
+                if !is_internal(&method) && method.kind == KIND_FN && method.owner == item.owner {
+                    if method.must_use { put_line(out, "    #[must_use]"); }
+                    out.push_str("    ");
+                    put_line(out, method.lines.as_slice()[0]);
+                }
+                j = j + 1;
+            }
+            put_line(out, "}");
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < all.len {
+        let item = all[i];
+        if !is_internal(&item) && item.kind == KIND_FN && item.owner.len == 0 {
+            put_declaration(out, &item, item.must_use);
+        }
+        i = i + 1;
+    }
+    put_line(out, "```");
+    blank_line(out);
+}
+
+fn lower_ascii(text: [u8], out: &mut String) {
+    let mut i = 0 as usize;
+    while i < text.len {
+        let c = text[i];
+        if c >= 'A' as u8 && c <= 'Z' as u8 {
+            out.push_u8(c + 32 as u8);
+        } else {
+            out.push_u8(c);
+        }
+        i = i + 1;
+    }
+}
+
+fn has_internal(items: &Vec<Item>) -> bool {
+    let all = items.as_slice();
+    let mut i = 0 as usize;
+    while i < all.len {
+        if is_internal(&all[i]) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn put_items(out: &mut String, items: &Vec<Item>, source: &Source, internal: bool) -> [u8] {
+    let all = items.as_slice();
+    let mut i = 0 as usize;
+    while i < all.len {
+        let item = &all[i];
+        if is_internal(item) == internal {
+            let missing = put_item(out, item, item.owner, source);
+            if missing.len > 0 { return missing; }
+            if item.kind == KIND_TRAIT {
+                let methods = item.methods.as_slice();
+                let mut m = 0 as usize;
+                while m < methods.len {
+                    let method = &methods[m];
+                    let missing_method = put_trait_method(out, item, method, source);
+                    if missing_method.len > 0 { return missing_method; }
+                    m = m + 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
+fn put_trait_method(out: &mut String, trait_item: &Item, method: &Method, source: &Source) -> [u8] {
+    out.push_u8('*' as u8);
+    out.push_str(method.name);
+    out.push_u8('*' as u8);
+    out.push_u8('\n' as u8);
+    put_line(out, "```");
+    put_line(out, method.sig);
+    put_line(out, "```");
+    blank_line(out);
+    let text = lookup(source, trait_item.header, method.name);
+    if text.len == 0 { return method.name; }
+    put_description(out, text);
+    return "";
+}
+
+pub fn render_page(
+    module: [u8],
+    source: &Source,
+    items: &Vec<Item>,
+    arena: *mut ArenaHeader
+) -> Result<[u8], [u8]> {
+    let mut out = unsafe { String.new_in_raw(arena) };
+    out.push_str("zoril-");
+    out.push_str(module);
+    put_line(&mut out, "(3)");
+    blank_line(&mut out);
+    put_line(&mut out, "# NAME");
+    blank_line(&mut out);
+    out.push_str("zoril-");
+    out.push_str(module);
+    out.push_str(" - ");
+    put_line(&mut out, source.summary);
+    blank_line(&mut out);
+    put_line(&mut out, "# SYNOPSIS");
+    blank_line(&mut out);
+    out.push_str("*import* \"");
+    out.push_str(module);
+    put_line(&mut out, ".zrl\";");
+    blank_line(&mut out);
+    put_synopsis(&mut out, items);
+    put_line(&mut out, "# DESCRIPTION");
+    blank_line(&mut out);
+    out.push_str("The *");
+    out.push_str(module);
+    out.push_str("* module provides ");
+    lower_ascii(source.summary, &mut out);
+    put_line(&mut out, " for Zoril programs.");
+    put_line(
+        &mut out,
+        "All operations interface directly with kernel facilities or safe region-allocated"
+    );
+    put_line(&mut out, "memory without relying on the C runtime library.");
+    blank_line(&mut out);
+    put_line(&mut out, "# ITEMS");
+    blank_line(&mut out);
+    let missing = put_items(&mut out, items, source, false);
+    if missing.len > 0 {
+        return Result.Err(missing);
+    }
+    if has_internal(items) {
+        put_line(&mut out, "# INTERNAL");
+        blank_line(&mut out);
+        put_line(
+            &mut out,
+            "The following unsafe escape hatches are intended for the bootstrap compiler"
+        );
+        put_line(&mut out, "and standard library internals:");
+        blank_line(&mut out);
+        let missing_internal = put_items(&mut out, items, source, true);
+        if missing_internal.len > 0 {
+            return Result.Err(missing_internal);
+        }
+    }
+    put_line(&mut out, "# RETURN VALUES AND ERRORS");
+    blank_line(&mut out);
+    put_line(
+        &mut out,
+        "Fallible operations return `Result<T, io::Error>` or `Option<T>` rather than"
+    );
+    put_line(
+        &mut out,
+        "setting an errno global. Programming errors and bounds violations trap or panic"
+    );
+    put_line(&mut out, "with diagnostic exit statuses (see *doc/SAFETY.md*).");
+    blank_line(&mut out);
+    put_line(&mut out, "# SEE ALSO");
+    blank_line(&mut out);
+    put_line(&mut out, "*zoril*(1), *zbuild*(1), *zoril-stdlib*(7)");
+    return Result.Ok(out.as_slice());
+}

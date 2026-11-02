@@ -1,0 +1,8 @@
+// expected exit 7
+// The other side of the boundary: the LAST valid index must still work. Guards
+// against "fixing" the off-by-one in the wrong direction and rejecting s[len-1].
+fn main() -> i32 {
+    let mut arr = [1 as u8, 2, 7];
+    let s: [u8] = &mut arr;
+    return s[2 as usize] as i32;
+}

@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_fn_value_static.zrl:6:32: error: a static or constant cannot hold a function value: F
+// A function value carries an environment made at run time, so a global cannot hold one (this
+// was an internal compiler error).
+fn plain(x: i32) -> i32 { return x; }
+static mut F: fn(i32) -> i32 = plain;
+fn set(k: i32) { F = |x: i32| -> i32 { x + k }; }
+fn main() -> i32 { set(5); return F(2); }

@@ -1,0 +1,14 @@
+// expected compile fail
+// The same shape with a `Box`: the old box is dropped and the box is then moved out of itself, so
+// the value read afterwards comes from freed storage. This one does not crash - it reads intact
+// freed memory - which is why the arena and Drop-field forms exist as well.
+// EXPECT: tests/error_reporting/err_self_move_through_mut_ref_box.zrl:11:5: error: cannot use 'b' while it is mutably borrowed
+// EXPECT: tests/error_reporting/err_self_move_through_mut_ref_box.zrl:10:14: note: borrow of 'b' taken here
+
+fn main() -> i32 {
+    let mut b = box 3;
+    let rm = &mut b;
+    *rm = b;
+    let q = &*rm;
+    return **q - 3;
+}

@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_block_scope_borrow_returned_arg_chain.zrl:15:5: error: cannot let 'x' go out of scope while it is still borrowed
+
+// `id2` hands back what the call `id(r)` hands back, so the storage summary has to follow the call
+// into `id` to see that `r` points into `x`. A wrapper no longer hides the local's scope ending
+// while a borrower outlives it.
+fn id(r: &i32) -> &i32 { return r; }
+fn id2(r: &i32) -> &i32 { return id(r); }
+
+fn main() -> i32 {
+    let mut r: &i32 = &0;
+    {
+        let x: i32 = 5;
+        r = id2(&x);
+    }
+    return *r;
+}

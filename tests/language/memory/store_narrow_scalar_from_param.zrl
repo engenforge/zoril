@@ -1,0 +1,50 @@
+// expected exit 0
+// A 32-bit integer computed from a call on a `&mut` parameter carries no address, so pushing it into
+// a collection in the caller's arena stores nothing of the parameter's storage. The callee's store
+// summary used to say it did, and the call site then rejected a document built by a call
+// (`let mut p = mk(arena)`) and passed as `&mut p.doc` (the shape of a JSON stream processor).
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+enum Val { Nil, Str([u8]) }
+struct Node { v: Val, k: u32 }
+struct Doc { nodes: Vec<Node>, arena: &Arena }
+struct Q { steps: Vec<u32> }
+struct P { doc: Doc, depth: u32 }
+
+impl Doc {
+    fn alloc(self: &mut Doc, v: Val) -> u32 {
+        let id = self.nodes.len() as u32;
+        self.nodes.push(Node { v: v, k: 0 as u32 });
+        return id;
+    }
+}
+impl Q {
+    fn exec(self: &Q, doc: &mut Doc, root: u32, arena: &Arena) -> u32 {
+        let mut ids = Vec::<u32>.new_in(arena);
+        ids.push(doc.alloc(Val.Nil));
+        return ids.as_slice()[0];
+    }
+}
+
+fn mk(arena: &Arena) -> P {
+    return P { doc: Doc { nodes: Vec::<Node>.new_in(arena), arena: arena }, depth: 0 as u32 };
+}
+
+struct Ctx { arena: &Arena }
+
+fn run(ctx: &Ctx) -> u32 {
+    let mut p = mk(ctx.arena);
+    let q = Q { steps: Vec::<u32>.new_in(ctx.arena) };
+    let first = q.exec(&mut p.doc, 0 as u32, ctx.arena);
+    return first;
+}
+
+fn main() -> i32 {
+    let arena = Arena.new(4096 as u64).unwrap();
+    let ctx = Ctx { arena: &arena };
+    if run(&ctx) != 0 as u32 { return 1; }
+    return 0;
+}

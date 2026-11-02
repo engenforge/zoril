@@ -1,0 +1,23 @@
+// name: Loop-body container growth keeps pre-mark epoch at loop header
+// expected: compile_reject
+import "mem.zrl";
+import "vec.zrl";
+import "core.zrl";
+use mem::Arena;
+use vec::Vec;
+use core::Option;
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536 as u64).unwrap();
+    let mut v = Vec::<u64>.new_in(&a);
+    v.push(7);
+    let m = a.mark();
+    let mut i = 0 as u64;
+    while i < 64 { v.push(7); i = i + 1; }
+    a.reset_to(m);
+    let mut z = Vec::<u64>.new_in(&a);
+    let mut j = 0 as u64;
+    while j < 64 { z.push(99); j = j + 1; }
+    // v.as_slice()[1] reads 99 instead of 7
+    return v.as_slice()[1] as i32;
+}

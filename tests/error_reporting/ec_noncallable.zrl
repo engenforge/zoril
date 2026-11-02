@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/ec_noncallable.zrl:5:13: error: Failed to resolve callee
+pub fn main() {
+    let x = 42;
+    let y = x();
+}

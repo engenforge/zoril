@@ -1,0 +1,43 @@
+// The runtime's `memcmp` is C's: the sign of the first byte that differs, comparing as unsigned
+// bytes. `rt/runtime.s` compared with `cmpsb`, whose flags are the second argument's byte minus the
+// first, so its sign came out inverted; and a `repe` with %rcx = 0 leaves the flags of whatever ran
+// before it, so `n = 0` could return a non-zero result. The probe in `scripts/check_runtimes.sh`
+// found both on 2026-10-13 (the three other runtime copies were right); this test pins the contract
+// where a program sees it, through the compiler that links this runtime.
+//
+// Only the sign is checked, which is all C defines: `rt/runtime.s` returns -1/0/1 and the stage0-C
+// copies return the byte difference.
+extern fn memcmp(a: *u8, b: *u8, n: u64) -> i32;
+
+fn main() -> i32 {
+    let eq_a: [u8; 2] = ['x' as u8, 'y' as u8];
+    let eq_b: [u8; 2] = ['x' as u8, 'y' as u8];
+    let greater: [u8; 2] = ['x' as u8, 'z' as u8];
+    let high: [u8; 1] = [128 as u8];
+    let one: [u8; 1] = [1 as u8];
+
+    let a = &eq_a[0] as *u8;
+    let b = &eq_b[0] as *u8;
+    let c = &greater[0] as *u8;
+
+    // Equal buffers are equal, and n = 0 is 0 whatever the buffers hold.
+    if unsafe { memcmp(a, b, 2 as u64) } != 0 {
+        return 1;
+    }
+    if unsafe { memcmp(a, c, 0 as u64) } != 0 { return 2; }
+
+    // The pair that differs decides the sign, and the argument order decides its direction.
+    if unsafe { memcmp(a, c, 2 as u64) } >= 0 {
+        return 3;
+    }
+    if unsafe { memcmp(c, a, 2 as u64) } <= 0 { return 4; }
+
+    // 128 against 1: unsigned greater, signed smaller. Comparing the bytes as signed integers would
+    // answer the other way, so this is the pair that pins "unsigned".
+    if unsafe { memcmp(&high[0] as *u8, &one[0] as *u8, 1 as u64) } <= 0 {
+        return 5;
+    }
+    if unsafe { memcmp(&one[0] as *u8, &high[0] as *u8, 1 as u64) } >= 0 { return 6; }
+
+    return 0;
+}

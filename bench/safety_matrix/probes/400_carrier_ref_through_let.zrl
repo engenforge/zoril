@@ -1,0 +1,22 @@
+// name: A reference to a local carrier that reaches the callee through a let, stored out of the frame
+// expected: compile_reject
+// A pointer into the frame that arrives at the callee through a value (a load of a slot, a call result, a
+// phi) names no slot, so the summary pass reads it as pointing at stack and fails closed; the callee
+// reads a pointer out of the carrier, and that pointer is the frame's local.
+struct Carrier { v: &i32 }
+fn ex_ref(co: &Carrier) -> &i32 { return co.v; }
+fn idc(c: &Carrier) -> &Carrier { return c; }
+
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn escape_storer(out: &mut &i32) {
+    let x = 42;
+    let c = Carrier { v: &x };
+    let r = &c; *out = ex_ref(r);
+}
+fn main() -> i32 {
+    let seed = 0;
+    let mut dest_val: &i32 = &seed;
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    return *dest_val;
+}

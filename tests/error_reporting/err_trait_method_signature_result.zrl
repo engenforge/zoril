@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_trait_method_signature_result.zrl:10:5: error: method `make` does not match trait `Make`: it returns `&i32`, the trait `i64`
+// An impl method's signature is the trait's, with Self and the associated types as the impl has
+// them. The disagreement surfaced only where a caller or default method used the method.
+trait Make { type Out; fn make(self: &Self) -> Self::Out; }
+struct S { v: i32 }
+fn main() -> i32 { return 0; }
+impl Make for S {
+    type Out = i64;
+    fn make(self: &S) -> &i32 { return &self.v; }
+}

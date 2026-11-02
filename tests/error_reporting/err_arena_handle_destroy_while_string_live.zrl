@@ -1,0 +1,19 @@
+// expected compile fail
+// EXPECT: error: cannot move borrowed value 'a'
+// A String built with `String.new_in(&arena)` holds the arena (through the Vec it wraps),
+// so destroying the arena while the String is live is a compile error (Stage 4 for String).
+import "mem.zrl";
+import "string.zrl";
+use mem::Arena;
+use string::String;
+
+fn consume(a: Arena) {}
+
+fn main() -> i32 {
+    let a = Arena.new(65536).unwrap();
+    let mut s = String.new_in(&a);
+    s.push_str("hello");
+    consume(a); // @error "cannot move borrowed value 'a'"
+    s.push_str("world");
+    return 0;
+}

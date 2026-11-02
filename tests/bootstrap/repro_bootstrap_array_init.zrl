@@ -1,0 +1,11 @@
+// repro_bootstrap_array_init.zrl
+// Demonstrates that [expr; count] in struct literals fails.
+
+struct Target {
+    padding: [u8; 4],
+}
+
+fn main() -> i32 {
+    let t = Target { padding: [0 as u8; 4] };
+    return 0;
+}

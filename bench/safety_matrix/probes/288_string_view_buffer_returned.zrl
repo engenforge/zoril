@@ -1,0 +1,17 @@
+// name: A `String::as_slice` view of a local String returned from the frame
+// expected: compile_reject
+// `String::as_slice` was not on the old view list (only the `Vec`/`ByteVec`/`HashMap` names were),
+// and the caller read the invalid buffer. The rule reads the borrow graph, not a list of views.
+import "string.zrl";
+use string::String;
+
+fn view() -> [u8] {
+    let mut s = String.new();
+    s.push_str("hello world, a longer text");
+    return s.as_slice();
+}
+
+fn main() -> i32 {
+    let b = view();
+    return b[0] as i32;
+}

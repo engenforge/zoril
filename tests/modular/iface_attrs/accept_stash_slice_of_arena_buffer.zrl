@@ -1,0 +1,19 @@
+// expected exit 0
+// A slice of an arena-backed byte vector handed to a callee that keeps it in a global: the slice
+// header is a temporary, but what it holds is the caller's arena memory, so nothing of this frame is
+// stashed (the compiler's own `set_ice_context` is this shape).
+import "core0.zrl";
+import "bytevec.zrl";
+import "mem_raw.zrl";
+use bytevec::ByteVec;
+use mem_raw::ArenaHeader;
+
+fn note_in(arena: *mut ArenaHeader) {
+    let mut note = unsafe { ByteVec.new_raw(arena) };
+    note.push_slice("x");
+    set_ice_note(note.as_slice());
+}
+
+fn main() -> i32 {
+    return 0;
+}

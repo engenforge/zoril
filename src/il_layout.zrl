@@ -1,0 +1,177 @@
+// Size and alignment of IL types: the layout rules of doc/spec/abi.md, for every pass that
+// needs them. A struct is its fields in order, each at its alignment, padded to the largest;
+// an enum is a tag then the largest payload, aligned to max(tag, payload alignment).
+//
+// Every sum and product is checked. A wrapped size had no bound at all: a 4-deep
+// `[[[[u8; 65536]; 65536]; 65536]; 65536]` was 0, so a `Vec` element's bounds checks passed and
+// a write went about 2^34 bytes past the allocation. The limit is isize::MAX, which keeps an
+// in-bounds element address inside the signed range. A recursion past the depth limit has no
+// size either, and reports as the overflow value rather than as 0.
+
+import "core.zrl";
+import "il_type.zrl";
+import "il_cfg.zrl";
+use il_cfg::ILModule;
+use il_type::{ENUM_TAG_SIZE, ILPrimitive};
+
+const LAYOUT_MAX_DEPTH: usize = 100;
+
+// The largest type the compiler lays out, and the two "no size" values size_at returns for a
+// type above it and for one past the depth limit.
+pub const TYPE_SIZE_LIMIT: u64 = 9223372036854775807;
+pub const TYPE_SIZE_OVERFLOW: u64 = 18446744073709551615;
+pub const TYPE_SIZE_TOO_DEEP: u64 = 18446744073709551614;
+
+pub fn type_size_overflows(size: u64) -> bool {
+    return size == TYPE_SIZE_OVERFLOW || size == TYPE_SIZE_TOO_DEEP;
+}
+
+pub fn type_size_too_deep(size: u64) -> bool {
+    return size == TYPE_SIZE_TOO_DEEP;
+}
+
+pub fn type_size(m: &ILModule, ty: u32) -> u64 {
+    return size_at(m, ty, 0 as usize);
+}
+
+pub fn type_align(m: &ILModule, ty: u32) -> u64 {
+    return align_at(m, ty, 0 as usize);
+}
+
+fn size_at(m: &ILModule, ty: u32, depth: usize) -> u64 {
+    if ty == 0 as u32 { return 0 as u64; }
+    if depth > LAYOUT_MAX_DEPTH { return TYPE_SIZE_TOO_DEEP; }
+    return match m.types[ty as usize - 1 as usize].def {
+        ILType.Primitive(p) => primitive_size(p),
+        ILType.Slice(_) => 16 as u64,
+        ILType.Array(a) => mul_size(a.size as u64, size_at(m, a.element, depth + 1 as usize)),
+        ILType.Tuple(types) => fields_size(m, types, depth),
+        ILType.User(u) => match m.typedefs[u.id as usize] {
+            ILTypeDef.Struct(s) => {
+                let mut size = 0 as u64;
+                let mut align = 1 as u64;
+                for f in s.fields {
+                    let f_align = align_at(m, f.ty, depth + 1 as usize);
+                    if f_align > align { align = f_align; }
+                    size = add_size(
+                        round_up_size(size, f_align),
+                        size_at(m, f.ty, depth + 1 as usize)
+                    );
+                }
+                round_up_size(size, align)
+            },
+            ILTypeDef.Enum(e) => {
+                let mut payload_size = 0 as u64;
+                for v in e.variants {
+                    let s = size_at(m, v.payload, depth + 1 as usize);
+                    if type_size_overflows(s) { return s; }
+                    if s > payload_size { payload_size = s; }
+                }
+                if payload_size == 0 as u64 {
+                    ENUM_TAG_SIZE
+                } else {
+                    let align = align_at(m, ty, depth);
+                    round_up_size(add_size(align, payload_size), align)
+                }
+            },
+            ILTypeDef.Fn(_) => 8 as u64,
+        },
+        // A function value: its code and its environment (doc/spec/abi.md).
+        ILType.Fn(_) => 16 as u64,
+        // Pointers, boxes, descriptors, rings, type variables.
+        _ => 8 as u64,
+    };
+}
+
+// A tuple's size: its elements laid out as a struct's fields.
+fn fields_size(m: &ILModule, types: [u32], depth: usize) -> u64 {
+    let mut size = 0 as u64;
+    let mut align = 1 as u64;
+    for t in types {
+        let f_align = align_at(m, *t, depth + 1 as usize);
+        if f_align > align { align = f_align; }
+        size = add_size(round_up_size(size, f_align), size_at(m, *t, depth + 1 as usize));
+    }
+    return round_up_size(size, align);
+}
+
+fn align_at(m: &ILModule, ty: u32, depth: usize) -> u64 {
+    if ty == 0 as u32 || depth > LAYOUT_MAX_DEPTH { return 1 as u64; }
+    return match m.types[ty as usize - 1 as usize].def {
+        ILType.Primitive(p) => {
+            let s = primitive_size(p);
+            if s == 0 as u64 { 1 as u64 } else { s }
+        },
+        ILType.Array(a) => align_at(m, a.element, depth + 1 as usize),
+        ILType.Tuple(types) => {
+            let mut align = 1 as u64;
+            for t in types {
+                let a = align_at(m, *t, depth + 1 as usize);
+                if a > align { align = a; }
+            }
+            align
+        },
+        ILType.User(u) => match m.typedefs[u.id as usize] {
+            ILTypeDef.Struct(s) => {
+                let mut align = 1 as u64;
+                for f in s.fields {
+                    let a = align_at(m, f.ty, depth + 1 as usize);
+                    if a > align { align = a; }
+                }
+                align
+            },
+            ILTypeDef.Enum(e) => {
+                let mut align = ENUM_TAG_SIZE;
+                for v in e.variants {
+                    if v.payload != 0 as u32 {
+                        let a = align_at(m, v.payload, depth + 1 as usize);
+                        if a > align { align = a; }
+                    }
+                }
+                align
+            },
+            ILTypeDef.Fn(_) => 8 as u64,
+        },
+        // Pointers, slices and function values (two words), boxes, descriptors, rings,
+        // type variables.
+        _ => 8 as u64,
+    };
+}
+
+fn primitive_size(p: ILPrimitive) -> u64 {
+    return match p {
+        ILPrimitive.U8 | ILPrimitive.I8 | ILPrimitive.Bool => 1 as u64,
+        ILPrimitive.U16 | ILPrimitive.I16 => 2 as u64,
+        ILPrimitive.U32 | ILPrimitive.I32 | ILPrimitive.F32 | ILPrimitive.Char => 4 as u64,
+        ILPrimitive.U64
+            | ILPrimitive.I64
+            | ILPrimitive.USize
+            | ILPrimitive.ISize
+            | ILPrimitive.F64 => 8 as u64,
+        ILPrimitive.Unit | ILPrimitive.Never => 0 as u64,
+    };
+}
+
+// Each check keeps the result at or below TYPE_SIZE_LIMIT, so an in-bounds element address
+// cannot wrap; a "no size" value propagates (the depth limit first, so the caller can say which).
+fn add_size(a: u64, b: u64) -> u64 {
+    if type_size_too_deep(a) || type_size_too_deep(b) { return TYPE_SIZE_TOO_DEEP; }
+    if type_size_overflows(a) || type_size_overflows(b) { return TYPE_SIZE_OVERFLOW; }
+    if a > TYPE_SIZE_LIMIT - b { return TYPE_SIZE_OVERFLOW; }
+    return a + b;
+}
+
+fn mul_size(a: u64, b: u64) -> u64 {
+    if type_size_too_deep(a) || type_size_too_deep(b) { return TYPE_SIZE_TOO_DEEP; }
+    if type_size_overflows(a) || type_size_overflows(b) { return TYPE_SIZE_OVERFLOW; }
+    if a == 0 as u64 || b == 0 as u64 { return 0 as u64; }
+    if a > TYPE_SIZE_LIMIT / b { return TYPE_SIZE_OVERFLOW; }
+    return a * b;
+}
+
+fn round_up_size(n: u64, align: u64) -> u64 {
+    if type_size_overflows(n) { return n; }
+    let padded = add_size(n, align - 1 as u64);
+    if type_size_overflows(padded) { return padded; }
+    return padded / align * align;
+}

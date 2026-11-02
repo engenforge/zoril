@@ -1,0 +1,18 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_find_in_path_escape.zrl:16:5: error: cannot let 'buf' go out of scope while it is still borrowed
+// EXPECT: tests/error_reporting/err_find_in_path_escape.zrl:14:32: note: borrow of 'buf' taken here
+import "mem.zrl";
+import "fsys.zrl";
+use mem::Arena;
+use fsys::find_in_path;
+
+fn main() -> i32 {
+    let a = Arena.new(4096 as u64).unwrap();
+    let mut outer: [u8] = "";
+    {
+        let buf: [u8; 3] = ['.' as u8, '/' as u8, 'x' as u8];
+        let opt = find_in_path(&buf, &a);
+        outer = opt.unwrap();
+    }
+    return outer.len as i32;
+}

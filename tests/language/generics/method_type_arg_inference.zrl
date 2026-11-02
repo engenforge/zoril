@@ -1,0 +1,28 @@
+// expected exit 0
+// A generic method called without `::<..>` takes its type arguments from its arguments, and
+// from the impls its bounds name, as a generic function does. They were left unbound.
+trait Scale { fn apply(self: &Self, x: i32) -> i32; }
+struct Times { k: i32 }
+impl Scale for Times { fn apply(self: &Times, x: i32) -> i32 { return x * self.k; } }
+trait Source<T> { fn get(self: &Self) -> T; }
+impl Source<i64> for Times { fn get(self: &Times) -> i64 { return self.k as i64; } }
+
+struct Sq { s: i32 }
+impl Sq {
+    fn scaled<T: Scale>(self: &Sq, s: T) -> i32 { return s.apply(self.s); }
+    fn pick<U>(self: &Sq, u: U) -> U { return u; }
+    fn apply_fn<A, B>(self: &Sq, a: A, f: fn(A) -> B) -> B { return f(a); }
+    fn first<T, S: Source<T>>(self: &Sq, s: &S) -> T { return s.get(); }
+}
+fn neg(x: i64) -> bool { return x < 0; }
+
+fn main() -> i32 {
+    let q = Sq { s: 3 };
+    if q.pick(5) != 5 { return 1; }
+    if !q.pick(true) { return 2; }
+    if q.scaled(Times { k: 4 }) != 12 { return 3; }
+    if !q.apply_fn(-2 as i64, neg) { return 4; }
+    if q.first(&Times { k: 9 }) != 9 { return 5; }
+    if q.pick::<i64>(7) != 7 { return 6; }
+    return 0;
+}

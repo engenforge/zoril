@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_body_value_without_result_type.zrl:5:18: error: the function returns nothing, but its body ends in a value of type `i64` (end it with `;`, or declare the result type)
+// A function with no result type dropped its body's value: a call read a result that was never
+// stored. (A closure with no `-> R` takes its body's type, since 2026-10-05.)
+fn inc(x: i64) { x + 1 }
+fn main() -> i32 {
+    inc(4);
+    return 0;
+}

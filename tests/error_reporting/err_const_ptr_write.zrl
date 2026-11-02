@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: error: cannot assign to 'cp' because it is behind a shared reference
+// Option (a): `*T` is read-only, matching Rust's `*const T` -- `*mut T` is the
+// only writable raw pointer. See doc/spec/unsafe_policy.md.
+struct P { x: i64 }
+fn main() {
+    let p = P { x: 1 };
+    let cp: *P = &p as *P;
+    unsafe { (*cp).x = 99; }
+}

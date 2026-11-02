@@ -1,0 +1,9 @@
+// name: Null dereference (inside unsafe)
+// expected: runtime_fault
+// The escape hatch half of 14_null_deref.zrl: the marker permits the operation,
+// it does not make it safe.
+fn main() -> i32 {
+    let p = 0 as *u8;
+    let r: &u8 = unsafe { &*p };
+    return *r as i32;
+}

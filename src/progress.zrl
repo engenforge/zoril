@@ -1,0 +1,19 @@
+// The compiler's progress report, on stderr with `-v`.
+
+import "io.zrl";
+use io::eprint;
+
+// Set by `-v`: the compiler reports its progress (each phase, file and function) on stderr.
+pub static mut VERBOSE: bool = false;
+
+pub fn progress(msg: [u8]) {
+    if unsafe { VERBOSE } { eprint(msg); }
+}
+
+// `WHAT NAME`, a line of progress.
+pub fn progress_name(what: [u8], name: [u8]) {
+    if !unsafe { VERBOSE } { return; }
+    eprint(what);
+    eprint(name);
+    eprint("\n");
+}

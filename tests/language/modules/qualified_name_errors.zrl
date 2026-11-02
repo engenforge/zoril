@@ -1,0 +1,12 @@
+// expected compile fail
+// A qualified name that names nothing says why.
+// EXPECT: note: no item `Nope` in
+// EXPECT: note: `geo` is neither an import nor a type
+// EXPECT: note: `hidden` is private to
+import "geom_lib.zrl";
+
+fn main() -> i32 {
+    let p: geom_lib::Nope = 0;
+    let q = geo::x();
+    return geom_lib::hidden();
+}

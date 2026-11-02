@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_array_length_truncation.zrl:5:32: error: array length does not fit: at most 4294967295 elements
+// An array length is held in 32 bits; a longer one used to become its low half (`[u8; 4294967298]`
+// was an array of 2, so every index the program believed was in range landed elsewhere).
+fn main() -> i32 { let a: [u8; 4294967298] = [0 as u8; 1]; return 0; }

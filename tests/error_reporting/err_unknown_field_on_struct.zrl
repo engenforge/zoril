@@ -1,0 +1,8 @@
+// expected compile fail
+// A field that does not exist is a program error, not a compiler one. It used to travel as the
+// `0xffffffff` sentinel to the ZIL half, which has no span and no reporter and therefore ICEd with
+// "ZirToZilLowerer.get_field_index: field not found", after printing the field list.
+// EXPECT: tests/error_reporting/err_unknown_field_on_struct.zrl:8:47: error: no field 'nope' on 'S'
+
+struct S { a: i32 }
+fn main() -> i32 { let s = S { a: 1 }; return s.nope; }

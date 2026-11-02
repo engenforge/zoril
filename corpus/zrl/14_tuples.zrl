@@ -1,0 +1,46 @@
+// expected exit code: 219
+// 14: Tuple types, literals, numeric field access, and destructuring via fields.
+// Demonstrates: (T1, T2, ...), .0/.1 access, tuples as return types, trailing commas.
+
+fn divmod(a: i32, b: i32) -> (i32, i32) {
+    return (a / b, a % b);
+}
+
+fn min_max(a: i32, b: i32, c: i32) -> (i32, i32) {
+    let mut lo = a;
+    let mut hi = a;
+    if b < lo { lo = b; }
+    if c < lo { lo = c; }
+    if b > hi { hi = b; }
+    if c > hi { hi = c; }
+    return (lo, hi,);  // trailing comma allowed
+}
+
+fn swap_pair(p: (i32, i32)) -> (i32, i32) {
+    return (p.1, p.0);
+}
+
+struct Point3D {
+    coords: (f64, f64, f64),
+}
+
+fn main() -> i32 {
+    let result = divmod(17, 5);
+    let quotient = result.0;   // 3
+    let remainder = result.1;  // 2
+
+    let bounds = min_max(7, 2, 9);
+    let lo = bounds.0;  // 2
+    let hi = bounds.1;  // 9
+
+    let flipped = swap_pair((100, 200));
+
+    // Tuple inside a struct
+    let pt = Point3D { coords: (1.0, 2.0, 3.0) };
+    let z = pt.coords.2 as i32;
+
+    // Empty tuple is unit
+    let nothing: () = ();
+
+    return quotient + remainder + lo + hi + flipped.0 + z;
+}

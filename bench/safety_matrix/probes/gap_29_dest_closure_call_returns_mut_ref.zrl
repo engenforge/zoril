@@ -1,0 +1,28 @@
+// name: Store escape into mut ref returned by closure call
+// expected: known_gap
+// gap: CallPtr return target check misses closure call returning captured mutable reference
+// observed: exit 77
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct H { s: [i32] }
+
+fn f(h: &mut H) {
+    let get_out = || -> &mut [i32] { return &mut h.s; };
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let r = get_out();
+    *r = v.as_slice();
+}
+
+fn main() -> i32 {
+    let mut h = H { s: @slice(0 as *i32, 0) };
+    f(&mut h);
+    let a2 = match Arena.new(65536) { Result.Ok(a2) => a2, Result.Err(_) => { return 1; } };
+    let mut v2 = Vec::<i32>.new_in(&a2);
+    v2.push(77);
+    return h.s[0];
+}

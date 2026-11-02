@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_assoc_type_not_in_trait.zrl:9:5: error: associated type `Extra` is not a member of trait `Make`
+// A trait impl defines only the associated types its trait declares.
+trait Make {
+    fn make(self: &Self) -> i64;
+}
+struct Num { v: i32 }
+impl Make for Num {
+    type Extra = i32;
+    fn make(self: &Num) -> i64 { return 1 as i64; }
+}
+fn main() -> i32 { return 0; }

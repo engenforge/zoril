@@ -1,0 +1,11 @@
+// name: Let pattern destructuring auto-dereferences raw pointer without unsafe
+// expected: compile_reject
+fn forge_tuple(p: u64) -> u64 {
+    let raw: *(u64, u64) = p as *(u64, u64);
+    let (a, _) = raw;
+    return *a;
+}
+
+fn main() -> i32 {
+    return forge_tuple(3735928559) as i32;
+}

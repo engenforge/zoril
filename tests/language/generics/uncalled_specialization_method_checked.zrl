@@ -1,0 +1,21 @@
+// expected exit 0
+// The accepted twin of tests/error_reporting/err_uncalled_specialization_method_checks.zrl: the
+// methods of a concrete specialisation are checked whether or not anything calls them, and the
+// bodies nothing calls are dropped again before the ZIL is written, so what this program emits and
+// runs is what its *called* code lowers to. `scripts/test_uncalled_method_emit.sh` checks the
+// second half from outside: the ZIL must not name `never_called` below.
+struct W<T> { v: T }
+
+impl W<i32> {
+    pub fn shown(self: &W<i32>) -> i32 { return self.v; }
+
+    // Nothing calls this one. It is checked - a field, name, type or borrow error in it would be
+    // reported here - and it is not emitted.
+    fn never_called(self: &W<i32>) -> i32 { return self.v + self.shown(); }
+}
+
+fn main() -> i32 {
+    let w = W { v: 3 };
+    // 3 from shown(), and `never_called` is not run: 0.
+    return w.shown() - 3;
+}

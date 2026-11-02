@@ -1,0 +1,6 @@
+// name: `W<()>` used as `W<&i32>`
+// expected: compile_reject
+// `()` is an argument nothing inferred, standing at most for a plain number. As a wildcard for any
+// argument it let a field of nothing be read as a reference.
+struct W<T> { x: T }
+fn main() -> i32 { let w: W<()> = W { x: () }; let b: W<&i32> = w; return *b.x; }

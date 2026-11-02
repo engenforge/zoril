@@ -1,0 +1,36 @@
+enum MyOption<T> {
+    None,
+    Some(T),
+}
+
+fn check_none<T>(opt: MyOption<T>) -> bool {
+    match opt {
+        MyOption.None => true,
+        _ => false,
+    }
+}
+
+fn main() -> i32 {
+    // 1. Infer from expected type (LHS)
+    let x: MyOption<i32> = MyOption.None();
+    if !check_none(x) { return 1; }
+
+    // 2. Infer from expected type (function param)
+    if !check_none(MyOption.None()) { return 2; }
+
+    // 3. Explicit turbofish
+    let y = MyOption.None::<i32>();
+    if !check_none(y) { return 3; }
+
+    // 4. Nested generics inference
+    let z = MyOption.Some(MyOption.Some(42));
+    match z {
+        MyOption.Some(inner) => match inner {
+            MyOption.Some(v) => if v != 42 { return 4; },
+            _ => return 5,
+        },
+        _ => return 6,
+    }
+
+    0
+}

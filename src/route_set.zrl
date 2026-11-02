@@ -1,0 +1,247 @@
+// Route vocabulary shared by the ZIR checker and `--emit-zir-stats`.
+//
+// A route is one ZIR construct or CFG shape a safety-matrix row can depend on. `--emit-zir-stats`
+// prints the routes a program lowers to, and the checker records the routes a *rejection*
+// travelled through (`reject-via`): the rvalue that created the borrow, every step that carried
+// it, the statement/terminator that reported the error, and whether the borrow crossed a join or
+// a back-edge. `scripts/check_route_coverage.sh` counts a route for a row only from that set.
+//
+// The index functions are exhaustive matches so adding a ZirRvalue, ZirStmt or ZirTerminator
+// variant cannot silently fall into an existing bucket. A u64 holds every route (37 today).
+
+import "zir.zrl";
+use zir::{ZirRvalue, ZirStmt, ZirTerminator};
+
+pub const ROUTE_RV_COUNT: u32 = 25;
+pub const ROUTE_STMT_COUNT: u32 = 6;
+pub const ROUTE_TERM_COUNT: u32 = 4;
+pub const ROUTE_RV_BASE: u32 = 0;
+pub const ROUTE_STMT_BASE: u32 = 25;
+pub const ROUTE_TERM_BASE: u32 = 31;
+pub const ROUTE_JOIN: u32 = 35;
+pub const ROUTE_BACKEDGE: u32 = 36;
+// The two rvalues that create a borrow (indices in `rv_index`).
+pub const ROUTE_RV_REF: u32 = 1;
+pub const ROUTE_RV_REFMUT: u32 = 2;
+
+pub fn route_bit(i: u32) -> u64 {
+    return 1 as u64 << (i as u64);
+}
+
+pub fn rv_route(rv: &ZirRvalue) -> u32 {
+    return ROUTE_RV_BASE + rv_index(rv);
+}
+
+pub fn stmt_route(st: &ZirStmt) -> u32 {
+    return ROUTE_STMT_BASE + stmt_index(st);
+}
+
+pub fn term_route(term: &ZirTerminator) -> u32 {
+    return ROUTE_TERM_BASE + term_index(term);
+}
+
+pub fn rv_bit(rv: &ZirRvalue) -> u64 {
+    return route_bit(rv_route(rv));
+}
+
+pub fn stmt_bit(st: &ZirStmt) -> u64 {
+    return route_bit(stmt_route(st));
+}
+
+pub fn term_bit(term: &ZirTerminator) -> u64 {
+    return route_bit(term_route(term));
+}
+
+// ── the routes a borrow can travel through into a reported error ──────────────
+//
+// A row's `Routes` cell may list only a route from this set: the routes a *borrow* can be created,
+// carried or ended through, because those are the only ones a rejection can name
+// (`report_borrow_conflict` records the borrow's `via` mask plus the rvalue, statement and
+// terminator being checked, and nothing else writes `reject_via`). A route outside the set would be
+// a claim no probe can support, so `scripts/check_route_coverage.sh` rejects such a cell, and
+// `zir_stats` prints this set on its `carry` line (the gate reads it from there: one definition).
+//
+// Carrying: the rvalues that create a borrow (`Ref`, `RefMut`); those that put a borrow into a
+// value that can hold one (`Use`, `Call`, `CallPtr`, `StructLiteral`, `Tuple`, `Array`,
+// `EnumVariant`, `EnumPayload`, `Boxed`, `ArrayRepeat`, `Cast` to a non-raw target, `FuncAddr`);
+// the statements that bind, move or end one (`Let`, `Assign`, `EndBorrow`); and the CFG shapes a
+// borrow crosses (`cfg:join`, `cfg:backedge`).
+//
+// Excluded, with the reason a rejection cannot travel through one: `rv:GetEnv` (its result is the
+// closure environment as a raw pointer, and no borrow is tracked through one - the captures'
+// borrows reach the closure through `rv:FuncAddr`); the number-valued rvalues (`Syscall`,
+// `Intrinsic`, `Const`, `BinaryOp`, `UnaryOp`, `Sizeof`, `StringConst`, `VariantCheck`,
+// `GlobalAddr`, `PtrFromInt`); every terminator (a conflict is reported at a statement or rvalue,
+// never at a `Jmp`, `Branch`, `Ret` or `Unreachable`); and `stmt:Drop`/`DropIfLive`/`Intrinsic`
+// (`check_drop` and the intrinsics report ownership errors, not borrow conflicts - the borrow end
+// that is checked is the `EndBorrow` the lowering emits).
+pub fn route_carries(i: u32) -> bool {
+    if i == ROUTE_JOIN || i == ROUTE_BACKEDGE { return true; }
+    if i >= ROUTE_TERM_BASE { return false; }
+    if i >= ROUTE_STMT_BASE { return stmt_carries(i - ROUTE_STMT_BASE); }
+    return rv_carries(i);
+}
+
+// Exhaustive over ZirRvalue: a new variant must say whether a borrow can travel through it.
+fn rv_carries(idx: u32) -> bool {
+    return match idx {
+        // Use: a bare copy of the reference keeps pointing at the referent.
+        0 => true,
+        // Ref, RefMut: the rvalues that create a borrow.
+        1 => true,
+        2 => true,
+        // Const, BinaryOp, UnaryOp: a number.
+        3 => false,
+        4 => false,
+        5 => false,
+        // Call, CallPtr: the result inherits the borrows its signature ties it to.
+        6 => true,
+        7 => true,
+        // StructLiteral, EnumVariant: an aggregate that can hold the reference.
+        8 => true,
+        9 => true,
+        // Cast: carries the operand's borrows unless the target is a raw pointer.
+        10 => true,
+        // Sizeof, Syscall, Intrinsic, StringConst, VariantCheck: no reference result.
+        11 => false,
+        12 => false,
+        13 => false,
+        14 => false,
+        15 => false,
+        // EnumPayload: extracting a payload that can hold the reference.
+        16 => true,
+        // GlobalAddr: a static's address, not a borrow.
+        17 => false,
+        // FuncAddr: a closure keeps its environment's captures borrowed.
+        18 => true,
+        // Tuple, Array: an aggregate that can hold the reference.
+        19 => true,
+        20 => true,
+        // Boxed: a box built from a borrowed operand holds that borrow.
+        21 => true,
+        // GetEnv: the environment as a raw pointer, which holds no borrow.
+        22 => false,
+        // PtrFromInt: a number turned into a pointer.
+        23 => false,
+        // ArrayRepeat (`[&x; N]`).
+        _ => true,
+    };
+}
+
+// Exhaustive over ZirStmt: a new statement must say whether a borrow travels through it.
+fn stmt_carries(idx: u32) -> bool {
+    return match idx {
+        // Let: binds a borrow, or moves one into a new local.
+        0 => true,
+        // Assign: moves a borrow into a place.
+        1 => true,
+        // Drop, Intrinsic: ownership errors, never a borrow conflict.
+        2 => false,
+        3 => false,
+        // EndBorrow: the scope end where a borrow outliving its referent is reported.
+        4 => true,
+        // DropIfLive: a drop again.
+        _ => false,
+    };
+}
+
+// Exhaustive: a new rvalue must be given a route index.
+pub fn rv_index(rv: &ZirRvalue) -> u32 {
+    return match *rv {
+        ZirRvalue.Use(_) => 0 as u32,
+        ZirRvalue.Ref(_, _) => 1 as u32,
+        ZirRvalue.RefMut(_, _) => 2 as u32,
+        ZirRvalue.Const(_, _) => 3 as u32,
+        ZirRvalue.BinaryOp(_, _, _) => 4 as u32,
+        ZirRvalue.UnaryOp(_, _) => 5 as u32,
+        ZirRvalue.Call(_, _) => 6 as u32,
+        ZirRvalue.CallPtr(_, _) => 7 as u32,
+        ZirRvalue.StructLiteral(_, _) => 8 as u32,
+        ZirRvalue.EnumVariant(_, _, _) => 9 as u32,
+        ZirRvalue.Cast(_, _) => 10 as u32,
+        ZirRvalue.Sizeof(_) => 11 as u32,
+        ZirRvalue.Syscall(_) => 12 as u32,
+        ZirRvalue.Intrinsic(_, _) => 13 as u32,
+        ZirRvalue.StringConst(_) => 14 as u32,
+        ZirRvalue.VariantCheck(_, _, _) => 15 as u32,
+        ZirRvalue.EnumPayload(_, _, _) => 16 as u32,
+        ZirRvalue.GlobalAddr(_) => 17 as u32,
+        ZirRvalue.FuncAddr(_, _) => 18 as u32,
+        ZirRvalue.Tuple(_) => 19 as u32,
+        ZirRvalue.Array(_, _) => 20 as u32,
+        ZirRvalue.Boxed(_) => 21 as u32,
+        ZirRvalue.GetEnv => 22 as u32,
+        ZirRvalue.PtrFromInt(_, _) => 23 as u32,
+        ZirRvalue.ArrayRepeat(_, _, _) => 24 as u32,
+    };
+}
+
+pub fn stmt_index(st: &ZirStmt) -> u32 {
+    return match *st {
+        ZirStmt.Let(_, _, _) => 0 as u32,
+        ZirStmt.Assign(_, _, _) => 1 as u32,
+        ZirStmt.Drop(_, _) => 2 as u32,
+        ZirStmt.Intrinsic(_, _, _) => 3 as u32,
+        ZirStmt.EndBorrow(_, _) => 4 as u32,
+        ZirStmt.DropIfLive(_, _) => 5 as u32,
+    };
+}
+
+pub fn term_index(term: &ZirTerminator) -> u32 {
+    return match *term {
+        ZirTerminator.Jmp(_) => 0 as u32,
+        ZirTerminator.Branch(_, _, _) => 1 as u32,
+        ZirTerminator.Ret(_) => 2 as u32,
+        ZirTerminator.Unreachable => 3 as u32,
+    };
+}
+
+pub fn rv_name(i: u32) -> [u8] {
+    return match i {
+        0 => "Use",
+        1 => "Ref",
+        2 => "RefMut",
+        3 => "Const",
+        4 => "BinaryOp",
+        5 => "UnaryOp",
+        6 => "Call",
+        7 => "CallPtr",
+        8 => "StructLiteral",
+        9 => "EnumVariant",
+        10 => "Cast",
+        11 => "Sizeof",
+        12 => "Syscall",
+        13 => "Intrinsic",
+        14 => "StringConst",
+        15 => "VariantCheck",
+        16 => "EnumPayload",
+        17 => "GlobalAddr",
+        18 => "FuncAddr",
+        19 => "Tuple",
+        20 => "Array",
+        21 => "Boxed",
+        22 => "GetEnv",
+        23 => "PtrFromInt",
+        _ => "ArrayRepeat",
+    };
+}
+
+pub fn stmt_name(i: u32) -> [u8] {
+    return match i {
+        0 => "Let",
+        1 => "Assign",
+        2 => "Drop",
+        3 => "Intrinsic",
+        4 => "EndBorrow",
+        _ => "DropIfLive",
+    };
+}
+
+pub fn term_name(i: u32) -> [u8] {
+    return match i {
+        0 => "Jmp",
+        1 => "Branch",
+        2 => "Ret",
+        _ => "Unreachable",
+    };
+}

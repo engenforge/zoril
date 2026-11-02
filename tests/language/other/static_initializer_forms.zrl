@@ -1,0 +1,76 @@
+// expected exit code: 0
+// Every form a `static`'s or `const`'s initializer can take, each value read back at run time.
+// A constant context materializes the declared type's bytes, so each check here compares what the
+// program sees with what the source says. The path these replaced returned a u64 for whatever it
+// could salvage and let the caller copy it into the type's bytes: `!true` was written as 1 (true),
+// `-7 / 2` was the u64 division of two's complement bits, and any type wider than 8 bytes was
+// filled from compiler heap. The forms it could not guess at all (a float, a char, a byte string,
+// an enum variant) were an internal compiler error.
+
+struct Header { off: u64 }
+
+enum Color { Red, Green = 5 }
+enum Maybe { Nothing, Something(u32) }
+
+const MAX: usize = 10;
+const DOUBLED: usize = MAX * 2;             // a constant named by another constant
+const NEG: i32 = -7;
+const HALF: i32 = NEG / 2;                  // -3: the division is signed, not u64
+const MOD: i32 = NEG % 2;                   // -1
+const SHIFTED: u32 = 1 << 31;               // the top bit of the declared type
+const SIGNED_SHIFT: i32 = NEG >> 1;         // -4: an arithmetic shift
+const MASK: u8 = !0;                        // 255: bitwise not on an integer
+const FLAG: bool = !true;                   // false: logical not on a bool
+const CHAR_A: u8 = 'a';                     // a char literal in its own type
+const CHAR_WIDE: u32 = 'Z' as u32;          // and widened by a cast
+const PI: f64 = 3.5;
+const HALF_F: f32 = 0.5;
+const RATIO: f64 = 2;                       // an integer literal in a float context
+const NAME: [u8; 5] = "hello";              // a byte string, whose length is checked
+const CASTED: u64 = 0xFF as u8 as u64;      // a chain of casts, narrowed then widened
+const NEGATED_F: f64 = -1.25;
+
+static COLOR: Color = Color.Green;          // an enum variant: the image is its discriminant
+static NONE: Maybe = Maybe.Nothing;         // a variant with no payload, in an enum that has one
+static mut COUNTER: u64 = 1 + 2 * 3;        // arithmetic, with `*` before `+`
+static PTR: *mut Header = 0 as *mut Header; // a null raw pointer
+static BOOL: bool = true;
+static OWNED: i64 = -9223372036854775807;
+static F32: f32 = HALF_F;
+static F64: f64 = PI;
+static STRING: [u8; 5] = NAME;
+
+fn main() -> i32 {
+    if MAX != 10 as usize { return 1; }
+    if DOUBLED != 20 as usize { return 2; }
+    if NEG != -7 { return 3; }
+    if HALF != -3 { return 4; }
+    if MOD != -1 { return 5; }
+    if SHIFTED != 2147483648 as u32 { return 6; }
+    if SIGNED_SHIFT != -4 { return 7; }
+    if MASK != 255 as u8 { return 8; }
+    if FLAG { return 9; }
+    if CHAR_A != 97 as u8 { return 10; }
+    if CHAR_WIDE != 90 as u32 { return 11; }
+    if PI != 3.5 { return 12; }
+    if HALF_F != 0.5 { return 13; }
+    if RATIO != 2.0 { return 14; }
+    if NAME[0] != 104 as u8 { return 15; }
+    if NAME[4] != 111 as u8 { return 16; }
+    if CASTED != 255 as u64 { return 17; }
+    if NEGATED_F != -1.25 { return 18; }
+    if COLOR != Color.Green { return 19; }
+    if (COLOR as u32) != 5 as u32 { return 20; }
+    match NONE {
+        Maybe.Nothing => {},
+        Maybe.Something(_) => { return 21; }
+    }
+    if COUNTER != 7 as u64 { return 22; }
+    if PTR as u64 != 0 as u64 { return 23; }
+    if !BOOL { return 24; }
+    if OWNED != -9223372036854775807 { return 25; }
+    if F32 != 0.5 { return 26; }
+    if F64 != 3.5 { return 27; }
+    if STRING[1] != 101 as u8 { return 28; }
+    return 0;
+}

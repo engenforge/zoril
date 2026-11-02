@@ -1,0 +1,42 @@
+// Concrete impls on a specialization of a generic type (A7.8): `impl W<i32>` and a trait impl for
+// it are compiled once in this module, so the interface must carry their summaries (or the
+// importer rejects a call as storing a stack pointer, or fails to link).
+pub struct SpWrap<T> { pub v: T }
+pub trait SpPub {
+    fn f(self: &Self) -> i32;
+}
+trait SpPriv {
+    fn p(self: &Self) -> i32;
+}
+impl SpPub for SpWrap<i32> {
+    fn f(self: &SpWrap<i32>) -> i32 { return self.v + 1; }
+}
+impl SpPriv for SpWrap<i32> {
+    fn p(self: &SpWrap<i32>) -> i32 { return self.v + 2; }
+}
+impl SpWrap<i32> {
+    pub fn inh(self: &SpWrap<i32>) -> i32 { return self.v + 3; }
+}
+pub fn sp_priv(w: &SpWrap<i32>) -> i32 { return w.p(); }
+
+pub struct SpDrop<T> { pub v: T }
+static mut SP_DROPS: i32 = 0;
+impl Drop for SpDrop<i32> {
+    fn drop(self: &mut SpDrop<i32>) { SP_DROPS = SP_DROPS + 1; }
+}
+pub fn sp_drops() -> i32 { return SP_DROPS; }
+
+pub struct SpPair<T> { pub v: T }
+impl SpPair<(i32, u64)> {
+    pub fn total(self: &SpPair<(i32, u64)>) -> u64 { return (self.v.0 as u64) + self.v.1; }
+}
+
+// Written without `<T>` after `impl` (A7.9): the target's own parameters bind T.
+fn sp_helper() -> i32 { return 5; }
+pub struct SpImplicit<T> { pub x: T }
+impl SpImplicit<T> {
+    pub fn get(self: &SpImplicit<T>) -> T { return self.x; }
+    #[borrows(self)]
+    pub fn at(self: &SpImplicit<T>) -> &T { return &self.x; }
+    pub fn five(self: &SpImplicit<T>) -> i32 { return sp_helper(); }
+}

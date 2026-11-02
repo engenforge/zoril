@@ -1,0 +1,50 @@
+// CLI tool to compute SHA-256 digests of files for differential testing
+import "args.zrl";
+import "core.zrl";
+import "mem_raw.zrl";
+import "file.zrl";
+import "io.zrl";
+import "sha256.zrl";
+use args::Args;
+use file::read_file_raw;
+use io::{stderr, stdout, write};
+use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
+use sha256::sha256_hex;
+
+fn main(argc: i32, argv: **u8) -> i32 {
+    let mut args = args::args();
+    let _ = args.next(); // skip program name
+
+    let arena_box = unsafe { arena_init(16777216) };
+    let arena = arena_box as *mut ArenaHeader;
+
+    let mut hex: [u8; 64] = [0; 64];
+
+    while args.has_next() {
+        let path_opt = args.next();
+        if path_opt.is_none() {
+            break;
+        }
+        let path = path_opt.unwrap();
+        let res = unsafe { read_file_raw(path, arena) };
+        if res.is_err() {
+            let _ = write(stderr(), "error: failed to read file\n");
+            return 1;
+        }
+        let data = res.ok().unwrap();
+        sha256_hex(data, &mut hex);
+
+        let out_buf = unsafe { zoril_allocator_alloc(arena, 64) } as *mut u8;
+        let mut s = unsafe { @slice(out_buf, 64 as usize) };
+        let mut k = 0 as usize;
+        while k < 64 {
+            s[k] = hex[k];
+            k = k + 1;
+        }
+        let _ = write(stdout(), s);
+        let _ = write(stdout(), "  ");
+        let _ = write(stdout(), path);
+        let _ = write(stdout(), "\n");
+    }
+    return 0;
+}

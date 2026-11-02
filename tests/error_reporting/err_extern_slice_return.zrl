@@ -1,0 +1,4 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_extern_slice_return.zrl:3:36: error: an extern function cannot take or return a slice (a pointer and a length; pass `s.ptr` and the length separately): returns_slice
+extern fn returns_slice(n: i32) -> [u8];
+fn main() -> i32 { return 0; }

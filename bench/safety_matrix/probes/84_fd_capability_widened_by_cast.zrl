@@ -1,0 +1,17 @@
+// name: fd<r> cast to fd<w> (capability forgery)
+// expected: compile_reject
+// Accepted until 2026-10-02: any value could be cast to an fd type.
+extern fn open_r(path: *u8) -> fd<r>;
+extern fn open_w(path: *u8) -> fd<w>;
+extern fn open_rw(path: *u8) -> fd<rw>;
+extern fn close_r(f: fd<r>);
+extern fn close_w(f: fd<w>);
+extern fn close_rw(f: fd<rw>);
+extern fn write_to(f: &fd<w>, b: *u8, n: u64) -> i64;
+extern fn read_from(f: &fd<r>, b: *mut u8, n: u64) -> i64;
+fn main() -> i32 {
+    let f = unsafe { open_r("x".ptr) };
+    let g = f as fd<w>;
+    unsafe { close_w(g); }
+    return 0;
+}

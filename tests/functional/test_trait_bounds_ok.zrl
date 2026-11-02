@@ -1,0 +1,34 @@
+// expected compile success
+
+trait Hashable {
+    fn hash(self: &Self) -> u64;
+}
+
+fn needs_hashable<T: Hashable>(t: &T) -> u64 {
+    return t.hash();
+}
+
+struct IsHashable {
+    x: u64,
+}
+
+impl Hashable for IsHashable {
+    fn hash(self: &IsHashable) -> u64 {
+        return self.x;
+    }
+}
+
+struct Map<K: Hashable, V> {
+    key: K,
+    val: V,
+}
+
+fn main() {
+    let h = IsHashable { x: 42 };
+    let res = needs_hashable(&h);
+
+    let m = Map<IsHashable, i32> {
+        key: h,
+        val: 100,
+    };
+}

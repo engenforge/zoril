@@ -1,0 +1,92 @@
+// Equivalence relations and slice search helpers (Eq, contains)
+//
+//
+// Eq implementations for the primitive types and Option, plus generic helpers
+// written against Eq. The trait itself lives in core.zrl.
+//
+// There is no separate PartialEq. Impl methods share one namespace per type
+// (`Type_method`), so a PartialEq.eq and an Eq.eq on one type would collide; a
+// type whose equality is not an equivalence relation (a float, with NaN != NaN)
+// simply does not implement Eq.
+
+import "core.zrl";
+
+impl Eq for bool {
+    // Returns true if self and other are equal.
+    fn eq(self: &bool, other: &bool) -> bool { return *self == *other; }
+}
+
+impl Eq for u8 {
+    // Returns true if self and other are equal.
+    fn eq(self: &u8, other: &u8) -> bool { return *self == *other; }
+}
+
+impl Eq for u16 {
+    // Returns true if self and other are equal.
+    fn eq(self: &u16, other: &u16) -> bool { return *self == *other; }
+}
+
+impl Eq for u32 {
+    // Returns true if self and other are equal.
+    fn eq(self: &u32, other: &u32) -> bool { return *self == *other; }
+}
+
+impl Eq for u64 {
+    // Returns true if self and other are equal.
+    fn eq(self: &u64, other: &u64) -> bool { return *self == *other; }
+}
+
+impl Eq for i8 {
+    // Returns true if self and other are equal.
+    fn eq(self: &i8, other: &i8) -> bool { return *self == *other; }
+}
+
+impl Eq for i16 {
+    // Returns true if self and other are equal.
+    fn eq(self: &i16, other: &i16) -> bool { return *self == *other; }
+}
+
+impl Eq for i32 {
+    // Returns true if self and other are equal.
+    fn eq(self: &i32, other: &i32) -> bool { return *self == *other; }
+}
+
+impl Eq for i64 {
+    // Returns true if self and other are equal.
+    fn eq(self: &i64, other: &i64) -> bool { return *self == *other; }
+}
+
+impl Eq for usize {
+    // Returns true if self and other are equal.
+    fn eq(self: &usize, other: &usize) -> bool { return *self == *other; }
+}
+
+impl Eq for isize {
+    // Returns true if self and other are equal.
+    fn eq(self: &isize, other: &isize) -> bool { return *self == *other; }
+}
+
+impl<T: Eq> Eq for Option<T> {
+    // Returns true if self and other are equal.
+    fn eq(self: &Option<T>, other: &Option<T>) -> bool {
+        return match *self {
+            Some(a) => match *other {
+                Some(b) => a.eq(&b),
+                None => false,
+            },
+            None => other.is_none(),
+        };
+    }
+}
+
+// Returns true if the slice contains an element equal to val.
+pub fn contains<T: Eq>(items: [T], x: &T) -> bool {
+    let mut i = 0 as usize;
+    while i < items.len {
+        if items[i].eq(x) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}

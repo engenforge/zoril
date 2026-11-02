@@ -1,0 +1,19 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_nested_slice_array_escape.zrl:17:5: error: cannot let 'arr' go out of scope while it is still borrowed
+// EXPECT: tests/error_reporting/err_nested_slice_array_escape.zrl:15:25: note: borrow of 'arr' taken here
+
+fn get_sub(s: [[u8]]) -> [[u8]] {
+    return s;
+}
+
+fn main() -> i32 {
+    let mut outer: [[u8]] = @slice(0 as *[u8], 0 as usize);
+    {
+        let s1: [u8] = "hello";
+        let s2: [u8] = "world";
+        let arr: [[u8]; 2] = [s1, s2];
+        let s: [[u8]] = &arr;
+        outer = get_sub(s);
+    }
+    return outer.len as i32;
+}

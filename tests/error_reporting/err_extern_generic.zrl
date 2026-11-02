@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_extern_generic.zrl:5:21: error: an extern function cannot be generic (C has one function per name)
+// C has one function per name, so a generic extern would need one C function per instantiation;
+// a call used to emit a mangled symbol nothing could define.
+extern fn f<T>(x: T);
+
+fn main() -> i32 { return 0; }

@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: error: cannot assign to 'e' because it is borrowed
+// A pattern binding through a reference keeps the enum borrowed.
+enum E { A(Box<i32>), B }
+fn main() -> i32 {
+    let mut e = E.A(box 5);
+    if let E.A(x) = &e {
+        e = E.B;
+        return **x;
+    }
+    return 0;
+}

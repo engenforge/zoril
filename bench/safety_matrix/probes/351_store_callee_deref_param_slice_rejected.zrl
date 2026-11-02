@@ -1,0 +1,29 @@
+// name: A frame-owned view stored from a load through a reference parameter is rejected
+// expected: compile_reject
+// Storing a view of a frame-owned arena buffer loaded through a reference parameter into a parameter is rejected.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn copy_into(dst: &mut [i32], src: &[i32]) {
+    *dst = *src;
+}
+
+fn f(out: &mut [i32]) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(7);
+    let local = v.as_slice();
+    copy_into(out, &local);
+}
+
+fn main() -> i32 {
+    let e: [i32] = @slice(0 as *i32, 0);
+    let mut s = e;
+    f(&mut s);
+    return s[0];
+}

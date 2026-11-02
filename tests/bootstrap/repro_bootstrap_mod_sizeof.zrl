@@ -1,0 +1,3 @@
+// expected compile success
+import "intern.zrl";
+import "bytevec.zrl";

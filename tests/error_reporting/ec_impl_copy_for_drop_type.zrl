@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: error: type 'Res' cannot implement Copy: it owns a value that implements Drop
+import "core.zrl";
+
+struct Res { x: i32 }
+impl Drop for Res { fn drop(self) {} }
+impl Copy for Res {} // @error "type 'Res' cannot implement Copy: it owns a value that implements Drop"
+
+fn main() -> i32 { return 0; }

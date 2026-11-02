@@ -1,0 +1,42 @@
+// Reproduction for Bug 002: Enum variant construction uses storeb (1-byte) for tags
+// The compiler should use storew (4-bytes) if the tag is expected to be u32.
+// Even if it optimizes for space, it must zero the rest if accessed as u32.
+// Actually, it should just use the correct width store.
+
+enum TestEnum {
+    A(u32),
+    B(u32),
+}
+
+fn get_tag(e: &TestEnum) -> u32 {
+    unsafe { return *(e as *u32); }
+}
+
+fn dirty_stack(depth: i32) {
+    let a: u32 = 0xDEADBEEF;
+    let b: u32 = 0xCAFEBABE;
+    let c: u32 = 0x12345678;
+    let d: u32 = 0x87654321;
+    let pa = &a;
+    let pb = &b;
+    let pc = &c;
+    let pd = &d;
+    if depth > 0 {
+        dirty_stack(depth - 1);
+    }
+}
+
+fn test_inner() -> i32 {
+    let e = TestEnum.B(42);
+    let tag = get_tag(&e);
+    if tag == 1 {
+        return 0;
+    } else {
+        return 1;
+    }
+}
+
+pub fn main() -> i32 {
+    dirty_stack(10);
+    return test_inner();
+}

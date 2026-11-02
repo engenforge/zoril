@@ -1,0 +1,14 @@
+// expected compile fail
+// Tests that moving a value while it is borrowed is an error.
+// EXPECT: error: cannot move borrowed value 'r'
+struct Resource { id: i32 }
+
+fn consume(r: Box<Resource>) {}
+
+fn main() -> i32 {
+    let r = box Resource { id: 1 };
+    let s = &r;
+    consume(r); // @error "cannot move borrowed value 'r'"
+    let t = s.id;
+    0
+}

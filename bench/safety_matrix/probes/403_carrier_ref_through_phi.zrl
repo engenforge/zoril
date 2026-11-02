@@ -1,0 +1,25 @@
+// name: A reference to one of two local carriers chosen by an if, stored out of the frame
+// expected: compile_reject
+// A pointer into the frame that arrives at the callee through a value (a load of a slot, a call result, a
+// phi) names no slot, so the summary pass reads it as pointing at stack and fails closed; the callee
+// reads a pointer out of the carrier, and that pointer is the frame's local.
+struct Carrier { v: &i32 }
+struct Holder { c: &Carrier }
+impl Carrier { fn get(self: &Carrier) -> &i32 { return self.v; } }
+fn ex_ref(co: &Carrier) -> &i32 { return co.v; }
+fn ex_holder(h: Holder) -> &i32 { return h.c.v; }
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn escape_storer(out: &mut &i32, flag: bool) {
+    let x = 42;
+    let y = 43;
+    let c = Carrier { v: &x };
+    let d = Carrier { v: &y };
+    let r = if flag { &c } else { &d }; *out = ex_ref(r);
+}
+fn main() -> i32 {
+    let seed = 0;
+    let mut dest_val: &i32 = &seed;
+    escape_storer(&mut dest_val, true);
+    let _ = clobber_stack();
+    return *dest_val;
+}

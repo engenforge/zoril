@@ -1,0 +1,18 @@
+// expected compile fail
+// A struct that owns something with a `Drop` implementation, moved into itself through its own
+// `&mut`. Same hole, spelled as a struct rather than an arena handle.
+// EXPECT: tests/error_reporting/err_self_move_through_mut_ref_drop_field.zrl:15:5: error: cannot use 's' while it is mutably borrowed
+// EXPECT: tests/error_reporting/err_self_move_through_mut_ref_drop_field.zrl:14:14: note: borrow of 's' taken here
+
+import "mem.zrl";
+use mem::Arena;
+
+struct S { a: Arena }
+
+fn main() -> i32 {
+    let mut s = S { a: Arena.new(65536).unwrap() };
+    let rm = &mut s;
+    *rm = s;
+    let t = &*rm;
+    return 0;
+}

@@ -1,0 +1,19 @@
+// expected compile fail
+// EXPECT: error: cannot move borrowed value 'a'
+// A ByteVec from `ByteVec.new(&arena)` borrows the arena, so destroying the arena while the
+// ByteVec is live is a compile error (Stage 4 for ByteVec).
+import "mem.zrl";
+import "bytevec.zrl";
+use bytevec::ByteVec;
+use mem::Arena;
+
+fn consume(a: Arena) {}
+
+fn main() -> i32 {
+    let a = Arena.new(4096).unwrap();
+    let mut bv = ByteVec.new(&a);
+    bv.push('h' as u8);
+    consume(a); // @error "cannot move borrowed value 'a'"
+    bv.push('i' as u8);
+    return 0;
+}

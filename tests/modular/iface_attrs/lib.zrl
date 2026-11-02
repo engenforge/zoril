@@ -1,0 +1,155 @@
+// Every declared contract on an item whose body crosses a .zri (generic functions, generic
+// methods, trait default methods); scripts/test_interface_attrs.sh checks each is written.
+import "core.zrl";
+use core::Option;
+
+#[must_use]
+pub struct Token { pub v: i32 }
+
+#[must_use]
+pub enum Outcome { Good, Bad }
+
+struct Hidden { x: i32 }
+
+pub struct Holder<T> { pub r: &T }
+
+pub struct Cell<T> { pub item: T, pub slot: *mut T }
+
+#[must_use]
+pub fn gen_must_use<T>(x: T) -> T { return x; }
+
+#[borrows(b)]
+pub fn gen_borrows<T>(a: &T, b: &T) -> &T { return b; }
+
+#[stores(val -> dst)]
+pub fn gen_stores<T>(val: &T, dst: &mut Holder<T>) { dst.r = val; }
+
+pub unsafe fn gen_unsafe<T>(p: *mut T) -> *mut T { return p; }
+
+impl<T> Cell<T> {
+    #[must_use]
+    pub fn impl_must_use(self: &Cell<T>) -> bool { return true; }
+
+    #[borrows(self)]
+    pub fn impl_borrows(self: &Cell<T>, other: &Cell<T>) -> &T { return &self.item; }
+
+    #[stores(val -> self)]
+    pub fn impl_stores(self: &mut Cell<&T>, val: &T) { self.item = val; }
+
+    pub unsafe fn impl_unsafe(self: &Cell<T>) -> bool { return true; }
+}
+
+pub trait Shape {
+    #[must_use]
+    fn area(self: &Self) -> i32 { return 0; }
+
+    #[borrows(self)]
+    fn first(self: &Self, o: &Self) -> &Self { return self; }
+}
+
+type HiddenAlias = i32;
+
+// Items an importer reaches through the interface other than a plain function: statics (one
+// definition, shared), constants a generic body uses, an associated constant, a marker impl.
+pub static mut COUNT: i32 = 3;
+static mut HIDDEN: i32 = 10;
+const LIMIT: i32 = 7;
+const DOUBLE: i32 = LIMIT * 2;
+
+pub fn peek_count() -> i32 { return COUNT; }
+pub fn set_count(v: i32) { COUNT = v; }
+pub fn bump_hidden<T>(x: T) -> i32 { HIDDEN = HIDDEN + 1; return HIDDEN; }
+pub fn peek_hidden() -> i32 { return HIDDEN; }
+pub fn limit_double<T>(x: T) -> i32 { return DOUBLE; }
+
+impl<T> Cell<T> {
+    pub const SLOTS: i32 = 4;
+    const SECRET: i32 = 9;
+    pub fn secret(self: &Cell<T>) -> i32 { return Cell::SECRET; }
+}
+
+pub struct Plain { pub v: i32 }
+impl Copy for Plain {}
+
+// `if let`, `else if let` and `while let` in a generic body: the interface must write them back as
+// the desugared forms they were, or the importer lints a `_` arm nobody wrote.
+pub fn first_ok<T>(a: Result<T, i32>, b: Result<T, i32>, fallback: T) -> T {
+    if let Result.Ok(v) = a {
+        return v;
+    } else if let Result.Ok(w) = b {
+        return w;
+    }
+    return fallback;
+}
+
+pub fn drain_to_zero<T>(x: T, n: i32) -> i32 {
+    let mut left = n;
+    let mut o: Option<i32> = Option.Some(left);
+    while let Option.Some(k) = o {
+        if k == 0 { o = Option.None; } else { left = k - 1; o = Option.Some(left); }
+    }
+    return left;
+}
+
+// `if let` as a value, with an `else` that is itself a value (A7.2): the interface must not end the
+// `else` body with a `;`, which drops the value.
+pub enum Slot<T> { Empty, Full(T) }
+
+pub fn pick_value<T>(o: Slot<T>, c: bool, a: T, b: T) -> T {
+    let v = if let Slot.Full(x) = o { x } else if c { a } else { b };
+    return v;
+}
+
+pub fn pick_chain<T>(o: Slot<T>, p: Slot<T>, fallback: T) -> T {
+    let v = if let Slot.Full(x) = o { x } else if let Slot.Full(y) = p { y } else { fallback };
+    return v;
+}
+
+pub fn pick_block<T>(o: Slot<T>, a: T) -> T {
+    return if let Slot.Full(x) = o { x } else { a };
+}
+
+// A `Drop` impl of an imported type (found by the fuzzer's mode-diff reading): its `drop` is called by the
+// importer's drop glue, so it must be linkable though it is not written `pub` (a trait impl's methods are public).
+pub static mut GUARD_DROPS: i32 = 0;
+pub struct Guard { pub x: i32 }
+impl Drop for Guard {
+    fn drop(self: &mut Guard) { GUARD_DROPS = GUARD_DROPS + self.x; }
+}
+
+// A default method's body is instantiated where the trait is implemented or the method called, so what it names
+// of this module - private functions, a private struct, a private `static` - must be in the interface and
+// linkable (A7.3).
+struct DmHidden { h: i32 }
+fn dm_mk() -> DmHidden { return DmHidden { h: 4 }; }
+static mut DM_HITS: i32 = 0;
+fn dm_bonus() -> i32 { return 2; }
+pub trait DmTrait {
+    fn base(self: &Self) -> i32;
+    fn ty(self: &Self) -> i32 { return dm_mk().h + self.base(); }
+    fn gen<U>(self: &Self, u: U) -> i32 { return dm_bonus() + self.base(); }
+    fn hit(self: &Self) -> i32 { DM_HITS = DM_HITS + 1; return DM_HITS; }
+}
+pub struct DmSq { pub s: i32 }
+impl DmTrait for DmSq { fn base(self: &DmSq) -> i32 { return self.s; } }
+
+// A private trait this module implements for its public types: the interface carries the impls, so it
+// carries the trait too, as private (A7.4). Its default methods are instantiated in an importer that
+// instantiates a public generic body calling them, so what they name is linkable as well.
+fn pt_bonus() -> i32 { return 3; }
+static mut PT_HITS: i32 = 0;
+trait PtReq { fn q(self: &Self) -> i32; }
+trait PtDefault { fn p(self: &Self) -> i32 { PT_HITS = PT_HITS + 1; return pt_bonus() + PT_HITS; } }
+trait PtAssoc { type Out; fn out(self: &Self) -> i32; }
+pub struct PtV { pub v: i32 }
+impl PtReq for PtV { fn q(self: &PtV) -> i32 { return self.v; } }
+impl PtDefault for PtV {}
+impl PtAssoc for PtV { type Out = i32; fn out(self: &PtV) -> i32 { return self.v * 2; } }
+pub fn pt_use(v: &PtV) -> i32 { return v.q() + v.p() + v.out(); }
+pub fn pt_use_generic<T>(v: &PtV, t: T) -> i32 { return v.p(); }
+fn pt_bound<T: PtReq>(x: &T) -> i32 { return x.q(); }
+pub fn pt_via_bound(v: &PtV) -> i32 { return pt_bound(v); }
+
+// `box(allocator) expr` is refused where it is instantiated (A7.10): the interface must keep the
+// allocator operand, or an importer would heap-allocate what the whole-program build rejects.
+pub fn box_in<T>(alloc: i32, v: T) -> Box<T> { return box(alloc) v; }

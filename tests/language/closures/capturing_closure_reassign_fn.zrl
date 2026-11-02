@@ -1,0 +1,13 @@
+// expected exit 2
+// A capturing closure is a function value carrying its environment, so it works anywhere a
+// `fn` value does (reassign fn). Until 2026-10-05 this was rejected: the environment was
+// bound to the variable statically.
+fn plain(x: i32) -> i32 { return x; }
+
+fn main() -> i32 {
+    let k = 5;
+    let mut f = |x: i32| -> i32 { x + k };
+    let c = k == 5;
+    if c { f = plain; }
+    return f(2);
+}

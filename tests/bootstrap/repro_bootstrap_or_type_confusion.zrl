@@ -1,0 +1,15 @@
+// expected compile fail
+enum Multi {
+    A(u32),
+    B(i32),
+}
+
+fn main() {
+    let m = Multi.A(1 as u32);
+    match m {
+        Multi.A(x) | Multi.B(x) => {
+            // x is u32 in one case, i32 in another.
+            // This should be a type error.
+        }
+    }
+}

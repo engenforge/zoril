@@ -1,0 +1,46 @@
+// The application: opens a window, fills an RGBA buffer from the monotonic clock in each frame
+// callback, and checks that what it blitted is what the platform layer received.
+import "platform.zrl";
+import "time.zrl";
+use platform::{Display, Frame};
+
+struct App {
+    pixels: [u8; 64],
+    frame: i32,
+}
+
+
+fn main() -> i32 {
+    let mut display = match Display.open(4, 4) {
+        Option.Some(d) => d,
+        Option.None => { return 1; },
+    };
+    if display.width() != 4 || display.height() != 4 { return 2; }
+    if Display.open(0, 5).is_some() { return 3; }
+
+    let mut app = App { pixels: [0 as u8; 64], frame: 0 };
+    // The handler borrows the application's state for the length of the call and gets a Frame,
+    // not the Display, so nothing here aliases what run() has borrowed. No `unsafe`, no cast.
+    let a = &mut app;
+    display.run(|frame: &mut Frame| {
+        let t = time::monotonic_ns();
+        let mut i = 0;
+        while i < 64 {
+            a.pixels[i as usize] = ((t >> (i % 8)) as u8) ^ (i as u8);
+            i = i + 1;
+        }
+        if frame.blit(&a.pixels) {
+            a.frame = a.frame + 1;
+        }
+    });
+
+    if app.frame != 3 { return 4; }
+    if display.frames_shown() != 3 { return 5; }
+    // A fourth frame of the right size is shown; one of the wrong size is refused.
+    if !display.blit(&app.pixels) || display.frames_shown() != 4 { return 6; }
+    if display.blit(&[1 as u8, 2, 3]) { return 7; }
+    if display.checksum() == 0 { return 8; }
+    // run() cleared the callback: C holds no pointer into run's stack once it has returned.
+    if display.holds_handler() { return 9; }
+    return 0;
+}

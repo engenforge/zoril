@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/ec_unknown_variant.zrl:9:16: error: no variant or associated constant `Nope` in `K`
+// A misspelled variant used to compile: as a value it was junk (passing it on crashed),
+// and as a pattern it silently never matched.
+enum K { A, B }
+fn same(k: K, j: K) -> bool { return k == j; }
+fn main() -> i32 {
+    let k = K.B;
+    if same(k, K.Nope) { return 1; }
+    return 0;
+}

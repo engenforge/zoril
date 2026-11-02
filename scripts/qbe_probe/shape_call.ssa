@@ -1,0 +1,8 @@
+export function w $f(l %p, w %a, w %b, w %c, w %d, w %e, w %g, w %h, w %i) {
+@s
+	%r =w call $k(l %p, w %a, w %b, w %c, w %d, w %e, w %g, w %h, w %i)
+	%t =w add %r, %a
+	%u =w call $k(l %p, w %t, w %b, w %c, w %d, w %e, w %g, w %h, w %r)
+	%v =w add %u, %i
+	ret %v
+}

@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: `yield` is a reserved word, kept for a future feature
+fn f() -> i32 {
+    let yield = 1;
+    return yield;
+}

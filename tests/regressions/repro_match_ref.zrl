@@ -1,0 +1,20 @@
+enum Large {
+    A((u64, u64, u64, u64)),
+    B(u64),
+}
+
+fn process(l: &Large) -> u64 {
+    match *l {
+        Large.A(t) => return t.0 + t.1 + t.2 + t.3,
+        Large.B(val) => return val,
+    }
+}
+
+fn main() -> i32 {
+    let l = Large.A((1 as u64, 2 as u64, 3 as u64, 4 as u64));
+    let res = process(&l);
+    if res == 10 {
+        return 0;
+    }
+    return 1;
+}

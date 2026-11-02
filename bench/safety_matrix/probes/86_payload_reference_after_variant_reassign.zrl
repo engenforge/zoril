@@ -1,0 +1,17 @@
+// name: Reference inside a payload binding used after the enum is reassigned
+// expected: accept
+// The binding holds its own copy of the struct (and so of the reference), not a view into e.
+struct S { p: &i64 }
+enum E { A(S), B(i64) }
+fn main() -> i32 {
+    let v: i64 = 5;
+    let mut e = E.A(S { p: &v });
+    match e {
+        E.A(s) => {
+            e = E.B(12345 as i64);
+            if *s.p != 5 as i64 { return 2; }
+        },
+        E.B(_) => { return 1; },
+    }
+    return 0;
+}

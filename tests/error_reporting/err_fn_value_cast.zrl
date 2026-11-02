@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_fn_value_cast.zrl:5:59: error: cannot cast a function value: it is its code and its environment, not a number or pointer
+// A function value is two words; `f as u64` would read the address of the slot holding them.
+fn plain(x: i32) -> i32 { return x; }
+fn main() -> i32 { let f: fn(i32) -> i32 = plain; let a = f as u64; return a as i32; }

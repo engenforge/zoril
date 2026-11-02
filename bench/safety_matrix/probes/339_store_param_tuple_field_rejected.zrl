@@ -1,0 +1,23 @@
+// name: A view of a local arena buffer stored through a tuple field parameter outlives the buffer
+// expected: compile_reject
+// Storing a view of a frame-owned arena buffer through a tuple element on a `&mut` parameter is rejected.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn f(out: &mut (i32, [i32])) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return; }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(7);
+    out.1 = v.as_slice();
+}
+
+fn main() -> i32 {
+    let mut pair = (0, @slice(0 as *i32, 0));
+    f(&mut pair);
+    return 0;
+}

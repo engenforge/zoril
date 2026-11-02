@@ -1,0 +1,23 @@
+// expected compile fail
+// Probe 177 as a located test: the `fd<w>` is nine struct levels down, past the recursion limit of
+// `type_holds_linear`, so the value's scope exit used to close nothing and the descriptor leaked.
+// One to eight levels are rejected either way (`tests/error_reporting/err_linear_type_leak.zrl` is
+// the one-level case); the depth is the point.
+// EXPECT: tests/error_reporting/err_linear_deep_fd_leak.zrl:22:5: error: value 'v' holds a linear resource (fd or ioring) that must be explicitly closed, not dropped
+extern fn open_w(path: *u8) -> fd<w>;
+extern fn close_w(f: fd<w>);
+
+struct S1 { f: fd<w> }
+struct S2 { a: S1 }
+struct S3 { a: S2 }
+struct S4 { a: S3 }
+struct S5 { a: S4 }
+struct S6 { a: S5 }
+struct S7 { a: S6 }
+struct S8 { a: S7 }
+struct S9 { a: S8 }
+
+fn main() -> i32 {
+    let v = S9 { a: S8 { a: S7 { a: S6 { a: S5 { a: S4 { a: S3 { a: S2 { a: S1 { f: unsafe { open_w("/dev/null".ptr) } } } } } } } } } };
+    return 0;
+}

@@ -1,0 +1,14 @@
+// name: Or-pattern binding with different types per alternative
+// expected: compile_reject
+// `R(x) | N(x)` bound x with the first alternative's type (&i32) even when N(u64) matched,
+// so *x dereferenced an integer. The compiler rejects bindings whose types differ.
+
+enum E { R(&i32), N(u64) }
+fn read(e: E) -> i32 {
+    return match e {
+        E.R(x) | E.N(x) => *x,
+    };
+}
+fn main() -> i32 {
+    return read(E.N(4096 as u64));
+}

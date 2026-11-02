@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_callee_stores_local_ref.zrl:7:33: error: region escape: a pointer to local stack storage is written to memory that outlives this function
+// put's body stores its p into h (summary: stores p, into h), so passing &x for a local x
+// writes a pointer into fill's frame into the caller's H.
+struct H { r: &i32 }
+fn put(h: &mut H, p: &i32) { h.r = p; }
+fn fill(h: &mut H) { let x = 5; put(h, &x); }
+fn main() -> i32 { let y = 1; let mut h = H { r: &y }; fill(&mut h); return *h.r; }

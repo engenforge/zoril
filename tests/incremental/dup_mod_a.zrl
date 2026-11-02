@@ -1,0 +1,7 @@
+import "generic_lib.zrl";
+use generic_lib::identity;
+
+pub fn run_a() -> i64 {
+    let x: i64 = 15;
+    return identity::<i64>(x);
+}

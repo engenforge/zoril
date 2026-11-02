@@ -1,0 +1,928 @@
+import "diag.zrl";
+import "core.zrl";
+import "mem_raw.zrl";
+import "io.zrl";
+import "ast.zrl";
+import "il_type.zrl";
+import "il_layout.zrl";
+import "il_instr.zrl";
+import "il_cfg.zrl";
+import "resolve.zrl";
+import "token.zrl";
+import "lexer.zrl";
+import "intern.zrl";
+import "bytevec.zrl";
+import "mono.zrl";
+import "builder.zrl";
+import "vec.zrl";
+import "state.zrl";
+use ast::{AST, BINARY_ADD, BINARY_ADDWRAP, BINARY_AND, BINARY_DIV, BINARY_MOD, BINARY_MUL, BINARY_MULWRAP, BINARY_OR, BINARY_SHL, BINARY_SHR, BINARY_SUB, BINARY_SUBWRAP, BINARY_XOR, BinaryExpr, DECL_CONST, DECL_ENUM, DECL_IMPL, DECL_STRUCT, DECL_TRAIT, Decl, EXPR_BINARY, EXPR_CAST, EXPR_IDENT, EXPR_LITERAL, EXPR_MEMBER_ACCESS, EXPR_UNARY, Expr, ExprId, ImplDecl, LITERAL_BOOL, LITERAL_CHAR, LITERAL_FLOAT, LITERAL_INT, LITERAL_STRING, Literal, StructDecl, TYPE_PATH, TYPE_PRIMITIVE, TYPE_PTR, TYPE_REFMUT, TYPE_SLICE, TYPE_SLICE_MUT, TraitDecl, Type, TypeId, TypeParam, UNARY_NEG, UNARY_NOT};
+use diag::diag_start;
+use il_cfg::takes_env_ptr;
+use il_layout::{type_align, type_size};
+use il_type::{ILPRIM_BOOL, ILPRIM_F32, ILPRIM_F64, ILPRIM_I8, ILPRIM_ISIZE, ILType, ILTypeDecl, ILTypeDef};
+use io::eprint;
+use resolve::SymbolKind;
+use state::Driver;
+use token::NO_SUFFIX;
+
+// The form of a `static`'s or `const`'s initializer: which of the shapes a constant context can
+// materialize as the declared type's bytes it took. CONST_FORM_NOT_CONST is the answer for
+// everything else (a struct or array literal, a call, another static's name), which the caller
+// reports at the initializer.
+pub const CONST_FORM_NOT_CONST: u32 = 0;
+pub const CONST_FORM_INT: u32 = 1;    // an integer, bool or char value
+pub const CONST_FORM_FLOAT: u32 = 2;  // a floating-point value
+pub const CONST_FORM_STRING: u32 = 3; // a byte string, for a `[u8; N]` constant
+pub const CONST_FORM_ENUM: u32 = 4;   // a variant with no payload: its discriminant
+pub const CONST_FORM_ERROR: u32 = 5;  // the walk reported its own reason
+
+// What such an initializer evaluates to.
+pub struct ConstInit {
+    pub int_value: u64,     // an integer, a bool (0/1), a char, or a discriminant
+    pub float_value: f64,   // a floating-point value, narrowed to f32 by float_is_f32
+    pub float_is_f32: bool, // whether the value has been rounded to f32 (by a suffix or a cast)
+    pub str_id: u32,        // a string literal's interned bytes
+}
+
+impl Driver {
+    pub fn is_aggregate(self: &mut Driver, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        let p_ty: &ILTypeDecl = self.builder.get_type_decl(ty_id);
+        match (*p_ty).def {
+            ILType.Slice(_) | ILType.Array(_) | ILType.Tuple(_) | ILType.Fn(_) => { return true; },
+            ILType.User(u) => {
+                return match self.module.typedefs[u.id as usize] {
+                    ILTypeDef.Struct(_) | ILTypeDef.Enum(_) => true,
+                    ILTypeDef.Fn(_) => false
+                };
+            },
+            _ => { return false; },
+        }
+    }
+
+    pub fn requires_pass_by_ref(self: &mut Driver, ty_id: u32) -> bool {
+        if ty_id == 0 as u32 { return false; }
+        return self.is_aggregate(ty_id);
+    }
+    pub fn needs_env_ptr(self: &mut Driver, is_extern: bool, name: u32) -> bool {
+        return takes_env_ptr(is_extern, self.intern_table.lookup(name));
+    }
+
+    pub fn get_type_size(self: &mut Driver, ty_id: u32) -> u64 {
+        return type_size(self.module, ty_id);
+    }
+
+    pub fn get_type_align(self: &mut Driver, ty_id: u32) -> u64 {
+        return type_align(self.module, ty_id);
+    }
+
+    pub fn is_terminated(self: &mut Driver) -> bool {
+        return self.builder.is_terminated();
+    }
+
+    fn slice_elem_matches(
+        self: &Driver,
+        p_elem_ty: &Type,
+        elem_ty: u32,
+        imp_type_params: [TypeParam]
+    ) -> bool {
+        let ast: &AST = self.resolver.ast;
+        let elem_tag = (*p_elem_ty).get_tag();
+        if elem_tag == TYPE_PRIMITIVE {
+            let prim_tag = (*p_elem_ty).get_Primitive().get_tag();
+            let prim_ty_id = unsafe {
+                *((self.resolver.primitives as usize + prim_tag as usize * 4) as *mut u32)
+            };
+            return elem_ty == prim_ty_id;
+        } else if elem_tag == TYPE_PATH {
+            let path = (*p_elem_ty).get_Path();
+            let path_name = path.0;
+            for tp in imp_type_params {
+                if (*tp).name == path_name { return true; }
+            }
+            let p_decl = self.builder.get_type_decl(elem_ty);
+            let mut name_matched = false;
+            if (*p_decl).name == path_name {
+                name_matched = true;
+            } else if let ILType.User(u) = (*p_decl).def {
+                if u.name == path_name { name_matched = true; }
+            }
+            if !name_matched && (*p_decl).name != 0 as u32 {
+                let target_str = self.intern_table.lookup(path_name);
+                let elem_str = self.intern_table.lookup((*p_decl).name);
+                if elem_str.len >= target_str.len {
+                    let mut prefix_match = true;
+                    let mut pi = 0 as usize;
+                    while pi < target_str.len {
+                        if elem_str[pi] != target_str[pi] {
+                            prefix_match = false;
+                            break;
+                        }
+                        pi = pi + 1 as usize;
+                    }
+                    if prefix_match
+                        && (elem_str.len == target_str.len
+                            || (elem_str.len >= target_str.len + 2 as usize
+                                && elem_str[target_str.len] == '_' as u8
+                                && elem_str[target_str.len + 1 as usize] == 'T' as u8)) {
+                        name_matched = true;
+                    }
+                }
+            }
+            if !name_matched { return false; }
+            if path.1.len > 0 as usize {
+                if let ILType.User(u) = (*p_decl).def {
+                    if u.type_args.len != path.1.len { return false; }
+                    let mut k = 0 as usize;
+                    while k < path.1.len {
+                        let expected_arg = self.resolver.resolve_type(path.1[k]);
+                        if expected_arg != 0 as u32 && expected_arg != u.type_args[k] {
+                            return false;
+                        }
+                        k = k + 1 as usize;
+                    }
+                }
+            }
+            return true;
+        } else if elem_tag == TYPE_SLICE || elem_tag == TYPE_SLICE_MUT {
+            let p_inner_decl = self.builder.get_type_decl(elem_ty);
+            if let ILType.Slice(inner_sl) = (*p_inner_decl).def {
+                if elem_tag == TYPE_SLICE_MUT && !inner_sl.mutable {
+                    return false;
+                }
+                let next_elem: &Type = &ast.types[(*p_elem_ty).get_Slice() as usize];
+                return self.slice_elem_matches(next_elem, inner_sl.element, imp_type_params);
+            }
+            return false;
+        }
+        return false;
+    }
+
+    pub fn find_method_in_impls(self: &mut Driver, ty_id: u32, method_name: u32) -> Option<u32> {
+        if ty_id == 0 as u32 { return Option.None; }
+
+        if ty_id == 0 as u32 { ICE("a type id of 0 where a type is needed"); }
+        let p_ty: &ILTypeDecl = self.builder.get_type_decl(ty_id);
+        let struct_name_id = (*p_ty).name;
+        let ast: &AST = self.resolver.ast;
+
+        let mut i = 0 as usize;
+        while i < ast.decls.len() {
+            let p_decl: &Decl = &ast.decls[i];
+            if (*p_decl).get_tag() == DECL_IMPL {
+                let imp: &ImplDecl = (*p_decl).get_Impl();
+                let p_target_ty: &Type = &ast.types[imp.target_ty as usize];
+
+                let t_tag = (*p_target_ty).get_tag();
+                let mut target_name = 0 as u32;
+                let mut matched = false;
+
+                if t_tag == TYPE_PATH {
+                    target_name = (*p_target_ty).get_Path().0;
+                } else if t_tag >= TYPE_PTR && t_tag <= TYPE_REFMUT {
+                    let inner = (*p_target_ty).get_Ptr();
+                    let p_inner: &Type = &ast.types[inner as usize];
+                    let inner_tag = (*p_inner).get_tag();
+                    if inner_tag == TYPE_PATH {
+                        target_name = (*p_inner).get_Path().0;
+                    } else if inner_tag == TYPE_PRIMITIVE {
+                        let prim_tag = (*p_inner).get_Primitive().get_tag();
+                        let prim_ty_id = unsafe {
+                            *((self.resolver.primitives as usize
+                                + prim_tag as usize * 4) as *mut u32)
+                        };
+                        if prim_ty_id == ty_id { matched = true; }
+                    } else if inner_tag == TYPE_SLICE || inner_tag == TYPE_SLICE_MUT {
+                        match (*p_ty).def {
+                            ILType.Slice(sl) => {
+                                if !(inner_tag == TYPE_SLICE_MUT && !sl.mutable) {
+                                    let p_elem_ty: &Type = &ast.types[(*p_inner).get_Slice() as usize];
+                                    if self.slice_elem_matches(
+                                        p_elem_ty,
+                                        sl.element,
+                                        imp.type_params
+                                    ) {
+                                        matched = true;
+                                    }
+                                }
+                            },
+                            _ => {}
+                        }
+                    }
+                } else if t_tag == TYPE_PRIMITIVE {
+                    let prim_tag = (*p_target_ty).get_Primitive().get_tag();
+                    let prim_ty_id = unsafe {
+                        *((self.resolver.primitives as usize + prim_tag as usize * 4) as *mut u32)
+                    };
+                    if prim_ty_id == ty_id { matched = true; }
+                } else if t_tag == TYPE_SLICE || t_tag == TYPE_SLICE_MUT {
+                    match (*p_ty).def {
+                        ILType.Slice(sl) => {
+                            if !(t_tag == TYPE_SLICE_MUT && !sl.mutable) {
+                                let p_elem_ty: &Type = &ast.types[(*p_target_ty).get_Slice() as usize];
+                                if self.slice_elem_matches(p_elem_ty, sl.element, imp.type_params) {
+                                    matched = true;
+                                }
+                            }
+                        },
+                        _ => {}
+                    }
+                }
+
+                if target_name != 0 as u32 {
+                    if target_name == struct_name_id {
+                        matched = true;
+                    } else if struct_name_id != 0 as u32 {
+                        let target_str = self.intern_table.lookup(target_name);
+                        let struct_str = self.intern_table.lookup(struct_name_id);
+                        if struct_str.len >= target_str.len {
+                            let mut prefix_match = true;
+                            let mut pi = 0 as usize;
+                            while pi < target_str.len {
+                                if struct_str[pi] != target_str[pi] {
+                                    prefix_match = false;
+                                    break;
+                                }
+                                pi = pi + 1 as usize;
+                            }
+                            if prefix_match
+                                && (struct_str.len == target_str.len
+                                    || struct_str[target_str.len] == '_' as u8) {
+                                matched = true;
+                            }
+                        }
+                    }
+                }
+
+                if matched {
+                    let mut k = 0 as usize;
+                    while k < imp.methods.len {
+                        if imp.methods[k].name == method_name {
+                            return Option.Some(i as u32);
+                        }
+                        k = k + 1 as usize;
+                    }
+                }
+            }
+            i = i + 1 as usize;
+        }
+        return Option.None;
+    }
+
+    // ── Constant initializers ────────────────────────────────────────────────────────────────
+    // A `static`'s or `const`'s value is materialized as the declared type's bytes at compile
+    // time, so only the forms below can be one. The walk is total: an initializer it does not
+    // support is reported at the initializer, never as an ICE. It is also exact, where the path
+    // it replaces guessed - that one returned a u64 for whatever it could salvage and let the
+    // caller copy it into the type's bytes, so `static B: Big = 7` filled a 24-byte struct from
+    // an 8-byte buffer (the tail was compiler heap), `!true` wrote 1 (`true`), and `-7 / 2` was
+    // the u64 division of two's complement bits.
+
+    pub fn const_init_form(self: &mut Driver, value: ExprId, ty: u32, cv: *mut ConstInit) -> u32 {
+        return self.const_init_form_depth(value, ty, 0 as usize, cv);
+    }
+
+    fn const_init_form_depth(
+        self: &mut Driver,
+        expr_id: ExprId,
+        ty: u32,
+        depth: usize,
+        cv: *mut ConstInit
+    ) -> u32 {
+        if expr_id == 0 as ExprId { return CONST_FORM_NOT_CONST; }
+        let ast: &AST = self.resolver.ast;
+        let p_expr: &Expr = &ast.exprs[expr_id as usize];
+        let tag = (*p_expr).get_tag();
+        if depth > 256 as usize && tag == EXPR_IDENT {
+            // Only a const reaching itself through other consts can recurse without bound.
+            self.report_error_concat(
+                "constant definition is cyclic: ",
+                "",
+                ast.expr_spans[expr_id as usize]
+            );
+            eprint(self.resolver.intern_table.lookup((*p_expr).get_Ident()));
+            eprint("\n");
+            return CONST_FORM_ERROR;
+        }
+        if tag == EXPR_LITERAL {
+            match *p_expr {
+                Expr.Literal(lit) => { return self.literal_const_form(lit, ty, cv); },
+                _ => { ICE("const_init_form: EXPR_LITERAL tag but non-Literal expr variant"); },
+            }
+        }
+        if tag == EXPR_CAST {
+            let c = (*p_expr).get_Cast();
+            // The cast's target decides how its operand reads (an integer literal under `as f32`
+            // is that f32) and it is the only place a value's kind changes.
+            let target = self.resolver.resolve_type(c.target_ty);
+            let inner = self.const_init_form_depth(c.expr, target, depth + 1 as usize, cv);
+            if inner == CONST_FORM_INT {
+                if !self.is_float_il_ty(target) { return CONST_FORM_INT; }
+                let v = unsafe { (*cv).int_value };
+                unsafe { (*cv).float_value = v as f64; }
+                if self.il_primitive_tag(target) == ILPRIM_F32 {
+                    let f = unsafe { (*cv).float_value } as f32;
+                    unsafe { (*cv).float_value = f as f64; }
+                    unsafe { (*cv).float_is_f32 = true; }
+                }
+                return CONST_FORM_FLOAT;
+            }
+            if inner == CONST_FORM_FLOAT {
+                // A float cast to an integer truncates at run time (`1.5 as u64`), which is not a
+                // form this context takes.
+                if !self.is_float_il_ty(target) {
+                    return CONST_FORM_NOT_CONST;
+                }
+                // Narrowing to f32 rounds here, as the run-time cast does, so a later widening to
+                // f64 keeps the f32 value (`0.1 as f32 as f64` is not `0.1 as f64`).
+                if self.il_primitive_tag(target) == ILPRIM_F32 && !unsafe { (*cv).float_is_f32 } {
+                    let f = unsafe { (*cv).float_value } as f32;
+                    unsafe { (*cv).float_value = f as f64; }
+                    unsafe { (*cv).float_is_f32 = true; }
+                }
+                return CONST_FORM_FLOAT;
+            }
+            return CONST_FORM_NOT_CONST;
+        }
+        if tag == EXPR_UNARY {
+            let u = (*p_expr).get_Unary();
+            let op = u.op.get_tag();
+            // `&x` and `*p` are addresses: no data section holds them.
+            if op != UNARY_NEG && op != UNARY_NOT {
+                return CONST_FORM_NOT_CONST;
+            }
+            let inner = self.const_init_form_depth(u.expr, ty, depth + 1 as usize, cv);
+            if inner == CONST_FORM_INT {
+                let v = unsafe { (*cv).int_value };
+                if op == UNARY_NEG {
+                    unsafe { (*cv).int_value = (0 as u64) - v; }
+                } else if self.il_primitive_tag(ty) == ILPRIM_BOOL {
+                    // `!` is logical not on a bool and bitwise not on an integer, which is what
+                    // the IL lowers to (`ceqw x, 0` against `xor x, -1`).
+                    unsafe { (*cv).int_value = if v == 0 as u64 { 1 as u64 } else { 0 as u64 }; }
+                } else {
+                    unsafe { (*cv).int_value = !v; }
+                }
+                return CONST_FORM_INT;
+            }
+            if inner == CONST_FORM_FLOAT && op == UNARY_NEG {
+                let f = unsafe { (*cv).float_value };
+                unsafe { (*cv).float_value = 0.0 - f; }
+                return CONST_FORM_FLOAT;
+            }
+            return CONST_FORM_NOT_CONST;
+        }
+        if tag == EXPR_BINARY {
+            return self.binary_const_form((*p_expr).get_Binary(), ty, depth, cv);
+        }
+        if tag == EXPR_MEMBER_ACCESS {
+            let m = (*p_expr).get_MemberAccess();
+            // A variant with no payload is a constant: its image is its discriminant and nothing
+            // else (`static C: Color = Color.Green`). A variant that takes a payload is written as
+            // a call, and a call is not one of these forms. The declared type's enum is tried
+            // first - it is the one an instance names (`Option.None` for `Option<u32>`) - then the
+            // enum the base names, so a variant path written against another type is still read as
+            // the constant it is and the type check reports the mismatch between the two enums.
+            if self.bare_variant_value(ty, m.member, cv) {
+                return CONST_FORM_ENUM;
+            }
+            let base_ty = self.enum_named_by_expr(m.expr);
+            if self.bare_variant_value(base_ty, m.member, cv) { return CONST_FORM_ENUM; }
+            return CONST_FORM_NOT_CONST;
+        }
+        if tag == EXPR_IDENT {
+            let name = (*p_expr).get_Ident();
+            // A name of a constant (of this module or one a `use` brought in). Another static's
+            // name is not one: its address is not known when the data section is written.
+            let sym = match self.resolver.lookup_global_ptr(name) {
+                Option.Some(s) => s,
+                Option.None => { return CONST_FORM_NOT_CONST; },
+            };
+            let decl_id = match sym.kind {
+                SymbolKind.Global(d) => d,
+                _ => { return CONST_FORM_NOT_CONST; },
+            };
+            if ast.decls[decl_id as usize].get_tag() != DECL_CONST {
+                return CONST_FORM_NOT_CONST;
+            }
+            let cd = ast.decls[decl_id as usize].get_Const();
+            let cd_ty = self.resolver.resolve_type(cd.ty);
+            return self.const_init_form_depth(cd.value, cd_ty, depth + 1 as usize, cv);
+        }
+        return CONST_FORM_NOT_CONST;
+    }
+
+    // The constant form of a literal. TY is the type the context expects: an integer literal in
+    // a float context is that float (`const PI: f64 = 3`), which is how the checker reads it.
+    fn literal_const_form(self: &mut Driver, lit: Literal, ty: u32, cv: *mut ConstInit) -> u32 {
+        let lt = lit.get_tag();
+        if lt == LITERAL_INT {
+            if self.is_float_il_ty(ty) {
+                let f = lit.get_Int() as f64;
+                let is_f32 = self.il_primitive_tag(ty) == ILPRIM_F32;
+                unsafe { (*cv).float_value = if is_f32 { (f as f32) as f64 } else { f }; }
+                unsafe { (*cv).float_is_f32 = is_f32; }
+                return CONST_FORM_FLOAT;
+            }
+            unsafe { (*cv).int_value = lit.get_Int(); }
+            return CONST_FORM_INT;
+        }
+        if lt == LITERAL_FLOAT {
+            let v = lit.get_Float();
+            let suffix = lit.get_Float_suffix();
+            let is_f32 = suffix == ILPRIM_F32
+                || (suffix == NO_SUFFIX && self.il_primitive_tag(ty) == ILPRIM_F32);
+            unsafe { (*cv).float_value = if is_f32 { (v as f32) as f64 } else { v }; }
+            unsafe { (*cv).float_is_f32 = is_f32; }
+            return CONST_FORM_FLOAT;
+        }
+        if lt == LITERAL_BOOL {
+            unsafe { (*cv).int_value = if lit.get_Bool() { 1 as u64 } else { 0 as u64 }; }
+            return CONST_FORM_INT;
+        }
+        if lt == LITERAL_CHAR {
+            unsafe { (*cv).int_value = lit.get_Char() as u64; }
+            return CONST_FORM_INT;
+        }
+        if lt == LITERAL_STRING {
+            unsafe { (*cv).str_id = lit.get_String(); }
+            return CONST_FORM_STRING;
+        }
+        return CONST_FORM_NOT_CONST;
+    }
+
+    // A binary operator's constant value. Only the operators that are exact on the value's
+    // two's complement bits are here, read in the declared type's signedness and width: the
+    // comparisons and the logical `&&`/`||` are not, since `<` needs the signedness of operands
+    // the declared type of `const B: bool = a < b` does not give, and a float expression would
+    // have to round in the declared precision (f32 vs f64) to match the run-time value.
+    fn binary_const_form(
+        self: &mut Driver,
+        b: &BinaryExpr,
+        ty: u32,
+        depth: usize,
+        cv: *mut ConstInit
+    ) -> u32 {
+        let op = b.op.get_tag();
+        let mut left = ConstInit {
+            int_value: 0 as u64,
+            float_value: 0.0,
+            float_is_f32: false,
+            str_id: 0 as u32
+        };
+        let mut right = ConstInit {
+            int_value: 0 as u64,
+            float_value: 0.0,
+            float_is_f32: false,
+            str_id: 0 as u32
+        };
+        if self.const_init_form_depth(b.lhs, ty, depth + 1 as usize, &mut left) != CONST_FORM_INT {
+            return CONST_FORM_NOT_CONST;
+        }
+        if self.const_init_form_depth(b.rhs, ty, depth + 1 as usize, &mut right) != CONST_FORM_INT {
+            return CONST_FORM_NOT_CONST;
+        }
+        let l = left.int_value;
+        let r = right.int_value;
+        let bits = self.il_int_bits(ty);
+        let signed = self.is_signed_il_int(ty);
+        let mut out = 0 as u64;
+        if op == BINARY_ADD || op == BINARY_ADDWRAP {
+            out = l + r;
+        } else if op == BINARY_SUB || op == BINARY_SUBWRAP {
+            out = l - r;
+        } else if op == BINARY_MUL || op == BINARY_MULWRAP {
+            out = l * r;
+        } else if op == BINARY_AND {
+            out = l & r;
+        } else if op == BINARY_OR {
+            out = l | r;
+        } else if op == BINARY_XOR {
+            out = l ^ r;
+        } else if op == BINARY_DIV || op == BINARY_MOD {
+            if r == 0 as u64 {
+                // The run-time operation traps; a constant has no trap to fall back on.
+                self.report_error(
+                    "constant initializer divides by zero",
+                    self.resolver.ast.expr_spans[b.lhs as usize]
+                );
+                eprint("\n");
+                return CONST_FORM_ERROR;
+            }
+            if signed {
+                let sl = l as i64;
+                let sr = r as i64;
+                // The one division that overflows in two's complement, and the only one the
+                // compiler's own `/` could trap on.
+                if sr == -1 as i64 && l == 1 as u64 << 63 as u64 {
+                    return CONST_FORM_NOT_CONST;
+                }
+                if op == BINARY_DIV { out = (sl / sr) as u64; } else { out = (sl % sr) as u64; }
+            } else {
+                if op == BINARY_DIV { out = l / r; } else { out = l % r; }
+            }
+        } else if op == BINARY_SHL || op == BINARY_SHR {
+            // A count at or past the declared width traps at run time, so it is not a value a
+            // constant can hold. The check also keeps the shift below 64 in the compiler itself.
+            if bits == 0 as u64 || r >= bits {
+                return CONST_FORM_NOT_CONST;
+            }
+            if op == BINARY_SHL {
+                out = l << r;
+            } else if signed {
+                out = ((l as i64) >> r) as u64;
+            } else {
+                out = l >> r;
+            }
+        } else {
+            return CONST_FORM_NOT_CONST;
+        }
+        unsafe { (*cv).int_value = out; }
+        return CONST_FORM_INT;
+    }
+
+    // Writes a constant's bytes into BUF, a zero-filled buffer of LEN bytes (the declared type's
+    // size). The type check has accepted the form as a value of TY, so the width comes from TY.
+    pub fn write_const_image(
+        self: &mut Driver,
+        form: u32,
+        cv: &ConstInit,
+        ty: u32,
+        buf: *mut u8,
+        len: usize
+    ) {
+        if form == CONST_FORM_STRING {
+            let n = self.intern_table.lookup(cv.str_id).len;
+            let mut i = 0 as usize;
+            while i < n && i < len {
+                let b = self.intern_table.lookup(cv.str_id)[i];
+                self.write_const_byte(buf, i, b);
+                i = i + 1 as usize;
+            }
+            return;
+        }
+        if form == CONST_FORM_ENUM {
+            // A fieldless enum is its tag, then the payload area, which stays zero.
+            let v = cv.int_value;
+            let mut i = 0 as usize;
+            while i < 4 as usize && i < len {
+                self.write_const_byte(buf, i, ((v >> (i as u64 * 8 as u64)) & 255 as u64) as u8);
+                i = i + 1 as usize;
+            }
+            return;
+        }
+        if form == CONST_FORM_FLOAT && self.il_primitive_tag(ty) == ILPRIM_F32 {
+            // Narrowing here is what the run-time literal does too (the AST holds an f64).
+            let f = cv.float_value as f32;
+            let bits = unsafe { *((&f as usize) as *u32) } as u64;
+            let mut i = 0 as usize;
+            while i < 4 as usize && i < len {
+                self.write_const_byte(buf, i, ((bits >> (i as u64 * 8 as u64)) & 255 as u64) as u8);
+                i = i + 1 as usize;
+            }
+            return;
+        }
+        // An integer, or an f64 (whose bytes are its bit pattern).
+        let v = if form == CONST_FORM_FLOAT {
+            unsafe { *((&cv.float_value as usize) as *u64) }
+        } else {
+            cv.int_value
+        };
+        let mut i = 0 as usize;
+        while i < 8 as usize && i < len {
+            self.write_const_byte(buf, i, ((v >> (i as u64 * 8 as u64)) & 255 as u64) as u8);
+            i = i + 1 as usize;
+        }
+    }
+
+    pub fn write_const_byte(self: &mut Driver, buf: *mut u8, i: usize, b: u8) {
+        let p = (buf as usize + i) as *mut u8;
+        unsafe { *p = b; }
+    }
+
+    // TY's payload-less variant MEMBER's discriminant, written to CV: whether TY has one. A
+    // variant that takes a payload is not one - `Maybe.Something` without its argument is not a
+    // value (`Maybe.Something(5)` is a call, and a call is a different form).
+    fn bare_variant_value(self: &mut Driver, ty: u32, member: u32, cv: *mut ConstInit) -> bool {
+        if ty == 0 as u32 || ty as usize > self.module.types.len() { return false; }
+        return match self.module.types[ty as usize - 1 as usize].def {
+            ILType.User(u) => {
+                match self.module.typedefs[u.id as usize] {
+                    ILTypeDef.Enum(e) => {
+                        let mut i = 0 as usize;
+                        while i < e.variants.len {
+                            if e.variants[i].name == member && e.variants[i].payload == 0 as u32 {
+                                unsafe { (*cv).int_value = e.variants[i].discriminant as u64; }
+                                return true;
+                            }
+                            i = i + 1 as usize;
+                        }
+                        false
+                    },
+                    ILTypeDef.Struct(_) | ILTypeDef.Fn(_) => false,
+                }
+            },
+            _ => false,
+        };
+    }
+
+    // The type of the enum a base expression names, or 0: a bare name of an enum declaration.
+    fn enum_named_by_expr(self: &mut Driver, base: ExprId) -> u32 {
+        if base == 0 as ExprId { return 0 as u32; }
+        let p_base: &Expr = &self.resolver.ast.exprs[base as usize];
+        if (*p_base).get_tag() != EXPR_IDENT { return 0 as u32; }
+        let sym = match self.resolver.lookup_global_ptr((*p_base).get_Ident()) {
+            Option.Some(s) => s,
+            Option.None => { return 0 as u32; },
+        };
+        let decl_id = match sym.kind {
+            SymbolKind.Global(d) => d,
+            _ => { return 0 as u32; },
+        };
+        if self.resolver.ast.decls[decl_id as usize].get_tag() != DECL_ENUM { return 0 as u32; }
+        let no_args = @slice(0 as *mut u32, 0 as usize);
+        return self.mono.instantiate_type(decl_id, no_args);
+    }
+
+    // TY's primitive tag (`ILPRIM_*`), or 0xffffffff when TY is not a primitive type.
+    pub fn il_primitive_tag(self: &mut Driver, ty: u32) -> u32 {
+        if ty == 0 as u32 || ty as usize > self.module.types.len() { return 0xffffffff as u32; }
+        return match self.module.types[ty as usize - 1 as usize].def {
+            ILType.Primitive(p) => p.get_tag(),
+            _ => 0xffffffff as u32,
+        };
+    }
+
+    // Whether TY is `f32` or `f64`.
+    fn is_float_il_ty(self: &mut Driver, ty: u32) -> bool {
+        let p = self.il_primitive_tag(ty);
+        return p == ILPRIM_F32 || p == ILPRIM_F64;
+    }
+
+    // Whether TY is a signed integer type: a constant's division, modulo and right shift depend
+    // on it (`-7 / 2` is -3, not the u64 division of two's complement bits).
+    fn is_signed_il_int(self: &mut Driver, ty: u32) -> bool {
+        let p = self.il_primitive_tag(ty);
+        return p >= ILPRIM_I8 && p <= ILPRIM_ISIZE;
+    }
+
+    // The bit width of TY when TY is an integer type, else 0.
+    fn il_int_bits(self: &mut Driver, ty: u32) -> u64 {
+        let p = self.il_primitive_tag(ty);
+        if p > ILPRIM_ISIZE { return 0 as u64; }
+        return self.get_type_size(ty) * 8 as u64;
+    }
+
+    pub fn is_copy_type(self: &mut Driver, type_id: u32) -> bool {
+        return self.is_copy_type_internal(type_id, 0 as usize);
+    }
+
+    fn get_ast_path_name(self: &mut Driver, type_id: TypeId) -> u32 {
+        if type_id == 0 as u32 { return 0 as u32; }
+        let ast: &AST = self.resolver.ast;
+        let p_ty: &Type = &ast.types[type_id as usize];
+        if (*p_ty).get_tag() == TYPE_PATH {
+            return (*p_ty).get_Path().0;
+        }
+        return 0 as u32;
+    }
+
+    // TRAIT_NAME is as written in module TRAIT_MODULE.
+    fn type_has_impl_for_trait(
+        self: &mut Driver,
+        type_name: u32,
+        trait_name: u32,
+        trait_module: u32
+    ) -> bool {
+        let ast: &AST = self.resolver.ast;
+        let all_decls = ast.decls.as_slice();
+        let mut i = 0 as usize;
+        while i < all_decls.len {
+            let p_d: &Decl = &all_decls[i];
+            if (*p_d).get_tag() == DECL_IMPL {
+                let imp: &ImplDecl = (*p_d).get_Impl();
+                if imp.trait_name != 0 as u32
+                    && self.resolver.same_trait(
+                        imp.trait_name,
+                        imp.source_file,
+                        trait_name,
+                        trait_module
+                    ) {
+                    let tgt_name = self.get_ast_path_name(imp.target_ty);
+                    if tgt_name == type_name { return true; }
+                }
+            }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
+    fn find_first_non_copy_field(self: &mut Driver, type_id: u32) -> u32 {
+        if type_id == 0 as u32 || (type_id as usize) > self.module.types.len() {
+            return 0 as u32;
+        }
+        let p_ty: ILTypeDecl = self.module.types[type_id as usize - 1 as usize];
+        match p_ty.def {
+            ILType.User(u) => {
+                if u.id == 0 as u32 || (u.id as usize) >= self.module.typedefs.len() {
+                    return 0 as u32;
+                }
+                let p_def: ILTypeDef = self.module.typedefs[u.id as usize];
+                match p_def {
+                    ILTypeDef.Struct(s) => {
+                        let mut k = 0 as usize;
+                        while k < s.fields.len {
+                            if !self.is_copy_type(s.fields[k].ty) {
+                                return s.fields[k].name;
+                            }
+                            k = k + 1 as usize;
+                        }
+                        return 0 as u32;
+                    },
+                    ILTypeDef.Enum(e) => {
+                        let mut k = 0 as usize;
+                        while k < e.variants.len {
+                            if e.variants[k].payload != 0 as u32 {
+                                if !self.is_copy_type(e.variants[k].payload) {
+                                    return e.variants[k].name;
+                                }
+                            }
+                            k = k + 1 as usize;
+                        }
+                        return 0 as u32;
+                    },
+                    _ => { return 0 as u32; },
+                }
+            },
+            _ => { return 0 as u32; },
+        }
+    }
+
+    fn find_first_non_copy_ast_field(self: &mut Driver, s: &StructDecl) -> u32 {
+        let ast: &AST = self.resolver.ast;
+        for f in s.fields {
+            if f.ty != 0 as u32 && (f.ty as usize) < ast.types.len() {
+                let p_ty = &ast.types[f.ty as usize];
+                if p_ty.get_tag() == TYPE_PATH {
+                    let path = p_ty.get_Path();
+                    let type_name = self.intern_table.lookup(path.0);
+                    if type_name == "Vec"
+                        || type_name == "String"
+                        || type_name == "ByteVec"
+                        || type_name == "HashMap"
+                        || type_name == "Box" {
+                        return f.name;
+                    }
+                }
+            }
+        }
+        return 0 as u32;
+    }
+
+    // Copy is structural: a type copies implicitly unless it has a raw-pointer
+    // field without `impl Copy`, or owns storage. A type that owns storage (implements
+    // Drop, or has a field that does not implement Copy) cannot implement Copy.
+    pub fn check_copy_impls(self: &mut Driver) {
+        let copy_name = self.intern_table.intern("Copy");
+        let drop_name_id = self.intern_table.intern("drop");
+        let mut i = 0 as usize;
+        while i < self.resolver.ast.decls.len() {
+            let p_decl: Decl = self.resolver.ast.decls[i];
+            if p_decl.get_tag() == DECL_IMPL {
+                let imp: &ImplDecl = p_decl.get_Impl();
+                if imp.trait_name == copy_name {
+                    let name = self.get_ast_path_name(imp.target_ty);
+                    if imp.type_params.len == 0 as usize {
+                        let ty = self.resolver.resolve_type(imp.target_ty);
+                        if ty != 0 as u32 && !self.is_copy_type(ty) {
+                            let saved_path = self.file_path;
+                            if imp.source_file != 0 as u32 {
+                                self.file_path = self.intern_table.lookup(imp.source_file);
+                            }
+                            let opt_decl = self.find_method_in_impls(ty, drop_name_id);
+                            let first_field = self.find_first_non_copy_field(ty);
+                            let has_drop = match opt_decl {
+                                Option.Some(_) => true,
+                                Option.None => false,
+                            };
+                            if has_drop && first_field == 0 as u32 {
+                                self.report_error("type '", self.resolver.ast.decl_spans[i]);
+                                if name != 0 as u32 { eprint(self.intern_table.lookup(name)); }
+                                eprint(
+                                    "' cannot implement Copy: it owns a value that implements Drop\n"
+                                );
+                            } else if first_field != 0 as u32 {
+                                self.report_error(
+                                    "'impl Copy' on '",
+                                    self.resolver.ast.decl_spans[i]
+                                );
+                                if name != 0 as u32 { eprint(self.intern_table.lookup(name)); }
+                                eprint("', which owns storage through field '");
+                                eprint(self.intern_table.lookup(first_field));
+                                eprint("'\n");
+                            } else {
+                                self.report_error("type '", self.resolver.ast.decl_spans[i]);
+                                if name != 0 as u32 { eprint(self.intern_table.lookup(name)); }
+                                eprint(
+                                    "' cannot implement Copy: it owns a value that implements Drop\n"
+                                );
+                            }
+                            self.file_path = saved_path;
+                        }
+                    } else if name != 0 as u32 {
+                        let mut j = 0 as usize;
+                        while j < self.resolver.ast.decls.len() {
+                            let p_sd: Decl = self.resolver.ast.decls[j];
+                            if p_sd.get_tag() == DECL_STRUCT {
+                                let sd: &StructDecl = p_sd.get_Struct();
+                                if sd.name == name {
+                                    let non_copy_f = self.find_first_non_copy_ast_field(sd);
+                                    if non_copy_f != 0 as u32 {
+                                        let saved_path = self.file_path;
+                                        if imp.source_file != 0 as u32 {
+                                            self.file_path = self.intern_table.lookup(
+                                                imp.source_file
+                                            );
+                                        }
+                                        self.report_error(
+                                            "'impl Copy' on '",
+                                            self.resolver.ast.decl_spans[i]
+                                        );
+                                        eprint(self.intern_table.lookup(name));
+                                        eprint("', which owns storage through field '");
+                                        eprint(self.intern_table.lookup(non_copy_f));
+                                        eprint("'\n");
+                                        self.file_path = saved_path;
+                                    }
+                                    break;
+                                }
+                            }
+                            j = j + 1 as usize;
+                        }
+                    }
+                }
+            }
+            i = i + 1 as usize;
+        }
+    }
+
+    pub fn check_impl_trait_bounds(self: &mut Driver) {
+        let mut i = 0 as usize;
+        while i < self.resolver.ast.decls.len() {
+            let p_decl: Decl = self.resolver.ast.decls[i];
+            if p_decl.get_tag() == DECL_IMPL {
+                let imp: &ImplDecl = p_decl.get_Impl();
+                if imp.trait_name != 0 as u32 && imp.trait_type_args.len > 0 as usize {
+                    let trait_decl_idx = self.resolver.trait_decl_named(
+                        imp.trait_name,
+                        imp.source_file
+                    ) as usize;
+                    if trait_decl_idx == 0 as usize { i = i + 1 as usize; continue; }
+                    // Copied out: the trait declaration is read again after `&mut self` calls.
+                    let p_tr: Decl = self.resolver.ast.decls[trait_decl_idx];
+                    let tr: &TraitDecl = p_tr.get_Trait();
+                    if tr.type_params.len == 0 as usize { i = i + 1 as usize; continue; }
+                    // Check each trait type arg against the type param's bounds
+                    let mut k = 0 as usize;
+                    while k < imp.trait_type_args.len && k < tr.type_params.len {
+                        let type_arg_id = imp.trait_type_args[k];
+                        let arg_name = self.get_ast_path_name(type_arg_id);
+                        let p_param: &TypeParam = &tr.type_params[k];
+                        let mut m = 0 as usize;
+                        while m < p_param.bounds.len {
+                            let bound_id = p_param.bounds[m];
+                            let bound_name = self.get_ast_path_name(bound_id);
+                            if arg_name != 0 as u32 && bound_name != 0 as u32 {
+                                if !self.type_has_impl_for_trait(
+                                    arg_name,
+                                    bound_name,
+                                    tr.source_file
+                                ) {
+                                    self.had_error = true;
+                                    let arg_str = self.intern_table.lookup(arg_name);
+                                    let bound_str = self.intern_table.lookup(bound_name);
+                                    diag_start(
+                                        self.intern_table.lookup(
+                                            self.resolver.ast.decls[i].source_file()
+                                        ),
+                                        self.resolver.ast.decl_spans[i],
+                                        "error"
+                                    );
+                                    eprint("`");
+                                    eprint(arg_str);
+                                    eprint("` does not implement `");
+                                    eprint(bound_str);
+                                    eprint("`\n");
+                                }
+                            }
+                            m = m + 1 as usize;
+                        }
+                        k = k + 1 as usize;
+                    }
+                }
+            }
+            i = i + 1 as usize;
+        }
+    }
+}

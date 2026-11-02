@@ -1,0 +1,9 @@
+enum Val { A(u32), B(u32) }
+fn main() -> i32 {
+    let arr = [Val.A(1), Val.A(2), Val.B(3)];
+    match arr[0] {
+        Val.A(v) => { if v != 1 { return 1; } },
+        _ => return 1,
+    }
+    return 0;
+}

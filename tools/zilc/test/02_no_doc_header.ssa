@@ -1,0 +1,10 @@
+export function l $z7get_twoE(l %v__env_1) {
+@b0
+    %v2 =l alloc4 4
+    %v3 =l alloc8 8
+    jmp @b1
+@b1
+    %v4 =w copy 2
+    %v5 =l extsw %v4
+    ret %v5
+}

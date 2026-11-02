@@ -1,0 +1,2 @@
+// @skip: fixture for the runner's output test
+fn main() -> i32 { return 0; }

@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: use of moved value 'the value of the expression at 8:30'
+// A compiler temporary has no source name. The diagnostic must name the expression that
+// produced it (`&mut x as *mut i32`, a raw-pointer temporary, which stays linear), not print
+// `variable (id: N)`. scripts/check_temp_names.sh keeps this out of every expectation.
+fn main() -> i32 {
+    let mut x = 7;
+    let _a: [*mut i32; 2] = [&mut x as *mut i32; 2];
+    return 0;
+}

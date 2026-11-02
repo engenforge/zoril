@@ -1,0 +1,23 @@
+// expected exit code: 0
+// Tests that dereferencing a pointer to a struct yields the struct's type,
+// allowing it to be assigned properly via a memory copy rather than a pointer copy.
+
+struct Point {
+    x: u64,
+    y: u64,
+}
+
+pub fn main() -> i32 {
+    let mut p1 = Point { x: 1, y: 2 };
+    let ptr = &mut p1;
+    
+    // This assignment should trigger a memcpy of 16 bytes.
+    // If the lvalue bug exists, *ptr will be typed as a pointer, 
+    // and it will only copy 8 bytes (or corrupt memory).
+    *ptr = Point { x: 10, y: 20 };
+
+    if p1.x != 10 { return 1; }
+    if p1.y != 20 { return 2; }
+
+    return 0;
+}

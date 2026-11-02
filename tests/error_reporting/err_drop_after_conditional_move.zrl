@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: cannot drop value 'r' that may have been moved
+// On the path where sink(r) ran, this @drop would drop r a second time.
+struct R { v: i32 }
+impl Drop for R { fn drop(self: &mut R) { } }
+fn sink(r: R) { }
+fn main() -> i32 {
+    let r = R { v: 1 };
+    let c = 1;
+    if c == 1 { sink(r); }
+    @drop(r);
+    return 0;
+}

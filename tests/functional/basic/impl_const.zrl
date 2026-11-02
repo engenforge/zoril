@@ -1,0 +1,16 @@
+// expected exit code: 0
+struct TestStruct {}
+impl TestStruct {
+    const VALUE: u64 = 42;
+    pub fn get_value() -> u64 {
+        return TestStruct.VALUE;
+    }
+}
+fn main() -> i32 {
+    let val = TestStruct.get_value();
+    if val == 42 {
+        return 0;
+    } else {
+        return 1;
+    }
+}

@@ -1,0 +1,194 @@
+// Low-level runtime panic, abort, trap, and byte swap primitives
+
+// Returns true if two byte slices have identical lengths and byte contents.
+pub fn is_str_eq(a: [u8], b: [u8]) -> bool {
+    if a.len != b.len { return false; }
+    let mut i = 0 as u64;
+    while i < a.len {
+        if a[i] != b[i] { return false; }
+        i = i + 1 as u64;
+    }
+    return true;
+}
+
+// Compares two memory buffers for byte-level equality.
+//
+// CALLER OBLIGATION: pointers a and b must be valid for len bytes.
+pub unsafe fn is_mem_eq(a: *u8, b: *u8, len: u64) -> bool {
+    let mut i = 0 as u64;
+    while i < len {
+        let p_a = (a as u64 + i) as *u8;
+        let p_b = (b as u64 + i) as *u8;
+        if *p_a != *p_b { return false; }
+        i = i + 1 as u64;
+    }
+    return true;
+}
+
+// `s[start .. start + len]`, bounds-checked. Re-slicing a byte slice has no safe
+// spelling in the surface language yet (Rust writes `&s[a..b]`), so every caller
+// was doing the pointer arithmetic itself; this is the one marked site, and it
+// traps rather than reading past the end.
+pub fn subslice(s: [u8], start: usize, len: usize) -> [u8] {
+    if start > s.len || len > s.len - start {
+        ICE("subslice: range out of bounds");
+    }
+    // SAFETY: the range was checked against `s.len` above (and ICE'd otherwise), so the view
+    // stays inside the caller's slice.
+    return unsafe { @slice((s.ptr as usize + start) as *mut u8, len) };
+}
+
+// `s[start ..]`, bounds-checked.
+pub fn subslice_from(s: [u8], start: usize) -> [u8] {
+    return subslice(s, start, s.len - start);
+}
+
+// Returns true if byte c is an ASCII decimal digit ('0' through '9').
+pub fn is_digit(c: u8) -> bool {
+    return c >= '0' as u8 && c <= '9' as u8;
+}
+
+// Returns true if byte c is an ASCII hexadecimal digit ('0'-'9', 'a'-'f', 'A'-'F').
+pub fn is_hex_digit(c: u8) -> bool {
+    if is_digit(c) { return true; }
+    if c >= 'a' as u8 && c <= 'f' as u8 { return true; }
+    if c >= 'A' as u8 && c <= 'F' as u8 { return true; }
+    return false;
+}
+
+// Converts a hex digit character to its 0-15 value. Returns 0 for non-hex
+// digits (callers are expected to have already validated via is_hex_digit).
+pub fn hex_digit_val(c: u8) -> u8 {
+    if c >= '0' as u8 && c <= '9' as u8 { return c - '0' as u8; }
+    if c >= 'a' as u8 && c <= 'f' as u8 { return c - 'a' as u8 + 10 as u8; }
+    if c >= 'A' as u8 && c <= 'F' as u8 { return c - 'A' as u8 + 10 as u8; }
+    return 0 as u8;
+}
+
+// Returns true if byte c is an ASCII alphabetic character ('a'-'z', 'A'-'Z').
+pub fn is_alpha(c: u8) -> bool {
+    if c >= 'a' as u8 && c <= 'z' as u8 { return true; }
+    if c >= 'A' as u8 && c <= 'Z' as u8 { return true; }
+    if c == '_' as u8 { return true; }
+    return false;
+}
+
+// Immediately terminates the process with an abort trap status.
+pub extern fn zoril_abort() -> never;
+
+// The trap: a failure the program cannot continue past and cannot be expected to handle - a bound
+// that does not hold, an allocation the runtime cannot honour, a failed `mmap`. It exits 134, the
+// code the bounds checks, the arena and `make safety-matrix` read as "trapped", and not 1, because 1
+// is indistinguishable from a program that merely returned 1 (doc/spec/safety_model.md §4).
+pub fn zoril_user_trap(msg: [u8]) -> never {
+    // SAFETY: write(1) to stderr and exit_group(231) are raw syscalls with no checked wrapper; the
+    // message slices are static or the caller's own, live for the call.
+    unsafe {
+        @syscall(1, 2, "panic: ".ptr, 7);
+        @syscall(1, 2, msg.ptr, msg.len);
+        @syscall(1, 2, "\n".ptr, 1);
+        // Syscall 60 is exit; 134 is the trap code. zoril_abort() is unreachable but tells the type
+        // checker this path diverges (extern fn -> never).
+        @syscall(231, 134);
+    }
+    zoril_abort();
+}
+
+// Prints a diagnostic panic message to standard error and terminates the process.
+pub fn zoril_user_panic(msg: [u8]) -> never {
+    // SAFETY: write(1) to stderr and exit_group(231) are raw syscalls with no checked wrapper; the
+    // message slices are static or the caller's own, live for the call.
+    unsafe {
+        @syscall(1, 2, "panic: ".ptr, 7);
+        @syscall(1, 2, msg.ptr, msg.len);
+        @syscall(1, 2, "\n".ptr, 1);
+        // Syscall 60 is exit. zoril_abort() is unreachable but tells the type checker this path
+        // diverges (extern fn -> never).
+        @syscall(231, 1);
+    }
+    zoril_abort();
+}
+
+// Prints a diagnostic message and error detail to standard error and terminates the process.
+pub fn zoril_user_panic_error(msg: [u8], err: [u8]) -> never {
+    // SAFETY: write(1) to stderr and exit_group(231) are raw syscalls; message slices are live for the call.
+    unsafe {
+        @syscall(1, 2, "panic: ".ptr, 7);
+        @syscall(1, 2, msg.ptr, msg.len);
+        @syscall(1, 2, ": ".ptr, 2);
+        @syscall(1, 2, err.ptr, err.len);
+        @syscall(1, 2, "\n".ptr, 1);
+        @syscall(231, 1);
+    }
+    zoril_abort();
+}
+
+// What the program was doing when an internal error struck (a compiler sets it to the function
+// it is compiling): printed with the error as a note. An address and a length, as a `static mut`
+// holds no slice.
+pub static mut ICE_NOTE_ADDR: usize = 0 as usize;
+pub static mut ICE_NOTE_LEN: usize = 0 as usize;
+
+// Registers an internal compiler error diagnostic context string.
+#[stores(note -> static)]
+pub fn set_ice_note(note: [u8]) {
+    ICE_NOTE_ADDR = note.ptr as usize;
+    ICE_NOTE_LEN = note.len;
+}
+
+// An internal error: a bug in the program itself (in a compiler, the compiler), not in its
+// input. Exits with 134.
+pub fn ICE(msg: [u8]) -> never {
+    let head = "internal compiler error: ";
+    let tail = "note: this is a bug in the compiler, not in the program it compiles\n";
+    // SAFETY: write(1) to stderr and exit_group(231) are raw syscalls; every slice is static or the
+    // caller's own, and ICE_NOTE_ADDR/LEN are only written by `set_ice_note`.
+    unsafe {
+        @syscall(1, 2, head.ptr, head.len);
+        @syscall(1, 2, msg.ptr, msg.len);
+        @syscall(1, 2, "\n".ptr, 1);
+        if ICE_NOTE_LEN > 0 as usize {
+            @syscall(1, 2, "note: ".ptr, 6);
+            @syscall(1, 2, ICE_NOTE_ADDR, ICE_NOTE_LEN);
+            @syscall(1, 2, "\n".ptr, 1);
+        }
+        @syscall(1, 2, tail.ptr, tail.len);
+        @syscall(231, 134); // SIGABRT-like exit
+    }
+    zoril_abort();
+}
+
+// Formats an unsigned 64-bit integer into a decimal byte string in buf, returning the formatted slice.
+pub unsafe fn u64_to_str(val: u64, buf: *mut u8) -> [u8] {
+    if val == 0 as u64 {
+        let p = buf as *mut u8;
+        *p = '0' as u8;
+        return @slice(buf as *u8, 1 as u64);
+    }
+    let mut i = 19 as u64;
+    let mut v = val;
+    while v > 0 as u64 {
+        let digit = (v % 10 as u64) as u8;
+        let p = (buf as u64 + i) as *mut u8;
+        *p = digit + '0' as u8;
+        v = v / 10 as u64;
+        i = i - 1 as u64;
+    }
+    let start = i + 1 as u64;
+    return @slice((buf as u64 + start) as *u8, 20 as u64 - start);
+}
+
+// Swaps len bytes between two memory regions.
+//
+// CALLER OBLIGATION: src and dst must be valid for len bytes and non-overlapping.
+pub unsafe fn swap_bytes(a: *mut u8, b: *mut u8, len: u64) {
+    let mut i = 0 as u64;
+    while i < len {
+        let p_a = (a as u64 + i) as *mut u8;
+        let p_b = (b as u64 + i) as *mut u8;
+        let tmp = *p_a;
+        *p_a = *p_b;
+        *p_b = tmp;
+        i = i + 1 as u64;
+    }
+}

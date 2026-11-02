@@ -1,0 +1,19 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::{write, stdout};
+use fmt::write_u64;
+
+fn print_slice_info(s: [u8]) {
+    let mut out = stdout();
+    write(stdout(), "Slice pointer non-null: ");
+    let _ = write_u64(&mut out, if s.ptr as u64 != 0 as u64 { 1 as u64 } else { 0 as u64 });
+    write(stdout(), "\nSlice length: ");
+    let _ = write_u64(&mut out, s.len as u64);
+    write(stdout(), "\n");
+}
+
+fn main() -> i32 {
+    let s = "hello";
+    print_slice_info(s);
+    return 0;
+}

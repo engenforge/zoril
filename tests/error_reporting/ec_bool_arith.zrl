@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: error: arithmetic operator not supported on bool operands
+
+fn main() -> i32 {
+    let t = true;
+    let f = false;
+    let y = t + f;
+    if y { return 1; }
+    return 0;
+}

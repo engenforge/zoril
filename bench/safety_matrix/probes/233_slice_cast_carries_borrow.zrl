@@ -1,0 +1,14 @@
+// name: A cast that converts one slice type to another carries the borrow
+// expected: compile_reject
+// `[mut T] as [T]` is the one cast that neither forges a value nor drops the borrow: the result
+// still points into `a`, so the borrow of `a` survives the cast and writing `a` while the
+// converted view is live is rejected. This is the program that walks `rv:Cast`, which no
+// rejection reached before (a cast to a *raw* pointer ends the borrow, so the carrying form is
+// this one, not the escape hatch).
+fn main() -> i32 {
+    let mut a = [1 as i32, 2, 3];
+    let s: [mut i32] = &mut a;
+    let t = s as [i32];
+    a[0] = 9;
+    return t[0] as i32;
+}

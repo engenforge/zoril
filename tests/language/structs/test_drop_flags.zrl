@@ -1,0 +1,120 @@
+// Drop exactly once on every path, including after moves that happen on only some paths.
+// Complements test_drop_comprehensive.zrl, whose move case uses a callee that returns nothing.
+static mut DROPS: i32 = 0;
+
+struct D {
+    x: i64,
+}
+
+trait Drop {
+    fn drop(self: &mut D);
+}
+
+impl Drop for D {
+    fn drop(self: &mut D) {
+        DROPS = DROPS + 1;
+    }
+}
+
+// The callee owns a by-value parameter; returning a copy field must not exempt it from its drop.
+fn take(d: D) -> i64 {
+    return d.x;
+}
+
+fn moved_into_callee() {
+    let d = D { x: 1 };
+    let n = take(d);
+}
+
+// Moved on one branch only: dropped by the callee on that branch, at scope exit on the other.
+fn conditional_move(c: bool) {
+    let d = D { x: 2 };
+    if c {
+        let n = take(d);
+    }
+}
+
+// A fresh binding per iteration, moved on one iteration only.
+fn move_in_loop() {
+    let mut i = 0;
+    while i < 3 {
+        let d = D { x: 3 };
+        if i == 1 {
+            let n = take(d);
+        }
+        i = i + 1;
+    }
+}
+
+// Moved, then assigned again: the new value is live and dropped at scope exit.
+fn move_then_reassign() {
+    let mut d = D { x: 4 };
+    let n = take(d);
+    d = D { x: 5 };
+}
+
+// Returned on one path (ownership passes to the caller), dropped on the other.
+fn conditional_return(c: bool) -> D {
+    let d = D { x: 6 };
+    if c {
+        return d;
+    }
+    let e = D { x: 7 };
+    return e;
+}
+
+// Returning a copy field on one path still drops the binding on both paths.
+fn field_return(c: bool) -> i64 {
+    let d = D { x: 8 };
+    if c {
+        return d.x;
+    }
+    return 0;
+}
+
+// Explicitly dropped on one path only: still dropped exactly once on the other.
+fn conditional_explicit_drop(c: bool) {
+    let d = D { x: 9 };
+    if c {
+        @drop(d);
+    }
+}
+
+fn main() -> i32 {
+    DROPS = 0;
+    moved_into_callee();
+    if DROPS != 1 { return 10; }
+
+    DROPS = 0;
+    conditional_move(true);
+    if DROPS != 1 { return 20; }
+    conditional_move(false);
+    if DROPS != 2 { return 21; }
+
+    DROPS = 0;
+    move_in_loop();
+    if DROPS != 3 { return 30; }
+
+    DROPS = 0;
+    move_then_reassign();
+    if DROPS != 2 { return 40; }
+
+    DROPS = 0;
+    let a = conditional_return(true);
+    if DROPS != 0 { return 50; }
+    let b = conditional_return(false);
+    if DROPS != 1 { return 51; }
+
+    DROPS = 0;
+    let r1 = field_return(true);
+    let r2 = field_return(false);
+    if DROPS != 2 { return 60; }
+
+    DROPS = 0;
+    conditional_explicit_drop(true);
+    if DROPS != 1 { return 70; }
+    conditional_explicit_drop(false);
+    if DROPS != 2 { return 71; }
+
+    return 0;
+}

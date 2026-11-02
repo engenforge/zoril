@@ -1,0 +1,15 @@
+import "io.zrl";
+import "ast.zrl";
+import "mem_raw.zrl";
+use ast::AST;
+use io::{write, stdout};
+use mem_raw::{ArenaHeader, arena_init};
+
+fn main() -> i32 {
+    let arena_box = unsafe { arena_init(1024 * 1024) };
+    let arena = arena_box as *mut ArenaHeader;
+    let mut ast = AST.new(arena);
+    
+    write(stdout(), "Minimal test with AST passed\n");
+    return 0;
+}

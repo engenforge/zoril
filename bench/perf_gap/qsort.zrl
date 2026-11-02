@@ -1,0 +1,40 @@
+// Recursive quicksort over a slice: calls, slice indexing, swaps.
+const SCALE: usize = 1000000; // gate: 20000
+fn sort(a: [mut u32], lo: usize, hi: usize) {
+    if lo + 1 as usize >= hi { return; }
+    let pivot = a[(lo + hi) / 2 as usize];
+    let mut i = lo;
+    let mut j = hi - 1 as usize;
+    while i <= j {
+        while a[i] < pivot { i = i + 1 as usize; }
+        while a[j] > pivot { j = j - 1 as usize; }
+        if i <= j {
+            let t = a[i]; a[i] = a[j]; a[j] = t;
+            i = i + 1 as usize;
+            if j == 0 as usize { break; }
+            j = j - 1 as usize;
+        }
+    }
+    sort(a, lo, j + 1 as usize);
+    sort(a, i, hi);
+}
+import "vec.zrl";
+use vec::Vec;
+fn main() -> i32 {
+    // Heap data, as the C version's static array is not on the stack.
+    let mut v = Vec::<u32>.new();
+    let mut k = 0 as usize;
+    while k < SCALE { v.push(0 as u32); k = k + 1 as usize; }
+    let data = v.as_mut_slice();
+    let mut acc = 0 as u32;
+    let mut seed = 12345 as u32;
+    let mut r = 0;
+    while r < 5 {
+        let mut i = 0 as usize;
+        while i < SCALE { seed = seed * 1103515245 as u32 + 12345 as u32; data[i] = seed >> 8 as u32; i = i + 1 as usize; }
+        sort(data, 0 as usize, SCALE);
+        acc = acc + data[0] + data[SCALE / 2 as usize] + data[SCALE - 1 as usize];
+        r = r + 1;
+    }
+    return (acc % 251 as u32) as i32;
+}

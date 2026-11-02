@@ -1,0 +1,10 @@
+// expected compile fail
+// A constant has no trap to fall back on: `5 / 0` traps at run time, and the constant path used to
+// write 0 into the data section in silence.
+// EXPECT: tests/error_reporting/err_const_init_div_zero.zrl:6:16: error: constant initializer divides by zero
+
+const X: i32 = 5 / 0;
+
+fn main() -> i32 {
+    return X;
+}

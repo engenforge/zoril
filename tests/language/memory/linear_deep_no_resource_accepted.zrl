@@ -1,0 +1,37 @@
+// expected exit code: 10
+// The other side of probe 177: neither a chain of structs nested *deeper* than the walk's old
+// recursion limit nor a recursive list through a `Box` holds a linear resource, so neither is
+// rejected - the walk reaches the end of the deep chain and cuts the list's cycle without inventing
+// one. `main` exercises both, so this is not a vacuous acceptance.
+struct S1 { x: i64 }
+struct S2 { a: S1 }
+struct S3 { a: S2 }
+struct S4 { a: S3 }
+struct S5 { a: S4 }
+struct S6 { a: S5 }
+struct S7 { a: S6 }
+struct S8 { a: S7 }
+struct S9 { a: S8 }
+struct S10 { a: S9 }
+struct S11 { a: S10 }
+struct S12 { a: S11 }
+struct S13 { a: S12 }
+
+enum List { Nil, Cons((i64, Box<List>)) }
+
+fn sum(list: List) -> i64 {
+    return match list {
+        Nil => 0 as i64,
+        Cons(pair) => {
+            let a = pair.0;
+            let t = *pair.1;
+            return a + sum(t);
+        },
+    };
+}
+
+fn main() -> i32 {
+    let deep = S13 { a: S12 { a: S11 { a: S10 { a: S9 { a: S8 { a: S7 { a: S6 { a: S5 { a: S4 { a: S3 { a: S2 { a: S1 { x: 7 as i64 } } } } } } } } } } } } };
+    let list = List.Cons((1 as i64, box List.Cons((2 as i64, box List.Nil))));
+    return (deep.a.a.a.a.a.a.a.a.a.a.a.a.x + sum(list)) as i32;
+}

@@ -1,0 +1,20 @@
+// Tests callee-saved register allocation, parameter passing in registers,
+// and correct pop ordering of callee-saved registers on return.
+fn test_params(a: u64, b: u64, c: u64, d: u64, e: u64) -> u64 {
+    // Force a, b, c, d, e into callee-saved registers by using them across calls.
+    // In our linear-scan allocator, this ensures they are assigned to rbx, r12, r13, r14, r15.
+    let x = a + 1 as u64;
+    let y = b + 2 as u64;
+    let z = c + 3 as u64;
+    let w = d + 4 as u64;
+    let v = e + 5 as u64;
+    return x + y + z + w + v;
+}
+
+fn main() -> i32 {
+    let res = test_params(10, 20, 30, 40, 50);
+    if res == 165 as u64 {
+        return 0;
+    }
+    return 1;
+}

@@ -1,0 +1,269 @@
+import "ast.zrl";
+import "resolve.zrl";
+
+// Zoril Intermediate Representation (ZIR)
+// A mid-level IR between AST and ZIL, suitable for borrow checking.
+
+pub type LocalId = u32;
+
+pub enum Projection {
+    Field(u32),        // interned field name
+    TupleIndex(u32),   // tuple element index
+    Deref,             // pointer dereference
+    Index(u32),        // local variable index
+}
+
+impl Projection {
+    pub fn get_tag(self: &Projection) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Field(self: &Projection) -> u32 { return unsafe { *( (self as usize + 4) as *u32 ) }; }
+    pub fn get_TupleIndex(self: &Projection) -> u32 { return unsafe { *( (self as usize + 4) as *u32 ) }; }
+    pub fn get_Index(self: &Projection) -> u32 { return unsafe { *( (self as usize + 4) as *u32 ) }; }
+}
+
+pub struct Place {
+    pub base: u32, // LocalId (variable index)
+    pub projections: [Projection],
+}
+
+pub const PROJ_FIELD: u32 = 0;
+pub const PROJ_TUPLEINDEX: u32 = 1;
+pub const PROJ_DEREF: u32 = 2;
+pub const PROJ_INDEX: u32 = 3;
+
+pub struct Local {
+    pub id: u32,       // LocalId (variable index)
+    pub name_id: u32,  // Interned name ID (0 if temporary)
+    pub ty: u32,       // Type index
+    pub kind: u32,     // LOCAL_KIND_*
+    pub is_copy: bool, // Copy or Move type
+    pub is_raw_ptr: bool,
+}
+
+pub const LOCAL_KIND_ARG: u32 = 0;
+pub const LOCAL_KIND_TMP: u32 = 1;
+pub const LOCAL_KIND_LET: u32 = 2;
+pub const LOCAL_KIND_LETMUT: u32 = 3;
+
+pub const ZIR_RV_USE: u32 = 0;
+pub const ZIR_RV_REF: u32 = 1;
+pub const ZIR_RV_REFMUT: u32 = 2;
+pub const ZIR_RV_CONST: u32 = 3;
+pub const ZIR_RV_BINARY: u32 = 4;
+pub const ZIR_RV_UNARY: u32 = 5;
+pub const ZIR_RV_CALL: u32 = 6;
+pub const ZIR_RV_CALLPTR: u32 = 7;
+pub const ZIR_RV_STRUCT: u32 = 8;
+pub const ZIR_RV_ENUM: u32 = 9;
+pub const ZIR_RV_FIELD: u32 = 10;
+pub const ZIR_RV_INDEX: u32 = 11;
+pub const ZIR_RV_CAST: u32 = 12;
+pub const ZIR_RV_SIZEOF: u32 = 13;
+pub const ZIR_RV_SYSCALL: u32 = 14;
+pub const ZIR_RV_INTRINSIC: u32 = 15;
+pub const ZIR_RV_STRING: u32 = 16;
+pub const ZIR_RV_VARIANT_CHECK: u32 = 17;
+pub const ZIR_RV_ENUM_PAYLOAD: u32 = 18;
+pub const ZIR_RV_GLOBAL_ADDR: u32 = 19;
+pub const ZIR_RV_FUNC_ADDR: u32 = 20;
+pub const ZIR_RV_TUPLE: u32 = 21;
+pub const ZIR_RV_ARRAY: u32 = 22;
+pub const ZIR_RV_INDEX_ADDR: u32 = 23;
+pub const ZIR_RV_BOXED: u32 = 24;
+pub const ZIR_RV_GETENV: u32 = 25;
+// @ptr_from_int<T>(x): identical in shape to Cast, but carries the authorization
+// that the pointer-forgery check looks for. Kept distinct from Cast so the marker
+// survives AST -> ZIR -> IL instead of being erased at lowering time.
+pub const ZIR_RV_PTR_FROM_INT: u32 = 26;
+pub const ZIR_RV_ARRAY_REPEAT: u32 = 27;
+
+pub enum ZirRvalue {
+    Use(Place),
+    Ref(Place, u32),     // Place, Region ID
+    RefMut(Place, u32),  // Place, Region ID
+    Const(u64, u32),     // value, type index
+    BinaryOp(u32, Place, Place), // op tag, lhs, rhs
+    UnaryOp(u32, Place), // op tag, operand
+    Call(u32, [Place]),  // fn_id, args
+    CallPtr(Place, [Place]), // fn place, args
+    StructLiteral(u32, [Place]), // struct type index, values
+    EnumVariant(u32, u32, Place), // enum type index, variant index, payload place
+    Field(Place, u32),   // place, field name interned
+    Index(Place, Place), // place, index place
+    Cast(Place, u32),    // place, target type index
+    Sizeof(u32),         // type index
+    Syscall([Place]),   // args[0]=num, args[1..]=args
+    Intrinsic(u32, [Place]), // id, args
+    StringConst(u32),        // interned string ID
+    VariantCheck(Place, u32, u32), // enum place, type_id, variant_idx → bool
+    EnumPayload(Place, u32, u32),  // enum place, type_id, variant_idx → payload
+    GlobalAddr(u32), // global index in module
+    FuncAddr(u32),   // function index in module
+    Tuple([Place]),  // element values
+    Array(u32, [Place]), // element type, element values
+    IndexAddr(Place, Place), // base place, index place → pointer to element
+    Boxed(Place, u32),     // value place, allocator local ID (0 if heap)
+    GetEnv,
+    PtrFromInt(Place, u32), // place, target pointer type index (@ptr_from_int<T>)
+    ArrayRepeat(Place, u32, u32), // `[v; n]` for large n: value, element type, count (lowered to a loop)
+    }
+
+impl ZirRvalue {
+    pub fn get_tag(self: &ZirRvalue) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Use(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_Ref(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_Ref_region(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_RefMut(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_RefMut_region(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_Const_val(self: &ZirRvalue) -> u64 { return unsafe { *( (self as usize + 8) as *u64 ) }; }
+    pub fn get_Const_ty(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 16) as *u32 ) }; }
+    pub fn get_BinaryOp_op(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_BinaryOp_lhs(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 16) as *Place) }; }
+    pub fn get_BinaryOp_rhs(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 16 + sizeof(Place)) as *Place) }; }
+    pub fn get_UnaryOp_op(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_UnaryOp_arg(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 16) as *Place) }; }
+    pub fn get_Call_id(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Call_args(self: &ZirRvalue) -> [Place] { return unsafe { *( (self as usize + 16) as *[Place] ) }; }
+    pub fn get_CallPtr_pl(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_CallPtr_args(self: &ZirRvalue) -> [Place] { return unsafe { *( (self as usize + 8 + sizeof(Place)) as *[Place] ) }; }
+    pub fn get_StructLiteral_ty(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_StructLiteral_args(self: &ZirRvalue) -> [Place] { return unsafe { *( (self as usize + 16) as *[Place] ) }; }
+    pub fn get_EnumVariant_ty(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_EnumVariant_idx(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 12) as *u32 ) }; }
+    pub fn get_EnumVariant_payload(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 16) as *Place) }; }
+    pub fn get_Field_pl(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_Field_name(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_Index_pl(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_Index_idx(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8 + sizeof(Place)) as *Place) }; }
+    pub fn get_Cast_pl(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_Cast_ty(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_Sizeof_ty(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Syscall_args(self: &ZirRvalue) -> [Place] { return unsafe { *( (self as usize + 8) as *[Place] ) }; }
+    pub fn get_StringConst_id(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_VariantCheck_pl(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_VariantCheck_ty(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_VariantCheck_idx(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 12 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_EnumPayload_pl(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_EnumPayload_ty(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_EnumPayload_idx(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 12 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_Intrinsic_id(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Intrinsic_args(self: &ZirRvalue) -> [Place] { return unsafe { *( (self as usize + 16) as *[Place] ) }; }
+    pub fn get_GlobalAddr_id(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_FuncAddr_id(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Tuple_elements(self: &ZirRvalue) -> [Place] { return unsafe { *( (self as usize + 8) as *[Place] ) }; }
+    pub fn get_Array_ty(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Array_elements(self: &ZirRvalue) -> [Place] { return unsafe { *( (self as usize + 16) as *[Place] ) }; }
+    pub fn get_IndexAddr_base(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_IndexAddr_idx(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8 + sizeof(Place)) as *Place) }; }
+    pub fn get_Boxed_val(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_Boxed_alloc(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_PtrFromInt_pl(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_PtrFromInt_ty(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_ArrayRepeat_val(self: &ZirRvalue) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_ArrayRepeat_ty(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 8 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_ArrayRepeat_count(self: &ZirRvalue) -> u32 { return unsafe { *( (self as usize + 12 + sizeof(Place)) as *u32 ) }; }
+}
+
+pub const ZIR_STMT_LET: u32 = 0;
+pub const ZIR_STMT_ASSIGN: u32 = 1;
+pub const ZIR_STMT_DROP: u32 = 2;
+pub const ZIR_STMT_CALL: u32 = 3;
+pub const ZIR_STMT_CALLPTR: u32 = 4;
+pub const ZIR_STMT_INTRINSIC: u32 = 5;
+pub const ZIR_STMT_BORROW: u32 = 6;
+pub const ZIR_STMT_BORROWMUT: u32 = 7;
+pub const ZIR_STMT_ENDBORROW: u32 = 8;
+pub const ZIR_STMT_NOP: u32 = 9;
+pub const ZIR_STMT_DROP_IF_LIVE: u32 = 10;
+
+pub enum ZirStmt {
+    Let(u32, ZirRvalue, Span),       // LocalId, Rvalue, Span
+    Assign(Place, ZirRvalue, Span),  // Place, Rvalue, Span
+    Drop(Place, Span),               // Place to drop, Span
+    Call(u32, [Place], Span),        // fn_id, args, Span
+    CallPtr(Place, [Place], Span),   // fn place, args, Span
+    Intrinsic(u32, [Place], Span),   // name ID, args, Span
+    Borrow(u32, Place, u32, Span),   // LocalId, Place, Region ID, Span
+    BorrowMut(u32, Place, u32, Span),// LocalId, Place, Region ID, Span
+    EndBorrow(u32, Span),            // LocalId, Span
+    Nop,
+    // Scope-exit drop guarded by a runtime drop flag (lower_zir emits it inside `if flag { ... }`).
+    // Statically the value may already be moved or dropped on some paths; the checker treats it as
+    // "drop if still owned" instead of reporting a double drop.
+    DropIfLive(Place, Span),
+}
+
+impl ZirStmt {
+    pub fn get_tag(self: &ZirStmt) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Let_id(self: &ZirStmt) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Let_rv(self: &ZirStmt) -> &ZirRvalue { return unsafe { &*((self as usize + 16) as *ZirRvalue) }; }
+    pub fn get_Assign_pl(self: &ZirStmt) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_Assign_rv(self: &ZirStmt) -> &ZirRvalue { return unsafe { &*((self as usize + 8 + sizeof(Place)) as *ZirRvalue) }; }
+    pub fn get_Drop_pl(self: &ZirStmt) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_Call_id(self: &ZirStmt) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Call_args(self: &ZirStmt) -> [Place] { return unsafe { *( (self as usize + 16) as *[Place] ) }; }
+    pub fn get_CallPtr_pl(self: &ZirStmt) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_CallPtr_args(self: &ZirStmt) -> [Place] { return unsafe { *( (self as usize + 8 + sizeof(Place)) as *[Place] ) }; }
+    pub fn get_Intrinsic_id(self: &ZirStmt) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Intrinsic_args(self: &ZirStmt) -> [Place] { return unsafe { *( (self as usize + 16) as *[Place] ) }; }
+    pub fn get_Borrow_id(self: &ZirStmt) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Borrow_pl(self: &ZirStmt) -> &Place { return unsafe { &*((self as usize + 16) as *Place) }; }
+    pub fn get_Borrow_region(self: &ZirStmt) -> u32 { return unsafe { *( (self as usize + 16 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_BorrowMut_id(self: &ZirStmt) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_BorrowMut_pl(self: &ZirStmt) -> &Place { return unsafe { &*((self as usize + 16) as *Place) }; }
+    pub fn get_BorrowMut_region(self: &ZirStmt) -> u32 { return unsafe { *( (self as usize + 16 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_EndBorrow_id(self: &ZirStmt) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+
+    pub fn get_span(self: &ZirStmt) -> Span {
+        match *self {
+            ZirStmt.Let(a, b, span) => { return span; },
+            ZirStmt.Assign(a, b, span) => { return span; },
+            ZirStmt.Drop(a, span) => { return span; },
+            ZirStmt.DropIfLive(a, span) => { return span; },
+            ZirStmt.Call(a, b, span) => { return span; },
+            ZirStmt.CallPtr(a, b, span) => { return span; },
+            ZirStmt.Intrinsic(a, b, span) => { return span; },
+            ZirStmt.Borrow(a, b, c, span) => { return span; },
+            ZirStmt.BorrowMut(a, b, c, span) => { return span; },
+            ZirStmt.EndBorrow(a, span) => { return span; },
+            _ => { return Span { start: 0, end: 0, line: 0, col: 0 }; }
+        }
+    }
+}
+
+pub struct ZirBlock {
+    pub id: u32,
+    pub statements: [ZirStmt],
+    pub literal_comments: [u32], // parallel to statements: literal source comment in effect when each was emitted, 0 if none
+    pub terminator: ZirTerminator,
+    pub name_hint: u32, // Interned label hint based on the construct that created this block (0 if none)
+}
+
+pub enum ZirTerminator {
+    Jmp(u32),
+    Branch(Place, u32, u32), // cond, then, else
+    Ret(Place),
+    Unreachable,
+}
+
+impl ZirTerminator {
+    pub fn get_tag(self: &ZirTerminator) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Jmp(self: &ZirTerminator) -> u32 { return unsafe { *( (self as usize + 8) as *u32 ) }; }
+    pub fn get_Branch_cond(self: &ZirTerminator) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+    pub fn get_Branch_then(self: &ZirTerminator) -> u32 { return unsafe { *( (self as usize + 8 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_Branch_else(self: &ZirTerminator) -> u32 { return unsafe { *( (self as usize + 12 + sizeof(Place)) as *u32 ) }; }
+    pub fn get_Ret(self: &ZirTerminator) -> &Place { return unsafe { &*((self as usize + 8) as *Place) }; }
+}
+
+pub struct ZirFunction {
+    pub name: u32,
+    pub params: [Local],
+    pub locals: [Local],
+    pub blocks: [ZirBlock],
+    pub ret_ty: u32,
+    pub doc_comment: u32,
+    pub span: Span,
+}
+
+pub struct ZirModule {
+    pub funcs: [ZirFunction],
+}

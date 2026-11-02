@@ -1,0 +1,38 @@
+// expected exit 0
+// A closure's parameter types, and its result type when it has no `-> R`, come from the
+// function type its context expects; with none, an untyped closure's result is its body's
+// type. The body may be one expression (`|x| x + 1`). Every parameter needed `: T`, the result
+// `-> R` and the body a block.
+import "iter.zrl";
+import "vec.zrl";
+use iter::Iterator;
+use vec::Vec;
+
+fn apply(f: fn(i32) -> i32, x: i32) -> i32 { return f(x); }
+fn apply2(f: fn(u8, u8) -> u64, a: u8, b: u8) -> u64 { return f(a, b); }
+struct Op { run: fn(i64) -> bool }
+
+fn main() -> i32 {
+    if apply(|x| x + 1, 2) != 3 { return 1; }
+    let k = 10;
+    if apply(|x| { x * k }, 2) != 20 { return 2; }
+    if apply2(|a, b| (a as u64) << 8 | b as u64, 1, 2) != 258 { return 3; }
+    let f: fn(u8) -> u8 = |x| x + 1;
+    if f(2) != 3 { return 4; }
+    let op = Op { run: |n| n > 5 };
+    if !(op.run)(6) { return 5; }
+
+    // A generic method's closure argument: its parameter is the iterator's item, its result
+    // decides the mapped type.
+    let mut v = Vec::<i32>.new();
+    v.push(1); v.push(2); v.push(3);
+    let s = v.iter().map(|x| *x * 2).fold(0, |a, x| a + x);
+    if s != 12 { return 6; }
+    let big = v.iter().filter(|x| *x > 1).fold(0 as u64, |a, x| a + *x as u64);
+    if big != 5 as u64 { return 7; }
+
+    // With no expected type, annotated parameters and an expression body.
+    let g = |x: i64| x * 3;
+    if g(4) != 12 as i64 { return 8; }
+    return 0;
+}

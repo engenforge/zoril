@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_impl_unknown_trait.zrl:5:1: error: unknown trait `Shapely`
+// An impl of a trait no module in scope declares was accepted as an impl of nothing.
+struct Sq { s: i32 }
+impl Shapely for Sq { fn area(self: &Sq) -> i32 { return 1; } }
+fn main() -> i32 { return 0; }

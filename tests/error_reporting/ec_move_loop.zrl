@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: error: use of moved value 'r'
+// Tests that move inside a loop is caught on the second iteration.
+struct Resource { id: i32 }
+
+fn consume(r: Box<Resource>) {}
+
+fn main() -> i32 {
+    let r = box Resource { id: 1 };
+    while true {
+        consume(r); // @error "use of moved value 'r'"
+    }
+    0
+}

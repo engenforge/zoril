@@ -1,0 +1,482 @@
+// Module path canonicalization shared by the compiler front end and tools/zbuild, so the
+// compiler and the driver cannot disagree about which file an import names.
+//
+// A module's canonical path is its source path as resolved from the working directory:
+// normalized (no "./", "//", or resolvable ".."), with its .zrl/.zri extension dropped
+// wherever it is used as an identity. This is the path the symbol mangler keys on and the
+// key under which interfaces are cached (see doc/spec/modular_compilation.md §3.1, §4).
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "vec.zrl";
+import "bytevec.zrl";
+import "intern.zrl";
+import "io.zrl";
+use bytevec::ByteVec;
+use intern::InternTable;
+use io::eprint;
+use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+use vec::Vec;
+
+fn is_dotdot(seg: [u8]) -> bool {
+    return seg.len == 2 as usize && seg[0] == '.' as u8 && seg[1] == '.' as u8;
+}
+
+#[stores(arena -> arena)]
+pub fn normalize_path(raw: [u8], arena: *mut ArenaHeader) -> [u8] {
+    if raw.len == 0 as usize { return ""; }
+    let is_abs = raw[0] == '/' as u8;
+    // Kept segments as (start, len) ranges into `raw`.
+    let mut starts = unsafe { Vec::<usize>.new_in_raw(arena) };
+    let mut lens = unsafe { Vec::<usize>.new_in_raw(arena) };
+    let mut i = 0 as usize;
+    while i < raw.len {
+        while i < raw.len && raw[i] == '/' as u8 { i = i + 1 as usize; }
+        if i >= raw.len { break; }
+        let start = i;
+        while i < raw.len && raw[i] != '/' as u8 { i = i + 1 as usize; }
+        let len = i - start;
+        let seg = subslice(raw, start, len);
+        if len == 1 as usize && seg[0] == '.' as u8 {
+            // "." names the current directory
+        } else if is_dotdot(seg) {
+            let n = starts.len();
+            let prev_is_dotdot = n > 0 as usize
+                && is_dotdot(
+                    subslice(
+                        raw,
+                        starts.as_slice()[n - 1 as usize],
+                        lens.as_slice()[n - 1 as usize]
+                    )
+                );
+            if n > 0 as usize && !prev_is_dotdot {
+                let _ = starts.pop();
+                let _ = lens.pop();
+            } else if !is_abs {
+                starts.push(start);
+                lens.push(len);
+            }
+        } else {
+            starts.push(start);
+            lens.push(len);
+        }
+    }
+
+    if starts.len() == 0 as usize {
+        if is_abs { return "/"; }
+        return ".";
+    }
+    let mut out = unsafe { ByteVec.new_raw(arena) };
+    if is_abs { out.push('/' as u8); }
+    let mut s = 0 as usize;
+    while s < starts.len() {
+        if s > 0 as usize { out.push('/' as u8); }
+        out.push_slice(subslice(raw, starts.as_slice()[s], lens.as_slice()[s]));
+        s = s + 1 as usize;
+    }
+    return out.as_slice();
+}
+
+pub fn has_zrl_or_zri_ext(path: [u8]) -> bool {
+    let n = path.len;
+    if n < 4 as usize { return false; }
+    if path[n - 4 as usize] != '.' as u8
+        || path[n - 3 as usize] != 'z' as u8
+        || path[n - 2 as usize] != 'r' as u8 {
+        return false;
+    }
+    return path[n - 1 as usize] == 'l' as u8 || path[n - 1 as usize] == 'i' as u8;
+}
+
+// Whether INCLUDE_ARG - one `-I` argument as spelled - designates the standard library and
+// contains ABS_FILE. Only the explicit named form counts: `-I stdlib=<dir>`. A bare `-I <dir>` is
+// never evidence, however the directory is called - `<project>/stdlib/`, `vendor/stdlib`,
+// `build/mutation/<id>/stdlib` - because a program that can name a directory `stdlib` must not be
+// handed the exemption the standard library's `Arena` gets. Identity is designated, never inferred.
+//
+// It is asked of the *root* and the file's location, never of a file's own name, so a user library
+// called `mem.zrl` answers no. The include arguments are read directly rather than from the
+// resolution's honored roots: a designated root inside the project root is not a separate
+// identity root (doc/spec/modular_compilation.md §3.1), yet it is still the root a file came from.
+#[stores(arena -> arena)]
+pub fn is_designated_stdlib_file(
+    include_arg: [u8],
+    cwd: [u8],
+    abs_file: [u8],
+    arena: *mut ArenaHeader
+) -> bool {
+    let (named, given_name, dir) = split_include_arg(include_arg);
+    if !named || given_name != "stdlib" { return false; }
+    let abs_root = make_absolute(dir, cwd, arena);
+    return is_within_dir(abs_file, abs_root);
+}
+
+// Flat, reversible file-name form of a module path: extension dropped, '/' -> "%2F", '%' -> "%25",
+// any byte outside [A-Za-z0-9_.-] -> "%XX". One directory level, so "a/b.zrl" and "a_b.zrl" cannot
+// collide and a path can never climb out of the directory it is joined to (".." stays a literal name).
+#[stores(arena -> arena)]
+pub fn encode_module_key(module_path: [u8], arena: *mut ArenaHeader) -> [u8] {
+    let mut end = module_path.len;
+    if has_zrl_or_zri_ext(module_path) { end = end - 4 as usize; }
+    let hex = "0123456789ABCDEF";
+    let mut out = unsafe { ByteVec.new_raw(arena) };
+    let mut i = 0 as usize;
+    while i < end {
+        let b = module_path[i];
+        let plain = (b >= 'a' as u8 && b <= 'z' as u8)
+            || (b >= 'A' as u8 && b <= 'Z' as u8)
+            || (b >= '0' as u8 && b <= '9' as u8)
+            || b == '_' as u8
+            || b == '.' as u8
+            || b == '-' as u8;
+        if plain {
+            out.push(b);
+        } else {
+            out.push('%' as u8);
+            out.push(hex[(b >> 4 as u8) as usize]);
+            out.push(hex[(b & 15 as u8) as usize]);
+        }
+        i = i + 1 as usize;
+    }
+    return out.as_slice();
+}
+
+// Where the interface of the module at `module_path` lives under an interface directory.
+#[stores(arena -> arena)]
+pub fn iface_relative_path(module_path: [u8], arena: *mut ArenaHeader) -> [u8] {
+    let mut out = unsafe { ByteVec.new_raw(arena) };
+    out.push_slice(encode_module_key(module_path, arena));
+    out.push_slice(".zri");
+    return out.as_slice();
+}
+
+pub fn bytes_lt(a: [u8], b: [u8]) -> bool {
+    let mut i = 0 as usize;
+    while i < a.len && i < b.len {
+        if a[i] != b[i] { return a[i] < b[i]; }
+        i = i + 1 as usize;
+    }
+    return a.len < b.len;
+}
+
+// Sorted (by string), duplicate-free copy of interned ids: import lists derived from edges must
+// not depend on source order or on how often a module is imported. The copy is arena storage, so
+// it points into the arena rather than into either input.
+#[borrows(arena)]
+pub fn sorted_unique_ids(
+    ids: &Vec<u32>,
+    table: &mut InternTable,
+    arena: *mut ArenaHeader
+) -> Vec<u32> {
+    let mut out = unsafe { Vec::<u32>.new_in_raw(arena) };
+    let mut i = 0 as usize;
+    while i < ids.len() {
+        let cand = ids.as_slice()[i];
+        let mut pos = 0 as usize;
+        let mut dup = false;
+        while pos < out.len() {
+            let cur = out.as_slice()[pos];
+            if cur == cand { dup = true; break; }
+            if !bytes_lt(table.lookup(cur), table.lookup(cand)) { break; }
+            pos = pos + 1 as usize;
+        }
+        if !dup {
+            out.push(cand);
+            let mut j = out.len() - 1 as usize;
+            while j > pos {
+                let tmp = out.as_slice()[j];
+                out.set(j, out.as_slice()[j - 1 as usize]);
+                out.set(j - 1 as usize, tmp);
+                j = j - 1 as usize;
+            }
+        }
+        i = i + 1 as usize;
+    }
+    return out;
+}
+
+#[stores(arena -> arena)]
+pub fn get_cwd(arena: *mut ArenaHeader) -> [u8] {
+    let cap = 4096 as usize;
+    let p = unsafe { zoril_allocator_alloc(arena, cap as u64) } as *mut u8;
+    let ret = unsafe { @syscall(79, p as u64, cap as u64) } as i64;
+    if ret <= 0 as i64 { return ""; }
+    let mut len = 0 as usize;
+    let slice = unsafe { @slice(p, cap) };
+    while len < cap && slice[len] != 0 as u8 {
+        len = len + 1 as usize;
+    }
+    return normalize_path(subslice(slice, 0 as usize, len), arena);
+}
+
+#[stores(arena -> arena)]
+pub fn path_exists(path: [u8], arena: *mut ArenaHeader) -> bool {
+    let mut bv = unsafe { ByteVec.new_raw(arena) };
+    bv.push_slice(path);
+    bv.push(0 as u8);
+    let ret = unsafe { @syscall(21, bv.as_slice().ptr as u64, 0 as u64) } as i64;
+    return ret == 0 as i64;
+}
+
+#[stores(arena -> arena)]
+pub fn make_absolute(path: [u8], cwd: [u8], arena: *mut ArenaHeader) -> [u8] {
+    if path.len == 0 as usize { return cwd; }
+    if path[0] == '/' as u8 {
+        return normalize_path(path, arena);
+    }
+    let mut out = unsafe { ByteVec.new_raw(arena) };
+    out.push_slice(cwd);
+    if cwd.len > 0 as usize && cwd[cwd.len - 1 as usize] != '/' as u8 {
+        out.push('/' as u8);
+    }
+    out.push_slice(path);
+    return normalize_path(out.as_slice(), arena);
+}
+
+// The index of PATH's last `/`, or PATH.len when it has none.
+fn last_slash(path: [u8]) -> usize {
+    let mut i = path.len;
+    while i > 0 as usize {
+        i = i - 1 as usize;
+        if path[i] == '/' as u8 { return i; }
+    }
+    return path.len;
+}
+
+pub fn dirname(path: [u8]) -> [u8] {
+    let slash = last_slash(path);
+    if slash == path.len { return "."; }
+    if slash == 0 as usize { return "/"; }
+    return subslice(path, 0 as usize, slash);
+}
+
+pub fn basename(path: [u8]) -> [u8] {
+    let slash = last_slash(path);
+    if slash == path.len { return path; }
+    return subslice_from(path, slash + 1 as usize);
+}
+
+fn check_marker(dir: [u8], marker: [u8], arena: *mut ArenaHeader) -> bool {
+    return path_exists(join_two_paths(dir, marker, arena), arena);
+}
+
+fn has_project_marker(dir: [u8], arena: *mut ArenaHeader) -> bool {
+    if check_marker(dir, ".git", arena) { return true; }
+    if check_marker(dir, "zoril.toml", arena) { return true; }
+    if check_marker(dir, "Zoril.toml", arena) { return true; }
+    if check_marker(dir, ".zoril-root", arena) { return true; }
+    return false;
+}
+
+#[stores(arena -> arena)]
+pub fn find_project_root(entry_file: [u8], cwd: [u8], arena: *mut ArenaHeader) -> [u8] {
+    let abs_entry = make_absolute(entry_file, cwd, arena);
+    let mut cur = dirname(abs_entry);
+    let fallback = cur;
+    while cur.len > 0 as usize {
+        if has_project_marker(cur, arena) {
+            return cur;
+        }
+        if cur == "/" {
+            break;
+        }
+        cur = dirname(cur);
+    }
+    return fallback;
+}
+
+pub fn is_within_dir(file: [u8], dir: [u8]) -> bool {
+    if dir.len == 0 as usize { return false; }
+    if dir == "/" { return file.len > 1 as usize && file[0] == '/' as u8; }
+    if file.len <= dir.len { return false; }
+    if subslice(file, 0 as usize, dir.len) != dir { return false; }
+    return file[dir.len] == '/' as u8;
+}
+
+pub fn rel_within_dir(file: [u8], dir: [u8]) -> [u8] {
+    if dir == "/" {
+        return subslice_from(file, 1 as usize);
+    }
+    return subslice_from(file, dir.len + 1 as usize);
+}
+
+pub struct ModuleResolution {
+    pub cwd: [u8],
+    pub project_root: [u8],
+    // No --root and no marker file: the root is just the entry's directory, which must not swallow
+    // an include root that contains the entry (its identity would lose the include-root name).
+    pub root_is_fallback: bool,
+    pub root_paths: Vec<u32>,
+    pub root_prefixes: Vec<u32>,
+    pub had_error: bool,
+    pub arena: *mut ArenaHeader,
+    pub table: *mut InternTable,
+}
+
+// `-I name=dir` as (true, name, dir); `-I dir` as (false, "", dir).
+pub fn split_include_arg(inc_str: [u8]) -> (bool, [u8], [u8]) {
+    for i in 0 as usize..inc_str.len {
+        if inc_str[i] == '=' as u8 {
+            return (true, subslice(inc_str, 0 as usize, i), subslice_from(inc_str, i + 1 as usize));
+        }
+    }
+    return (false, "", inc_str);
+}
+
+// One `-I` argument as (named, name, absolute dir), copied out of the intern table: the
+// caller interns the result, and interning can reallocate the table's storage that
+// `lookup` returns slices into.
+fn include_root_of(
+    inc_id: u32,
+    table: *mut InternTable,
+    cwd: [u8],
+    arena: *mut ArenaHeader
+) -> (bool, [u8], [u8]) {
+    let (named, given_name, dir) = split_include_arg(unsafe { (*table).lookup(inc_id) });
+    let mut name = unsafe { ByteVec.new_raw(arena) };
+    name.push_slice(given_name);
+    return (named, name.as_slice(), make_absolute(dir, cwd, arena));
+}
+
+// The result's paths are copied into `arena` or are slices of `entry_file` / `root_opt`;
+// nothing in it points into `inc_ids`.
+#[borrows(entry_file, root_opt)]
+#[stores(arena -> arena)]
+pub fn module_resolution_new(
+    entry_file: [u8],
+    root_opt: [u8],
+    inc_ids: &Vec<u32>,
+    table: *mut InternTable,
+    arena: *mut ArenaHeader
+) -> ModuleResolution {
+    let cwd = get_cwd(arena);
+    let project_root = if root_opt.len > 0 as usize {
+        make_absolute(root_opt, cwd, arena)
+    } else {
+        find_project_root(entry_file, cwd, arena)
+    };
+    let root_is_fallback = root_opt.len == 0 as usize && !has_project_marker(project_root, arena);
+    let mut root_paths = unsafe { Vec::<u32>.new_in_raw(arena) };
+    let mut root_prefixes = unsafe { Vec::<u32>.new_in_raw(arena) };
+    root_paths.push(unsafe { (*table).intern(project_root) });
+    root_prefixes.push(unsafe { (*table).intern("") });
+    let mut had_error = false;
+    for inc_id in inc_ids.as_slice() {
+        let (named, given_name, abs_inc) = include_root_of(*inc_id, table, cwd, arena);
+        // Include roots inside the project root are covered by root derivation. Under a fallback root
+        // (just the entry's directory) a *named* root still takes precedence, so `-I xl=x/lib` gives
+        // `xl/s`; an unnamed root adds nothing over the fallback root (both are named after the same
+        // directory) and keeps the directory-relative identity. See spec §3.1.1 on unanchored compiles.
+        let inside_root = is_within_dir(abs_inc, project_root) || abs_inc == project_root;
+        if inside_root && (!root_is_fallback || !named) { continue; }
+        let prefix = if named { given_name } else { basename(abs_inc) };
+        let mut already_added = false;
+        for p in 1 as usize..root_paths.len() {
+            if unsafe { (*table).lookup(root_paths.as_slice()[p]) } == abs_inc {
+                already_added = true;
+            }
+        }
+        if already_added { continue; }
+        for c in 1 as usize..root_prefixes.len() {
+            if unsafe { (*table).lookup(root_prefixes.as_slice()[c]) } == prefix {
+                eprint("zoril: error: conflicting include root name '");
+                eprint(prefix);
+                eprint("': ");
+                eprint(unsafe { (*table).lookup(root_paths.as_slice()[c]) });
+                eprint(" and ");
+                eprint(abs_inc);
+                eprint("; disambiguate with -I <name>=<dir>\n");
+                had_error = true;
+                break;
+            }
+        }
+        root_paths.push(unsafe { (*table).intern(abs_inc) });
+        root_prefixes.push(unsafe { (*table).intern(prefix) });
+    }
+    return ModuleResolution {
+        cwd: cwd,
+        project_root: project_root,
+        root_is_fallback: root_is_fallback,
+        root_paths: root_paths,
+        root_prefixes: root_prefixes,
+        had_error: had_error,
+        arena: arena,
+        table: table,
+    };
+}
+
+// The identity is a slice of `abs_file` (relative to a root), never of `mr`.
+#[borrows(abs_file)]
+#[stores(arena -> arena)]
+pub fn derive_module_identity(
+    mr: &ModuleResolution,
+    abs_file: [u8],
+    arena: *mut ArenaHeader
+) -> [u8] {
+    if is_within_dir(abs_file, mr.project_root) && !mr.root_is_fallback {
+        return rel_within_dir(abs_file, mr.project_root);
+    }
+    let from_include = derive_include_identity(mr, abs_file, arena);
+    if from_include.len > 0 as usize { return from_include; }
+    if is_within_dir(abs_file, mr.project_root) {
+        return rel_within_dir(abs_file, mr.project_root);
+    }
+    return "";
+}
+
+fn derive_include_identity(mr: &ModuleResolution, abs_file: [u8], arena: *mut ArenaHeader) -> [u8] {
+    let table = mr.table;
+    let mut i = 1 as usize;
+    while i < mr.root_paths.len() {
+        let r_path = unsafe { (*table).lookup(mr.root_paths.as_slice()[i]) };
+        if is_within_dir(abs_file, r_path) {
+            let rel = rel_within_dir(abs_file, r_path);
+            let r_prefix = unsafe { (*table).lookup(mr.root_prefixes.as_slice()[i]) };
+            if r_prefix.len == 0 as usize {
+                return rel;
+            }
+            let mut out = unsafe { ByteVec.new_raw(arena) };
+            out.push_slice(r_prefix);
+            out.push('/' as u8);
+            out.push_slice(rel);
+            return out.as_slice();
+        }
+        i = i + 1 as usize;
+    }
+    return "";
+}
+
+#[stores(arena -> arena)]
+pub fn join_two_paths(dir: [u8], rel: [u8], arena: *mut ArenaHeader) -> [u8] {
+    let mut p = unsafe { ByteVec.new_raw(arena) };
+    p.push_slice(dir);
+    if dir.len > 0 as usize && dir[dir.len - 1 as usize] != '/' as u8 {
+        p.push('/' as u8);
+    }
+    p.push_slice(rel);
+    return p.as_slice();
+}
+
+#[stores(arena -> arena)]
+pub fn resolve_module_identity_to_path(
+    mr: &ModuleResolution,
+    mod_id: [u8],
+    arena: *mut ArenaHeader
+) -> [u8] {
+    let table = mr.table;
+    let mut i = 1 as usize;
+    while i < mr.root_paths.len() {
+        let r_prefix = unsafe { (*table).lookup(mr.root_prefixes.as_slice()[i]) };
+        if r_prefix.len > 0 as usize {
+            if mod_id.len > r_prefix.len
+                && subslice(mod_id, 0 as usize, r_prefix.len) == r_prefix
+                && mod_id[r_prefix.len] == '/' as u8 {
+                let rel = subslice_from(mod_id, r_prefix.len + 1 as usize);
+                let r_path = unsafe { (*table).lookup(mr.root_paths.as_slice()[i]) };
+                return join_two_paths(r_path, rel, arena);
+            }
+        }
+        i = i + 1 as usize;
+    }
+    return join_two_paths(mr.project_root, mod_id, arena);
+}

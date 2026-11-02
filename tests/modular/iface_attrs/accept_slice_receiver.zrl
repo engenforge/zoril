@@ -1,0 +1,15 @@
+// expected exit 0
+// A method on a slice that returns slices of its bytes (`split_raw`) read through an interface: the
+// result points into what the literal's header refers to, not into the temporary that holds the
+// header, so the temporary need not outlive the result (a whole-program build reads it the same way).
+import "mem.zrl";
+import "string.zrl";
+use mem::{Arena, arena_raw};
+
+fn main() -> i32 {
+    let arena = Arena.new(4096 as u64).unwrap();
+    let parts = unsafe { "a,b,c".split_raw(',' as u8, arena_raw(&arena)) };
+    if parts.len() != 3 as usize { return 1; }
+    if parts.as_slice()[1] != "b" { return 2; }
+    return 0;
+}

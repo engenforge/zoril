@@ -1,0 +1,18 @@
+// expected compile fail
+// EXPECT: error: cannot compare a reference with a non-reference (dereference it or compare both references)
+// Equality on references compares addresses, so both sides must be references of the same type.
+// `r == 3` used to compare the address of `r`'s referent with 3.
+fn right(r: &u64) -> bool {
+    return r == 3;
+}
+
+fn left(r: &u64) -> bool {
+    return 3 == r;
+}
+
+fn main() -> i32 {
+    if false {
+        return 1;
+    }
+    return 0;
+}

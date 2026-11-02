@@ -1,0 +1,18 @@
+// expected exit 0
+import "lib.zrl";
+use lib::{DmTrait, DmSq};
+
+struct M { m: i32 }
+impl DmTrait for M { fn base(self: &M) -> i32 { return self.m; } }
+
+fn main() -> i32 {
+    let m = M { m: 1 };
+    let q = DmSq { s: 2 };
+    if m.ty() != 5 { return 1; }
+    if q.ty() != 6 { return 2; }
+    if m.gen(7) != 3 { return 3; }
+    if q.gen(7) != 4 { return 4; }
+    if m.hit() != 1 { return 5; }
+    if q.hit() != 2 { return 6; }
+    return 0;
+}

@@ -1,0 +1,9 @@
+// name: @drop of a projected struct field is rejected
+// expected: compile_reject
+// @drop requires an owned local variable binding; partial drop of a struct field is not permitted.
+struct S { a: i32 }
+fn main() -> i32 {
+    let s = S { a: 1 };
+    @drop(s.a);
+    return 0;
+}

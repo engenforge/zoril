@@ -1,0 +1,23 @@
+extern fn __zoril_syscall_3(sysno: i64, a: i64, b: i64, c: i64) -> i64;
+
+fn write_str(fd: i64, msg: *u8, len: i64) {
+    unsafe { __zoril_syscall_3(1 as i64, fd, msg as i64, len); }
+}
+
+fn main(argc: i64, argv: *u64) -> i32 {
+    // If the runtime is correct, argc should be at least 1
+    if argc < 1 as i64 {
+        write_str(1 as i64, "FAILURE: argc is less than 1\n" as *u8, 29 as i64);
+        return 1;
+    }
+    
+    // If the runtime is correct, argv[0] should be a valid pointer
+    let program_name_ptr = unsafe { *argv };
+    if program_name_ptr as u64 == 0 as u64 {
+        write_str(1 as i64, "FAILURE: argv[0] is null\n" as *u8, 25 as i64);
+        return 1;
+    }
+
+    write_str(1 as i64, "SUCCESS: argc/argv preserved\n" as *u8, 29 as i64);
+    return 0;
+}

@@ -1,0 +1,33 @@
+// expected compile fail
+// Probe 175 as a located test: the `Arena` is nine struct levels down, past the recursion limit of
+// `type_has_drop`, so the derived borrow used to be exempt at `h`'s scope end and the program read
+// the unmapped arena (139). A `Holder` holding the arena directly (probe 166) is the one-level case.
+// EXPECT: tests/error_reporting/err_block_scope_borrow_deep_arena.zrl:28:5: error: cannot let 'h' go out of scope while it is still borrowed
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct S1 { a: Arena }
+struct S2 { a: S1 }
+struct S3 { a: S2 }
+struct S4 { a: S3 }
+struct S5 { a: S4 }
+struct S6 { a: S5 }
+struct S7 { a: S6 }
+struct S8 { a: S7 }
+struct S9 { a: S8 }
+
+fn main() -> i32 {
+    let mut out: Option<&u64> = Option.None;
+    {
+        let h = S9 { a: S8 { a: S7 { a: S6 { a: S5 { a: S4 { a: S3 { a: S2 { a: S1 { a: Arena.new(4096).unwrap() } } } } } } } } };
+        let mut v = Vec::<u64>.new_in(&h.a.a.a.a.a.a.a.a.a);
+        v.push(42 as u64);
+        out = v.get(0 as u64);
+    }
+    return match out {
+        Option.Some(r) => *r as i32,
+        Option.None => 0,
+    };
+}

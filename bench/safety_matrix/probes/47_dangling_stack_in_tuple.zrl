@@ -1,0 +1,8 @@
+// name: Dangling stack ptr — wrapped in a returned tuple
+// expected: compile_reject
+// A tuple holding a local's address is returned.
+fn leak() -> (*mut i32, i32) {
+    let mut x: i32 = 42;
+    return (&mut x, 0);
+}
+fn main() -> i32 { let t = leak(); if t.0 as usize == 0 as usize { return 1; } return 0; }

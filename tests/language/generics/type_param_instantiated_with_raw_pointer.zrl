@@ -1,0 +1,15 @@
+// expected exit 0
+// A type parameter instantiated with a raw pointer comes back raw, and what that buys is the
+// dereference rule below: `q` is a `*mut i32`, so reading through it needs `unsafe` exactly as
+// reading through `p` does. Probe 125's shape - binding `id(p)` straight to a `&T` - is a type error
+// because of the same distinction, and probe 184 is the hole that existed when only the conversion
+// was checked.
+fn id<T>(t: T) -> T { return t; }
+
+fn main() -> i32 {
+    let mut x: i32 = 41;
+    let p: *mut i32 = &mut x as *mut i32;
+    let q = id(p);
+    if unsafe { *q } != 41 { return 1; }
+    return 0;
+}

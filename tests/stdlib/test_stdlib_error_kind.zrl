@@ -1,0 +1,42 @@
+// expected exit 0
+// io::Error.kind() maps the operating system's code to a portable category, and the raw Linux
+// code stays reachable only through the explicitly Linux-named accessors.
+
+import "core.zrl";
+import "io.zrl";
+use io::{Error, ErrorKind};
+
+fn kind_is_not_found(e: &Error) -> bool {
+    return match e.kind() { ErrorKind.NotFound => true, _ => false };
+}
+
+fn main() -> i32 {
+    let enoent = Error.from_linux_errno(2);
+    if !kind_is_not_found(&enoent) { return 1; }
+    if enoent.linux_errno() != 2 { return 2; }
+    if !is_str_eq(enoent.linux_name(), "ENOENT") { return 3; }
+
+    let eperm = Error.from_linux_errno(1);
+    let eacces = Error.from_linux_errno(13);
+    if !(match eperm.kind() { ErrorKind.PermissionDenied => true, _ => false }) { return 4; }
+    if !(match eacces.kind() { ErrorKind.PermissionDenied => true, _ => false }) { return 5; }
+
+    let eexist = Error.from_linux_errno(17);
+    if !(match eexist.kind() { ErrorKind.AlreadyExists => true, _ => false }) { return 6; }
+
+    let eintr = Error.from_linux_errno(4);
+    if !(match eintr.kind() { ErrorKind.Interrupted => true, _ => false }) { return 7; }
+
+    let einval = Error.from_linux_errno(22);
+    if !(match einval.kind() { ErrorKind.InvalidInput => true, _ => false }) { return 8; }
+
+    let eagain = Error.from_linux_errno(11);
+    if !(match eagain.kind() { ErrorKind.WouldBlock => true, _ => false }) { return 9; }
+
+    let epipe = Error.from_linux_errno(32);
+    if !(match epipe.kind() { ErrorKind.BrokenPipe => true, _ => false }) { return 10; }
+
+    let unknown = Error.from_linux_errno(999);
+    if !(match unknown.kind() { ErrorKind.Other => true, _ => false }) { return 11; }
+    return 0;
+}

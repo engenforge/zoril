@@ -1,0 +1,42 @@
+// expected compile success
+// Tests for pointer indirection and argument count edge cases
+
+struct Data { val: i32 }
+
+fn takes_ptr(p: *Data) -> i32 {
+    unsafe { return (*p).val; }
+}
+
+fn takes_ref(p: &Data) -> i32 {
+    return (*p).val;
+}
+
+fn test_indirection() {
+    let mut d = Data { val: 42 };
+    let b = box Data { val: 100 };
+    
+    // 1. Passing *Box<Data> to *Data should be REJECTED without manual deref
+    // (Previously the compiler was too aggressive with auto-deref)
+    // takes_ptr(&b); 
+}
+
+fn takes_two(a: i32, b: i32) -> i32 { return a + b; }
+
+fn test_arg_counts() {
+    // 1. Excess arguments
+    // // takes_two(1, 2, 3); 
+}
+
+extern fn printf(fmt: *u8, ...) -> i32;
+
+fn test_variadic() {
+    // Variadic functions should still allow multiple arguments
+    unsafe { printf("hello %d %d\n" as *u8, 1, 2); }
+    // But they should respect the fixed parameter count
+    // (printf has 1 fixed parameter)
+    // printf(); 
+}
+
+fn main() -> i32 {
+    return 0;
+}

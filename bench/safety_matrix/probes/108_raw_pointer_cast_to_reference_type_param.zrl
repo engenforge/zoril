@@ -1,0 +1,9 @@
+// name: Raw pointer cast to a type parameter instantiated with a reference
+// expected: compile_reject
+// `p as &i32` is rejected, but `p as T` with T = &i32 made a null reference in safe code until
+// 2026-10-05. A cast to a type parameter now converts one number to another only.
+fn forge<T>(p: *mut i32) -> T { return p as T; }
+fn main() -> i32 {
+    let r: &i32 = forge::<&i32>(0 as *mut i32);
+    return *r;
+}

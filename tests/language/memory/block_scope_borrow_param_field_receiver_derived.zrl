@@ -1,0 +1,35 @@
+// expected exit 42
+// The *field-step* half of resolving a parameter receiver, and what mutation M100 pins. In
+// `slice_of(h: &Holder)` the receiver `h.buf` is reached by a field step from a parameter, so the
+// type that has to be resolved is the one the parameter's *declared* type names
+// (`storage_type_named_by`) - the name-based lookup (`storage_receiver_name`,
+// `storage_method_of_type_name`, see block_scope_borrow_param_receiver_derived.zrl) only covers a
+// parameter named directly. Read the callee as the worst case instead and `slice_of(&h)` is read as
+// handing back `h`'s own storage rather than a buffer the `Vec` allocated: not derived, so not
+// exempt at `h`'s scope end, and this legitimate program is rejected.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct Holder {
+    buf: Vec<u64>,
+}
+
+fn slice_of(h: &Holder) -> [u64] {
+    return h.buf.as_slice();
+}
+
+fn main() -> i32 {
+    let a: Arena = Arena.new(4096).unwrap();
+    let mut base: Holder = Holder { buf: Vec::<u64>.new_in(&a) };
+    base.buf.push(1 as u64);
+    let mut sl: [u64] = base.buf.as_slice();
+    {
+        let mut h = Holder { buf: Vec::<u64>.new_in(&a) };
+        h.buf.push(5 as u64);
+        sl = slice_of(&h);
+    }
+    if sl.len != 1 || sl[0] != 5 { return 1; }
+    return 42;
+}

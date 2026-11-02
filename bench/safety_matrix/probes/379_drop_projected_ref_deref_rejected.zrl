@@ -1,0 +1,9 @@
+// name: @drop of a projected reference dereference is rejected
+// expected: compile_reject
+// A reference does not own the referent; @drop(*r) is rejected.
+fn nuke(r: &i32) {
+    @drop(*r);
+}
+fn main() -> i32 {
+    return 0;
+}

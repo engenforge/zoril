@@ -1,0 +1,18 @@
+import "ast.zrl";
+import "zir.zrl";
+import "il_type.zrl";
+use ast::Span;
+use il_type::ILVariant;
+use zir::{Place, ZirStmt};
+
+fn main() -> i32 {
+    let a = sizeof(Span);
+    let b = sizeof(Place);
+    let c = sizeof(ILVariant);
+    let d = sizeof(ZirStmt);
+    if a == 0 { return 1; }
+    if b == 0 { return 2; }
+    if c == 0 { return 3; }
+    if d == 0 { return 4; }
+    return 0;
+}

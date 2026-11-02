@@ -1,0 +1,166 @@
+// Read/Write traits: one generic writer and reader serve files, an in-memory
+// String, and an in-memory SliceReader alike.
+// expected exit 0
+
+import "io.zrl";
+import "os/linux.zrl" as os_linux;
+import "file.zrl";
+import "string.zrl";
+import "mem.zrl";
+use file::{read_file, read_to_end};
+use io::{Error, File, Read, SliceReader, Stdout, Write, write_all};
+use mem::Arena;
+use string::String;
+
+fn emit_greeting<W: Write>(w: &mut W) -> bool {
+    return write_all(w, "hello ").is_ok() && write_all(w, "world").is_ok();
+}
+
+fn format_temp_path(prefix: [u8], pid: u64, buf: &mut [u8; 64]) -> [u8] {
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        buf[i] = prefix[i];
+        i = i + 1;
+    }
+    let mut digits: [u8; 20] = [0 as u8; 20];
+    let mut dcount = 0 as usize;
+    let mut n = pid;
+    if n == 0 as u64 {
+        digits[0] = '0' as u8;
+        dcount = 1;
+    } else {
+        while n > 0 as u64 {
+            let rem = (n % 10 as u64) as u8;
+            digits[dcount] = '0' as u8 + rem;
+            dcount = dcount + 1;
+            n = n / 10 as u64;
+        }
+    }
+    let mut d = dcount;
+    while d > 0 {
+        d = d - 1;
+        buf[i] = digits[d];
+        i = i + 1;
+    }
+    let suffix = ".txt\0";
+    let mut s = 0 as usize;
+    while s < suffix.len {
+        buf[i] = suffix[s];
+        i = i + 1;
+        s = s + 1;
+    }
+    unsafe { return @slice(&buf[0] as *u8, i - 1); }
+}
+
+fn main() -> i32 {
+    let arena = Arena.new(65536).unwrap();
+
+    let mut s = String.new_in(&arena);
+    if !emit_greeting(&mut s) { return 1; }
+    if s.as_slice() != "hello world" { return 2; }
+
+    let mut path_buf = [0 as u8; 64];
+    let pid = unsafe { @syscall(39) } as u64;
+    let path = format_temp_path("/tmp/zrl_stdlib_read_write_", pid, &mut path_buf);
+    {
+        let mut out = match File.create(path) {
+            Ok(f) => f,
+            Err(_) => { return 3; },
+        };
+        if !emit_greeting(&mut out) { return 4; }
+    }
+
+    let mut input = match os_linux::open_file(path, 0, 0) {
+        Ok(f) => f,
+        Err(_) => { return 5; },
+    };
+    let from_file = match read_to_end(&mut input, &arena) {
+        Ok(bytes) => bytes,
+        Err(_) => { return 6; },
+    };
+    if from_file != "hello world" { return 7; }
+    unsafe { @syscall(87, path.ptr, 0, 0); }
+
+    let mut reader = SliceReader.new("abc");
+    let mut buf = [0 as u8, 0];
+    let window = unsafe { @slice(&mut buf[0] as *mut u8, 2 as usize) };
+    match reader.read(window) {
+        Ok(n) => { if n != 2 as usize { return 8; } },
+        Err(_) => { return 8; },
+    }
+    if buf[0] != 'a' as u8 || buf[1] != 'b' as u8 { return 9; }
+    match reader.read(window) {
+        Ok(n) => { if n != 1 as usize { return 10; } },
+        Err(_) => { return 10; },
+    }
+    if buf[0] != 'c' as u8 { return 11; }
+    match reader.read(window) {
+        Ok(n) => { if n != 0 as usize { return 12; } },
+        Err(_) => { return 12; },
+    }
+
+    let mut again = SliceReader.new("in-memory");
+    let from_memory = match read_to_end(&mut again, &arena) {
+        Ok(bytes) => bytes,
+        Err(_) => { return 13; },
+    };
+    if from_memory != "in-memory" { return 14; }
+
+    let mut console = Stdout.new();
+    if !write_all(&mut console, "").is_ok() { return 15; }
+
+    // Test EintrMockReader with read_to_end
+    let mut eintr_r = EintrMockReader { calls: 0 as usize };
+    let eintr_bytes = match read_to_end(&mut eintr_r, &arena) {
+        Ok(b) => b,
+        Err(_) => return 16,
+    };
+    if eintr_bytes != "XYZ" { return 17; }
+
+    // Test reading 0-byte file
+    let empty_path = format_temp_path("/tmp/zrl_empty_file_", pid, &mut path_buf);
+    {
+        let mut f = match File.create(empty_path) {
+            Ok(file) => file,
+            Err(_) => return 20,
+        };
+        let _ = f.close();
+    }
+    let empty_res = read_file(empty_path, &arena);
+    match empty_res {
+        Ok(bytes) => {
+            if bytes.len != 0 as usize { return 21; }
+        },
+        Err(_) => return 22,
+    }
+    unsafe { @syscall(87, empty_path.ptr, 0, 0); }
+
+    return 0;
+}
+
+struct EintrMockReader {
+    calls: usize,
+}
+
+impl Read for EintrMockReader {
+    fn read(self: &mut EintrMockReader, mut buf: [mut u8]) -> Result<usize, Error> {
+        self.calls = self.calls + 1 as usize;
+        if self.calls == 1 as usize || self.calls == 3 as usize {
+            return Result.Err(Error.from_linux_errno(4)); // EINTR
+        }
+        if self.calls == 2 as usize {
+            if buf.len > 0 as usize {
+                buf[0] = 'X' as u8;
+                return Result.Ok(1 as usize);
+            }
+        }
+        if self.calls == 4 as usize {
+            if buf.len > 1 as usize {
+                buf[0] = 'Y' as u8;
+                buf[1] = 'Z' as u8;
+                return Result.Ok(2 as usize);
+            }
+        }
+        return Result.Ok(0 as usize);
+    }
+}

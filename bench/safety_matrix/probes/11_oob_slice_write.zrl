@@ -1,0 +1,11 @@
+// name: OOB slice write
+// expected: runtime_trap
+fn write_slice(s: [mut u8]) {
+    let i = 99 as usize;
+    s[i] = 42 as u8;
+}
+fn main() -> i32 {
+    let mut data = [1 as u8, 2 as u8, 3 as u8];
+    write_slice(&mut data);
+    return 0;
+}

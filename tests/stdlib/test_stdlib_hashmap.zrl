@@ -1,0 +1,65 @@
+// Test for HashMap in stdlib/hashmap.zrl
+// [PASS] stdlib HashMap new, insert, get, resize
+
+import "hashmap.zrl";
+import "hash_impls.zrl";
+import "core.zrl";
+import "io.zrl";
+import "mem.zrl";
+use hashmap::HashMap;
+use io::{write, stdout};
+use mem::Arena;
+
+fn main() -> i32 {
+    let arena = Arena.new(4096 * 4).unwrap();
+    let mut map = HashMap::<u32, i32>.new(&arena);
+    
+    map.insert(10, 42);
+    map.insert(20, 100);
+    
+    let k10: u32 = 10;
+    let k20: u32 = 20;
+    let k105: u32 = 105;
+
+    let v1_pre: i32 = match map.get(&k10) {
+        Some(v) => *v,
+        None => 0,
+    };
+    if v1_pre != 42 { 
+        write(stdout(), "FAILED: v1_pre != 42\n");
+        return 1; 
+    }
+
+    // Force resize (initial cap 16, threshold 11)
+    let mut k = 100 as u32;
+    while k < 120 {
+        map.insert(k, (k as i32) * 2);
+        k = k + 1;
+    }
+    
+    write(stdout(), "Resized successfully\n");
+
+    let v1: i32 = match map.get(&k10) {
+        Some(v) => *v,
+        None => 0,
+    };
+    
+    let v2: i32 = match map.get(&k20) {
+        Some(v) => *v,
+        None => 0,
+    };
+    
+    let v105: i32 = match map.get(&k105) {
+        Some(v) => *v,
+        None => -1,
+    };
+    
+    if v1 != 42 { return 1; }
+    if v2 != 100 { return 2; }
+    if v105 != 210 { return 3; }
+    
+    if map.cap() <= 16 as usize { return 4; }
+    
+    write(stdout(), "HashMap test passed (with resize)\n");
+    return 0;
+}

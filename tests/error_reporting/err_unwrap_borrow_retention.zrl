@@ -1,0 +1,23 @@
+// expected compile fail
+// EXPECT: error: cannot assign to 'e' because it is borrowed
+// Option.unwrap() preserves borrows held by its Option<T> argument.
+import "core.zrl";
+
+enum E {
+    A(Box<i32>),
+    B,
+}
+
+fn first(e: &E) -> Option<&Box<i32>> {
+    return match e {
+        E.A(x) => Option.Some(x),
+        E.B => Option.None,
+    };
+}
+
+fn main() -> i32 {
+    let mut e = E.A(box 5);
+    let r = first(&e).unwrap();
+    e = E.B;
+    return **r;
+}

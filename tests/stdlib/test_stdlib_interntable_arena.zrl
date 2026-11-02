@@ -1,0 +1,23 @@
+// InternTable's arena constructors, both entry points: the safe `new(&Arena)` path and the
+// `unsafe fn new_raw` escape hatch the compiler and tools use.
+// expected exit 0
+
+import "intern.zrl";
+import "mem.zrl";
+use intern::InternTable;
+use mem::{Arena, arena_raw};
+
+fn main() -> i32 {
+    let arena = Arena.new(1 << 20).unwrap();
+
+    let mut safe = InternTable.new(&arena);
+    let a = safe.intern("hello");
+    let b = safe.intern("hello");
+    if a != b { return 1; } // interning the same bytes returns the same id
+    if safe.lookup(a) != "hello" { return 2; }
+
+    let mut raw = unsafe { InternTable.new_raw(arena_raw(&arena)) };
+    let c = raw.intern("world");
+    if raw.lookup(c) != "world" { return 3; }
+    return 0;
+}

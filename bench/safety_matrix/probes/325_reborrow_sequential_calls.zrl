@@ -1,0 +1,25 @@
+// name: Sequential reborrows and mutations through a &mut Vec are accepted
+// expected: accept
+// Accepted twin: passing a &mut reference into consecutive mutating calls is legal because
+// each reborrow ends when the callee returns.
+import "vec.zrl";
+use vec::Vec;
+
+fn step1(v: &mut Vec<i32>) {
+    v.push(1);
+}
+
+fn step2(v: &mut Vec<i32>) {
+    v.push(2);
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    let r = &mut v;
+    step1(r);
+    step2(r);
+    if r.len() != 2 {
+        return 1;
+    }
+    return 0;
+}

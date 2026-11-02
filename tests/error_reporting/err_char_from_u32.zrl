@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_char_from_u32.zrl:6:19: error: cannot implicitly convert between char and a number (use `unicode::char_from_u32` to make a char, `c as u8` to take its value)
+// A char is a Unicode scalar value: a u32 may be a surrogate or above U+10FFFF.
+fn main() -> i32 {
+    let n: u32 = 0xd800;
+    let c: char = n;
+    return 0;
+}

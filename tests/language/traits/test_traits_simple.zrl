@@ -1,0 +1,20 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl Point {
+    fn new(x: i32, y: i32) -> Point {
+        return Point { x: x, y: y };
+    }
+
+    fn sum(self: &Point) -> i32 {
+        return self.x + self.y;
+    }
+}
+
+fn main() -> i32 {
+    let p = Point.new(10, 20);
+    if p.sum() != 30 { return 1; }
+    return 0;
+}

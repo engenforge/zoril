@@ -1,0 +1,116 @@
+// The safe Zoril side of the C platform layer (platform.c): every `extern` declaration and every
+// `unsafe` that talks to C lives here. The application owns a Display (a handle with Drop) and, while
+// it runs, is handed a Frame in each callback: the callback never holds the Display, which run() has
+// borrowed, so there is no aliasing to reason about. The handler is a closure that carries its own
+// state, so the application needs no `unsafe` and no pointer cast; the trampoline below is the only
+// place that turns the C userdata back into a Zoril value.
+import "mem.zrl";
+
+pub struct CWindow {}
+
+extern fn create_window(w: i32, h: i32) -> *mut CWindow;
+extern fn set_frame_callback(
+    win: *mut CWindow,
+    cb: extern "C" fn(*mut CWindow, *mut u8),
+    userdata: *mut u8
+);
+extern fn clear_frame_callback(win: *mut CWindow);
+extern fn blit_rgba(win: *mut CWindow, rgba: *u8, w: i32, h: i32);
+extern fn run(win: *mut CWindow);
+extern fn window_has_userdata(win: *CWindow) -> i32;
+extern fn window_frames(win: *CWindow) -> i32;
+extern fn window_checksum(win: *CWindow) -> u64;
+extern fn destroy(win: *mut CWindow);
+
+// What a frame callback gets: the window to draw into for the length of the call.
+pub struct Frame {
+    win: *mut CWindow,
+    width: i32,
+    height: i32,
+}
+
+impl Frame {
+    // Shows a frame of width x height RGBA pixels. A buffer of the wrong size is refused.
+    pub fn blit(self: &mut Frame, rgba: [u8]) -> bool {
+        if rgba.len != (self.width * self.height * 4) as usize {
+            return false;
+        }
+        unsafe { blit_rgba(self.win, rgba.ptr, self.width, self.height); }
+        return true;
+    }
+}
+
+// What the C callback carries: the application's handler (a closure with its state) behind one
+// pointer. Its one invariant is local: the userdata C hands back is the Dispatch that run() built.
+struct Dispatch {
+    handler: fn(&mut Frame),
+    width: i32,
+    height: i32,
+}
+
+extern "C" fn trampoline(win: *mut CWindow, userdata: *mut u8) {
+    let d = userdata as *mut Dispatch;
+    let mut frame = Frame { win: win, width: unsafe { (*d).width }, height: unsafe { (*d).height } };
+    let handler = unsafe { (*d).handler };
+    handler(&mut frame);
+}
+
+// An open window. The C object is released when this is dropped.
+pub struct Display {
+    win: *mut CWindow,
+    width: i32,
+    height: i32,
+}
+
+impl Display {
+    // Opens a window of the given size, or None when the platform layer refuses it.
+    pub fn open(width: i32, height: i32) -> Option<Display> {
+        let win = unsafe { create_window(width, height) };
+        if win as usize == 0 {
+            return Option.None;
+        }
+        return Option.Some(Display { win: win, width: width, height: height });
+    }
+
+    pub fn width(self: &Display) -> i32 { return self.width; }
+    pub fn height(self: &Display) -> i32 { return self.height; }
+
+    // Shows a frame from outside the callback.
+    pub fn blit(self: &mut Display, rgba: [u8]) -> bool {
+        let mut frame = Frame { win: self.win, width: self.width, height: self.height };
+        return frame.blit(rgba);
+    }
+
+    // Runs the window's event loop (three frames for this stand-in), calling `handler(frame)` for
+    // each. The handler is a closure, so whatever state it needs travels with it.
+    pub fn run(self: &mut Display, handler: fn(&mut Frame)) {
+        let mut d = Dispatch { handler: handler, width: self.width, height: self.height };
+        unsafe {
+            set_frame_callback(self.win, trampoline, &mut d as *mut Dispatch as *mut u8);
+            run(self.win);
+            // `d` is a stack slot that is gone when run returns. A real toolkit can fire callbacks
+            // at other times (resize, expose, timers), so C must not keep a pointer to it: clear the
+            // callback before leaving, and copy this clear along with the rest of the template.
+            clear_frame_callback(self.win);
+        }
+    }
+
+    // True while C holds a pointer to a handler's state, which must only be during run().
+    pub fn holds_handler(self: &Display) -> bool {
+        return unsafe { window_has_userdata(self.win as *CWindow) } != 0;
+    }
+
+    pub fn frames_shown(self: &Display) -> i32 {
+        return unsafe { window_frames(self.win as *CWindow) };
+    }
+
+    pub fn checksum(self: &Display) -> u64 {
+        return unsafe { window_checksum(self.win as *CWindow) };
+    }
+}
+
+impl Drop for Display {
+    pub fn drop(self: Display) {
+        unsafe { destroy(self.win); }
+    }
+}

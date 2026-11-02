@@ -1,0 +1,9 @@
+// name: Whole reassignment of a Box after @drop is accepted
+// expected: accept
+// Explicit @drop marks the binding consumed without drop glue firing on subsequent assignment.
+fn main() -> i32 {
+    let mut b = box 1;
+    @drop(b);
+    b = box 42;
+    return if *b == 42 { 0 } else { 1 };
+}

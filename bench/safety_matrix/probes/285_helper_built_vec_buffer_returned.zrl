@@ -1,0 +1,21 @@
+// name: A reference into a helper-built local Vec's buffer returned from the frame
+// expected: compile_reject
+// The `Vec` comes from a helper, so its constructor is not visible to the checker: an unknown
+// constructor answers "this frame owns it". A reference into storage owned by this frame cannot outlive the frame.
+import "vec.zrl";
+use vec::Vec;
+
+fn make() -> Vec<i32> {
+    let mut v = Vec::<i32>.new();
+    v.push(77);
+    return v;
+}
+
+fn view() -> &i32 {
+    let v = make();
+    return v.get(0).unwrap();
+}
+
+fn main() -> i32 {
+    return *view();
+}

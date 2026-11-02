@@ -1,0 +1,47 @@
+// String's arena constructors, both entry points of each: the safe `&Arena` path
+// (`new_in`, `with_capacity`, `split`) and the `unsafe` raw escape hatches
+// (`new_in_raw`, `with_capacity_in_raw`, `split_raw`) internals use.
+// expected exit 0
+
+import "mem.zrl";
+import "string.zrl";
+use mem::{Arena, arena_raw};
+use string::String;
+
+fn main() -> i32 {
+    let arena = Arena.new(65536).unwrap();
+
+    // The safe constructors borrow the arena.
+    let mut a = String.new_in(&arena);
+    a.push_str("hello world");
+    if a.len() != 11 { return 1; }
+
+    let mut b = String.with_capacity(&arena, 64);
+    b.push_str("xyz");
+    if b.len() != 3 { return 2; }
+
+    // The raw escape hatches (the internal path).
+    let mut c = unsafe { String.new_in_raw(arena_raw(&arena)) };
+    c.push_str("raw");
+    if c.len() != 3 { return 3; }
+    let mut d = unsafe { String.with_capacity_in_raw(arena_raw(&arena), 32) };
+    d.push_str("raw-cap");
+    if d.len() != 7 { return 4; }
+
+    // split through both entry points.
+    let parts = "a,b,c".split(',' as u8, &arena);
+    if parts.len() != 3 { return 5; }
+    if parts.as_slice()[1] != "b" { return 6; }
+    let parts2 = unsafe { "d,e".split_raw(',' as u8, arena_raw(&arena)) };
+    if parts2.len() != 2 { return 7; }
+    if parts2.as_slice()[0] != "d" { return 8; }
+
+    // No delimiter: one piece. Trailing delimiter: an empty last piece.
+    let one = "solo".split(',' as u8, &arena);
+    if one.len() != 1 { return 9; }
+    let trailing = "x,".split(',' as u8, &arena);
+    if trailing.len() != 2 { return 10; }
+    if trailing.as_slice()[1].len != 0 { return 11; }
+
+    return 0;
+}

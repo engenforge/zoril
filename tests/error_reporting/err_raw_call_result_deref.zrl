@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: error: dereference of raw pointer requires unsafe block
+// Dereferencing a raw pointer returned by a function call requires unsafe.
+fn make_ptr() -> *mut i32 {
+    return 0 as *mut i32;
+}
+fn main() -> i32 {
+    let p = make_ptr();
+    return *p;
+}

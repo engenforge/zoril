@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_assoc_type_cycle.zrl:7:29: error: associated type `Out` of `Num` is defined in terms of itself
+// EXPECT: tests/error_reporting/err_assoc_type_cycle.zrl:8:20: error: unresolved type in let binding
+// An associated type defined through itself has no type; the projection is cut off and reported.
+trait A { type Out; }
+struct Num { v: i32 }
+impl A for Num { type Out = Self::Out; }
+fn main() -> i32 { let x: Num::Out = 0; return 0; }

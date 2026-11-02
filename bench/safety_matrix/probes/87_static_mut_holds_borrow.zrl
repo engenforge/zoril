@@ -1,0 +1,11 @@
+// name: Borrowed reference stored in a static mut
+// expected: compile_reject
+// After the caller returns, the static points into a dead frame (read back as clobbered stack
+// until 2026-10-02). A static mut can no longer have a reference or slice type.
+static mut G: &i32 = &0;
+fn stash(r: &i32) { G = r; }
+fn main() -> i32 {
+    let x: i32 = 5;
+    stash(&x);
+    return 0;
+}

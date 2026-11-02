@@ -1,0 +1,34 @@
+# Differences from Rust that are classified, so a run stops only on something new.
+#
+# Format: exactly `<rustc error code> <feature tag> <expiry YYYY-MM-DD>`; the reason goes in comment
+# lines above it. A candidate whose Rust error carries that code and whose program's manifest carries
+# that tag is reported as [DIFF] and counted. Anything not matched here fails the run, and so does an
+# entry past its expiry: a difference nobody has decided is not a difference, it is an open finding -
+# quarantine it with a date, or fix it. Moving the date does not decide anything.
+#
+# No entries. Three were here and all three are gone:
+#   `E0502 mutable-reference-to-local` and `E0503 write-through-mut-ref` were the same trigger, a write
+#   through a reference ending that reference's own borrow (fixed in the task that carried them).
+#   The third was a bare read of a place through a `&mut` to it (`*rm = x`), which Zoril accepted where
+#   Rust refuses. Deciding it meant measuring it properly, with a value that owns something rather than
+#   an `i32`, and that is what it turned out to be: when the `&mut` is *live* afterwards the read is
+#   rejected (`*rm = x; *rm = 9;` - "cannot use 'x' while it is mutably borrowed"), and the accepted
+#   spelling is the one whose write is the `&mut`'s last use, so no borrow is live to read through.
+#   The owning-type form of it was a use after free, and that is fixed too (the same task).
+#
+# The one that is *decided* rather than gone: naming the place on the right-hand side of a write
+# through a `&mut` to it (`*rm = x`), where that write is the `&mut`'s last use. Zoril accepts it and
+# Rust refuses it (error[E0503]). Measured 2026-10-12, both spellings, by compiling and running:
+#   `let mut x = 3; let rm = &mut x; *rm = x; return x - 3;` compiles and exits 0 - `x` is unchanged,
+#   because the load is of the same place the store writes and it happens first;
+#   `let mut x = 3; let rm = &mut x; *rm = x; *rm = 9;` is rejected - with the `&mut` live afterwards
+#   the read conflicts, which is the rule the owning-type fix restored visibility for.
+# So the accepted spelling is the one where no borrow is live after the read, and nothing can observe
+# the write it is about to make. Accepted on purpose, with the reason here rather than in a comment
+# nobody reads. Refresh the date by re-measuring, not by editing it.
+E0503 write-through-mut-ref 2027-01-12
+#
+# The lesson that came out of that quarantine is a rule now (bench/fuzz/README.md): a shape is never
+# cleared on a `Copy` type alone - always test one that owns a resource as well, because ownership is
+# where the damage is. Both holes the fuzzer has found first were judged harmless on an `i32` before
+# someone tried an `Arena`.

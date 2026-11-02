@@ -1,0 +1,6 @@
+import "io.zrl";
+use io::{write, stdout};
+fn main() -> i32 {
+    write(stdout(), "Hello from tiny\n");
+    return 0;
+}

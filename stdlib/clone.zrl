@@ -1,0 +1,119 @@
+// Explicit deep cloning traits and implementations (Clone, Copy)
+//
+//
+// Clone implementations for the primitive types, Option, Vec and String. The
+// trait itself lives in core.zrl.
+
+import "core.zrl";
+import "vec.zrl";
+import "string.zrl";
+use string::String;
+use vec::Vec;
+
+impl Clone for bool {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &bool) -> bool { return *self; }
+}
+
+impl Clone for u8 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &u8) -> u8 { return *self; }
+}
+
+impl Clone for u16 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &u16) -> u16 { return *self; }
+}
+
+impl Clone for u32 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &u32) -> u32 { return *self; }
+}
+
+impl Clone for u64 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &u64) -> u64 { return *self; }
+}
+
+impl Clone for usize {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &usize) -> usize { return *self; }
+}
+
+impl Clone for i8 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &i8) -> i8 { return *self; }
+}
+
+impl Clone for i16 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &i16) -> i16 { return *self; }
+}
+
+impl Clone for i32 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &i32) -> i32 { return *self; }
+}
+
+impl Clone for i64 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &i64) -> i64 { return *self; }
+}
+
+impl Clone for isize {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &isize) -> isize { return *self; }
+}
+
+impl<T: Clone> Clone for Option<T> {
+    // Creates an explicit duplicate copy of the value.
+    #[borrows()]
+    fn clone(self: &Option<T>) -> Option<T> {
+        // Matched through the reference: `T` may own storage, so `match *self` would move it out
+        // of the borrow. The ergonomic binding is `&T`, which `clone` copies.
+        return match self {
+            Some(v) => Option.Some(v.clone()),
+            None => Option.None,
+        };
+    }
+}
+
+// A slice value is a pointer and a length, so a clone is a copy of the header: the elements it
+// refers to are not duplicated. That is what lets `Vec<[u8]>.clone()` name a `Clone` element type,
+// and a `Vec` clone then duplicates its elements rather than sharing them.
+impl<T: Clone> Clone for [T] {
+    // Creates an explicit duplicate copy of the value.
+    #[borrows()]
+    fn clone(self: &[T]) -> [T] {
+        return *self;
+    }
+}
+
+// Clones each element into a new Vec on the same allocator.
+impl<T: Clone> Clone for Vec<T> {
+    // Creates an explicit duplicate copy of the value.
+    #[borrows()]
+    fn clone(self: &Vec<T>) -> Vec<T> {
+        // SAFETY: the pointer is the arena `self` (a live Vec) allocates from, and `new_in_raw`
+        // only records it.
+        let mut out = unsafe { Vec::<T>.new_in_raw(self.raw_arena()) };
+        let mut i = 0 as usize;
+        while i < self.len() {
+            out.push(self.get(i).unwrap().clone());
+            i = i + 1;
+        }
+        return out;
+    }
+}
+
+// A String's bytes are Copy, so one block copy duplicates them. The clone reuses the
+// String's own arena via the raw escape hatch (an `&Arena` is not available here).
+impl Clone for String {
+    // Creates an explicit duplicate copy of the value.
+    #[borrows()]
+    fn clone(self: &String) -> String {
+        // SAFETY: the pointer is the arena `self` (a live String) allocates from, and
+        // `clone_in_raw` only records it.
+        return unsafe { self.clone_in_raw(self.raw_arena()) };
+    }
+}

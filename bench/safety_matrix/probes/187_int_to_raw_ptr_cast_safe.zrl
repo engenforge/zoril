@@ -1,0 +1,18 @@
+// name: Pointer forged from a fixed address, used as a value
+// expected: accept
+// `n as *T` creates a raw pointer, and creating one is safe: every *use* of it - the
+// dereference, a field access, an index, a method call, a conversion to a reference - is gated
+// on the pointer's own type, so the marker has to sit on the use, not on the creation
+// (unsafe_policy.md §1). This is what gives a memory-mapped register a spelling as a constant,
+// which a `static`'s initializer needs. The other half of the pair is 13_forged_pointer.zrl,
+// which dereferences the same kind of pointer in unmarked code and is rejected there.
+fn main() -> i32 {
+    let p = 0x401000 as *mut u8;
+    let q = 0x401000 as *mut u8;
+    if p as usize != q as usize { return 1; }
+    if p as usize != 0x401000 as usize { return 2; }
+    // The value is a pointer, not an index: pointer arithmetic on it is arithmetic.
+    let r = (p as usize + 4) as *mut u8;
+    if r as usize != 0x401004 as usize { return 3; }
+    return 0;
+}

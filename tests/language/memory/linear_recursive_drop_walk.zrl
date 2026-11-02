@@ -1,0 +1,12 @@
+// expected exit code: 0
+// The linear walk has to revisit a type here: `L` holds `Box<L>`, and `@drop(a)` asks the checker
+// whether the dropped value holds a linear resource, so the walk enters `L`, its `Cons` payload and
+// `L` again. The walk's cycle breaker is what stops there - mutant M116 removes it and the compiler
+// then recurses until its stack overflows on this program.
+enum L { Nil, Cons(Box<L>) }
+
+fn main() -> i32 {
+    let a = L.Cons(box L.Nil);
+    @drop(a);
+    return 0;
+}

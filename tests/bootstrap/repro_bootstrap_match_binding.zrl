@@ -1,0 +1,11 @@
+enum Test {
+    A(u32),
+    B,
+}
+
+fn main() {
+    let t = Test.B;
+    match t {
+        Test.A(_) | Test.B => {}
+    }
+}

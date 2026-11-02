@@ -1,0 +1,45 @@
+struct Foo<T> { x: T }
+
+impl Foo<T> {
+    fn set(self: &mut Foo<T>, val: T) {
+        self.x = val;
+    }
+}
+
+struct Vec2 { x: f64, y: f64 }
+impl Vec2 {
+    pub fn new(x: f64, y: f64) -> Vec2 {
+        return Vec2 { x: x, y: y };
+    }
+}
+
+struct Test {}
+impl Test {
+    const VAL: u32 = 42;
+    fn get_val() -> u32 { return Test.VAL; }
+}
+
+fn main() -> i32 {
+    // repro_generic_trait_lower.zrl
+    {
+        let mut f = Foo { x: 42 };
+        // If the compiler supports it, call it directly. 
+        // Based on the repro, it was calling the mangled name.
+        // But for a consolidated test, we might want to see if the feature works as intended.
+        f.set(100); 
+    }
+
+    // test_impl.zrl & repro_pub_impl.zrl
+    {
+        let v = Vec2.new(1.0, 2.0);
+    }
+
+    // test_impl_const.zrl
+    {
+        if Test.get_val() != 42 {
+            return 1;
+        }
+    }
+
+    return 0;
+}

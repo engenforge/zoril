@@ -1,0 +1,6 @@
+import "lib.zrl";
+use lib::wrap;
+pub fn main() -> i32 {
+    if wrap::<i64>(0, 41) == 42 { return 0; }
+    return 1;
+}

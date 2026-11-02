@@ -1,0 +1,24 @@
+// Standalone reproduction for constant dependency bug in zoril-c.release
+// Minimal dependencies, uses exit code to signal result.
+// Run and check exit code: 64 = SUCCESS, 0 = FAILURE (bug reproduced)
+// expected exit code: 64
+
+extern fn __zoril_syscall_1(n: i64, a1: u64) -> i64;
+
+pub struct Test {
+    pub dummy: i32,
+}
+
+impl Test {
+    // B depends on A, but A is defined AFTER B.
+    // In zoril-c.release, B will incorrectly evaluate to 0.
+    const B: usize = Test.A;
+    const A: usize = 64 as usize;
+}
+
+fn main() -> i32 {
+    let val = Test.B;
+    // syscall 60 is exit on x86_64 Linux
+    unsafe { __zoril_syscall_1(60, val as u64); }
+    return 0;
+}

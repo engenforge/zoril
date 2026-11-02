@@ -1,0 +1,20 @@
+// name: A local Vec assigned to a second binding is a move, not a shared buffer
+// expected: compile_reject
+// A collection owns its buffer. `let w = v;` moved `v`, so the drop of `v` while `w` is live -
+// and any later read through `w` of a buffer `v` freed - is refused.
+import "vec.zrl";
+use vec::Vec;
+
+fn churn() -> i32 {
+    let a: [i32; 64] = [77; 64];
+    return a[0];
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1234);
+    let w = v;
+    @drop(v);
+    let _c = churn();
+    return *w.get(0).unwrap();
+}

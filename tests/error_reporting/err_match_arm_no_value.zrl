@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_match_arm_no_value.zrl:6:14: error: this `match` arm produces no value, but `i32` was expected
+// A match whose arm produces no value cannot satisfy a non-unit expected type.
+fn f(i: u32) -> i32 {
+    match i {
+        1 => {
+            let _ = 1;
+        }
+        _ => 42
+    }
+}
+fn main() -> i32 {
+    return f(0);
+}

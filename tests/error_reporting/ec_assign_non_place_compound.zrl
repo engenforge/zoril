@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: error: invalid assignment target
+// Compound assignment has the same rule as `=`: its left side must be a place.
+fn main() -> i32 {
+    let mut x: i32 = 1;
+    (x + 1) += 3;
+    return x;
+}

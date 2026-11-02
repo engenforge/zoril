@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_vec_clone_in_survive_arena_reset.zrl:15:5: error: cannot mutably borrow 'a2' while it is already borrowed
+// EXPECT: tests/error_reporting/err_vec_clone_in_survive_arena_reset.zrl:14:25: note: borrow of 'a2' taken here
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a1 = Arena.new(4096 as u64).unwrap();
+    let mut a2 = Arena.new(4096 as u64).unwrap();
+    let mut v = Vec::<i32>.new_in(&a1);
+    v.push(42);
+    let v2 = v.clone_in(&a2);
+    a2.reset();
+    return v2.len() as i32;
+}

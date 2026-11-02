@@ -1,0 +1,58 @@
+// expected exit code: 0
+struct Span {
+    start: u32,
+    end: u32,
+    line: u32,
+    col: u32,
+}
+enum Token {
+    KFn,
+    Ident(u32),
+    Int(u64),
+}
+struct TokenWithSpan {
+    token: Token,
+    span: Span,
+}
+struct Parser {
+    lexer_ptr: u64,
+    cur: TokenWithSpan,
+    peek: TokenWithSpan,
+    arena_ptr: u64,
+}
+fn main() -> i32 {
+    let mut p = Parser {
+        lexer_ptr: 0x1122334455667788,
+        cur: TokenWithSpan {
+            token: Token.Ident(123),
+            span: Span { start: 1, end: 2, line: 3, col: 4 },
+        },
+        peek: TokenWithSpan {
+            token: Token.Int(456),
+            span: Span { start: 5, end: 6, line: 7, col: 8 },
+        },
+        arena_ptr: 0xAABBCCDD00112233,
+    };
+    if p.lexer_ptr != 0x1122334455667788 { return 1; }
+    match p.cur.token {
+        Token.Ident(val) => { if val != 123 { return 2; } },
+        _ => { return 3; },
+    }
+    if p.cur.span.start != 1 { return 4; }
+    if p.cur.span.col != 4 { return 5; }
+    match p.peek.token {
+        Token.Int(val) => { if val != 456 { return 6; } },
+        _ => { return 7; },
+    }
+    if p.peek.span.start != 5 { return 8; }
+    if p.peek.span.col != 8 { return 9; }
+    if p.arena_ptr != 0xAABBCCDD00112233 { return 10; }
+    p.cur.token = Token.KFn;
+    p.peek.span.line = 99;
+    match p.cur.token {
+        Token.KFn => {},
+        _ => { return 11; },
+    }
+    if p.peek.span.line != 99 { return 12; }
+    return 0;
+}

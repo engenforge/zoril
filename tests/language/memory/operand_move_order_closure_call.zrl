@@ -1,0 +1,20 @@
+// expected compile fail
+// EXPECT: cannot use 'v' while it is mutably borrowed
+// A closure that captured the borrow runs as a later argument. The value is moved where it is written, before the later operand runs; the later operand uses the `&mut` taken from it.
+import "vec.zrl";
+use vec::Vec;
+
+struct H { w: Vec<i32>, n: usize }
+enum E { A(Vec<i32>, usize), B }
+fn f(a: Vec<i32>, n: usize) -> usize { return n + a.len(); }
+impl H { fn eat(self: H, n: usize) -> usize { return n; } }
+fn mk() -> Vec<i32> { return Vec::<i32>.new(); }
+
+fn main() -> i32 {
+    let mut v = mk();
+    v.push(7);
+    let r = &mut v;
+    let c = || { r.len() };
+    let k = f(v, c());
+    return 0;
+}

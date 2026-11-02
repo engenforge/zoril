@@ -1,0 +1,6 @@
+// name: static mut holding reference inside Box is rejected
+// expected: compile_reject
+// Rule (d): a static mut cannot hold a reference inside a Box.
+enum OptBoxRef { None, Some(Box<&i32>) }
+static mut G: OptBoxRef = OptBoxRef.None;
+fn main() -> i32 { return 0; }

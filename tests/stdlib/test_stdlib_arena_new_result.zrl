@@ -1,0 +1,113 @@
+// expected exit 0
+// Tests for safe Arena API: Result<Arena, io::Error>, reset, mark, reset_to, and Drop.
+
+import "mem.zrl";
+import "vec.zrl";
+import "io.zrl";
+
+use mem::{Arena, arena_raw};
+use vec::Vec;
+
+fn test_arena_new_success() -> bool {
+    let mut a = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return false; },
+    };
+    let mut v = Vec::<u64>.new_in(&a);
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    if v.len() != 3 as usize { return false; }
+    if v[0] != 10 || v[1] != 20 || v[2] != 30 { return false; }
+    return true;
+}
+
+fn test_arena_new_enomem() -> bool {
+    // 2^61 cannot be mapped; Linux returns -ENOMEM (12).
+    let res = Arena.new(2305843009213693952);
+    return match res {
+        Ok(_) => false,
+        Err(e) => e.linux_errno() == 12 as i32,
+    };
+}
+
+fn test_arena_new_einval() -> bool {
+    // Capacity smaller than ARENA_HEADER_SIZE + 8 (72 bytes) must be rejected with EINVAL (22).
+    let res10 = Arena.new(10);
+    if match res10 { Ok(_) => true, Err(e) => e.linux_errno() != 22 as i32 } { return false; }
+
+    let res64 = Arena.new(64);
+    if match res64 { Ok(_) => true, Err(e) => e.linux_errno() != 22 as i32 } { return false; }
+
+    let res71 = Arena.new(71);
+    if match res71 { Ok(_) => true, Err(e) => e.linux_errno() != 22 as i32 } { return false; }
+
+    let res72 = Arena.new(72);
+    return match res72 {
+        Ok(_) => true,
+        Err(_) => false,
+    };
+}
+
+fn test_arena_mark_and_reset_to() -> bool {
+    let mut a = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return false; },
+    };
+    let mut v_pre = Vec::<u64>.new_in(&a);
+    v_pre.push(42);
+    v_pre.push(43);
+
+    let offset_before_mark = unsafe { (*arena_raw(&a)).offset };
+    let mark1 = a.mark();
+    {
+        let mut v1 = Vec::<u64>.new_in(&a);
+        v1.push(100);
+        v1.push(200);
+        let offset_during_v1 = unsafe { (*arena_raw(&a)).offset };
+        if offset_during_v1 <= offset_before_mark { return false; }
+    }
+    // v1 is no longer live, but v_pre is still live!
+    // The borrow checker recognizes pre-mark borrows and permits a.reset_to(mark1).
+    a.reset_to(mark1);
+
+    let offset_after_reset = unsafe { (*arena_raw(&a)).offset };
+    if offset_after_reset != offset_before_mark { return false; }
+
+    // Allocating again should reuse the memory from mark1
+    let mut v2 = Vec::<u64>.new_in(&a);
+    v2.push(999);
+    if v2[0] != 999 { return false; }
+
+    // Pre-mark vector survived and retained its values
+    if v_pre.len() != 2 as usize { return false; }
+    if v_pre[0] != 42 || v_pre[1] != 43 { return false; }
+    return true;
+}
+
+fn test_arena_reset() -> bool {
+    let mut a = match Arena.new(65536) {
+        Ok(arena) => arena,
+        Err(_) => { return false; },
+    };
+    {
+        let mut v = Vec::<u64>.new_in(&a);
+        v.push(1);
+        v.push(2);
+    }
+    a.reset();
+
+    let mut v2 = Vec::<u64>.new_in(&a);
+    v2.push(5);
+    if v2[0] != 5 { return false; }
+    return true;
+}
+
+fn main() -> i32 {
+    if !test_arena_new_success() { return 1; }
+    if !test_arena_new_enomem() { return 2; }
+    if !test_arena_new_einval() { return 3; }
+    if !test_arena_mark_and_reset_to() { return 4; }
+    if !test_arena_reset() { return 5; }
+    return 0;
+}

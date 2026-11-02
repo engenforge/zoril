@@ -1,0 +1,6 @@
+// name: A char or bool forged through an intrinsic instead of a cast
+// expected: compile_reject
+// `@int_cast<T>`, `@ptr_cast<T>` and `@ptr_from_int<T>` make a value of T from a number or a
+// pointer, and they did not consult the rule `as` does: `@int_cast<char>(0xd800)` was a char
+// holding a surrogate and `@int_cast<bool>(5)` a bool holding 5, both in safe code.
+fn main() -> i32 { let c = @int_cast<char>(0xd800 as u32); return 0; }

@@ -1,0 +1,29 @@
+// expected exit 0
+// time::monotonic_ns never decreases, and time::sleep_ns waits at least the requested time.
+
+import "time.zrl";
+
+fn main() -> i32 {
+    let mut prev = time::monotonic_ns();
+    if prev <= 0 { return 1; }
+    let mut i = 0;
+    while i < 1000000 {
+        let now = time::monotonic_ns();
+        if now < prev { return 2; }
+        prev = now;
+        i = i + 1;
+    }
+
+    let before = time::monotonic_ns();
+    time::sleep_ns(50000000);
+    let elapsed = time::monotonic_ns() - before;
+    if elapsed < 50000000 { return 3; }
+    if elapsed > 1000000000 { return 4; }
+
+    // A non-positive duration returns at once.
+    let t0 = time::monotonic_ns();
+    time::sleep_ns(0);
+    time::sleep_ns(-5);
+    if time::monotonic_ns() - t0 > 20000000 { return 5; }
+    return 0;
+}

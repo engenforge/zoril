@@ -1,0 +1,41 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::{stdout, write};
+use fmt::write_i64;
+
+struct Huge {
+    data: [u64; 16],
+}
+
+enum Decl {
+    Fn(i32),
+    Impl(Huge),
+}
+
+fn main() -> i32 {
+    let mut h = Huge { data: [0 as u64; 16] };
+    h.data[0] = 42;
+    let d = Decl.Impl(h);
+    
+    let mut out = stdout();
+    write_str("sizeof(Decl) = ");
+    let _ = write_i64(&mut out, sizeof(Decl) as i64);
+    write_str("\n");
+
+    match d {
+        Decl.Impl(v) => {
+            write_str("Matched Impl, val: ");
+            let _ = write_i64(&mut out, v.data[0] as i64);
+            write_str("\n");
+            if v.data[0] != 42 {
+                write_str("REPRODUCED! Data corrupted in match\n");
+            }
+        },
+        _ => { write_str("Matched Other\n"); }
+    }
+    return 0;
+}
+
+fn write_str(s: [u8]) {
+    write(stdout(), s);
+}

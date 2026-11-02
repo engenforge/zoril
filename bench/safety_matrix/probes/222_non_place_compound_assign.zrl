@@ -1,0 +1,8 @@
+// name: Compound assignment to an arithmetic value is rejected
+// expected: compile_reject
+// Compound assignment has the same target rule as `=`: `(x + 1)` is not a place.
+fn main() -> i32 {
+    let mut x: i64 = 1;
+    (x + 1) += 3;
+    return 0;
+}

@@ -1,0 +1,28 @@
+// name: Args carries a raw pointer safe code supplies, and its methods dereference it
+// expected: compile_reject
+// The class this probe recorded as a gap is closed: `Args.new(argc, argv: **u8)` is `unsafe fn` now,
+// so the call below is rejected (see tests/error_reporting/err_args_new_outside_unsafe.zrl), and
+// safe code takes the runtime's own arguments from `args()` in stdlib/args.zrl instead
+// (tests/stdlib/test_stdlib_args_from_runtime.zrl). The body stays, so the rejection is pinned next
+// to the hole it closed; probe 127_safe_fn_derefs_raw_pointer_argument.zrl pins the allocator half.
+//
+// Shown without a fault: the program builds its own NUL-terminated buffer and its own argv array
+// out of references (`&buf[0] as *u8` is a safe cast), hands `Args` a pointer to its own local
+// array, and `get` reads a string out of that memory. Nothing here needs `unsafe`, and on a real
+// program `get` walks whatever address the caller put in the slot.
+import "args.zrl";
+use args::Args;
+
+fn main() -> i32 {
+    let buf: [u8; 3] = ['h' as u8, 'i' as u8, 0 as u8];
+    let argv: [*u8; 1] = [&buf[0] as *u8];
+    let a = Args.new(1, &argv[0] as **u8);
+    let v = a.get(0);
+    return match v {
+        Option.Some(s) => {
+            if s.len == 2 as usize && s[0] == 'h' as u8 { return 0; }
+            return 1;
+        },
+        Option.None => { return 2; },
+    };
+}

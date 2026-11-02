@@ -1,0 +1,13 @@
+pub fn main() -> i32 {
+    let x = if true { 1 } else { 2 };
+    let y = match x {
+        1 => 10,
+        2 => 20,
+        _ => 30,
+    };
+    let s = "test_string";
+    if y == 10 {
+        return 0;
+    }
+    return 1;
+}

@@ -1,0 +1,18 @@
+// name: MarkInfo updated on reassignment to earlier mark
+// expected: compile_reject
+// Reassigning a mutable ArenaMark variable to an earlier mark must update its epoch
+// so that allocations made after the earlier mark are not falsely exempted at reset_to.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = Arena.new(65536 as u64).unwrap();
+    let m_early = a.mark();
+    let mut v = Vec::<u64>.new_in(&a);
+    let mut m = a.mark();
+    m = m_early;
+    a.reset_to(m);
+    return v.len() as i32;
+}

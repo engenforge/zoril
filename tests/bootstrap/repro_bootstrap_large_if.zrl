@@ -1,0 +1,63 @@
+import "io.zrl";
+import "fmt.zrl";
+use io::{stderr, write};
+use fmt::write_u64;
+
+fn test_large_if_complex(val: u32) {
+    let mut err = stderr();
+    // Pressure registers
+    let a = 1 as u32; let b = 2 as u32; let c = 3 as u32; let d = 4 as u32;
+    let e = 5 as u32; let f = 6 as u32; let g = 7 as u32; let h = 8 as u32;
+
+    if val == 0 as u32 { write(err, "0\n"); return; }
+    if val == 1 as u32 { write(err, "1\n"); return; }
+    if val == 2 as u32 { write(err, "2\n"); return; }
+    if val == 3 as u32 { write(err, "3\n"); return; }
+    if val == 4 as u32 { write(err, "4\n"); return; }
+    if val == 5 as u32 { write(err, "5\n"); return; }
+    if val == 6 as u32 { write(err, "6\n"); return; }
+    if val == 7 as u32 { write(err, "7\n"); return; }
+    if val == 8 as u32 { write(err, "8\n"); return; }
+    if val == 9 as u32 { write(err, "9\n"); return; }
+    if val == 10 as u32 { write(err, "10\n"); return; }
+    if val == 11 as u32 { write(err, "11\n"); return; }
+    if val == 12 as u32 { write(err, "12\n"); return; }
+    if val == 13 as u32 { write(err, "13\n"); return; }
+    if val == 14 as u32 { write(err, "14\n"); return; }
+    if val == 15 as u32 { write(err, "15\n"); return; }
+    if val == 16 as u32 { write(err, "16\n"); return; }
+    if val == 17 as u32 { write(err, "17\n"); return; }
+    if val == 18 as u32 { write(err, "18\n"); return; }
+    if val == 19 as u32 { write(err, "19\n"); return; }
+    if val == 20 as u32 { write(err, "20\n"); return; }
+    if val == 21 as u32 { write(err, "21\n"); return; }
+    if val == 22 as u32 { write(err, "22\n"); return; }
+    if val == 23 as u32 { write(err, "23\n"); return; }
+    if val == 24 as u32 { write(err, "24\n"); return; }
+    if val == 25 as u32 { write(err, "25\n"); return; }
+    if val == 26 as u32 { write(err, "26\n"); return; }
+    if val == 27 as u32 { write(err, "27\n"); return; }
+    if val == 28 as u32 { write(err, "28\n"); return; }
+    if val == 29 as u32 { write(err, "29\n"); return; }
+    if val == 30 as u32 { write(err, "30\n"); return; }
+    if val == 31 as u32 { write(err, "31\n"); return; }
+    if val == 32 as u32 { write(err, "32\n"); return; }
+    if val == 33 as u32 { write(err, "33\n"); return; }
+    if val == 34 as u32 { write(err, "34\n"); return; }
+    if val == 35 as u32 { write(err, "35\n"); return; }
+    if val == 36 as u32 { write(err, "36\n"); return; }
+    if val == 37 as u32 { write(err, "37\n"); return; }
+    if val == 38 as u32 { 
+        write(err, "FOUND 38\n"); 
+        // Use extra variables to prevent them being optimized away
+        let _ = write_u64(&mut err, (a + b + c + d + e + f + g + h) as u64);
+        write(err, "\n");
+        return; 
+    }
+    
+    write(err, "NOT FOUND\n");
+}
+
+fn main() {
+    test_large_if_complex(38 as u32);
+}

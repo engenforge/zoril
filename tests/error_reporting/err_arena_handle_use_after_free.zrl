@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: error: use of moved value 'a'
+import "mem.zrl";
+use mem::{Arena, arena_raw};
+
+fn consume(a: Arena) {}
+
+fn main() -> i32 {
+    let a = Arena.new(4096 as u64).unwrap();
+    consume(a);
+    let p = unsafe { arena_raw(&a) }; // @error "use of moved value 'a'"
+    0
+}

@@ -1,0 +1,10 @@
+// name: Mutation through a shared reference (&T laundering immutability)
+// expected: compile_reject
+struct P { x: i64 }
+impl P { fn bump(self: &mut P) { self.x = self.x + 1; } }
+fn main() -> i32 {
+    let p = P { x: 1 };
+    let r: &P = &p;
+    r.bump();
+    return (r.x - 2) as i32;
+}

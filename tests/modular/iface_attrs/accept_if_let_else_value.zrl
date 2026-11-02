@@ -1,0 +1,14 @@
+// expected exit 0
+import "lib.zrl";
+
+fn main() -> i32 {
+    let e: lib::Slot<i32> = lib::Slot.Empty;
+    let f: lib::Slot<i32> = lib::Slot.Full(7);
+    if lib::pick_value(e, true, 3, 4) != 3 { return 1; }
+    if lib::pick_value(e, false, 3, 4) != 4 { return 2; }
+    if lib::pick_value(f, false, 3, 4) != 7 { return 3; }
+    if lib::pick_chain(e, f, 9) != 7 { return 4; }
+    if lib::pick_chain(e, e, 9) != 9 { return 5; }
+    if lib::pick_block(e, 6) != 6 { return 6; }
+    return 0;
+}

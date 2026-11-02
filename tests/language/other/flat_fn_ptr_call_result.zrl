@@ -1,0 +1,10 @@
+// Calls through a function pointer keep their result after an --emit-flat
+// round trip (the flat printer used to cast every callee to `fn() -> unit`).
+// expected exit 0
+fn apply(f: fn(i32) -> i64, x: i32) -> i64 { return f(x); }
+fn to_wide(x: i32) -> i64 { return x as i64 * 1000000000; }
+fn main() -> i32 {
+    let w = apply(to_wide, 5);
+    if w != 5000000000 { return 1; }
+    return 0;
+}

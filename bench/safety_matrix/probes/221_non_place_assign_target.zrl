@@ -1,0 +1,9 @@
+// name: Assignment to an arithmetic value is rejected
+// expected: compile_reject
+// `(x + 8)` is a value, not a place: the assignment-target check refuses it, so no store
+// through the computed address is emitted.
+fn main() -> i32 {
+    let x: i64 = 4096;
+    (x + 8) = 9;
+    return 0;
+}

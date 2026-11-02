@@ -1,0 +1,9 @@
+// expected compile fail
+// A `use` may not bring in a name the module defines itself.
+// EXPECT: cannot use `geom_lib::weight`: it is defined in this module: `weight`
+import "geom_lib.zrl";
+use geom_lib::weight;
+
+fn weight() -> i32 { return 1; }
+
+fn main() -> i32 { return weight(); }

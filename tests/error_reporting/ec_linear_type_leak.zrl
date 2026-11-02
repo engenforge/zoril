@@ -1,0 +1,15 @@
+// expected compile fail
+// Tests that a linear resource must be consumed (closed).
+// EXPECT: error: linear resource 'f' (type fd) must be explicitly closed, not dropped
+extern fn fd_open(path: *u8) -> fd<rw>;
+extern fn fd_close(f: fd<rw>);
+
+fn main() -> i32 {
+    let f = unsafe { fd_open("test.txt".ptr) };
+    // f is never closed!
+    0 // @error "must be explicitly closed, not dropped"
+}
+/*
+Actually, I'll need to check the exact error message.
+I'll check verifier.c for linear type check.
+*/

@@ -1,0 +1,209 @@
+// zbuild cache manifest (.zoril-cache/manifest.tsv).
+//
+//   # zbuild manifest v3
+//   #written<TAB><ns since epoch>
+//   #toolchain<TAB><sha256 of tool binaries + flags>
+//   #tool<TAB><name><TAB><path><TAB><mtime ns><TAB><size><TAB><sha256>     (one per tool)
+//   <module><TAB><mtime ns><TAB><size><TAB><source sha256><TAB><interface key><TAB><object><TAB><dep,dep,...><TAB><.zri sha256><TAB><source file>
+//
+// <source file> is the absolute path the module was read from; a row for a module outside the
+// current build is carried over only while that file exists (write_manifest in build.zrl). The
+// object name embeds the build's action key (toolchain, source, dependency interface keys), so a
+// build that fails part-way cannot overwrite an object a row still points to; the .zri has a fixed
+// name, so its hash is recorded and re-verified. A row whose mtime is 0 was racy when recorded
+// (RACY_NS in build.zrl): it is never trusted by the mtime/size pre-filter and is always re-hashed.
+
+import "core.zrl";
+import "clone.zrl";
+import "mem_raw.zrl";
+import "string.zrl";
+import "vec.zrl";
+import "util.zrl";
+use mem_raw::ArenaHeader;
+use string::String;
+use util::i64_to_str_in;
+use vec::Vec;
+
+#[derive(Clone)]
+pub struct ToolRec {
+    pub name: [u8],
+    pub path: [u8],
+    pub mtime: i64,
+    pub size: i64,
+    pub sha: [u8],
+}
+
+#[derive(Clone)]
+pub struct Entry {
+    pub path: [u8],
+    pub mtime: i64,
+    pub size: i64,
+    pub source_sha: [u8],
+    pub iface_key: [u8],
+    pub object: [u8],
+    pub deps: Vec<[u8]>,
+    pub zri_sha: [u8],
+    pub file: [u8],
+}
+
+#[derive(Clone)]
+pub struct Manifest {
+    pub written_ns: i64,
+    pub toolchain: [u8],
+    pub tools: Vec<ToolRec>,
+    pub entries: Vec<Entry>,
+}
+
+pub fn empty_manifest(arena: *mut ArenaHeader) -> Manifest {
+    return Manifest {
+        written_ns: 0,
+        toolchain: "",
+        tools: unsafe { Vec::<ToolRec>.new_in_raw(arena) },
+        entries: unsafe { Vec::<Entry>.new_in_raw(arena) },
+    };
+}
+
+fn parse_i64_or(s: [u8], fallback: i64) -> i64 {
+    return match s.parse_i64() {
+        Some(v) => v,
+        None => fallback,
+    };
+}
+
+fn parse_entry(cols: &Vec<[u8]>, arena: *mut ArenaHeader) -> Option<Entry> {
+    if cols.len() < 8 {
+        return Option.None;
+    }                                                // older formats: rebuild
+    let c = cols.as_slice();
+    let mtime = match c[1].parse_i64() { Some(v) => v, None => { return Option.None; }, };
+    let size = match c[2].parse_i64() { Some(v) => v, None => { return Option.None; }, };
+    let mut deps = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+    if c[6].len > 0 {
+        let d_list = unsafe { c[6].split_raw(',' as u8, arena) };
+        let mut i = 0 as usize;
+        while i < d_list.len() {
+            deps.push(d_list.as_slice()[i]);
+            i = i + 1;
+        }
+    }
+    return Option.Some(Entry {
+        path: c[0], mtime: mtime, size: size, source_sha: c[3],
+        iface_key: c[4], object: c[5], deps: deps, zri_sha: c[7],
+        file: if cols.len() >= 9 { c[8] } else { "" },
+    });
+}
+
+// Unreadable or partially corrupt input never produces a wrong manifest: bad rows are dropped,
+// which only ever costs a rebuild of the module they described.
+pub fn parse_manifest(content: [u8], arena: *mut ArenaHeader) -> Manifest {
+    let mut m = empty_manifest(arena);
+    let lines = unsafe { content.split_raw('\n' as u8, arena) };
+    let mut i = 0 as usize;
+    while i < lines.len() {
+        // Not trimmed: a module without dependencies legitimately ends in an empty last column.
+        let line = lines.as_slice()[i];
+        i = i + 1;
+        if line.len == 0 { continue; }
+        let cols = unsafe { line.split_raw('\t' as u8, arena) };
+        if line[0] == '#' as u8 {
+            let tag = cols.as_slice()[0];
+            if tag == "#written" && cols.len() >= 2 {
+                m.written_ns = parse_i64_or(cols.as_slice()[1], 0);
+            } else if tag == "#toolchain" && cols.len() >= 2 {
+                m.toolchain = cols.as_slice()[1];
+            } else if tag == "#tool" && cols.len() >= 6 {
+                let c = cols.as_slice();
+                m.tools.push(ToolRec {
+                    name: c[1], path: c[2],
+                    mtime: parse_i64_or(c[3], 0), size: parse_i64_or(c[4], 0),
+                    sha: c[5],
+                });
+            }
+            continue;
+        }
+        match parse_entry(&cols, arena) {
+            Some(e) => { m.entries.push(e); },
+            None => {},
+        }
+    }
+    return m;
+}
+
+pub fn find_entry(m: &Manifest, path: [u8]) -> Option<Entry> {
+    let mut i = 0 as usize;
+    while i < m.entries.len() {
+        let e = m.entries.as_slice()[i];
+        if e.path == path { return Option.Some(e); }
+        i = i + 1;
+    }
+    return Option.None;
+}
+
+pub fn find_tool_rec(m: &Manifest, name: [u8], path: [u8]) -> Option<ToolRec> {
+    let mut i = 0 as usize;
+    while i < m.tools.len() {
+        let t = m.tools.as_slice()[i];
+        if t.name == name && t.path == path { return Option.Some(t); }
+        i = i + 1;
+    }
+    return Option.None;
+}
+
+fn push_tab(out: &mut String) {
+    out.push_u8('\t' as u8);
+}
+
+pub fn serialize_manifest(m: &Manifest, arena: *mut ArenaHeader) -> [u8] {
+    let mut out = unsafe { String.new_in_raw(arena) };
+    out.push_str("# zbuild manifest v3\n");
+    out.push_str("#written\t");
+    out.push_str(i64_to_str_in(m.written_ns, arena));
+    out.push_str("\n#toolchain\t");
+    out.push_str(m.toolchain);
+    out.push_u8('\n' as u8);
+    let mut t = 0 as usize;
+    while t < m.tools.len() {
+        let r = m.tools.as_slice()[t];
+        out.push_str("#tool\t");
+        out.push_str(r.name);
+        push_tab(&mut out);
+        out.push_str(r.path);
+        push_tab(&mut out);
+        out.push_str(i64_to_str_in(r.mtime, arena));
+        push_tab(&mut out);
+        out.push_str(i64_to_str_in(r.size, arena));
+        push_tab(&mut out);
+        out.push_str(r.sha);
+        out.push_u8('\n' as u8);
+        t = t + 1;
+    }
+    let mut i = 0 as usize;
+    while i < m.entries.len() {
+        let e = m.entries.as_slice()[i];
+        out.push_str(e.path);
+        push_tab(&mut out);
+        out.push_str(i64_to_str_in(e.mtime, arena));
+        push_tab(&mut out);
+        out.push_str(i64_to_str_in(e.size, arena));
+        push_tab(&mut out);
+        out.push_str(e.source_sha);
+        push_tab(&mut out);
+        out.push_str(e.iface_key);
+        push_tab(&mut out);
+        out.push_str(e.object);
+        push_tab(&mut out);
+        let mut d = 0 as usize;
+        while d < e.deps.len() {
+            if d > 0 { out.push_u8(',' as u8); }
+            out.push_str(e.deps.as_slice()[d]);
+            d = d + 1;
+        }
+        push_tab(&mut out);
+        out.push_str(e.zri_sha);
+        push_tab(&mut out);
+        out.push_str(e.file);
+        out.push_u8('\n' as u8);
+        i = i + 1;
+    }
+    return out.as_slice();
+}

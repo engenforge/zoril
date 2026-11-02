@@ -1,0 +1,16 @@
+// From repro_match_keyword_mod.zrl
+pub struct Lex {
+    pub dummy: u32,
+}
+pub enum Token {
+    KFn,
+    Other,
+}
+impl Lex {
+    pub fn next(self: &mut Lex) -> Token {
+        return Token.KFn;
+    }
+}
+
+// From repro_match_mod_2.zrl
+pub enum OuterEnum { Variant(u32) }

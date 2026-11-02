@@ -1,0 +1,8 @@
+// name: A raw pointer cast to a C function pointer inside unsafe
+// expected: accept
+// The dlsym spelling. The pointer is never called here; non-null is the caller's obligation.
+fn main() -> i32 {
+    let p = 0 as *mut u8;
+    let f = unsafe { p as extern "C" fn(i32) -> i32 };
+    return 0;
+}

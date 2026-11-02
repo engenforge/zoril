@@ -1,0 +1,32 @@
+// 22: Branch prediction annotations for performance-critical code paths.
+// expected exit code: 244
+// Demonstrates: @likely, @unlikely, annotation on if conditions.
+
+const ERROR_THRESHOLD: i32 = 1000;
+
+fn validate(value: i32) -> bool {
+    // Hot path: most values are valid — hint the compiler
+    if @unlikely(value < 0) {
+        return false;
+    }
+    if @unlikely(value > ERROR_THRESHOLD) {
+        return false;
+    }
+    return true;
+}
+
+fn process_batch(count: i32) -> i32 {
+    let mut processed = 0;
+
+    for i in 0..count {
+        if @likely(validate(i)) {
+            processed += 1;
+        }
+    }
+
+    return processed;
+}
+
+fn main() -> i32 {
+    return process_batch(500);
+}

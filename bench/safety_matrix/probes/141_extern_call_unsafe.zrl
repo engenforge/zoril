@@ -1,0 +1,12 @@
+// name: Extern function call outside unsafe (inside unsafe)
+// expected: accept
+// The escape hatch half of 140_extern_call_outside_unsafe.zrl: inside `unsafe` the call is
+// unchecked and accepted.
+extern fn memcmp(s1: *u8, s2: *u8, n: u64) -> i32;
+
+fn main() -> i32 {
+    let a: u64 = 42;
+    let b: u64 = 42;
+    let res = unsafe { memcmp(&a as *u64 as *u8, &b as *u64 as *u8, 8 as u64) };
+    return res;
+}

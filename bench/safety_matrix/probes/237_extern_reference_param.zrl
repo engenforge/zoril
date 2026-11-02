@@ -1,0 +1,5 @@
+// name: Reference passed across an extern signature
+// expected: compile_reject
+// C can keep or hand back a pointer that a borrow checked reference promised it would not.
+extern fn stash(r: &mut i32);
+fn main() -> i32 { let mut x = 1; unsafe { stash(&mut x); } return x; }

@@ -1,0 +1,21 @@
+// Repro for bootstrap compiler bug: compiler hang when processing complex struct literals.
+
+struct S1 { a: u64, b: u64 }
+struct S2 { s1: S1, c: u64 }
+struct S3 { s2: S2, d: u64, e: *mut S1 }
+
+fn test() -> S3 {
+    return S3 {
+        s2: S2 {
+            s1: S1 { a: 1, b: 2 },
+            c: 3,
+        },
+        d: 4,
+        e: 0 as *mut S1,
+    };
+}
+
+fn main() -> i32 {
+    let s = test();
+    return 0;
+}

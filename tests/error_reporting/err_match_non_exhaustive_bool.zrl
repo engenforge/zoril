@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: error: non-exhaustive match: missing case 'false'
+fn test_bool(b: bool) -> i32 {
+    return match b {
+        true => 1,
+    };
+}
+
+fn main() -> i32 {
+    return test_bool(true);
+}

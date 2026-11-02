@@ -1,0 +1,800 @@
+import "il_type.zrl";
+use il_type::Region;
+
+// IL Instruction definitions.
+// Uses SSA (Static Single Assignment) form.
+
+pub const NO_SSA: u32 = 0xffffffff;
+pub const NO_TYPE: u32 = 0;
+pub const NO_BLOCK: u32 = 0xffffffff;
+pub const NO_FUNC: u32 = 0xffffffff;
+pub const NO_DECL: u32 = 0xffffffff;
+
+// Aliases for self-hosted names
+pub const IL_INSTR_GETENV: u32 = 64;
+pub const IL_INSTR_ADD: u32 = 0;
+pub const IL_INSTR_SUB: u32 = 1;
+pub const IL_INSTR_MUL: u32 = 2;
+pub const IL_INSTR_DIV: u32 = 3;
+pub const IL_INSTR_REM: u32 = 4;
+pub const IL_INSTR_AND: u32 = 5;
+pub const IL_INSTR_OR: u32 = 6;
+pub const IL_INSTR_XOR: u32 = 7;
+pub const IL_INSTR_SHL: u32 = 8;
+pub const IL_INSTR_SHR: u32 = 9;
+pub const IL_INSTR_CMP_LT: u32 = 10;
+pub const IL_INSTR_CMP_LE: u32 = 11;
+pub const IL_INSTR_CMP_GT: u32 = 12;
+pub const IL_INSTR_CMP_GE: u32 = 13;
+pub const IL_INSTR_CMP_EQ: u32 = 14;
+pub const IL_INSTR_CMP_NE: u32 = 15;
+pub const IL_INSTR_WRAPPING_ADD: u32 = 16;
+pub const IL_INSTR_WRAPPING_SUB: u32 = 17;
+pub const IL_INSTR_WRAPPING_MUL: u32 = 18;
+pub const IL_INSTR_SATURATING_ADD: u32 = 19;
+pub const IL_INSTR_CHECKED_ADD: u32 = 20;
+pub const IL_INSTR_CHECKED_SUB: u32 = 21;
+pub const IL_INSTR_CHECKED_MUL: u32 = 22;
+pub const IL_INSTR_ALLOC: u32 = 23;
+pub const IL_INSTR_LOAD: u32 = 24;
+pub const IL_INSTR_STORE: u32 = 25;
+pub const IL_INSTR_DROP: u32 = 26;
+pub const IL_INSTR_BOUNDS_CHECK: u32 = 27;
+pub const IL_INSTR_SLICE_LOAD: u32 = 28;
+pub const IL_INSTR_SLICE_STORE: u32 = 29;
+pub const IL_INSTR_SLICE_LEN: u32 = 30;
+pub const IL_INSTR_SLICE_CONSTRUCT: u32 = 31;
+pub const IL_INSTR_ARRAY_CONSTRUCT: u32 = 32;
+pub const IL_INSTR_ARRAY_LOAD: u32 = 33;
+pub const IL_INSTR_ARRAY_STORE: u32 = 34;
+pub const IL_INSTR_MOVE: u32 = 35;
+pub const IL_INSTR_REGION_CAST: u32 = 36;
+pub const IL_INSTR_IS_SOME: u32 = 37;
+pub const IL_INSTR_UNWRAP: u32 = 38;
+pub const IL_INSTR_CALL: u32 = 39;
+pub const IL_INSTR_RET: u32 = 40;
+pub const IL_INSTR_BRANCH: u32 = 41;
+pub const IL_INSTR_JMP: u32 = 42;
+pub const IL_INSTR_GLOBAL_ADDR: u32 = 43;
+pub const IL_INSTR_FIELD_ADDR: u32 = 44;
+pub const IL_INSTR_VARIANT_MATCH: u32 = 45;
+pub const IL_INSTR_SUM_CONSTRUCT: u32 = 46;
+pub const IL_INSTR_SYSCALL: u32 = 47;
+pub const IL_INSTR_CONST: u32 = 48;
+pub const IL_INSTR_PHI: u32 = 49;
+pub const IL_INSTR_STRING_CONST: u32 = 50;
+pub const IL_INSTR_CALL_PTR: u32 = 51;
+pub const IL_INSTR_FUNC_ADDR: u32 = 52;
+pub const IL_INSTR_FDOPEN: u32 = 53;
+pub const IL_INSTR_FDCLOSE: u32 = 54;
+pub const IL_INSTR_FDREAD: u32 = 55;
+pub const IL_INSTR_FDWRITE: u32 = 56;
+pub const IL_INSTR_IORING_SETUP: u32 = 57;
+pub const IL_INSTR_IORING_ENTER: u32 = 58;
+pub const IL_INSTR_IORING_CLOSE: u32 = 59;
+
+// Extension opcodes
+pub const IL_INSTR_PARAM: u32 = 60;
+pub const IL_INSTR_LIKELY: u32 = 61;
+pub const IL_INSTR_UNLIKELY: u32 = 62;
+pub const IL_INSTR_CAST: u32 = 63;
+pub const IL_INSTR_END_BORROW: u32 = 65;
+pub const IL_INSTR_RELEASE: u32 = 66;
+pub const IL_INSTR_NEG: u32 = 67;
+pub const IL_INSTR_NOT: u32 = 68;
+pub const IL_INSTR_STRUCT_CONSTRUCT: u32 = 69;
+pub const IL_INSTR_TUPLE_CONSTRUCT: u32 = 70;
+pub const IL_INSTR_BORROW: u32 = 71;
+pub const IL_INSTR_UNREACHABLE: u32 = 72;
+
+pub type SSAId = u32;
+pub type BlockId = u32;
+
+pub struct ILBinaryOp {
+    pub lhs: SSAId,
+    pub rhs: SSAId,
+}
+
+pub struct BorrowInstr {
+    pub val: SSAId,
+    pub is_mut: bool,
+}
+
+pub enum ILInstr {
+    Add(ILBinaryOp), // 0
+    Sub(ILBinaryOp), // 1
+    Mul(ILBinaryOp), // 2
+    Div(ILBinaryOp), // 3
+    Rem(ILBinaryOp), // 4
+    And(ILBinaryOp), // 5
+    Or(ILBinaryOp), // 6
+    Xor(ILBinaryOp), // 7
+    Shl(ILBinaryOp), // 8
+    Shr(ILBinaryOp), // 9
+    CmpLt(ILBinaryOp), // 10
+    CmpLe(ILBinaryOp), // 11
+    CmpGt(ILBinaryOp), // 12
+    CmpGe(ILBinaryOp), // 13
+    CmpEq(ILBinaryOp), // 14
+    CmpNe(ILBinaryOp), // 15
+    WrappingAdd(ILBinaryOp), // 16
+    WrappingSub(ILBinaryOp), // 17
+    WrappingMul(ILBinaryOp), // 18
+    SaturatingAdd(ILBinaryOp), // 19
+    CheckedAdd(ILBinaryOp), // 20
+    CheckedSub(ILBinaryOp), // 21
+    CheckedMul(ILBinaryOp), // 22
+    Alloc(AllocInstr), // 23
+    Load(SSAId), // 24
+    Store(StoreInstr), // 25
+    Drop(SSAId), // 26
+    BoundsCheck(BoundsCheckInstr), // 27
+    SliceLoad(IndexInstr), // 28
+    SliceStore(IndexStoreInstr), // 29
+    SliceLen(SSAId), // 30
+    SliceConstruct(SliceConstructInstr), // 31
+    ArrayConstruct([SSAId]), // 32
+    ArrayLoad(IndexInstr), // 33
+    ArrayStore(IndexStoreInstr), // 34
+    Move(SSAId), // 35
+    RegionCast(RegionCastInstr), // 36
+    IsSome(SSAId), // 37
+    Unwrap(SSAId), // 38
+    Call(CallInstr), // 39
+    Ret(SSAId), // 40
+    Branch(BranchInstr), // 41
+    Jmp(BlockId), // 42
+    GlobalAddr(u32), // 43
+    FieldAddr(FieldAddrInstr), // 44
+    VariantMatch(VariantMatchInstr), // 45
+    SumConstruct(SumConstructInstr), // 46
+    Syscall(SyscallInstr), // 47
+    Const(ConstInstr), // 48
+    Phi(PhiInstr), // 49
+    StringConst([u8]), // 50
+    CallPtr(CallPtrInstr), // 51
+    FuncAddr(u32), // 52
+    FDOpen(FDOpenInstr), // 53
+    FDClose(SSAId), // 54
+    FDRead(FDIOInstr), // 55
+    FDWrite(FDIOInstr), // 56
+    IORingSetup(SSAId), // 57
+    IORingEnter(IORingEnterInstr), // 58
+    IORingClose(SSAId), // 59
+
+    // Extensions
+    Param(u32), // 60
+    Likely(SSAId), // 61
+    Unlikely(SSAId), // 62
+    Cast(CastInstr), // 63
+    GetEnv, // 64
+    EndBorrow(SSAId), // 65
+    Release(SSAId), // 66
+    Neg(SSAId), // 67
+    Not(SSAId), // 68
+    StructConstruct(StructConstructInstr), // 69
+    TupleConstruct([SSAId]), // 70
+    Borrow(BorrowInstr), // 71
+    // Control never reaches here (after a call that exits). Ends a block with no successor.
+    Unreachable, // 72
+}
+
+pub struct CastInstr {
+    pub val: SSAId,
+    pub target_ty: u32,
+}
+
+pub struct AllocInstr {
+    pub region: Region,
+    pub ty: u32, // Index to ILType
+    pub allocator: SSAId, // 0 if default
+}
+
+pub struct StoreInstr {
+    pub ptr: SSAId,
+    pub val: SSAId,
+}
+
+pub struct BoundsCheckInstr {
+    pub idx: SSAId,
+    pub len: SSAId,
+}
+
+pub struct RegionCastInstr {
+    pub val: SSAId,
+    pub region: Region,
+}
+
+pub struct IndexInstr {
+    pub base: SSAId,
+    pub idx: SSAId,
+}
+
+pub struct IndexStoreInstr {
+    pub base: SSAId,
+    pub idx: SSAId,
+    pub val: SSAId,
+}
+
+pub struct SliceConstructInstr {
+    pub ptr: SSAId,
+    pub len: SSAId,
+}
+
+pub struct VariantMatchInstr {
+    pub val: SSAId,
+    pub type_id: u32,
+    pub variant_idx: u32,
+}
+
+pub struct SumConstructInstr {
+    pub type_id: u32,
+    pub variant_idx: u32,
+    pub payload: SSAId,
+}
+
+pub struct CallInstr {
+    pub args: [SSAId],
+    pub name_id: u32,
+    pub is_extern: bool,
+    // The callee's index in ILModule.functions, or CALL_BY_NAME: the name alone does not say
+    // which of two modules' same-named functions is meant.
+    pub func_idx: u32,
+}
+
+// CallInstr.func_idx of a call known only by name (a runtime or extern function).
+pub const CALL_BY_NAME: u32 = 0xffffffff;
+
+pub struct CallPtrInstr {
+    pub args: [SSAId],
+    pub func_ptr: SSAId,
+}
+
+pub struct BranchInstr {
+    pub cond: SSAId,
+    pub then_block: BlockId,
+    pub else_block: BlockId,
+}
+
+pub enum ConstValue {
+    U64(u64),
+    F64(u64),
+    Bool(u64),
+}
+
+pub struct ConstInstr {
+    pub val: ConstValue,
+    pub ty: u32, // Index to ILType
+}
+
+pub struct PhiInstr {
+    pub preds: [PhiPred],
+}
+
+pub struct PhiPred {
+    pub block: BlockId,
+    pub val: SSAId,
+}
+
+pub struct FieldAddrInstr {
+    pub val: SSAId,
+    pub field_idx: u32,
+}
+
+pub struct StructConstructInstr {
+    pub ty: u32, // Struct type ID
+    pub fields: [SSAId],
+}
+
+pub struct SyscallInstr {
+    pub num: SSAId,
+    pub args: [SSAId],
+}
+
+pub struct FDOpenInstr {
+    pub path: SSAId,
+    pub flags: u64,
+    pub mode: u64,
+}
+
+pub struct FDIOInstr {
+    pub fd: SSAId,
+    pub buf: SSAId,
+    pub count: SSAId,
+}
+
+pub struct IORingEnterInstr {
+    pub ring: SSAId,
+    pub to_submit: u32,
+    pub min_complete: u32,
+}
+
+impl ILInstr {
+    pub fn get_tag(self: &ILInstr) -> u32 { return unsafe { *(self as *u32) }; }
+    pub fn get_Add(self: &ILInstr) -> &ILBinaryOp {
+        return match self {
+            ILInstr.Add(x)
+                | ILInstr.Sub(x)
+                | ILInstr.Mul(x)
+                | ILInstr.Div(x)
+                | ILInstr.Rem(x)
+                | ILInstr.And(x)
+                | ILInstr.Or(x)
+                | ILInstr.Xor(x)
+                | ILInstr.Shl(x)
+                | ILInstr.Shr(x)
+                | ILInstr.CmpLt(x)
+                | ILInstr.CmpLe(x)
+                | ILInstr.CmpGt(x)
+                | ILInstr.CmpGe(x)
+                | ILInstr.CmpEq(x)
+                | ILInstr.CmpNe(x)
+                | ILInstr.WrappingAdd(x)
+                | ILInstr.WrappingSub(x)
+                | ILInstr.WrappingMul(x)
+                | ILInstr.SaturatingAdd(x)
+                | ILInstr.CheckedAdd(x)
+                | ILInstr.CheckedSub(x)
+                | ILInstr.CheckedMul(x) => x,
+            _ => ICE("ILInstr.get_Add on another variant")
+        };
+    }
+    pub fn get_Sub(self: &ILInstr) -> &ILBinaryOp {
+        return match self {
+            ILInstr.Add(x)
+                | ILInstr.Sub(x)
+                | ILInstr.Mul(x)
+                | ILInstr.Div(x)
+                | ILInstr.Rem(x)
+                | ILInstr.And(x)
+                | ILInstr.Or(x)
+                | ILInstr.Xor(x)
+                | ILInstr.Shl(x)
+                | ILInstr.Shr(x)
+                | ILInstr.CmpLt(x)
+                | ILInstr.CmpLe(x)
+                | ILInstr.CmpGt(x)
+                | ILInstr.CmpGe(x)
+                | ILInstr.CmpEq(x)
+                | ILInstr.CmpNe(x)
+                | ILInstr.WrappingAdd(x)
+                | ILInstr.WrappingSub(x)
+                | ILInstr.WrappingMul(x)
+                | ILInstr.SaturatingAdd(x)
+                | ILInstr.CheckedAdd(x)
+                | ILInstr.CheckedSub(x)
+                | ILInstr.CheckedMul(x) => x,
+            _ => ICE("ILInstr.get_Sub on another variant")
+        };
+    }
+    pub fn get_Mul(self: &ILInstr) -> &ILBinaryOp {
+        return match self {
+            ILInstr.Add(x)
+                | ILInstr.Sub(x)
+                | ILInstr.Mul(x)
+                | ILInstr.Div(x)
+                | ILInstr.Rem(x)
+                | ILInstr.And(x)
+                | ILInstr.Or(x)
+                | ILInstr.Xor(x)
+                | ILInstr.Shl(x)
+                | ILInstr.Shr(x)
+                | ILInstr.CmpLt(x)
+                | ILInstr.CmpLe(x)
+                | ILInstr.CmpGt(x)
+                | ILInstr.CmpGe(x)
+                | ILInstr.CmpEq(x)
+                | ILInstr.CmpNe(x)
+                | ILInstr.WrappingAdd(x)
+                | ILInstr.WrappingSub(x)
+                | ILInstr.WrappingMul(x)
+                | ILInstr.SaturatingAdd(x)
+                | ILInstr.CheckedAdd(x)
+                | ILInstr.CheckedSub(x)
+                | ILInstr.CheckedMul(x) => x,
+            _ => ICE("ILInstr.get_Mul on another variant")
+        };
+    }
+    pub fn get_Neg(self: &ILInstr) -> SSAId {
+        return match self {
+            ILInstr.Load(x)
+                | ILInstr.Drop(x)
+                | ILInstr.SliceLen(x)
+                | ILInstr.Move(x)
+                | ILInstr.IsSome(x)
+                | ILInstr.Unwrap(x)
+                | ILInstr.Ret(x)
+                | ILInstr.FDClose(x)
+                | ILInstr.IORingSetup(x)
+                | ILInstr.IORingClose(x)
+                | ILInstr.Likely(x)
+                | ILInstr.Unlikely(x)
+                | ILInstr.EndBorrow(x)
+                | ILInstr.Release(x)
+                | ILInstr.Neg(x)
+                | ILInstr.Not(x) => *x,
+            _ => ICE("ILInstr.get_Neg on another variant")
+        };
+    }
+    pub fn get_Not(self: &ILInstr) -> SSAId {
+        return match self {
+            ILInstr.Load(x)
+                | ILInstr.Drop(x)
+                | ILInstr.SliceLen(x)
+                | ILInstr.Move(x)
+                | ILInstr.IsSome(x)
+                | ILInstr.Unwrap(x)
+                | ILInstr.Ret(x)
+                | ILInstr.FDClose(x)
+                | ILInstr.IORingSetup(x)
+                | ILInstr.IORingClose(x)
+                | ILInstr.Likely(x)
+                | ILInstr.Unlikely(x)
+                | ILInstr.EndBorrow(x)
+                | ILInstr.Release(x)
+                | ILInstr.Neg(x)
+                | ILInstr.Not(x) => *x,
+            _ => ICE("ILInstr.get_Not on another variant")
+        };
+    }
+    pub fn get_CmpEq(self: &ILInstr) -> &ILBinaryOp {
+        return match self {
+            ILInstr.Add(x)
+                | ILInstr.Sub(x)
+                | ILInstr.Mul(x)
+                | ILInstr.Div(x)
+                | ILInstr.Rem(x)
+                | ILInstr.And(x)
+                | ILInstr.Or(x)
+                | ILInstr.Xor(x)
+                | ILInstr.Shl(x)
+                | ILInstr.Shr(x)
+                | ILInstr.CmpLt(x)
+                | ILInstr.CmpLe(x)
+                | ILInstr.CmpGt(x)
+                | ILInstr.CmpGe(x)
+                | ILInstr.CmpEq(x)
+                | ILInstr.CmpNe(x)
+                | ILInstr.WrappingAdd(x)
+                | ILInstr.WrappingSub(x)
+                | ILInstr.WrappingMul(x)
+                | ILInstr.SaturatingAdd(x)
+                | ILInstr.CheckedAdd(x)
+                | ILInstr.CheckedSub(x)
+                | ILInstr.CheckedMul(x) => x,
+            _ => ICE("ILInstr.get_CmpEq on another variant")
+        };
+    }
+    pub fn get_Alloc(self: &ILInstr) -> &AllocInstr {
+        return match self {
+            ILInstr.Alloc(x) => x,
+            _ => ICE("ILInstr.get_Alloc on another variant")
+        };
+    }
+    pub fn get_Load(self: &ILInstr) -> SSAId {
+        return match self {
+            ILInstr.Load(x)
+                | ILInstr.Drop(x)
+                | ILInstr.SliceLen(x)
+                | ILInstr.Move(x)
+                | ILInstr.IsSome(x)
+                | ILInstr.Unwrap(x)
+                | ILInstr.Ret(x)
+                | ILInstr.FDClose(x)
+                | ILInstr.IORingSetup(x)
+                | ILInstr.IORingClose(x)
+                | ILInstr.Likely(x)
+                | ILInstr.Unlikely(x)
+                | ILInstr.EndBorrow(x)
+                | ILInstr.Release(x)
+                | ILInstr.Neg(x)
+                | ILInstr.Not(x) => *x,
+            _ => ICE("ILInstr.get_Load on another variant")
+        };
+    }
+    pub fn get_Store(self: &ILInstr) -> &StoreInstr {
+        return match self {
+            ILInstr.Store(x) => x,
+            _ => ICE("ILInstr.get_Store on another variant")
+        };
+    }
+    pub fn get_Move(self: &ILInstr) -> SSAId {
+        return match self {
+            ILInstr.Load(x)
+                | ILInstr.Drop(x)
+                | ILInstr.SliceLen(x)
+                | ILInstr.Move(x)
+                | ILInstr.IsSome(x)
+                | ILInstr.Unwrap(x)
+                | ILInstr.Ret(x)
+                | ILInstr.FDClose(x)
+                | ILInstr.IORingSetup(x)
+                | ILInstr.IORingClose(x)
+                | ILInstr.Likely(x)
+                | ILInstr.Unlikely(x)
+                | ILInstr.EndBorrow(x)
+                | ILInstr.Release(x)
+                | ILInstr.Neg(x)
+                | ILInstr.Not(x) => *x,
+            _ => ICE("ILInstr.get_Move on another variant")
+        };
+    }
+    pub fn get_SliceLoad(self: &ILInstr) -> &IndexInstr {
+        return match self {
+            ILInstr.SliceLoad(x) | ILInstr.ArrayLoad(x) => x,
+            _ => ICE("ILInstr.get_SliceLoad on another variant")
+        };
+    }
+    pub fn get_SliceStore(self: &ILInstr) -> &IndexStoreInstr {
+        return match self {
+            ILInstr.SliceStore(x) | ILInstr.ArrayStore(x) => x,
+            _ => ICE("ILInstr.get_SliceStore on another variant")
+        };
+    }
+    pub fn get_SliceLen(self: &ILInstr) -> SSAId {
+        return match self {
+            ILInstr.Load(x)
+                | ILInstr.Drop(x)
+                | ILInstr.SliceLen(x)
+                | ILInstr.Move(x)
+                | ILInstr.IsSome(x)
+                | ILInstr.Unwrap(x)
+                | ILInstr.Ret(x)
+                | ILInstr.FDClose(x)
+                | ILInstr.IORingSetup(x)
+                | ILInstr.IORingClose(x)
+                | ILInstr.Likely(x)
+                | ILInstr.Unlikely(x)
+                | ILInstr.EndBorrow(x)
+                | ILInstr.Release(x)
+                | ILInstr.Neg(x)
+                | ILInstr.Not(x) => *x,
+            _ => ICE("ILInstr.get_SliceLen on another variant")
+        };
+    }
+    pub fn get_SliceConstruct(self: &ILInstr) -> &SliceConstructInstr {
+        return match self {
+            ILInstr.SliceConstruct(x) => x,
+            _ => ICE("ILInstr.get_SliceConstruct on another variant")
+        };
+    }
+    pub fn get_ArrayConstruct(self: &ILInstr) -> [SSAId] {
+        return match self {
+            ILInstr.ArrayConstruct(x) | ILInstr.TupleConstruct(x) => *x,
+            _ => ICE("ILInstr.get_ArrayConstruct on another variant")
+        };
+    }
+    pub fn get_ArrayLoad(self: &ILInstr) -> &IndexInstr {
+        return match self {
+            ILInstr.SliceLoad(x) | ILInstr.ArrayLoad(x) => x,
+            _ => ICE("ILInstr.get_ArrayLoad on another variant")
+        };
+    }
+    pub fn get_ArrayStore(self: &ILInstr) -> &IndexStoreInstr {
+        return match self {
+            ILInstr.SliceStore(x) | ILInstr.ArrayStore(x) => x,
+            _ => ICE("ILInstr.get_ArrayStore on another variant")
+        };
+    }
+    pub fn get_Unwrap(self: &ILInstr) -> SSAId {
+        return match self {
+            ILInstr.Load(x)
+                | ILInstr.Drop(x)
+                | ILInstr.SliceLen(x)
+                | ILInstr.Move(x)
+                | ILInstr.IsSome(x)
+                | ILInstr.Unwrap(x)
+                | ILInstr.Ret(x)
+                | ILInstr.FDClose(x)
+                | ILInstr.IORingSetup(x)
+                | ILInstr.IORingClose(x)
+                | ILInstr.Likely(x)
+                | ILInstr.Unlikely(x)
+                | ILInstr.EndBorrow(x)
+                | ILInstr.Release(x)
+                | ILInstr.Neg(x)
+                | ILInstr.Not(x) => *x,
+            _ => ICE("ILInstr.get_Unwrap on another variant")
+        };
+    }
+    pub fn get_VariantMatch(self: &ILInstr) -> &VariantMatchInstr {
+        return match self {
+            ILInstr.VariantMatch(x) => x,
+            _ => ICE("ILInstr.get_VariantMatch on another variant")
+        };
+    }
+    pub fn get_SumConstruct(self: &ILInstr) -> &SumConstructInstr {
+        return match self {
+            ILInstr.SumConstruct(x) => x,
+            _ => ICE("ILInstr.get_SumConstruct on another variant")
+        };
+    }
+    pub fn get_Call(self: &ILInstr) -> &CallInstr {
+        return match self { ILInstr.Call(x) => x, _ => ICE("ILInstr.get_Call on another variant") };
+    }
+    pub fn get_CallPtr(self: &ILInstr) -> &CallPtrInstr {
+        return match self {
+            ILInstr.CallPtr(x) => x,
+            _ => ICE("ILInstr.get_CallPtr on another variant")
+        };
+    }
+    pub fn get_Branch(self: &ILInstr) -> &BranchInstr {
+        return match self {
+            ILInstr.Branch(x) => x,
+            _ => ICE("ILInstr.get_Branch on another variant")
+        };
+    }
+    pub fn get_Jmp(self: &ILInstr) -> BlockId {
+        return match self { ILInstr.Jmp(x) => *x, _ => ICE("ILInstr.get_Jmp on another variant") };
+    }
+    pub fn get_Const(self: &ILInstr) -> &ConstInstr {
+        return match self {
+            ILInstr.Const(x) => x,
+            _ => ICE("ILInstr.get_Const on another variant")
+        };
+    }
+    pub fn get_GlobalAddr(self: &ILInstr) -> u32 {
+        return match self {
+            ILInstr.GlobalAddr(x) | ILInstr.FuncAddr(x) | ILInstr.Param(x) => *x,
+            _ => ICE("ILInstr.get_GlobalAddr on another variant")
+        };
+    }
+    pub fn get_FuncAddr(self: &ILInstr) -> u32 {
+        return match self {
+            ILInstr.GlobalAddr(x) | ILInstr.FuncAddr(x) | ILInstr.Param(x) => *x,
+            _ => ICE("ILInstr.get_FuncAddr on another variant")
+        };
+    }
+    pub fn get_FieldAddr(self: &ILInstr) -> &FieldAddrInstr {
+        return match self {
+            ILInstr.FieldAddr(x) => x,
+            _ => ICE("ILInstr.get_FieldAddr on another variant")
+        };
+    }
+    pub fn get_StructConstruct(self: &ILInstr) -> &StructConstructInstr {
+        return match self {
+            ILInstr.StructConstruct(x) => x,
+            _ => ICE("ILInstr.get_StructConstruct on another variant")
+        };
+    }
+    pub fn get_TupleConstruct(self: &ILInstr) -> [SSAId] {
+        return match self {
+            ILInstr.ArrayConstruct(x) | ILInstr.TupleConstruct(x) => *x,
+            _ => ICE("ILInstr.get_TupleConstruct on another variant")
+        };
+    }
+    pub fn get_StringConst(self: &ILInstr) -> [u8] {
+        return match self {
+            ILInstr.StringConst(x) => *x,
+            _ => ICE("ILInstr.get_StringConst on another variant")
+        };
+    }
+    pub fn get_Syscall(self: &ILInstr) -> &SyscallInstr {
+        return match self {
+            ILInstr.Syscall(x) => x,
+            _ => ICE("ILInstr.get_Syscall on another variant")
+        };
+    }
+    pub fn get_Phi(self: &ILInstr) -> &PhiInstr {
+        return match self { ILInstr.Phi(x) => x, _ => ICE("ILInstr.get_Phi on another variant") };
+    }
+    pub fn get_Ret(self: &ILInstr) -> SSAId {
+        return match self {
+            ILInstr.Load(x)
+                | ILInstr.Drop(x)
+                | ILInstr.SliceLen(x)
+                | ILInstr.Move(x)
+                | ILInstr.IsSome(x)
+                | ILInstr.Unwrap(x)
+                | ILInstr.Ret(x)
+                | ILInstr.FDClose(x)
+                | ILInstr.IORingSetup(x)
+                | ILInstr.IORingClose(x)
+                | ILInstr.Likely(x)
+                | ILInstr.Unlikely(x)
+                | ILInstr.EndBorrow(x)
+                | ILInstr.Release(x)
+                | ILInstr.Neg(x)
+                | ILInstr.Not(x) => *x,
+            _ => ICE("ILInstr.get_Ret on another variant")
+        };
+    }
+    pub fn get_Param(self: &ILInstr) -> u32 {
+        return match self {
+            ILInstr.GlobalAddr(x) | ILInstr.FuncAddr(x) | ILInstr.Param(x) => *x,
+            _ => ICE("ILInstr.get_Param on another variant")
+        };
+    }
+    pub fn get_FDOpen(self: &ILInstr) -> &FDOpenInstr {
+        return match self {
+            ILInstr.FDOpen(x) => x,
+            _ => ICE("ILInstr.get_FDOpen on another variant")
+        };
+    }
+    pub fn get_FDClose(self: &ILInstr) -> SSAId {
+        return match self {
+            ILInstr.Load(x)
+                | ILInstr.Drop(x)
+                | ILInstr.SliceLen(x)
+                | ILInstr.Move(x)
+                | ILInstr.IsSome(x)
+                | ILInstr.Unwrap(x)
+                | ILInstr.Ret(x)
+                | ILInstr.FDClose(x)
+                | ILInstr.IORingSetup(x)
+                | ILInstr.IORingClose(x)
+                | ILInstr.Likely(x)
+                | ILInstr.Unlikely(x)
+                | ILInstr.EndBorrow(x)
+                | ILInstr.Release(x)
+                | ILInstr.Neg(x)
+                | ILInstr.Not(x) => *x,
+            _ => ICE("ILInstr.get_FDClose on another variant")
+        };
+    }
+    pub fn get_FDRead(self: &ILInstr) -> &FDIOInstr {
+        return match self {
+            ILInstr.FDRead(x) | ILInstr.FDWrite(x) => x,
+            _ => ICE("ILInstr.get_FDRead on another variant")
+        };
+    }
+    pub fn get_FDWrite(self: &ILInstr) -> &FDIOInstr {
+        return match self {
+            ILInstr.FDRead(x) | ILInstr.FDWrite(x) => x,
+            _ => ICE("ILInstr.get_FDWrite on another variant")
+        };
+    }
+    pub fn get_IORingSetup(self: &ILInstr) -> SSAId {
+        return match self {
+            ILInstr.Load(x)
+                | ILInstr.Drop(x)
+                | ILInstr.SliceLen(x)
+                | ILInstr.Move(x)
+                | ILInstr.IsSome(x)
+                | ILInstr.Unwrap(x)
+                | ILInstr.Ret(x)
+                | ILInstr.FDClose(x)
+                | ILInstr.IORingSetup(x)
+                | ILInstr.IORingClose(x)
+                | ILInstr.Likely(x)
+                | ILInstr.Unlikely(x)
+                | ILInstr.EndBorrow(x)
+                | ILInstr.Release(x)
+                | ILInstr.Neg(x)
+                | ILInstr.Not(x) => *x,
+            _ => ICE("ILInstr.get_IORingSetup on another variant")
+        };
+    }
+    pub fn get_IORingEnter(self: &ILInstr) -> &IORingEnterInstr {
+        return match self {
+            ILInstr.IORingEnter(x) => x,
+            _ => ICE("ILInstr.get_IORingEnter on another variant")
+        };
+    }
+    pub fn get_IORingClose(self: &ILInstr) -> SSAId {
+        return match self {
+            ILInstr.Load(x)
+                | ILInstr.Drop(x)
+                | ILInstr.SliceLen(x)
+                | ILInstr.Move(x)
+                | ILInstr.IsSome(x)
+                | ILInstr.Unwrap(x)
+                | ILInstr.Ret(x)
+                | ILInstr.FDClose(x)
+                | ILInstr.IORingSetup(x)
+                | ILInstr.IORingClose(x)
+                | ILInstr.Likely(x)
+                | ILInstr.Unlikely(x)
+                | ILInstr.EndBorrow(x)
+                | ILInstr.Release(x)
+                | ILInstr.Neg(x)
+                | ILInstr.Not(x) => *x,
+            _ => ICE("ILInstr.get_IORingClose on another variant")
+        };
+    }
+    pub fn get_Cast(self: &ILInstr) -> &CastInstr {
+        return match self { ILInstr.Cast(x) => x, _ => ICE("ILInstr.get_Cast on another variant") };
+    }
+}
+
+impl ConstValue {}
