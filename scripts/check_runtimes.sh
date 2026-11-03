@@ -38,6 +38,31 @@ else
     skip "build/runtime.o not built"
 fi
 
+# ── the runtime objects must carry a .note.GNU-stack section ─────────────────────
+# Without that note GNU ld assumes the object needs an executable stack and marks every program
+# that links it GNU_STACK RWE (newer binutils also warn about it at every link). The note is an
+# empty section, so its presence is read straight from the object's section table: that fails the
+# same way on every host, whether or not the linker in use warns about it.
+has_stack_note() {
+    readelf -SW "$1" 2>/dev/null | grep -qF '.note.GNU-stack'
+}
+if command -v readelf >/dev/null 2>&1; then
+    for _o in build/runtime.o build/runtime_hosted.o; do
+        if [ -f "$_o" ]; then
+            if has_stack_note "$_o"; then
+                ok "$_o has a .note.GNU-stack section (programs linking it get a non-executable stack)"
+            else
+                note "$_o has no .note.GNU-stack section — every program linked with it gets GNU_STACK RWE"
+                note "  (an executable stack). Add: .section .note.GNU-stack,\"\",@progbits to rt/runtime.s"
+            fi
+        else
+            skip "$_o not built"
+        fi
+    done
+else
+    skip "readelf not installed — cannot check the runtime objects for .note.GNU-stack"
+fi
+
 # ── scripts/env.sh must not hand hare a search path that looks set but is empty ─
 # Hare reads a set-but-empty HAREPATH as "no search path" and fails with "rt: Module not
 # found"; scripts/env.sh used to export "" when there is no Hare checkout, which broke every

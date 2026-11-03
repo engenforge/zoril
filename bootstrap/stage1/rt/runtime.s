@@ -455,3 +455,7 @@ realloc:
 .align 8
 os_argv: .zero 8
 os_argc: .zero 4
+
+# Mark the stack non-executable: without this note GNU ld assumes the object needs an executable stack
+# and links every program GNU_STACK RWE.
+.section .note.GNU-stack,"",@progbits
