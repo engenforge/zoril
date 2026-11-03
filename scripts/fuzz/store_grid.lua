@@ -3,12 +3,19 @@
 -- skipping combinations that are not well-typed with explicit reasons.
 
 local sources = {"arena_vec", "local_vec", "string", "ref_local", "elem_ref", "closure_local"}
-local carriers = {"direct", "struct_field", "tuple_slot", "enum_payload", "box", "array_slot", "struct_val", "struct_scalar"}
+local carriers = {"direct", "struct_field", "tuple_slot", "enum_payload", "box", "array_slot", "struct_val", "struct_scalar", "arena_struct_bundle", "arena_tuple_bundle", "call_local", "call_method", "call_identity", "call_closure", "ref_direct", "ref_let", "ref_identity", "ref_phi"}
 local paths = {"direct", "helper", "two_level_helper", "method", "self_method", "trait_method", "closure", "fn_val", "mutual_rec", "param_65", "same_param", "store_mutual_rec", "store_param_65"}
 -- Note: 'global' destination was removed per S1.1 spec because non-scalar static mut
 -- requires 'unsafe' in Zoril, and cells must not use 'unsafe'.
 local destinations = {"deref_out", "field_out", "call_mut", "call_struct_mut", "closure_capture_mut", "closure_owned_capture", "local_field_assigned_out", "ten_copies", "return_val", "closure_call_mut"}
 local invalidations = {"frame_ends", "arena_reset", "vec_free", "push_growth", "drop", "move_owner"}
+
+-- Two-module mode (--generate-modular): the path's functions go into a module of their own,
+-- pathmod.zrl, which the cell imports, so the call crosses a module boundary and its summary comes
+-- from pathmod's interface (.zri), as under zbuild. Only paths whose callee is a free function qualify.
+local modular = false
+local modular_paths = {helper = true, two_level_helper = true, fn_val = true, mutual_rec = true,
+    param_65 = true, same_param = true, store_mutual_rec = true, store_param_65 = true}
 
 -- Check why a combination should be skipped
 local function get_skip_reason(s, c, p, d, inv)
@@ -30,6 +37,9 @@ local function get_skip_reason(s, c, p, d, inv)
     end
 
     -- Carrier constraints
+    if (c == "arena_struct_bundle" or c == "arena_tuple_bundle") and s ~= "arena_vec" then
+        return "an arena-bundling carrier needs an arena source"
+    end
     if c == "box" and (s == "ref_local" or s == "elem_ref") then
         return "box carrier of stack reference rejected at box creation"
     end
@@ -59,6 +69,10 @@ end
 local function generate_code(s, c, p, d, inv, is_safe_twin)
     local out = {}
     local function emit(line) table.insert(out, line) end
+    local mod_out = {}
+    local function emit_path(line)
+        if modular then table.insert(mod_out, "pub " .. line) else emit(line) end
+    end
 
     -- Determine payload type and imports
     local payload_type = "[i32]"
@@ -101,8 +115,34 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
     end
 
     -- Carrier struct definitions
-    if c == "struct_field" or c == "struct_val" then
+    -- The arena-bundling carriers (gap_31's shape): the arena moves into a struct literal or a tuple
+    -- beside a field that comes from a parameter, and the view is taken from the bundled arena. The
+    -- twin bundles a reference to the caller's arena instead.
+    if c == "arena_struct_bundle" then
+        if is_safe_twin then
+            emit('struct ArenaBundle { ext_tag: i32, a: &Arena }')
+        else
+            emit('struct ArenaBundle { ext_tag: i32, a: Arena }')
+        end
+    end
+    -- A carrier a call produced (call_*), or a reference to a carrier that a callee reads (ref_*).
+    local is_call_carrier = (c == "call_local" or c == "call_method" or c == "call_identity" or c == "call_closure")
+    local is_ref_carrier = (c == "ref_direct" or c == "ref_let" or c == "ref_identity" or c == "ref_phi")
+    if c == "struct_field" or c == "struct_val" or is_call_carrier or is_ref_carrier then
         emit('struct Carrier { v: ' .. payload_type .. ' }')
+        if c == "call_local" then
+            emit('fn make_carrier(v: ' .. payload_type .. ') -> Carrier { return Carrier { v: v }; }')
+        elseif c == "call_method" then
+            emit('struct CarrierMaker { x: i32 }')
+            emit('impl CarrierMaker { fn make(self: &CarrierMaker, v: ' .. payload_type .. ') -> Carrier { return Carrier { v: v }; } }')
+        elseif c == "call_identity" then
+            emit('fn id_carrier(c: Carrier) -> Carrier { return c; }')
+        elseif is_ref_carrier then
+            emit('fn take_ref(c: &Carrier) -> ' .. payload_type .. ' { return c.v; }')
+            if c == "ref_identity" then
+                emit('fn id_ref(c: &Carrier) -> &Carrier { return c; }')
+            end
+        end
         if c == "struct_val" then
             emit('fn extract_carrier_val(co: Carrier) -> ' .. payload_type .. ' { return co.v; }')
         end
@@ -136,10 +176,10 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
 
     -- Helper functions for paths
     if p == "helper" then
-        emit('fn forward_helper(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; }')
+        emit_path('fn forward_helper(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; }')
     elseif p == "two_level_helper" then
-        emit('fn helper_inner(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; }')
-        emit('fn helper_outer(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return helper_inner(v); }')
+        emit_path('fn helper_inner(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; }')
+        emit_path('fn helper_outer(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return helper_inner(v); }')
     elseif p == "method" then
         emit('struct MethodPass { x: i32 }')
         emit('impl MethodPass { fn forward(self: &MethodPass, v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; } }')
@@ -151,30 +191,30 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
         emit('struct TraitImpl { x: i32 }')
         emit('impl StorerTrait for TraitImpl { fn forward(self: &TraitImpl, v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; } }')
     elseif p == "fn_val" then
-        emit('fn forward_fn_target(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; }')
+        emit_path('fn forward_fn_target(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; }')
     elseif p == "mutual_rec" then
-        emit('fn rec_a(depth: i32, v: ' .. payload_type .. ') -> ' .. payload_type .. ' { if depth > 0 { return rec_b(depth - 1, v); } return v; }')
-        emit('fn rec_b(depth: i32, v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return rec_a(depth, v); }')
+        emit_path('fn rec_a(depth: i32, v: ' .. payload_type .. ') -> ' .. payload_type .. ' { if depth > 0 { return rec_b(depth - 1, v); } return v; }')
+        emit_path('fn rec_b(depth: i32, v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return rec_a(depth, v); }')
     elseif p == "param_65" then
         local p_args = ""
         for i = 1, 63 do p_args = p_args .. "_p" .. i .. ": i32, " end
         p_args = p_args .. "v: " .. payload_type
-        emit('fn pass_param65(' .. p_args .. ') -> ' .. payload_type .. ' { return v; }')
+        emit_path('fn pass_param65(' .. p_args .. ') -> ' .. payload_type .. ' { return v; }')
     elseif p == "store_mutual_rec" then
         -- The callee stores: the value reaches `*out` only after the recursion bottoms out.
-        emit('fn stash_a(out: &mut ' .. payload_type .. ', depth: i32, v: ' .. payload_type .. ') { if depth > 0 { stash_b(out, depth - 1, v); return; } *out = v; }')
-        emit('fn stash_b(out: &mut ' .. payload_type .. ', depth: i32, v: ' .. payload_type .. ') { stash_a(out, depth, v); }')
+        emit_path('fn stash_a(out: &mut ' .. payload_type .. ', depth: i32, v: ' .. payload_type .. ') { if depth > 0 { stash_b(out, depth - 1, v); return; } *out = v; }')
+        emit_path('fn stash_b(out: &mut ' .. payload_type .. ', depth: i32, v: ' .. payload_type .. ') { stash_a(out, depth, v); }')
     elseif p == "store_param_65" then
         -- The callee stores, and the value is its 65th parameter, past the 64-bit summary masks.
         local s_args = "out: &mut " .. payload_type .. ", "
         for i = 1, 63 do s_args = s_args .. "_p" .. i .. ": i32, " end
         s_args = s_args .. "v: " .. payload_type
-        emit('fn stash65(' .. s_args .. ') { *out = v; }')
+        emit_path('fn stash65(' .. s_args .. ') { *out = v; }')
     elseif p == "same_param" then
         if d == "field_out" then
-            emit('fn stash_pair(p: (&mut FieldDest, ' .. payload_type .. ')) { p.0.s = p.1; }')
+            emit_path('fn stash_pair(p: (&mut FieldDest, ' .. payload_type .. ')) { p.0.s = p.1; }')
         else
-            emit('fn stash_pair(p: (&mut ' .. payload_type .. ', ' .. payload_type .. ')) { *p.0 = p.1; }')
+            emit_path('fn stash_pair(p: (&mut ' .. payload_type .. ', ' .. payload_type .. ')) { *p.0 = p.1; }')
         end
     end
 
@@ -211,6 +251,14 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
             func_args = func_args .. "ref_param: &i32"
         end
     end
+    local is_bundle = (c == "arena_struct_bundle" or c == "arena_tuple_bundle")
+    if is_bundle then
+        if #func_args > 0 then func_args = func_args .. ", " end
+        func_args = func_args .. "ext_tag: i32"
+    end
+    -- How the bundled arena is named once it has moved into the bundle.
+    local bundled_arena = "b.a"
+    if c == "arena_tuple_bundle" then bundled_arena = "b.1" end
 
     local ret_sig = ""
     if ret_type ~= "void" then
@@ -230,7 +278,26 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
     end
 
     -- Step 1: Create the source value
-    if is_safe_twin then
+    if is_safe_twin and is_bundle then
+        if c == "arena_struct_bundle" then
+            emit('    let b = ArenaBundle { ext_tag: ext_tag, a: arena_param };')
+        else
+            emit('    let b = (ext_tag, arena_param);')
+        end
+        emit('    let mut v = Vec::<i32>.new_in(' .. bundled_arena .. ');')
+        emit('    v.push(42);')
+        emit('    let src_val = v.as_slice();')
+    elseif is_bundle then
+        emit('    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { ' .. err_ret .. ' } };')
+        if c == "arena_struct_bundle" then
+            emit('    let mut b = ArenaBundle { ext_tag: ext_tag, a: a };')
+        else
+            emit('    let mut b = (ext_tag, a);')
+        end
+        emit('    let mut v = Vec::<i32>.new_in(&' .. bundled_arena .. ');')
+        emit('    v.push(42);')
+        emit('    let src_val = v.as_slice();')
+    elseif is_safe_twin then
         if s == "arena_vec" or s == "local_vec" then
             emit('    let mut v = Vec::<i32>.new_in(arena_param);')
             emit('    v.push(42);')
@@ -269,7 +336,7 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
     end
 
     -- Step 2: Wrap in carrier
-    if c == "direct" then
+    if c == "direct" or is_bundle then
         emit('    let carried = src_val;')
     elseif c == "struct_field" then
         if is_slice then
@@ -316,6 +383,36 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
     elseif c == "struct_scalar" then
         emit('    let carrier_obj = CarrierScalar { v: src_val, tag: 1 };')
         emit('    let carried = carrier_obj.v;')
+    elseif c == "call_local" then
+        emit('    let carrier_obj = make_carrier(src_val);')
+        emit('    let carried = carrier_obj.v;')
+    elseif c == "call_method" then
+        emit('    let maker = CarrierMaker { x: 0 };')
+        emit('    let carrier_obj = maker.make(src_val);')
+        emit('    let carried = carrier_obj.v;')
+    elseif c == "call_identity" then
+        emit('    let carrier_obj = id_carrier(Carrier { v: src_val });')
+        emit('    let carried = carrier_obj.v;')
+    elseif c == "call_closure" then
+        emit('    let make_c = |item: ' .. payload_type .. '| -> Carrier { return Carrier { v: item }; };')
+        emit('    let carrier_obj = make_c(src_val);')
+        emit('    let carried = carrier_obj.v;')
+    elseif c == "ref_direct" then
+        emit('    let carrier_obj = Carrier { v: src_val };')
+        emit('    let carried = take_ref(&carrier_obj);')
+    elseif c == "ref_let" then
+        emit('    let carrier_obj = Carrier { v: src_val };')
+        emit('    let carrier_ref = &carrier_obj;')
+        emit('    let carried = take_ref(carrier_ref);')
+    elseif c == "ref_identity" then
+        emit('    let carrier_obj = Carrier { v: src_val };')
+        emit('    let carried = take_ref(id_ref(&carrier_obj));')
+    elseif c == "ref_phi" then
+        -- The branch depends on a call, so it is a real join of two references, not a folded one.
+        emit('    let carrier_obj = Carrier { v: src_val };')
+        emit('    let carrier_alt = Carrier { v: src_val };')
+        emit('    let carrier_ref = if clobber_stack() > 0 { &carrier_obj } else { &carrier_alt };')
+        emit('    let carried = take_ref(carrier_ref);')
     end
 
     -- Step 3: Route through path
@@ -432,7 +529,9 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
 
     -- Step 5: Invalidation inside storer (for reset, free, push, drop, move)
     if not is_safe_twin then
-        if inv == "arena_reset" then
+        if inv == "arena_reset" and is_bundle then
+            emit('    ' .. bundled_arena .. '.reset();')
+        elseif inv == "arena_reset" then
             emit('    a.reset();')
         elseif inv == "vec_free" then
             emit('    v.free();')
@@ -442,6 +541,8 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
             else
                 emit('    for i in 0..100 { v.push(i); }')
             end
+        elseif inv == "drop" and is_bundle then
+            emit('    @drop(b);')
         elseif inv == "drop" then
             if s == "arena_vec" then
                 emit('    @drop(a);')
@@ -452,6 +553,8 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
             elseif s == "closure_local" then
                 emit('    @drop(x);')
             end
+        elseif inv == "move_owner" and is_bundle then
+            emit('    sink(b);')
         elseif inv == "move_owner" then
             if s == "arena_vec" then
                 emit('    sink(a);')
@@ -484,6 +587,10 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
             emit('    let val_main = 42;')
             extra_arg = "&val_main"
         end
+    end
+    if is_bundle then
+        if #extra_arg > 0 then extra_arg = extra_arg .. ", " end
+        extra_arg = extra_arg .. "7"
     end
     if d == "return_val" then
         if #extra_arg > 0 then
@@ -576,7 +683,16 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
     end
     emit('}') -- end main
 
-    return table.concat(out, "\n") .. "\n"
+    if modular and #mod_out > 0 then
+        local uses = {}
+        for _, line in ipairs(mod_out) do
+            local name = line:match("^pub fn ([%w_]+)")
+            if name then table.insert(uses, 'use pathmod::' .. name .. ';') end
+        end
+        for i = #uses, 1, -1 do table.insert(out, 1, uses[i]) end
+        table.insert(out, 1, 'import "pathmod.zrl";')
+    end
+    return table.concat(out, "\n") .. "\n", table.concat(mod_out, "\n") .. "\n"
 end
 
 -- CLI Handler
@@ -601,6 +717,10 @@ while i <= #arg do
         target_cell = arg[i]
     elseif a == "--generate-all" then
         mode = "generate-all"
+        i = i + 1
+        target_dir = arg[i]
+    elseif a == "--generate-modular" then
+        mode = "generate-modular"
         i = i + 1
         target_dir = arg[i]
     else
@@ -692,4 +812,32 @@ elseif mode == "generate-all" then
     end
     manifest:close()
     print(string.format("Generated %d cell pairs in %s", #valid_cells, target_dir))
+elseif mode == "generate-modular" then
+    -- One directory per cell: pathmod.zrl (the path's functions), unsafe.zrl and twin.zrl (each
+    -- importing it). The cells are the direct carrier with the frame_ends invalidation, over every
+    -- source and destination, for each path whose callee is a free function: the routes the call
+    -- summary decides, without the grid's full product.
+    assert(target_dir, "Target directory required for --generate-modular")
+    modular = true
+    os.execute("mkdir -p " .. target_dir)
+    local manifest = io.open(target_dir .. "/manifest.txt", "w")
+    local count = 0
+    for _, id in ipairs(valid_cells) do
+        local s, c, p, d, inv = parse_cell_id(id)
+        if modular_paths[p] and c == "direct" and inv == "frame_ends" and (p ~= "same_param" or d == "deref_out") then
+            local dir = target_dir .. "/" .. id
+            os.execute("mkdir -p " .. dir)
+            local u_code, mod_code = generate_code(s, c, p, d, inv, false)
+            local t_code = generate_code(s, c, p, d, inv, true)
+            for name, text in pairs({["pathmod.zrl"] = mod_code, ["unsafe.zrl"] = u_code, ["twin.zrl"] = t_code}) do
+                local f = io.open(dir .. "/" .. name, "w")
+                f:write(text)
+                f:close()
+            end
+            manifest:write(id .. "\n")
+            count = count + 1
+        end
+    end
+    manifest:close()
+    print(string.format("Generated %d two-module cells in %s", count, target_dir))
 end

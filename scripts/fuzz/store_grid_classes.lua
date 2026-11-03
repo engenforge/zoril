@@ -33,7 +33,7 @@ if unsafe_accepted[base_id] then
 end
 
 local sources = {"arena_vec", "local_vec", "string", "ref_local", "elem_ref", "closure_local"}
-local carriers = {"direct", "struct_field", "tuple_slot", "enum_payload", "box", "array_slot", "struct_val", "struct_scalar"}
+local carriers = {"direct", "struct_field", "tuple_slot", "enum_payload", "box", "array_slot", "struct_val", "struct_scalar", "arena_struct_bundle", "arena_tuple_bundle", "call_local", "call_method", "call_identity", "call_closure", "ref_direct", "ref_let", "ref_identity", "ref_phi"}
 local paths = {"direct", "helper", "two_level_helper", "method", "self_method", "trait_method", "closure", "fn_val", "mutual_rec", "param_65", "same_param", "store_mutual_rec", "store_param_65"}
 local destinations = {"deref_out", "field_out", "call_mut", "call_struct_mut", "closure_capture_mut", "closure_owned_capture", "local_field_assigned_out", "ten_copies", "return_val", "closure_call_mut"}
 local invalidations = {"frame_ends", "arena_reset", "vec_free", "push_growth", "drop", "move_owner"}
