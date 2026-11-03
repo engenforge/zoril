@@ -9,12 +9,16 @@ date: 2026-11-03
 
 Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session and its setup; Z-0007 to Z-0012 are the hardening series that closes the open soundness holes (each is a check-in: stop for review after it); Z-0013 to Z-0017 follow. Deferred work is in `future.tm.md`. Every `+safety` task follows the safety rules in `AGENTS.md`: the rejection differential for a change that accepts more, and nothing beyond what the task names in the same commit.
 
-- [ ] +tests +docs Z-0001 The comment gate accepts source comments that name `doc/tasks`, `doc/design` and `.tm.md` files
+- [x] +tests +docs Z-0001 The comment gate accepts source comments that name `doc/tasks`, `doc/design` and `.tm.md` files
     > **Created:** 2026-11-03
+    > **Completed:** 2026-11-03 git:a5a8f1a
 
     - **Why:** rule 2b of `scripts/check_comment_noise.sh` fails a source comment naming `doc/tasks`, `doc/design` or any `.tm.md` file as a private document. Those paths are now part of the tree, so the first comment that cites a task turns `make test` red.
     - **Do:** remove `doc/tasks`, `doc/design` and `.tm.md` from rule 2b; the rule that a named path must exist in the tree still applies to them. Keep the directories the tree still does not carry (`doc/performance`, `doc/release`, `doc/archive`, `doc/stage0-C`). Update the self-tests in `scripts/test_check_comment_noise.sh` that assert the old behaviour (items 15-21); this changes what those tests expect, so say so in the commit message. Also update the comments elsewhere in `scripts/` that call these paths private (`check_md_tables.sh`, `check_fuzz_fresh.sh`, `test.sh`) where they now say something untrue.
     - **Verification:** a scratch comment naming `doc/tasks/active.tm.md` passes the gate, one naming a missing file still fails; `make test`.
+    - **Result:** rule 2b now lists only `doc/performance`, `doc/release`, `doc/archive` and `doc/stage0-C`; the `.tm.md` loop is gone, so `doc/tasks`, `doc/design` and `.tm.md` paths are held to the existence rule (2a). A bare directory (`doc/tasks`) or bare file name (`future.tm.md`) is not path-shaped and passes, like `doc/spec` or `README.md`. Self-test items 15-21 changed their expectations and the suite went from 21 to 25 cases; against the old gate four of the updated cases failed. A scratch tree confirmed `doc/tasks/active.tm.md` passes and `doc/tasks/missing.tm.md` fails. The comments in `check_md_tables.sh`, `check_fuzz_fresh.sh` and `test.sh` were read: none calls these paths private, so none changed.
+    - **Found on the way:** `make test` was red on the unchanged tree because `doc/tasks/future.tm.md:13` said "a leak, which is memory-safe", a banned safety phrase (`bash scripts/check_safety_model.sh`). Reworded to "does not break memory safety" in commit `22280d7`, meaning unchanged.
+    - **Checks:** `make test`: Total: 3163 run, 3163 passed, 0 failed, 37 skipped. Scripts only, so `make preflight-changed` was not required.
 
 - [ ] +safety +review Z-0002 Review the fixes made in the first cloud session
     > **Created:** 2026-11-03
