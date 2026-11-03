@@ -7,7 +7,7 @@ date: 2026-11-03
 
 # Current Sprint
 
-Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session and its setup; Z-0007 to Z-0012 are the hardening series that closes the open soundness holes (each is a check-in: stop for review after it); Z-0013 to Z-0017 follow. Deferred work is in `future.tm.md`. Every `+safety` task follows the safety rules in `AGENTS.md`: the rejection differential for a change that accepts more, and nothing beyond what the task names in the same commit.
+Open work, most urgent first, in five groups. (1) The provenance series' first piece: Z-0047, Z-0048, Z-0049 (the split of Z-0009), then Z-0045, which depends on how Z-0047 settles the design note's open question. (2) The rest of the hardening series that follows it: Z-0044, then Z-0010, Z-0011, Z-0012. (3) The store-grid audits and the review rounds: Z-0046, Z-0017, Z-0013. (4) Tooling and diagnostics: Z-0014, Z-0015, Z-0016. (5) Z-0004 and Z-0005, the benchmark measurement and decision, last because a session never starts one unprompted. Each task in the hardening series is a check-in: stop for review after it. Finished tasks stay at the top until `tm sweep` rotates them. Deferred work is in `future.tm.md`. Every `+safety` task follows the safety rules in `AGENTS.md`: the rejection differential for a change that accepts more, and nothing beyond what the task names in the same commit.
 
 - [x] +safety +review Z-0002 Review the fixes made in the first cloud session
     > **Created:** 2026-11-03
@@ -51,8 +51,9 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
     - **Found on the way:** run from a shell rather than from `make test`, `scripts/test_preflight.sh` takes about 10 minutes and fails its later cases. Case 7 runs the real checked suite (it stubs neither `PREFLIGHT_CHECKED` nor `PREFLIGHT_CALIBRATE`); a "Terminated" then reaches the test, whose trap deletes its stub directory, and the later cases fail with "not found". Under `make test` the test passes, as the unchanged one did. My explanation, not verified: the nested suite cannot start there because the run holds the test lock. Case 7 is unchanged from `main`, but I did not run `main`'s version from a shell, so whether it fails the same way there is unchecked. Not fixed here.
     - **Checks:** `make test` (before the last two commits; the only failure was `check-deps-selftest`, whose scratch copy is a `git archive HEAD` and lacked the then-uncommitted library; it passes once committed). `PREFLIGHT_BASE=1a02a61~1 make preflight-changed` on this branch, against the commit before Z-0007, whose source the current compiler refuses, with no wrapper: exit 0. Its results: base taken from `PREFLIGHT_BASE`; 25 mutations targeted, "All mutations caught"; fixpoint PASS; the seeded base build failed and was rebuilt through stage1; reject-diff PASS with 0 newly accepted and 1164 newly refused of 33317 programs (Z-0007's own result); checked suite 1151/1151.
 
-- [ ] +safety +tests Z-0009 B1 Origin sets per local, and the store and return rules on them, behind a flag
+- [x] +safety +tests Z-0009 B1 Origin sets per local, and the store and return rules on them, behind a flag
     > **Created:** 2026-11-03 **Depends:** Z-0006. **Check-in:** stop for review after it. **Split here** if it outgrows a session (the sets, then the rules).
+    > **Completed:** 2026-11-03 git:63d1202 **Closed as split:** the work is Z-0047, Z-0048 and Z-0049; take one of those, never this parent.
 
     - **Build:** in `src/check_zir.zrl`, a forward, flow-insensitive fixpoint computing for every local the origins of the addresses it holds and of the storage it owns (`Frame(L)`, `Param(i)`, `Static`, `Unknown`; field-insensitive), per the design note. Call results come from the existing summaries; a `fn`-value or summary-less call yields `Unknown`. Whether a type owns storage comes from its structure, not `is_collection_type_name`.
     - **Rules, under `--provenance` (off by default):** a destination with any non-`Frame` origin accepts no value with a `Frame` or `Unknown` origin; a return carries no `Frame` or `Unknown` origin. With the flag the old rule still runs too. A `--provenance=warn` mode reports what the new rule rejects and the old one accepts.
@@ -92,6 +93,7 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
 
 - [ ] +audit +safety Z-0045 A reference to a local carrier passed through a `let`, an identity call or a phi is refused
     > **Created:** 2026-11-03 **Fix with or after:** Z-0010 (the same flow analysis). Over-rejection, not a hole; related to Z-0017.
+    > **Depends:** Z-0047 (it settles the design note's open question about a read through a reference, which decides whether this over-rejection is closed by the rule or needs more).
 
     - **Now:** a safe program that hands a callee a reference to a local struct, and stores what the callee returns, is accepted when the reference is written in the call (`take_ref(&c)`) and refused when it first goes through a `let`, an identity function or an `if`. The callee returns the view the struct holds (`c.v`), not a pointer into the struct; the checker reads the result as a pointer into the caller's stack frame. Error: "region escape: returning a pointer to local stack storage via sret".
     - **In the grid:** all 3402 safe twins of the `ref_let`, `ref_identity` and `ref_phi` carriers (1134 each; Z-0041) are refused, and every twin of `ref_direct` is accepted. They are in `bench/fuzz/store_grid_twin_rejections.txt`: `grep -E '__ref_(let|identity|phi)__' bench/fuzz/store_grid_twin_rejections.txt`.
@@ -198,6 +200,7 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
 
 - [ ] +bench +measurement Z-0004 Measure how far the benchmark gate's measures move between cloud sessions
     > **Created:** 2026-11-03
+    > **Session rule:** a new session records one sample only if asked to, so this task never starts a session.
 
     - **Why:** `bench/cross_lang/thresholds.cfg` is not in the tree, so `scripts/bench_threshold_check.sh` records a baseline on its first run on a host. Every cloud session starts on a fresh VM, so there the gate compares a run with itself and cannot fail. Of its three measures, `runtime_ratio_vs_gcc_o2` is relative to gcc on the same host; `clean_throughput_loc_s` and `incremental_rebuild_ms` are absolute and depend on the VM.
     - **Do:** in three to five separate cloud sessions, run `sh scripts/bench_cross_lang.sh --check-thresholds` on the same commit and record each measure, the CPU model (`/proc/cpuinfo`) and the load. Report the spread of each measure against the gate's 15% tolerance. Delete the files the run writes under `bench/`; commit nothing but this task's text.
