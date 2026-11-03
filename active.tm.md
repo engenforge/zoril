@@ -68,6 +68,37 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
     - **Rules, under `--provenance` (off by default):** a destination with any non-`Frame` origin accepts no value with a `Frame` or `Unknown` origin; a return carries no `Frame` or `Unknown` origin. With the flag the old rule still runs too. A `--provenance=warn` mode reports what the new rule rejects and the old one accepts.
     - **Expected to close** (with the flag): `gap_11_dest_closure_capture_mut`, `gap_13_ref_local_enum_payload`, `gap_16_ref_local_fn_val`, `gap_18_elem_ref_enum_payload`, `gap_21_elem_ref_fn_val`, `gap_23_closure_local_enum_payload`, `gap_26_closure_local_fn_val`, `gap_29_dest_closure_call_returns_mut_ref`, `gap_32_byval_collection_param_store`, `gap_36_carrier_ref_enum_payload_match`; the measurement decides, so list what is left for Z-0010.
     - **Done when:** run warn mode over `src/`, `stdlib/`, `tools/` and `corpus/` and record each new rejection as a real escape, a leak, or an over-rejection, without changing that code. `make test` with the default unchanged, `make preflight-changed`.
+    - **Split (2026-11-03):** more than one session, so it is done as Z-0047 (B1.1, the origin sets), Z-0048 (B1.2, the rules behind the flag) and Z-0049 (B1.3, the measurement), in that order. This task closes when all three have. Sizing:
+        - the analysis covers all 24 `ZirRvalue` forms and four projection kinds;
+        - it reads five existing summary fields (`ret_ties`, `ret_storage`, `storage_known`, `summary_escape`, `summary_stash`) and settles the design note's open question;
+        - it needs a new compiler flag;
+        - then every new rejection across the tree has to be classified;
+        - all of it in `src/`, which stage1 must still compile.
+
+- [ ] +safety +tests Z-0047 B1.1 Origin sets per local on ZIR, computed and dumped, with no rule using them
+    > **Created:** 2026-11-03 **Split from:** Z-0009. **Depends:** Z-0006. **Check-in:** stop for review after it.
+
+    - **Build:** in `src/check_zir.zrl`, beside the existing analyses and changing no accept/reject decision, a forward, flow-insensitive fixpoint giving every local `L` two origin sets (`doc/design/provenance.md` §3): `O(L)`, the origins of the addresses it holds, and `S(L)`, the origins of the storage it owns, over `Frame(L)`, `Param(i)` (bit 63 meaning "63 or later"), `Static` and `Unknown`; field-insensitive.
+    - **Transfer:** every `ZirRvalue` form gets a rule, so an unhandled form fails the build (an `// exhaustive:` match). That covers `Use`, `Ref`, `RefMut`, `Call`, `CallPtr`, `StructLiteral`, `EnumVariant`, `EnumPayload`, `Tuple`, `Array`, `ArrayRepeat`, `Boxed`, `Cast`, `PtrFromInt`, `GlobalAddr`, `StringConst`, `FuncAddr` with its environment, `GetEnv`, `Syscall` and `Intrinsic`; the scalar forms yield nothing. Calls read the existing summaries (`ret_ties`, `ret_storage`, `storage_known`), and a `CallPtr` or summary-less call yields `Unknown`. A projected write `x.f = rv` (not through a dereference) adds to `x`.
+    - **Ownership:** whether a type owns storage comes from its structure (it contains a `Box`, an owning raw pointer, or a type that does), never `is_collection_type_name`. By-value parameters are locals (`Frame`); the referent of a reference parameter is `Param(i)`.
+    - **Settle the open question** of the design note §3, a read through a reference. The note suggests that a read through `r` yields `O(L)` for each `Frame(L)` in `O(r)`, and stays `Param` or `Unknown` otherwise. Decide it with probes, and say in `doc/design/provenance.md` which rule holds and what Z-0045's reproducer gives under it.
+    - **Observe it:** a developer option, for example `--emit-origins`, prints each function's `O` and `S` per local, so the sets can be tested without a rule. Golden tests for the shapes the note names: a field write, a chain of ten copies, an enum payload and its `match` binding, a `fn`-value call, a closure capture, `Vec::new_in(&a)`, a by-value `Vec` parameter, a tuple-carried destination and value. Each golden test checks one local's sets, so a change shows as a diff.
+    - **Constraints:** `src/` is compiled by stage1, so use only what the pinned stage1 accepts. Build warning-free. Measure the analysis's time on `src/`: it runs on every compile even with no rule reading it, so record the cost.
+    - **Verification:** `make test`, `make preflight-changed`, and the golden tests. Nothing may be newly accepted or refused: the rejection differential shows 0 and 0.
+
+- [ ] +safety +tests Z-0048 B1.2 The store and return rules on the origin sets, under `--provenance`
+    > **Created:** 2026-11-03 **Split from:** Z-0009. **Depends:** Z-0047. **Check-in:** stop for review after it.
+
+    - **Rules** (design note §3): a store through a reference, into a closure capture or into a global, whose destination origins contain anything but this frame's `Frame` origins, accepts no value with a `Frame` or `Unknown` origin. A return carries no `Frame` or `Unknown` origin. A call applies the store rule to each `i -> j` of the callee's existing store summary, `j` equal to `i` included.
+    - **Flag:** `--provenance` adds the rules to the old ones (it never removes a rejection), and `--provenance=warn` prints what the new rules refuse and the old ones accept, as warnings that do not fail the compile. It is off by default; plumb it like `--checked` (`src/main.zrl` `Options`) and through `zbuild`, and document it in `zoril --help` and the man page.
+    - **Probes:** run every safety probe with the flag. Of the ten gaps Z-0009 expects to close, record which do, with the flag only (their `known_gap` expectation stays until Z-0012 makes the flag the default). List the rest for Z-0010. The store grid with the flag (`ZORIL_CC` set to a wrapper that passes it) gives the unsafe cells it newly rejects and the twins it newly refuses.
+    - **Verification:** `make test` with the default unchanged, `make preflight-changed`, the probes and the grid with the flag.
+
+- [ ] +safety +tests Z-0049 B1.3 Measure what `--provenance` newly rejects in the tree
+    > **Created:** 2026-11-03 **Split from:** Z-0009. **Depends:** Z-0048.
+
+    - **Do:** compile `src/`, `stdlib/`, `tools/` and `corpus/` with `--provenance=warn` and record every warning as a real escape, a leak (a by-value collection whose view outlives it: `gap_32`'s class), or an over-rejection (for example the field-insensitive struct case of design note §5). Change none of that code. Each class with its count and one example goes on this task. Over-rejections that are common enough to block Z-0012 get a task of their own.
+    - **Then** close Z-0009 with the gaps closed under the flag, the ones left for Z-0010, and the measurement.
 
 - [ ] +safety +tests Z-0044 B0.1 A value stored into a local's field through a pointer to the local keeps its borrow
     > **Created:** 2026-11-03 **Check-in:** stop for review after it. **Closes:** `gap_37_local_mutref_field_reset`, `gap_38_param_field_reset`, `gap_39_method_self_field_reset`. **After:** Z-0007.
