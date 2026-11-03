@@ -1,0 +1,22 @@
+// name: Tuple slot of a local keeps the borrow written into it
+// expected: compile_reject
+// Rejected by ZirVerifier.check_assign: the slot's borrow of the vector, and through it of the arena, stays live while the tuple is read.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => {
+            return 1;
+        }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let mut t = (@slice(0 as *i32, 0), 10);
+    t.0 = v.as_slice();
+    a.reset();
+    return t.0[0];
+}

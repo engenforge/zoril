@@ -1,7 +1,6 @@
 // name: Inner block arena dropped while field-assigned reference lives in local struct
-// expected: known_gap
-// gap: ZirVerifier.check_assign drops RHS borrows when assigning to struct field of local, permitting inner-block arena drop while field reference is live
-// observed: exit 77
+// expected: compile_reject
+// Rejected by ZirVerifier.check_assign, which records the borrows of a value written into a field, element or tuple slot of a local on that local, so the inner arena cannot be dropped while the field is read afterwards.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

@@ -1,0 +1,28 @@
+// name: Field written, read and reassigned before the arena is reset
+// expected: accept
+// The accepted twin of the field-write probes: the field is last read before the reset, so the borrow it holds has ended by then.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct W {
+    s: [i32],
+}
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => {
+            return 1;
+        }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let mut w = W { s: @slice(0 as *i32, 0) };
+    w.s = v.as_slice();
+    let x = w.s[0];
+    w.s = @slice(0 as *i32, 0);
+    a.reset();
+    return x - 42;
+}
