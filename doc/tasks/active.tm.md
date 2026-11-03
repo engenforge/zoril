@@ -44,8 +44,9 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
     - **Status (2026-11-03):** blocked on the maintainer's text; `doc/design/` does not exist yet and nothing was written in its place.
     - The design of one store-and-return rule over per-local origin sets, which Z-0009 to Z-0012 implement. Add it as supplied, then check it against `AGENTS.md`'s public-text rules (present tense, no history) and `make test` (`md-check`, `comment-noise`).
 
-- [ ] +safety +fuzz +tests Z-0040 S1.3 The store grid gains carriers that bundle the arena itself
+- [x] +safety +fuzz +tests Z-0040 S1.3 The store grid gains carriers that bundle the arena itself
     > **Created:** 2026-11-03 **Split from:** Z-0008. **Before:** Z-0010.
+    > **Completed:** 2026-11-03 git:55388e6
 
     - **Add** to `scripts/fuzz/store_grid.lua`, each with a safe twin: a carrier that bundles the arena itself in a struct literal, and one that bundles it in a tuple, beside an external field (the destination's reference), so a view of the arena and the arena travel together. Add the values to `store_grid_classes.lua`'s axis lists too, or they never appear as classes.
     - The new accepted unsafe cells go into `bench/fuzz/store_grid_expected_failures.txt` and any new twin rejections into `store_grid_twin_rejections.txt`, through `sh scripts/check_store_grid.sh --record`; check that the diff adds only cells of the new values. **Verification:** `make store-grid`, `make test`.
@@ -54,8 +55,9 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
     - **Result:** 1248 new valid cells. 486 unsafe cells are accepted and joined the expected failures (8808 to 9294), all of the new carriers; no other cell moved. No new twin rejection (494 unchanged), 0 generator errors, and four new 2-axis classes: each bundle with `path=fn_val` and with `path=param_65` (43 to 47). The four sampled shapes are refused with a safety reason (region escape, dropping or moving the borrowed bundle) and their twins compile.
     - **Checks:** `sh scripts/check_store_grid.sh --record`: 9294 failing cells, 494 over-rejected twins, 47 classes, 0 generator errors; the diff adds only `arena_*_bundle` lines.
 
-- [ ] +safety +fuzz +tests Z-0041 S1.4 The store grid gains carriers a call produced, and references to a carrier
+- [x] +safety +fuzz +tests Z-0041 S1.4 The store grid gains carriers a call produced, and references to a carrier
     > **Created:** 2026-11-03 **Split from:** Z-0008. **Before:** Z-0010.
+    > **Completed:** 2026-11-03 git:6343b7d
 
     - **Add**, each with a safe twin: carrier values for an aggregate a call produced (through a local, a method, an identity function, a closure), and a reference to a carrier reaching the callee directly, through a `let`, an identity call or a phi. Same recording and checks as Z-0040.
     - **Done (2026-11-03):** eight carriers, all wrapping the view in `Carrier { v }`. Four take the aggregate from a call: `call_local` (`make_carrier(src_val)` into a local), `call_method` (`maker.make(src_val)`), `call_identity` (`id_carrier(Carrier { v: src_val })`) and `call_closure` (a closure returning the carrier). Four pass a reference to a local carrier to `take_ref(c: &Carrier) -> PT`: `ref_direct` (`take_ref(&carrier_obj)`), `ref_let` (through `let carrier_ref = &carrier_obj`), `ref_identity` (through `id_ref(&carrier_obj)`) and `ref_phi` (an `if` on `clobber_stack() > 0` choosing between two carriers' references, so the join is not folded).
@@ -63,8 +65,9 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
     - **Over-rejection found:** 3438 new safe twins are refused (494 to 3932). 3402 of them are every twin of `ref_let`, `ref_identity` and `ref_phi` (1134 each), while `ref_direct`'s twins are accepted. So a reference to a local carrier that reaches the callee through a `let`, an identity call or a phi makes the callee's result read as a pointer into the carrier's stack storage, though `take_ref` returns the view the carrier holds. Example: `arena_vec__ref_let__direct__deref_out__frame_ends`'s twin, "region escape: returning a pointer to local stack storage". The other 36 are `call_local` and `call_method` twins through `closure_call_mut` with a `ref_local` or `elem_ref` source, Z-0017's existing class. Not fixed here; the reference-through-`let` form is the one to start from.
     - **Checks:** `sh scripts/check_store_grid.sh --record` (about 9 minutes now): 17115 failing cells, 3932 over-rejected twins, 51 classes, 0 generator errors; the diff adds only lines of the eight new carriers.
 
-- [ ] +safety +fuzz +tests Z-0042 S1.5 A two-module mode for the store grid's summary cells
+- [x] +safety +fuzz +tests Z-0042 S1.5 A two-module mode for the store grid's summary cells
     > **Created:** 2026-11-03 **Split from:** Z-0008. **Before:** Z-0010, which is expected to close these cells.
+    > **Completed:** 2026-11-03 git:ca53660
 
     - **Do:** for the cells whose route crosses a call summary, compile the callee as its own module with `-c --write-interface` and the caller against its `.zri`, as `zbuild` does. `scripts/check_store_grid.sh` then builds such a cell in two steps; generate the callee and the caller as two files.
     - The new accepted unsafe cells go into the expected-failures file. **Verification:** `make store-grid`, `make test`.
