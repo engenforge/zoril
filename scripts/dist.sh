@@ -10,8 +10,9 @@
 #
 # Each run rewrites build/dist/SHA256SUMS for the tarballs present, and build/dist/build-info.txt
 # (scripts/generate_build_info.sh: the commit, the host and the toolchain that made them, then the
-# archive hashes). build-info.txt is not in SHA256SUMS and `check` does not compare it: it names the
-# machine, so it is not reproducible.
+# archive hashes). SHA256SUMS ends with build-info.txt's own hash, so a signature on SHA256SUMS covers
+# every published file. build-info.txt names the machine, so it is not reproducible: a rebuild compares
+# the archive lines, and `check` does not compare it.
 #
 # The release archives are built on Alpine Linux. On any other host, src and bin print a warning (the
 # build-info.txt says which host); DIST_REQUIRE_ALPINE=1 makes it an error. OS_RELEASE names the
@@ -182,7 +183,7 @@ write_sums() {
 }
 
 # build/dist/build-info.txt: what this tree is and what built it, then the hashes of the archives
-# present (the same ones SHA256SUMS holds). Not part of SHA256SUMS: it names the machine.
+# present (the ones write_sums put in SHA256SUMS). Its own hash is then appended to SHA256SUMS.
 write_build_info() {
     {
         ./scripts/generate_build_info.sh "$REPO_ROOT"
@@ -191,6 +192,7 @@ write_build_info() {
         done < "$OUT/SHA256SUMS"
     } > "$OUT/build-info.txt.tmp"
     mv -f "$OUT/build-info.txt.tmp" "$OUT/build-info.txt"
+    (cd "$OUT" && sha256_of build-info.txt) >> "$OUT/SHA256SUMS"
 }
 
 case "$MODE" in
