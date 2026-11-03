@@ -28,27 +28,6 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
         - **Bash-only `set` options in `#!/bin/sh`:** none in the 130 tracked `#!/bin/sh` scripts. All of them end in `.sh`, so check 7b's `*.sh` filter misses none. The five `set -uo pipefail` users under `bootstrap/stage0-c/scripts/` are `#!/usr/bin/env bash`.
     - **Checks:** `make test`: 3178 run, 3178 passed, 0 failed, 38 skipped (on the content of `0925c4a`). Only `scripts/` and this file changed, so `make preflight-changed` was not run. `0925c4a` is a fixture fix written by this reviewing session; it is not a safety rule, but a later session may re-run its take-out check above.
 
-- [ ] +bench +measurement Z-0004 Measure how far the benchmark gate's measures move between cloud sessions
-    > **Created:** 2026-11-03
-
-    - **Why:** `bench/cross_lang/thresholds.cfg` is not in the tree, so `scripts/bench_threshold_check.sh` records a baseline on its first run on a host. Every cloud session starts on a fresh VM, so there the gate compares a run with itself and cannot fail. Of its three measures, `runtime_ratio_vs_gcc_o2` is relative to gcc on the same host; `clean_throughput_loc_s` and `incremental_rebuild_ms` are absolute and depend on the VM.
-    - **Do:** in three to five separate cloud sessions, run `sh scripts/bench_cross_lang.sh --check-thresholds` on the same commit and record each measure, the CPU model (`/proc/cpuinfo`) and the load. Report the spread of each measure against the gate's 15% tolerance. Delete the files the run writes under `bench/`; commit nothing but this task's text.
-    - **Sample 1 (2026-11-03, commit `fdb0c55`):** `Intel(R) Xeon(R) Processor @ 2.30GHz`, 4 vCPUs, 1-minute load average 2.46 at the start (a `make test` had just finished, so the host was not quiet). `clean_throughput_loc_s` 10177 (the run's own spread 288..297 ms, +3.1%), `incremental_rebuild_ms` 22, `runtime_ratio_vs_gcc_o2` 4.182, `peak_rss_mb_per_kloc` 2.973; the run took 42 s. Earlier on this same VM, an unrelated preflight recorded `clean_throughput_loc_s` 10072, 1.0% below this sample. That is one VM twice, not a spread between sessions.
-    - **Sample 2 (2026-11-03, commit `fdb0c55`):** the same conversation, but on a freshly booted VM (booted 14:49 UTC, after the setup script changed), so not the VM of sample 1. `Intel(R) Xeon(R) Processor @ 2.30GHz`, 4 vCPUs, 1-minute load average 0.36 at the start. Run in a scratch worktree of `fdb0c55` whose `build/zoril` was built from that commit's compiler source and which rebuilt its own `zilc` and `zbuild`. `clean_throughput_loc_s` 9705 (the run's own spread 302..330 ms, +9.3%), `incremental_rebuild_ms` 20, `runtime_ratio_vs_gcc_o2` 4.095, `peak_rss_mb_per_kloc` 2.973; the run took 56 s. Against sample 1: clean -4.6%, incremental -9.1%, ratio -2.1%, RSS unchanged, all inside 15%. The bench outputs were deleted with the worktree.
-    - **Still to do:** one to three more samples, each from a new cloud session on this commit. This task stays open until they exist; two samples are not a spread.
-
-- [ ] +bench +decision Z-0005 Decide the benchmark gate's behaviour on a host without a committed baseline
-    > **Created:** 2026-11-03 **Depends:** Z-0004.
-
-    - **Options, from the measurement:** commit a baseline for the measures whose spread stays inside the tolerance; make the gate print a `[SKIP]` naming the reason for those that do not; and when no committed baseline exists, have the gate say so instead of recording one and passing.
-    - **Recommendation (2026-11-03, until Z-0004's spread data decides it):**
-        1. A host with no committed baseline gets a statement, not a pass. The gate stops recording a baseline on a first run and then printing "All performance thresholds within tolerance"; it prints `[SKIP] bench-thresholds: no committed baseline for <axis> (<reason>)` per axis and exits 0. Recording stays an explicit act (`sh scripts/bench_cross_lang.sh --record`).
-        2. Commit a baseline for `runtime_ratio_vs_gcc_o2` only (4.182 in Z-0004's sample 1): it is relative to gcc -O2 on the same host, so it moves with the compiler and not with the VM. It is committed once Z-0004's samples keep its spread inside the 15% tolerance; otherwise it gets the `[SKIP]` too.
-        3. `clean_throughput_loc_s` and `incremental_rebuild_ms` stay host-local. A host that has recorded its own baseline (a developer's machine) still compares against it; anywhere else they print `[SKIP]` naming "absolute measure, no baseline for this host".
-    - **Why:** on a fresh VM the present gate compares a run with itself, so it cannot fail, and it says "within tolerance" anyway. A committed absolute baseline would pass or fail with the VM's speed, which tests the VM. Z-0004's single sample says nothing yet about other VMs; rule 2 is the part its data can overturn.
-    - **Not done here:** the change to `scripts/bench_threshold_check.sh` and its tests. It needs a task of its own once Z-0004 has its samples.
-    - **Reopened (2026-11-03):** the decision depends on Z-0004's measurements, so the task stays open until they exist; the recommendation above is not a decision yet.
-
 - [x] +docs Z-0006 Publish the provenance design note, `doc/design/provenance.md`
     > **Created:** 2026-11-03 **Owner:** the maintainer supplies the text. **Blocks:** Z-0009 to Z-0012.
     > **Completed:** 2026-11-03 git:e1af92e
@@ -111,6 +90,35 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
     - **Do:** compile `src/`, `stdlib/`, `tools/` and `corpus/` with `--provenance=warn` and record every warning as a real escape, a leak (a by-value collection whose view outlives it: `gap_32`'s class), or an over-rejection (for example the field-insensitive struct case of design note §5). Change none of that code. Each class with its count and one example goes on this task. Over-rejections that are common enough to block Z-0012 get a task of their own.
     - **Then** close Z-0009 with the gaps closed under the flag, the ones left for Z-0010, and the measurement.
 
+- [ ] +audit +safety Z-0045 A reference to a local carrier passed through a `let`, an identity call or a phi is refused
+    > **Created:** 2026-11-03 **Fix with or after:** Z-0010 (the same flow analysis). Over-rejection, not a hole; related to Z-0017.
+
+    - **Now:** a safe program that hands a callee a reference to a local struct, and stores what the callee returns, is accepted when the reference is written in the call (`take_ref(&c)`) and refused when it first goes through a `let`, an identity function or an `if`. The callee returns the view the struct holds (`c.v`), not a pointer into the struct; the checker reads the result as a pointer into the caller's stack frame. Error: "region escape: returning a pointer to local stack storage via sret".
+    - **In the grid:** all 3402 safe twins of the `ref_let`, `ref_identity` and `ref_phi` carriers (1134 each; Z-0041) are refused, and every twin of `ref_direct` is accepted. They are in `bench/fuzz/store_grid_twin_rejections.txt`: `grep -E '__ref_(let|identity|phi)__' bench/fuzz/store_grid_twin_rejections.txt`.
+    - **Reproducer** (checked on the compiler of this commit, and the compiler before Z-0007 refuses it too, so it is not caused by that change). With `let r = &c;` and `take_ref(r)` in `f`, it is refused; with `take_ref(&c)` and no `let`, it is accepted, builds with `scripts/build_zrl.sh`, and exits 0:
+
+    ```zoril
+    struct Carrier { v: [i32] }
+    fn take_ref(c: &Carrier) -> [i32] { return c.v; }
+
+    fn f(out: &mut [i32], view: [i32]) {
+        let c = Carrier { v: view };
+        let r = &c;
+        *out = take_ref(r);
+    }
+
+    fn main() -> i32 {
+        let data = [42, 0];
+        let mut dest: [i32] = @slice(0 as *i32, 0);
+        f(&mut dest, &data);
+        return dest[0] - 42;
+    }
+    ```
+
+    - **Same refusal, other forms:** `take_ref(id_ref(&c))` with `fn id_ref(c: &Carrier) -> &Carrier { return c; }`, and `let r = if pick() > 0 { &a } else { &b }; take_ref(r)` with two carriers `a` and `b` and `fn pick() -> i32 { return 1; }`.
+    - **Do:** find where a reference that passed through a `let`, a call or a join stops being read as "the reference to `c`" and becomes "a pointer into `c`'s storage", so that the callee's result is tied to the whole frame. Fix it so `take_ref` is tied to what `c.v` points at, not to `c`. This makes the checker accept more, so run the rejection differential (`scripts/check_reject_diff.sh <base>`) and list every program the base rejects and the change accepts; none of the store grid's unsafe cells may become accepted. Move the three carriers' twins out of the twin record in the same commit, and add one of the forms above as an `accept` probe.
+    - **Verification:** `make test`, `make preflight-changed`, `sh scripts/check_store_grid.sh`, the rejection differential.
+
 - [ ] +safety +tests Z-0044 B0.1 A value stored into a local's field through a pointer to the local keeps its borrow
     > **Created:** 2026-11-03 **Check-in:** stop for review after it. **Closes:** `gap_37_local_mutref_field_reset`, `gap_38_param_field_reset`, `gap_39_method_self_field_reset`. **After:** Z-0007.
     > **Depends:** Z-0006.
@@ -139,6 +147,25 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
 
     - **Do:** make the new rules the default; resolve every warn-mode rejection recorded in Z-0009 to Z-0011 (a real escape: fix the code; a common over-rejection: stop for a decision on field sensitivity; a leak through a by-value collection parameter: change the code); then delete `local_storage_external`, `local_is_external_target`, `rvalue_is_external_target`, `place_outlives_frame`, `rvalue_storage_external`, `storage_walk_zir`'s mask logic, the depth limits, `is_collection_type_name` and the same-parameter filters, keeping the ZIL stack check as an add-only net. Update `doc/SAFETY.md` §2.3 and §6, `doc/spec/surface_syntax.md` (`#[borrows]`/`#[stores]`), `KNOWN_ISSUES.md` and the store grid's expected-failures file.
     - **Done when:** every unsafe store-grid cell is rejected with the flag gone, no `known_gap` probe of this family is left, the self-hosting fixpoint holds, and `make test` and `make preflight` pass. Then a review round (Z-0013).
+
+- [ ] +audit +safety Z-0046 Find why the interface build refuses 35 store-grid cells the whole-program build accepts
+    > **Created:** 2026-11-03 **Diagnosis, not a fix.** Found by Z-0042's comparison.
+
+    - **Question:** when a callee is compiled to an interface (`-c --write-interface`) and its caller reads that interface (`--iface-dir`), 35 of the 318 two-module cells are refused that the whole-program build accepts. Is the interface path's behaviour the right one, which the whole-program build should share, or is it an over-rejection, or does it cover only a part of what the whole-program path covers? Answer it before anyone changes either path.
+    - **The cells,** all with the `direct` carrier and the `frame_ends` invalidation (`<source>__direct__<path>__<destination>__frame_ends`): 30 with the `string` source, for each of the paths `helper`, `two_level_helper`, `fn_val`, `mutual_rec` and `param_65` and each of the destinations `call_struct_mut`, `closure_call_mut`, `closure_capture_mut`, `closure_owned_capture`, `local_field_assigned_out` and `ten_copies`; the `string` source with `deref_out` and each of `same_param`, `store_mutual_rec` and `store_param_65`; and `store_mutual_rec` into `deref_out` with the `arena_vec` and `local_vec` sources. The first to look at: `string__direct__fn_val__call_struct_mut__frame_ends`.
+    - **Regenerate the list:** `lua scripts/fuzz/store_grid.lua --generate-modular build/z46`, then compile each cell both ways as `scripts/check_store_grid_modular.sh` does; the cells that are in `bench/fuzz/store_grid_expected_failures.txt` (whole-program accepts) and not in `bench/fuzz/store_grid_modular_expected_failures.txt` (two-module accepts) are the 35.
+    - **First cell, both ways:** whole-program (`lua scripts/fuzz/store_grid.lua --emit string__direct__fn_val__call_struct_mut__frame_ends`, then `zoril --emit-zil`) compiles. Two-module (path functions in `pathmod.zrl` compiled with `-c --interproc-summary --write-interface`, the cell compiled with `-c --interproc-summary --iface-dir`) is refused: "region escape: callee stashes local stack pointer into global memory". The cell stores into `out` through `get_struct_slot(out)`, a local struct, not into global memory, so the message does not describe the cell.
+    - **What running them shows:** 34 of the 35 cells, built whole-program, run and exit 42: the stored string or vector is still intact, because collections are not freed at scope end. Only `arena_vec__direct__store_mutual_rec__deref_out__frame_ends` reads clobbered memory (exit 77), the shape of `gap_28`. So for 34 cells the interface path refuses a program that works today, and would be the one that stays correct once the `Box` and collection drop series makes frees real.
+    - **To establish:** (1) which summary field differs between the two paths for this cell (compare `pathmod`'s interface with what the whole-program pass computes for `forward_fn_target`); (2) whether an interface that omits a field reads as "unknown, so strict", which would explain a stricter result for any callee compiled separately; (3) why the `string` source is so prominent, when `arena_vec` and `local_vec` cells with the same paths are refused by both builds; (4) whether the one `arena_vec` cell is `gap_28` showing in one path only. Record each finding on this task as it is made.
+    - **Done when:** the task states whether the interface path is right, over-strict, or incomplete, with the evidence, and names the task that acts on it. No compiler change in this task.
+
+- [ ] +audit Z-0017 A3.5 Twelve safe store-grid twins are rejected
+    > **Created:** 2026-11-03 **Fix with or after:** Z-0010 (the same analysis changes). Over-rejection, not a hole.
+
+    - **Cells:** `{ref_local,elem_ref}__{struct_field,tuple_slot,array_slot}__{closure,param_65}__call_struct_mut__frame_ends`, for example `ref_local__struct_field__closure__call_struct_mut__frame_ends.twin.zrl` (`make store-grid` writes them under `build/rv_grid/`): a pointer from the caller's own parameter, passed through a closure identity or as a 65th argument, stored through `get_struct_slot(out).r`, rejected with "region escape: storing local stack pointer into caller memory".
+    - **Do:** find which flow marks the closure (or 65th-argument) result as stack when its argument is a parameter; fix it without reopening any other probe, and add one of the twelve as an `accept` probe. `KNOWN_ISSUES.md` does not list this over-rejection yet: add it (section 5) in a commit of its own before the fix, and remove it with the fix.
+    - **Over-rejection from Z-0007 (found in its review, 2026-11-03):** borrows are tracked per local, not per field, so a borrow stored into one field keeps the whole struct borrowed while another field is still used. Reproducer: `struct W { s: [i32], t: i32 }`; in `main`, `let mut v = Vec::<i32>.new_in(&a); v.push(42); let mut w = W { s: @slice(0 as *i32, 0), t: 3 }; w.s = v.as_slice(); let x = w.s[0]; a.reset(); return x - 42 + w.t - 3;`. It is safe (`w.s` is not read after the reset): `main`'s compiler accepts it and it exits 0; with Z-0007 it is refused with "cannot mutably borrow 'a' while it is already borrowed" at `a.reset()`, because `w` is live for `w.t`. A fix records the borrow on the field path rather than on the local. Z-0009's origin sets are field-insensitive by design, so decide this together with Z-0009 and Z-0012's field-sensitivity question.
+    - **Exposed by Z-0008:** 96 more safe twins with a `ref_local` or `elem_ref` source and a field, tuple-slot or array-slot carrier, through `closure_call_mut` and the storing paths, are refused with the same region-escape error by `main`'s compiler and by Z-0007's (`bench/fuzz/store_grid_twin_rejections.txt`, 398 to 494).
 
 - [ ] +safety +research Z-0013 Review rounds: rotate reviewers over the compiler until the findings dwindle
     > **Created:** 2026-11-03 **Standing task;** a round reads and probes only, so it can run beside anything except a change to the area it reviews.
@@ -169,50 +196,23 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
     - **Do:** a root ending in `.zil` skips the module graph and the front end and runs `zilc`, `qbe`, `as` and the link with `zbuild`'s usual linker and runtime choice, honouring `-o` and the cache directory; `--checked` with a `.zil` root is refused with one line. A root ending in neither `.zrl` nor `.zil` is refused with one line naming both. Update `doc/man/zbuild.1.scd` (`make man`), `zbuild --help`, and "Starting from ZIL" in `doc/getting_started.md`.
     - **Tests:** with the installed `zbuild` (`scripts/test_user_paths.sh`), `corpus/zil/01_arithmetic.zil` exits 30 and every `corpus/zil/` file gives its expected exit code; the refusals for `foo.txt` and for `.zil` with `--checked`; `scripts/test_man_pages.sh`. Take the `.zil` branch out and watch the scenario fail. Remove or update the `KNOWN_ISSUES.md` entry. `make test`, `make preflight-changed`.
 
-- [ ] +audit Z-0017 A3.5 Twelve safe store-grid twins are rejected
-    > **Created:** 2026-11-03 **Fix with or after:** Z-0010 (the same analysis changes). Over-rejection, not a hole.
+- [ ] +bench +measurement Z-0004 Measure how far the benchmark gate's measures move between cloud sessions
+    > **Created:** 2026-11-03
 
-    - **Cells:** `{ref_local,elem_ref}__{struct_field,tuple_slot,array_slot}__{closure,param_65}__call_struct_mut__frame_ends`, for example `ref_local__struct_field__closure__call_struct_mut__frame_ends.twin.zrl` (`make store-grid` writes them under `build/rv_grid/`): a pointer from the caller's own parameter, passed through a closure identity or as a 65th argument, stored through `get_struct_slot(out).r`, rejected with "region escape: storing local stack pointer into caller memory".
-    - **Do:** find which flow marks the closure (or 65th-argument) result as stack when its argument is a parameter; fix it without reopening any other probe, and add one of the twelve as an `accept` probe. `KNOWN_ISSUES.md` does not list this over-rejection yet: add it (section 5) in a commit of its own before the fix, and remove it with the fix.
-    - **Over-rejection from Z-0007 (found in its review, 2026-11-03):** borrows are tracked per local, not per field, so a borrow stored into one field keeps the whole struct borrowed while another field is still used. Reproducer: `struct W { s: [i32], t: i32 }`; in `main`, `let mut v = Vec::<i32>.new_in(&a); v.push(42); let mut w = W { s: @slice(0 as *i32, 0), t: 3 }; w.s = v.as_slice(); let x = w.s[0]; a.reset(); return x - 42 + w.t - 3;`. It is safe (`w.s` is not read after the reset): `main`'s compiler accepts it and it exits 0; with Z-0007 it is refused with "cannot mutably borrow 'a' while it is already borrowed" at `a.reset()`, because `w` is live for `w.t`. A fix records the borrow on the field path rather than on the local. Z-0009's origin sets are field-insensitive by design, so decide this together with Z-0009 and Z-0012's field-sensitivity question.
-    - **Exposed by Z-0008:** 96 more safe twins with a `ref_local` or `elem_ref` source and a field, tuple-slot or array-slot carrier, through `closure_call_mut` and the storing paths, are refused with the same region-escape error by `main`'s compiler and by Z-0007's (`bench/fuzz/store_grid_twin_rejections.txt`, 398 to 494).
+    - **Why:** `bench/cross_lang/thresholds.cfg` is not in the tree, so `scripts/bench_threshold_check.sh` records a baseline on its first run on a host. Every cloud session starts on a fresh VM, so there the gate compares a run with itself and cannot fail. Of its three measures, `runtime_ratio_vs_gcc_o2` is relative to gcc on the same host; `clean_throughput_loc_s` and `incremental_rebuild_ms` are absolute and depend on the VM.
+    - **Do:** in three to five separate cloud sessions, run `sh scripts/bench_cross_lang.sh --check-thresholds` on the same commit and record each measure, the CPU model (`/proc/cpuinfo`) and the load. Report the spread of each measure against the gate's 15% tolerance. Delete the files the run writes under `bench/`; commit nothing but this task's text.
+    - **Sample 1 (2026-11-03, commit `fdb0c55`):** `Intel(R) Xeon(R) Processor @ 2.30GHz`, 4 vCPUs, 1-minute load average 2.46 at the start (a `make test` had just finished, so the host was not quiet). `clean_throughput_loc_s` 10177 (the run's own spread 288..297 ms, +3.1%), `incremental_rebuild_ms` 22, `runtime_ratio_vs_gcc_o2` 4.182, `peak_rss_mb_per_kloc` 2.973; the run took 42 s. Earlier on this same VM, an unrelated preflight recorded `clean_throughput_loc_s` 10072, 1.0% below this sample. That is one VM twice, not a spread between sessions.
+    - **Sample 2 (2026-11-03, commit `fdb0c55`):** the same conversation, but on a freshly booted VM (booted 14:49 UTC, after the setup script changed), so not the VM of sample 1. `Intel(R) Xeon(R) Processor @ 2.30GHz`, 4 vCPUs, 1-minute load average 0.36 at the start. Run in a scratch worktree of `fdb0c55` whose `build/zoril` was built from that commit's compiler source and which rebuilt its own `zilc` and `zbuild`. `clean_throughput_loc_s` 9705 (the run's own spread 302..330 ms, +9.3%), `incremental_rebuild_ms` 20, `runtime_ratio_vs_gcc_o2` 4.095, `peak_rss_mb_per_kloc` 2.973; the run took 56 s. Against sample 1: clean -4.6%, incremental -9.1%, ratio -2.1%, RSS unchanged, all inside 15%. The bench outputs were deleted with the worktree.
+    - **Still to do:** one to three more samples, each from a new cloud session on this commit. This task stays open until they exist; two samples are not a spread.
 
-- [ ] +audit +safety Z-0045 A reference to a local carrier passed through a `let`, an identity call or a phi is refused
-    > **Created:** 2026-11-03 **Fix with or after:** Z-0010 (the same flow analysis). Over-rejection, not a hole; related to Z-0017.
+- [ ] +bench +decision Z-0005 Decide the benchmark gate's behaviour on a host without a committed baseline
+    > **Created:** 2026-11-03 **Depends:** Z-0004.
 
-    - **Now:** a safe program that hands a callee a reference to a local struct, and stores what the callee returns, is accepted when the reference is written in the call (`take_ref(&c)`) and refused when it first goes through a `let`, an identity function or an `if`. The callee returns the view the struct holds (`c.v`), not a pointer into the struct; the checker reads the result as a pointer into the caller's stack frame. Error: "region escape: returning a pointer to local stack storage via sret".
-    - **In the grid:** all 3402 safe twins of the `ref_let`, `ref_identity` and `ref_phi` carriers (1134 each; Z-0041) are refused, and every twin of `ref_direct` is accepted. They are in `bench/fuzz/store_grid_twin_rejections.txt`: `grep -E '__ref_(let|identity|phi)__' bench/fuzz/store_grid_twin_rejections.txt`.
-    - **Reproducer** (checked on the compiler of this commit, and the compiler before Z-0007 refuses it too, so it is not caused by that change). With `let r = &c;` and `take_ref(r)` in `f`, it is refused; with `take_ref(&c)` and no `let`, it is accepted, builds with `scripts/build_zrl.sh`, and exits 0:
-
-    ```zoril
-    struct Carrier { v: [i32] }
-    fn take_ref(c: &Carrier) -> [i32] { return c.v; }
-
-    fn f(out: &mut [i32], view: [i32]) {
-        let c = Carrier { v: view };
-        let r = &c;
-        *out = take_ref(r);
-    }
-
-    fn main() -> i32 {
-        let data = [42, 0];
-        let mut dest: [i32] = @slice(0 as *i32, 0);
-        f(&mut dest, &data);
-        return dest[0] - 42;
-    }
-    ```
-
-    - **Same refusal, other forms:** `take_ref(id_ref(&c))` with `fn id_ref(c: &Carrier) -> &Carrier { return c; }`, and `let r = if pick() > 0 { &a } else { &b }; take_ref(r)` with two carriers `a` and `b` and `fn pick() -> i32 { return 1; }`.
-    - **Do:** find where a reference that passed through a `let`, a call or a join stops being read as "the reference to `c`" and becomes "a pointer into `c`'s storage", so that the callee's result is tied to the whole frame. Fix it so `take_ref` is tied to what `c.v` points at, not to `c`. This makes the checker accept more, so run the rejection differential (`scripts/check_reject_diff.sh <base>`) and list every program the base rejects and the change accepts; none of the store grid's unsafe cells may become accepted. Move the three carriers' twins out of the twin record in the same commit, and add one of the forms above as an `accept` probe.
-    - **Verification:** `make test`, `make preflight-changed`, `sh scripts/check_store_grid.sh`, the rejection differential.
-
-- [ ] +audit +safety Z-0046 Find why the interface build refuses 35 store-grid cells the whole-program build accepts
-    > **Created:** 2026-11-03 **Diagnosis, not a fix.** Found by Z-0042's comparison.
-
-    - **Question:** when a callee is compiled to an interface (`-c --write-interface`) and its caller reads that interface (`--iface-dir`), 35 of the 318 two-module cells are refused that the whole-program build accepts. Is the interface path's behaviour the right one, which the whole-program build should share, or is it an over-rejection, or does it cover only a part of what the whole-program path covers? Answer it before anyone changes either path.
-    - **The cells,** all with the `direct` carrier and the `frame_ends` invalidation (`<source>__direct__<path>__<destination>__frame_ends`): 30 with the `string` source, for each of the paths `helper`, `two_level_helper`, `fn_val`, `mutual_rec` and `param_65` and each of the destinations `call_struct_mut`, `closure_call_mut`, `closure_capture_mut`, `closure_owned_capture`, `local_field_assigned_out` and `ten_copies`; the `string` source with `deref_out` and each of `same_param`, `store_mutual_rec` and `store_param_65`; and `store_mutual_rec` into `deref_out` with the `arena_vec` and `local_vec` sources. The first to look at: `string__direct__fn_val__call_struct_mut__frame_ends`.
-    - **Regenerate the list:** `lua scripts/fuzz/store_grid.lua --generate-modular build/z46`, then compile each cell both ways as `scripts/check_store_grid_modular.sh` does; the cells that are in `bench/fuzz/store_grid_expected_failures.txt` (whole-program accepts) and not in `bench/fuzz/store_grid_modular_expected_failures.txt` (two-module accepts) are the 35.
-    - **First cell, both ways:** whole-program (`lua scripts/fuzz/store_grid.lua --emit string__direct__fn_val__call_struct_mut__frame_ends`, then `zoril --emit-zil`) compiles. Two-module (path functions in `pathmod.zrl` compiled with `-c --interproc-summary --write-interface`, the cell compiled with `-c --interproc-summary --iface-dir`) is refused: "region escape: callee stashes local stack pointer into global memory". The cell stores into `out` through `get_struct_slot(out)`, a local struct, not into global memory, so the message does not describe the cell.
-    - **What running them shows:** 34 of the 35 cells, built whole-program, run and exit 42: the stored string or vector is still intact, because collections are not freed at scope end. Only `arena_vec__direct__store_mutual_rec__deref_out__frame_ends` reads clobbered memory (exit 77), the shape of `gap_28`. So for 34 cells the interface path refuses a program that works today, and would be the one that stays correct once the `Box` and collection drop series makes frees real.
-    - **To establish:** (1) which summary field differs between the two paths for this cell (compare `pathmod`'s interface with what the whole-program pass computes for `forward_fn_target`); (2) whether an interface that omits a field reads as "unknown, so strict", which would explain a stricter result for any callee compiled separately; (3) why the `string` source is so prominent, when `arena_vec` and `local_vec` cells with the same paths are refused by both builds; (4) whether the one `arena_vec` cell is `gap_28` showing in one path only. Record each finding on this task as it is made.
-    - **Done when:** the task states whether the interface path is right, over-strict, or incomplete, with the evidence, and names the task that acts on it. No compiler change in this task.
+    - **Options, from the measurement:** commit a baseline for the measures whose spread stays inside the tolerance; make the gate print a `[SKIP]` naming the reason for those that do not; and when no committed baseline exists, have the gate say so instead of recording one and passing.
+    - **Recommendation (2026-11-03, until Z-0004's spread data decides it):**
+        1. A host with no committed baseline gets a statement, not a pass. The gate stops recording a baseline on a first run and then printing "All performance thresholds within tolerance"; it prints `[SKIP] bench-thresholds: no committed baseline for <axis> (<reason>)` per axis and exits 0. Recording stays an explicit act (`sh scripts/bench_cross_lang.sh --record`).
+        2. Commit a baseline for `runtime_ratio_vs_gcc_o2` only (4.182 in Z-0004's sample 1): it is relative to gcc -O2 on the same host, so it moves with the compiler and not with the VM. It is committed once Z-0004's samples keep its spread inside the 15% tolerance; otherwise it gets the `[SKIP]` too.
+        3. `clean_throughput_loc_s` and `incremental_rebuild_ms` stay host-local. A host that has recorded its own baseline (a developer's machine) still compares against it; anywhere else they print `[SKIP]` naming "absolute measure, no baseline for this host".
+    - **Why:** on a fresh VM the present gate compares a run with itself, so it cannot fail, and it says "within tolerance" anyway. A committed absolute baseline would pass or fail with the VM's speed, which tests the VM. Z-0004's single sample says nothing yet about other VMs; rule 2 is the part its data can overturn.
+    - **Not done here:** the change to `scripts/bench_threshold_check.sh` and its tests. It needs a task of its own once Z-0004 has its samples.
+    - **Reopened (2026-11-03):** the decision depends on Z-0004's measurements, so the task stays open until they exist; the recommendation above is not a decision yet.
