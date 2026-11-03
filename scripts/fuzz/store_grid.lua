@@ -3,7 +3,7 @@
 -- skipping combinations that are not well-typed with explicit reasons.
 
 local sources = {"arena_vec", "local_vec", "string", "ref_local", "elem_ref", "closure_local"}
-local carriers = {"direct", "struct_field", "tuple_slot", "enum_payload", "box", "array_slot", "struct_val", "struct_scalar"}
+local carriers = {"direct", "struct_field", "tuple_slot", "enum_payload", "box", "array_slot", "struct_val", "struct_scalar", "arena_struct_bundle", "arena_tuple_bundle"}
 local paths = {"direct", "helper", "two_level_helper", "method", "self_method", "trait_method", "closure", "fn_val", "mutual_rec", "param_65", "same_param", "store_mutual_rec", "store_param_65"}
 -- Note: 'global' destination was removed per S1.1 spec because non-scalar static mut
 -- requires 'unsafe' in Zoril, and cells must not use 'unsafe'.
@@ -30,6 +30,9 @@ local function get_skip_reason(s, c, p, d, inv)
     end
 
     -- Carrier constraints
+    if (c == "arena_struct_bundle" or c == "arena_tuple_bundle") and s ~= "arena_vec" then
+        return "an arena-bundling carrier needs an arena source"
+    end
     if c == "box" and (s == "ref_local" or s == "elem_ref") then
         return "box carrier of stack reference rejected at box creation"
     end
@@ -101,6 +104,16 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
     end
 
     -- Carrier struct definitions
+    -- The arena-bundling carriers (gap_31's shape): the arena moves into a struct literal or a tuple
+    -- beside a field that comes from a parameter, and the view is taken from the bundled arena. The
+    -- twin bundles a reference to the caller's arena instead.
+    if c == "arena_struct_bundle" then
+        if is_safe_twin then
+            emit('struct ArenaBundle { ext_tag: i32, a: &Arena }')
+        else
+            emit('struct ArenaBundle { ext_tag: i32, a: Arena }')
+        end
+    end
     if c == "struct_field" or c == "struct_val" then
         emit('struct Carrier { v: ' .. payload_type .. ' }')
         if c == "struct_val" then
@@ -211,6 +224,14 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
             func_args = func_args .. "ref_param: &i32"
         end
     end
+    local is_bundle = (c == "arena_struct_bundle" or c == "arena_tuple_bundle")
+    if is_bundle then
+        if #func_args > 0 then func_args = func_args .. ", " end
+        func_args = func_args .. "ext_tag: i32"
+    end
+    -- How the bundled arena is named once it has moved into the bundle.
+    local bundled_arena = "b.a"
+    if c == "arena_tuple_bundle" then bundled_arena = "b.1" end
 
     local ret_sig = ""
     if ret_type ~= "void" then
@@ -230,7 +251,26 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
     end
 
     -- Step 1: Create the source value
-    if is_safe_twin then
+    if is_safe_twin and is_bundle then
+        if c == "arena_struct_bundle" then
+            emit('    let b = ArenaBundle { ext_tag: ext_tag, a: arena_param };')
+        else
+            emit('    let b = (ext_tag, arena_param);')
+        end
+        emit('    let mut v = Vec::<i32>.new_in(' .. bundled_arena .. ');')
+        emit('    v.push(42);')
+        emit('    let src_val = v.as_slice();')
+    elseif is_bundle then
+        emit('    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { ' .. err_ret .. ' } };')
+        if c == "arena_struct_bundle" then
+            emit('    let mut b = ArenaBundle { ext_tag: ext_tag, a: a };')
+        else
+            emit('    let mut b = (ext_tag, a);')
+        end
+        emit('    let mut v = Vec::<i32>.new_in(&' .. bundled_arena .. ');')
+        emit('    v.push(42);')
+        emit('    let src_val = v.as_slice();')
+    elseif is_safe_twin then
         if s == "arena_vec" or s == "local_vec" then
             emit('    let mut v = Vec::<i32>.new_in(arena_param);')
             emit('    v.push(42);')
@@ -269,7 +309,7 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
     end
 
     -- Step 2: Wrap in carrier
-    if c == "direct" then
+    if c == "direct" or is_bundle then
         emit('    let carried = src_val;')
     elseif c == "struct_field" then
         if is_slice then
@@ -432,7 +472,9 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
 
     -- Step 5: Invalidation inside storer (for reset, free, push, drop, move)
     if not is_safe_twin then
-        if inv == "arena_reset" then
+        if inv == "arena_reset" and is_bundle then
+            emit('    ' .. bundled_arena .. '.reset();')
+        elseif inv == "arena_reset" then
             emit('    a.reset();')
         elseif inv == "vec_free" then
             emit('    v.free();')
@@ -442,6 +484,8 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
             else
                 emit('    for i in 0..100 { v.push(i); }')
             end
+        elseif inv == "drop" and is_bundle then
+            emit('    @drop(b);')
         elseif inv == "drop" then
             if s == "arena_vec" then
                 emit('    @drop(a);')
@@ -452,6 +496,8 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
             elseif s == "closure_local" then
                 emit('    @drop(x);')
             end
+        elseif inv == "move_owner" and is_bundle then
+            emit('    sink(b);')
         elseif inv == "move_owner" then
             if s == "arena_vec" then
                 emit('    sink(a);')
@@ -484,6 +530,10 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
             emit('    let val_main = 42;')
             extra_arg = "&val_main"
         end
+    end
+    if is_bundle then
+        if #extra_arg > 0 then extra_arg = extra_arg .. ", " end
+        extra_arg = extra_arg .. "7"
     end
     if d == "return_val" then
         if #extra_arg > 0 then
