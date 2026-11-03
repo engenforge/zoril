@@ -38,11 +38,13 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
     - **Not done here:** the change to `scripts/bench_threshold_check.sh` and its tests. It needs a task of its own once Z-0004 has its samples.
     - **Reopened (2026-11-03):** the decision depends on Z-0004's measurements, so the task stays open until they exist; the recommendation above is not a decision yet.
 
-- [ ] +docs Z-0006 Publish the provenance design note, `doc/design/provenance.md`
+- [x] +docs Z-0006 Publish the provenance design note, `doc/design/provenance.md`
     > **Created:** 2026-11-03 **Owner:** the maintainer supplies the text. **Blocks:** Z-0009 to Z-0012.
+    > **Completed:** 2026-11-03 git:e1af92e
 
     - **Status (2026-11-03):** blocked on the maintainer's text; `doc/design/` does not exist yet and nothing was written in its place.
     - The design of one store-and-return rule over per-local origin sets, which Z-0009 to Z-0012 implement. Add it as supplied, then check it against `AGENTS.md`'s public-text rules (present tense, no history) and `make test` (`md-check`, `comment-noise`).
+    - **Done (2026-11-03):** added byte-for-byte from the maintainer's file; its task, symbol and probe references were checked against the tree (the 17 open probes are the 17 `known_gap` ones, 82 `#[borrows()]` declarations). `make test`: 3178 run, 3178 passed, 0 failed, 38 skipped, `md-check` and `comment-noise` included. Only docs changed, so `make preflight-changed` was not run.
 
 - [x] +tools +tests Z-0043 `make preflight-changed` checks a committed change, and builds the base of a stricter rule
     > **Created:** 2026-11-03
