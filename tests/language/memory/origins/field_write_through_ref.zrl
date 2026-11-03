@@ -1,0 +1,13 @@
+// A write through a local reference lands in the local it points to.
+// ORIGINS: f w O={Param(0), Static} S={}
+// expected exit 0
+struct W { s: [u8], t: i32 }
+fn f(view: [u8]) -> i32 {
+    let mut w = W { s: "", t: 3 };
+    let r = &mut w;
+    r.s = view;
+    return w.s[0] as i32 - 42 + w.t - 3;
+}
+fn main() -> i32 {
+    return f("*");
+}

@@ -1,0 +1,13 @@
+// Inside a closure, a captured reference is read from the environment, which outlives the call:
+// its origin is Env, not this frame (gap_11).
+// ORIGINS: _closure_0 out O={Env} S={}
+// expected exit 0
+fn store(out: &mut i32) {
+    let mut cl = || { *out = 42; };
+    cl();
+}
+fn main() -> i32 {
+    let mut d = 0;
+    store(&mut d);
+    return d - 42;
+}

@@ -68,6 +68,9 @@ pub struct Driver {
     // compile does no counting.
     pub collect_zir_stats: bool,
     pub zir_stats: ZirStats,
+    // `zoril --emit-origins`: print the origin sets of each function the input file defines
+    // (check_zir::compute_origins_zir, computed for every body either way).
+    pub emit_origins: bool,
 }
 
 impl Driver {
@@ -202,6 +205,7 @@ impl Driver {
                 hosted: false,
                 collect_zir_stats: false,
                 zir_stats: ZirStats.new(),
+                emit_origins: false,
             };
         }
         return l;

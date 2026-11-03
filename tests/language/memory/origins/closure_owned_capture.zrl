@@ -1,0 +1,12 @@
+// An owned capture's storage dies with the closure, so inside the body the capture owns Frame(itself)
+// (and Env, which it was read from: a superset).
+// ORIGINS: _closure_0 v O={Env} S={Frame(v), Env}
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let cl = || -> i32 { return v.as_slice()[0]; };
+    return cl() - 42;
+}

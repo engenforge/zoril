@@ -1193,6 +1193,18 @@ impl Driver {
             &zir_func,
             self.builder.current_func_idx as u32
         );
+        // Computed for every body although no rule reads it yet, so its cost is the one the rules
+        // will add (doc/design/provenance.md §6).
+        let sret_name = self.intern_table.intern("__sret");
+        let origins = check_zir::compute_origins_zir(
+            self.scratch_arena,
+            self.module,
+            &zir_func,
+            sret_name
+        );
+        if self.emit_origins && current_source_file == self.target_source_file {
+            check_zir::print_origins(&origins, &zir_func, self.module, self.intern_table);
+        }
         // `--emit-zir-stats`: a census of the canonical ZIR, before this frame's scratch arena is
         // reset (the counter arrays are part of the Driver, so nothing is allocated here).
         if self.collect_zir_stats {

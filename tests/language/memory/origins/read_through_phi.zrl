@@ -1,0 +1,19 @@
+// The read-through rule through a join: either carrier holds only the view (Z-0045).
+// ORIGINS: f got O={Param(1)} S={}
+// expected compile fail
+struct Carrier { v: [i32] }
+fn take_ref(c: &Carrier) -> [i32] { return c.v; }
+fn pick() -> i32 { return 1; }
+fn f(out: &mut [i32], view: [i32]) {
+    let a = Carrier { v: view };
+    let b = Carrier { v: view };
+    let r = if pick() > 0 { &a } else { &b };
+    let got = take_ref(r);
+    *out = got;
+}
+fn main() -> i32 {
+    let data = [42, 0];
+    let mut dest: [i32] = @slice(0 as *i32, 0);
+    f(&mut dest, &data);
+    return dest[0] - 42;
+}

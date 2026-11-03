@@ -1,0 +1,14 @@
+// One tuple carries both a destination and a value: the tuple holds both origins (gap_07).
+// ORIGINS: f pair O={Param(0), Frame(x)} S={}
+// expected exit 0
+fn put(p: (&mut i32, &i32)) { *p.0 = *p.1; }
+fn f(out: &mut i32) {
+    let x = 42;
+    let pair = (out, &x);
+    put(pair);
+}
+fn main() -> i32 {
+    let mut d = 0;
+    f(&mut d);
+    return d - 42;
+}
