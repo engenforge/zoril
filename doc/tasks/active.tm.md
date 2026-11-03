@@ -25,16 +25,19 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
 
     - **What:** the commits that fixed the executable stack (`81e0340`: `.note.GNU-stack` in `rt/runtime.s` and its byte-identical copy `bootstrap/stage1/rt/runtime.s`, the check in `scripts/check_runtimes.sh`; `b6ab12d`: `tests/integration/external_stub.s`), the POSIX `scripts/marker_density.sh` and portability check 7b (`b372763`), the scdoc 1.11.5 minimum (`36adb90` and its `test_check_deps.sh` follow-up), and the runner's result-file race (`c100684`). The session that wrote them does not close this task.
     - **Re-run:** on Ubuntu 24.04 (binutils 2.42), `readelf -lW` on a program built with `build/zbuild` shows `GNU_STACK ... RW`; with the note removed from `rt/runtime.s` the new runtime check fails. `TR_TEST_ST_DELAY` with the `write_status` change reverted makes `scripts/test_result_file.sh` fail. The scdoc stubs in `scripts/test_scdoc_min.sh` fail with the version check removed.
+    - **Status (2026-11-03):** not started. The session that wrote these fixes also worked this series, so it does not review them; a different model or session runs the re-runs above. Known from the first session, as input for the reviewer: `tests/integration/external_stub.s` and `rt/runtime.s` now carry the note; `bootstrap/stage0-c/lib/rt/runtime.s` and `sys_linux_x86_64.s` still do not (Z-0039); the flake's cause was the empty `N.st` window (`TR_TEST_ST_DELAY` reproduces it deterministically).
     - **Siblings to probe:** every other object the toolchain links that is not QBE output (hosted runtime, test fixtures, `bootstrap/stage0-c/lib/rt/`, see Z-0039 in `future.tm.md`); every other file `scripts/test.sh` creates in one process and reads in another (`.out`, `pool.pid`, the plan file); every other `#!/bin/sh` script using a bash-only `set` option.
 
-- [ ] +fuzz +decision Z-0003 Decide when to renew the fuzz record, now that `rt/` changed
+- [x] +fuzz +decision Z-0003 Decide when to renew the fuzz record, now that `rt/` changed
     > **Created:** 2026-11-03 **Owner:** the maintainer (a fuzz session takes the whole machine for hours).
+    > **Completed:** 2026-11-03 git:986092a
 
     - **State:** `scripts/check_fuzz_fresh.sh` reports the record stale for `rt/` since `81e0340`. The pages that quote the record (`README.md`, `doc/SAFETY.md` §5, `doc/STABILITY.md`) describe the launched code and stay true while they say so. Z-0007 to Z-0012 will change `src/` several times.
     - **Options:** a short session now; or one after the hardening series (Z-0012), with the pages saying which code the current record describes until then. Record the decision here.
     - **Decision (2026-11-03, a delegated judgment for the maintainer to review):** renew the record once, after Z-0012, not now.
     - **Reasons:** (1) Z-0007 to Z-0012 each change `src/`, so a session run now would be stale again before anything cites it. (2) The pages are accurate as they stand: they quote the figure for the launched code (`bench/fuzz/README.md`, "The short session on the launched code"), and `scripts/check_fuzz_fresh.sh` reports the drift (`STALE ... rt`) without failing outside `--strict`. (3) Nothing is lost by waiting: the release recording step runs the same check with `--strict` and refuses while the hashes differ, so a release cannot cite the stale record. (4) A session takes the whole machine for hours; one run after the series costs less than one after each task.
     - **Conditions:** no page edit is needed now. Z-0012's completion note starts the renewal. If a release is wanted before Z-0012, a short session runs first, because the strict check requires it. Run Z-0013's new generator features in the same session.
+    - **Result:** decided to renew after Z-0012. Nothing in the tree changes; the staleness stays visible through `scripts/check_fuzz_fresh.sh` and is enforced at release by its `--strict` mode. No check ran beyond `tm validate`; the maintainer should confirm or overrule the timing.
 
 - [ ] +bench +measurement Z-0004 Measure how far the benchmark gate's measures move between cloud sessions
     > **Created:** 2026-11-03
@@ -44,8 +47,9 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
     - **Sample 1 (2026-11-03, commit `fdb0c55`):** `Intel(R) Xeon(R) Processor @ 2.30GHz`, 4 vCPUs, 1-minute load average 2.46 at the start (a `make test` had just finished, so the host was not quiet). `clean_throughput_loc_s` 10177 (the run's own spread 288..297 ms, +3.1%), `incremental_rebuild_ms` 22, `runtime_ratio_vs_gcc_o2` 4.182, `peak_rss_mb_per_kloc` 2.973; the run took 42 s. Earlier on this same VM, an unrelated preflight recorded `clean_throughput_loc_s` 10072, 1.0% below this sample. That is one VM twice, not a spread between sessions.
     - **Still to do:** two to four more samples, each from a new cloud session on this commit. This task stays open until they exist; the spread cannot be computed from one VM.
 
-- [ ] +bench +decision Z-0005 Decide the benchmark gate's behaviour on a host without a committed baseline
+- [x] +bench +decision Z-0005 Decide the benchmark gate's behaviour on a host without a committed baseline
     > **Created:** 2026-11-03 **Depends:** Z-0004.
+    > **Completed:** 2026-11-03 git:986092a
 
     - **Options, from the measurement:** commit a baseline for the measures whose spread stays inside the tolerance; make the gate print a `[SKIP]` naming the reason for those that do not; and when no committed baseline exists, have the gate say so instead of recording one and passing.
     - **Decision (2026-11-03, provisional on Z-0004's spread data; a delegated judgment for the maintainer to review):**
@@ -54,10 +58,12 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
         3. `clean_throughput_loc_s` and `incremental_rebuild_ms` stay host-local. A host that has recorded its own baseline (a developer's machine) still compares against it; anywhere else they print `[SKIP]` naming "absolute measure, no baseline for this host".
     - **Why:** on a fresh VM the present gate compares a run with itself, so it cannot fail, and it says "within tolerance" anyway. A committed absolute baseline would pass or fail with the VM's speed, which tests the VM. Z-0004's single sample says nothing yet about other VMs; rule 2 is the part its data can overturn.
     - **Not done here:** the change to `scripts/bench_threshold_check.sh` and its tests. It needs a task of its own once Z-0004 has its samples.
+    - **Result:** the gate should report "no committed baseline" instead of passing against itself; only the gcc-relative ratio is a candidate for a committed baseline. This is closed on reasoning plus one sample, ahead of its dependency Z-0004, which is still open: if Z-0004's spread for the ratio exceeds 15%, reopen rule 2. No check ran beyond `tm validate`.
 
 - [ ] +docs Z-0006 Publish the provenance design note, `doc/design/provenance.md`
     > **Created:** 2026-11-03 **Owner:** the maintainer supplies the text. **Blocks:** Z-0009 to Z-0012.
 
+    - **Status (2026-11-03):** blocked on the maintainer's text; `doc/design/` does not exist yet and nothing was written in its place.
     - The design of one store-and-return rule over per-local origin sets, which Z-0009 to Z-0012 implement. Add it as supplied, then check it against `AGENTS.md`'s public-text rules (present tense, no history) and `make test` (`md-check`, `comment-noise`).
 
 - [ ] +safety +tests Z-0007 B0 A write into a field, element or tuple slot of a local keeps the borrow it stores
