@@ -70,14 +70,6 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
     - **Do:** (1) with no base to compare against, say so as a failure or name the base to use (`PREFLIGHT_BASE=<commit>`), instead of passing; (2) seed the base build with a compiler built from the base: build it through stage1 as a fresh checkout does, or keep the previous `build/zoril`. Add a self-test for each in `scripts/test_preflight.sh`: a committed change with no upstream must not pass silently, and a change that rejects code in the base source must still produce a differential.
     - **Verification:** `scripts/test_preflight.sh`, `make test`, and a `make preflight-changed` on a stricter-rule change that runs its mutations and its differential without a wrapper.
 
-- [ ] +safety +tests Z-0044 B0.1 A value stored into a local's field through a pointer to the local keeps its borrow
-    > **Created:** 2026-11-03 **Check-in:** stop for review after it. **Closes:** `gap_37_local_mutref_field_reset`, `gap_38_param_field_reset`, `gap_39_method_self_field_reset`. **After:** Z-0007.
-
-    - **Now:** a slice written into a local struct's field through a local `&mut`, through a callee's `&mut` parameter, or through `self` in a `&mut self` method is not recorded as a borrow the struct holds, so `a.reset()` passes while the field is read. Z-0007's rule skips these writes (`place_writes_through_pointer`), because the store lands in the referent, not in the base local.
-    - **Do:** carry the stored value's borrows to the local the pointer refers to: for a local `&mut`, through the reference's own borrow of that local; for a callee, through a summary edge from the stored argument to the pointer parameter's referent, applied at the call (`#[stores(..)]` is the declared form). Probe the sibling routes: a `&mut` held in a struct field, a reborrow, a closure capturing `&mut w`, and a trait method.
-    - **Probes:** the three gap probes flip to `compile_reject`, with an accepted twin for each (the field is read before the reset). Check the over-rejection recorded on Z-0017 does not grow.
-    - **Verification:** `make test`, `make preflight-changed`, the rejection differential; the fuzz record goes stale for `src/`.
-
 - [ ] +safety +tests Z-0009 B1 Origin sets per local, and the store and return rules on them, behind a flag
     > **Created:** 2026-11-03 **Depends:** Z-0006. **Check-in:** stop for review after it. **Split here** if it outgrows a session (the sets, then the rules).
 
@@ -85,6 +77,16 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
     - **Rules, under `--provenance` (off by default):** a destination with any non-`Frame` origin accepts no value with a `Frame` or `Unknown` origin; a return carries no `Frame` or `Unknown` origin. With the flag the old rule still runs too. A `--provenance=warn` mode reports what the new rule rejects and the old one accepts.
     - **Expected to close** (with the flag): `gap_11_dest_closure_capture_mut`, `gap_13_ref_local_enum_payload`, `gap_16_ref_local_fn_val`, `gap_18_elem_ref_enum_payload`, `gap_21_elem_ref_fn_val`, `gap_23_closure_local_enum_payload`, `gap_26_closure_local_fn_val`, `gap_29_dest_closure_call_returns_mut_ref`, `gap_32_byval_collection_param_store`, `gap_36_carrier_ref_enum_payload_match`; the measurement decides, so list what is left for Z-0010.
     - **Done when:** run warn mode over `src/`, `stdlib/`, `tools/` and `corpus/` and record each new rejection as a real escape, a leak, or an over-rejection, without changing that code. `make test` with the default unchanged, `make preflight-changed`.
+
+- [ ] +safety +tests Z-0044 B0.1 A value stored into a local's field through a pointer to the local keeps its borrow
+    > **Created:** 2026-11-03 **Check-in:** stop for review after it. **Closes:** `gap_37_local_mutref_field_reset`, `gap_38_param_field_reset`, `gap_39_method_self_field_reset`. **After:** Z-0007.
+    > **Depends:** Z-0006.
+
+    - **Now:** a slice written into a local struct's field through a local `&mut`, through a callee's `&mut` parameter, or through `self` in a `&mut self` method is not recorded as a borrow the struct holds, so `a.reset()` passes while the field is read. Z-0007's rule skips these writes (`place_writes_through_pointer`), because the store lands in the referent, not in the base local.
+    - **Do:** carry the stored value's borrows to the local the pointer refers to: for a local `&mut`, through the reference's own borrow of that local; for a callee, through a summary edge from the stored argument to the pointer parameter's referent, applied at the call (`#[stores(..)]` is the declared form). Probe the sibling routes: a `&mut` held in a struct field, a reborrow, a closure capturing `&mut w`, and a trait method.
+    - **Probes:** the three gap probes flip to `compile_reject`, with an accepted twin for each (the field is read before the reset). Check the over-rejection recorded on Z-0017 does not grow.
+    - **Verification:** `make test`, `make preflight-changed`, the rejection differential; the fuzz record goes stale for `src/`.
+    - **Placement (2026-11-03):** after Z-0009, because the provenance series (Z-0009 to Z-0012, designed in Z-0006) may subsume it; whoever reaches it decides whether it still stands alone.
 
 - [ ] +safety +tests Z-0010 B2 One call summary from the origin sets, iterated over recursive calls, written to the `.zri`
     > **Created:** 2026-11-03 **Depends:** Z-0008, Z-0009. **Check-in:** stop for review after it.
