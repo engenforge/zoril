@@ -6,6 +6,7 @@
 # verifies unsafe rejections are for safety reasons (zero generator errors),
 # computes the soundness hole class report,
 # verifies actual failing cells match bench/fuzz/store_grid_expected_failures.txt,
+# runs the two-module cells (scripts/check_store_grid_modular.sh),
 # and reports cell counts, class count, and status.
 #
 # Usage:
@@ -132,6 +133,14 @@ if [ "$GENERATOR_ERROR_COUNT" -gt 0 ]; then
     head -n 15 "$WORK_DIR/generator_errors.txt" | sed 's/^/       /'
     exit 1
 fi
+
+# Step 3b: the two-module cells (scripts/check_store_grid_modular.sh): the cells whose path goes through
+# a free function, built with the callee read from its interface, as zbuild builds them. It records its
+# own files under --record.
+mod_args="--jobs $JOBS"
+[ "$RECORD" -eq 1 ] && mod_args="--record $mod_args"
+# shellcheck disable=SC2086
+ZORIL_CC="$ZORIL" STORE_GRID_SAFETY_REGEX="$SAFETY_REGEX" sh "$REPO_ROOT/scripts/check_store_grid_modular.sh" $mod_args || exit $?
 
 # Step 4: Generate Class Report. A tracked file is written only under --record: the report of a plain
 # run goes to the work directory.

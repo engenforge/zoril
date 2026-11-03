@@ -10,6 +10,13 @@ local paths = {"direct", "helper", "two_level_helper", "method", "self_method", 
 local destinations = {"deref_out", "field_out", "call_mut", "call_struct_mut", "closure_capture_mut", "closure_owned_capture", "local_field_assigned_out", "ten_copies", "return_val", "closure_call_mut"}
 local invalidations = {"frame_ends", "arena_reset", "vec_free", "push_growth", "drop", "move_owner"}
 
+-- Two-module mode (--generate-modular): the path's functions go into a module of their own,
+-- pathmod.zrl, which the cell imports, so the call crosses a module boundary and its summary comes
+-- from pathmod's interface (.zri), as under zbuild. Only paths whose callee is a free function qualify.
+local modular = false
+local modular_paths = {helper = true, two_level_helper = true, fn_val = true, mutual_rec = true,
+    param_65 = true, same_param = true, store_mutual_rec = true, store_param_65 = true}
+
 -- Check why a combination should be skipped
 local function get_skip_reason(s, c, p, d, inv)
     -- Invalidation vs source constraints
@@ -62,6 +69,10 @@ end
 local function generate_code(s, c, p, d, inv, is_safe_twin)
     local out = {}
     local function emit(line) table.insert(out, line) end
+    local mod_out = {}
+    local function emit_path(line)
+        if modular then table.insert(mod_out, "pub " .. line) else emit(line) end
+    end
 
     -- Determine payload type and imports
     local payload_type = "[i32]"
@@ -165,10 +176,10 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
 
     -- Helper functions for paths
     if p == "helper" then
-        emit('fn forward_helper(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; }')
+        emit_path('fn forward_helper(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; }')
     elseif p == "two_level_helper" then
-        emit('fn helper_inner(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; }')
-        emit('fn helper_outer(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return helper_inner(v); }')
+        emit_path('fn helper_inner(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; }')
+        emit_path('fn helper_outer(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return helper_inner(v); }')
     elseif p == "method" then
         emit('struct MethodPass { x: i32 }')
         emit('impl MethodPass { fn forward(self: &MethodPass, v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; } }')
@@ -180,30 +191,30 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
         emit('struct TraitImpl { x: i32 }')
         emit('impl StorerTrait for TraitImpl { fn forward(self: &TraitImpl, v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; } }')
     elseif p == "fn_val" then
-        emit('fn forward_fn_target(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; }')
+        emit_path('fn forward_fn_target(v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return v; }')
     elseif p == "mutual_rec" then
-        emit('fn rec_a(depth: i32, v: ' .. payload_type .. ') -> ' .. payload_type .. ' { if depth > 0 { return rec_b(depth - 1, v); } return v; }')
-        emit('fn rec_b(depth: i32, v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return rec_a(depth, v); }')
+        emit_path('fn rec_a(depth: i32, v: ' .. payload_type .. ') -> ' .. payload_type .. ' { if depth > 0 { return rec_b(depth - 1, v); } return v; }')
+        emit_path('fn rec_b(depth: i32, v: ' .. payload_type .. ') -> ' .. payload_type .. ' { return rec_a(depth, v); }')
     elseif p == "param_65" then
         local p_args = ""
         for i = 1, 63 do p_args = p_args .. "_p" .. i .. ": i32, " end
         p_args = p_args .. "v: " .. payload_type
-        emit('fn pass_param65(' .. p_args .. ') -> ' .. payload_type .. ' { return v; }')
+        emit_path('fn pass_param65(' .. p_args .. ') -> ' .. payload_type .. ' { return v; }')
     elseif p == "store_mutual_rec" then
         -- The callee stores: the value reaches `*out` only after the recursion bottoms out.
-        emit('fn stash_a(out: &mut ' .. payload_type .. ', depth: i32, v: ' .. payload_type .. ') { if depth > 0 { stash_b(out, depth - 1, v); return; } *out = v; }')
-        emit('fn stash_b(out: &mut ' .. payload_type .. ', depth: i32, v: ' .. payload_type .. ') { stash_a(out, depth, v); }')
+        emit_path('fn stash_a(out: &mut ' .. payload_type .. ', depth: i32, v: ' .. payload_type .. ') { if depth > 0 { stash_b(out, depth - 1, v); return; } *out = v; }')
+        emit_path('fn stash_b(out: &mut ' .. payload_type .. ', depth: i32, v: ' .. payload_type .. ') { stash_a(out, depth, v); }')
     elseif p == "store_param_65" then
         -- The callee stores, and the value is its 65th parameter, past the 64-bit summary masks.
         local s_args = "out: &mut " .. payload_type .. ", "
         for i = 1, 63 do s_args = s_args .. "_p" .. i .. ": i32, " end
         s_args = s_args .. "v: " .. payload_type
-        emit('fn stash65(' .. s_args .. ') { *out = v; }')
+        emit_path('fn stash65(' .. s_args .. ') { *out = v; }')
     elseif p == "same_param" then
         if d == "field_out" then
-            emit('fn stash_pair(p: (&mut FieldDest, ' .. payload_type .. ')) { p.0.s = p.1; }')
+            emit_path('fn stash_pair(p: (&mut FieldDest, ' .. payload_type .. ')) { p.0.s = p.1; }')
         else
-            emit('fn stash_pair(p: (&mut ' .. payload_type .. ', ' .. payload_type .. ')) { *p.0 = p.1; }')
+            emit_path('fn stash_pair(p: (&mut ' .. payload_type .. ', ' .. payload_type .. ')) { *p.0 = p.1; }')
         end
     end
 
@@ -672,7 +683,16 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
     end
     emit('}') -- end main
 
-    return table.concat(out, "\n") .. "\n"
+    if modular and #mod_out > 0 then
+        local uses = {}
+        for _, line in ipairs(mod_out) do
+            local name = line:match("^pub fn ([%w_]+)")
+            if name then table.insert(uses, 'use pathmod::' .. name .. ';') end
+        end
+        for i = #uses, 1, -1 do table.insert(out, 1, uses[i]) end
+        table.insert(out, 1, 'import "pathmod.zrl";')
+    end
+    return table.concat(out, "\n") .. "\n", table.concat(mod_out, "\n") .. "\n"
 end
 
 -- CLI Handler
@@ -697,6 +717,10 @@ while i <= #arg do
         target_cell = arg[i]
     elseif a == "--generate-all" then
         mode = "generate-all"
+        i = i + 1
+        target_dir = arg[i]
+    elseif a == "--generate-modular" then
+        mode = "generate-modular"
         i = i + 1
         target_dir = arg[i]
     else
@@ -788,4 +812,32 @@ elseif mode == "generate-all" then
     end
     manifest:close()
     print(string.format("Generated %d cell pairs in %s", #valid_cells, target_dir))
+elseif mode == "generate-modular" then
+    -- One directory per cell: pathmod.zrl (the path's functions), unsafe.zrl and twin.zrl (each
+    -- importing it). The cells are the direct carrier with the frame_ends invalidation, over every
+    -- source and destination, for each path whose callee is a free function: the routes the call
+    -- summary decides, without the grid's full product.
+    assert(target_dir, "Target directory required for --generate-modular")
+    modular = true
+    os.execute("mkdir -p " .. target_dir)
+    local manifest = io.open(target_dir .. "/manifest.txt", "w")
+    local count = 0
+    for _, id in ipairs(valid_cells) do
+        local s, c, p, d, inv = parse_cell_id(id)
+        if modular_paths[p] and c == "direct" and inv == "frame_ends" and (p ~= "same_param" or d == "deref_out") then
+            local dir = target_dir .. "/" .. id
+            os.execute("mkdir -p " .. dir)
+            local u_code, mod_code = generate_code(s, c, p, d, inv, false)
+            local t_code = generate_code(s, c, p, d, inv, true)
+            for name, text in pairs({["pathmod.zrl"] = mod_code, ["unsafe.zrl"] = u_code, ["twin.zrl"] = t_code}) do
+                local f = io.open(dir .. "/" .. name, "w")
+                f:write(text)
+                f:close()
+            end
+            manifest:write(id .. "\n")
+            count = count + 1
+        end
+    end
+    manifest:close()
+    print(string.format("Generated %d two-module cells in %s", count, target_dir))
 end
