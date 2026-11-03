@@ -44,11 +44,17 @@ mkdir -p "$master_shim"
 tools="sh bash make cc gcc clang qbe as gas ld ld.bfd ld.gold ld.lld awk gawk mawk nawk sed flock lua lua5.4 lua5.3 lua5.2 lua5.1 luajit mkfifo xargs scdoc timeout git tar bsdtar gzip curl ssh scp cmp podman valgrind dprint rustc setsid cproc mcpp grep cat rm cp ln mkdir touch chmod uname head tr mktemp sleep kill ps sort seq uniq diff date cut tee mv find comm wc true false test expr basename dirname"
 
 for t in $tools; do
+    # scdoc is stubbed below: the preflight profile refuses an scdoc older than 1.11.5, so these rows
+    # must not depend on which scdoc (or whether any) the host has.
+    [ "$t" = scdoc ] && continue
     p=$(command -v "$t" 2>/dev/null || true)
     if [ -n "$p" ] && [ -x "$p" ]; then
         ln -s "$p" "$master_shim/$t" 2>/dev/null || true
     fi
 done
+# An scdoc that reports 1.11.5, the minimum, and copies stdin to stdout otherwise.
+printf '#!/bin/sh\nif [ "${1:-}" = -v ]; then echo "scdoc 1.11.5"; exit 0; fi\ncat\n' > "$master_shim/scdoc"
+chmod +x "$master_shim/scdoc"
 
 # Also check for sha256 tools
 _sha="sha256""sum"
@@ -249,6 +255,20 @@ if [ $rc -eq 0 ]; then
     pass "profile fuzz accepts a Lua that has math.tointeger"
 else
     fail "profile fuzz refused a Lua 5.3 stand-in (rc=$rc, out=$out)"
+fi
+
+# An scdoc older than 1.11.5, the version the committed man pages are generated with, is refused by
+# the preflight profile, naming the version found and the minimum (the stub reports 1.11.2).
+shim_dir="$tmp/shim_old_scdoc"
+create_sub_shim "$deps_master_shim" "$shim_dir" scdoc
+printf '#!/bin/sh\nif [ "${1:-}" = -v ]; then echo "scdoc 1.11.2"; exit 0; fi\ncat\n' > "$shim_dir/scdoc"
+chmod +x "$shim_dir/scdoc"
+rc=0
+out=$(PATH="$shim_dir" run_with_timeout 10 ./scripts/check_deps.sh preflight 2>&1) || rc=$?
+if [ $rc -eq 1 ] && echo "$out" | grep -qF "1.11.2" && echo "$out" | grep -qF "1.11.5"; then
+    pass "profile preflight refuses an scdoc older than 1.11.5, naming 1.11.2 and 1.11.5"
+else
+    fail "profile preflight did not refuse an scdoc 1.11.2 (rc=$rc, out=$out)"
 fi
 
 # -----------------------------------------------------------------------------
