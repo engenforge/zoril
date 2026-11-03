@@ -28,13 +28,14 @@
 # runs from the start of the line to the token, opening quote included, so a second path in the
 # same quoted example is inside it too; build outputs (`build/`, `.zoril-cache/`) are not source.
 #
-# Rule 2b - private documents. `doc/tasks`, `doc/performance`, `doc/release`, `doc/archive`,
-# `doc/design`, `doc/stage0-C` and any `.tm.md` name a document no tree exports, so naming one
-# fails with no existence check: this tree carries them and the export still never will. It is the
-# same leak `check_export_docs.sh` closes for Markdown, which is why a shipped `src/il_type.zrl`
-# naming `doc/tasks/active.tm.md` must be replaced with the sentence a reader needs. A document
-# that exists here but is dropped from the curated export (`doc/spec/bootstrap_subset.md`, the
-# `doc/language/debugging-*` notes) cannot be listed here - Rule 2a resolves it - which is why
+# Rule 2b - private documents. `doc/performance`, `doc/release`, `doc/archive` and `doc/stage0-C`
+# name a document no tree exports, so naming one fails with no existence check: the private tree
+# may carry it and the export still never will. It is the same leak `check_export_docs.sh` closes
+# for Markdown. `doc/tasks` and `doc/design` (and the `.tm.md` files under them) are carried by the
+# tree, so they are held only to Rule 2a: a comment may cite `doc/tasks/active.tm.md` while that
+# file exists, and a citation of one that does not fails as any stale path does.
+# A document that exists here but is dropped from the curated export (`doc/spec/bootstrap_subset.md`,
+# the `doc/language/debugging-*` notes) cannot be listed here - Rule 2a resolves it - which is why
 # `scripts/export_public_release.sh` runs this gate on the exported tree as well.
 # A path that ships (`doc/spec/safety_model.md`) is Rule 2a's business, not this one.
 #
@@ -142,7 +143,7 @@ findings() {
                 # trailing boundary is left for the next token so a closing quote still counts.
                 off = 1
                 r = scan
-                while (match(r, /(^|[^A-Za-z0-9_-])doc\/(tasks|performance|release|archive|design|stage0-C)([^A-Za-z0-9_-]|$)/)) {
+                while (match(r, /(^|[^A-Za-z0-9_-])doc\/(performance|release|archive|stage0-C)([^A-Za-z0-9_-]|$)/)) {
                     tok = substr(r, RSTART, RLENGTH)
                     start = off + RSTART - 1
                     off = start + RLENGTH - 1
@@ -150,20 +151,9 @@ findings() {
                     q = substr(scan, 1, start)
                     if (gsub(/"/, "x", q) % 2 == 1) continue
                     sub(/^[^A-Za-z0-9_-]/, "", tok)
-                    # The trailing boundary may be a quote (`doc/tasks"`): keep it out of the finding.
+                    # The trailing boundary may be a quote (`doc/release"`): keep it out of the finding.
                     sub(/[.,;:)" \t]+$/, "", tok)
                     sub(/\/$/, "", tok)
-                    printf "%s\t%d\t%s\t%s\n", file, FNR, "private-doc", tok
-                }
-                off = 1
-                r = scan
-                while (match(r, /[A-Za-z0-9_.\/-]*\.tm\.md/)) {
-                    tok = substr(r, RSTART, RLENGTH)
-                    start = off + RSTART - 1
-                    off = start + RLENGTH
-                    r = substr(r, RSTART + RLENGTH)
-                    q = substr(scan, 1, start)
-                    if (gsub(/"/, "x", q) % 2 == 1) continue
                     printf "%s\t%d\t%s\t%s\n", file, FNR, "private-doc", tok
                 }
                 # Rule 2a: a path-shaped token must name a file this tree carries.
