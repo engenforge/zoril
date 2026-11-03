@@ -71,7 +71,7 @@
 #     not percentages — there is no natural "total" to divide either by that
 #     isn't itself LOC, and LOC-normalizing them was not asked for by the
 #     design they gate (`@ptr_cast`-mandatory; pointer-creation-site boundary).
-set -euo pipefail
+set -eu
 
 if [ "$#" -eq 0 ]; then
   echo "usage: marker_density.sh <file.zrl | directory> [file2.zrl ...]" >&2
