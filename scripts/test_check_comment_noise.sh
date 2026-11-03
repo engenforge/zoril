@@ -176,8 +176,9 @@ run "$d"
 expect "a task file the tree does not carry fails" 1 "references 'doc/tasks/gone.tm.md', which the tree does not carry"
 
 # 18. A quoted example is not a reference, and the quote that opens it must not become part of the
-#     finding. Before 2026-10-19 this failed and named `doc/performance"`: the rule's boundary
-#     character was the opening quote, so the count before the token was even.
+#     finding. Before 2026-10-19 this failed and named `doc/tasks"`: the rule's boundary
+#     character was the opening quote, so the count before the token was even. The example token
+#     is `doc/performance` now, because `doc/tasks` is no longer private and is accepted anyway.
 d=$(tree quoted_private)
 printf '// "doc/performance" is an example of a name, never a reference.\nfn f() {}\n' > "$d/src/a.zrl"
 run "$d"
