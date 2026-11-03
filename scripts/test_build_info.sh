@@ -2,6 +2,7 @@
 # scripts/test_build_info.sh — build-info.txt names the tree it was made from and the host, leaks no
 # local path, and scripts/dist.sh warns when the host is not Alpine Linux.
 cd "$(dirname "$0")/.." || exit 2
+. scripts/lib/portability.sh
 command -v git >/dev/null 2>&1 || { echo "[SKIP] build-info: no git"; exit 0; }
 fail() { echo "[FAIL] build-info: $1"; exit 1; }
 t=$(mktemp -d "${TMPDIR:-/tmp}/zoril_buildinfo_XXXXXX")
@@ -88,14 +89,16 @@ grep -q 'requires Alpine' "$t/err.txt" || fail "the refusal does not say why"
 host OS_RELEASE=/nonexistent || fail "dist.sh host failed with no os-release"
 grep -q 'unknown host' "$t/err.txt" || fail "no warning without an os-release"
 
-# A real source archive: build-info.txt lands beside SHA256SUMS and lists the archive's hash.
+# A real source archive: build-info.txt lands beside SHA256SUMS, lists the archive's hash, and is itself
+# listed last in SHA256SUMS (so signing SHA256SUMS covers it).
 if command -v bsdtar >/dev/null 2>&1; then
     (cd "$t" && OS_RELEASE="$t/alpine.release" DIST_OUT="$t/dist" sh scripts/dist.sh src > "$t/out.txt" 2>&1) || fail "dist.sh src failed: $(cat "$t/out.txt")"
     [ -f "$t/dist/build-info.txt" ] || fail "dist.sh src wrote no build-info.txt"
     grep -q "^commit: $head\$" "$t/dist/build-info.txt" || fail "build-info.txt has the wrong commit"
-    want=$(sed 's/  */ /' "$t/dist/SHA256SUMS")
+    want=$(grep -v ' build-info\.txt$' "$t/dist/SHA256SUMS" | sed 's/  */ /')
     [ "$(sed -n 's/^archive_sha256: //p' "$t/dist/build-info.txt")" = "$want" ] || fail "archive_sha256 does not match SHA256SUMS"
-    if grep -q build-info "$t/dist/SHA256SUMS"; then fail "build-info.txt is in SHA256SUMS"; fi
+    [ "$(tail -n 1 "$t/dist/SHA256SUMS")" = "$(cd "$t/dist" && sha256_of build-info.txt)" ] \
+        || fail "SHA256SUMS does not end with build-info.txt's hash"
 else
     echo "[SKIP] build-info: no bsdtar, so no source archive was built"
 fi
