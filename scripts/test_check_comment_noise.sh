@@ -139,33 +139,47 @@ printf '// The reader lives in src/parser/\n// module.zrl and mirrors the interf
 run "$d"
 expect "a wrapped path that resolves passes" 0 "no scaffolding"
 
-# 15. A private document directory is a finding with no file after it: nothing under doc/tasks,
-#     doc/performance, doc/release or doc/archive is ever exported.
+# 15. A private document directory is a finding with no file after it: nothing under doc/performance,
+#     doc/release, doc/archive or doc/stage0-C is ever exported. doc/tasks and doc/design are not on
+#     the list: the tree carries them, so a bare mention of the directory passes like doc/spec does.
 d=$(tree private_dir)
+printf '// The rule came from a decision (doc/performance, recorded there).\nfn f() {}\n' > "$d/src/a.zrl"
+run "$d"
+expect "a bare private document directory fails" 1 "doc/performance"
+
+d=$(tree task_dir)
 printf '// The rule came from a decision (doc/tasks, recorded there).\nfn f() {}\n' > "$d/src/a.zrl"
 run "$d"
-expect "a bare private document directory fails" 1 "doc/tasks"
+expect "a bare doc/tasks directory passes" 0 "no scaffolding"
 
-# 16. A bare task record is a finding whatever its prefix.
+# 16. A bare task record name is not path-shaped, like a bare README.md: the existence rule reads
+#     only tokens with a directory in them, and the private-document rule no longer names .tm.md.
 d=$(tree private_record)
 printf '// See future.tm.md for why the walk is finite.\nfn f() {}\n' > "$d/src/a.zrl"
 run "$d"
-expect "a bare .tm.md token fails" 1 "future.tm.md"
+expect "a bare .tm.md token passes" 0 "no scaffolding"
 
-# 17. The private-document rule does not consult the tree: a file this tree carries is still
-#     absent from the export, so pointing at it is the same leak.
-d=$(tree private_exists)
+# 17. A task file the tree carries may be cited by path; one it does not carry is a stale path like
+#     any other (Rule 2a), so naming a missing task file still fails.
+d=$(tree task_exists)
 mkdir -p "$d/doc/tasks"
 printf '# Active\n' > "$d/doc/tasks/active.tm.md"
 printf '// The task is recorded in doc/tasks/active.tm.md.\nfn f() {}\n' > "$d/src/a.zrl"
 run "$d"
-expect "a private document fails even when the tree carries it" 1 "doc/tasks/active.tm.md"
+expect "a task file the tree carries passes" 0 "no scaffolding"
+
+d=$(tree task_missing)
+mkdir -p "$d/doc/tasks"
+printf '# Active\n' > "$d/doc/tasks/active.tm.md"
+printf '// The task is recorded in doc/tasks/gone.tm.md.\nfn f() {}\n' > "$d/src/a.zrl"
+run "$d"
+expect "a task file the tree does not carry fails" 1 "references 'doc/tasks/gone.tm.md', which the tree does not carry"
 
 # 18. A quoted example is not a reference, and the quote that opens it must not become part of the
-#     finding. Before 2026-10-19 this failed and named `doc/tasks"`: the rule's boundary character
-#     was the opening quote, so the count before the token was even.
+#     finding. Before 2026-10-19 this failed and named `doc/performance"`: the rule's boundary
+#     character was the opening quote, so the count before the token was even.
 d=$(tree quoted_private)
-printf '// "doc/tasks" is an example of a name, never a reference.\nfn f() {}\n' > "$d/src/a.zrl"
+printf '// "doc/performance" is an example of a name, never a reference.\nfn f() {}\n' > "$d/src/a.zrl"
 run "$d"
 expect "a quoted private-document name passes" 0 "no scaffolding"
 
@@ -179,19 +193,30 @@ expect "two paths inside one quoted example pass" 0 "no scaffolding"
 # 20. Quoted example, then a real reference on the same line: the finding names the reference and
 #     carries no stray quote.
 d=$(tree quote_then_bare)
-printf '// "x" is the shape; the task is doc/tasks.\nfn f() {}\n' > "$d/src/a.zrl"
+printf '// "x" is the shape; the notes are in doc/performance.\nfn f() {}\n' > "$d/src/a.zrl"
 run "$d"
-expect "a quoted token then a bare private document fails" 1 "the private document 'doc/tasks', which"
+expect "a quoted token then a bare private document fails" 1 "the private document 'doc/performance', which"
 
-# 21. doc/design and doc/stage0-C are private in every tree like the other four directories, so the
-#     private-tree run catches them before the export has to.
-d=$(tree private_design)
-printf '// The rationale is in doc/design, which the release leaves out.\nfn f() {}\n' > "$d/src/a.zrl"
+# 21. doc/stage0-C is private in every tree like the other three directories, so the private-tree run
+#     catches it before the export has to; doc/design is carried, so it passes bare and, with a
+#     file after it, is held to Rule 2a.
+d=$(tree private_stage0)
+printf '// The rationale is in doc/stage0-C, which the release leaves out.\nfn f() {}\n' > "$d/src/a.zrl"
 run "$d"
-expect "a bare doc/design directory fails" 1 "doc/design"
+expect "a bare doc/stage0-C directory fails" 1 "doc/stage0-C"
+
+d=$(tree design_dir)
+printf '// The rationale is in doc/design, which the tree carries.\nfn f() {}\n' > "$d/src/a.zrl"
+run "$d"
+expect "a bare doc/design directory passes" 0 "no scaffolding"
+
+d=$(tree design_file)
+printf '// The rationale is in doc/design/provenance.md.\nfn f() {}\n' > "$d/src/a.zrl"
+run "$d"
+expect "a doc/design file the tree does not carry fails" 1 "references 'doc/design/provenance.md', which the tree does not carry"
 
 if [ "$errors" -ne 0 ]; then
     echo "[FAIL] $errors case(s) failed"
     exit 1
 fi
-echo "[PASS] check_comment_noise.sh behaves as specified (21 cases)"
+echo "[PASS] check_comment_noise.sh behaves as specified (25 cases)"
