@@ -93,8 +93,13 @@ done
 
 # scdoc is a development tool: a user verifying a build has the committed pages and needs none, and
 # `make preflight` requires it, so a stale page cannot be merged.
-if ! command -v scdoc >/dev/null 2>&1; then
+. "$REPO_ROOT/scripts/lib/scdoc_version.sh"
+if ! _found=$(scdoc_found); then
     echo "[SKIP] man-pages: scdoc not found on PATH; page generation checked, the committed roff pages not"
+    exit 0
+fi
+if scdoc_old "$_found"; then
+    echo "[SKIP] man-pages: scdoc $_found is older than $SCDOC_MIN; page generation checked, the committed roff pages not"
     exit 0
 fi
 if ! "$REPO_ROOT/scripts/man_pages.sh" check; then

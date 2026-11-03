@@ -15,7 +15,7 @@ Compiling Zoril from source requires only a C compiler, GNU Make, QBE, and GNU b
 - **dprint:** Optional markdown formatting checker (used by `make md-check` and `make md-fmt`).
 - **valgrind:** Optional memory profiling checker (used by `make perf-gate`).
 - **rustc:** Optional differential oracle for fuzz testing (`make fuzz`).
-- **scdoc:** Required for development: the roff man pages in `doc/man/` are committed, so building, installing and `make test` need no scdoc (`make test` skips the page check without it), but `make preflight` requires it and fails when a committed page does not match its `.scd` source. `make man` regenerates them.
+- **scdoc 1.11.5 or newer:** Required for development: the roff man pages in `doc/man/` are committed, so building, installing and `make test` need no scdoc (`make test` skips the page check without it, and with a scdoc older than 1.11.5, the version the pages are generated with, because older releases write other roff for the same source), but `make preflight` and `make man` require 1.11.5 or newer and fails when a committed page does not match its `.scd` source. `make man` regenerates them.
 - **bsdtar (libarchive):** Required only to build the release archives (`make dist`, `make dist-bin`, `make dist-check`): `libarchive-tools` on Alpine and Debian, part of `libarchive` on Arch, built in on FreeBSD and macOS.
 
 You can verify all developer dependencies on your machine by running:

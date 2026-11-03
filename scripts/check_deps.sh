@@ -13,7 +13,7 @@
 #   preflight - test + git, timeout, scdoc
 #   fuzz      - bash, lua, timeout (optional: rustc)
 #   repro     - git, tar, sha256sum/shasum/sha256
-#   man       - scdoc (required)
+#   man       - scdoc 1.11.5 or newer (required; an older one is skipped by `test`, an error here and in preflight)
 #   dist      - build + git, bsdtar, sha256sum/shasum/sha256 (the release tarballs)
 #
 # Options:
@@ -38,6 +38,11 @@ if [ -f "$REPO_ROOT/scripts/lib/portability.sh" ]; then
     . "$REPO_ROOT/scripts/lib/portability.sh"
 elif [ -f "$_d/lib/portability.sh" ]; then
     . "$_d/lib/portability.sh"
+fi
+if [ -f "$REPO_ROOT/scripts/lib/scdoc_version.sh" ]; then
+    . "$REPO_ROOT/scripts/lib/scdoc_version.sh"
+elif [ -f "$_d/lib/scdoc_version.sh" ]; then
+    . "$_d/lib/scdoc_version.sh"
 fi
 
 REQUIRED_ONLY=0
@@ -139,6 +144,10 @@ ${_tilda}${_hints}"
             *" backend_version "*) ;;
             *) check_backend_version "$_bin" ;;
         esac
+    elif [ "$_id" = scdoc ] && _sv=$(scdoc_found) && scdoc_old "$_sv"; then
+        MISSING_REQ="$MISSING_REQ scdoc"
+        REQ_ERRORS="${REQ_ERRORS}Unsupported scdoc: $(command -v "$_bin") is version $_sv; $SCDOC_MIN or newer is required (needed by: $_purpose; the committed man pages are generated with $SCDOC_MIN, and older releases write other roff for the same source; install scdoc $SCDOC_MIN or newer and put it first on PATH)
+"
     elif [ "$_id" = lua ] && lua_too_old "$_bin"; then
         MISSING_REQ="$MISSING_REQ lua"
         REQ_ERRORS="${REQ_ERRORS}Unsupported Lua: $(command -v "$_bin") is older than 5.3 (needed by: $_purpose; Lua 5.3 or newer is required: Lua 5.1 and LuaJIT produce other programs from the same seeds; install lua5.4 or lua5.3 with your OS package manager)
@@ -210,6 +219,13 @@ check_optional() {
             OPT_SKIPS="$OPT_SKIPS, $_skip_desc ($_display_name)"
         else
             OPT_SKIPS="$_skip_desc ($_display_name)"
+        fi
+    elif [ "$_tool" = scdoc ] && _sv=$(scdoc_found) && scdoc_old "$_sv"; then
+        MISSING_OPT="$MISSING_OPT $_tool"
+        if [ -n "$OPT_SKIPS" ]; then
+            OPT_SKIPS="$OPT_SKIPS, $_skip_desc (scdoc $_sv is older than $SCDOC_MIN)"
+        else
+            OPT_SKIPS="$_skip_desc (scdoc $_sv is older than $SCDOC_MIN)"
         fi
     elif [ "$_tool" = lua ] && lua_too_old "$_bin"; then
         MISSING_OPT="$MISSING_OPT $_tool"
