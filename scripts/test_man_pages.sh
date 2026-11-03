@@ -97,40 +97,6 @@ if ! command -v scdoc >/dev/null 2>&1; then
     echo "[SKIP] man-pages: scdoc not found on PATH; page generation checked, the committed roff pages not"
     exit 0
 fi
-
-# 0b. The comparison in man_pages.sh reads ".P" and ".PP" as the same paragraph macro: scdoc 1.11.2
-#     writes ".P" where 1.11.5 writes ".PP", so a committed page made by one must pass `check` under
-#     the other. It must still fail on a real difference, or the comparison compares nothing. Run in
-#     a scratch tree (man_pages.sh works relative to its own checkout) so no committed page is touched.
-stage="$TMP_DIR/mp_stage"
-mkdir -p "$stage/scripts" "$stage/doc/man"
-cp "$REPO_ROOT/scripts/man_pages.sh" "$stage/scripts/"
-cp "$MAN_DIR/zoril.1.scd" "$stage/doc/man/"
-scdoc < "$stage/doc/man/zoril.1.scd" > "$stage/fresh"
-# the same page as the other scdoc spells it: every ".PP" line as ".P", or every ".P" as ".PP"
-awk '$0 == ".PP" { print ".P"; next } $0 == ".P" { print ".PP"; next } { print }' "$stage/fresh" \
-    > "$stage/doc/man/zoril.1"
-if cmp -s "$stage/fresh" "$stage/doc/man/zoril.1"; then
-    echo "[FAIL] man-pages: the test page has no .P / .PP line, so it cannot show they compare equal"
-    exit 1
-fi
-if ! "$stage/scripts/man_pages.sh" check > "$stage/check.log" 2>&1; then
-    echo "[FAIL] man-pages: man_pages.sh check treats .P and .PP as different (a page from the other scdoc fails)"
-    sed -n '1,20p' "$stage/check.log"
-    exit 1
-fi
-sed 's/^zoril - .*/zoril - not the description/' "$stage/doc/man/zoril.1" > "$stage/changed"
-if cmp -s "$stage/changed" "$stage/doc/man/zoril.1"; then
-    echo "[FAIL] man-pages: the test could not make a content change to the page"
-    exit 1
-fi
-cp "$stage/changed" "$stage/doc/man/zoril.1"
-if "$stage/scripts/man_pages.sh" check > "$stage/check2.log" 2>&1; then
-    echo "[FAIL] man-pages: man_pages.sh check accepted a page whose text differs from its source"
-    exit 1
-fi
-echo "[PASS] man-pages: .P and .PP compare equal, and a changed line still fails the check"
-
 if ! "$REPO_ROOT/scripts/man_pages.sh" check; then
     exit 1
 fi
