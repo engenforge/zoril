@@ -63,9 +63,17 @@ d="$WORK_DIR/$first"
 k=$(key "$d")
 mkdir -p "$d/empty"
 printf '// zri-module: %s/pathmod.zrl\n' "$d/pathmod" > "$d/empty/$k.zri"
-if run_with_timeout -k 2s 60s "$ZORIL" -c -I stdlib=stdlib -I "$d" --interproc-summary --iface-dir "$d/empty" \
-        -o /dev/null "$d/twin.zrl" > /dev/null 2>&1 < /dev/null; then
+guard_fn=$(sed -n 's/^pub fn \([A-Za-z0-9_]*\).*/\1/p' "$d/pathmod.zrl" | head -n 1)
+if guard_out=$(run_with_timeout -k 2s 60s "$ZORIL" -c -I stdlib=stdlib -I "$d" --interproc-summary --iface-dir "$d/empty" \
+        -o /dev/null "$d/twin.zrl" 2>&1 < /dev/null); then
     echo "[FAIL] store-grid-modular: $first compiled against an empty interface - the interface is not being read"
+    exit 1
+fi
+# Refusing is not enough: the refusal must be the one an interface that lacks the function gives, naming
+# that function, or the guard would pass on any unrelated error (a bad path, a crashed compiler).
+if [ -z "$guard_fn" ] || ! printf '%s\n' "$guard_out" | grep -F "defines no" | grep -qF "$guard_fn"; then
+    echo "[FAIL] store-grid-modular: the empty-interface guard for $first was refused for another reason (expected 'the module defines no $guard_fn'):"
+    printf '%s\n' "$guard_out" | head -n 3 | cut -c1-200 | sed 's/^/       /'
     exit 1
 fi
 
