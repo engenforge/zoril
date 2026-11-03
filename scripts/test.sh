@@ -111,7 +111,7 @@ group_scenarios() {
             echo sha256-differential
             ;;
         integration)
-            echo incremental fuzz-jobs fuzz-mode-diff fuzz-tools modular-mangling uncalled-method-emit runner-output readme-snippets doc-snippets getting-started struct-layout ffi-export ffi-callback zbuild-link module-names interface-attrs hosted platform-layer man-pages tool-versions md-links safety-comments-selftest no-new-deps-selftest comment-noise-selftest comment-census-selftest export-checks-selftest bench-contention bench-threshold-gate test-lock preflight-selftest check-deps-selftest scdoc-min stray-files-selftest
+            echo incremental fuzz-jobs fuzz-mode-diff fuzz-tools modular-mangling uncalled-method-emit runner-output readme-snippets doc-snippets getting-started struct-layout ffi-export ffi-callback zbuild-link module-names interface-attrs hosted platform-layer man-pages tool-versions md-links safety-comments-selftest no-new-deps-selftest comment-noise-selftest comment-census-selftest export-checks-selftest bench-contention bench-threshold-gate test-lock preflight-selftest check-deps-selftest scdoc-min result-file stray-files-selftest
             echo bench-step-failed reject-diff-selftest zbuild-errors zbuild-diff user-paths build-info qbe-arg-order qbe-fingerprint full-test-stamp deps-matrix-interrupt
             ;;
         diagnostics) echo zilc-errors ;;
@@ -154,6 +154,7 @@ scenario_run() {
         preflight-selftest)         tr_run_scenario "$1" ./scripts/test_preflight.sh ;;
         check-deps-selftest)        tr_run_scenario "$1" ./scripts/test_check_deps.sh ;;
         scdoc-min)                  tr_run_scenario "$1" ./scripts/test_scdoc_min.sh ;;
+        result-file)                tr_run_scenario "$1" ./scripts/test_result_file.sh ;;
         stray-files-selftest)       tr_run_scenario "$1" ./scripts/check_stray_files.sh --selftest ;;
         bench-step-failed)          tr_run_scenario "$1" ./scripts/test_bench_step_failed.sh ;;
         reject-diff-selftest)       tr_run_scenario "$1" ./scripts/test_reject_diff.sh ;;
@@ -279,8 +280,20 @@ if [ "$1" = "--worker" ]; then
     # two bound a killed run's pool to one item's time, so nothing is left holding the lock.
     dispatcher_alive() { [ -z "${TR_PARENT:-}" ] || kill -0 "$TR_PARENT" 2>/dev/null; }
     dispatcher_alive || exit 0
+    # write_status LINE — record this item's counts for the dispatcher. TR_TEST_ST_DELAY is a hook for
+    # scripts/test_result_file.sh and nothing else sets it: "IDX:SECONDS" holds the worker of item IDX
+    # for SECONDS between opening the status file and writing it, which is the window a reader can
+    # catch the file empty in. Unset, it costs nothing. The line goes to N.st.tmp and is renamed: the
+    # dispatcher takes N.st to mean "the result is in", and a rename within one directory is atomic, so
+    # it sees no file or the whole file, never the empty one a plain `> N.st` leaves until it is written.
+    write_status() {
+        {
+            case "${TR_TEST_ST_DELAY:-}" in "$idx":*) sleep "${TR_TEST_ST_DELAY#*:}" ;; esac
+            printf '%s\n' "$1"
+        } > "$ITEMS/$idx.st.tmp" && mv -f "$ITEMS/$idx.st.tmp" "$ITEMS/$idx.st"
+    }
     if [ -e "$ITEMS/stop" ]; then
-        echo STOPPED > "$ITEMS/$idx.st"
+        write_status STOPPED
     else
         TR_RESULTS=""
         case "$kind" in
@@ -289,7 +302,7 @@ if [ "$1" = "--worker" ]; then
             gate)     gate_run "$name" > "$ITEMS/$idx.out" 2>&1 ;;
         esac
         # Every item reports the same four counts: run passed failed skipped.
-        echo "$TR_RUN $TR_PASSED $TR_FAILED $TR_SKIPPED" > "$ITEMS/$idx.st"
+        write_status "$TR_RUN $TR_PASSED $TR_FAILED $TR_SKIPPED"
         [ "$TR_FAILED" -gt 0 ] && [ "$TR_FAIL_FAST" -eq 1 ] && : > "$ITEMS/stop"
     fi
     dispatcher_alive || exit 0
@@ -615,7 +628,8 @@ while [ $next -le "$total" ]; do
     counts=$(cat "$ITEMS/$next.st" 2>/dev/null)
     if [ -z "$counts" ]; then
         counts="1 0 1 0"
-        echo "[FAIL] $name (the worker left no result)" > "$ITEMS/$next.out"
+        # Appended, not written: the worker's own output is the best evidence of how far it got.
+        echo "[FAIL] $name (the worker left no result)" >> "$ITEMS/$next.out"
     fi
     if [ "$suite" != "$cur_suite" ]; then
         [ -n "$cur_suite" ] && [ $stopped -eq 0 ] && suite_line
