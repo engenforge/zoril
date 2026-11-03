@@ -151,3 +151,35 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     > **Created:** 2026-11-03 **Deferred:** stage0-c is frozen and fixed only when a bug blocks building stage1 or its own suites.
 
     - `bootstrap/stage0-c/lib/rt/runtime.s` and `sys_linux_x86_64.s` lack the section, so on a linker that defaults to an executable stack (binutils 2.42 on Ubuntu 24.04) the programs `zoril-c` links itself warn and get one. Only stage0-c's own test programs link them; stage1 is linked with `bootstrap/stage1/rt/runtime.s`, which has the section. Take this up if the warning ever fails a stage0-c suite.
+
+## Compatibility matrix
+
+Where Zoril has been tested, by operating system and architecture, recorded per release. **First priority:** Alpine Linux, Arch Linux and Debian (stable): between them they cover musl and glibc, and a `/bin/sh` that is BusyBox `ash`, `bash` and `dash`. **Second priority:** other systems (Ubuntu, Fedora, the BSDs once a port exists, other architectures once the runtime supports them), in an order revised as ports are prioritised. Today the runtime targets `x86_64` Linux only, so the architecture column has one value.
+
+- [ ] +docs +portability Z-0050 CM1 Define the compatibility matrix and record the hosts already tested
+    > **Created:** 2026-11-03 **Group:** the compatibility matrix (CM1 to CM4).
+
+    - **Do:** a page, `doc/compatibility.md`, linked from `README.md`: one table per release, one row per host. Columns: operating system and version, architecture, C library, what `/bin/sh` is, the toolchain (`cc`, `qbe`, `as`/`ld` versions), and one result column each for `make test`, the user paths (`make dist-check` with `scripts/dist_user_paths.sh`) and `make repro-check` (two bootstraps from scratch give identical results; with `HASHES=`, they also match a release's hashes). A result is `pass`, `fail` (naming the task that tracks it), `skipped` (naming the reason, for example a missing optional tool) or `not run`. For the comparison with a release's hashes, a mismatch on a host whose QBE, binutils or C library differs from the release host's is expected (`doc/reproducible_builds.md`, "Why the C Library, QBE and the Linker Matter"): record it as `differs (toolchain)`, naming the differing tool, not as `fail`.
+    - **Priority:** the page states the two tiers above, and that a first-priority system is tested before each release.
+    - **Rows to fill now,** for the current release, from runs repeated on its commit (not from memory): Arch Linux and Alpine Linux, plus Ubuntu 24.04 (the cloud environment), as a second-priority row.
+    - **Keep the page true:** a row says which release it was tested at; a release with no row for a first-priority system does not claim it.
+    - **Verification:** `make test` (`md-check`, the table width rule); every result in the table has a run behind it.
+
+- [ ] +portability +tests Z-0051 CM2 Test Debian (stable) and add its row
+    > **Created:** 2026-11-03 **Depends:** CM1.
+
+    - **Do:** on Debian stable, x86_64: install the dependencies `scripts/check_deps.sh` names, then run `make test`, `make dist-check` and `make repro-check`, and record the row. `/bin/sh` is `dash`. Debian's packaged `scdoc` is older than the 1.11.5 the man-page check requires, so that check skips; record the skip and its reason.
+    - **A failure** gets a task of its own, named in the row; this task records the result and does not fix it.
+    - **Verification:** the row's three results, each from a run on the release commit.
+
+- [ ] +portability +tests Z-0052 CM3 A recipe for adding a host to the matrix
+    > **Created:** 2026-11-03 **Depends:** CM2.
+
+    - **Do:** a short section in `doc/compatibility.md`: how to install the dependencies on the host, which three commands to run, what to record, and how to report a result (a pull request with the row, or an issue linking the logs). After CM1 and CM2 this is written from three systems' experience, so it can be followed on a fourth without asking.
+    - **Verification:** follow the recipe on one second-priority system and add its row.
+
+- [ ] +docs +release Z-0053 CM4 The release checklist requires the first-priority rows
+    > **Created:** 2026-11-03 **Depends:** CM1.
+
+    - **Do:** the release steps in `CONTRIBUTING.md` require a `make test` pass on each first-priority system (Alpine, Arch, Debian) at the release commit, and the matrix row for each, before the release is tagged. A system's failure blocks the release or is listed in `KNOWN_ISSUES.md` with its task.
+    - **Verification:** `make test`; the checklist names the three systems and the page.
