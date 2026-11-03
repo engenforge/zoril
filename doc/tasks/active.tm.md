@@ -44,38 +44,6 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
     - **Status (2026-11-03):** blocked on the maintainer's text; `doc/design/` does not exist yet and nothing was written in its place.
     - The design of one store-and-return rule over per-local origin sets, which Z-0009 to Z-0012 implement. Add it as supplied, then check it against `AGENTS.md`'s public-text rules (present tense, no history) and `make test` (`md-check`, `comment-noise`).
 
-- [x] +safety +fuzz +tests Z-0040 S1.3 The store grid gains carriers that bundle the arena itself
-    > **Created:** 2026-11-03 **Split from:** Z-0008. **Before:** Z-0010.
-    > **Completed:** 2026-11-03 git:55388e6
-
-    - **Add** to `scripts/fuzz/store_grid.lua`, each with a safe twin: a carrier that bundles the arena itself in a struct literal, and one that bundles it in a tuple, beside an external field (the destination's reference), so a view of the arena and the arena travel together. Add the values to `store_grid_classes.lua`'s axis lists too, or they never appear as classes.
-    - The new accepted unsafe cells go into `bench/fuzz/store_grid_expected_failures.txt` and any new twin rejections into `store_grid_twin_rejections.txt`, through `sh scripts/check_store_grid.sh --record`; check that the diff adds only cells of the new values. **Verification:** `make store-grid`, `make test`.
-    - **Done (2026-11-03):** carriers `arena_struct_bundle` and `arena_tuple_bundle`, for the `arena_vec` source only. The arena moves into `ArenaBundle { ext_tag: ext_tag, a: a }` or `(ext_tag, a)`, `ext_tag` being a new `i32` parameter of `escape_storer`; the vector is made in `&b.a` (`&b.1`), and the reset, drop and move invalidations act on the bundle (`b.a.reset()`, `@drop(b)`, `sink(b)`). The twin bundles the caller's `&Arena` instead.
-    - **Departure from the text above:** the field beside the arena comes from a parameter, as in `gap_31_struct_literal_ext_field` (the probe this carrier is taken from), not from the destination's reference. Moving `out` into the bundle would make every destination write go through `b.ext`, and the text's parenthetical was a guess made when the task was split.
-    - **Result:** 1248 new valid cells. 486 unsafe cells are accepted and joined the expected failures (8808 to 9294), all of the new carriers; no other cell moved. No new twin rejection (494 unchanged), 0 generator errors, and four new 2-axis classes: each bundle with `path=fn_val` and with `path=param_65` (43 to 47). The four sampled shapes are refused with a safety reason (region escape, dropping or moving the borrowed bundle) and their twins compile.
-    - **Checks:** `sh scripts/check_store_grid.sh --record`: 9294 failing cells, 494 over-rejected twins, 47 classes, 0 generator errors; the diff adds only `arena_*_bundle` lines.
-
-- [x] +safety +fuzz +tests Z-0041 S1.4 The store grid gains carriers a call produced, and references to a carrier
-    > **Created:** 2026-11-03 **Split from:** Z-0008. **Before:** Z-0010.
-    > **Completed:** 2026-11-03 git:6343b7d
-
-    - **Add**, each with a safe twin: carrier values for an aggregate a call produced (through a local, a method, an identity function, a closure), and a reference to a carrier reaching the callee directly, through a `let`, an identity call or a phi. Same recording and checks as Z-0040.
-    - **Done (2026-11-03):** eight carriers, all wrapping the view in `Carrier { v }`. Four take the aggregate from a call: `call_local` (`make_carrier(src_val)` into a local), `call_method` (`maker.make(src_val)`), `call_identity` (`id_carrier(Carrier { v: src_val })`) and `call_closure` (a closure returning the carrier). Four pass a reference to a local carrier to `take_ref(c: &Carrier) -> PT`: `ref_direct` (`take_ref(&carrier_obj)`), `ref_let` (through `let carrier_ref = &carrier_obj`), `ref_identity` (through `id_ref(&carrier_obj)`) and `ref_phi` (an `if` on `clobber_stack() > 0` choosing between two carriers' references, so the join is not folded).
-    - **Result:** 16640 new valid cells (17680 to 34320). 7821 unsafe cells are accepted and joined the expected failures (9294 to 17115), all of the new carriers, none removed; 0 generator errors; four new 2-axis classes, all `call_method` (with `local_vec`, `string`, `path=fn_val`, `path=param_65`; 47 to 51).
-    - **Over-rejection found:** 3438 new safe twins are refused (494 to 3932). 3402 of them are every twin of `ref_let`, `ref_identity` and `ref_phi` (1134 each), while `ref_direct`'s twins are accepted. So a reference to a local carrier that reaches the callee through a `let`, an identity call or a phi makes the callee's result read as a pointer into the carrier's stack storage, though `take_ref` returns the view the carrier holds. Example: `arena_vec__ref_let__direct__deref_out__frame_ends`'s twin, "region escape: returning a pointer to local stack storage". The other 36 are `call_local` and `call_method` twins through `closure_call_mut` with a `ref_local` or `elem_ref` source, Z-0017's existing class. Not fixed here; the reference-through-`let` form is the one to start from.
-    - **Checks:** `sh scripts/check_store_grid.sh --record` (about 9 minutes now): 17115 failing cells, 3932 over-rejected twins, 51 classes, 0 generator errors; the diff adds only lines of the eight new carriers.
-
-- [x] +safety +fuzz +tests Z-0042 S1.5 A two-module mode for the store grid's summary cells
-    > **Created:** 2026-11-03 **Split from:** Z-0008. **Before:** Z-0010, which is expected to close these cells.
-    > **Completed:** 2026-11-03 git:ca53660
-
-    - **Do:** for the cells whose route crosses a call summary, compile the callee as its own module with `-c --write-interface` and the caller against its `.zri`, as `zbuild` does. `scripts/check_store_grid.sh` then builds such a cell in two steps; generate the callee and the caller as two files.
-    - The new accepted unsafe cells go into the expected-failures file. **Verification:** `make store-grid`, `make test`.
-    - **Done (2026-11-03):** `scripts/fuzz/store_grid.lua --generate-modular DIR` writes, per cell, `pathmod.zrl` (the path's functions, made `pub`) and `unsafe.zrl`/`twin.zrl` importing them. The new `scripts/check_store_grid_modular.sh` compiles `pathmod` with `-c --interproc-summary --write-interface <iface>/<key>.zri` and each side with `-c --interproc-summary --iface-dir <iface>`, judges them as the grid does (same safety-diagnostic list, read from `check_store_grid.sh`), and compares with its own `bench/fuzz/store_grid_modular_expected_failures.txt` and `store_grid_modular_twin_rejections.txt`. `check_store_grid.sh` runs it as step 3b, `--record` included. A guard compiles the first cell against an empty interface, which must fail ("the module defines no `forward_helper`"): a key that misses would make the compiler read the source silently.
-    - **Scope:** the paths whose callee is a free function (`helper`, `two_level_helper`, `fn_val`, `mutual_rec`, `param_65`, `same_param` with `deref_out` only, `store_mutual_rec`, `store_param_65`), with the `direct` carrier and the `frame_ends` invalidation over every source and destination: 318 cells, about 3 s. Methods and traits (`method`, `self_method`, `trait_method`) need their structs and impls moved into the module too, and are not covered. Widening the carriers and invalidations is a size choice, not a code change.
-    - **Result:** 125 unsafe cells are accepted and 8 twins are refused, 0 generator errors. Compared with the whole-program build of the same 318 cells (160 accepted, 8 twins refused): no cell is accepted only by the two-module build, and the refused twins are the same 8. In the other direction, 35 cells the whole-program build accepts are refused when the callee is read from its interface. 33 of them have the `string` source, spread over seven destinations; the other two are `store_mutual_rec` with `arena_vec` and `local_vec` into `deref_out`, the shape of `gap_28` (the mutual-recursion summary). So `gap_28` shows only in the whole-program build here; what makes the interface path stricter is not established.
-    - **Checks:** `sh scripts/check_store_grid_modular.sh --record`, then `sh scripts/check_store_grid.sh` with the gate wired in (results in the PR).
-
 - [x] +tools +tests Z-0043 `make preflight-changed` checks a committed change, and builds the base of a stricter rule
     > **Created:** 2026-11-03
     > **Completed:** 2026-11-03 git:b1c9851
@@ -164,3 +132,43 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
     - **Do:** find which flow marks the closure (or 65th-argument) result as stack when its argument is a parameter; fix it without reopening any other probe, and add one of the twelve as an `accept` probe. `KNOWN_ISSUES.md` does not list this over-rejection yet: add it (section 5) in a commit of its own before the fix, and remove it with the fix.
     - **Over-rejection from Z-0007 (found in its review, 2026-11-03):** borrows are tracked per local, not per field, so a borrow stored into one field keeps the whole struct borrowed while another field is still used. Reproducer: `struct W { s: [i32], t: i32 }`; in `main`, `let mut v = Vec::<i32>.new_in(&a); v.push(42); let mut w = W { s: @slice(0 as *i32, 0), t: 3 }; w.s = v.as_slice(); let x = w.s[0]; a.reset(); return x - 42 + w.t - 3;`. It is safe (`w.s` is not read after the reset): `main`'s compiler accepts it and it exits 0; with Z-0007 it is refused with "cannot mutably borrow 'a' while it is already borrowed" at `a.reset()`, because `w` is live for `w.t`. A fix records the borrow on the field path rather than on the local. Z-0009's origin sets are field-insensitive by design, so decide this together with Z-0009 and Z-0012's field-sensitivity question.
     - **Exposed by Z-0008:** 96 more safe twins with a `ref_local` or `elem_ref` source and a field, tuple-slot or array-slot carrier, through `closure_call_mut` and the storing paths, are refused with the same region-escape error by `main`'s compiler and by Z-0007's (`bench/fuzz/store_grid_twin_rejections.txt`, 398 to 494).
+
+- [ ] +audit +safety Z-0045 A reference to a local carrier passed through a `let`, an identity call or a phi is refused
+    > **Created:** 2026-11-03 **Fix with or after:** Z-0010 (the same flow analysis). Over-rejection, not a hole; related to Z-0017.
+
+    - **Now:** a safe program that hands a callee a reference to a local struct, and stores what the callee returns, is accepted when the reference is written in the call (`take_ref(&c)`) and refused when it first goes through a `let`, an identity function or an `if`. The callee returns the view the struct holds (`c.v`), not a pointer into the struct; the checker reads the result as a pointer into the caller's stack frame. Error: "region escape: returning a pointer to local stack storage via sret".
+    - **In the grid:** all 3402 safe twins of the `ref_let`, `ref_identity` and `ref_phi` carriers (1134 each; Z-0041) are refused, and every twin of `ref_direct` is accepted. They are in `bench/fuzz/store_grid_twin_rejections.txt`: `grep -E '__ref_(let|identity|phi)__' bench/fuzz/store_grid_twin_rejections.txt`.
+    - **Reproducer** (checked on the compiler of this commit, and the compiler before Z-0007 refuses it too, so it is not caused by that change). With `let r = &c;` and `take_ref(r)` in `f`, it is refused; with `take_ref(&c)` and no `let`, it is accepted, builds with `scripts/build_zrl.sh`, and exits 0:
+
+    ```zoril
+    struct Carrier { v: [i32] }
+    fn take_ref(c: &Carrier) -> [i32] { return c.v; }
+
+    fn f(out: &mut [i32], view: [i32]) {
+        let c = Carrier { v: view };
+        let r = &c;
+        *out = take_ref(r);
+    }
+
+    fn main() -> i32 {
+        let data = [42, 0];
+        let mut dest: [i32] = @slice(0 as *i32, 0);
+        f(&mut dest, &data);
+        return dest[0] - 42;
+    }
+    ```
+
+    - **Same refusal, other forms:** `take_ref(id_ref(&c))` with `fn id_ref(c: &Carrier) -> &Carrier { return c; }`, and `let r = if pick() > 0 { &a } else { &b }; take_ref(r)` with two carriers `a` and `b` and `fn pick() -> i32 { return 1; }`.
+    - **Do:** find where a reference that passed through a `let`, a call or a join stops being read as "the reference to `c`" and becomes "a pointer into `c`'s storage", so that the callee's result is tied to the whole frame. Fix it so `take_ref` is tied to what `c.v` points at, not to `c`. This makes the checker accept more, so run the rejection differential (`scripts/check_reject_diff.sh <base>`) and list every program the base rejects and the change accepts; none of the store grid's unsafe cells may become accepted. Move the three carriers' twins out of the twin record in the same commit, and add one of the forms above as an `accept` probe.
+    - **Verification:** `make test`, `make preflight-changed`, `sh scripts/check_store_grid.sh`, the rejection differential.
+
+- [ ] +audit +safety Z-0046 Find why the interface build refuses 35 store-grid cells the whole-program build accepts
+    > **Created:** 2026-11-03 **Diagnosis, not a fix.** Found by Z-0042's comparison.
+
+    - **Question:** when a callee is compiled to an interface (`-c --write-interface`) and its caller reads that interface (`--iface-dir`), 35 of the 318 two-module cells are refused that the whole-program build accepts. Is the interface path's behaviour the right one, which the whole-program build should share, or is it an over-rejection, or does it cover only a part of what the whole-program path covers? Answer it before anyone changes either path.
+    - **The cells,** all with the `direct` carrier and the `frame_ends` invalidation (`<source>__direct__<path>__<destination>__frame_ends`): 30 with the `string` source, for each of the paths `helper`, `two_level_helper`, `fn_val`, `mutual_rec` and `param_65` and each of the destinations `call_struct_mut`, `closure_call_mut`, `closure_capture_mut`, `closure_owned_capture`, `local_field_assigned_out` and `ten_copies`; the `string` source with `deref_out` and each of `same_param`, `store_mutual_rec` and `store_param_65`; and `store_mutual_rec` into `deref_out` with the `arena_vec` and `local_vec` sources. The first to look at: `string__direct__fn_val__call_struct_mut__frame_ends`.
+    - **Regenerate the list:** `lua scripts/fuzz/store_grid.lua --generate-modular build/z46`, then compile each cell both ways as `scripts/check_store_grid_modular.sh` does; the cells that are in `bench/fuzz/store_grid_expected_failures.txt` (whole-program accepts) and not in `bench/fuzz/store_grid_modular_expected_failures.txt` (two-module accepts) are the 35.
+    - **First cell, both ways:** whole-program (`lua scripts/fuzz/store_grid.lua --emit string__direct__fn_val__call_struct_mut__frame_ends`, then `zoril --emit-zil`) compiles. Two-module (path functions in `pathmod.zrl` compiled with `-c --interproc-summary --write-interface`, the cell compiled with `-c --interproc-summary --iface-dir`) is refused: "region escape: callee stashes local stack pointer into global memory". The cell stores into `out` through `get_struct_slot(out)`, a local struct, not into global memory, so the message does not describe the cell.
+    - **What running them shows:** 34 of the 35 cells, built whole-program, run and exit 42: the stored string or vector is still intact, because collections are not freed at scope end. Only `arena_vec__direct__store_mutual_rec__deref_out__frame_ends` reads clobbered memory (exit 77), the shape of `gap_28`. So for 34 cells the interface path refuses a program that works today, and would be the one that stays correct once the `Box` and collection drop series makes frees real.
+    - **To establish:** (1) which summary field differs between the two paths for this cell (compare `pathmod`'s interface with what the whole-program pass computes for `forward_fn_target`); (2) whether an interface that omits a field reads as "unknown, so strict", which would explain a stricter result for any callee compiled separately; (3) why the `string` source is so prominent, when `arena_vec` and `local_vec` cells with the same paths are refused by both builds; (4) whether the one `arena_vec` cell is `gap_28` showing in one path only. Record each finding on this task as it is made.
+    - **Done when:** the task states whether the interface path is right, over-strict, or incomplete, with the evidence, and names the task that acts on it. No compiler change in this task.
