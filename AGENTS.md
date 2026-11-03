@@ -9,12 +9,12 @@ Guidance for any AI agent working on Zoril. Read this, `CONTRIBUTING.md` and `do
 - **zoril** (`build/zoril`, built from `src/`): with no `build/zoril`, `make` builds it through stage1 (about a minute, once); afterwards `build/zoril` rebuilds `src/` itself. If a change breaks the compiler, delete `build/zoril` to rebuild through stage1. Its runtime is `rt/runtime.s`, which must keep every runtime symbol the pinned stage1 can emit.
 - **zilc** (`build/zilc`) is built by `build/zoril`; with no `build/zilc` yet, `build/zilc-boot` assembles the ZIL it is built from.
 
-| Code | Compiled by | May use |
-| --- | --- | --- |
-| `bootstrap/stage0-c/` | a C compiler | C99 |
-| `bootstrap/stage1/` | stage0-c | frozen; never edited by hand |
+| Code                                        | Compiled by              | May use                             |
+| ------------------------------------------- | ------------------------ | ----------------------------------- |
+| `bootstrap/stage0-c/`                       | a C compiler             | C99                                 |
+| `bootstrap/stage1/`                         | stage0-c                 | frozen; never edited by hand        |
 | `src/` and the `stdlib/` modules it imports | stage1 and `build/zoril` | only what the pinned stage1 accepts |
-| other `stdlib/`, `tools/`, tests | `build/zoril` | the full current language |
+| other `stdlib/`, `tools/`, tests            | `build/zoril`            | the full current language           |
 
 **The stage1 constraint.** Every `stdlib/` module that `src/` imports, directly or through another module, may use only what the pinned stage1 accepts; list that closure with `build/zoril --emit-deps src/main.zrl` before planning a change. A new language feature can be used only outside that closure. A type-checker change is also compiled by the previous `build/zoril`, so `src/` must build under both the old rule and the new one.
 
