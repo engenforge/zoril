@@ -7,6 +7,13 @@
 #   3. Dual failure under --changed reports preflight-changed prefix and both codes.
 #   4. --changed passes the flag to mutation-check.
 #   5. Concurrency: selfhost runs in background and is waited on before proceeding.
+#   13. The base of a --changed run (scripts/lib/preflight_base.sh), in scratch repositories: a committed
+#       change with no upstream and no default branch has no base, and the run must say so rather than
+#       pass; a pushed branch (its upstream holds the commits) is measured from its merge base with
+#       origin/main; an upstream behind HEAD is the base; an uncommitted change is measured from HEAD.
+#   14. preflight-changed refuses to start without a base, and hands the base it chose to mutation-check.
+#   15. The rejection differential still runs when the seed compiler refuses the base source: the scratch
+#       tree's compiler is built through stage1 instead (a stand-in make plays both builds).
 set -u
 cd "$(dirname "$0")/.." || exit 2
 . scripts/lib/portability.sh
@@ -29,6 +36,8 @@ EOF
 
 # Cases 1-9 are about other steps; a real rejection differential would build a second compiler.
 export PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh"
+# They run in this checkout, whose state is not theirs to choose: HEAD is a base they always have.
+export PREFLIGHT_BASE=HEAD
 
 cat << 'EOF' > "$tmp/stub_fail_selfhost.sh"
 #!/bin/sh
@@ -269,17 +278,132 @@ else
     echo "[SKIP] preflight-selftest: case 11 needs the checkers to equal HEAD's (the tree has uncommitted checker changes)"
 fi
 
-# Case 12: with no base given, the run says which base it chose (the working tree against HEAD when the
-# tree differs from it, else the upstream branch), so a committed change is not silently compared with itself.
+# Case 12: with no base given, the run either names the base it chose or refuses, naming PREFLIGHT_BASE;
+# it never goes on without one (it used to compare a committed change with itself and pass).
 rc=0
-out=$(env -u PREFLIGHT_REJECT_BASE PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+out=$(env -u PREFLIGHT_REJECT_BASE -u PREFLIGHT_BASE PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
       PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
       PREFLIGHT_BENCH="$tmp/stub_pass.sh" PREFLIGHT_CHECKED="$tmp/stub_pass.sh" PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
       ./scripts/preflight.sh --changed 2>&1) || rc=$?
-if [ $rc -eq 0 ] && echo "$out" | grep -E "reject-diff.*(against HEAD|against .*/|PREFLIGHT_REJECT_BASE)" > /dev/null; then
-    pass "the rejection differential names the base it chose when none is given"
+if [ $rc -eq 0 ] && echo "$out" | grep -q "^preflight-changed: base [0-9a-f]* (" \
+    && echo "$out" | grep -qE "reject-diff"; then
+    pass "with no base given, the run names the base it chose"
+elif [ $rc -eq 1 ] && echo "$out" | grep -qF "no base to check the change against" && echo "$out" | grep -qF "PREFLIGHT_BASE="; then
+    pass "with no base given and none to find, the run refuses and names PREFLIGHT_BASE"
 else
-    fail "expected the chosen base to be named (rc=$rc, out=$out)"
+    fail "expected the chosen base to be named, or a refusal naming PREFLIGHT_BASE (rc=$rc, out=$out)"
+fi
+
+# Case 13: the base, in scratch repositories whose history the case controls.
+repo_base() { # repo_base DIR -> "<rc> <PF_BASE or error>"
+    ( cd "$1" && unset PREFLIGHT_BASE && . "$OLDPWD/scripts/lib/preflight_base.sh" \
+        && if preflight_base; then echo "0 $PF_BASE"; else echo "1 $PF_BASE_ERR"; fi )
+}
+g() { git -c user.name=t -c user.email=t@t -c init.defaultBranch=main "$@" > /dev/null 2>&1; }
+r="$tmp/repo13"
+mkdir -p "$r/origin.git" "$r/w"
+g init --bare "$r/origin.git"
+g -C "$r/w" init
+echo a > "$r/w/f"; g -C "$r/w" add f; g -C "$r/w" commit -m one
+c1=$(git -C "$r/w" rev-parse HEAD)
+echo b > "$r/w/f"; g -C "$r/w" commit -am two
+res=$(repo_base "$r/w")
+case "$res" in
+    "1 "*PREFLIGHT_BASE=*) pass "a committed change with no upstream and no default branch has no base, and says so" ;;
+    *) fail "a committed change with no upstream must not get a base (got: $res)" ;;
+esac
+g -C "$r/w" remote add origin "$r/origin.git"
+g -C "$r/w" push origin "$c1:refs/heads/main"
+g -C "$r/w" fetch origin
+g -C "$r/w" checkout -b feature
+g -C "$r/w" push -u origin feature
+res=$(repo_base "$r/w")
+if [ "$res" = "0 $c1" ]; then
+    pass "a pushed branch (its upstream holds the commits) is measured from its merge base with origin/main"
+else
+    fail "a pushed branch should be measured from its merge base $c1 (got: $res)"
+fi
+echo c > "$r/w/f"; g -C "$r/w" commit -am three
+res=$(repo_base "$r/w")
+up=$(git -C "$r/w" rev-parse origin/feature)
+if [ "$res" = "0 $up" ]; then
+    pass "an upstream behind HEAD is the base"
+else
+    fail "the upstream $up should be the base (got: $res)"
+fi
+g -C "$r/w" checkout -q main 2>/dev/null || g -C "$r/w" checkout -b main "$c1"
+g -C "$r/w" reset -q --hard origin/main
+g -C "$r/w" branch -u origin/main
+echo d > "$r/w/f"
+res=$(repo_base "$r/w")
+if [ "$res" = "0 $c1" ]; then
+    pass "an uncommitted change on an up-to-date branch is measured from HEAD"
+else
+    fail "an uncommitted change should be measured from HEAD $c1 (got: $res)"
+fi
+
+# Case 14: preflight-changed refuses to start without a base, and passes the one it chose to mutation-check.
+trace14="$tmp/trace14"
+: > "$trace14"
+cat << EOS > "$tmp/stub_trace_selfhost.sh"
+#!/bin/sh
+echo "selfhost ran" >> "$trace14"
+exit 0
+EOS
+chmod +x "$tmp/stub_trace_selfhost.sh"
+rc=0
+out=$(PREFLIGHT_BASE=no-such-commit-z0043 PREFLIGHT_SELFHOST="$tmp/stub_trace_selfhost.sh" PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+      ./scripts/preflight.sh --changed 2>&1) || rc=$?
+if [ $rc -eq 1 ] && echo "$out" | grep -qF "[FAIL] preflight-changed: no base" && [ ! -s "$trace14" ]; then
+    pass "preflight-changed refuses to start without a base"
+else
+    fail "expected a refusal before anything starts (rc=$rc, trace: $(cat "$trace14"), out=$out)"
+fi
+cat << 'EOS' > "$tmp/stub_echo_base.sh"
+#!/bin/sh
+echo "stub: mutation base ${MUTATION_BASE:-none}"
+exit 0
+EOS
+chmod +x "$tmp/stub_echo_base.sh"
+if parent=$(git rev-parse -q --verify HEAD~1 2>/dev/null); then
+    rc=0
+    out=$(PREFLIGHT_BASE=HEAD~1 PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_echo_base.sh" \
+          PREFLIGHT_BENCH="$tmp/stub_pass.sh" PREFLIGHT_CHECKED="$tmp/stub_pass.sh" PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+          ./scripts/preflight.sh --changed 2>&1) || rc=$?
+    if [ $rc -eq 0 ] && echo "$out" | grep -qF "stub: mutation base $parent"; then
+        pass "preflight-changed hands mutation-check the base it chose"
+    else
+        fail "mutation-check should receive MUTATION_BASE=$parent (rc=$rc, out=$out)"
+    fi
+else
+    echo "[SKIP] preflight-selftest: case 14b needs a parent commit"
+fi
+
+# Case 15: the seed compiler refusing the base source (a stricter rule) must not stop the differential.
+# The stand-in make refuses while build/zoril is the seed copied in, and builds stand-in tools once the
+# differential has removed it to build through stage1; the stand-ins accept every program.
+cat << 'EOS' > "$tmp/stub_make.sh"
+#!/bin/sh
+if [ -f build/zoril ] && ! grep -q 'stand-in zoril' build/zoril 2>/dev/null; then
+    echo "build/zoril: error: the seed refuses this source" >&2
+    exit 1
+fi
+mkdir -p build
+for t in zoril zbuild; do printf '#!/bin/sh\n# stand-in zoril\nexit 0\n' > "build/$t"; chmod +x "build/$t"; done
+exit 0
+EOS
+chmod +x "$tmp/stub_make.sh"
+if [ -x build/zoril ] && [ -f build/zilc ] && [ -f build/runtime.o ]; then
+    rc=0
+    out=$(REJECT_DIFF_MAKE="$tmp/stub_make.sh" ./scripts/check_reject_diff.sh --probes-only --change HEAD HEAD 2>&1) || rc=$?
+    if [ $rc -eq 0 ] && echo "$out" | grep -qF "building its compiler through stage1" \
+        && echo "$out" | grep -qF "[PASS] reject-diff: 0 newly accepted"; then
+        pass "the differential builds a base the seed refuses through stage1, and still runs"
+    else
+        fail "expected the stage1 rebuild and a differential (rc=$rc, out=$(echo "$out" | tail -n 5))"
+    fi
+else
+    echo "[SKIP] preflight-selftest: case 15 needs build/zoril, build/zilc and build/runtime.o (run make)"
 fi
 
 exit $status
