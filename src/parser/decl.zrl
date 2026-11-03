@@ -133,7 +133,9 @@ impl Parser {
     }
 
     // `(a, b)` / `()`: `#[borrows]`'s parameter names, checked against the function's
-    // parameters when it is lowered.
+    // parameters when it is lowered. The names are copied into the arena, so the result borrows
+    // nothing from the parser.
+    #[borrows()]
     fn parse_name_list(self: &mut Parser) -> [u32] {
         let mut names = unsafe { Vec::<u32>.new_in_raw(self.arena) };
         self.expect(Token.LParen);

@@ -395,7 +395,9 @@ fn parse_args(argc: i32, argv: **u8, table: &mut InternTable, arena: *mut ArenaH
 }
 
 // Without `-o`: `<module>.zri` for an interface, `<module>.zil` when compiling one module, else
-// out.zil.
+// out.zil. The result is a copy built in the arena (or a literal), so it borrows nothing from `o`:
+// `o.output_path = default_output_path(&o, arena)` must not leave `o` holding a borrow of itself.
+#[borrows()]
 fn default_output_path(o: &Options, arena: *mut ArenaHeader) -> [u8] {
     if !o.emit_interface && !o.compile_only { return "out.zil"; }
     let mut bv = unsafe { ByteVec.new_raw(arena) };

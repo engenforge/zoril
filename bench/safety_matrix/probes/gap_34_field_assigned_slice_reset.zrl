@@ -1,7 +1,6 @@
 // name: Arena reset while field-assigned slice lives in local struct
-// expected: known_gap
-// gap: ZirVerifier.check_assign drops RHS borrows when assigning to struct field of local, permitting arena reset while field view is live
-// observed: exit 77
+// expected: compile_reject
+// Rejected by ZirVerifier.check_assign, which records the borrows of a value written into a field, element or tuple slot of a local on that local, so the arena reset cannot pass while the field is read afterwards.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

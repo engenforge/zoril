@@ -1,0 +1,29 @@
+// name: Option field of a local keeps the borrow written into it
+// expected: compile_reject
+// Rejected by ZirVerifier.check_assign: the variant built from the slice holds its borrow, and the field write hands it to the local.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct H {
+    o: Option<[i32]>,
+}
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => {
+            return 1;
+        }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let mut h = H { o: Option.None };
+    h.o = Option.Some(v.as_slice());
+    a.reset();
+    return match h.o {
+        Option.Some(s) => s[0],
+        Option.None => 0,
+    };
+}
