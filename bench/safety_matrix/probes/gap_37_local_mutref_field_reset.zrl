@@ -1,0 +1,24 @@
+// name: Arena reset after a field write through a local &mut to the struct
+// expected: known_gap
+// gap: a value written into a local's field through a local &mut to it is not recorded as a borrow the struct holds: check_assign skips a write through a pointer (place_writes_through_pointer), so the reset passes while the field is read afterwards
+// observed: exit 77
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct W { s: [i32], t: i32, }
+
+fn mk() -> W { return W { s: @slice(0 as *i32, 0), t: 0 }; }
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let mut w = mk();
+    { let r = &mut w; r.s = v.as_slice(); }
+    a.reset();
+    let mut v2 = Vec::<i32>.new_in(&a);
+    v2.push(77);
+    return w.s[0];
+}
