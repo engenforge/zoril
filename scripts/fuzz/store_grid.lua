@@ -4,10 +4,10 @@
 
 local sources = {"arena_vec", "local_vec", "string", "ref_local", "elem_ref", "closure_local"}
 local carriers = {"direct", "struct_field", "tuple_slot", "enum_payload", "box", "array_slot", "struct_val", "struct_scalar"}
-local paths = {"direct", "helper", "two_level_helper", "method", "self_method", "trait_method", "closure", "fn_val", "mutual_rec", "param_65", "same_param"}
+local paths = {"direct", "helper", "two_level_helper", "method", "self_method", "trait_method", "closure", "fn_val", "mutual_rec", "param_65", "same_param", "store_mutual_rec", "store_param_65"}
 -- Note: 'global' destination was removed per S1.1 spec because non-scalar static mut
 -- requires 'unsafe' in Zoril, and cells must not use 'unsafe'.
-local destinations = {"deref_out", "field_out", "call_mut", "call_struct_mut", "closure_capture_mut", "closure_owned_capture", "local_field_assigned_out", "ten_copies", "return_val"}
+local destinations = {"deref_out", "field_out", "call_mut", "call_struct_mut", "closure_capture_mut", "closure_owned_capture", "local_field_assigned_out", "ten_copies", "return_val", "closure_call_mut"}
 local invalidations = {"frame_ends", "arena_reset", "vec_free", "push_growth", "drop", "move_owner"}
 
 -- Check why a combination should be skipped
@@ -37,6 +37,9 @@ local function get_skip_reason(s, c, p, d, inv)
     -- Path constraints
     if p == "same_param" and d ~= "deref_out" and d ~= "field_out" then
         return "same_param path requires an in-parameter destination (deref_out or field_out)"
+    end
+    if (p == "store_mutual_rec" or p == "store_param_65") and d ~= "deref_out" then
+        return "a storing path writes through the in-parameter itself (deref_out)"
     end
 
     return nil
@@ -108,7 +111,7 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
     end
 
     -- Destination struct definitions
-    if d == "field_out" then
+    if d == "field_out" or d == "closure_call_mut" then
         emit('struct FieldDest { s: ' .. payload_type .. ' }')
     elseif d == "call_struct_mut" then
         emit('struct SlotMut { r: &mut ' .. payload_type .. ' }')
@@ -157,6 +160,16 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
         for i = 1, 63 do p_args = p_args .. "_p" .. i .. ": i32, " end
         p_args = p_args .. "v: " .. payload_type
         emit('fn pass_param65(' .. p_args .. ') -> ' .. payload_type .. ' { return v; }')
+    elseif p == "store_mutual_rec" then
+        -- The callee stores: the value reaches `*out` only after the recursion bottoms out.
+        emit('fn stash_a(out: &mut ' .. payload_type .. ', depth: i32, v: ' .. payload_type .. ') { if depth > 0 { stash_b(out, depth - 1, v); return; } *out = v; }')
+        emit('fn stash_b(out: &mut ' .. payload_type .. ', depth: i32, v: ' .. payload_type .. ') { stash_a(out, depth, v); }')
+    elseif p == "store_param_65" then
+        -- The callee stores, and the value is its 65th parameter, past the 64-bit summary masks.
+        local s_args = "out: &mut " .. payload_type .. ", "
+        for i = 1, 63 do s_args = s_args .. "_p" .. i .. ": i32, " end
+        s_args = s_args .. "v: " .. payload_type
+        emit('fn stash65(' .. s_args .. ') { *out = v; }')
     elseif p == "same_param" then
         if d == "field_out" then
             emit('fn stash_pair(p: (&mut FieldDest, ' .. payload_type .. ')) { p.0.s = p.1; }')
@@ -184,7 +197,7 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
         ret_type = payload_type
     elseif d == "closure_owned_capture" then
         ret_type = "i32"
-    elseif d == "field_out" then
+    elseif d == "field_out" or d == "closure_call_mut" then
         func_args = "out: &mut FieldDest"
     elseif d == "deref_out" or d == "call_mut" or d == "call_struct_mut" or d == "ten_copies" or d == "local_field_assigned_out" or p == "same_param" or d == "closure_capture_mut" then
         func_args = "out: &mut " .. payload_type
@@ -335,14 +348,24 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
         emit('    let routed = pass_param65(' .. dummy_args .. 'carried);')
     elseif p == "same_param" then
         emit('    stash_pair((out, carried));')
+    elseif p == "store_mutual_rec" then
+        emit('    stash_b(out, 1, carried);')
+    elseif p == "store_param_65" then
+        local s_dummy = ""
+        for i = 1, 63 do s_dummy = s_dummy .. i .. ", " end
+        emit('    stash65(out, ' .. s_dummy .. 'carried);')
     end
 
-    -- Step 4: Write into destination (if not already handled by path same_param)
-    if p ~= "same_param" then
+    -- Step 4: Write into destination (if not already handled by a path that stores)
+    if p ~= "same_param" and p ~= "store_mutual_rec" and p ~= "store_param_65" then
         if d == "deref_out" then
             emit('    *out = routed;')
         elseif d == "field_out" then
             emit('    out.s = routed;')
+        elseif d == "closure_call_mut" then
+            emit('    let get_out = || -> &mut ' .. payload_type .. ' { return &mut out.s; };')
+            emit('    let slot = get_out();')
+            emit('    *slot = routed;')
         elseif d == "call_mut" then
             emit('    let slot = get_mut_slot(out);')
             emit('    *slot = routed;')
@@ -491,7 +514,7 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
             emit('    let res = escape_storer();')
         end
         emit('    return res;')
-    elseif d == "field_out" then
+    elseif d == "field_out" or d == "closure_call_mut" then
         if is_slice then
             emit('    let mut fd = FieldDest { s: @slice(0 as *' .. elem_type .. ', 0) };')
         elseif is_ref then

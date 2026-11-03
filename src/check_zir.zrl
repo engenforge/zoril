@@ -409,6 +409,48 @@ impl ZirVerifier {
         return false;
     }
 
+    // Whether a write to PL reaches its target through a pointer, a box or a slice view: an explicit
+    // dereference, or a field, tuple or index step out of a value of such a type (a field access
+    // through a reference dereferences it implicitly, as place_last_deref_is_readonly reads it).
+    // That write stores into the referent, not into the base local, so what the value borrows is
+    // not the base local's to hold. The steps are the ones place_last_deref_is_readonly takes.
+    fn place_writes_through_pointer(self: &mut ZirVerifier, pl: &Place, locals: [Local]) -> bool {
+        let mut curr_ty = 0 as u32;
+        let mut li = 0 as usize;
+        while li < locals.len {
+            if locals[li].id == (*pl).base {
+                curr_ty = locals[li].ty;
+                break;
+            }
+            li = li + 1 as usize;
+        }
+        let mut i = 0 as usize;
+        while i < (*pl).projections.len {
+            let proj = &(*pl).projections[i];
+            let tag = proj.get_tag();
+            if tag == PROJ_DEREF { return true; }
+            if curr_ty != 0 as u32 {
+                let layer_tag = self.get_type_decl(curr_ty).def.get_tag();
+                if is_any_pointer_tag(layer_tag)
+                    || layer_tag == ILTYPE_BOXED
+                    || layer_tag == ILTYPE_BOXEDMUT
+                    || layer_tag == ILTYPE_SLICE {
+                    return true;
+                }
+            }
+            if tag == PROJ_FIELD {
+                let field_idx = self.get_field_index(curr_ty, proj.get_Field());
+                curr_ty = self.get_field_type(curr_ty, field_idx);
+            } else if tag == PROJ_TUPLEINDEX {
+                curr_ty = self.get_tuple_elem_type(curr_ty, proj.get_TupleIndex());
+            } else {
+                curr_ty = self.get_slice_element_type(curr_ty);
+            }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
     fn is_pointer_like_type(self: &mut ZirVerifier, ty: u32) -> bool {
         if ty == 0 as u32 || ty as usize > self.zil_module.types.len() { return false; }
         let tag = self.zil_module.types[ty as usize - 1 as usize].def.get_tag();
@@ -2628,6 +2670,12 @@ impl ZirVerifier {
                         self.remove_mark_info(state, borrower_id);
                     }
                     self.inherit_rv_borrows(rv, borrower_id, state, locals);
+                } else if !self.place_writes_through_pointer(place, locals) {
+                    // A write into a field, element or tuple slot of the local (`x.f = ..`,
+                    // `x[i] = ..`, `x.0 = ..`) stores the value in x: x holds what the value
+                    // holds. A write through a pointer stores into the referent instead, which
+                    // the escape rules judge.
+                    self.inherit_rv_borrows(rv, borrower_id, state, locals);
                 }
             },
         }
@@ -2657,6 +2705,17 @@ impl ZirVerifier {
             self.propagate_borrow(rv, state, place.base, locals);
             state.ownership[place.base as usize] = OWN_OWNED;
             state.maybe_live[place.base as usize] = false;
+        } else if !self.place_writes_through_pointer(place, locals) {
+            // The borrows of a copied reference join x's: x keeps each borrow it already holds
+            // and the old value's borrow is not ended, because the other fields are still live.
+            // The copy lands in a field or slot, not in x itself, so it is not a direct borrow.
+            let before = state.borrows.len();
+            self.propagate_borrow(rv, state, place.base, locals);
+            let mut bi = before;
+            while bi < state.borrows.len() {
+                state.borrows[bi].direct = false;
+                bi = bi + 1 as usize;
+            }
         }
         self.end_rv_temp_borrows(rv, place.base, state, locals);
     }

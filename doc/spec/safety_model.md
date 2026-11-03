@@ -183,7 +183,7 @@ Regarding runtime abort conventions: `zoril_abort()` exits **1** (unhandled logi
 
 ### Gap summary
 
-No row above is marked **GAP** today. That does not mean no hole is open: the 16 holes still open in checked code are routes inside rows the matrix counts as closed, and each is a `known_gap` probe listed under [Known gaps](#known-gaps).
+No row above is marked **GAP** today. That does not mean no hole is open: the 17 holes still open in checked code are routes inside rows the matrix counts as closed, and each is a `known_gap` probe listed under [Known gaps](#known-gaps).
 
 Every program that showed a hole in one of the rows is kept as a `compile_reject` probe (or, for the two drop-count probes, an `accept` that asserts one drop), so the hole cannot reopen unnoticed.
 
@@ -225,9 +225,10 @@ Every probe in `bench/safety_matrix/probes/` whose expectation is `known_gap` is
 - **[`gap_29_dest_closure_call_returns_mut_ref.zrl`](../../bench/safety_matrix/probes/gap_29_dest_closure_call_returns_mut_ref.zrl)**: CallPtr return target check misses closure call returning captured mutable reference
 - **[`gap_32_byval_collection_param_store.zrl`](../../bench/safety_matrix/probes/gap_32_byval_collection_param_store.zrl)**: By-value collection parameter treated as external instead of frame-owned storage
 - **[`gap_33_param_65_arena_slice_store.zrl`](../../bench/safety_matrix/probes/gap_33_param_65_arena_slice_store.zrl)**: Parameter bitmask overflow at index >= 64 drops arena slice storage provenance
-- **[`gap_34_field_assigned_slice_reset.zrl`](../../bench/safety_matrix/probes/gap_34_field_assigned_slice_reset.zrl)**: ZirVerifier.check_assign drops RHS borrows when assigning to struct field of local, permitting arena reset while field view is live
-- **[`gap_35_inner_block_arena_field_assigned_ref.zrl`](../../bench/safety_matrix/probes/gap_35_inner_block_arena_field_assigned_ref.zrl)**: ZirVerifier.check_assign drops RHS borrows when assigning to struct field of local, permitting inner-block arena drop while field reference is live
 - **[`gap_36_carrier_ref_enum_payload_match.zrl`](../../bench/safety_matrix/probes/gap_36_carrier_ref_enum_payload_match.zrl)**: The summary pass does not follow a pointer into the frame through an enum payload bound in a match arm
+- **[`gap_37_local_mutref_field_reset.zrl`](../../bench/safety_matrix/probes/gap_37_local_mutref_field_reset.zrl)**: A slice written into a local's field through a local `&mut` to it is not held by the struct, so an arena reset passes while the field is read. Route class: a store into a local's field through a pointer to that local, which `check_assign` skips (`place_writes_through_pointer`)
+- **[`gap_38_param_field_reset.zrl`](../../bench/safety_matrix/probes/gap_38_param_field_reset.zrl)**: The same store made by a callee through its `&mut` parameter. Route class: a store into a local's field through a pointer to that local, which `check_assign` skips (`place_writes_through_pointer`)
+- **[`gap_39_method_self_field_reset.zrl`](../../bench/safety_matrix/probes/gap_39_method_self_field_reset.zrl)**: The same store made by a `&mut self` method through `self`. Route class: a store into a local's field through a pointer to that local, which `check_assign` skips (`place_writes_through_pointer`)
 
 ---
 

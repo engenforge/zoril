@@ -1,0 +1,30 @@
+// name: Nested field of a local keeps the borrow written into it
+// expected: compile_reject
+// Rejected by ZirVerifier.check_assign: a write two fields deep is still a write into the local, which holds the borrow.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct W {
+    s: [i32],
+}
+
+struct Outer {
+    w: W,
+}
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => {
+            return 1;
+        }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let mut o = Outer { w: W { s: @slice(0 as *i32, 0) } };
+    o.w.s = v.as_slice();
+    a.reset();
+    return o.w.s[0];
+}

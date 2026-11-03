@@ -180,7 +180,7 @@ An `extern` declaration is the unsafe contract. The compiler checks the shape of
 
 ### 5.1 The safety matrix
 
-The repository keeps 445 probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes), each recording its expectation in its first lines: **344 `compile_reject`**, **66 `accept`**, **8 `runtime_trap`**, **11 `runtime_fault`**, and **16 `known_gap`**. `scripts/run_safety_matrix.sh` runs all of them and fails when an observation differs from the recorded expectation; `make test` gates it (`safety-matrix`) together with `safety-model`, which keeps [`doc/spec/safety_model.md`](spec/safety_model.md) and the probes consistent in both directions.
+The repository keeps 453 probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes), each recording its expectation in its first lines: **350 `compile_reject`**, **67 `accept`**, **8 `runtime_trap`**, **11 `runtime_fault`**, and **17 `known_gap`**. `scripts/run_safety_matrix.sh` runs all of them and fails when an observation differs from the recorded expectation; `make test` gates it (`safety-matrix`) together with `safety-model`, which keeps [`doc/spec/safety_model.md`](spec/safety_model.md) and the probes consistent in both directions.
 
 Each matrix row carries an evidence level: **6 rows at `routes`**, **72 at `example`**, and **0 at `fuzzed`** or `argued`. `example` means the cited probes fire the mechanism on the shapes they name; `routes` means every route the row lists is named by a cited `compile_reject` probe (`scripts/check_route_coverage.sh`); `fuzzed` adds generated programs for the row's routes, and `argued` adds an argument that the invariant holds for every route. The levels are defined in [`safety_model.md`](spec/safety_model.md) and validated by `scripts/check_safety_model.sh`.
 
@@ -208,7 +208,7 @@ Safe code is only as good as the `unsafe` code under it, so the project measures
 | stdlib `unsafe fn` declarations  | 63     |
 | of those, public                 | 59     |
 | compiler modules                 | 50     |
-| compiler lines                   | 46,769 |
+| compiler lines                   | 46,832 |
 | compiler `unsafe { }` blocks     | 843    |
 
 How each one is counted: every `.zrl` file under the directory, recursively; **lines** are physical lines (`wc -l`); **`unsafe { }` blocks** are occurrences of `unsafe` followed by `{` on the same line; **`unsafe fn` declarations** are lines that start with `unsafe fn` or `pub unsafe fn`. That is a different question from `scripts/marker_density.sh`, which counts raw-pointer dereference sites over non-comment lines (58 marker lines for `stdlib`, 264 for `src`).
@@ -222,26 +222,28 @@ How each one is counted: every `.zrl` file under the directory, recursively; **l
 
 ## 6. Known gaps in checked code
 
-The matrix has no row marked `GAP`. The holes that remain open in checked code are tracked as 16 `known_gap` probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes) and listed in the [Known gaps](spec/safety_model.md#known-gaps) table. Ordinary code rarely reaches them: each needs a view of storage the function owns (or a reference to its stack) to be stored or returned through one of the routes below. They are known, and the unified provenance model planned for after the launch is meant to close all of them. For example, this program is accepted although the arena is reset while `w.s` still views its storage (class A, [`gap_34_field_assigned_slice_reset.zrl`](../bench/safety_matrix/probes/gap_34_field_assigned_slice_reset.zrl)):
+The matrix has no row marked `GAP`. The holes that remain open in checked code are tracked as 17 `known_gap` probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes) and listed in the [Known gaps](spec/safety_model.md#known-gaps) table. Ordinary code rarely reaches them: each needs a view of storage the function owns (or a reference to its stack) to be stored or returned through one of the routes below. They are known, and the unified provenance model planned for after the launch is meant to close all of them. For example, this function is accepted although the arena dies when it returns while `out` keeps the view (class A, [`gap_07_path_same_param.zrl`](../bench/safety_matrix/probes/gap_07_path_same_param.zrl)):
 
 ```zoril,no-test
-let mut v = Vec::<i32>.new_in(&a);
-v.push(42);
-let mut w = W { s: @slice(0 as *i32, 0) };
-w.s = v.as_slice();   // the view is stored in a field of a local struct
-a.reset();            // accepted: the compiler does not follow the field
-return w.s[0];        // reads reset memory
+fn stash_pair(p: (&mut [i32], [i32])) { *p.0 = p.1; }
+
+fn escape_storer(out: &mut [i32]) {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    stash_pair((out, v.as_slice()));  // the destination and the view travel in one parameter
+}                                     // accepted: `a` is gone, `out` still views its storage
 ```
 
 The open classes:
 
-- **(A) Aggregate slot carriers:** a borrow written into a field of a local aggregate and then reset or dropped is not followed when the aggregate is read later ([`gap_34_field_assigned_slice_reset.zrl`](../bench/safety_matrix/probes/gap_34_field_assigned_slice_reset.zrl), [`gap_35_inner_block_arena_field_assigned_ref.zrl`](../bench/safety_matrix/probes/gap_35_inner_block_arena_field_assigned_ref.zrl)). The struct-field, tuple-slot and array-slot forms of an escape through a call are closed.
-- **(B) Same-parameter destination and value:** when one parameter carries both an external destination and a borrowed source, the store check allows storing a frame view into external storage ([`gap_07_path_same_param.zrl`](../bench/safety_matrix/probes/gap_07_path_same_param.zrl)).
-- **(C) Unrecognised external destinations:** a destination reached through a closure call that returns a mutable reference is missed ([`gap_29_dest_closure_call_returns_mut_ref.zrl`](../bench/safety_matrix/probes/gap_29_dest_closure_call_returns_mut_ref.zrl)).
-- **(D) Closures storing frame views:** a closure storing a frame-owned view through a captured mutable reference is accepted ([`gap_11_dest_closure_capture_mut.zrl`](../bench/safety_matrix/probes/gap_11_dest_closure_capture_mut.zrl)).
-- **(E) Two-axis aggregate and path combinations:** a reference to a stack local, an element reference, or a stack-capturing closure carried through an enum payload, a `fn` value or a 65th parameter loses provenance and is accepted ([`gap_13_ref_local_enum_payload.zrl`](../bench/safety_matrix/probes/gap_13_ref_local_enum_payload.zrl), [`gap_36_carrier_ref_enum_payload_match.zrl`](../bench/safety_matrix/probes/gap_36_carrier_ref_enum_payload_match.zrl), [`gap_16_ref_local_fn_val.zrl`](../bench/safety_matrix/probes/gap_16_ref_local_fn_val.zrl), [`gap_18_elem_ref_enum_payload.zrl`](../bench/safety_matrix/probes/gap_18_elem_ref_enum_payload.zrl), [`gap_21_elem_ref_fn_val.zrl`](../bench/safety_matrix/probes/gap_21_elem_ref_fn_val.zrl), [`gap_23_closure_local_enum_payload.zrl`](../bench/safety_matrix/probes/gap_23_closure_local_enum_payload.zrl), [`gap_26_closure_local_fn_val.zrl`](../bench/safety_matrix/probes/gap_26_closure_local_fn_val.zrl), [`gap_27_closure_local_param_65.zrl`](../bench/safety_matrix/probes/gap_27_closure_local_param_65.zrl)).
-- **(F) Call summary limits:** a store inside mutually recursive calls has no interprocedural fixpoint, parameters beyond the 64-parameter limit drop provenance, and a callee compiled separately records an empty store summary in its `.zri` ([`gap_28_call_summary_mutual_recursion.zrl`](../bench/safety_matrix/probes/gap_28_call_summary_mutual_recursion.zrl), [`gap_33_param_65_arena_slice_store.zrl`](../bench/safety_matrix/probes/gap_33_param_65_arena_slice_store.zrl)).
-- **(G) Storing views of by-value collection parameters:** a view into a `Vec` passed by value is accepted for a store into caller memory ([`gap_32_byval_collection_param_store.zrl`](../bench/safety_matrix/probes/gap_32_byval_collection_param_store.zrl)).
+- **(A) Same-parameter destination and value:** when one parameter carries both an external destination and a borrowed source, the store check allows storing a frame view into external storage ([`gap_07_path_same_param.zrl`](../bench/safety_matrix/probes/gap_07_path_same_param.zrl)).
+- **(B) Unrecognised external destinations:** a destination reached through a closure call that returns a mutable reference is missed ([`gap_29_dest_closure_call_returns_mut_ref.zrl`](../bench/safety_matrix/probes/gap_29_dest_closure_call_returns_mut_ref.zrl)).
+- **(C) Closures storing frame views:** a closure storing a frame-owned view through a captured mutable reference is accepted ([`gap_11_dest_closure_capture_mut.zrl`](../bench/safety_matrix/probes/gap_11_dest_closure_capture_mut.zrl)).
+- **(D) Two-axis aggregate and path combinations:** a reference to a stack local, an element reference, or a stack-capturing closure carried through an enum payload, a `fn` value or a 65th parameter loses provenance and is accepted ([`gap_13_ref_local_enum_payload.zrl`](../bench/safety_matrix/probes/gap_13_ref_local_enum_payload.zrl), [`gap_36_carrier_ref_enum_payload_match.zrl`](../bench/safety_matrix/probes/gap_36_carrier_ref_enum_payload_match.zrl), [`gap_16_ref_local_fn_val.zrl`](../bench/safety_matrix/probes/gap_16_ref_local_fn_val.zrl), [`gap_18_elem_ref_enum_payload.zrl`](../bench/safety_matrix/probes/gap_18_elem_ref_enum_payload.zrl), [`gap_21_elem_ref_fn_val.zrl`](../bench/safety_matrix/probes/gap_21_elem_ref_fn_val.zrl), [`gap_23_closure_local_enum_payload.zrl`](../bench/safety_matrix/probes/gap_23_closure_local_enum_payload.zrl), [`gap_26_closure_local_fn_val.zrl`](../bench/safety_matrix/probes/gap_26_closure_local_fn_val.zrl), [`gap_27_closure_local_param_65.zrl`](../bench/safety_matrix/probes/gap_27_closure_local_param_65.zrl)).
+- **(E) Call summary limits:** a store inside mutually recursive calls has no interprocedural fixpoint, parameters beyond the 64-parameter limit drop provenance, and a callee compiled separately records an empty store summary in its `.zri` ([`gap_28_call_summary_mutual_recursion.zrl`](../bench/safety_matrix/probes/gap_28_call_summary_mutual_recursion.zrl), [`gap_33_param_65_arena_slice_store.zrl`](../bench/safety_matrix/probes/gap_33_param_65_arena_slice_store.zrl)).
+- **(F) Storing views of by-value collection parameters:** a view into a `Vec` passed by value is accepted for a store into caller memory ([`gap_32_byval_collection_param_store.zrl`](../bench/safety_matrix/probes/gap_32_byval_collection_param_store.zrl)).
+- **(G) Stores into a local through a pointer to it:** a view written into a local struct's field through a local `&mut`, a `&mut` parameter of a callee, or `self` in a method is not recorded as a borrow the struct holds, so an arena reset passes while the field is read ([`gap_37_local_mutref_field_reset.zrl`](../bench/safety_matrix/probes/gap_37_local_mutref_field_reset.zrl), [`gap_38_param_field_reset.zrl`](../bench/safety_matrix/probes/gap_38_param_field_reset.zrl), [`gap_39_method_self_field_reset.zrl`](../bench/safety_matrix/probes/gap_39_method_self_field_reset.zrl)).
 
 ---
 
