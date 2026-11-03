@@ -32,17 +32,28 @@ Open work, most urgent first. Z-0001 to Z-0006 come from the first cloud session
 
     - **State:** `scripts/check_fuzz_fresh.sh` reports the record stale for `rt/` since `81e0340`. The pages that quote the record (`README.md`, `doc/SAFETY.md` §5, `doc/STABILITY.md`) describe the launched code and stay true while they say so. Z-0007 to Z-0012 will change `src/` several times.
     - **Options:** a short session now; or one after the hardening series (Z-0012), with the pages saying which code the current record describes until then. Record the decision here.
+    - **Decision (2026-11-03, a delegated judgment for the maintainer to review):** renew the record once, after Z-0012, not now.
+    - **Reasons:** (1) Z-0007 to Z-0012 each change `src/`, so a session run now would be stale again before anything cites it. (2) The pages are accurate as they stand: they quote the figure for the launched code (`bench/fuzz/README.md`, "The short session on the launched code"), and `scripts/check_fuzz_fresh.sh` reports the drift (`STALE ... rt`) without failing outside `--strict`. (3) Nothing is lost by waiting: the release recording step runs the same check with `--strict` and refuses while the hashes differ, so a release cannot cite the stale record. (4) A session takes the whole machine for hours; one run after the series costs less than one after each task.
+    - **Conditions:** no page edit is needed now. Z-0012's completion note starts the renewal. If a release is wanted before Z-0012, a short session runs first, because the strict check requires it. Run Z-0013's new generator features in the same session.
 
 - [ ] +bench +measurement Z-0004 Measure how far the benchmark gate's measures move between cloud sessions
     > **Created:** 2026-11-03
 
     - **Why:** `bench/cross_lang/thresholds.cfg` is not in the tree, so `scripts/bench_threshold_check.sh` records a baseline on its first run on a host. Every cloud session starts on a fresh VM, so there the gate compares a run with itself and cannot fail. Of its three measures, `runtime_ratio_vs_gcc_o2` is relative to gcc on the same host; `clean_throughput_loc_s` and `incremental_rebuild_ms` are absolute and depend on the VM.
     - **Do:** in three to five separate cloud sessions, run `sh scripts/bench_cross_lang.sh --check-thresholds` on the same commit and record each measure, the CPU model (`/proc/cpuinfo`) and the load. Report the spread of each measure against the gate's 15% tolerance. Delete the files the run writes under `bench/`; commit nothing but this task's text.
+    - **Sample 1 (2026-11-03, commit `fdb0c55`):** `Intel(R) Xeon(R) Processor @ 2.30GHz`, 4 vCPUs, 1-minute load average 2.46 at the start (a `make test` had just finished, so the host was not quiet). `clean_throughput_loc_s` 10177 (the run's own spread 288..297 ms, +3.1%), `incremental_rebuild_ms` 22, `runtime_ratio_vs_gcc_o2` 4.182, `peak_rss_mb_per_kloc` 2.973; the run took 42 s. Earlier on this same VM, an unrelated preflight recorded `clean_throughput_loc_s` 10072, 1.0% below this sample. That is one VM twice, not a spread between sessions.
+    - **Still to do:** two to four more samples, each from a new cloud session on this commit. This task stays open until they exist; the spread cannot be computed from one VM.
 
 - [ ] +bench +decision Z-0005 Decide the benchmark gate's behaviour on a host without a committed baseline
     > **Created:** 2026-11-03 **Depends:** Z-0004.
 
     - **Options, from the measurement:** commit a baseline for the measures whose spread stays inside the tolerance; make the gate print a `[SKIP]` naming the reason for those that do not; and when no committed baseline exists, have the gate say so instead of recording one and passing.
+    - **Decision (2026-11-03, provisional on Z-0004's spread data; a delegated judgment for the maintainer to review):**
+        1. A host with no committed baseline gets a statement, not a pass. The gate stops recording a baseline on a first run and then printing "All performance thresholds within tolerance"; it prints `[SKIP] bench-thresholds: no committed baseline for <axis> (<reason>)` per axis and exits 0. Recording stays an explicit act (`sh scripts/bench_cross_lang.sh --record`).
+        2. Commit a baseline for `runtime_ratio_vs_gcc_o2` only (4.182 in Z-0004's sample 1): it is relative to gcc -O2 on the same host, so it moves with the compiler and not with the VM. It is committed once Z-0004's samples keep its spread inside the 15% tolerance; otherwise it gets the `[SKIP]` too.
+        3. `clean_throughput_loc_s` and `incremental_rebuild_ms` stay host-local. A host that has recorded its own baseline (a developer's machine) still compares against it; anywhere else they print `[SKIP]` naming "absolute measure, no baseline for this host".
+    - **Why:** on a fresh VM the present gate compares a run with itself, so it cannot fail, and it says "within tolerance" anyway. A committed absolute baseline would pass or fail with the VM's speed, which tests the VM. Z-0004's single sample says nothing yet about other VMs; rule 2 is the part its data can overturn.
+    - **Not done here:** the change to `scripts/bench_threshold_check.sh` and its tests. It needs a task of its own once Z-0004 has its samples.
 
 - [ ] +docs Z-0006 Publish the provenance design note, `doc/design/provenance.md`
     > **Created:** 2026-11-03 **Owner:** the maintainer supplies the text. **Blocks:** Z-0009 to Z-0012.
