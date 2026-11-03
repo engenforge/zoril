@@ -1,0 +1,29 @@
+// name: Frame view stored out after a field write through a local &mut to the struct
+// expected: known_gap
+// gap: a slice of a Vec in this frame's arena, written into a local struct's field through a local &mut to it (r.s = v.as_slice()), is accepted and then stored out through *out = w.s; the same store written as w.s = v.as_slice() is refused (cannot store 'v')
+// observed: exit 77
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct W { s: [i32], t: i32, }
+fn mk() -> W { return W { s: @slice(0 as *i32, 0), t: 0 }; }
+fn set_s(w: &mut W, s: [i32]) { w.s = s; }
+
+fn stash(out: &mut [i32]) -> i32 {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let mut w = mk();
+    { let r = &mut w; r.s = v.as_slice(); }
+    *out = w.s;
+    return 0;
+}
+fn main() -> i32 {
+    let mut out: [i32] = @slice(0 as *i32, 0);
+    if stash(&mut out) != 0 { return 1; }
+    let mut a2 = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 2; } };
+    let mut v2 = Vec::<i32>.new_in(&a2);
+    v2.push(77);
+    return out[0];
+}
