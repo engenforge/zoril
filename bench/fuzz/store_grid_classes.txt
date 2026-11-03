@@ -1,6 +1,6 @@
 # Store Grid Soundness Hole Class Report
 # Generated from base cell: arena_vec__direct__direct__deref_out__frame_ends (rejected)
-# Total classes: 43 (1-axis: 6, 2-axis: 37)
+# Total classes: 47 (1-axis: 6, 2-axis: 41)
 
 # --- 1-Axis Soundness Hole Classes (single change from base escapes safety check) ---
 path=same_param: arena_vec__direct__same_param__deref_out__frame_ends
@@ -42,6 +42,10 @@ carrier=box + path=trait_method: arena_vec__box__trait_method__deref_out__frame_
 carrier=box + destination=call_struct_mut: arena_vec__box__direct__call_struct_mut__frame_ends
 carrier=box + destination=local_field_assigned_out: arena_vec__box__direct__local_field_assigned_out__frame_ends
 carrier=box + destination=ten_copies: arena_vec__box__direct__ten_copies__frame_ends
+carrier=arena_struct_bundle + path=fn_val: arena_vec__arena_struct_bundle__fn_val__deref_out__frame_ends
+carrier=arena_struct_bundle + path=param_65: arena_vec__arena_struct_bundle__param_65__deref_out__frame_ends
+carrier=arena_tuple_bundle + path=fn_val: arena_vec__arena_tuple_bundle__fn_val__deref_out__frame_ends
+carrier=arena_tuple_bundle + path=param_65: arena_vec__arena_tuple_bundle__param_65__deref_out__frame_ends
 path=fn_val + destination=call_struct_mut: arena_vec__direct__fn_val__call_struct_mut__frame_ends
 path=fn_val + destination=local_field_assigned_out: arena_vec__direct__fn_val__local_field_assigned_out__frame_ends
 path=fn_val + destination=ten_copies: arena_vec__direct__fn_val__ten_copies__frame_ends
