@@ -83,6 +83,10 @@ function foo'
 declare -i num=5'
     test_bad_construct "bashism == in [ ]" '#!/bin/sh
 [ "$a" == "$b" ]'
+    test_bad_construct "bashism set -o pipefail" '#!/bin/sh
+set -o pipefail'
+    test_bad_construct "bashism set -euo pipefail" '#!/bin/sh
+set -euo pipefail'
     test_bad_construct "/proc access" '#!/bin/sh
 cat /proc/cpuinfo'
     test_bad_construct "grep --exclude-dir" '#!/bin/sh
@@ -322,6 +326,30 @@ for f in $FILES; do
 done
 if [ "$bashism_fail" -eq 0 ]; then
     echo "[PASS] portability: no bashisms in #!/bin/sh scripts"
+fi
+
+# 7b. `set -o pipefail` in a #!/bin/sh script. POSIX sh has no pipefail (dash and OpenBSD ksh's sh
+# reject it with "Illegal option -o pipefail" and the script dies on its first line), and
+# checkbashisms does not always flag it, so it is looked for whether or not checkbashisms ran.
+pipefail_fail=0
+for f in $FILES; do
+    [ -f "$f" ] || continue
+    case "$f" in *.sh) ;; *) continue ;; esac
+    _first_line=$(head -n 1 "$f" 2>/dev/null || true)
+    case "$_first_line" in
+        *bin/sh*|*bin/env[[:space:]]sh*) ;;
+        *) continue ;;
+    esac
+    matches=$(grep -n -E '(^|[;&|[:space:]])set[[:space:]]+([^#;]*[[:space:]])?-[a-zA-Z]*o[[:space:]]+pipefail' "$f" 2>/dev/null | grep -v '^[[:space:]]*[0-9]*:*[[:space:]]*#' || true)
+    if [ -n "$matches" ]; then
+        echo "[FAIL] portability: $f uses 'set -o pipefail' under #!/bin/sh (POSIX sh has no pipefail):"
+        printf '%s\n' "$matches" | sed 's/^/       /'
+        pipefail_fail=1
+        fail=1
+    fi
+done
+if [ "$pipefail_fail" -eq 0 ]; then
+    echo "[PASS] portability: no 'set -o pipefail' in #!/bin/sh scripts"
 fi
 
 # 8. Check /proc usage
