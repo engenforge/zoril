@@ -30,7 +30,8 @@
 #                `stdlib/`, instead of building anything
 #
 # The scratch worktrees are under build/reject-diff/ and are removed on exit. build/zoril is never touched:
-# the base worktree's build/ is seeded with copies of it and rebuilt from the base source.
+# the base worktree's build/ is seeded with copies of it and rebuilt from the base source, or, when the
+# seed refuses the base source, built through stage1 instead.
 set -u
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT" || exit 2
@@ -68,14 +69,26 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# A scratch tree of COMMIT with a compiler built from its source, seeded with the working tree's.
+# REJECT_DIFF_MAKE replaces `make` in the scratch builds (a test hook: scripts/test_preflight.sh).
+MAKE_CMD="${REJECT_DIFF_MAKE:-make}"
+
+# A scratch tree of COMMIT with a compiler built from its source, seeded with the working tree's. When
+# the change adds a rule the base source breaks, the working tree's compiler refuses to build the base
+# (Z-0007's refused main's src/), so the seeded build fails; the tree's compiler is then built the way a
+# fresh checkout builds it - through stage1, from COMMIT's own source - and the seed is not needed.
 build_tree() { # build_tree COMMIT DIR
     git -C "$REPO_ROOT" worktree add -q --detach "$2" "$1" || { echo "check_reject_diff: cannot check out $1" >&2; exit 2; }
     WORKTREES="$WORKTREES $2"
     mkdir -p "$2/build"
+    _log="$WORK/build_$(basename "$2").log"
     for f in zoril zilc runtime.o; do cp "$REPO_ROOT/build/$f" "$2/build/$f" || { echo "check_reject_diff: build/$f is missing; run make first" >&2; exit 2; }; done
-    if ! (cd "$2" && make > "$WORK/build_$(basename "$2").log" 2>&1 && make build/zbuild >> "$WORK/build_$(basename "$2").log" 2>&1); then
-        echo "check_reject_diff: building $1 failed; see $WORK/build_$(basename "$2").log" >&2
+    if (cd "$2" && $MAKE_CMD > "$_log" 2>&1 && $MAKE_CMD build/zbuild >> "$_log" 2>&1); then
+        return 0
+    fi
+    echo "check_reject_diff: the seeded build of $1 failed; building its compiler through stage1 from its own source (see $_log)" >&2
+    rm -f "$2/build/zoril" "$2/build/zilc" "$2/build/zbuild"
+    if ! (cd "$2" && echo "--- rebuilt through stage1 ---" >> "$_log" && $MAKE_CMD >> "$_log" 2>&1 && $MAKE_CMD build/zbuild >> "$_log" 2>&1); then
+        echo "check_reject_diff: building $1 failed, seeded and through stage1; see $_log" >&2
         exit 2
     fi
 }
