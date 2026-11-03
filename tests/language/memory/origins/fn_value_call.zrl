@@ -6,5 +6,5 @@ fn main() -> i32 {
     let x = 42;
     let f: fn(&i32) -> &i32 = forward;
     let routed = f(&x);
-    return *routed - 42;
+    return *routed - *forward(&x);
 }
