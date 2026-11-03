@@ -64,6 +64,11 @@ if [ "$ONLY" = "--row" ]; then
         echo "usage: mutation-check.sh --row <row-name-fragment>" >&2
         exit 2
     fi
+elif [ "$ONLY" = "--changed" ] && [ -n "${MUTATION_BASE:-}" ]; then
+    # The base preflight chose (scripts/lib/preflight_base.sh): `git diff BASE` compares it with the
+    # working tree, so committed and uncommitted changes since the base are both covered.
+    CHANGED=$( (git diff --name-only "$MUTATION_BASE"; git ls-files --others --exclude-standard) | sort -u)
+    CHANGED_DESC="changes since $MUTATION_BASE"
 elif [ "$ONLY" = "--changed" ]; then
     CHANGED=$( (git diff --name-only HEAD; git ls-files --others --exclude-standard) | sort -u)
     if [ -n "$CHANGED" ]; then

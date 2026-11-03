@@ -12,6 +12,7 @@
 set -u
 cd "$(dirname "$0")/.." || exit 2
 . scripts/lib/portability.sh
+. scripts/lib/preflight_base.sh
 
 changed=0
 while [ $# -gt 0 ]; do
@@ -42,6 +43,19 @@ LOG="${PREFLIGHT_LOG:-build/preflight-selfhost.log}"
 
 mkdir -p build "$(dirname "$LOG")"
 
+# A --changed run measures the change against a base (scripts/lib/preflight_base.sh). Without one,
+# the mutations and the differential compare the tree with itself and find nothing, so the gate
+# would pass having checked nothing: refuse instead, before anything starts.
+PF_BASE=""
+PF_BASE_WHY=""
+if [ "$changed" -eq 1 ]; then
+    if ! preflight_base; then
+        echo "[FAIL] preflight-changed: no base to check the change against: $PF_BASE_ERR" >&2
+        exit 1
+    fi
+    echo "preflight-changed: base $PF_BASE ($PF_BASE_WHY)"
+fi
+
 # selfhost-check in the background
 $SELFHOST_CMD > "$LOG" 2>&1 &
 selfhost=$!
@@ -49,7 +63,7 @@ selfhost=$!
 # mutation-check in the foreground
 mutation=0
 if [ "$changed" -eq 1 ]; then
-    $MUTATION_CMD --changed || mutation=$?
+    MUTATION_BASE="$PF_BASE" $MUTATION_CMD --changed || mutation=$?
 else
     $MUTATION_CMD || mutation=$?
 fi
@@ -71,16 +85,17 @@ fi
 $CALIBRATE_CMD || exit $?
 
 # The rejection differential (AGENTS.md): a change to what decides acceptance is compared with its base.
-# The base is PREFLIGHT_REJECT_BASE if set; else HEAD when the working tree differs from it (the change is
-# uncommitted); else the upstream branch (a committed change is compared with what was last pushed, as
-# mutation-check.sh --changed does), and HEAD when there is no upstream. A committed change compared with
-# its own commit would always look unchanged. It builds the base compiler (about 4 min on 16 cores), so
-# it is skipped, saying so, when none of the files that decide acceptance differs from the base: the
-# checkers, and what reaches them (the parser, the lowering, the driver, the interface printer, main).
+# The base is PREFLIGHT_REJECT_BASE if set; else, for --changed, the base chosen above; else (the full
+# preflight) HEAD when the working tree differs from it, and the upstream branch otherwise. It builds the
+# base compiler (about 4 min on 16 cores), so it is skipped, saying so, when none of the files that decide
+# acceptance differs from the base: the checkers, and what reaches them (the parser, the lowering, the
+# driver, the interface printer, main).
 REJECT_DIFF_CMD="${PREFLIGHT_REJECT_DIFF:-./scripts/check_reject_diff.sh}"
 REJECT_PATHS="src/summary_pass.zrl src/check_zir.zrl src/verify.zrl src/main.zrl src/interface_print.zrl src/driver src/lower_zir src/parser src/parser.zrl src/ast.zrl"
 if [ -n "${PREFLIGHT_REJECT_BASE:-}" ]; then
     reject_base="$PREFLIGHT_REJECT_BASE"; reject_why="PREFLIGHT_REJECT_BASE"
+elif [ -n "$PF_BASE" ]; then
+    reject_base="$PF_BASE"; reject_why="$PF_BASE_WHY"
 elif ! git diff --quiet HEAD 2>/dev/null; then
     reject_base=HEAD; reject_why="the working tree against HEAD"
 elif git rev-parse --verify '@{upstream}' > /dev/null 2>&1; then
