@@ -111,7 +111,7 @@ group_scenarios() {
             echo sha256-differential
             ;;
         integration)
-            echo incremental fuzz-jobs fuzz-mode-diff fuzz-tools modular-mangling uncalled-method-emit runner-output readme-snippets doc-snippets getting-started struct-layout ffi-export ffi-callback zbuild-link module-names interface-attrs hosted platform-layer man-pages tool-versions md-links safety-comments-selftest no-new-deps-selftest comment-noise-selftest comment-census-selftest export-checks-selftest bench-contention bench-threshold-gate test-lock preflight-selftest check-deps-selftest result-file stray-files-selftest
+            echo incremental fuzz-jobs fuzz-mode-diff fuzz-tools modular-mangling uncalled-method-emit runner-output readme-snippets doc-snippets getting-started struct-layout ffi-export ffi-callback zbuild-link module-names interface-attrs hosted platform-layer man-pages tool-versions md-links safety-comments-selftest no-new-deps-selftest comment-noise-selftest comment-census-selftest export-checks-selftest bench-contention bench-threshold-gate test-lock preflight-selftest check-deps-selftest result-file scdoc-min stray-files-selftest
             echo bench-step-failed reject-diff-selftest zbuild-errors zbuild-diff user-paths build-info qbe-arg-order qbe-fingerprint full-test-stamp deps-matrix-interrupt
             ;;
         diagnostics) echo zilc-errors ;;
@@ -154,6 +154,7 @@ scenario_run() {
         preflight-selftest)         tr_run_scenario "$1" ./scripts/test_preflight.sh ;;
         check-deps-selftest)        tr_run_scenario "$1" ./scripts/test_check_deps.sh ;;
         result-file)                tr_run_scenario "$1" ./scripts/test_result_file.sh ;;
+        scdoc-min)                  tr_run_scenario "$1" ./scripts/test_scdoc_min.sh ;;
         stray-files-selftest)       tr_run_scenario "$1" ./scripts/check_stray_files.sh --selftest ;;
         bench-step-failed)          tr_run_scenario "$1" ./scripts/test_bench_step_failed.sh ;;
         reject-diff-selftest)       tr_run_scenario "$1" ./scripts/test_reject_diff.sh ;;
