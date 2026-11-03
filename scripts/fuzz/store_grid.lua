@@ -3,7 +3,7 @@
 -- skipping combinations that are not well-typed with explicit reasons.
 
 local sources = {"arena_vec", "local_vec", "string", "ref_local", "elem_ref", "closure_local"}
-local carriers = {"direct", "struct_field", "tuple_slot", "enum_payload", "box", "array_slot", "struct_val", "struct_scalar", "arena_struct_bundle", "arena_tuple_bundle"}
+local carriers = {"direct", "struct_field", "tuple_slot", "enum_payload", "box", "array_slot", "struct_val", "struct_scalar", "arena_struct_bundle", "arena_tuple_bundle", "call_local", "call_method", "call_identity", "call_closure", "ref_direct", "ref_let", "ref_identity", "ref_phi"}
 local paths = {"direct", "helper", "two_level_helper", "method", "self_method", "trait_method", "closure", "fn_val", "mutual_rec", "param_65", "same_param", "store_mutual_rec", "store_param_65"}
 -- Note: 'global' destination was removed per S1.1 spec because non-scalar static mut
 -- requires 'unsafe' in Zoril, and cells must not use 'unsafe'.
@@ -114,8 +114,24 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
             emit('struct ArenaBundle { ext_tag: i32, a: Arena }')
         end
     end
-    if c == "struct_field" or c == "struct_val" then
+    -- A carrier a call produced (call_*), or a reference to a carrier that a callee reads (ref_*).
+    local is_call_carrier = (c == "call_local" or c == "call_method" or c == "call_identity" or c == "call_closure")
+    local is_ref_carrier = (c == "ref_direct" or c == "ref_let" or c == "ref_identity" or c == "ref_phi")
+    if c == "struct_field" or c == "struct_val" or is_call_carrier or is_ref_carrier then
         emit('struct Carrier { v: ' .. payload_type .. ' }')
+        if c == "call_local" then
+            emit('fn make_carrier(v: ' .. payload_type .. ') -> Carrier { return Carrier { v: v }; }')
+        elseif c == "call_method" then
+            emit('struct CarrierMaker { x: i32 }')
+            emit('impl CarrierMaker { fn make(self: &CarrierMaker, v: ' .. payload_type .. ') -> Carrier { return Carrier { v: v }; } }')
+        elseif c == "call_identity" then
+            emit('fn id_carrier(c: Carrier) -> Carrier { return c; }')
+        elseif is_ref_carrier then
+            emit('fn take_ref(c: &Carrier) -> ' .. payload_type .. ' { return c.v; }')
+            if c == "ref_identity" then
+                emit('fn id_ref(c: &Carrier) -> &Carrier { return c; }')
+            end
+        end
         if c == "struct_val" then
             emit('fn extract_carrier_val(co: Carrier) -> ' .. payload_type .. ' { return co.v; }')
         end
@@ -356,6 +372,36 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
     elseif c == "struct_scalar" then
         emit('    let carrier_obj = CarrierScalar { v: src_val, tag: 1 };')
         emit('    let carried = carrier_obj.v;')
+    elseif c == "call_local" then
+        emit('    let carrier_obj = make_carrier(src_val);')
+        emit('    let carried = carrier_obj.v;')
+    elseif c == "call_method" then
+        emit('    let maker = CarrierMaker { x: 0 };')
+        emit('    let carrier_obj = maker.make(src_val);')
+        emit('    let carried = carrier_obj.v;')
+    elseif c == "call_identity" then
+        emit('    let carrier_obj = id_carrier(Carrier { v: src_val });')
+        emit('    let carried = carrier_obj.v;')
+    elseif c == "call_closure" then
+        emit('    let make_c = |item: ' .. payload_type .. '| -> Carrier { return Carrier { v: item }; };')
+        emit('    let carrier_obj = make_c(src_val);')
+        emit('    let carried = carrier_obj.v;')
+    elseif c == "ref_direct" then
+        emit('    let carrier_obj = Carrier { v: src_val };')
+        emit('    let carried = take_ref(&carrier_obj);')
+    elseif c == "ref_let" then
+        emit('    let carrier_obj = Carrier { v: src_val };')
+        emit('    let carrier_ref = &carrier_obj;')
+        emit('    let carried = take_ref(carrier_ref);')
+    elseif c == "ref_identity" then
+        emit('    let carrier_obj = Carrier { v: src_val };')
+        emit('    let carried = take_ref(id_ref(&carrier_obj));')
+    elseif c == "ref_phi" then
+        -- The branch depends on a call, so it is a real join of two references, not a folded one.
+        emit('    let carrier_obj = Carrier { v: src_val };')
+        emit('    let carrier_alt = Carrier { v: src_val };')
+        emit('    let carrier_ref = if clobber_stack() > 0 { &carrier_obj } else { &carrier_alt };')
+        emit('    let carried = take_ref(carrier_ref);')
     end
 
     -- Step 3: Route through path
