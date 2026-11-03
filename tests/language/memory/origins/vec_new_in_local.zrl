@@ -1,0 +1,14 @@
+// With a local arena, the Vec's storage is this frame's: S(v) names the arena and the `Result` it
+// was moved out of (gap_31's shape: S per local).
+// ORIGINS: main v O={Frame(_2), Frame(a)} S={Frame(_2), Frame(a)}
+// expected exit 0
+import "mem.zrl";
+use mem::Arena;
+import "vec.zrl";
+use vec::Vec;
+fn main() -> i32 {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 2; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    return v.as_slice()[0] - 42;
+}

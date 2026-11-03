@@ -1,0 +1,14 @@
+// A box cast to a raw pointer is an address into the storage the box owns, so the pointer holds it
+// (in O, which the store and return rules read), not only in S.
+// ORIGINS: f p O={Frame(_3)} S={Frame(_3)}
+// expected compile fail
+fn f(out: &mut *i32) {
+    let b = box 42;
+    let p = b as *i32;
+    *out = p;
+}
+fn main() -> i32 {
+    let mut d: *i32 = 0 as *i32;
+    f(&mut d);
+    return 0;
+}

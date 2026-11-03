@@ -1,0 +1,10 @@
+// A call through a `fn` value has no summary: its result is Unknown (gap_16).
+// ORIGINS: main routed O={Unknown} S={}
+// expected exit 0
+fn forward(v: &i32) -> &i32 { return v; }
+fn main() -> i32 {
+    let x = 42;
+    let f: fn(&i32) -> &i32 = forward;
+    let routed = f(&x);
+    return *routed - 42;
+}
