@@ -211,6 +211,7 @@ c_add:
     movl %edi, %eax
     addl %esi, %eax
     ret
+.section .note.GNU-stack,"",@progbits
 EOF
 "$ASSEMBLER_BIN" "$WORK_DIR/c_ffi_lib.s" -o "$WORK_DIR/c_ffi_lib.o"
 "$ZORIL_CC" -c tests/incremental/c_ffi_main.zrl -o "$WORK_DIR/c_ffi_main.zil"
@@ -240,6 +241,11 @@ grep -q 'call \$c_add(w %v[0-9]\+, w %v[0-9]\+)' "$WORK_DIR/c_ffi_main.ssa" || {
 CFFI_LD_EXIT=$?
 if [ "$CFFI_LD_EXIT" -ne 0 ]; then
     echo "FAIL: c_ffi binary linked with ld exited with $CFFI_LD_EXIT, expected 0"
+    exit 1
+fi
+# An input without .note.GNU-stack makes GNU ld link the whole program with an executable stack.
+if readelf -lW "$WORK_DIR/c_ffi_ld" | grep -E 'GNU_STACK.* RWE ' >/dev/null; then
+    echo "FAIL: c_ffi binary has an executable stack (GNU_STACK RWE): an input lacks .note.GNU-stack"
     exit 1
 fi
 
