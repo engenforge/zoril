@@ -51,6 +51,7 @@ Each snapshot must be compilable by `stage0-C`, so the snapshot is never appende
 - Until a re-pin, `src/` and the frozen `stdlib/` modules may use only what the pinned snapshot accepts. The snapshot gate in preflight enforces it.
 - A re-pin replaces the snapshot with a newer snapshot of `src/` that has been ported back into the `stage0-C` dialect by hand. It is expected to be rare: only when the compiler's own source needs a language feature added after the freeze.
 - A deliberate **backport** may add a language feature the frozen compiler must parse (`use` / `ns::item`, `unsafe fn`). It is made through the re-pin procedure and recorded in the commit that carries it; a runtime fix moves `bootstrap/stage1/rt/runtime.s` with `rt/runtime.s`, because the `runtimes` gate requires the two to stay byte-identical.
+  - **Backport recorded:** `bootstrap/stage1/rt/runtime.s` gained a `.note.GNU-stack` section (`.section .note.GNU-stack,"",@progbits`, which marks the stack non-executable) as a byte-identical copy of the same addition to `rt/runtime.s`. It changes no symbol and no code: the stage1 binaries link the object and now get a non-executable `GNU_STACK` instead of `RWE`. It is not a language backport and not a re-pin; `bootstrap/stage1/PIN` is unchanged.
 - Verification, scripted in the source repository: `stage0-C` builds the candidate, the candidate builds current `src/`, the fixpoint holds, `make test` and `make preflight` pass, and `bootstrap/stage1/PIN` records the release it was pinned for.
 
 ## 4. Carried limits
