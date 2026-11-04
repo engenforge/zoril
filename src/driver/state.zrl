@@ -60,6 +60,8 @@ pub struct Driver {
     // `zoril --checked`: instrument the emitted program (poison a dead local's slot, trap on a
     // double drop). Read by the ZIR-to-ZIL lowering only, never by the program being compiled.
     pub checked: bool,
+    // `zoril --provenance[=warn]`: check_zir::PROVENANCE_OFF, _ON or _WARN.
+    pub provenance: u32,
     // `zoril --hosted`: the program shares its process with libc, so a function that would take the
     // name of one of libc's symbols is an error.
     pub hosted: bool,
@@ -202,6 +204,7 @@ impl Driver {
                 target_source_file: 0 as u32,
                 is_specialization: false,
                 checked: false,
+                provenance: 0 as u32,
                 hosted: false,
                 collect_zir_stats: false,
                 zir_stats: ZirStats.new(),

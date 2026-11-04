@@ -1,0 +1,19 @@
+// Destination reach follows O(L) only for a type that can hold a mutable handle: a `Vec<[u8]>`
+// holds none, so the Static that `v.push("lit")` put in O(v) does not make `&mut v` external, and
+// pushing a view of this frame's arena stays accepted (§3, _Destination reach_).
+// flags: --provenance
+// expected exit 0
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+fn main() -> i32 {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 2; } };
+    let mut bytes = Vec::<u8>.new_in(&a);
+    bytes.push(42 as u8);
+    let arena_str = bytes.as_slice();
+    let mut v = Vec::<[u8]>.new();
+    v.push("lit");
+    v.push(arena_str);
+    return v.len() as i32 - 2;
+}

@@ -99,6 +99,9 @@ binary at *../share/zoril/stdlib*).
 *--checked*
 	Developer option, not a user-facing mode: build the program with *zoril --checked*, which instruments it for memory-safety testing. The mode is part of the toolchain id, so objects built with and without it are never reused for each other. A release build is unaffected.
 
+*--provenance*, *--provenance=warn*
+	Developer option: compile every module with *zoril --provenance* (or *=warn*), the origin-set store and return rules. Part of the toolchain id, so an object compiled without the rules is never reused with them.
+
 # ENVIRONMENT
 
 *BACKEND_BIN*

@@ -1,0 +1,25 @@
+// The direct-call twin of gap_47: `write_slot` stores through `*r.out`, and `r = &w` with `w`
+// holding the caller's `&mut`. The destination reach finds the Param two hops away, so the call
+// store rule refuses it on its own (Z-0012 deletes the buffer-escape rule that refuses it too).
+// flags: --provenance
+// EXPECT: call store rule
+// expected compile fail
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct Slot { out: &mut [i32] }
+fn write_slot(r: &Slot, s: [i32]) { *r.out = s; }
+fn escape(out: &mut [i32]) {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let w = Slot { out: out };
+    let r = &w;
+    write_slot(r, v.as_slice());
+}
+fn main() -> i32 {
+    let mut d: [i32] = @slice(0 as *i32, 0);
+    escape(&mut d);
+    return 0;
+}

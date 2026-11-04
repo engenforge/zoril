@@ -1,0 +1,17 @@
+// An owning result tied to no argument that can reach an `Arena` owns fresh storage: S(v) is the
+// call's Frame, without the tied view's Param.
+// ORIGINS: f v O={Param(0)} S={Frame(_2)}
+// flags: --provenance
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+fn make_vec(s: [i32]) -> Vec<[i32]> {
+    let mut v = Vec::<[i32]>.new();
+    v.push(s);
+    return v;
+}
+fn f(s: [i32]) -> i32 { let v = make_vec(s); return v.len() as i32; }
+fn main() -> i32 {
+    let data = [42, 0];
+    return f(&data) - 1;
+}

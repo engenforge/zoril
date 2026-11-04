@@ -124,6 +124,7 @@ fn compile_to_object(ctx: &BuildCtx, path: [u8], src_file: [u8], action_key: [u8
     push_compiler_paths(&mut c1, ctx);
     c1.arg("--interproc-summary");
     if ctx.opts.checked { c1.arg("--checked"); }
+    if ctx.opts.provenance.len > 0 as usize { c1.arg(ctx.opts.provenance); }
     if ctx.opts.hosted { c1.arg("--hosted"); }
     c1.arg("--write-interface");
     c1.arg(iface_file(ctx, path));

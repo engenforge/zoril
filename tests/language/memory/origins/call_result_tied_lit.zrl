@@ -1,0 +1,12 @@
+// A tied "lit" (Static) cannot reach an `Arena`, so it puts no Static in the owning result's S.
+// ORIGINS: main v O={Static} S={Frame(_2)}
+// flags: --provenance
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+fn make_vec(s: [u8]) -> Vec<[u8]> {
+    let mut v = Vec::<[u8]>.new();
+    v.push(s);
+    return v;
+}
+fn main() -> i32 { let v = make_vec("lit"); return v.len() as i32 - 1; }

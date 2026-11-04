@@ -1,0 +1,15 @@
+// An unannotated `extern` is a known summary (§3, _Scalars, casts and `extern`_): its result is
+// Static, it stores nothing, and the call is no unknown call, so storing the result out is accepted.
+// ORIGINS: f p O={Static} S={}
+// flags: --provenance
+// expected compile success
+extern fn c_get_ptr() -> *u8;
+fn f(out: &mut *u8) {
+    let p = unsafe { c_get_ptr() };
+    *out = p;
+}
+fn main() -> i32 {
+    let mut d: *u8 = 0 as *u8;
+    f(&mut d);
+    return 0;
+}

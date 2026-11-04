@@ -1,0 +1,28 @@
+// gap_45: the closure call's environment holds `r` (Frame(w)) and `s` (a Frame(a) view), so its
+// unknown-call effects give O(w) Frame(a) and Unknown, and `*out = w.s` is refused. The effects
+// also store into everything the arena reaches, so the closure call is refused as well.
+// ORIGINS: stash w O={Frame(_3), Frame(a), Frame(w), Unknown} S={}
+// flags: --provenance
+// EXPECT: store rule
+// expected compile fail
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct W { s: [i32], t: i32 }
+fn stash(out: &mut [i32]) {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let mut w = W { s: @slice(0 as *i32, 0), t: 0 };
+    let r = &mut w;
+    let s = v.as_slice();
+    let mut cl = || { r.s = s; };
+    cl();
+    *out = w.s;
+}
+fn main() -> i32 {
+    let mut d: [i32] = @slice(0 as *i32, 0);
+    stash(&mut d);
+    return 0;
+}

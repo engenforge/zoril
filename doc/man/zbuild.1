@@ -5,7 +5,7 @@
 .nh
 .ad l
 .\" Begin generated content:
-.TH "zbuild" "1" "2026\-10\-30"
+.TH "zbuild" "1" "2026\-11\-04"
 .PP
 .SH NAME
 .PP
@@ -149,6 +149,11 @@ Path to the Zoril runtime assembly object (\fBruntime.\&o\fR).\& By default, \fB
 \fB\-\-checked\fR
 .RS 4
 Developer option, not a user\-facing mode: build the program with \fBzoril \-\-checked\fR, which instruments it for memory\-safety testing.\& The mode is part of the toolchain id, so objects built with and without it are never reused for each other.\& A release build is unaffected.\&
+.PP
+.RE
+\fB\-\-provenance\fR, \fB\-\-provenance=warn\fR
+.RS 4
+Developer option: compile every module with \fBzoril \-\-provenance\fR (or \fB=warn\fR), the origin\-set store and return rules.\& Part of the toolchain id, so an object compiled without the rules is never reused with them.\&
 .PP
 .RE
 .SH ENVIRONMENT

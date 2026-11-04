@@ -208,14 +208,14 @@ Safe code is only as good as the `unsafe` code under it, so the project measures
 | stdlib `unsafe fn` declarations  | 63     |
 | of those, public                 | 59     |
 | compiler modules                 | 50     |
-| compiler lines                   | 47,826 |
-| compiler `unsafe { }` blocks     | 848    |
+| compiler lines                   | 48,292 |
+| compiler `unsafe { }` blocks     | 851    |
 
 How each one is counted: every `.zrl` file under the directory, recursively; **lines** are physical lines (`wc -l`); **`unsafe { }` blocks** are occurrences of `unsafe` followed by `{` on the same line; **`unsafe fn` declarations** are lines that start with `unsafe fn` or `pub unsafe fn`. That is a different question from `scripts/marker_density.sh`, which counts raw-pointer dereference sites over non-comment lines (58 marker lines for `stdlib`, 264 for `src`).
 
 - **The standard library** holds 170 `unsafe { }` blocks in 23 of its 30 modules. Every one states the invariant it relies on in a `// SAFETY:` comment, and `scripts/check_safety_comments.sh` fails `make test` when a block does not. The comments are a review artifact, not a proof.
 - **An audit of those invariants** asked which of them checked code could break. Five could, all of one shape (arithmetic or a field the block trusted): a `Vec` capacity that overflowed to zero ([`163_vec_capacity_overflow.zrl`](../bench/safety_matrix/probes/163_vec_capacity_overflow.zrl)), an allocation size that wrapped ([`161_arena_allocator_size_wrap.zrl`](../bench/safety_matrix/probes/161_arena_allocator_size_wrap.zrl)), a string `sub` skipping its clamp ([`tests/stdlib/test_stdlib_str_sub_clamp.zrl`](../tests/stdlib/test_stdlib_str_sub_clamp.zrl)), an `Args::get` index truncated to `i32` ([`162_args_get_index_truncation.zrl`](../bench/safety_matrix/probes/162_args_get_index_truncation.zrl)), and a public `Vec::len` field ([`164_vec_len_forge.zrl`](../bench/safety_matrix/probes/164_vec_len_forge.zrl)). Sizes now go through `mem::size_of_n` and `grow_cap`, which trap instead of wrapping, and the collections' fields are private behind narrow accessors.
-- **The compiler** is 50 modules of Zoril, with 848 `unsafe { }` blocks, because a self-hosted compiler also carries its own allocator and IL machinery. The calibration against rustc and Rust's standard library is in [`doc/spec/unsafe_policy.md`](spec/unsafe_policy.md) §5, with about 2-3% line density for `src/` as the target. `rt/runtime.s` and the hand-written summaries are outside the verifier.
+- **The compiler** is 50 modules of Zoril, with 851 `unsafe { }` blocks, because a self-hosted compiler also carries its own allocator and IL machinery. The calibration against rustc and Rust's standard library is in [`doc/spec/unsafe_policy.md`](spec/unsafe_policy.md) §5, with about 2-3% line density for `src/` as the target. `rt/runtime.s` and the hand-written summaries are outside the verifier.
 - **An application written against the safe interface needs no `unsafe` at all.** An example JSON tool written in Zoril (a CLI to query, format and validate JSON; 9 modules and 1,992 non-comment lines; not yet published) holds **0 `unsafe { }` blocks** and measures 0.00% under `scripts/marker_density.sh`. Its test suite fails if an `unsafe` block returns.
 
 ---

@@ -1,0 +1,18 @@
+// An owning call result holding a box by value owns the call's own Frame, tied or not.
+// ORIGINS: f w O={Param(0)} S={Frame(_2)}
+// flags: --provenance
+// expected exit 0
+import "core.zrl";
+import "vec.zrl";
+use vec::Vec;
+struct W { s: [i32] }
+fn try_wrap(s: [i32]) -> Option<Box<W>> { return Option.Some(box W { s: s }); }
+fn f(s: [i32]) -> i32 {
+    let w = try_wrap(s);
+    return match w { Option.Some(b) => (*b).s[0], Option.None => 1 };
+}
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    return f(v.as_slice()) - 42;
+}

@@ -37,6 +37,10 @@ pub struct Options {
     // `--checked`: instrument the emitted program for memory-safety testing (see `zoril --checked`).
     // Part of the toolchain id, so objects built in one mode are never reused in the other.
     pub checked: bool,
+    // `--provenance` or `--provenance=warn` (the whole option, passed to every `zoril -c`; empty
+    // when not given): the origin-set store and return rules (see `zoril --help`). Part of the
+    // toolchain id, so an object compiled without the rules is never reused with them.
+    pub provenance: [u8],
     // `--hosted`: link into a libc process through `cc` (part of the toolchain id).
     pub hosted: bool,
     pub cc: [u8],
@@ -52,6 +56,7 @@ pub fn default_options(arena: *mut ArenaHeader) -> Options {
         link_objects: unsafe { Vec::<[u8]>.new_in_raw(arena) },
         link_items: unsafe { Vec::<[u8]>.new_in_raw(arena) },
         checked: false,
+        provenance: "",
         hosted: false,
         cc: "",
     };
@@ -86,6 +91,10 @@ pub fn print_usage() {
         "    --checked                Developer option: build the program instrumented for memory-safety\n"
     );
     print("                             testing (see zoril --checked). Not a safety mode\n");
+    print(
+        "    --provenance[=warn]      Developer option: compile every module with zoril --provenance\n"
+    );
+    print("                             (or =warn), the origin-set store and return rules\n");
     print(
         "    --hosted                 Link into a libc process: enter through main(), link with cc and\n"
     );
@@ -143,6 +152,8 @@ pub fn parse_args(argc: i32, argv: **u8, opts: &mut Options) -> i32 {
             opts.gc = true;
         } else if arg == "--checked" {
             opts.checked = true;
+        } else if arg == "--provenance" || arg == "--provenance=warn" {
+            opts.provenance = arg;
         } else if arg == "--hosted" {
             opts.hosted = true;
         } else if arg == "--test-break-cutoff" {

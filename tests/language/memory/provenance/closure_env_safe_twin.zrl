@@ -1,0 +1,14 @@
+// The safe twin of gap_11: the environment holds two parameters' origins, so the closure call
+// stores nothing of this frame (§3, _Closure environments_).
+// flags: --provenance
+// expected exit 0
+fn safe(out: &mut [i32], view: [i32]) {
+    let mut cl = || { *out = view; };
+    cl();
+}
+fn main() -> i32 {
+    let data = [42, 0];
+    let mut d: [i32] = @slice(0 as *i32, 0);
+    safe(&mut d, &data);
+    return d[0] - 42;
+}

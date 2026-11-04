@@ -1,0 +1,23 @@
+// A box is a value wrapper (§3, _Details the transfer needs_): `(*b).s` reads O(b) directly, so `x`
+// carries the view's Frame origins, the storage `v` owns (_2, from `Vec.new()`; before Z-0048 the walk read through the box a second time and
+// gave `x O={} S={}`).
+// ORIGINS: f x O={Frame(_2)} S={}
+// flags: --provenance
+// EXPECT: store rule
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+struct W { s: [i32] }
+fn wrap(s: [i32]) -> Box<W> { return box W { s: s }; }
+fn f(out: &mut [i32]) {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let b = wrap(v.as_slice());
+    let x = (*b).s;
+    *out = x;
+}
+fn main() -> i32 {
+    let mut d: [i32] = @slice(0 as *i32, 0);
+    f(&mut d);
+    return 0;
+}

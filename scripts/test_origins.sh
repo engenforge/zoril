@@ -6,9 +6,10 @@
 #     // ORIGINS: <function> <local> O={...} S={...}
 #
 # and `zoril --emit-origins` must print exactly that line for that local (the first local of that
-# name in that function). No rule reads the sets yet (Z-0048 adds them), so a change to the analysis
-# shows only here, as a diff of the line. The same files also run as ordinary tests in the memory
-# group, so each one's verdict and exit code are checked there.
+# name in that function). The rules read the sets only under `--provenance` (Z-0048), so by default
+# a change to the analysis shows only here, as a diff of the line. The same files also run as
+# ordinary tests in the memory group (with their `// flags:`), so each one's verdict and exit code
+# are checked there.
 cd "$(dirname "$0")/.." || exit 2
 . scripts/lib/portability.sh
 ZORIL=${ZORIL_BIN:-./build/zoril}

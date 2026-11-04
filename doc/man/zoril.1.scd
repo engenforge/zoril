@@ -80,6 +80,9 @@ The compiler accepts exactly one input file. Specifying more than one input file
 *--checked*
 	Developer option, not a user-facing mode. Instrument the emitted program for memory-safety testing: released arena space stays poisoned and is never handed out again, a local's slot is poisoned where its scope ends, a dropped value is poisoned and a second drop of it traps (exit 134), and a heap block released twice traps instead of unmapping whatever lives there now. A release build contains none of it - the instrumentation is emitted only under this flag, so the emitted ZIL of a program does not change - and it is not a safety mode: nothing about what the compiler accepts changes. See *make test-checked* in *doc/developer_guide.md*.
 
+*--provenance*, *--provenance=warn*
+	Developer option, off by default, until the rules replace the old ones. Also apply the store and return rules of the origin sets (*doc/design/provenance.md*): a store through a reference, into a closure capture or into a global, whose destination outlives the frame, takes no value holding an address of this frame; a returned value holds none; a call applies the same rule to the callee's store summary, and a call with no summary to every argument against every other. The rules are added to the existing checks and never remove a rejection. With *=warn* each refusal is a *warning:* line and the compile does not fail on it, so a compile that succeeds lists what the new rules refuse and the old ones accept. An *unsafe fn* body is not checked.
+
 *--*
 	Terminate option processing. All subsequent arguments are treated as input file paths, even if they begin with a dash *-*.
 
