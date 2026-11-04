@@ -24,6 +24,22 @@ Open work, in execution order from top to bottom, in five groups. (1) Landing th
         - Rejection differential against HEAD (`scripts/check_reject_diff.sh HEAD`): 0 newly accepted, 2 newly rejected (`gap_46` whole-program and `zbuild`), 0 newly rejected store-grid cells across 69,103 programs.
         - Verification results: `make test` (3221 run, 3221 passed, 0 failed, 52 skipped); `sh scripts/run_safety_matrix.sh` (438/463 passed, 0 mismatches); `make preflight-changed` passed (fixpoint, self-host, mutations, performance thresholds); `scripts/check_safety_figures.sh --all` passed; `scripts/check_safety_model.sh` passed; `scripts/check_comment_noise.sh` passed; `fuzz/README.md` stale as expected.
     - **Awaiting review:** re-run `gap_46` (`./build/zoril -I stdlib=stdlib bench/safety_matrix/probes/gap_46_call_ret_mutref_off_by_one.zrl -o /dev/null`; expected compile error: `cannot store 'v'`), re-run twin `415` (`scripts/build_zrl.sh build/p415 bench/safety_matrix/probes/415_call_ret_mutref_param_view_accepted.zrl -I stdlib=stdlib && ./build/p415`; expected exit 0), `sh scripts/run_safety_matrix.sh` (438/463), `sh scripts/check_safety_model.sh`, and `scripts/check_reject_diff.sh HEAD~1`.
+    - **Second-model review (2026-11-04, of `ca87989`; not closed):** confirmed: on `build/zoril` at `ca87989`, `gap_46` is refused (`cannot store 'v'`) and `415` builds and exits 0; on the base `eeb85fa` (built in a scratch worktree under `build/z56/`, removed after) `gap_46` compiles, so taking the fix out reopens it. Findings below.
+    - **Finding 1.** **The route class is still open (pre-existing, 8 of 8 routes probed exit 77 on both `eeb85fa` and `ca87989`).** Route class "a call result (`Call` rvalue) used as a store destination" (`gap_46`'s own). Reproducer: `gap_46`'s program with these helpers added and `stash` replaced by each body below; every one compiles and exits 77, and so does each with `let n = 1; let _keep: &i32 = &n;` appended (so the index is not their cause):
+
+    ```zoril
+    fn pass_slot(h: Slot) -> Slot { return h; }
+    fn write(d: &mut [i32], s: [i32]) { *d = s; }
+    fn write_slot(d: Slot, s: [i32]) { *d.out = s; }
+    fn stash(h: Slot, s: [i32]) { let d = pass_slot(h); *d.out = s; }       // s_struct
+    fn stash(h: Slot, s: [i32]) { let d = unwrap_slot(h); write(d, s); }    // c_ref
+    fn stash(h: Slot, s: [i32]) { let d = pass_slot(h); write_slot(d, s); } // c_struct
+    fn stash(h: Slot, s: [i32]) { let d = pass_slot(h); write(d.out, s); }  // c_field
+    ```
+
+    - **Finding 2.** **The `base_is_ref` narrowing is beyond the task and gives up a closure.** A compiler with only the `os_local_ty` change and the original `module.type_holds_reference(pl_base_ty, 0)` refuses `gap_46` and also `s_struct` (with and without `_keep`); `ca87989`'s `is_reference_tag(storage_type_tag(..))` leaves `s_struct` at exit 77. `c_struct` and `c_field` stay open under both (they go through `note_call_stores_zir`). No test or probe shows the over-rejection of "slice copies and collection value assignments" that the narrowing is said to avoid.
+    - **Finding 3.** **`note_call_stores_zir` is left with the off-by-one** (`locals[jb].ty` with a 1-based `jb`), against the task's **Do**. The `zbuild` false positive given as the reason (`Vec.push(&mut m.entries, e)`, "cannot store 'manifest'") was not reproduced in this review; no reproducer is recorded.
+    - **Next step:** revert the predicate to `type_holds_reference` (the task's fix) and run `scripts/check_reject_diff.sh eeb85fa` and `make test`; if a real over-rejection appears, record it verbatim with a reproducer before choosing a predicate. Record `c_ref`, `c_struct`, `c_field` (and `s_struct` if it stays open) as `known_gap` probes with the route class above, and either fix `note_call_stores_zir`'s lookup with the false positive recorded as a reproducer, or split that site into its own task. Stop for review again.
 
 - [ ] +safety +tests +AI-D Z-0048 B1.2 The store and return rules on the origin sets, under `--provenance`
     > **Created:** 2026-11-03 **Split from:** Z-0009. **Depends:** Z-0047, Z-0055, Z-0056. **Check-in:** stop for review after it.
