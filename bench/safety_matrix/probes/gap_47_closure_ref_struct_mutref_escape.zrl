@@ -1,0 +1,27 @@
+// name: Closure stores a frame view through an external &mut held in a local struct it captured a reference to
+// expected: known_gap
+// gap: a closure capturing r = &w, where the local struct w holds the caller's &mut, stores a slice of a Vec in this frame's arena through *r.out; the external destination is two hops from the closure environment (env -> w -> out)
+// observed: exit 77
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct Slot { out: &mut [i32] }
+fn escape_storer(out: &mut [i32]) {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let w = Slot { out: out };
+    let r = &w;
+    let s = v.as_slice();
+    let mut cl = || { *r.out = s; };
+    cl();
+}
+fn main() -> i32 {
+    let mut dest: [i32] = @slice(0 as *i32, 0);
+    escape_storer(&mut dest);
+    let a2 = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v2 = Vec::<i32>.new_in(&a2);
+    v2.push(77);
+    return dest[0];
+}

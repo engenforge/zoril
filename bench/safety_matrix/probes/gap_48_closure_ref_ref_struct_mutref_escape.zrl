@@ -1,0 +1,28 @@
+// name: Closure stores a frame view through an external &mut three hops from its environment
+// expected: known_gap
+// gap: the same store as gap_47 with one more local reference (rr = &r, the closure writes *rr.out), so a rule that follows a fixed number of hops from the closure environment still misses it
+// observed: exit 77
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct Slot { out: &mut [i32] }
+fn escape_storer(out: &mut [i32]) {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let w = Slot { out: out };
+    let r = &w;
+    let s = v.as_slice();
+    let rr = &r;
+    let mut cl = || { *rr.out = s; };
+    cl();
+}
+fn main() -> i32 {
+    let mut dest: [i32] = @slice(0 as *i32, 0);
+    escape_storer(&mut dest);
+    let a2 = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v2 = Vec::<i32>.new_in(&a2);
+    v2.push(77);
+    return dest[0];
+}
