@@ -1,0 +1,31 @@
+// name: A callee copies a frame view between two locals the caller reaches through one argument
+// expected: known_gap
+// gap: copy_in(&mut r) with r = R { x: &mut wa, y: &wb } copies wb's arena view into wa, then *out = wa.s stores it out; the store summary's i != j filter drops the edge from parameter 0 to itself (gap_07's class, here through a struct of references); closed under --provenance by Z-0010's body summary (ParamContents(0) -> ParamContents(0))
+// observed: exit 77
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct W { s: [i32] }
+struct R { x: &mut W, y: &W }
+fn copy_in(t: &mut R) { (*t.x).s = (*t.y).s; }
+fn escape_storer(out: &mut [i32]) {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let mut wa = W { s: @slice(0 as *i32, 0) };
+    let wb = W { s: v.as_slice() };
+    {
+        let mut r = R { x: &mut wa, y: &wb };
+        copy_in(&mut r);
+    }
+    *out = wa.s;
+}
+fn main() -> i32 {
+    let mut dest: [i32] = @slice(0 as *i32, 0);
+    escape_storer(&mut dest);
+    let a2 = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v2 = Vec::<i32>.new_in(&a2);
+    v2.push(77);
+    return dest[0];
+}
