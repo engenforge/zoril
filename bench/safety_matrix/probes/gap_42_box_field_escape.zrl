@@ -8,7 +8,6 @@ use mem::Arena;
 use vec::Vec;
 struct W { s: [i32], t: i32, }
 fn mk() -> W { return W { s: @slice(0 as *i32, 0), t: 0 }; }
-fn set_s(w: &mut W, s: [i32]) { w.s = s; }
 
 fn stash(out: &mut [i32]) -> i32 {
     let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
