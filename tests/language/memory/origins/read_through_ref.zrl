@@ -1,6 +1,6 @@
 // The read-through rule (doc/design/provenance.md §3): `take_ref` returns what `c` holds, reached
 // through `r`, so the result is the view's origin, not Frame(c) (Z-0045's reproducer).
-// ORIGINS: f got O={Param(1)} S={}
+// ORIGINS: f got O={Param(1), ParamContents(1)} S={}
 // expected compile fail
 struct Carrier { v: [i32] }
 fn take_ref(c: &Carrier) -> [i32] { return c.v; }

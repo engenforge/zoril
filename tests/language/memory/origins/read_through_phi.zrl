@@ -1,5 +1,5 @@
 // The read-through rule through a join: either carrier holds only the view (Z-0045).
-// ORIGINS: f got O={Param(1)} S={}
+// ORIGINS: f got O={Param(1), ParamContents(1)} S={}
 // expected compile fail
 struct Carrier { v: [i32] }
 fn take_ref(c: &Carrier) -> [i32] { return c.v; }

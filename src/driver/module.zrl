@@ -1028,6 +1028,13 @@ impl Driver {
             allocator_free: arena_op == ARENA_OP_ALLOCATOR_FREE,
             buffer_external: arena_op == ARENA_OP_BUFFER_EXTERNAL,
             buffer_anchored: arena_op == ARENA_OP_BUFFER_ANCHORED,
+            os_known: false,
+            os_ret_addr: 0 as u64,
+            os_ret_contents: 0 as u64,
+            os_ret_flags: 0 as u64,
+            os_ret_fresh: false,
+            os_edges: 0 as *mut u64,
+            os_edge_rows: 0 as usize,
         });
     }
 
@@ -1214,6 +1221,17 @@ impl Driver {
         );
         if origins.errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
             self.had_error = true;
+        }
+        // The body's summary, for the calls lowered after it. An `unsafe fn` gets none, for the
+        // reason its body is not checked: an address it makes from an integer would reach every
+        // caller as Unknown. Its callers keep the old analyses' masks.
+        if !self.module.functions[self.builder.current_func_idx as usize].is_unsafe {
+            check_zir::store_origin_summary(
+                self.arena,
+                self.module,
+                self.builder.current_func_idx as usize,
+                &origins
+            );
         }
         if self.emit_origins && current_source_file == self.target_source_file {
             check_zir::print_origins(&origins, &zir_func, self.module, self.intern_table);

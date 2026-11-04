@@ -64,7 +64,7 @@ The compiler accepts exactly one input file. Specifying more than one input file
 	Print a census of the ZIR constructs and CFG shape the input lowers to, one line per construct, and exit without emitting ZIL. Used by *scripts/check_route_coverage.sh* to check that the probes cited by a safety matrix row walk every route the row lists.
 
 *--emit-origins*
-	Developer option. Print the origin sets of every function the input file defines - for each local, the origins of the addresses it holds (O) and of the storage it owns (S), as described in *doc/design/provenance.md* - and exit without emitting ZIL; the exit status is the compile's verdict. No rule reads the sets yet. Used by *scripts/test_origins.sh*.
+	Developer option. Print the origin sets of every function the input file defines - for each local, the origins of the addresses it holds (O) and of the storage it owns (S); for the result, its O and S; and the store edges of the function's summary, one *store* line per stored value - as described in *doc/design/provenance.md*, and exit without emitting ZIL; the exit status is the compile's verdict. The rules read the sets only under *--provenance*. Used by *scripts/test_origins.sh*.
 
 *-v*, *--verbose*
 	Report compilation progress, printing each phase, source file, and function as it is processed.

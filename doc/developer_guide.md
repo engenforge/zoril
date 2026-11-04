@@ -116,7 +116,7 @@ The fuzzer generates programs from a grammar, compiles and runs them through the
 
 ```sh
 make fuzz-short       # 25 seeds x 4 programs, every oracle
-make fuzz-calibrate   # one program per known hole: each must still be refused (23 rows)
+make fuzz-calibrate   # one program per known hole: each row must stay in its fixed state (26 rows)
 ```
 
 **2. Your own session.** Foreground, all cores, output under `build/fuzz/<NAME>/`; nothing is filed and nothing is cited:

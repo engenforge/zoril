@@ -1,0 +1,15 @@
+// An integer read through a parameter is no address of it: `v.len()` of a local Vec, returned,
+// carries none of the Vec's origins, so the return rule accepts it (§3, _The summary_).
+// ORIGINS: cap return O={} S={}
+// flags: --provenance
+// expected exit 3
+import "vec.zrl";
+use vec::Vec;
+fn cap(n: usize) -> usize {
+    let mut v = Vec::<i32>.with_capacity(n);
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    return v.len();
+}
+fn main() -> i32 { return cap(3) as i32; }

@@ -1,6 +1,6 @@
 // The read-through rule through an identity call: `id_ref` returns its argument (`ret_storage`), so
 // the reference keeps Frame(c), and `take_ref` reads through it to the view's origin (Z-0045).
-// ORIGINS: f got O={Param(1)} S={}
+// ORIGINS: f got O={Param(1), ParamContents(1)} S={}
 // expected compile fail
 struct Carrier { v: [i32] }
 fn take_ref(c: &Carrier) -> [i32] { return c.v; }

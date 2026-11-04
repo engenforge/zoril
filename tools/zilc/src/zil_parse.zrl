@@ -662,6 +662,13 @@ impl ZilParser {
                 allocator_free: false,
                 buffer_external: false,
                 buffer_anchored: false,
+                os_known: false,
+                os_ret_addr: 0 as u64,
+                os_ret_contents: 0 as u64,
+                os_ret_flags: 0 as u64,
+                os_ret_fresh: false,
+                os_edges: 0 as *mut u64,
+                os_edge_rows: 0 as usize,
             };
             self.module.functions.push(f);
         }
