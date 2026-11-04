@@ -171,4 +171,21 @@ for prog in "$src"/prov_*.zrl; do
     fi
 done
 
+# 6b. ret_fresh is read back, not just written: a caller of `mix` (tied to its arena argument, and
+# fresh on the other path) owns storage of its own only through the bit, so dropping it from the
+# interface must change what `--emit-origins` prints for the result.
+fr="$dir/fresh"
+mkdir -p "$fr/off"
+key=$(printf '%s' "$src/lib_summary.zrl" | sed 's|/|%2F|g')
+run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -c --write-interface "$fr/${key%.zrl}.zri" -o "$fr/lib.zil" "$src/lib_summary.zrl" > "$fr/emit.log" 2>&1 \
+    || fail "lib_summary.zrl's interface was not written for the ret_fresh check" "$fr/emit.log"
+sed 's/ret_fresh = true/ret_fresh = false/' "$fr/${key%.zrl}.zri" > "$fr/off/${key%.zrl}.zri"
+origins_of() { # IFACE-DIR -> the result's line of origins_fresh_caller's `caller`
+    run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -I "$src" -c --iface-dir "$1" --emit-origins -o /dev/null "$src/origins_fresh_caller.zrl" 2>&1 \
+        | awk '/^origins / { on = ($2 == "caller"); next } on && $1 == "v" { print; exit }'
+}
+with_bit=$(origins_of "$fr"); without_bit=$(origins_of "$fr/off")
+case "$with_bit" in *"Frame("*) ;; *) fail "an imported ret_fresh result owns no storage of its own: '$with_bit'" ;; esac
+[ "$with_bit" != "$without_bit" ] || fail "ret_fresh is not read from the interface: both give '$with_bit'"
+
 echo "[PASS] interface-attrs: attributes, visibility and unsafe survive a .zri; every generic or trait attribute of the standard library is in its interface; zbuild and the whole-program build agree on the fixtures and probe 194; private items, duplicate methods and exports are diagnosed as whole-program does"
