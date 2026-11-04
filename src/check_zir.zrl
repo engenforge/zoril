@@ -5240,7 +5240,7 @@ fn storage_walk_zir(
                                 if storage_read_crosses_pointer(module, locals, &pl) {
                                     let pl_base_ty = os_local_ty(locals, pl.base);
                                     let base_is_ref = pl_base_ty != 0 as u32
-                                        && is_reference_tag(storage_type_tag(module, pl_base_ty));
+                                        && module.type_holds_reference(pl_base_ty, 0 as usize);
                                     let target_reach = if (pl.base as usize) < reach.len
                                         && (((pl.base as usize) < from_call.len
                                             && !from_call[pl.base as usize])
