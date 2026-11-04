@@ -1,0 +1,17 @@
+// `Vec::new_in(a)` owns storage in the arena argument: S(v) is the argument's origin, so a view of
+// `v` may be returned.
+// ORIGINS: build v O={Param(0)} S={Param(0)}
+// expected exit 0
+import "mem.zrl";
+use mem::Arena;
+import "vec.zrl";
+use vec::Vec;
+fn build(a: &Arena) -> [i32] {
+    let mut v = Vec::<i32>.new_in(a);
+    v.push(42);
+    return v.as_slice();
+}
+fn main() -> i32 {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 2; } };
+    return build(&a)[0] - 42;
+}

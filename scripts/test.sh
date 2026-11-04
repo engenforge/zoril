@@ -106,7 +106,7 @@ group_paths() {
 # group_scenarios G — the multi-step scripts of group G, listed after its per-file tests.
 group_scenarios() {
     case "$1" in
-        memory)      echo cross-module-safety-matrix ;;
+        memory)      echo cross-module-safety-matrix origins ;;
         stdlib)
             echo sha256-differential
             ;;
@@ -121,6 +121,7 @@ group_scenarios() {
 scenario_run() {
     case "$1" in
         cross-module-safety-matrix) tr_run_scenario "$1" ./scripts/test_safety_matrix_cross_module.sh ;;
+        origins)                    tr_run_scenario "$1" ./scripts/test_origins.sh ;;
         sha256-differential)        tr_run_scenario "$1" ./scripts/test_sha256_differential.sh ;;
         incremental)                tr_run_scenario "$1" ./scripts/test_incremental.sh --quiet ;;
         fuzz-jobs)                  tr_run_scenario "$1" ./scripts/test_fuzz_jobs.sh --quiet ;;

@@ -5,7 +5,7 @@
 .nh
 .ad l
 .\" Begin generated content:
-.TH "zoril" "1" "2026\-10\-30"
+.TH "zoril" "1" "2026\-11\-03"
 .PP
 .SH NAME
 .PP
@@ -97,6 +97,11 @@ Print the dependency import graph reachable from the input module.\&
 \fB\-\-emit\-zir\-stats\fR
 .RS 4
 Print a census of the ZIR constructs and CFG shape the input lowers to, one line per construct, and exit without emitting ZIL.\& Used by \fBscripts/check_route_coverage.\&sh\fR to check that the probes cited by a safety matrix row walk every route the row lists.\&
+.PP
+.RE
+\fB\-\-emit\-origins\fR
+.RS 4
+Developer option.\& Print the origin sets of every function the input file defines \- for each local, the origins of the addresses it holds (O) and of the storage it owns (S), as described in \fBdoc/design/provenance.\&md\fR \- and exit without emitting ZIL; the exit status is the compile'\&s verdict.\& No rule reads the sets yet.\& Used by \fBscripts/test_origins.\&sh\fR.\&
 .PP
 .RE
 \fB\-v\fR, \fB\-\-verbose\fR

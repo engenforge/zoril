@@ -16,9 +16,9 @@ use ast::Span;
 use bytevec::ByteVec;
 use diag::diag_start;
 use il_cfg::{ILFunction, ILModule};
-use il_type::{is_raw_pointer_tag, is_reference_tag, type_name_is, ILPRIM_BOOL, ILPRIM_CHAR, ILPRIM_F32, ILPRIM_I16, ILPRIM_I32, ILPRIM_I8, ILPRIM_NEVER, ILPRIM_U16, ILPRIM_U32, ILPRIM_U8, ILPRIM_UNIT, ILPRIM_USIZE, ILTYPE_ARRAY, ILTYPE_BOXED, ILTYPE_BOXEDMUT, ILTYPE_FD, ILTYPE_FN, ILTYPE_IORING, ILTYPE_PRIMITIVE, ILTYPE_PTR, ILTYPE_PTRMUT, ILTYPE_RAWPTR, ILTYPE_RAWPTRMUT, ILTYPE_SLICE, ILTYPE_TUPLE, ILTYPE_USER, ILType, ILTypeDecl, IL_TYPEDEF_ENUM, IL_TYPEDEF_STRUCT, is_any_pointer_tag, is_mut_pointer_tag, is_shared_pointer_tag};
+use il_type::{is_raw_pointer_tag, is_reference_tag, type_name_is, ILPRIM_BOOL, ILPRIM_CHAR, ILPRIM_F32, ILPRIM_I16, ILPRIM_I32, ILPRIM_I64, ILPRIM_I8, ILPRIM_ISIZE, ILPRIM_NEVER, ILPRIM_U16, ILPRIM_U32, ILPRIM_U64, ILPRIM_U8, ILPRIM_UNIT, ILPRIM_USIZE, ILTYPE_ARRAY, ILTYPE_BOXED, ILTYPE_BOXEDMUT, ILTYPE_FD, ILTYPE_FN, ILTYPE_IORING, ILTYPE_PRIMITIVE, ILTYPE_PTR, ILTYPE_PTRMUT, ILTYPE_RAWPTR, ILTYPE_RAWPTRMUT, ILTYPE_SLICE, ILTYPE_TUPLE, ILTYPE_USER, ILType, ILTypeDecl, IL_TYPEDEF_ENUM, IL_TYPEDEF_STRUCT, is_any_pointer_tag, is_mut_pointer_tag, is_shared_pointer_tag};
 use intern::InternTable;
-use io::{eprint, stderr};
+use io::{eprint, print, stderr, stdout};
 use fmt::write_u64;
 use mem_raw::{ArenaHeader, memcpy, memset, zoril_allocator_alloc};
 use vec::Vec;
@@ -5361,4 +5361,970 @@ pub fn compute_ret_storage_zir(
         module.functions[il_func_idx as usize].stores_storage = facts.stored;
         module.functions[il_func_idx as usize].store_targets = facts.targets;
     }
+}
+
+// Origin sets (doc/design/provenance.md §3): for every local L, O(L), the origins of the addresses
+// it holds, and S(L), the origins of the storage it owns, as a forward, flow-insensitive fixpoint
+// over every statement. Field-insensitive: a write into any projection of L adds to L's sets. No
+// rule reads them yet; `zoril --emit-origins` prints them.
+//
+// A set is `words` u64s in `buf`: word 0 holds Param(i) (bit 63 stands for parameter 63 and every
+// later one), word 1 the ORIGIN_* flags, and the rest Frame(L) by local id. Set k = L is O(L),
+// k = nl + L is S(L), k = 2 * nl the function's return value, and the OS_T_* temporaries follow.
+pub const ORIGIN_STATIC: u64 = 1;
+pub const ORIGIN_UNKNOWN: u64 = 2;
+// A closure body's environment (GetEnv): the caller's, so it outlives the call like a Param.
+pub const ORIGIN_ENV: u64 = 4;
+
+const OS_T_M: usize = 0;
+const OS_T_DM: usize = 1;
+const OS_T_OWN: usize = 2;
+const OS_T_VO: usize = 3;
+const OS_T_VS: usize = 4;
+const OS_T_A: usize = 5;
+const OS_T_B: usize = 6;
+const OS_T_C: usize = 7;
+const OS_T_AO: usize = 8;
+const OS_T_R: usize = 9;
+const OS_T_SV: usize = 10;
+const OS_T_W: usize = 11;
+const OS_TEMPS: usize = 12;
+
+pub struct OriginSets {
+    pub nl: usize,
+    pub words: usize,
+    pub buf: [mut u64],
+    // Per type id, memoised: 0 not yet asked, 1 no, 2 yes, 3 being asked (a cycle answers no; a
+    // cycle can only close through a pointer or a box, which answer for themselves).
+    pub carries_memo: [mut u8],
+    pub owns_memo: [mut u8],
+    pub walk_crossed: bool,
+    pub changed: bool,
+    pub passes: u32,
+    pub unknown_calls: u32,
+    // The callee of each unknown call of the last pass (UNKNOWN_FN_VALUE for a `fn` value), for the
+    // dump.
+    pub unknown_ids: [mut u32],
+    // The interned `__sret`: a callee whose first parameter has it takes the result's slot there.
+    pub sret_name: u32,
+}
+
+fn os_t(c: &OriginSets, k: usize) -> usize { return 2 as usize * c.nl + 1 as usize + k; }
+
+const UNKNOWN_FN_VALUE: u32 = 0xffffffff;
+
+fn os_note_unknown(c: &mut OriginSets, fn_id: u32) {
+    if (c.unknown_calls as usize) < c.unknown_ids.len {
+        c.unknown_ids[c.unknown_calls as usize] = fn_id;
+    }
+    c.unknown_calls = c.unknown_calls + 1 as u32;
+}
+
+fn os_or(c: &mut OriginSets, dst: usize, src: usize) -> bool {
+    let d = dst * c.words;
+    let s = src * c.words;
+    let mut changed = false;
+    let mut k = 0 as usize;
+    while k < c.words {
+        let old = c.buf[d + k];
+        let new = old | c.buf[s + k];
+        if new != old {
+            c.buf[d + k] = new;
+            changed = true;
+        }
+        k = k + 1 as usize;
+    }
+    return changed;
+}
+
+fn os_clear(c: &mut OriginSets, set: usize) {
+    let d = set * c.words;
+    let mut k = 0 as usize;
+    while k < c.words {
+        c.buf[d + k] = 0 as u64;
+        k = k + 1 as usize;
+    }
+}
+
+fn os_copy(c: &mut OriginSets, dst: usize, src: usize) {
+    os_clear(c, dst);
+    let _ = os_or(c, dst, src);
+}
+
+fn os_is_empty(c: &OriginSets, set: usize) -> bool {
+    let d = set * c.words;
+    let mut k = 0 as usize;
+    while k < c.words {
+        if c.buf[d + k] != 0 as u64 { return false; }
+        k = k + 1 as usize;
+    }
+    return true;
+}
+
+fn os_add_frame(c: &mut OriginSets, set: usize, id: u32) {
+    if id == 0 as u32 || id as usize >= c.nl { return; }
+    let w = set * c.words + 2 as usize + (id as usize) / 64 as usize;
+    c.buf[w] = c.buf[w] | ((1 as u64) << ((id as usize % 64 as usize) as u64));
+}
+
+fn os_has_frame(c: &OriginSets, set: usize, id: usize) -> bool {
+    let w = set * c.words + 2 as usize + id / 64 as usize;
+    return (c.buf[w] >> ((id % 64 as usize) as u64)) & 1 as u64 != 0 as u64;
+}
+
+fn os_add_flag(c: &mut OriginSets, set: usize, flag: u64) {
+    let w = set * c.words + 1 as usize;
+    c.buf[w] = c.buf[w] | flag;
+}
+
+fn os_add_param(c: &mut OriginSets, set: usize, i: usize) {
+    let bit = if i < 63 as usize { i } else { 63 as usize };
+    let w = set * c.words;
+    c.buf[w] = c.buf[w] | ((1 as u64) << (bit as u64));
+}
+
+// DST = what is stored in the memory SRC names: for each Frame(L), the addresses L holds and the
+// storage L owns, which is reached through L too; Param, Static, Env and Unknown memory holds only
+// more of the same origin. This is the read-through rule that settles the design note's open
+// question (§3).
+fn os_through(c: &mut OriginSets, src: usize, dst: usize) {
+    os_clear(c, dst);
+    let s = src * c.words;
+    let d = dst * c.words;
+    c.buf[d] = c.buf[s];
+    c.buf[d + 1 as usize] = c.buf[s + 1 as usize];
+    let mut id = 1 as usize;
+    while id < c.nl {
+        if os_has_frame(c, src, id) {
+            let _ = os_or(c, dst, id);
+            let _ = os_or(c, dst, c.nl + id);
+        }
+        id = id + 1 as usize;
+    }
+}
+
+// The value read from the memory SRC names, kept apart as a direct read keeps it (§3: S(src) when
+// L is moved or copied from src): DST_O gets what each Frame(L) holds, DST_S what it owns. A move
+// out of a payload or a box then stays an owner instead of becoming a borrow of its source.
+fn os_through_split(c: &mut OriginSets, src: usize, dst_o: usize, dst_s: usize) {
+    let s = src * c.words;
+    let o = dst_o * c.words;
+    let d = dst_s * c.words;
+    c.buf[o] = c.buf[o] | c.buf[s];
+    c.buf[o + 1 as usize] = c.buf[o + 1 as usize] | c.buf[s + 1 as usize];
+    c.buf[d] = c.buf[d] | c.buf[s];
+    c.buf[d + 1 as usize] = c.buf[d + 1 as usize] | c.buf[s + 1 as usize];
+    let mut id = 1 as usize;
+    while id < c.nl {
+        if os_has_frame(c, src, id) {
+            let _ = os_or(c, dst_o, id);
+            let _ = os_or(c, dst_s, c.nl + id);
+        }
+        id = id + 1 as usize;
+    }
+}
+
+// DST = everything reached through SRC by one or more reads (SRC itself only where a cycle leads
+// back to it).
+fn os_through_plus(c: &mut OriginSets, src: usize, dst: usize) {
+    os_through(c, src, dst);
+    let tb = os_t(c, OS_T_B);
+    loop {
+        os_through(c, dst, tb);
+        if !os_or(c, dst, tb) { break; }
+    }
+}
+
+// DST = SRC and everything reached through it.
+fn os_reach_all(c: &mut OriginSets, src: usize, dst: usize) {
+    let tc = os_t(c, OS_T_C);
+    os_through_plus(c, src, tc);
+    os_copy(c, dst, src);
+    let _ = os_or(c, dst, tc);
+}
+
+fn os_type_def_tag(module: &ILModule, ty: u32) -> u32 {
+    return module.types[ty as usize - 1 as usize].def.get_tag();
+}
+
+fn os_pointee(module: &ILModule, ty: u32) -> u32 {
+    return match module.types[ty as usize - 1 as usize].def {
+        ILType.Ptr(x)
+            | ILType.PtrMut(x)
+            | ILType.RawPtr(x)
+            | ILType.RawPtrMut(x)
+            | ILType.Boxed(x)
+            | ILType.BoxedMut(x) => x,
+        ILType.Slice(s) => s.element,
+        ILType.Primitive(_)
+            | ILType.Array(_)
+            | ILType.Fn(_)
+            | ILType.Tuple(_)
+            | ILType.FD(_)
+            | ILType.IORing
+            | ILType.User(_)
+            | ILType.Var(_) => 0 as u32,
+    };
+}
+
+// Whether a value of type TY can hold an address. A primitive of 64 bits can (`p as usize`); a
+// narrower one, a float, `bool`, `char` and unit cannot. An unknown type can.
+fn os_carries(c: &mut OriginSets, module: &ILModule, ty: u32) -> bool {
+    if ty == 0 as u32 || ty as usize > module.types.len() { return true; }
+    let memo = c.carries_memo[ty as usize];
+    if memo != 0 as u8 { return memo == 2 as u8; }
+    c.carries_memo[ty as usize] = 3 as u8;
+    let mut yes = false;
+    match module.types[ty as usize - 1 as usize].def {
+        ILType.Primitive(p) => {
+            let pt = p.get_tag();
+            yes = pt == ILPRIM_U64 || pt == ILPRIM_USIZE || pt == ILPRIM_I64 || pt == ILPRIM_ISIZE;
+        },
+        ILType.Ptr(_)
+            | ILType.PtrMut(_)
+            | ILType.RawPtr(_)
+            | ILType.RawPtrMut(_)
+            | ILType.Boxed(_)
+            | ILType.BoxedMut(_)
+            | ILType.Slice(_)
+            | ILType.Fn(_)
+            | ILType.Var(_) => { yes = true; },
+        ILType.Array(a) => { yes = os_carries(c, module, a.element); },
+        ILType.Tuple(elems) => {
+            for e in elems {
+                if os_carries(c, module, *e) { yes = true; }
+            }
+        },
+        ILType.FD(_) | ILType.IORing => {},
+        ILType.User(u) => {
+            if u.id == 0xffffffff as u32 || u.id as usize >= module.typedefs.len() {
+                yes = true;
+            } else {
+                match module.typedefs[u.id as usize] {
+                    ILTypeDef.Struct(st) => {
+                        for f in st.fields {
+                            if os_carries(c, module, f.ty) { yes = true; }
+                        }
+                    },
+                    ILTypeDef.Enum(en) => {
+                        for v in en.variants {
+                            if v.payload != 0 as u32 && os_carries(c, module, v.payload) {
+                                yes = true;
+                            }
+                        }
+                    },
+                    ILTypeDef.Fn(_) => { yes = true; },
+                }
+            }
+        },
+    }
+    c.carries_memo[ty as usize] = if yes { 2 as u8 } else { 1 as u8 };
+    return yes;
+}
+
+// Whether a value of type TY owns storage, from its structure alone (§3, "Deleted"): it is or
+// contains a box or a raw pointer. A reference, a slice and a function value own nothing. An
+// unknown type owns.
+fn os_owns(c: &mut OriginSets, module: &ILModule, ty: u32) -> bool {
+    if ty == 0 as u32 || ty as usize > module.types.len() { return true; }
+    let memo = c.owns_memo[ty as usize];
+    if memo != 0 as u8 { return memo == 2 as u8; }
+    c.owns_memo[ty as usize] = 3 as u8;
+    let mut yes = false;
+    match module.types[ty as usize - 1 as usize].def {
+        ILType.RawPtr(_)
+            | ILType.RawPtrMut(_)
+            | ILType.Boxed(_)
+            | ILType.BoxedMut(_)
+            | ILType.Var(_) => { yes = true; },
+        ILType.Primitive(_)
+            | ILType.Ptr(_)
+            | ILType.PtrMut(_)
+            | ILType.Slice(_)
+            | ILType.Fn(_)
+            | ILType.FD(_)
+            | ILType.IORing => {},
+        ILType.Array(a) => { yes = os_owns(c, module, a.element); },
+        ILType.Tuple(elems) => {
+            for e in elems {
+                if os_owns(c, module, *e) { yes = true; }
+            }
+        },
+        ILType.User(u) => {
+            if u.id == 0xffffffff as u32 || u.id as usize >= module.typedefs.len() {
+                yes = true;
+            } else {
+                match module.typedefs[u.id as usize] {
+                    ILTypeDef.Struct(st) => {
+                        for f in st.fields {
+                            if os_owns(c, module, f.ty) { yes = true; }
+                        }
+                    },
+                    ILTypeDef.Enum(en) => {
+                        for v in en.variants {
+                            if v.payload != 0 as u32 && os_owns(c, module, v.payload) {
+                                yes = true;
+                            }
+                        }
+                    },
+                    ILTypeDef.Fn(_) => {},
+                }
+            }
+        },
+    }
+    c.owns_memo[ty as usize] = if yes { 2 as u8 } else { 1 as u8 };
+    return yes;
+}
+
+// The type of field NAME of struct type TY, 0 when TY is no struct or has no such field.
+fn os_field_type(module: &ILModule, ty: u32, name: u32) -> u32 {
+    if os_type_def_tag(module, ty) != ILTYPE_USER { return 0 as u32; }
+    let uid = module.types[ty as usize - 1 as usize].def.get_User().id;
+    if uid == 0xffffffff as u32 || uid as usize >= module.typedefs.len() { return 0 as u32; }
+    if let ILTypeDef.Struct(st) = module.typedefs[uid as usize] {
+        for f in st.fields {
+            if f.name == name { return f.ty; }
+        }
+    }
+    return 0 as u32;
+}
+
+fn os_local_ty(locals: [Local], id: u32) -> u32 {
+    if id == 0 as u32 { return 0 as u32; }
+    if (id as usize) <= locals.len && locals[id as usize - 1 as usize].id == id {
+        return locals[id as usize - 1 as usize].ty;
+    }
+    for l in locals {
+        if l.id == id { return l.ty; }
+    }
+    return 0 as u32;
+}
+
+// The memory place P lies in. With no pointer crossed it is the base local's own slot
+// (`c.walk_crossed` false); otherwise OS_T_M holds that memory's origins. A projection on a
+// pointer or a box steps through it, as does an index or dereference of a slice (a field of a
+// slice, its length or data pointer, is in the slice's own slot). Returns P's type, 0 when the
+// walk lost it: the memory is then everything the base reaches, and Unknown.
+fn os_walk(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place) -> u32 {
+    let tm = os_t(c, OS_T_M);
+    let ta = os_t(c, OS_T_A);
+    os_clear(c, tm);
+    let mut ty = os_local_ty(locals, p.base);
+    let mut crossed = false;
+    let mut i = 0 as usize;
+    while i < p.projections.len {
+        if ty == 0 as u32 || ty as usize > module.types.len() {
+            if crossed {
+                os_through(c, tm, ta);
+                let _ = os_or(c, tm, ta);
+            } else {
+                os_add_frame(c, tm, p.base);
+                let _ = os_or(c, tm, p.base as usize);
+                let _ = os_or(c, tm, c.nl + p.base as usize);
+            }
+            os_add_flag(c, tm, ORIGIN_UNKNOWN);
+            c.walk_crossed = true;
+            return 0 as u32;
+        }
+        let tag = os_type_def_tag(module, ty);
+        let mut steps_in = is_any_pointer_tag(tag) || tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT;
+        let mut consumes = false;
+        match p.projections[i] {
+            Projection.Deref => { consumes = true; },
+            Projection.Index(_) => {
+                if tag == ILTYPE_SLICE {
+                    steps_in = true;
+                    consumes = true;
+                }
+            },
+            Projection.Field(_) | Projection.TupleIndex(_) => {},
+        }
+        if steps_in {
+            if crossed {
+                os_through(c, tm, ta);
+                os_copy(c, tm, ta);
+            } else {
+                let _ = os_or(c, tm, p.base as usize);
+                let _ = os_or(c, tm, c.nl + p.base as usize);
+                crossed = true;
+            }
+            ty = os_pointee(module, ty);
+            if consumes { i = i + 1 as usize; }
+            continue;
+        }
+        match p.projections[i] {
+            Projection.Field(name) => { ty = os_field_type(module, ty, name); },
+            Projection.TupleIndex(idx) => {
+                if tag == ILTYPE_TUPLE {
+                    let elems = module.types[ty as usize - 1 as usize].def.get_Tuple();
+                    ty = if (idx as usize) < elems.len { elems[idx as usize] } else { 0 as u32 };
+                } else if tag == ILTYPE_ARRAY {
+                    ty = module.types[ty as usize - 1 as usize].def.get_Array().element;
+                } else {
+                    ty = 0 as u32;
+                }
+            },
+            Projection.Index(_) => {
+                ty = if tag == ILTYPE_ARRAY {
+                    module.types[ty as usize - 1 as usize].def.get_Array().element
+                } else {
+                    0 as u32
+                };
+            },
+            // A dereference of a type that is not a pointer: the walk has lost the type.
+            Projection.Deref => {
+                ty = 0 as u32;
+                continue;
+            },
+        }
+        i = i + 1 as usize;
+    }
+    c.walk_crossed = crossed;
+    return ty;
+}
+
+// Adds what reading P yields to DST_O (the addresses) and DST_S (the storage the value owns).
+// From the base's own slot: its sets. Through a pointer: what that memory holds (os_through_split); the
+// value's own storage comes along only when its type owns any. Returns P's type.
+fn os_read(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    p: &Place,
+    dst_o: usize,
+    dst_s: usize
+) -> u32 {
+    if p.base == 0 as u32 { return 0 as u32; }
+    let ty = os_walk(c, module, locals, p);
+    if ty != 0 as u32 && !os_carries(c, module, ty) { return ty; }
+    if !c.walk_crossed {
+        let _ = os_or(c, dst_o, p.base as usize);
+        let _ = os_or(c, dst_s, c.nl + p.base as usize);
+        return ty;
+    }
+    let tm = os_t(c, OS_T_M);
+    let ta = os_t(c, OS_T_A);
+    os_clear(c, ta);
+    if os_owns(c, module, ty) {
+        os_through_split(c, tm, dst_o, dst_s);
+    } else {
+        os_through_split(c, tm, dst_o, ta);
+    }
+    return ty;
+}
+
+// Adds the origins of the address `&P` to DST: the base's slot, or the memory a pointer led to.
+fn os_addr(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place, dst: usize) {
+    if p.base == 0 as u32 { return; }
+    let _ = os_walk(c, module, locals, p);
+    if c.walk_crossed {
+        let tm = os_t(c, OS_T_M);
+        let _ = os_or(c, dst, tm);
+    } else {
+        os_add_frame(c, dst, p.base);
+    }
+}
+
+// Adds VO and VS to every local whose memory MEM names (its Frame origins); other origins are
+// memory outside the frame, which the store rule (not these sets) is about.
+fn os_write_memory(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    mem: usize,
+    vo: usize,
+    vs: usize
+) {
+    let mut id = 1 as usize;
+    while id < c.nl {
+        let lty = os_local_ty(locals, id as u32);
+        if os_has_frame(c, mem, id) && os_carries(c, module, lty) {
+            if os_or(c, id, vo) { c.changed = true; }
+            if os_owns(c, module, lty) && os_or(c, c.nl + id, vs) { c.changed = true; }
+        }
+        id = id + 1 as usize;
+    }
+}
+
+// What a call to a callee with no usable summary (a `fn` value, an `extern` with no summary, a
+// body not read yet) does to the caller's locals: it may store anything every argument reaches,
+// and Unknown, into anything any argument reaches (§3, "counts as storing every reference argument
+// into every other").
+fn os_unknown_call_effects(c: &mut OriginSets, module: &ILModule, locals: [Local], args: [Place]) {
+    let tao = os_t(c, OS_T_AO);
+    let tr = os_t(c, OS_T_R);
+    let tsv = os_t(c, OS_T_SV);
+    let tw = os_t(c, OS_T_W);
+    os_clear(c, tsv);
+    os_add_flag(c, tsv, ORIGIN_UNKNOWN);
+    for a in args {
+        os_clear(c, tao);
+        let _ = os_read(c, module, locals, a, tao, tao);
+        os_reach_all(c, tao, tr);
+        let _ = os_or(c, tsv, tr);
+    }
+    for a in args {
+        os_clear(c, tao);
+        let _ = os_read(c, module, locals, a, tao, tao);
+        os_reach_all(c, tao, tw);
+        os_write_memory(c, module, locals, tw, tsv, tsv);
+    }
+}
+
+// Reads argument I of a direct call to FN_ID into OS_T_AO and returns its type. An aggregate the
+// callee takes by value arrives as a shared pointer to a temporary holding it (ILParam.by_ref); it
+// is read as that value, not as the temporary's address.
+fn os_arg(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    fn_id: u32,
+    args: [Place],
+    i: usize
+) -> u32 {
+    let tao = os_t(c, OS_T_AO);
+    let ta = os_t(c, OS_T_A);
+    os_clear(c, tao);
+    let aty = os_read(c, module, locals, &args[i], tao, tao);
+    if aty == 0 as u32 || os_type_def_tag(module, aty) != ILTYPE_PTR { return aty; }
+    if (fn_id as usize) >= module.functions.len() { return aty; }
+    let f = &module.functions[fn_id as usize];
+    let base = if f.params_len > 0 as usize && f.param(0).name == c.sret_name {
+        1 as usize
+    } else {
+        0 as usize
+    };
+    if i + base >= f.params_len { return aty; }
+    if !f.param(i + base).by_ref { return aty; }
+    let pty = os_pointee(module, f.param(i + base).ty);
+    if pty == 0 as u32 || pty as usize > module.types.len() { return aty; }
+    os_through(c, tao, ta);
+    os_copy(c, tao, ta);
+    return pty;
+}
+
+// The callee's store summary at the call: what each stored argument reaches goes into what each
+// target argument reaches. The masks are not paired, so every stored argument meets every target,
+// the same one included. Bit 63 of the targets is a global: no local of this frame. An argument
+// past the masks' 64 bits counts as both.
+fn os_summary_store_effects(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    fn_id: u32,
+    args: [Place],
+    from_mask: u64,
+    to_mask: u64
+) {
+    if from_mask == 0 as u64 { return; }
+    let tao = os_t(c, OS_T_AO);
+    let tr = os_t(c, OS_T_R);
+    let tsv = os_t(c, OS_T_SV);
+    let tw = os_t(c, OS_T_W);
+    os_clear(c, tsv);
+    let mut i = 0 as usize;
+    while i < args.len {
+        if i >= 64 as usize || ((from_mask >> (i as u64)) & 1 as u64) != 0 as u64 {
+            let _ = os_arg(c, module, locals, fn_id, args, i);
+            os_reach_all(c, tao, tr);
+            let _ = os_or(c, tsv, tr);
+        }
+        i = i + 1 as usize;
+    }
+    if os_is_empty(c, tsv) { return; }
+    let mut j = 0 as usize;
+    while j < args.len {
+        let target = if j >= 63 as usize {
+            to_mask != 0 as u64
+        } else {
+            ((to_mask >> (j as u64)) & 1 as u64) != 0 as u64
+        };
+        if target {
+            let _ = os_arg(c, module, locals, fn_id, args, j);
+            os_reach_all(c, tao, tw);
+            os_write_memory(c, module, locals, tw, tsv, tsv);
+        }
+        j = j + 1 as usize;
+    }
+}
+
+// A direct call's result, into OS_T_VO and OS_T_VS, from the callee's summary: an argument in
+// `ret_storage` gives its own origins (the result points into it); one in `ret_ties` gives what is
+// reached through it when it is a reference, and itself and what it reaches otherwise. An owning
+// result tied to no argument owns fresh storage, OWNER's. A callee whose summary is not known yields
+// Unknown.
+fn os_call(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    fn_id: u32,
+    args: [Place],
+    owner: usize
+) {
+    let vo = os_t(c, OS_T_VO);
+    let vs = os_t(c, OS_T_VS);
+    let tao = os_t(c, OS_T_AO);
+    let tr = os_t(c, OS_T_R);
+    let mut known = (fn_id as usize) < module.functions.len();
+    let mut storage = 0 as u64;
+    let mut ties = 0 as u64;
+    let mut ret_ty = 0 as u32;
+    let mut from_mask = 0 as u64;
+    let mut to_mask = 0 as u64;
+    if known {
+        let f = &module.functions[fn_id as usize];
+        known = f.storage_known && !(f.is_extern && !f.has_summary);
+        storage = f.ret_storage;
+        ties = f.ret_ties;
+        ret_ty = f.ret_ty;
+        from_mask = f.stores_storage;
+        to_mask = f.store_targets;
+        if f.has_stores_declared {
+            from_mask = from_mask | f.stores_declared_from;
+            to_mask = to_mask | f.stores_declared_to;
+        }
+    }
+    if !known {
+        os_note_unknown(c, fn_id);
+        os_add_flag(c, vo, ORIGIN_UNKNOWN);
+        os_add_flag(c, vs, ORIGIN_UNKNOWN);
+        os_unknown_call_effects(c, module, locals, args);
+        return;
+    }
+    let mut tied = false;
+    // A callee of no result type (ret_ty 0, unit) hands back no address.
+    let result_carries = ret_ty != 0 as u32 && os_carries(c, module, ret_ty);
+    let mut i = 0 as usize;
+    while i < args.len {
+        let in_storage = i >= 64 as usize || ((storage >> (i as u64)) & 1 as u64) != 0 as u64;
+        let in_ties = i >= 64 as usize || ((ties >> (i as u64)) & 1 as u64) != 0 as u64;
+        if result_carries && (in_storage || in_ties) {
+            let aty = os_arg(c, module, locals, fn_id, args, i);
+            if aty == 0 as u32 || os_carries(c, module, aty) {
+                tied = true;
+                if in_storage { let _ = os_or(c, vo, tao); }
+                if in_ties {
+                    if aty != 0 as u32 && is_reference_tag(os_type_def_tag(module, aty)) {
+                        os_through_plus(c, tao, tr);
+                    } else {
+                        os_reach_all(c, tao, tr);
+                    }
+                    let _ = os_or(c, vo, tr);
+                }
+            }
+        }
+        i = i + 1 as usize;
+    }
+    if result_carries && os_owns(c, module, ret_ty) {
+        if tied {
+            let _ = os_or(c, vs, vo);
+        } else {
+            let _ = os_or(c, vs, owner);
+        }
+    }
+    os_summary_store_effects(c, module, locals, fn_id, args, from_mask, to_mask);
+}
+
+// exhaustive: every rvalue must say which origins its value carries and what storage it owns.
+fn os_rvalue(c: &mut OriginSets, module: &ILModule, locals: [Local], rv: &ZirRvalue, owner: usize) {
+    let vo = os_t(c, OS_T_VO);
+    let vs = os_t(c, OS_T_VS);
+    os_clear(c, vo);
+    os_clear(c, vs);
+    match *rv {
+        ZirRvalue.Use(p)
+            | ZirRvalue.UnaryOp(_, p)
+            | ZirRvalue.EnumVariant(_, _, p)
+            | ZirRvalue.ArrayRepeat(p, _, _) => {
+            let _ = os_read(c, module, locals, &p, vo, vs);
+        },
+        // An enum payload is lowered as the address of the payload inside the enum place; a
+        // `match` binding or `?` then reads through it.
+        ZirRvalue.Ref(p, _)
+            | ZirRvalue.RefMut(p, _)
+            | ZirRvalue.EnumPayload(p, _, _) => {
+            os_addr(c, module, locals, &p, vo);
+        },
+        ZirRvalue.BinaryOp(_, a, b) => {
+            let _ = os_read(c, module, locals, &a, vo, vs);
+            let _ = os_read(c, module, locals, &b, vo, vs);
+        },
+        ZirRvalue.StructLiteral(_, args)
+            | ZirRvalue.Tuple(args)
+            | ZirRvalue.Array(_, args)
+            | ZirRvalue.Syscall(args)
+            | ZirRvalue.Intrinsic(_, args) => {
+            for a in args { let _ = os_read(c, module, locals, a, vo, vs); }
+        },
+        // A cast reinterprets the value, so an owner cast to a pointer is an address into the
+        // storage it owns (`b as *i32` for a box): what it owns joins what it holds.
+        ZirRvalue.Cast(p, _) => {
+            let _ = os_read(c, module, locals, &p, vo, vs);
+            let _ = os_or(c, vo, vs);
+        },
+        // An address made from an integer: whatever the integer was made from, and Unknown.
+        ZirRvalue.PtrFromInt(p, _) => {
+            let _ = os_read(c, module, locals, &p, vo, vs);
+            let _ = os_or(c, vo, vs);
+            os_add_flag(c, vo, ORIGIN_UNKNOWN);
+        },
+        ZirRvalue.Boxed(p) => {
+            let _ = os_read(c, module, locals, &p, vo, vs);
+            let _ = os_or(c, vs, owner);
+        },
+        ZirRvalue.Call(fn_id, args) => { os_call(c, module, locals, fn_id, args, owner); },
+        ZirRvalue.CallPtr(_, args) => {
+            os_note_unknown(c, UNKNOWN_FN_VALUE);
+            os_add_flag(c, vo, ORIGIN_UNKNOWN);
+            os_add_flag(c, vs, ORIGIN_UNKNOWN);
+            os_unknown_call_effects(c, module, locals, args);
+        },
+        // A capturing closure's value points at its environment, a local of this frame.
+        ZirRvalue.FuncAddr(_, env) => {
+            if env != 0 as u32 {
+                os_add_frame(c, vo, env);
+            } else {
+                os_add_flag(c, vo, ORIGIN_STATIC);
+            }
+        },
+        ZirRvalue.GetEnv => { os_add_flag(c, vo, ORIGIN_ENV); },
+        ZirRvalue.StringConst(_) | ZirRvalue.GlobalAddr(_) => {
+            os_add_flag(c, vo, ORIGIN_STATIC);
+        },
+        ZirRvalue.Const(_, _) | ZirRvalue.Sizeof(_) | ZirRvalue.VariantCheck(_, _, _) => {},
+    }
+}
+
+// Writes OS_T_VO/OS_T_VS into the destination the caller walked: its base's sets when no pointer
+// was crossed, else every local the memory in OS_T_DM names.
+fn os_store(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    base: u32,
+    crossed: bool,
+    dest_ty: u32
+) {
+    if dest_ty != 0 as u32 && !os_carries(c, module, dest_ty) { return; }
+    let vo = os_t(c, OS_T_VO);
+    let vs = os_t(c, OS_T_VS);
+    if crossed {
+        let dm = os_t(c, OS_T_DM);
+        os_write_memory(c, module, locals, dm, vo, vs);
+        return;
+    }
+    if base == 0 as u32 || base as usize >= c.nl { return; }
+    if !os_carries(c, module, os_local_ty(locals, base)) { return; }
+    if os_or(c, base as usize, vo) { c.changed = true; }
+    if os_owns(c, module, os_local_ty(locals, base)) && os_or(c, c.nl + base as usize, vs) {
+        c.changed = true;
+    }
+}
+
+// exhaustive: every statement must say what it writes into which local's sets.
+fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt) {
+    let own = os_t(c, OS_T_OWN);
+    match *st {
+        ZirStmt.Let(id, rv, _) => {
+            os_clear(c, own);
+            os_add_frame(c, own, id);
+            os_rvalue(c, module, locals, &rv, own);
+            let ty = os_local_ty(locals, id);
+            // An owned capture's storage dies with the closure, whatever the frame does (§3).
+            if id != 0 as u32
+                && (id as usize) <= locals.len
+                && locals[id as usize - 1 as usize].is_capture_alias
+                && os_owns(c, module, ty) {
+                let vs = os_t(c, OS_T_VS);
+                os_add_frame(c, vs, id);
+            }
+            os_store(c, module, locals, id, false, ty);
+        },
+        ZirStmt.Assign(pl, rv, _) => {
+            let ty = os_walk(c, module, locals, &pl);
+            let crossed = c.walk_crossed;
+            let tm = os_t(c, OS_T_M);
+            let dm = os_t(c, OS_T_DM);
+            os_copy(c, dm, tm);
+            if crossed {
+                os_copy(c, own, dm);
+            } else {
+                os_clear(c, own);
+                os_add_frame(c, own, pl.base);
+            }
+            os_rvalue(c, module, locals, &rv, own);
+            os_store(c, module, locals, pl.base, crossed, ty);
+        },
+        ZirStmt.Drop(_, _)
+            | ZirStmt.DropIfLive(_, _)
+            | ZirStmt.EndBorrow(_, _)
+            | ZirStmt.Intrinsic(_, _, _) => {},
+    }
+}
+
+// The origin sets of FUNC's locals (see OriginSets), read by no rule yet. Parameter i holds
+// Param(i) when its type can hold an address; a by-value parameter that owns storage owns
+// Frame(itself) (§5: a by-value `Vec` is this frame's).
+pub fn compute_origins_zir(
+    arena: *mut ArenaHeader,
+    module: &ILModule,
+    func: &ZirFunction,
+    sret_name: u32
+) -> OriginSets {
+    let locals = (*func).locals;
+    let nl = locals.len + 1 as usize;
+    let words = 2 as usize + (nl + 63 as usize) / 64 as usize;
+    let nsets = 2 as usize * nl + 1 as usize + OS_TEMPS;
+    let nt = module.types.len() + 1 as usize;
+    let mut nstmts = 1 as usize;
+    for b in (*func).blocks { nstmts = nstmts + b.statements.len; }
+    let mut c = OriginSets {
+        nl: nl,
+        words: words,
+        buf: unsafe {
+            @slice(zoril_allocator_alloc(arena, nsets * words * 8) as *mut u64, nsets * words)
+        },
+        carries_memo: unsafe { @slice(zoril_allocator_alloc(arena, nt) as *mut u8, nt) },
+        owns_memo: unsafe { @slice(zoril_allocator_alloc(arena, nt) as *mut u8, nt) },
+        walk_crossed: false,
+        changed: false,
+        passes: 0 as u32,
+        unknown_calls: 0 as u32,
+        unknown_ids: unsafe {
+            @slice(zoril_allocator_alloc(arena, nstmts * 4) as *mut u32, nstmts)
+        },
+        sret_name: sret_name,
+    };
+    unsafe {
+        memset(c.buf.ptr as *mut u8, 0, (nsets * words * 8) as u64);
+        memset(c.carries_memo.ptr as *mut u8, 0, nt as u64);
+        memset(c.owns_memo.ptr as *mut u8, 0, nt as u64);
+    }
+    let mut pi = 0 as usize;
+    while pi < (*func).params.len {
+        let p = (*func).params[pi];
+        if p.id != 0 as u32 && (p.id as usize) < nl {
+            if os_carries(&mut c, module, p.ty) { os_add_param(&mut c, p.id as usize, pi); }
+            if os_owns(&mut c, module, p.ty) { os_add_frame(&mut c, nl + p.id as usize, p.id); }
+        }
+        pi = pi + 1 as usize;
+    }
+    let ret = 2 as usize * nl;
+    let mut more = true;
+    while more {
+        c.changed = false;
+        c.passes = c.passes + 1 as u32;
+        c.unknown_calls = 0 as u32;
+        for b in (*func).blocks {
+            for st in b.statements { os_stmt(&mut c, module, locals, st); }
+            if let ZirTerminator.Ret(rp) = b.terminator {
+                let vo = os_t(&c, OS_T_VO);
+                let vs = os_t(&c, OS_T_VS);
+                os_clear(&mut c, vo);
+                let _ = os_read(&mut c, module, locals, &rp, vo, vs);
+                if os_or(&mut c, ret, vo) { c.changed = true; }
+            }
+        }
+        more = c.changed;
+    }
+    return c;
+}
+
+fn os_print_local(id: usize, locals: [Local], table: &InternTable) {
+    let mut out = stdout();
+    if id >= 1 as usize && id <= locals.len && locals[id - 1 as usize].name_id != 0 as u32 {
+        print(table.lookup(locals[id - 1 as usize].name_id));
+    } else {
+        print("_");
+        let _ = write_u64(&mut out, id as u64);
+    }
+}
+
+fn os_print_set(c: &OriginSets, set: usize, locals: [Local], table: &InternTable) {
+    let mut out = stdout();
+    let base = set * c.words;
+    let mut first = true;
+    print("{");
+    let mut i = 0 as usize;
+    while i < 64 as usize {
+        if (c.buf[base] >> (i as u64)) & 1 as u64 != 0 as u64 {
+            if !first { print(", "); }
+            first = false;
+            print("Param(");
+            let _ = write_u64(&mut out, i as u64);
+            if i == 63 as usize { print("+"); }
+            print(")");
+        }
+        i = i + 1 as usize;
+    }
+    let mut id = 1 as usize;
+    while id < c.nl {
+        if os_has_frame(c, set, id) {
+            if !first { print(", "); }
+            first = false;
+            print("Frame(");
+            os_print_local(id, locals, table);
+            print(")");
+        }
+        id = id + 1 as usize;
+    }
+    let flags = c.buf[base + 1 as usize];
+    if flags & ORIGIN_STATIC != 0 as u64 {
+        if !first { print(", "); }
+        first = false;
+        print("Static");
+    }
+    if flags & ORIGIN_ENV != 0 as u64 {
+        if !first { print(", "); }
+        first = false;
+        print("Env");
+    }
+    if flags & ORIGIN_UNKNOWN != 0 as u64 {
+        if !first { print(", "); }
+        print("Unknown");
+    }
+    print("}");
+}
+
+// `zoril --emit-origins`: one header line per function, then each named local and each temporary
+// with a non-empty set, and the return value's origins.
+pub fn print_origins(c: &OriginSets, func: &ZirFunction, module: &ILModule, table: &InternTable) {
+    let mut out = stdout();
+    let locals = (*func).locals;
+    print("origins ");
+    print(table.lookup((*func).name));
+    print(" passes ");
+    let _ = write_u64(&mut out, c.passes as u64);
+    print(" unknown-calls ");
+    let _ = write_u64(&mut out, c.unknown_calls as u64);
+    print("\n");
+    let mut id = 1 as usize;
+    while id < c.nl {
+        let named = id <= locals.len && locals[id - 1 as usize].name_id != 0 as u32;
+        if named || !os_is_empty(c, id) || !os_is_empty(c, c.nl + id) {
+            print("  ");
+            os_print_local(id, locals, table);
+            print(" O=");
+            os_print_set(c, id, locals, table);
+            print(" S=");
+            os_print_set(c, c.nl + id, locals, table);
+            print("\n");
+        }
+        id = id + 1 as usize;
+    }
+    let mut k = 0 as usize;
+    while k < c.unknown_calls as usize && k < c.unknown_ids.len {
+        print("  unknown-call ");
+        let fid = c.unknown_ids[k];
+        if fid == UNKNOWN_FN_VALUE || fid as usize >= module.functions.len() {
+            print("<fn value>");
+        } else {
+            print(table.lookup(module.functions[fid as usize].name));
+        }
+        print("\n");
+        k = k + 1 as usize;
+    }
+    print("  return O=");
+    os_print_set(c, 2 as usize * c.nl, locals, table);
+    print("\n");
 }
