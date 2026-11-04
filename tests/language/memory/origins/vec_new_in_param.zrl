@@ -1,6 +1,6 @@
 // `Vec::new_in(a)` owns storage in the arena argument: S(v) is the argument's origin, so a view of
 // `v` may be returned.
-// ORIGINS: build v O={Param(0)} S={Param(0)}
+// ORIGINS: build v O={Param(0), ParamContents(0)} S={Param(0)}
 // expected exit 0
 import "mem.zrl";
 use mem::Arena;

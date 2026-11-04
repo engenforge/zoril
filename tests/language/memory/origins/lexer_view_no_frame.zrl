@@ -1,7 +1,7 @@
 // A raw pointer owns nothing (§3, _Ownership_), so a struct holding one is no owner, and a
 // by-value `Lexer` parameter owns no storage of this frame: a view read through `&lex` is the view
 // the struct holds (its Param), with no Frame(lex).
-// ORIGINS: f t O={Param(1)} S={}
+// ORIGINS: f t O={Param(1), ParamContents(1)} S={}
 // flags: --provenance
 // expected exit 0
 struct Lexer { text: [u8], cur: *u8 }

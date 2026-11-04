@@ -1,0 +1,13 @@
+// One parameter holds both the destination and the value (gap_07's shape): the body summary keeps
+// the edge from a parameter to itself, which the old masks' i != j filter dropped (§3, _The summary_).
+// ORIGINS: stash_pair store ParamContents(0) -> ParamContents(0)
+// expected exit 0
+fn stash_pair(t: &mut (&mut [i32], [i32])) { *t.0 = t.1; }
+fn main() -> i32 {
+    let keep = [7, 0];
+    let kv: [i32] = &keep;
+    let mut dest: [i32] = @slice(0 as *i32, 0);
+    let mut t = (&mut dest, kv);
+    stash_pair(&mut t);
+    return 0;
+}

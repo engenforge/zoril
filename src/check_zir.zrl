@@ -5365,9 +5365,15 @@ pub fn compute_ret_storage_zir(
 // `zoril --emit-origins` prints them; under `--provenance` one more pass applies the store and
 // return rules (Z-0048), beside the old ones until Z-0012.
 //
-// A set is `words` u64s in `buf`: word 0 holds Param(i) (bit 63 stands for parameter 63 and every
-// later one), word 1 the ORIGIN_* flags, and the rest Frame(L) by local id. Set k = L is O(L),
-// k = nl + L is S(L), k = 2 * nl the function's return value, and the OS_T_* temporaries follow.
+// A set is `words` u64s in `buf`: word OS_W_ADDR holds ParamAddr(i), what argument i itself holds,
+// and OS_W_CONTENTS ParamContents(i), the memory reached through it (§3, _The summary_; bit 63
+// stands for parameter 63 and every later one), word OS_W_FLAGS the ORIGIN_* flags, and the rest
+// Frame(L) by local id. Set k = L is O(L), k = nl + L is S(L), k = 2 * nl and 2 * nl + 1 the
+// return value's O and S, and the OS_T_* temporaries follow.
+const OS_W_ADDR: usize = 0;
+const OS_W_CONTENTS: usize = 1;
+const OS_W_FLAGS: usize = 2;
+const OS_W_FRAME: usize = 3;
 pub const ORIGIN_STATIC: u64 = 1;
 pub const ORIGIN_UNKNOWN: u64 = 2;
 // A closure body's environment (GetEnv): the caller's, so it outlives the call like a Param.
@@ -5390,7 +5396,9 @@ const OS_T_SO: usize = 13;
 const OS_T_V: usize = 14;
 const OS_T_D: usize = 15;
 const OS_T_X: usize = 16;
-const OS_TEMPS: usize = 17;
+const OS_T_EV: usize = 17;
+const OS_T_ED: usize = 18;
+const OS_TEMPS: usize = 19;
 
 // The questions os_type_has answers about a type.
 const OS_Q_ARENA: usize = 0;
@@ -5411,6 +5419,8 @@ pub struct OriginSets {
     pub carries_memo: [mut u8],
     pub owns_memo: [mut u8],
     pub walk_crossed: bool,
+    // The last os_walk ended on a slice's `len`, which holds no address.
+    pub walk_len: bool,
     pub changed: bool,
     pub passes: u32,
     pub unknown_calls: u32,
@@ -5433,9 +5443,17 @@ pub struct OriginSets {
     pub file: [u8],
     pub span: Span,
     pub errors: u32,
+    // The store edges of this body, for its summary (§3, _The summary_): per stored-value code
+    // (OS_EDGE_ROWS), the targets' ParamAddr bits, ParamContents bits, and OS_EDGE_GLOBAL.
+    pub edges: [mut u64],
 }
 
-fn os_t(c: &OriginSets, k: usize) -> usize { return 2 as usize * c.nl + 1 as usize + k; }
+const OS_EDGE_STATIC: usize = 128;
+const OS_EDGE_UNKNOWN: usize = 129;
+const OS_EDGE_ROWS: usize = 130;
+const OS_EDGE_GLOBAL: u64 = 1;
+
+fn os_t(c: &OriginSets, k: usize) -> usize { return 2 as usize * c.nl + 2 as usize + k; }
 
 const UNKNOWN_FN_VALUE: u32 = 0xffffffff;
 
@@ -5489,17 +5507,17 @@ fn os_is_empty(c: &OriginSets, set: usize) -> bool {
 
 fn os_add_frame(c: &mut OriginSets, set: usize, id: u32) {
     if id == 0 as u32 || id as usize >= c.nl { return; }
-    let w = set * c.words + 2 as usize + (id as usize) / 64 as usize;
+    let w = set * c.words + OS_W_FRAME + (id as usize) / 64 as usize;
     c.buf[w] = c.buf[w] | ((1 as u64) << ((id as usize % 64 as usize) as u64));
 }
 
 fn os_has_frame(c: &OriginSets, set: usize, id: usize) -> bool {
-    let w = set * c.words + 2 as usize + id / 64 as usize;
+    let w = set * c.words + OS_W_FRAME + id / 64 as usize;
     return (c.buf[w] >> ((id % 64 as usize) as u64)) & 1 as u64 != 0 as u64;
 }
 
 fn os_add_flag(c: &mut OriginSets, set: usize, flag: u64) {
-    let w = set * c.words + 1 as usize;
+    let w = set * c.words + OS_W_FLAGS;
     c.buf[w] = c.buf[w] | flag;
 }
 
@@ -5510,15 +5528,16 @@ fn os_add_param(c: &mut OriginSets, set: usize, i: usize) {
 }
 
 // DST = what is stored in the memory SRC names: for each Frame(L), the addresses L holds and the
-// storage L owns, which is reached through L too; Param, Static, Env and Unknown memory holds only
-// more of the same origin. This is the read-through rule that settles the design note's open
-// question (§3).
+// storage L owns, which is reached through L too; memory reached through parameter i, by its own
+// value (ParamAddr) or deeper (ParamContents), holds ParamContents(i); Static, Env and Unknown
+// memory holds only more of the same origin. This is the read-through rule that settles the design
+// note's open question (§3).
 fn os_through(c: &mut OriginSets, src: usize, dst: usize) {
     os_clear(c, dst);
     let s = src * c.words;
     let d = dst * c.words;
-    c.buf[d] = c.buf[s];
-    c.buf[d + 1 as usize] = c.buf[s + 1 as usize];
+    c.buf[d + OS_W_CONTENTS] = c.buf[s + OS_W_ADDR] | c.buf[s + OS_W_CONTENTS];
+    c.buf[d + OS_W_FLAGS] = c.buf[s + OS_W_FLAGS];
     let mut id = 1 as usize;
     while id < c.nl {
         if os_has_frame(c, src, id) {
@@ -5536,10 +5555,11 @@ fn os_through_split(c: &mut OriginSets, src: usize, dst_o: usize, dst_s: usize) 
     let s = src * c.words;
     let o = dst_o * c.words;
     let d = dst_s * c.words;
-    c.buf[o] = c.buf[o] | c.buf[s];
-    c.buf[o + 1 as usize] = c.buf[o + 1 as usize] | c.buf[s + 1 as usize];
-    c.buf[d] = c.buf[d] | c.buf[s];
-    c.buf[d + 1 as usize] = c.buf[d + 1 as usize] | c.buf[s + 1 as usize];
+    let contents = c.buf[s + OS_W_ADDR] | c.buf[s + OS_W_CONTENTS];
+    c.buf[o + OS_W_CONTENTS] = c.buf[o + OS_W_CONTENTS] | contents;
+    c.buf[o + OS_W_FLAGS] = c.buf[o + OS_W_FLAGS] | c.buf[s + OS_W_FLAGS];
+    c.buf[d + OS_W_CONTENTS] = c.buf[d + OS_W_CONTENTS] | contents;
+    c.buf[d + OS_W_FLAGS] = c.buf[d + OS_W_FLAGS] | c.buf[s + OS_W_FLAGS];
     let mut id = 1 as usize;
     while id < c.nl {
         if os_has_frame(c, src, id) {
@@ -5827,19 +5847,62 @@ fn os_dest_reach(c: &mut OriginSets, module: &ILModule, locals: [Local], src: us
 // Frame origins (a Param, Static, Env or Unknown).
 fn os_external(c: &OriginSets, set: usize) -> bool {
     let d = set * c.words;
-    return c.buf[d] != 0 as u64 || c.buf[d + 1 as usize] != 0 as u64;
+    return c.buf[d + OS_W_ADDR] != 0 as u64
+        || c.buf[d + OS_W_CONTENTS] != 0 as u64
+        || c.buf[d + OS_W_FLAGS] != 0 as u64;
 }
 
 // Whether a value with origins SET may not leave this frame: it has a Frame or an Unknown origin.
 fn os_frame_bound(c: &OriginSets, set: usize) -> bool {
     let d = set * c.words;
-    if c.buf[d + 1 as usize] & ORIGIN_UNKNOWN != 0 as u64 { return true; }
-    let mut k = 2 as usize;
+    if c.buf[d + OS_W_FLAGS] & ORIGIN_UNKNOWN != 0 as u64 { return true; }
+    let mut k = OS_W_FRAME;
     while k < c.words {
         if c.buf[d + k] != 0 as u64 { return true; }
         k = k + 1 as usize;
     }
     return false;
+}
+
+// Records that a value with origins VAL is stored into the memory MEM names, as edges of this
+// body's summary: each parameter origin of the value against each parameter origin of the memory.
+// Memory that is Static, Env or Unknown is a global; a Frame or Env origin of the value reads as
+// Unknown, which is what the caller has to assume. Frame memory is this frame's and no edge.
+fn os_note_edges(c: &mut OriginSets, val: usize, mem: usize) {
+    let m = mem * c.words;
+    let t_addr = c.buf[m + OS_W_ADDR];
+    let t_contents = c.buf[m + OS_W_CONTENTS];
+    let t_flags = if c.buf[m + OS_W_FLAGS] != 0 as u64 { OS_EDGE_GLOBAL } else { 0 as u64 };
+    if t_addr == 0 as u64 && t_contents == 0 as u64 && t_flags == 0 as u64 { return; }
+    let v = val * c.words;
+    let mut i = 0 as usize;
+    while i < 64 as usize {
+        if (c.buf[v + OS_W_ADDR] >> (i as u64)) & 1 as u64 != 0 as u64 {
+            os_note_edge_row(c, i, t_addr, t_contents, t_flags);
+        }
+        if (c.buf[v + OS_W_CONTENTS] >> (i as u64)) & 1 as u64 != 0 as u64 {
+            os_note_edge_row(c, 64 as usize + i, t_addr, t_contents, t_flags);
+        }
+        i = i + 1 as usize;
+    }
+    let vf = c.buf[v + OS_W_FLAGS];
+    if vf & ORIGIN_STATIC != 0 as u64 {
+        os_note_edge_row(c, OS_EDGE_STATIC, t_addr, t_contents, t_flags);
+    }
+    let mut unknown = vf & (ORIGIN_UNKNOWN | ORIGIN_ENV) != 0 as u64;
+    let mut k = OS_W_FRAME;
+    while k < c.words && !unknown {
+        if c.buf[v + k] != 0 as u64 { unknown = true; }
+        k = k + 1 as usize;
+    }
+    if unknown { os_note_edge_row(c, OS_EDGE_UNKNOWN, t_addr, t_contents, t_flags); }
+}
+
+fn os_note_edge_row(c: &mut OriginSets, row: usize, t_addr: u64, t_contents: u64, t_flags: u64) {
+    let r = row * 3 as usize;
+    c.edges[r] = c.edges[r] | t_addr;
+    c.edges[r + 1 as usize] = c.edges[r + 1 as usize] | t_contents;
+    c.edges[r + 2 as usize] = c.edges[r + 2 as usize] | t_flags;
 }
 
 // Reports one refusal of the rules at the statement being checked (c.span).
@@ -5886,6 +5949,7 @@ fn os_walk(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place) ->
     let tm = os_t(c, OS_T_M);
     let ta = os_t(c, OS_T_A);
     os_clear(c, tm);
+    c.walk_len = false;
     let mut ty = os_local_ty(locals, p.base);
     let mut crossed = false;
     let mut i = 0 as usize;
@@ -5938,7 +6002,17 @@ fn os_walk(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place) ->
             continue;
         }
         match p.projections[i] {
-            Projection.Field(name) => { ty = os_field_type(module, ty, name); },
+            Projection.Field(name) => {
+                // A slice's length is a count, not an address: it carries none of the origins of
+                // the slice's pointer, which field-insensitive sets would otherwise give it
+                // (`self.len = self.len + other.len` would read as storing `other` into `self`).
+                if tag == ILTYPE_SLICE
+                    && i + 1 as usize == p.projections.len
+                    && c.table.lookup(name) == "len" {
+                    c.walk_len = true;
+                }
+                ty = os_field_type(module, ty, name);
+            },
             Projection.TupleIndex(idx) => {
                 if tag == ILTYPE_TUPLE {
                     let elems = module.types[ty as usize - 1 as usize].def.get_Tuple();
@@ -5981,6 +6055,7 @@ fn os_read(
 ) -> u32 {
     if p.base == 0 as u32 { return 0 as u32; }
     let ty = os_walk(c, module, locals, p);
+    if c.walk_len { return ty; }
     if ty != 0 as u32 && !os_carries(c, module, ty) { return ty; }
     if !c.walk_crossed {
         let _ = os_or(c, dst_o, p.base as usize);
@@ -6055,7 +6130,7 @@ fn os_unknown_arg(
     }
     os_clear(c, ta);
     let _ = os_read(c, module, locals, callee, ta, ta);
-    let w = ta * c.words + 1 as usize;
+    let w = ta * c.words + OS_W_FLAGS;
     c.buf[w] = c.buf[w] & !ORIGIN_STATIC;
     os_through(c, ta, tao);
 }
@@ -6085,7 +6160,6 @@ fn os_unknown_call_effects(
     let td = os_t(c, OS_T_D);
     os_clear(c, tsv);
     os_clear(c, tso);
-    os_add_flag(c, tsv, ORIGIN_UNKNOWN);
     let mut k = 0 as usize;
     while k < nargs {
         os_unknown_arg(c, module, locals, args, callee, k);
@@ -6095,6 +6169,13 @@ fn os_unknown_call_effects(
         let _ = os_or(c, tsv, tr);
         k = k + 1 as usize;
     }
+    // The summary's edges carry what the arguments reach (os_note_edges below), not this Unknown:
+    // a `fn` value's body was checked where it was made, so what it stores is something its
+    // arguments reach, and an Unknown edge would refuse every caller handing it a closure.
+    let ev = os_t(c, OS_T_EV);
+    os_copy(c, ev, tsv);
+    let _ = os_or(c, ev, tso);
+    os_add_flag(c, tsv, ORIGIN_UNKNOWN);
     if c.checking {
         let mut refused = false;
         let mut i = 0 as usize;
@@ -6121,10 +6202,13 @@ fn os_unknown_call_effects(
             i = i + 1 as usize;
         }
     }
+    let ed = os_t(c, OS_T_ED);
     k = 0 as usize;
     while k < nargs {
         os_unknown_arg(c, module, locals, args, callee, k);
         let _ = os_or(c, tao, tas);
+        os_dest_reach(c, module, locals, tao, ed);
+        os_note_edges(c, ev, ed);
         os_reach_all(c, tao, tw);
         os_write_memory(c, module, locals, tw, tsv, tso);
         k = k + 1 as usize;
@@ -6249,6 +6333,15 @@ fn os_summary_store_effects(
             i = i + 1 as usize;
         }
     }
+    let ev = os_t(c, OS_T_EV);
+    let ed = os_t(c, OS_T_ED);
+    os_copy(c, ev, tsv);
+    let _ = os_or(c, ev, tso);
+    if (to_mask >> 63 as u64) & 1 as u64 != 0 as u64 {
+        os_clear(c, ed);
+        os_add_flag(c, ed, ORIGIN_STATIC);
+        os_note_edges(c, ev, ed);
+    }
     let mut j = 0 as usize;
     while j < args.len {
         let target = if j >= 63 as usize {
@@ -6259,11 +6352,206 @@ fn os_summary_store_effects(
         if target {
             let _ = os_arg(c, module, locals, fn_id, args, j);
             let _ = os_or(c, tao, tas);
+            os_dest_reach(c, module, locals, tao, ed);
+            os_note_edges(c, ev, ed);
             os_reach_all(c, tao, tw);
             os_write_memory(c, module, locals, tw, tsv, tso);
         }
         j = j + 1 as usize;
     }
+}
+
+// Argument K of a direct call to FN_ID, what it holds and owns together, into DST: with CONTENTS
+// what is reached through it instead (ParamContents). Parameter 63 stands for itself and every
+// later one, so code 63 takes the union of arguments 63 onwards.
+fn os_param_origin(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    fn_id: u32,
+    args: [Place],
+    i: usize,
+    contents: bool,
+    dst: usize
+) {
+    let tao = os_t(c, OS_T_AO);
+    let tas = os_t(c, OS_T_AS);
+    let tr = os_t(c, OS_T_R);
+    let mut k = i;
+    while k < args.len && (k == i || i == 63 as usize) {
+        let _ = os_arg(c, module, locals, fn_id, args, k);
+        let _ = os_or(c, tao, tas);
+        if contents {
+            os_through_plus(c, tao, tr);
+            let _ = os_or(c, dst, tr);
+        } else {
+            let _ = os_or(c, dst, tao);
+        }
+        k = k + 1 as usize;
+    }
+}
+
+// An edge's value VAL written into every local the memory MEM names, as os_write_memory does
+// for O, less the Frame origins of the storage that local owns: an address into storage L owns,
+// held by L, moves with L, and S(L) already says L reaches it. Without this, a callee storing what
+// it read through `self` back into `self` (`self.cap = grow_cap(self.cap)` in `Vec.push`, a
+// `usize` carrying origins) puts a Vec's own buffer into what it holds, and every `return v` of a
+// pushed-to Vec would read as returning an address of this frame. Storage in a local arena is no
+// exception the other way: the arena tie already puts `Frame(a)` into O(L) itself.
+fn os_write_edge(c: &mut OriginSets, module: &ILModule, locals: [Local], mem: usize, val: usize) {
+    let tx = os_t(c, OS_T_X);
+    let mut id = 1 as usize;
+    while id < c.nl {
+        let lty = os_local_ty(locals, id as u32);
+        if os_has_frame(c, mem, id) && os_carries(c, module, lty) {
+            os_copy(c, tx, val);
+            let x = tx * c.words;
+            let s = (c.nl + id) * c.words;
+            let mut k = OS_W_FRAME;
+            while k < c.words {
+                c.buf[x + k] = c.buf[x + k] & !c.buf[s + k];
+                k = k + 1 as usize;
+            }
+            if os_or(c, id, tx) { c.changed = true; }
+        }
+        id = id + 1 as usize;
+    }
+}
+
+// The store edges of a callee's summary (§3, _The summary_) at a call: each edge stores the
+// argument origin its value names into the memory its target names, pairwise, so independent
+// parameters are not conflated. The stored values join what the target memory holds, not what it
+// owns (a target's S grows only by storage it is handed, never by what is written into it). The
+// rule pass applies the store rule to each edge; every edge is also recorded as this body's own.
+fn os_edge_effects(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    fn_id: u32,
+    args: [Place],
+    edges: *mut u64,
+    rows: usize
+) {
+    let tv = os_t(c, OS_T_SV);
+    let tm = os_t(c, OS_T_W);
+    let ed = os_t(c, OS_T_ED);
+    // SAFETY: store_origin_summary allocated EDGES with ROWS rows of four u64 in the main arena,
+    // which outlives every body's checks.
+    let table = unsafe { @slice(edges, rows * 4 as usize) };
+    let mut refused = false;
+    let mut r = 0 as usize;
+    while r < rows {
+        let row = r * 4 as usize;
+        let code = table[row] as usize;
+        os_clear(c, tv);
+        if code < 64 as usize {
+            os_param_origin(c, module, locals, fn_id, args, code, false, tv);
+        } else if code < 128 as usize {
+            os_param_origin(c, module, locals, fn_id, args, code - 64 as usize, true, tv);
+        } else if code == OS_EDGE_STATIC {
+            os_add_flag(c, tv, ORIGIN_STATIC);
+        } else {
+            os_add_flag(c, tv, ORIGIN_UNKNOWN);
+        }
+        let bound = os_frame_bound(c, tv);
+        if table[row + 3 as usize] & OS_EDGE_GLOBAL != 0 as u64 {
+            if c.checking && bound && !refused {
+                os_refuse(
+                    c,
+                    "the callee stores an address of this frame into a global (call store rule)"
+                );
+                refused = true;
+            }
+            os_clear(c, ed);
+            os_add_flag(c, ed, ORIGIN_STATIC);
+            os_note_edges(c, tv, ed);
+        }
+        let mut w = 1 as usize;
+        while w <= 2 as usize {
+            let mut j = 0 as usize;
+            while j < 64 as usize {
+                if (table[row + w] >> (j as u64)) & 1 as u64 != 0 as u64 {
+                    // The target memory: what argument j names (ParamAddr), or what a write through
+                    // it can reach (ParamContents), which is its destination reach (§3), not every
+                    // read through it: a callee writes only through what it could write through,
+                    // so the Static of a literal already in a `Vec<[u8]>` is no target.
+                    os_clear(c, tm);
+                    os_param_origin(c, module, locals, fn_id, args, j, false, tm);
+                    os_dest_reach(c, module, locals, tm, ed);
+                    if w == 2 as usize { os_copy(c, tm, ed); }
+                    if c.checking && bound && !refused && os_external(c, ed) {
+                        os_refuse(
+                            c,
+                            "the callee stores an address of this frame into memory that outlives it (call store rule)"
+                        );
+                        refused = true;
+                    }
+                    os_note_edges(c, tv, ed);
+                    os_write_edge(c, module, locals, tm, tv);
+                }
+                j = j + 1 as usize;
+            }
+            w = w + 1 as usize;
+        }
+        r = r + 1 as usize;
+    }
+}
+
+// This body's summary, written to its function for the calls after it (§3, _The summary_): the
+// parameter origins of the result's O, its Static and Unknown (a Frame origin is Unknown to a
+// caller), whether the result's S is fresh storage (a Frame or Unknown origin), and the store
+// edges, copied into ARENA because the sets live in the body's scratch arena.
+pub fn store_origin_summary(
+    arena: *mut ArenaHeader,
+    module: &mut ILModule,
+    idx: usize,
+    c: &OriginSets
+) {
+    let r = 2 as usize * c.nl * c.words;
+    let rs = r + c.words;
+    let mut flags = c.buf[r + OS_W_FLAGS] & ORIGIN_STATIC;
+    let mut fresh = c.buf[rs + OS_W_FLAGS] & ORIGIN_UNKNOWN != 0 as u64;
+    if c.buf[r + OS_W_FLAGS] & (ORIGIN_UNKNOWN | ORIGIN_ENV) != 0 as u64 {
+        flags = flags | ORIGIN_UNKNOWN;
+    }
+    let mut k = OS_W_FRAME;
+    while k < c.words {
+        if c.buf[r + k] != 0 as u64 { flags = flags | ORIGIN_UNKNOWN; }
+        if c.buf[rs + k] != 0 as u64 { fresh = true; }
+        k = k + 1 as usize;
+    }
+    let mut rows = 0 as usize;
+    let mut i = 0 as usize;
+    while i < OS_EDGE_ROWS {
+        let e = i * 3 as usize;
+        if c.edges[e] | c.edges[e + 1 as usize] | c.edges[e + 2 as usize] != 0 as u64 {
+            rows = rows + 1 as usize;
+        }
+        i = i + 1 as usize;
+    }
+    let out = unsafe { zoril_allocator_alloc(arena, rows * 32 + 8) as *mut u64 };
+    let dst = unsafe { @slice(out, rows * 4 as usize) };
+    let mut n = 0 as usize;
+    i = 0 as usize;
+    while i < OS_EDGE_ROWS {
+        let e = i * 3 as usize;
+        if c.edges[e] | c.edges[e + 1 as usize] | c.edges[e + 2 as usize] != 0 as u64 {
+            dst[n] = i as u64;
+            dst[n + 1 as usize] = c.edges[e];
+            dst[n + 2 as usize] = c.edges[e + 1 as usize];
+            dst[n + 3 as usize] = c.edges[e + 2 as usize];
+            n = n + 4 as usize;
+        }
+        i = i + 1 as usize;
+    }
+    let f = module.get_function_mut(idx);
+    f.os_known = true;
+    f.os_ret_addr = c.buf[r + OS_W_ADDR];
+    f.os_ret_contents = c.buf[r + OS_W_CONTENTS];
+    f.os_ret_flags = flags;
+    f.os_ret_fresh = fresh;
+    f.os_edges = out;
+    f.os_edge_rows = rows;
 }
 
 // A direct call's result, into OS_T_VO and OS_T_VS, from the callee's summary: an argument in
@@ -6294,6 +6582,13 @@ fn os_call(
     let mut from_mask = 0 as u64;
     let mut to_mask = 0 as u64;
     let mut bare_extern = false;
+    // The summary the origin sets gave the callee's body, when it was lowered before this call
+    // (§3, _The summary_); otherwise the masks of the old analyses.
+    let mut body = false;
+    let mut ret_flags = 0 as u64;
+    let mut ret_fresh = false;
+    let mut edges = 0 as *mut u64;
+    let mut edge_rows = 0 as usize;
     if known {
         let f = &module.functions[fn_id as usize];
         bare_extern = f.is_extern && !f.has_summary;
@@ -6303,6 +6598,18 @@ fn os_call(
         ret_ty = f.ret_ty;
         from_mask = f.stores_storage;
         to_mask = f.store_targets;
+        if f.os_known {
+            body = true;
+            known = true;
+            storage = f.os_ret_addr;
+            ties = f.os_ret_contents;
+            ret_flags = f.os_ret_flags;
+            ret_fresh = f.os_ret_fresh;
+            edges = f.os_edges;
+            edge_rows = f.os_edge_rows;
+            from_mask = 0 as u64;
+            to_mask = 0 as u64;
+        }
         if bare_extern {
             storage = 0 as u64;
             if !f.has_borrows { ties = 0 as u64; }
@@ -6328,6 +6635,13 @@ fn os_call(
     let owning = ret_ty != 0 as u32 && os_carries(c, module, ret_ty) && os_owns(c, module, ret_ty);
     // A callee of no result type (ret_ty 0, unit) hands back no address.
     let result_carries = ret_ty != 0 as u32 && os_carries(c, module, ret_ty);
+    // An integer read through a parameter (`self.len` in `Vec.len`) is no address of it, and the
+    // field-insensitive sets cannot tell it from a pointer field, so for an integer result a body
+    // summary's ParamContents ties do not count; its ParamAddr ties (`p as usize`) do. Making an
+    // address of an integer needs `unsafe` either way.
+    if body && result_carries && os_type_def_tag(module, ret_ty) == ILTYPE_PRIMITIVE {
+        ties = 0 as u64;
+    }
     let mut i = 0 as usize;
     while i < args.len {
         let in_storage = i >= 64 as usize || ((storage >> (i as u64)) & 1 as u64) != 0 as u64;
@@ -6344,22 +6658,35 @@ fn os_call(
                     if arena { let _ = os_or(c, vs, tao); }
                 }
                 if in_ties {
-                    if aty != 0 as u32 && is_reference_tag(os_type_def_tag(module, aty)) {
+                    // ParamContents(i) is what is reached through the argument, whatever its type.
+                    if body || aty != 0 as u32 && is_reference_tag(os_type_def_tag(module, aty)) {
                         os_through_plus(c, tao, tr);
                     } else {
                         os_reach_all(c, tao, tr);
                     }
                     let _ = os_or(c, vo, tr);
-                    if arena { let _ = os_or(c, vs, tr); }
+                    // Storage in an arena is named by the arena argument's own origins (`Frame(a)`
+                    // for `&a`), never by what the arena struct holds: under a body summary that
+                    // includes the C memory of its blocks (Static), which would make every Vec in
+                    // a local arena an external destination.
+                    if arena {
+                        if body {
+                            let _ = os_or(c, vs, tao);
+                        } else {
+                            let _ = os_or(c, vs, tr);
+                        }
+                    }
                 }
             }
         }
         i = i + 1 as usize;
     }
     if result_carries && bare_extern && !tied { os_add_flag(c, vo, ORIGIN_STATIC); }
-    if owning && (!arena_tie || os_type_has(c, module, ret_ty, OS_Q_FRESH)) {
+    if result_carries && body { os_add_flag(c, vo, ret_flags); }
+    if owning && (!arena_tie || ret_fresh || os_type_has(c, module, ret_ty, OS_Q_FRESH)) {
         let _ = os_or(c, vs, owner);
     }
+    if body { os_edge_effects(c, module, locals, fn_id, args, edges, edge_rows); }
     os_summary_store_effects(c, module, locals, fn_id, args, from_mask, to_mask);
 }
 
@@ -6528,6 +6855,14 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
             if c.checking && (ty == 0 as u32 || os_carries(c, module, ty)) {
                 os_check_store(c, module, locals, pl.base, crossed);
             }
+            if crossed && (ty == 0 as u32 || os_carries(c, module, ty)) {
+                let ev = os_t(c, OS_T_EV);
+                let ed = os_t(c, OS_T_ED);
+                os_copy(c, ev, os_t(c, OS_T_VO));
+                let _ = os_or(c, ev, os_t(c, OS_T_VS));
+                os_dest_reach(c, module, locals, dm, ed);
+                os_note_edges(c, ev, ed);
+            }
             os_store(c, module, locals, pl.base, crossed, ty);
         },
         ZirStmt.Drop(_, _)
@@ -6540,7 +6875,10 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
 // The origin sets of FUNC's locals (see OriginSets), and under RULES the rules' refusals,
 // reported against FILE and counted in `errors`. Parameter i holds
 // Param(i) when its type can hold an address; a by-value parameter that owns storage owns
-// Frame(itself) (§5: a by-value `Vec` is this frame's).
+// Frame(itself) (§5: a by-value `Vec` is this frame's). The sets keep TABLE for the dump and
+// nothing of MODULE or FUNC (their buffers are in ARENA), so the driver can write the body's
+// summary into MODULE while they are live.
+#[borrows(table)]
 pub fn compute_origins_zir(
     arena: *mut ArenaHeader,
     module: &ILModule,
@@ -6552,8 +6890,8 @@ pub fn compute_origins_zir(
 ) -> OriginSets {
     let locals = (*func).locals;
     let nl = locals.len + 1 as usize;
-    let words = 2 as usize + (nl + 63 as usize) / 64 as usize;
-    let nsets = 2 as usize * nl + 1 as usize + OS_TEMPS;
+    let words = OS_W_FRAME + (nl + 63 as usize) / 64 as usize;
+    let nsets = 2 as usize * nl + 2 as usize + OS_TEMPS;
     let nt = module.types.len() + 1 as usize;
     let mut nstmts = 1 as usize;
     for b in (*func).blocks { nstmts = nstmts + b.statements.len; }
@@ -6586,6 +6924,7 @@ pub fn compute_origins_zir(
         carries_memo: unsafe { @slice(zoril_allocator_alloc(arena, nt) as *mut u8, nt) },
         owns_memo: unsafe { @slice(zoril_allocator_alloc(arena, nt) as *mut u8, nt) },
         walk_crossed: false,
+        walk_len: false,
         changed: false,
         passes: 0 as u32,
         unknown_calls: 0 as u32,
@@ -6603,8 +6942,15 @@ pub fn compute_origins_zir(
         file: file,
         span: (*func).span,
         errors: 0 as u32,
+        edges: unsafe {
+            @slice(
+                zoril_allocator_alloc(arena, OS_EDGE_ROWS * 3 * 8) as *mut u64,
+                OS_EDGE_ROWS * 3 as usize
+            )
+        },
     };
     unsafe {
+        memset(c.edges.ptr as *mut u8, 0, (OS_EDGE_ROWS * 3 * 8) as u64);
         memset(c.buf.ptr as *mut u8, 0, (nsets * words * 8) as u64);
         memset(c.carries_memo.ptr as *mut u8, 0, nt as u64);
         memset(c.owns_memo.ptr as *mut u8, 0, nt as u64);
@@ -6645,8 +6991,10 @@ fn os_pass(c: &mut OriginSets, module: &ILModule, func: &ZirFunction, ret: usize
             let vo = os_t(c, OS_T_VO);
             let vs = os_t(c, OS_T_VS);
             os_clear(c, vo);
+            os_clear(c, vs);
             let _ = os_read(c, module, locals, &rp, vo, vs);
             if os_or(c, ret, vo) { c.changed = true; }
+            if os_or(c, ret + 1 as usize, vs) { c.changed = true; }
             // The return rule: the result carries no Frame or Unknown origin.
             if c.checking && os_frame_bound(c, vo) {
                 if b.statements.len > 0 as usize {
@@ -6675,17 +7023,21 @@ fn os_print_set(c: &OriginSets, set: usize, locals: [Local], table: &InternTable
     let base = set * c.words;
     let mut first = true;
     print("{");
-    let mut i = 0 as usize;
-    while i < 64 as usize {
-        if (c.buf[base] >> (i as u64)) & 1 as u64 != 0 as u64 {
-            if !first { print(", "); }
-            first = false;
-            print("Param(");
-            let _ = write_u64(&mut out, i as u64);
-            if i == 63 as usize { print("+"); }
-            print(")");
+    let mut w = OS_W_ADDR;
+    while w <= OS_W_CONTENTS {
+        let mut i = 0 as usize;
+        while i < 64 as usize {
+            if (c.buf[base + w] >> (i as u64)) & 1 as u64 != 0 as u64 {
+                if !first { print(", "); }
+                first = false;
+                print(if w == OS_W_ADDR { "Param(" } else { "ParamContents(" });
+                let _ = write_u64(&mut out, i as u64);
+                if i == 63 as usize { print("+"); }
+                print(")");
+            }
+            i = i + 1 as usize;
         }
-        i = i + 1 as usize;
+        w = w + 1 as usize;
     }
     let mut id = 1 as usize;
     while id < c.nl {
@@ -6698,7 +7050,7 @@ fn os_print_set(c: &OriginSets, set: usize, locals: [Local], table: &InternTable
         }
         id = id + 1 as usize;
     }
-    let flags = c.buf[base + 1 as usize];
+    let flags = c.buf[base + OS_W_FLAGS];
     if flags & ORIGIN_STATIC != 0 as u64 {
         if !first { print(", "); }
         first = false;
@@ -6756,5 +7108,46 @@ pub fn print_origins(c: &OriginSets, func: &ZirFunction, module: &ILModule, tabl
     }
     print("  return O=");
     os_print_set(c, 2 as usize * c.nl, locals, table);
+    print(" S=");
+    os_print_set(c, 2 as usize * c.nl + 1 as usize, locals, table);
     print("\n");
+    // The store edges of the summary, one line per stored value (§3, _The summary_).
+    let mut r = 0 as usize;
+    while r < OS_EDGE_ROWS {
+        let e = r * 3 as usize;
+        if c.edges[e] | c.edges[e + 1 as usize] | c.edges[e + 2 as usize] != 0 as u64 {
+            print("  store ");
+            os_print_edge_code(r);
+            print(" ->");
+            let mut w = 0 as usize;
+            while w < 2 as usize {
+                let mut j = 0 as usize;
+                while j < 64 as usize {
+                    if (c.edges[e + w] >> (j as u64)) & 1 as u64 != 0 as u64 {
+                        print(" ");
+                        os_print_edge_code(w * 64 as usize + j);
+                    }
+                    j = j + 1 as usize;
+                }
+                w = w + 1 as usize;
+            }
+            if c.edges[e + 2 as usize] & OS_EDGE_GLOBAL != 0 as u64 { print(" global"); }
+            print("\n");
+        }
+        r = r + 1 as usize;
+    }
+}
+
+fn os_print_edge_code(code: usize) {
+    let mut out = stdout();
+    if code == OS_EDGE_STATIC {
+        print("Static");
+    } else if code == OS_EDGE_UNKNOWN {
+        print("Unknown");
+    } else {
+        print(if code < 64 as usize { "Param(" } else { "ParamContents(" });
+        let _ = write_u64(&mut out, (code % 64 as usize) as u64);
+        if code % 64 as usize == 63 as usize { print("+"); }
+        print(")");
+    }
 }

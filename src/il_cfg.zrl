@@ -138,6 +138,21 @@ pub struct ILFunction {
     pub allocator_free: bool,
     pub buffer_external: bool,
     pub buffer_anchored: bool,
+    // The summary the origin sets give this body (doc/design/provenance.md §3, _The summary_;
+    // check_zir::store_origin_summary), read at a call in place of the masks above when
+    // `os_known`. `os_ret_addr`/`os_ret_contents` are the ParamAddr/ParamContents bits of the
+    // result's origins and `os_ret_flags` its ORIGIN_STATIC/ORIGIN_UNKNOWN (a Frame origin reads as
+    // Unknown); `os_ret_fresh` is whether the result's storage holds a Frame or Unknown origin. The
+    // store edges are `os_edge_rows` rows of four u64 in the main arena: the stored value's code
+    // (0..63 ParamAddr(i), 64..127 ParamContents(i), 128 Static, 129 Unknown) and the target masks
+    // of ParamAddr bits, ParamContents bits, and bit 0 for a global.
+    pub os_known: bool,
+    pub os_ret_addr: u64,
+    pub os_ret_contents: u64,
+    pub os_ret_flags: u64,
+    pub os_ret_fresh: bool,
+    pub os_edges: *mut u64,
+    pub os_edge_rows: usize,
     // The declared result is a raw pointer. The IL type does not say (`&T` and `*T` share
     // `Ptr`), and a call's result needs it: `*f()` on a raw result needs `unsafe`.
 }
