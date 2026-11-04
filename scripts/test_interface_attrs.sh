@@ -9,7 +9,10 @@
 #      or `expected compile fail`;
 #   3. requires a warning-free build of a program that imports `vec` (a warning here once came from
 #      the interface's copy of `Vec::push` having lost its #[stores]), and the rejection of
-#      safety probe 194 (`Vec::clone_in`'s result borrows its arena), under zbuild.
+#      safety probe 194 (`Vec::clone_in`'s result borrows its arena), under zbuild;
+#   4. (below, 6) lib_summary.zrl's origin-set summaries (Z-0057): the interface writes each pairwise
+#      store edge, the overflow bit, ret_addr vs ret_contents and ret_fresh, and the prov_* programs
+#      built with --provenance, whole-program and under zbuild, agree on the header's outcome.
 cd "$(dirname "$0")/.." || exit 2
 . scripts/env.sh
 ZORIL=${ZORIL_BIN:-./build/zoril}
@@ -122,6 +125,48 @@ for t in err_method_in_two_modules err_private_method_cross_module err_cross_mod
     grep '^// EXPECT:' "$tf" | sed 's|^// EXPECT: *||' | while IFS= read -r want; do
         grep -qF -- "$want" "$dir/$t.log" || { echo "[FAIL] interface-attrs: $t: zbuild did not print: $want"; sed 's/^/       /' "$dir/$t.log"; exit 1; }
     done || exit 1
+done
+
+# 6. The origin-set summary an interface carries (Z-0057), read by `--provenance` at a call.
+run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -c --emit-interface -o "$dir/lib_summary.zri" "$src/lib_summary.zrl" > "$dir/emit_summary.log" 2>&1 \
+    || fail "lib_summary.zrl's interface was not written" "$dir/emit_summary.log"
+# summary_of ITEM: the #[summary(..)] line above `fn ITEM(`.
+summary_of() {
+    awk -v item="$1" '
+        /^[[:space:]]*#\[summary\(/ { s = $0; next }
+        $0 ~ ("fn " item "\\(") { print s; exit }' "$dir/lib_summary.zri"
+}
+want_summary() { # ITEM TEXT
+    summary_of "$1" | grep -qF -- "$2" || fail "the interface lost '$2' in the summary of $1" "$dir/lib_summary.zri"
+}
+want_summary pair "edge = 0, edge_addr = 4,"      # a -> x, not a -> y
+want_summary pair "edge = 1, edge_addr = 8,"      # b -> y
+summary_of pair | grep -qF "edge_addr = 12" && fail "pair's edges were conflated into one product" "$dir/lib_summary.zri"
+want_summary same "edge = 64, edge_addr = 1,"     # ParamContents(0) -> ParamAddr(0)
+want_summary p65 "edge = 127, edge_addr = 9223372036854775808," # ParamContents(63), the overflow bit
+want_summary fld "ret_addr = 1, ret_contents = 0"
+want_summary first "ret_addr = 0, ret_contents = 1"
+want_summary fresh "ret_fresh = true"
+want_summary first "ret_fresh = false"
+for prog in "$src"/prov_*.zrl; do
+    [ -f "$prog" ] || continue
+    name=$(basename "$prog" .zrl)
+    expect_fail=0; grep -q '^// expected compile fail' "$prog" && expect_fail=1
+    want_text=$(sed -n 's|^// EXPECT: *||p' "$prog" | head -1)
+    if run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib --provenance --emit-zil -o "$dir/$name.zil" "$prog" > "$dir/$name.whole.log" 2>&1; then
+        [ "$expect_fail" -eq 0 ] || fail "$name: the whole-program build accepted it under --provenance" "$dir/$name.whole.log"
+    else
+        [ "$expect_fail" -eq 1 ] || fail "$name: the whole-program build rejected it under --provenance" "$dir/$name.whole.log"
+    fi
+    if zb --provenance -o "$dir/$name.bin" "$prog" > "$dir/$name.zb.log" 2>&1; then
+        [ "$expect_fail" -eq 0 ] || fail "$name: zbuild accepted it under --provenance" "$dir/$name.zb.log"
+        want=$(sed -n 's|^// expected exit \([0-9]*\).*|\1|p' "$prog" | head -1)
+        "$dir/$name.bin"; rc=$?
+        [ "$rc" -eq "${want:-0}" ] || fail "$name: zbuild's program exited $rc, expected ${want:-0}"
+    else
+        [ "$expect_fail" -eq 1 ] || fail "$name: zbuild rejected it under --provenance" "$dir/$name.zb.log"
+        [ -z "$want_text" ] || grep -qF -- "$want_text" "$dir/$name.zb.log" || fail "$name: zbuild did not print: $want_text" "$dir/$name.zb.log"
+    fi
 done
 
 echo "[PASS] interface-attrs: attributes, visibility and unsafe survive a .zri; every generic or trait attribute of the standard library is in its interface; zbuild and the whole-program build agree on the fixtures and probe 194; private items, duplicate methods and exports are diagnosed as whole-program does"

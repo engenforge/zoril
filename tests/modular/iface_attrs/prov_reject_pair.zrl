@@ -1,0 +1,18 @@
+// expected compile fail
+// EXPECT: call store rule
+// `pair` stores its first argument into its third: a local view in that place escapes.
+import "lib_summary.zrl";
+use lib_summary::H;
+
+fn f(out: &mut H, view: [i32]) {
+    let inner = [3, 4];
+    let mut y = H { r: @slice(0 as *i32, 0), t: @slice(0 as *i32, 0) };
+    lib_summary::pair(&inner, view, out, &mut y);
+}
+
+fn main() -> i32 {
+    let data = [1, 2];
+    let mut h = H { r: @slice(0 as *i32, 0), t: @slice(0 as *i32, 0) };
+    f(&mut h, &data);
+    return 0;
+}

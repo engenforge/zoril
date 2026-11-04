@@ -951,7 +951,30 @@ impl Driver {
         let is_local = self.is_local_function(f, name);
         let owner_len = self.owner_len_of(name);
         let ret_ties = self.compute_ret_ties(f);
-        let (decl_from, decl_to) = self.compute_stores_declared(f);
+        let (mut decl_from, mut decl_to) = self.compute_stores_declared(f);
+        // An import's origin-set summary (summary_os), written by the compiler that built the
+        // interface; empty when it has none. `#[stores(..)]` of a non-generic function is not in
+        // the interface as such, so its masks come with the summary.
+        let os = f.summary_os;
+        let has_os = os.len >= 6 as usize;
+        let os_rows = if has_os { (os.len - 6 as usize) / 4 as usize } else { 0 as usize };
+        if has_os {
+            decl_from = decl_from | os[4];
+            decl_to = decl_to | os[5];
+        }
+        let mut os_edges = 0 as *mut u64;
+        if os_rows > 0 as usize {
+            // SAFETY: the main arena outlives every body's checks, as for a body's own summary
+            // (check_zir::store_origin_summary); the block holds `os_rows * 4` u64, all written
+            // by the loop below before it is read.
+            os_edges = unsafe { zoril_allocator_alloc(self.arena, os_rows * 32 + 8) as *mut u64 };
+            let dst = unsafe { @slice(os_edges, os_rows * 4 as usize) };
+            let mut q = 0 as usize;
+            while q < os_rows * 4 as usize {
+                dst[q] = os[6 + q];
+                q = q + 1 as usize;
+            }
+        }
         let decl_span = if f.body != 0 as ExprId {
             self.resolver.ast.expr_spans[f.body as usize]
         } else {
@@ -1000,7 +1023,7 @@ impl Driver {
             },
             stores_storage: if f.has_summary { f.summary_stores } else { 0 as u64 },
             store_targets: if f.has_summary { f.summary_into } else { 0 as u64 },
-            has_stores_declared: f.has_stores,
+            has_stores_declared: f.has_stores || (has_os && (os[4] | os[5]) != 0 as u64),
             stores_declared_from: decl_from,
             stores_declared_to: decl_to,
             decl_span: decl_span,
@@ -1028,13 +1051,13 @@ impl Driver {
             allocator_free: arena_op == ARENA_OP_ALLOCATOR_FREE,
             buffer_external: arena_op == ARENA_OP_BUFFER_EXTERNAL,
             buffer_anchored: arena_op == ARENA_OP_BUFFER_ANCHORED,
-            os_known: false,
-            os_ret_addr: 0 as u64,
-            os_ret_contents: 0 as u64,
-            os_ret_flags: 0 as u64,
-            os_ret_fresh: false,
-            os_edges: 0 as *mut u64,
-            os_edge_rows: 0 as usize,
+            os_known: has_os,
+            os_ret_addr: if has_os { os[0] } else { 0 as u64 },
+            os_ret_contents: if has_os { os[1] } else { 0 as u64 },
+            os_ret_flags: if has_os { os[2] } else { 0 as u64 },
+            os_ret_fresh: has_os && os[3] != 0 as u64,
+            os_edges: os_edges,
+            os_edge_rows: os_rows,
             os_depth: 0 as u32,
         });
     }

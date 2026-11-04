@@ -142,6 +142,7 @@ mod_args="--jobs $JOBS"
 [ "$RECORD" -eq 1 ] && mod_args="--record $mod_args"
 # shellcheck disable=SC2086
 ZORIL_CC="$ZORIL" STORE_GRID_SAFETY_REGEX="$SAFETY_REGEX" sh "$REPO_ROOT/scripts/check_store_grid_modular.sh" $mod_args || exit $?
+ZORIL_CC="$ZORIL" STORE_GRID_SAFETY_REGEX="$SAFETY_REGEX" sh "$REPO_ROOT/scripts/check_store_grid_modular.sh" --provenance $mod_args || exit $?
 
 # Step 4: Generate Class Report. A tracked file is written only under --record: the report of a plain
 # run goes to the work directory.

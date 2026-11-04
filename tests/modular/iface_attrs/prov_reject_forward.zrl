@@ -1,0 +1,27 @@
+// expected compile fail
+// EXPECT: provenance
+// A callee that returns its argument, read from the interface (ret_contents), carries the frame's
+// view to the closure's store.
+import "lib_summary.zrl";
+import "mem.zrl";
+import "vec.zrl";
+
+use lib_summary::H;
+use mem::Arena;
+use vec::Vec;
+
+fn f(out: &mut H) {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let routed = lib_summary::forward(v.as_slice());
+    let get_out = || -> &mut [i32] { return &mut out.r; };
+    let slot = get_out();
+    *slot = routed;
+}
+
+fn main() -> i32 {
+    let mut h = H { r: @slice(0 as *i32, 0), t: @slice(0 as *i32, 0) };
+    f(&mut h);
+    return 0;
+}
