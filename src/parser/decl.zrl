@@ -259,7 +259,13 @@ impl Parser {
             if self.is_kind(TokenKind.Comma) { self.next_token(); }
         }
         self.expect(Token.RParen);
-        // A torn edge list (a count not a multiple of four) drops its last partial row.
+        // The edge keys are read in the order the compiler writes them, four to a row.
+        if saw_os && os_edges.len() % 4 as usize != 0 as usize {
+            self.report_error(
+                "malformed #[summary]: an edge needs edge, edge_addr, edge_contents, edge_global",
+                self.cur.span
+            );
+        }
         if saw_os {
             let mut h = 0 as usize;
             while h < 6 as usize { os_head.push(head[h]); h = h + 1 as usize; }

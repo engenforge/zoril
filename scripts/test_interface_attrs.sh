@@ -146,6 +146,8 @@ want_summary same "edge = 64, edge_addr = 1,"     # ParamContents(0) -> ParamAdd
 want_summary p65 "edge = 127, edge_addr = 9223372036854775808," # ParamContents(63), the overflow bit
 want_summary fld "ret_addr = 1, ret_contents = 0"
 want_summary first "ret_addr = 0, ret_contents = 1"
+want_summary pair "decl_stores = 3, decl_into = 12"
+want_summary lit "ret_flags = 1"
 want_summary fresh "ret_fresh = true"
 want_summary first "ret_fresh = false"
 for prog in "$src"/prov_*.zrl; do

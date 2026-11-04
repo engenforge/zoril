@@ -590,7 +590,8 @@ pub struct FnDecl {
     pub summary_alloc: usize,
     // The origin-set summary an interface carried (doc/design/provenance.md §3): empty if none,
     // else [ret_addr, ret_contents, ret_flags, ret_fresh, decl_stores, decl_into] then the store
-    // edge rows of `ILFunction.os_edges`; the decl masks are the author's `#[stores(..)]`.
+    // edge rows of `ILFunction.os_edges`; the decl masks are the author's `#[stores(..)]`, which
+    // os_call re-adds because it clears the flat masks for a body summary.
     pub summary_os: [u64],
     // `#[borrows(p, ...)]`: the returned reference points into these parameters only
     // (`#[borrows()]`: into none of them). Without it, Rust's elision rules decide.

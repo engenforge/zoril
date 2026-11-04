@@ -9,6 +9,7 @@ pub struct V { pub v: i32 }
 pub fn forward(v: [i32]) -> [i32] { return v; }
 
 // Two independent edges, a -> x and b -> y, not the product of the two masks.
+#[stores(a -> x, b -> y)]
 pub fn pair(a: [i32], b: [i32], x: &mut H, y: &mut H) { x.r = a; y.r = b; }
 
 // A parameter stored into itself: its contents into its own memory.
@@ -19,6 +20,9 @@ pub fn fld(h: &V) -> &i32 { return &h.v; }
 pub fn first(h: &H) -> [i32] { return h.r; }
 
 // A result no parameter owns, so the caller treats it as fresh storage.
+// A result no parameter owns and that is Static: ret_flags = 1.
+pub fn lit() -> [u8] { return "abc"; }
+
 pub fn fresh() -> Vec<i32> { return Vec::<i32>.new(); }
 
 // Parameter 64 is stored through parameter 65: both share the overflow bit 63.

@@ -76,7 +76,7 @@ It is tempting to expect a compiler to carry unsafe code in the same way Rust's 
 | Zoril `stdlib/` (4.4k non-comment LOC)   | stdlib           | **10.95%** (170 blocks) |
 | Zoril example JSON tool (1.9k LOC)       | application      | **0.00%** (0 blocks)    |
 
-The Rust rows are a one-time measurement of the Rust source tree; the Zoril rows are recomputed by `scripts/check_safety_figures.sh --density` (part of `make test`): lines inside `unsafe { }` blocks, brace-matched, divided by non-blank, non-comment lines (Zoril: 1,986 of 42,587 lines in `src/`, 492 of 4,494 in `stdlib/`, 0 of 1,992 in the example JSON tool). The example tool is not yet published, so a tree that does not carry its sources reports that row as skipped rather than checking it against nothing. The count of blocks is §5 of [`doc/SAFETY.md`](../SAFETY.md).
+The Rust rows are a one-time measurement of the Rust source tree; the Zoril rows are recomputed by `scripts/check_safety_figures.sh --density` (part of `make test`): lines inside `unsafe { }` blocks, brace-matched, divided by non-blank, non-comment lines (Zoril: 1,986 of 42,593 lines in `src/`, 492 of 4,494 in `stdlib/`, 0 of 1,992 in the example JSON tool). The example tool is not yet published, so a tree that does not carry its sources reports that row as skipped rather than checking it against nothing. The count of blocks is §5 of [`doc/SAFETY.md`](../SAFETY.md).
 
 rustc is essentially unsafe-free because it consumes safe abstractions; the unsafe is concentrated in the standard library, which is exactly the division of labour §2 and §4 describe. **Zoril's compiler is roughly 8× rustc's density and now below Rust's standard library's**, and Zoril's own standard library is 1.8× Rust's.
 

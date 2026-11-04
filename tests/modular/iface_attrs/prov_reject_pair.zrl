@@ -1,5 +1,7 @@
 // expected compile fail
 // EXPECT: call store rule
+// Not a pairwise-precision test: the flat masks refuse it too, and the old rules refuse every
+// safe pairwise call until Z-0012; the pairwise edges show in lib_summary's interface text.
 // `pair` stores its first argument into its third: a local view in that place escapes.
 import "lib_summary.zrl";
 use lib_summary::H;

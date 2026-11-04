@@ -953,8 +953,8 @@ impl Driver {
         let ret_ties = self.compute_ret_ties(f);
         let (mut decl_from, mut decl_to) = self.compute_stores_declared(f);
         // An import's origin-set summary (summary_os), written by the compiler that built the
-        // interface; empty when it has none. `#[stores(..)]` of a non-generic function is not in
-        // the interface as such, so its masks come with the summary.
+        // interface; empty when it has none. os_call clears the flat `stores`/`into` masks for a known
+        // summary and re-adds only the declared ones, so those come with it.
         let os = f.summary_os;
         let has_os = os.len >= 6 as usize;
         let os_rows = if has_os { (os.len - 6 as usize) / 4 as usize } else { 0 as usize };
