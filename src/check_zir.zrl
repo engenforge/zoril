@@ -6435,8 +6435,9 @@ fn os_edge_effects(
     let tv = os_t(c, OS_T_SV);
     let tm = os_t(c, OS_T_W);
     let ed = os_t(c, OS_T_ED);
-    // SAFETY: store_origin_summary allocated EDGES with ROWS rows of four u64 in the main arena,
-    // which outlives every body's checks.
+    // SAFETY: EDGES has ROWS rows of four u64: store_origin_summary's table in the main arena,
+    // which outlives every body's checks, or null with zero rows for a callee in a recursive cycle
+    // that has no summary yet (os_call), whose empty slice is never indexed.
     let table = unsafe { @slice(edges, rows * 4 as usize) };
     let mut refused = false;
     let mut r = 0 as usize;
@@ -6497,16 +6498,64 @@ fn os_edge_effects(
     }
 }
 
+// The smallest lowering depth among FUNC's direct callees that are still being lowered and have
+// no summary yet (ILFunction.os_depth), 0xffffffff when there is none: such a call closes a
+// recursive cycle through a body on the driver's stack (Z-0059). The condition is os_call's for
+// giving such a callee an empty summary; the two must stay the same.
+pub fn zir_open_call_depth(module: &ILModule, func: &ZirFunction) -> u32 {
+    let mut low = 0xffffffff as u32;
+    for b in (*func).blocks {
+        for st in b.statements {
+            let rv = match *st {
+                ZirStmt.Let(_, r, _) => r,
+                ZirStmt.Assign(_, r, _) => r,
+                ZirStmt.Drop(_, _)
+                    | ZirStmt.DropIfLive(_, _)
+                    | ZirStmt.EndBorrow(_, _)
+                    | ZirStmt.Intrinsic(_, _, _) => { continue; },
+            };
+            if let ZirRvalue.Call(fn_id, _) = rv {
+                if (fn_id as usize) < module.functions.len() {
+                    let f = &module.functions[fn_id as usize];
+                    if !f.os_known && f.os_depth != 0 as u32 && f.os_depth < low {
+                        low = f.os_depth;
+                    }
+                }
+            }
+        }
+    }
+    return low;
+}
+
 // This body's summary, written to its function for the calls after it (§3, _The summary_): the
 // parameter origins of the result's O, its Static and Unknown (a Frame origin is Unknown to a
 // caller), whether the result's S is fresh storage (a Frame or Unknown origin), and the store
-// edges, copied into ARENA because the sets live in the body's scratch arena.
+// edges, copied into ARENA because the sets live in the body's scratch arena. The summary is
+// joined with the one the function already has, so a recursive cycle's fixpoint (Z-0059) only
+// grows it; returns whether it grew.
 pub fn store_origin_summary(
     arena: *mut ArenaHeader,
     module: &mut ILModule,
     idx: usize,
-    c: &OriginSets
-) {
+    c: &mut OriginSets
+) -> bool {
+    let old = module.functions[idx];
+    let mut grew = !old.os_known;
+    if old.os_known && old.os_edge_rows > 0 as usize {
+        // SAFETY: the function's own summary table, OS_EDGE_ROWS rows of four u64 in the main
+        // arena (written below on an earlier call).
+        let prev = unsafe { @slice(old.os_edges, old.os_edge_rows * 4 as usize) };
+        let mut j = 0 as usize;
+        while j < old.os_edge_rows {
+            let e = (prev[j * 4 as usize] as usize) * 3 as usize;
+            let mut w = 0 as usize;
+            while w < 3 as usize {
+                c.edges[e + w] = c.edges[e + w] | prev[j * 4 as usize + 1 as usize + w];
+                w = w + 1 as usize;
+            }
+            j = j + 1 as usize;
+        }
+    }
     let r = 2 as usize * c.nl * c.words;
     let rs = r + c.words;
     let mut flags = c.buf[r + OS_W_FLAGS] & ORIGIN_STATIC;
@@ -6548,14 +6597,38 @@ pub fn store_origin_summary(
         }
         i = i + 1 as usize;
     }
+    if old.os_known {
+        if rows != old.os_edge_rows {
+            grew = true;
+        } else if rows > 0 as usize {
+            // SAFETY: as above: the old table of the same number of rows.
+            let prev = unsafe { @slice(old.os_edges, rows * 4 as usize) };
+            let mut q = 0 as usize;
+            while q < rows * 4 as usize {
+                if dst[q] != prev[q] { grew = true; }
+                q = q + 1 as usize;
+            }
+        }
+    }
+    let addr = old.os_ret_addr | c.buf[r + OS_W_ADDR];
+    let contents = old.os_ret_contents | c.buf[r + OS_W_CONTENTS];
+    flags = flags | old.os_ret_flags;
+    fresh = fresh || old.os_ret_fresh;
+    if addr != old.os_ret_addr
+        || contents != old.os_ret_contents
+        || flags != old.os_ret_flags
+        || fresh != old.os_ret_fresh {
+        grew = true;
+    }
     let f = module.get_function_mut(idx);
     f.os_known = true;
-    f.os_ret_addr = c.buf[r + OS_W_ADDR];
-    f.os_ret_contents = c.buf[r + OS_W_CONTENTS];
+    f.os_ret_addr = addr;
+    f.os_ret_contents = contents;
     f.os_ret_flags = flags;
     f.os_ret_fresh = fresh;
     f.os_edges = out;
     f.os_edge_rows = rows;
+    return grew;
 }
 
 // A direct call's result, into OS_T_VO and OS_T_VS, from the callee's summary: an argument in
@@ -6602,6 +6675,18 @@ fn os_call(
         ret_ty = f.ret_ty;
         from_mask = f.stores_storage;
         to_mask = f.store_targets;
+        if !f.os_known && f.os_depth != 0 as u32 {
+            // A callee still being lowered: this body is in a recursive cycle with it. Its summary
+            // starts empty and grows with the cycle's fixpoint (Z-0059), which rechecks this body
+            // with the final summaries; the rules are deferred until then. The driver finds such
+            // calls before this pass with zir_open_call_depth, which must test the same condition.
+            body = true;
+            known = true;
+            storage = 0 as u64;
+            ties = if f.has_borrows { f.ret_ties } else { 0 as u64 };
+            from_mask = 0 as u64;
+            to_mask = 0 as u64;
+        }
         if f.os_known {
             body = true;
             known = true;

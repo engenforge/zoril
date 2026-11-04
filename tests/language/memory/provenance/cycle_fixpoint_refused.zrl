@@ -1,0 +1,26 @@
+// A recursive cycle's store summary comes from its fixpoint (Z-0059): `stash_b` stores nothing
+// itself and calls `stash_a`, still being lowered, so only the fixpoint gives it `stash_a`'s edge
+// `Param(1) -> Param(0)`, and the call store rule refuses the frame view `f` hands it.
+// flags: --provenance
+// EXPECT: call store rule
+// expected compile fail
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+fn stash_a(out: &mut [i32], s: [i32]) {
+    if false { stash_b(out, s); }
+    *out = s;
+}
+fn stash_b(out: &mut [i32], s: [i32]) { stash_a(out, s); }
+fn f(out: &mut [i32]) {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    stash_b(out, v.as_slice());
+}
+fn main() -> i32 {
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    f(&mut s);
+    return 0;
+}

@@ -40,7 +40,7 @@ use mem_raw::{arena_reset, zoril_allocator_alloc};
 use mono::INFER_RESULT;
 use progress::progress_name;
 use resolve::SymbolKind;
-use state::Driver;
+use state::{Driver, NO_LOW, OsPending};
 use types::{CONST_FORM_ERROR, CONST_FORM_NOT_CONST, CONST_FORM_STRING, ConstInit};
 use vec::Vec;
 use zir::ZirModule;
@@ -1035,6 +1035,7 @@ impl Driver {
             os_ret_fresh: false,
             os_edges: 0 as *mut u64,
             os_edge_rows: 0 as usize,
+            os_depth: 0 as u32,
         });
     }
 
@@ -1143,17 +1144,95 @@ impl Driver {
 
     // F's body through the pipeline: lowered to ZIR, checked, then lowered to ZIL in the
     // function being built (its own parameters from ZIR_ARG_START). The body's value, or None
-    // when lowering or checking it failed. The ZIR lives in the scratch arena, reset after.
+    // when lowering or checking it failed. The ZIR lives in the scratch arena, reset after, except
+    // for a body of a recursive cycle (Z-0059): a callee is lowered inside its caller's body, so
+    // the cycle's bodies are the ones on the lowering stack when one calls another still on it.
+    // Such a body keeps its ZIR until the cycle's root (the outermost of them) finishes, whose own
+    // reset frees them all after Driver.os_fixpoint.
     fn run_body_passes(
         self: &mut Driver,
         f: &FnDecl,
         name: u32,
         zir_arg_start: u32
     ) -> Option<SSAId> {
+        let idx = self.builder.current_func_idx as usize;
+        self.os_low.push(NO_LOW);
+        let depth = self.os_low.len() as u32;
+        self.module.get_function_mut(idx).os_depth = depth;
+        let pending_start = self.os_pending.len();
         let scratch_offset = unsafe { (*self.scratch_arena).offset };
         let result = self.run_body_passes_in_scratch(f, name, zir_arg_start);
+        let low = self.os_low[depth as usize - 1 as usize];
+        let _ = self.os_low.pop();
+        self.module.get_function_mut(idx).os_depth = 0 as u32;
+        if low < depth {
+            // A member below the root: the caller is in the cycle too.
+            let parent = depth as usize - 2 as usize;
+            if low < self.os_low[parent] { self.os_low[parent] = low; }
+            return result;
+        }
+        if self.os_pending.len() > pending_start { self.os_fixpoint(pending_start); }
         unsafe { arena_reset(self.scratch_arena, scratch_offset); }
         return result;
+    }
+
+    // A recursive cycle's root has finished: its bodies (os_pending from START) are recomputed with
+    // one another's summaries until none grows, then checked once with the final ones, and printed
+    // for `--emit-origins` (doc/design/provenance.md §3, _The summary_).
+    fn os_fixpoint(self: &mut Driver, start: usize) {
+        let sret_name = self.intern_table.intern("__sret");
+        let mut grew = true;
+        while grew {
+            grew = false;
+            let mut k = start;
+            while k < self.os_pending.len() {
+                if self.os_pass_pending(k, sret_name, false) { grew = true; }
+                k = k + 1 as usize;
+            }
+        }
+        let mut k = start;
+        while k < self.os_pending.len() {
+            let _ = self.os_pass_pending(k, sret_name, true);
+            k = k + 1 as usize;
+        }
+        while self.os_pending.len() > start { let _ = self.os_pending.pop(); }
+    }
+
+    // One origin pass over pending body K, in a scratch region released after it. With CHECK the
+    // rules apply and the sets are printed for `--emit-origins`; otherwise only the summary is
+    // updated. Returns whether the summary grew.
+    fn os_pass_pending(self: &mut Driver, k: usize, sret_name: u32, check: bool) -> bool {
+        let e = self.os_pending[k];
+        // SAFETY: the scratch arena is the driver's own and live; the pass's sets are allocated
+        // above MARK and dropped by the reset below, which leaves the kept ZIR beneath it intact.
+        let mark = unsafe { (*self.scratch_arena).offset };
+        let mut origins = check_zir::compute_origins_zir(
+            self.scratch_arena,
+            self.module,
+            &e.zir,
+            sret_name,
+            self.intern_table,
+            if check { e.rules } else { check_zir::PROVENANCE_OFF },
+            e.file_path
+        );
+        if origins.errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
+            self.had_error = true;
+        }
+        let mut grew = false;
+        if !self.module.functions[e.func_idx as usize].is_unsafe {
+            grew = check_zir::store_origin_summary(
+                self.arena,
+                self.module,
+                e.func_idx as usize,
+                &mut origins
+            );
+        }
+        if check && self.emit_origins && e.source_file == self.target_source_file {
+            check_zir::print_origins(&origins, &e.zir, self.module, self.intern_table);
+        }
+        // SAFETY: as at MARK above: nothing allocated past it outlives this pass.
+        unsafe { arena_reset(self.scratch_arena, mark); }
+        return grew;
     }
 
     fn run_body_passes_in_scratch(
@@ -1210,13 +1289,21 @@ impl Driver {
         } else {
             self.provenance
         };
-        let origins = check_zir::compute_origins_zir(
+        // A body in a recursive cycle (it, or a body nested in it, calls one still being lowered)
+        // is computed now for the summary its callers in the cycle read, and checked when the
+        // cycle's root finishes, with the final summaries (Z-0059, Driver.os_fixpoint).
+        let depth = self.os_low.len();
+        let open = check_zir::zir_open_call_depth(self.module, &zir_func);
+        if open < self.os_low[depth - 1 as usize] { self.os_low[depth - 1 as usize] = open; }
+        let low = self.os_low[depth - 1 as usize];
+        let in_cycle = low != NO_LOW && low as usize <= depth;
+        let mut origins = check_zir::compute_origins_zir(
             self.scratch_arena,
             self.module,
             &zir_func,
             sret_name,
             self.intern_table,
-            rules,
+            if in_cycle { check_zir::PROVENANCE_OFF } else { rules },
             self.file_path
         );
         if origins.errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
@@ -1226,14 +1313,22 @@ impl Driver {
         // reason its body is not checked: an address it makes from an integer would reach every
         // caller as Unknown. Its callers keep the old analyses' masks.
         if !self.module.functions[self.builder.current_func_idx as usize].is_unsafe {
-            check_zir::store_origin_summary(
+            let _ = check_zir::store_origin_summary(
                 self.arena,
                 self.module,
                 self.builder.current_func_idx as usize,
-                &origins
+                &mut origins
             );
         }
-        if self.emit_origins && current_source_file == self.target_source_file {
+        if in_cycle {
+            self.os_pending.push(OsPending {
+                func_idx: self.builder.current_func_idx as u32,
+                zir: zir_func,
+                file_path: self.file_path,
+                source_file: current_source_file,
+                rules: rules,
+            });
+        } else if self.emit_origins && current_source_file == self.target_source_file {
             check_zir::print_origins(&origins, &zir_func, self.module, self.intern_table);
         }
         // `--emit-zir-stats`: a census of the canonical ZIR, before this frame's scratch arena is

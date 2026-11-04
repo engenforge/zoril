@@ -15,6 +15,7 @@ import "mono.zrl";
 import "builder.zrl";
 import "vec.zrl";
 import "zir_stats.zrl";
+import "zir.zrl";
 use ast::Span;
 use builder::ILBuilder;
 use diag::diag_start;
@@ -28,6 +29,7 @@ use mono::Monomorphizer;
 use resolve::Resolver;
 use vec::Vec;
 use zir_stats::ZirStats;
+use zir::ZirFunction;
 
 pub struct Driver {
     pub arena: *mut ArenaHeader,
@@ -73,7 +75,24 @@ pub struct Driver {
     // `zoril --emit-origins`: print the origin sets of each function the input file defines
     // (check_zir::compute_origins_zir, computed for every body either way).
     pub emit_origins: bool,
+    // Tarjan's low-links on the lowering stack (Z-0059): entry d - 1 is the smallest depth still
+    // being lowered that the body at depth d, or one nested in it, calls; NO_LOW when none.
+    pub os_low: Vec<u32>,
+    // A recursive cycle's bodies, waiting for its root: their ZIR stays in the scratch arena until
+    // then, so the summaries can be iterated and the bodies checked with the final ones.
+    pub os_pending: Vec<OsPending>,
 }
+
+// A body of a recursive cycle, kept for the cycle's fixpoint (Driver.os_fixpoint).
+pub struct OsPending {
+    pub func_idx: u32,
+    pub zir: ZirFunction,
+    pub file_path: [u8],
+    pub source_file: u32,
+    pub rules: u32,
+}
+
+pub const NO_LOW: u32 = 0xffffffff;
 
 impl Driver {
     pub fn is_copy_type_internal(self: &mut Driver, type_id: u32, depth: usize) -> bool {
@@ -209,6 +228,9 @@ impl Driver {
                 collect_zir_stats: false,
                 zir_stats: ZirStats.new(),
                 emit_origins: false,
+                // SAFETY: ARENA is the driver's main arena, which outlives the driver.
+                os_low: unsafe { Vec::<u32>.new_in_raw(arena) },
+                os_pending: unsafe { Vec::<OsPending>.new_in_raw(arena) },
             };
         }
         return l;

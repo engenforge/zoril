@@ -153,6 +153,10 @@ pub struct ILFunction {
     pub os_ret_fresh: bool,
     pub os_edges: *mut u64,
     pub os_edge_rows: usize,
+    // While this body is being lowered, its depth on the driver's lowering stack (1 for the
+    // outermost); 0 otherwise. A call to a function with a depth and no summary yet is a call into
+    // a recursive cycle (Z-0059): it takes an empty summary until the cycle's fixpoint.
+    pub os_depth: u32,
     // The declared result is a raw pointer. The IL type does not say (`&T` and `*T` share
     // `Ptr`), and a call's result needs it: `*f()` on a raw result needs `unsafe`.
 }
