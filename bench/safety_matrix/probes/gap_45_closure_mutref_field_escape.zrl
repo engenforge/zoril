@@ -1,0 +1,31 @@
+// name: Frame view stored out after a closure writes it into a captured &mut local's field
+// expected: known_gap
+// gap: a slice of a Vec in this frame's arena, written into a local struct's field by a closure that captured a local &mut to it (|| { r.s = s; }), is accepted and then stored out through *out = w.s; written as w.s = s directly it is refused
+// observed: exit 77
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct W { s: [i32], t: i32, }
+fn mk_w() -> W { return W { s: @slice(0 as *i32, 0), t: 0 }; }
+fn f(out: &mut [i32]) {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let mut w = mk_w();
+    {
+        let s = v.as_slice();
+        let r = &mut w;
+        let mut cl = || { r.s = s; };
+        cl();
+    }
+    *out = w.s;
+}
+fn main() -> i32 {
+    let mut dest: [i32] = @slice(0 as *i32, 0);
+    f(&mut dest);
+    let a2 = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v2 = Vec::<i32>.new_in(&a2);
+    v2.push(77);
+    return dest[0];
+}
