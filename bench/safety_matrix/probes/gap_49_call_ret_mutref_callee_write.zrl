@@ -1,0 +1,51 @@
+// name: Frame view stored through a callee writing a call-returned &mut
+// expected: known_gap
+// gap: a &mut returned by a call and passed to a writing callee (write(d, s) with d = unwrap_slot(h)) leaves the outer caller's store summary empty because note_call_stores_zir does not propagate reach through call-produced references
+// observed: exit 77
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct Slot {
+    out: &mut [i32],
+}
+
+fn unwrap_slot(h: Slot) -> &mut [i32] {
+    return h.out;
+}
+
+fn write(d: &mut [i32], s: [i32]) {
+    *d = s;
+}
+
+fn stash(h: Slot, s: [i32]) {
+    let d = unwrap_slot(h);
+    write(d, s);
+}
+
+fn f(out: &mut [i32]) {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => {
+            return;
+        }
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    stash(Slot { out: out }, v.as_slice());
+}
+
+fn main() -> i32 {
+    let mut dest: [i32] = @slice(0 as *i32, 0);
+    f(&mut dest);
+    let a2 = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => {
+            return 1;
+        }
+    };
+    let mut v2 = Vec::<i32>.new_in(&a2);
+    v2.push(77);
+    return dest[0];
+}

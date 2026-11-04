@@ -5032,6 +5032,17 @@ fn note_call_stores_zir(
     }
 }
 
+fn os_local_ty(locals: [Local], id: u32) -> u32 {
+    if id == 0 as u32 { return 0 as u32; }
+    if (id as usize) <= locals.len && locals[id as usize - 1 as usize].id == id {
+        return locals[id as usize - 1 as usize].ty;
+    }
+    for l in locals {
+        if l.id == id { return l.ty; }
+    }
+    return 0 as u32;
+}
+
 fn storage_walk_zir(
     arena: *mut ArenaHeader,
     module: &mut ILModule,
@@ -5238,11 +5249,7 @@ fn storage_walk_zir(
                                 work[pl.base as usize] = work[pl.base as usize] | m;
                                 cmask[pl.base as usize] = cmask[pl.base as usize] | cm;
                                 if storage_read_crosses_pointer(module, locals, &pl) {
-                                    let pl_base_ty = if (pl.base as usize) < locals.len {
-                                        locals[pl.base as usize].ty
-                                    } else {
-                                        0 as u32
-                                    };
+                                    let pl_base_ty = os_local_ty(locals, pl.base);
                                     let base_is_ref = pl_base_ty != 0 as u32
                                         && module.type_holds_reference(pl_base_ty, 0 as usize);
                                     let target_reach = if (pl.base as usize) < reach.len

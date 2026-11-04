@@ -1,7 +1,6 @@
 // name: Frame view stored through a &mut returned by a call, when that result is the last local
-// expected: known_gap
-// gap: storage_walk_zir and note_call_stores_zir index the 0-based locals with the 1-based Local.id, so when the call result dst is the last local the store through it (*dst = s) leaves stash's store summary empty and the escape is accepted; a dead `let _keep: &i32 = &n;` after dst makes the same program refused
-// observed: exit 77
+// expected: compile_reject
+// Storing a frame-owned view through a &mut returned by a call is rejected even when the call result is the function's last local.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;
