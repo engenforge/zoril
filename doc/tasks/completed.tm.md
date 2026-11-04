@@ -156,7 +156,7 @@ date: 2026-11-03
 
 - [x] +safety +tests Z-0054 Merge the `gap_40`–`gap_44` branch and add `known_gap` probes for the two newly confirmed escape holes
     > **Created:** 2026-11-03
-    > **Completed:** 2026-11-04 git:e4d7dbe
+    > **Completed:** 2026-11-04 git:8cc54e7
 
     - **Branch disposition (`claude/gallant-feynman-kiu6ru-gaps-40-44`, commit `f23bf57`):** **merge into `main` (do not discard).** Verified in a scratch worktree: `f23bf57` sits cleanly on `main` (`977f1f4`), adds `gap_40_local_mutref_field_escape`, `gap_41_callee_field_escape`, `gap_42_box_field_escape`, `gap_43_box_field_reset` and `gap_44_borrows_attr_reset`, updates `doc/spec/safety_model.md`, `doc/SAFETY.md` and `README.md`, and passes `check_safety_model.sh`, `check_safety_figures.sh`, `check_comment_noise.sh` and `run_safety_matrix.sh` (all five report `[SKIP]`). Optional cleanup while touching them: drop the unused `fn set_s` helper copied into `gap_40` and `gap_42`.
     - **New hole 1 (`gap_45_closure_mutref_field_escape`):** confirmed during Z-0047's second-model review; add with a Known gaps entry in `doc/spec/safety_model.md` (widening `gap_40`–`gap_43`'s route class to include a closure capturing `&mut` to a local) and updated counts in `doc/SAFETY.md` and `README.md`:
@@ -222,11 +222,11 @@ date: 2026-11-03
 
     - **Verification:** `sh scripts/run_safety_matrix.sh` (all seven report `[SKIP]`), `sh scripts/check_safety_model.sh`, `sh scripts/check_safety_figures.sh`, `make test`.
 
-    - **Done (2026-11-04):** `gap_40`–`gap_44` cherry-picked (`8f602d7`, `main` had moved past `977f1f4`), `gap_45` and `gap_46` added in `e4d7dbe` (both `known_gap`, exit 77), the unused `set_s` dropped from `gap_40`/`gap_42`; the figures are 460 probes, 24 `known_gap`. Checks: `sh scripts/run_safety_matrix.sh` 436/460 passed, 0 mismatches (24 `[SKIP]`), `check_safety_model.sh`, `check_safety_figures.sh` and `check_comment_noise.sh` pass; `make test` on the combined branch: 3215 run, 3215 passed, 0 failed, 52 skipped.
+    - **Done (2026-11-04):** `gap_40`–`gap_44` arrived through PR #20 (`f23bf57`) while this was open, so the duplicate cherry-pick was dropped in the rebase, `gap_45` and `gap_46` added in `e4d7dbe` (both `known_gap`, exit 77), the unused `set_s` dropped from `gap_40`/`gap_42`; the figures are 460 probes, 24 `known_gap`. Checks: `sh scripts/run_safety_matrix.sh` 436/460 passed, 0 mismatches (24 `[SKIP]`), `check_safety_model.sh`, `check_safety_figures.sh` and `check_comment_noise.sh` pass; `make test` on the combined branch: 3215 run, 3215 passed, 0 failed, 52 skipped.
 
 - [x] +safety +tests Z-0047 B1.1 Origin sets per local on ZIR, computed and dumped, with no rule using them
     > **Created:** 2026-11-03 **Split from:** Z-0009. **Depends:** Z-0006, Z-0054. **Check-in:** second-model review complete; ready to rebase and merge.
-    > **Completed:** 2026-11-04 git:9efdac7
+    > **Completed:** 2026-11-04 git:6a1fbc6
 
     - **Build:** in `src/check_zir.zrl`, beside the existing analyses and changing no accept/reject decision, a forward, flow-insensitive fixpoint giving every local `L` two origin sets (`doc/design/provenance.md` §3): `O(L)`, the origins of the addresses it holds, and `S(L)`, the origins of the storage it owns, over `Frame(L)`, `Param(i)` (bit 63 meaning "63 or later"), `Static` and `Unknown`; field-insensitive.
     - **Transfer:** every `ZirRvalue` form gets a rule, so an unhandled form fails the build (an `// exhaustive:` match). That covers `Use`, `Ref`, `RefMut`, `Call`, `CallPtr`, `StructLiteral`, `EnumVariant`, `EnumPayload`, `Tuple`, `Array`, `ArrayRepeat`, `Boxed`, `Cast`, `PtrFromInt`, `GlobalAddr`, `StringConst`, `FuncAddr` with its environment, `GetEnv`, `Syscall` and `Intrinsic`; the scalar forms yield nothing. Calls read the existing summaries (`ret_ties`, `ret_storage`, `storage_known`), and a `CallPtr` or summary-less call yields `Unknown`. A projected write `x.f = rv` (not through a dereference) adds to `x`.
