@@ -1,0 +1,38 @@
+// name: Parameter view stored through a field of a returned struct
+// expected: accept
+// The accepted twin of 416: storing a view of the caller's arena through a field of a call-returned struct (*dst.out = s) is legal because that storage outlives this frame.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct Slot {
+    out: &mut [i32],
+}
+
+fn pass_slot(h: Slot) -> Slot { return h; }
+fn stash(h: Slot, s: [i32]) {
+    let dst = pass_slot(h);
+    *dst.out = s;
+}
+
+fn f(out: &mut [i32], a: &Arena) {
+    let mut v = Vec::<i32>.new_in(a);
+    v.push(42);
+    stash(Slot { out: out }, v.as_slice());
+}
+
+fn main() -> i32 {
+    let a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => {
+            return 1;
+        }
+    };
+    let mut dest: [i32] = @slice(0 as *i32, 0);
+    f(&mut dest, &a);
+    if dest.len == 1 as usize && dest[0] == 42 {
+        return 0;
+    }
+    return 1;
+}
