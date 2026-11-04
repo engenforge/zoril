@@ -669,6 +669,7 @@ impl ZilParser {
                 os_ret_fresh: false,
                 os_edges: 0 as *mut u64,
                 os_edge_rows: 0 as usize,
+                os_depth: 0 as u32,
             };
             self.module.functions.push(f);
         }

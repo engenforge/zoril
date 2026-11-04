@@ -48,7 +48,7 @@ src/decimal.zrl	132	14	11	3
 src/diag.zrl	38	7	4	2
 src/driver.zrl	3	2	1	2
 src/driver/module.zrl	1197	196	84	11
-src/driver/state.zrl	266	31	14	8
+src/driver/state.zrl	287	42	21	8
 src/driver/types.zrl	712	63	30	8
 src/fmt/doc.zrl	222	32	15	8
 src/fmt/fmt.zrl	321	13	8	5
