@@ -1,0 +1,17 @@
+// gap_11: the closure value holds O(env), the environment struct, so a call through it reaches the
+// captures: the call stores the Frame view `routed` into `out`'s Param (§3, _Closure environments_).
+// ORIGINS: escape cl O={Frame(_10)} S={}
+// flags: --provenance
+// EXPECT: unknown-call store rule
+// expected compile fail
+fn escape(out: &mut [i32]) {
+    let data = [42, 0];
+    let routed: [i32] = &data;
+    let mut cl = || { *out = routed; };
+    cl();
+}
+fn main() -> i32 {
+    let mut d: [i32] = @slice(0 as *i32, 0);
+    escape(&mut d);
+    return 0;
+}

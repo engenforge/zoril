@@ -1193,15 +1193,28 @@ impl Driver {
             &zir_func,
             self.builder.current_func_idx as u32
         );
-        // Computed for every body although no rule reads it yet, so its cost is the one the rules
-        // will add (doc/design/provenance.md §6).
+        // Computed for every body; `--provenance` also applies its rules (doc/design/provenance.md
+        // §3), beside the old ones until Z-0012.
         let sret_name = self.intern_table.intern("__sret");
+        // An `unsafe fn` answers for its addresses to its callers (its CALLER OBLIGATION), and an
+        // address it makes from an integer is Unknown, which the rules always refuse.
+        let rules = if self.module.functions[self.builder.current_func_idx as usize].is_unsafe {
+            check_zir::PROVENANCE_OFF
+        } else {
+            self.provenance
+        };
         let origins = check_zir::compute_origins_zir(
             self.scratch_arena,
             self.module,
             &zir_func,
-            sret_name
+            sret_name,
+            self.intern_table,
+            rules,
+            self.file_path
         );
+        if origins.errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
+            self.had_error = true;
+        }
         if self.emit_origins && current_source_file == self.target_source_file {
             check_zir::print_origins(&origins, &zir_func, self.module, self.intern_table);
         }

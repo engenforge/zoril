@@ -1,0 +1,18 @@
+// `(*b).s = arena_slice` is a projected write into the box: O(b) grows by the view, and the store
+// is not through a pointer, so no destination memory (and no Static from "lit") is consulted.
+// ORIGINS: main b O={Frame(_2), Frame(a), Static} S={Frame(_24)}
+// flags: --provenance
+// expected exit 0
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct S { s: [u8] }
+fn main() -> i32 {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 2; } };
+    let mut bytes = Vec::<u8>.new_in(&a);
+    bytes.push(42 as u8);
+    let mut b = box S { s: "lit" };
+    (*b).s = bytes.as_slice();
+    return (*b).s[0] as i32 - 42;
+}

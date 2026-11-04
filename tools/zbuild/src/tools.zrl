@@ -249,6 +249,11 @@ pub fn resolve_tools(
     if opts.checked {
         id_input.push_str(" --checked");
     }
+    // The rules only refuse, but a cached object compiled without them was never checked by them.
+    if opts.provenance.len > 0 as usize {
+        id_input.push_str(" ");
+        id_input.push_str(opts.provenance);
+    }
     // A hosted build names the entry differently, so it never shares an object with a default one.
     if opts.hosted {
         id_input.push_str(" --hosted");

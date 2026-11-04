@@ -1,0 +1,18 @@
+// A by-value box parameter is this frame's: `(*b).s = view` writes into the box itself, so its
+// destination is no Param(0) and the store rule does not refuse a frame view there. The old
+// buffer-escape rule refuses it (it counts a by-value parameter as outliving the frame); Z-0012
+// deletes that rule and flips this test to `expected exit 0`.
+// ORIGINS: f b O={Param(0), Frame(_2)} S={Frame(b)}
+// flags: --provenance
+// EXPECT: cannot store 'v'
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+struct S { s: [i32] }
+fn f(mut b: Box<S>) -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    (*b).s = v.as_slice();
+    return (*b).s[0];
+}
+fn main() -> i32 { return f(box S { s: @slice(0 as *i32, 0) }) - 42; }

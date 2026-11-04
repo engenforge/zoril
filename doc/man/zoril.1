@@ -5,7 +5,7 @@
 .nh
 .ad l
 .\" Begin generated content:
-.TH "zoril" "1" "2026\-11\-03"
+.TH "zoril" "1" "2026\-11\-04"
 .PP
 .SH NAME
 .PP
@@ -128,6 +128,11 @@ Name the program'\&s entry \fBzoril_main\fR instead of \fBmain\fR, for a program
 \fB\-\-checked\fR
 .RS 4
 Developer option, not a user\-facing mode.\& Instrument the emitted program for memory\-safety testing: released arena space stays poisoned and is never handed out again, a local'\&s slot is poisoned where its scope ends, a dropped value is poisoned and a second drop of it traps (exit 134), and a heap block released twice traps instead of unmapping whatever lives there now.\& A release build contains none of it \- the instrumentation is emitted only under this flag, so the emitted ZIL of a program does not change \- and it is not a safety mode: nothing about what the compiler accepts changes.\& See \fBmake test\-checked\fR in \fBdoc/developer_guide.\&md\fR.\&
+.PP
+.RE
+\fB\-\-provenance\fR, \fB\-\-provenance=warn\fR
+.RS 4
+Developer option, off by default, until the rules replace the old ones.\& Also apply the store and return rules of the origin sets (\fBdoc/design/provenance.\&md\fR): a store through a reference, into a closure capture or into a global, whose destination outlives the frame, takes no value holding an address of this frame; a returned value holds none; a call applies the same rule to the callee'\&s store summary, and a call with no summary to every argument against every other.\& The rules are added to the existing checks and never remove a rejection.\& With \fB=warn\fR each refusal is a \fBwarning:\fR line and the compile does not fail on it, so a compile that succeeds lists what the new rules refuse and the old ones accept.\& An \fBunsafe fn\fR body is not checked.\&
 .PP
 .RE
 \fB\-\-\fR

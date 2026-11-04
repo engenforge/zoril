@@ -135,6 +135,9 @@ struct Options {
     // the stdlib's CHECKED_BUILD constant reads as true, so released arena space stays poisoned
     // and is never reused, and the lowering poisons a dead local's slot and a dropped value.
     checked: bool,
+    // `--provenance` (1) or `--provenance=warn` (2): the store and return rules of
+    // doc/design/provenance.md §3, added to the old ones (check_zir::PROVENANCE_*).
+    provenance: u32,
     // `--hosted`: the program is linked into a libc process (see the HOSTED branch of rt/runtime.s). The only
     // difference in the output is the entry's name, `zoril_main` instead of `main`: the hosted
     // runtime defines `main` itself and calls it.
@@ -192,6 +195,13 @@ fn print_usage() {
     );
     print("                           Not a safety mode; release builds are unaffected\n");
     print(
+        "  --provenance[=warn]      Developer option: also apply the origin-set store and return\n"
+    );
+    print(
+        "                           rules (doc/design/provenance.md); =warn reports their refusals\n"
+    );
+    print("                           as warnings that do not fail the compile\n");
+    print(
         "  --hosted                 Link the program into a libc process: name its entry zoril_main\n"
     );
     print(
@@ -241,7 +251,7 @@ fn levenshtein(a: [u8], b: [u8]) -> u64 {
 
 fn suggest_option(arg: [u8]) -> [u8] {
     if arg == "--" { return ""; }
-    let opts: [[u8]; 25] = [
+    let opts: [[u8]; 26] = [
         "-h",
         "--help",
         "-V",
@@ -264,6 +274,7 @@ fn suggest_option(arg: [u8]) -> [u8] {
         "-W",
         "-A",
         "--checked",
+        "--provenance",
         "--hosted",
         "--no-verify",
         "--interproc-summary"
@@ -271,7 +282,7 @@ fn suggest_option(arg: [u8]) -> [u8] {
     let mut best_dist = 99 as u64;
     let mut best_opt: [u8] = "";
     let mut i = 0 as usize;
-    while i < 25 as usize {
+    while i < 26 as usize {
         let opt = opts[i];
         let d = levenshtein(arg, opt);
         if d < best_dist {
@@ -313,7 +324,7 @@ fn parse_args(argc: i32, argv: **u8, table: &mut InternTable, arena: *mut ArenaH
         include_ids: unsafe { Vec::<u32>.new_in_raw(arena) },
         bad_args: false,
         no_verify: false, interproc_summary: false, interproc_stats: false,
-        show_help: false, checked: false, hosted: false,
+        show_help: false, checked: false, provenance: 0 as u32, hosted: false,
     };
     let mut end_of_options = false;
     let mut i = 1 as i32;
@@ -377,6 +388,10 @@ fn parse_args(argc: i32, argv: **u8, table: &mut InternTable, arena: *mut ArenaH
             unsafe { VERBOSE = true; }
         } else if !end_of_options && arg == "--checked" {
             o.checked = true;
+        } else if !end_of_options && arg == "--provenance" {
+            o.provenance = 1 as u32;
+        } else if !end_of_options && arg == "--provenance=warn" {
+            o.provenance = 2 as u32;
         } else if !end_of_options && arg == "--hosted" {
             o.hosted = true;
         } else if !end_of_options && arg == "--no-verify" {
@@ -561,6 +576,7 @@ fn compile(
         (*driver).compile_only = compile_only;
         (*driver).target_source_file = target_source_file;
         (*driver).checked = o.checked;
+        (*driver).provenance = o.provenance;
         (*driver).hosted = o.hosted;
         (*driver).collect_zir_stats = o.emit_zir_stats;
         (*driver).emit_origins = o.emit_origins;

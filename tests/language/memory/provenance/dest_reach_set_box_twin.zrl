@@ -1,0 +1,19 @@
+// The `Box` twin of `v.push(arena_str)`: a box is not a leaf handle, so `&mut b` does not follow
+// O(b), where "lit" put Static, and the store stays accepted (§3, _Destination reach_).
+// flags: --provenance
+// expected exit 0
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct S { s: [u8] }
+fn set_box(b: &mut Box<S>, s: [u8]) { (**b).s = s; }
+fn main() -> i32 {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 2; } };
+    let mut bytes = Vec::<u8>.new_in(&a);
+    bytes.push(42 as u8);
+    let arena_str = bytes.as_slice();
+    let mut b = box S { s: "lit" };
+    set_box(&mut b, arena_str);
+    return (*b).s[0] as i32 - 42;
+}
