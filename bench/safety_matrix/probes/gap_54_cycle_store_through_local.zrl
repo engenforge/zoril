@@ -1,0 +1,38 @@
+// name: A recursive cycle stores a frame view into a caller's local, which is then stored out
+// expected: known_gap
+// gap: f, g and h call one another; g writes the view into f's local w, and f stores w.s through out; the old storage walk has no fixpoint over the cycle (gap_28's class), so leak's call f(out, v.as_slice(), 2) is accepted; closed under --provenance by Z-0059's fixpoint, which gives f the edge Param(1) -> Param(0)
+// observed: exit 77
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct W { s: [i32] }
+fn f(out: &mut [i32], view: [i32], n: i32) {
+    let mut w = W { s: @slice(0 as *i32, 0) };
+    g(&mut w, view, n);
+    *out = w.s;
+}
+fn g(w: &mut W, view: [i32], n: i32) {
+    w.s = view;
+    h(w, view, n);
+}
+fn h(w: &mut W, view: [i32], n: i32) {
+    if n > 0 {
+        let mut dummy: [i32] = @slice(0 as *i32, 0);
+        f(&mut dummy, view, n - 1);
+    }
+}
+fn escape_storer(out: &mut [i32]) {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    f(out, v.as_slice(), 2);
+}
+fn main() -> i32 {
+    let mut dest: [i32] = @slice(0 as *i32, 0);
+    escape_storer(&mut dest);
+    let a2 = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v2 = Vec::<i32>.new_in(&a2);
+    v2.push(77);
+    return dest[0];
+}
