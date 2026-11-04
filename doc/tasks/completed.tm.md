@@ -153,3 +153,93 @@ date: 2026-11-03
         - it needs a new compiler flag;
         - then every new rejection across the tree has to be classified;
         - all of it in `src/`, which stage1 must still compile.
+
+- [x] +safety +tests Z-0054 Merge the `gap_40`–`gap_44` branch and add `known_gap` probes for the two newly confirmed escape holes
+    > **Created:** 2026-11-03
+    > **Completed:** 2026-11-04 git:e4d7dbe
+
+    - **Branch disposition (`claude/gallant-feynman-kiu6ru-gaps-40-44`, commit `f23bf57`):** **merge into `main` (do not discard).** Verified in a scratch worktree: `f23bf57` sits cleanly on `main` (`977f1f4`), adds `gap_40_local_mutref_field_escape`, `gap_41_callee_field_escape`, `gap_42_box_field_escape`, `gap_43_box_field_reset` and `gap_44_borrows_attr_reset`, updates `doc/spec/safety_model.md`, `doc/SAFETY.md` and `README.md`, and passes `check_safety_model.sh`, `check_safety_figures.sh`, `check_comment_noise.sh` and `run_safety_matrix.sh` (all five report `[SKIP]`). Optional cleanup while touching them: drop the unused `fn set_s` helper copied into `gap_40` and `gap_42`.
+    - **New hole 1 (`gap_45_closure_mutref_field_escape`):** confirmed during Z-0047's second-model review; add with a Known gaps entry in `doc/spec/safety_model.md` (widening `gap_40`–`gap_43`'s route class to include a closure capturing `&mut` to a local) and updated counts in `doc/SAFETY.md` and `README.md`:
+
+    ```zoril
+    import "mem.zrl";
+    import "vec.zrl";
+    use mem::Arena;
+    use vec::Vec;
+    struct W { s: [i32], t: i32 }
+    fn mk_w() -> W { return W { s: @slice(0 as *i32, 0), t: 0 }; }
+    fn f(out: &mut [i32]) {
+        let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+        let mut v = Vec::<i32>.new_in(&a);
+        v.push(42);
+        let mut w = mk_w();
+        {
+            let s = v.as_slice();
+            let r = &mut w;
+            let mut cl = || { r.s = s; };
+            cl();
+        }
+        *out = w.s;
+    }
+    fn main() -> i32 {
+        let mut dest: [i32] = @slice(0 as *i32, 0);
+        f(&mut dest);
+        let a2 = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+        let mut v2 = Vec::<i32>.new_in(&a2);
+        v2.push(77);
+        return dest[0];
+    }
+    ```
+
+    - **New hole 2 (`gap_46_call_ret_mutref_off_by_one`):** `storage_walk_zir` and `note_call_stores_zir` index 0-based `locals` with 1-based `Local.id`, so when `dst` is the last local, `pl_base_ty` reads out-of-bounds as `0`, `base_is_ref` is false, and `stash`'s store summary stays empty (exits 77 on `main`, whereas adding a dead `let _keep: &i32 = &n;` immediately after `dst` is refused):
+
+    ```zoril
+    import "mem.zrl";
+    import "vec.zrl";
+    use mem::Arena;
+    use vec::Vec;
+    struct Slot { out: &mut [i32] }
+    fn unwrap_slot(h: Slot) -> &mut [i32] { return h.out; }
+    fn stash(h: Slot, s: [i32]) {
+        let dst = unwrap_slot(h);
+        *dst = s;
+    }
+    fn f(out: &mut [i32]) {
+        let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+        let mut v = Vec::<i32>.new_in(&a);
+        v.push(42);
+        stash(Slot { out: out }, v.as_slice());
+    }
+    fn main() -> i32 {
+        let mut dest: [i32] = @slice(0 as *i32, 0);
+        f(&mut dest);
+        let a2 = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+        let mut v2 = Vec::<i32>.new_in(&a2);
+        v2.push(77);
+        return dest[0];
+    }
+    ```
+
+    - **Verification:** `sh scripts/run_safety_matrix.sh` (all seven report `[SKIP]`), `sh scripts/check_safety_model.sh`, `sh scripts/check_safety_figures.sh`, `make test`.
+
+    - **Done (2026-11-04):** `gap_40`–`gap_44` cherry-picked (`8f602d7`, `main` had moved past `977f1f4`), `gap_45` and `gap_46` added in `e4d7dbe` (both `known_gap`, exit 77), the unused `set_s` dropped from `gap_40`/`gap_42`; the figures are 460 probes, 24 `known_gap`. Checks: `sh scripts/run_safety_matrix.sh` 436/460 passed, 0 mismatches (24 `[SKIP]`), `check_safety_model.sh`, `check_safety_figures.sh` and `check_comment_noise.sh` pass; `make test` on the combined branch: 3215 run, 3215 passed, 0 failed, 52 skipped.
+
+- [x] +safety +tests Z-0047 B1.1 Origin sets per local on ZIR, computed and dumped, with no rule using them
+    > **Created:** 2026-11-03 **Split from:** Z-0009. **Depends:** Z-0006, Z-0054. **Check-in:** second-model review complete; ready to rebase and merge.
+    > **Completed:** 2026-11-04 git:9efdac7
+
+    - **Build:** in `src/check_zir.zrl`, beside the existing analyses and changing no accept/reject decision, a forward, flow-insensitive fixpoint giving every local `L` two origin sets (`doc/design/provenance.md` §3): `O(L)`, the origins of the addresses it holds, and `S(L)`, the origins of the storage it owns, over `Frame(L)`, `Param(i)` (bit 63 meaning "63 or later"), `Static` and `Unknown`; field-insensitive.
+    - **Transfer:** every `ZirRvalue` form gets a rule, so an unhandled form fails the build (an `// exhaustive:` match). That covers `Use`, `Ref`, `RefMut`, `Call`, `CallPtr`, `StructLiteral`, `EnumVariant`, `EnumPayload`, `Tuple`, `Array`, `ArrayRepeat`, `Boxed`, `Cast`, `PtrFromInt`, `GlobalAddr`, `StringConst`, `FuncAddr` with its environment, `GetEnv`, `Syscall` and `Intrinsic`; the scalar forms yield nothing. Calls read the existing summaries (`ret_ties`, `ret_storage`, `storage_known`), and a `CallPtr` or summary-less call yields `Unknown`. A projected write `x.f = rv` (not through a dereference) adds to `x`.
+    - **Ownership:** whether a type owns storage comes from its structure (it contains a `Box`, an owning raw pointer, or a type that does), never `is_collection_type_name`. By-value parameters are locals (`Frame`); the referent of a reference parameter is `Param(i)`.
+    - **Settle the open question** of the design note §3, a read through a reference. The note suggests that a read through `r` yields `O(L)` for each `Frame(L)` in `O(r)`, and stays `Param` or `Unknown` otherwise. Decide it with probes, and say in `doc/design/provenance.md` which rule holds and what Z-0045's reproducer gives under it.
+    - **Observe it:** a developer option, for example `--emit-origins`, prints each function's `O` and `S` per local, so the sets can be tested without a rule. Golden tests for the shapes the note names: a field write, a chain of ten copies, an enum payload and its `match` binding, a `fn`-value call, a closure capture, `Vec::new_in(&a)`, a by-value `Vec` parameter, a tuple-carried destination and value. Each golden test checks one local's sets, so a change shows as a diff.
+    - **Constraints:** `src/` is compiled by stage1, so use only what the pinned stage1 accepts. Build warning-free. Measure the analysis's time on `src/`: it runs on every compile even with no rule reading it, so record the cost.
+    - **Verification:** `make test`, `make preflight-changed`, and the golden tests. Nothing may be newly accepted or refused: the rejection differential shows 0 and 0.
+    - **Built on branch `claude/gallant-feynman-kiu6ru` (2026-11-03, `e740616`..`e8fd27c`):** `compute_origins_zir` in `src/check_zir.zrl`, called from `run_body_passes_in_scratch` (`src/driver/module.zrl`) after `compute_ret_storage_zir`, read by no rule; `--emit-origins` option (`zoril --help`, `doc/man/zoril.1.scd`); 18 golden tests in `tests/language/memory/origins/` checked by `scripts/test_origins.sh`; open question settled in `doc/design/provenance.md` §3 (`os_through_plus` on tied reference arguments); median compile cost +68 ms (+2.8%) on `src/main.zrl` with byte-identical ZIL; `make test` (3215/3215) and `PREFLIGHT_BASE=705c037 make preflight-changed` green (31/31 mutations caught, reject-diff 0 newly accepted / 0 newly refused of 69,093 programs).
+    - **Second-model review (2026-11-03, Argon on `e8fd27c`):**
+        1. `scripts/test_origins.sh` and static gates confirmed. Both take-outs reproduced: reading tied references with `os_reach_all` fails all four `read_through_*` golden tests (`Frame(c)`/`Frame(v)`/`Frame(a), Frame(b)`); reading `EnumPayload` as `Use` fails `match_binding.zrl` (`item O={}`) and `vec_new_in_local.zrl`.
+        2. Gap-probe sets confirmed (`gap_13`, `gap_16`, `gap_32`, plus `gap_40`–`gap_42` all carry `Frame` or `Unknown`), **except two refusal claims refuted:** `gap_07` stays open under Z-0048 because Z-0048 still reads `stash_pair`'s old `i != j` summary (closes in Z-0010), and `gap_11` is **not** closed by `{Env}` alone because `_closure_0` has `out O={Env}` and `routed O={Env}` (no `Frame` or `Unknown`), identical to the safe twin `fn safe(out: &mut [i32], view: [i32]) { let mut cl = || { *out = view; }; cl(); }`.
+        3. Sibling routes: reborrow `&*r`, local `&c` method receiver (`r.view()` vs `r.field_ref()`), and direct/generic trait methods give clean `O={Param(0)}`; a by-value struct holding `&c` (`take_holder(h)`) over-conservatively retains `Frame(c)` (`os_reach_all`); `&&T` retains `Frame(c)` as required by a 1-bit `ret_ties` mask; and a zero-arg closure writing through a captured `&mut w` (`gap_45` in Z-0054) leaves `w O={}` because `CallPtr(_, args)` ignores `callee` and `FuncAddr(_, env)` adds `Frame(env_ptr)` instead of copying `O(env)`.
+        4. Confirmed Claude's three flags and the `locals[id]` lead: (a) `os_owns` marks `Lexer` as an owner (`from_byval_lexer` gives `view O={Param(0), Frame(lex)}`, untied `Lexer` gives `O={Frame(_1)}`), assigned to step 1 of Z-0048; (b) recursive cycles leave `storage_known = false` and spread `Unknown` (14 sites in 7/22 functions of `src/main.zrl`), so Z-0049 moves after Z-0010/Z-0057; (c) 1-based `locals[id]` in `note_call_stores_zir` and `storage_walk_zir` is an active `exit 77` hole (`gap_46` in Z-0054), assigned to Z-0056.
+    - **Branch disposition (`claude/gallant-feynman-kiu6ru`, `e8fd27c`):** **rebase onto `main` (after Z-0054) and merge without reworking `src/check_zir.zrl` first** (do not discard; no rule reads `O`/`S` yet, so merging preserves the verified 0/0 differential). During the rebase: (1) resolve `doc/tasks/active.tm.md` by keeping `main`'s updated task list with Z-0047 marked `[x]` complete (`> **Completed:** 2026-11-03 git:<sha>`), (2) reconcile `doc/SAFETY.md` §5 figures (`sh scripts/check_safety_figures.sh`) with §6 probe/gap counts from Z-0054, (3) correct the `gap_07`/`gap_11` bullet if carrying `e8fd27c`'s commit message text, (4) run `make test` (`bench/fuzz/README.md` goes stale for `src/`), merge, and run `tm sweep` in a commit of its own to rotate Z-0047 to `completed.tm.md`.
+    - **Done (2026-11-04):** rebased onto `main` by cherry-picking `e740616` and `92be871` (`f76d2a8`, `9efdac7`); the two task-note commits were dropped because `main` already carries the review findings, and no `src/check_zir.zrl` rework was done. `doc/SAFETY.md` §5 figures match (`check_safety_figures.sh`). Checks: `make test` 3215 run, 3215 passed, 0 failed, 52 skipped; `make preflight-changed` exit 0 (mutations caught, fixpoint, 1170 run / 1170 passed). The rejection differential (`scripts/check_reject_diff.sh 6d0747b`) did **not** complete: three runs were cut off when the cloud VM restarted, so no 0/0 result is recorded. What exists instead is the argument that no rule reads `O`/`S` and the byte-identical ZIL on `src/main.zrl`. Rerun it on a stable host before relying on the 0/0 claim. `bench/fuzz/README.md` is stale for `src/`. The benchmark files the run wrote under `bench/` were deleted.
