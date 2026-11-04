@@ -1,0 +1,17 @@
+// expected compile fail
+// EXPECT: call store rule
+// Parameters past 62 share an overflow bit in the interface: the store of parameter 64 through 65.
+import "lib_summary.zrl";
+use lib_summary::H;
+
+fn f(out: &mut H) {
+    let loc = [1, 2];
+    let z = [0, 0];
+    lib_summary::p65(&z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &z, &loc, out);
+}
+
+fn main() -> i32 {
+    let mut h = H { r: @slice(0 as *i32, 0), t: @slice(0 as *i32, 0) };
+    f(&mut h);
+    return 0;
+}

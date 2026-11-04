@@ -214,6 +214,42 @@ impl InterfacePrinter {
         self.write_dec(unsafe { (*p_f).stores_storage });
         self.write(", into = ");
         self.write_dec(unsafe { (*p_f).store_targets });
+        // The origin-set summary (doc/design/provenance.md §3, _The summary_): what `--provenance`
+        // reads at a call, the pairwise store edges and the result's origins, which the flat
+        // masks above cannot say. Absent when the body has none (an `unsafe fn`), and an importer
+        // then keeps the masks.
+        if unsafe { (*p_f).os_known } {
+            self.write(", ret_addr = ");
+            self.write_dec(unsafe { (*p_f).os_ret_addr });
+            self.write(", ret_contents = ");
+            self.write_dec(unsafe { (*p_f).os_ret_contents });
+            self.write(", ret_flags = ");
+            self.write_dec(unsafe { (*p_f).os_ret_flags });
+            self.write(", ret_fresh = ");
+            if unsafe { (*p_f).os_ret_fresh } { self.write("true"); } else { self.write("false"); }
+            self.write(", decl_stores = ");
+            self.write_dec(unsafe { (*p_f).stores_declared_from });
+            self.write(", decl_into = ");
+            self.write_dec(unsafe { (*p_f).stores_declared_to });
+            let rows = unsafe { (*p_f).os_edge_rows };
+            if rows > 0 as usize {
+                // SAFETY: the function's own summary table, OS_EDGE_ROWS rows of four u64 in the
+                // main arena (check_zir::store_origin_summary).
+                let table = unsafe { @slice((*p_f).os_edges, rows * 4 as usize) };
+                let mut r = 0 as usize;
+                while r < rows {
+                    self.write(", edge = ");
+                    self.write_dec(table[r * 4 as usize]);
+                    self.write(", edge_addr = ");
+                    self.write_dec(table[r * 4 as usize + 1 as usize]);
+                    self.write(", edge_contents = ");
+                    self.write_dec(table[r * 4 as usize + 2 as usize]);
+                    self.write(", edge_global = ");
+                    self.write_dec(table[r * 4 as usize + 3 as usize]);
+                    r = r + 1 as usize;
+                }
+            }
+        }
         self.write(")]\n");
         // An explicit #[borrows(..)] is part of the signature's contract: importers check
         // their calls against it. (The default rule is derived from the signature itself.)

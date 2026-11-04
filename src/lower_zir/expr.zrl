@@ -3099,6 +3099,7 @@ impl ZirLowerer {
             summary_into: 0 as u64,
             summary_ret_stack: false,
             summary_alloc: 0 as usize,
+            summary_os: @slice(0 as *mut u64, 0 as usize),
             has_borrows: false,
             borrows: @slice(0 as *mut u32, 0 as usize),
             has_stores: false,

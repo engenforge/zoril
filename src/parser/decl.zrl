@@ -37,6 +37,7 @@ pub struct Attribute {
     pub summary_into: u64,
     pub summary_ret_stack: bool,
     pub summary_alloc: usize,
+    pub summary_os: [u64],
     // `#[export]`: an interface says this body-less extern declaration is a Zoril function with a
     // C ABI whose body lives in another module, so a call needs no `unsafe`.
     pub is_export: bool,
@@ -72,6 +73,7 @@ impl Parser {
             summary_into: 0 as u64,
             summary_ret_stack: false,
             summary_alloc: 0 as usize,
+            summary_os: @slice(0 as *mut u64, 0 as usize),
             is_export: false,
             saw_storage: false,
             saw_stores: false,
@@ -184,9 +186,16 @@ impl Parser {
     }
 
     // `(key = value, ..)` of a `#[summary]` the compiler wrote into a `.zri`; unknown keys are
-    // skipped, so an older compiler reads a newer interface.
+    // skipped, so an older compiler reads a newer interface. The origin-set keys (`ret_addr`,
+    // `ret_contents`, `ret_flags`, `ret_fresh`, `decl_stores`, `decl_into`, and per store edge
+    // `edge`, `edge_addr`, `edge_contents`, `edge_global`, in that order) become `attr.summary_os`;
+    // an interface without `ret_addr` carries none, and its importer keeps the older masks.
     fn parse_summary_args(self: &mut Parser, attr: &mut Attribute) {
         self.next_token();
+        let mut saw_os = false;
+        let mut os_head = unsafe { Vec::<u64>.new_in_raw(self.arena) };
+        let mut os_edges = unsafe { Vec::<u64>.new_in_raw(self.arena) };
+        let mut head = [0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64];
         while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
             let key_id = self.cur.token.get_ident_id();
             self.expect(Token.Ident(0 as u32));
@@ -217,6 +226,22 @@ impl Parser {
                 attr.saw_storage = true;
             } else if key == "alloc" {
                 attr.summary_alloc = int_val as usize;
+            } else if key == "ret_addr" {
+                head[0] = int_val;
+                saw_os = true;
+            } else if key == "ret_contents" {
+                head[1] = int_val;
+            } else if key == "ret_flags" {
+                head[2] = int_val;
+            } else if key == "decl_stores" {
+                head[4] = int_val;
+            } else if key == "decl_into" {
+                head[5] = int_val;
+            } else if key == "edge"
+                || key == "edge_addr"
+                || key == "edge_contents"
+                || key == "edge_global" {
+                os_edges.push(int_val);
             } else {
                 is_int = false;
             }
@@ -225,12 +250,36 @@ impl Parser {
             } else if key == "ret_stack" {
                 attr.summary_ret_stack = self.cur.token.get_bool_val();
                 self.expect(Token.Bool(false));
+            } else if key == "ret_fresh" {
+                if self.cur.token.get_bool_val() { head[3] = 1 as u64; }
+                self.expect(Token.Bool(false));
             } else {
                 self.next_token();
             }
             if self.is_kind(TokenKind.Comma) { self.next_token(); }
         }
         self.expect(Token.RParen);
+        // The edge keys are read in the order the compiler writes them, four to a row.
+        if saw_os && os_edges.len() % 4 as usize != 0 as usize {
+            self.report_error(
+                "malformed #[summary]: an edge needs edge, edge_addr, edge_contents, edge_global",
+                self.cur.span
+            );
+        }
+        if saw_os {
+            let mut h = 0 as usize;
+            while h < 6 as usize { os_head.push(head[h]); h = h + 1 as usize; }
+            let ed = os_edges.as_slice();
+            let mut e = 0 as usize;
+            while e + 4 as usize <= ed.len {
+                os_head.push(ed[e]);
+                os_head.push(ed[e + 1 as usize]);
+                os_head.push(ed[e + 2 as usize]);
+                os_head.push(ed[e + 3 as usize]);
+                e = e + 4 as usize;
+            }
+            attr.summary_os = os_head.as_slice();
+        }
     }
 
     // `<T, U: Bound + Other>`, or none.
@@ -351,6 +400,7 @@ impl Parser {
             has_storage: attr.saw_storage && attr.saw_stores && attr.saw_into,
             summary_ret_stack: attr.summary_ret_stack,
             summary_alloc: attr.summary_alloc,
+            summary_os: attr.summary_os,
             has_borrows: attr.has_borrows,
             borrows: attr.borrows,
             has_stores: attr.has_stores,
@@ -511,6 +561,7 @@ impl Parser {
             summary_into: 0 as u64,
             summary_ret_stack: false,
             summary_alloc: 0 as usize,
+            summary_os: @slice(0 as *mut u64, 0 as usize),
             has_storage: false,
             has_borrows: false,
             borrows: @slice(0 as *mut u32, 0 as usize),
