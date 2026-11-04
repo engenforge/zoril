@@ -1,0 +1,23 @@
+// name: Arena reset after a field write into a Box's contents
+// expected: known_gap
+// gap: a slice of a Vec in arena a, written into a field of a Box's contents ((*b).s = v.as_slice()), is not held by the box: a.reset() is accepted while (*b).s is read afterwards; the same program with b a plain local struct is refused at the reset (cannot mutably borrow 'a')
+// observed: exit 77
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct W { s: [i32], t: i32, }
+fn mk() -> W { return W { s: @slice(0 as *i32, 0), t: 0 }; }
+fn set_s(w: &mut W, s: [i32]) { w.s = s; }
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let mut b = box mk();
+    (*b).s = v.as_slice();
+    a.reset();
+    let mut v2 = Vec::<i32>.new_in(&a);
+    v2.push(77);
+    return (*b).s[0];
+}
