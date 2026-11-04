@@ -6435,8 +6435,9 @@ fn os_edge_effects(
     let tv = os_t(c, OS_T_SV);
     let tm = os_t(c, OS_T_W);
     let ed = os_t(c, OS_T_ED);
-    // SAFETY: store_origin_summary allocated EDGES with ROWS rows of four u64 in the main arena,
-    // which outlives every body's checks.
+    // SAFETY: EDGES has ROWS rows of four u64: store_origin_summary's table in the main arena,
+    // which outlives every body's checks, or null with zero rows for a callee in a recursive cycle
+    // that has no summary yet (os_call), whose empty slice is never indexed.
     let table = unsafe { @slice(edges, rows * 4 as usize) };
     let mut refused = false;
     let mut r = 0 as usize;
@@ -6499,7 +6500,8 @@ fn os_edge_effects(
 
 // The smallest lowering depth among FUNC's direct callees that are still being lowered and have
 // no summary yet (ILFunction.os_depth), 0xffffffff when there is none: such a call closes a
-// recursive cycle through a body on the driver's stack (Z-0059).
+// recursive cycle through a body on the driver's stack (Z-0059). The condition is os_call's for
+// giving such a callee an empty summary; the two must stay the same.
 pub fn zir_open_call_depth(module: &ILModule, func: &ZirFunction) -> u32 {
     let mut low = 0xffffffff as u32;
     for b in (*func).blocks {
@@ -6676,7 +6678,8 @@ fn os_call(
         if !f.os_known && f.os_depth != 0 as u32 {
             // A callee still being lowered: this body is in a recursive cycle with it. Its summary
             // starts empty and grows with the cycle's fixpoint (Z-0059), which rechecks this body
-            // with the final summaries; the rules are deferred until then.
+            // with the final summaries; the rules are deferred until then. The driver finds such
+            // calls before this pass with zir_open_call_depth, which must test the same condition.
             body = true;
             known = true;
             storage = 0 as u64;
