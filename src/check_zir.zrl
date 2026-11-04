@@ -6529,7 +6529,11 @@ pub fn store_origin_summary(
         }
         i = i + 1 as usize;
     }
+    // SAFETY: ARENA is the main arena, which outlives every body's checks (the scratch arena of
+    // the sets is reset after each body); the block holds `rows * 4` u64, and the slice covers
+    // exactly those.
     let out = unsafe { zoril_allocator_alloc(arena, rows * 32 + 8) as *mut u64 };
+    // SAFETY: OUT was just allocated above with room for `rows * 4` u64.
     let dst = unsafe { @slice(out, rows * 4 as usize) };
     let mut n = 0 as usize;
     i = 0 as usize;
@@ -6602,7 +6606,11 @@ fn os_call(
             body = true;
             known = true;
             storage = f.os_ret_addr;
-            ties = f.os_ret_contents;
+            // A declared `#[borrows(..)]` adds to what the body proves, as `#[stores(..)]` below
+            // does, until Z-0011 checks the two against each other: a copy through a bare `extern`
+            // (`memcpy` in `Vec.clone_in`) is invisible to the body, and a declaration may be wider
+            // than it. A narrowing `#[borrows()]` adds nothing, so it no longer launders a tie.
+            ties = f.os_ret_contents | (if f.has_borrows { f.ret_ties } else { 0 as u64 });
             ret_flags = f.os_ret_flags;
             ret_fresh = f.os_ret_fresh;
             edges = f.os_edges;
@@ -6942,6 +6950,8 @@ pub fn compute_origins_zir(
         file: file,
         span: (*func).span,
         errors: 0 as u32,
+        // SAFETY: a block of OS_EDGE_ROWS * 3 u64 in ARENA, the body's scratch arena, which lives
+        // as long as these sets; it is zeroed below before any read.
         edges: unsafe {
             @slice(
                 zoril_allocator_alloc(arena, OS_EDGE_ROWS * 3 * 8) as *mut u64,

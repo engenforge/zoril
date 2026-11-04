@@ -101,7 +101,7 @@ Print a census of the ZIR constructs and CFG shape the input lowers to, one line
 .RE
 \fB\-\-emit\-origins\fR
 .RS 4
-Developer option.\& Print the origin sets of every function the input file defines \- for each local, the origins of the addresses it holds (O) and of the storage it owns (S), as described in \fBdoc/design/provenance.\&md\fR \- and exit without emitting ZIL; the exit status is the compile'\&s verdict.\& No rule reads the sets yet.\& Used by \fBscripts/test_origins.\&sh\fR.\&
+Developer option.\& Print the origin sets of every function the input file defines \- for each local, the origins of the addresses it holds (O) and of the storage it owns (S); for the result, its O and S; and the store edges of the function'\&s summary, one \fBstore\fR line per stored value \- as described in \fBdoc/design/provenance.\&md\fR, and exit without emitting ZIL; the exit status is the compile'\&s verdict.\& The rules read the sets only under \fB\-\-provenance\fR.\& Used by \fBscripts/test_origins.\&sh\fR.\&
 .PP
 .RE
 \fB\-v\fR, \fB\-\-verbose\fR

@@ -183,7 +183,7 @@ Regarding runtime abort conventions: `zoril_abort()` exits **1** (unhandled logi
 
 ### Gap summary
 
-No row above is marked **GAP** today. That does not mean no hole is open: the 17 holes still open in checked code are routes inside rows the matrix counts as closed, and each is a `known_gap` probe listed under [Known gaps](#known-gaps).
+No row above is marked **GAP** today. That does not mean no hole is open: the holes still open in checked code are routes inside rows the matrix counts as closed, and each is a `known_gap` probe listed under [Known gaps](#known-gaps).
 
 Every program that showed a hole in one of the rows is kept as a `compile_reject` probe (or, for the two drop-count probes, an `accept` that asserts one drop), so the hole cannot reopen unnoticed.
 
