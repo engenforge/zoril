@@ -222,7 +222,7 @@ How each one is counted: every `.zrl` file under the directory, recursively; **l
 
 ## 6. Known gaps in checked code
 
-The matrix has no row marked `GAP`. The holes that remain open in checked code are tracked as 39 `known_gap` probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes) and listed in the [Known gaps](spec/safety_model.md#known-gaps) table. Ordinary code rarely reaches them: each needs a view of storage the function owns (or a reference to its stack) to be stored or returned through one of the routes below. They are known, and the unified provenance model planned for after the launch is meant to close all of them. For example, this function is accepted although the arena dies when it returns while `out` keeps the view (class A, [`gap_07_path_same_param.zrl`](../bench/safety_matrix/probes/gap_07_path_same_param.zrl)):
+The matrix has no row marked `GAP`. The holes that remain open in checked code are tracked as 40 `known_gap` probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes) and listed in the [Known gaps](spec/safety_model.md#known-gaps) table. Ordinary code rarely reaches them: each needs a view of storage the function owns (or a reference to its stack) to be stored or returned through one of the routes below. They are known, and the unified provenance model planned for after the launch is meant to close all of them. For example, this function is accepted although the arena dies when it returns while `out` keeps the view (class A, [`gap_07_path_same_param.zrl`](../bench/safety_matrix/probes/gap_07_path_same_param.zrl)):
 
 ```zoril,no-test
 fn stash_pair(p: (&mut [i32], [i32])) { *p.0 = p.1; }
