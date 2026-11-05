@@ -143,6 +143,7 @@ want_summary pair "edge = 0, edge_addr = 4,"      # a -> x, not a -> y
 want_summary pair "edge = 1, edge_addr = 8,"      # b -> y
 summary_of pair | grep -qF "edge_addr = 12" && fail "pair's edges were conflated into one product" "$dir/lib_summary.zri"
 want_summary same "edge = 64, edge_addr = 1,"     # ParamContents(0) -> ParamAddr(0)
+want_summary put_owned "edge = 1, edge_addr = 1,"  # the moved owner w -> o, read by prov_accept_moved_owner.zrl
 want_summary p65 "edge = 127, edge_addr = 9223372036854775808," # ParamContents(63), the overflow bit
 want_summary fld "ret_addr = 1, ret_contents = 0"
 want_summary first "ret_addr = 0, ret_contents = 1"
