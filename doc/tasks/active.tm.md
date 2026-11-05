@@ -58,6 +58,65 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **Checks:** `make test` at `ad9045c`: 3332 run, 3332 passed, 0 failed, 80 skipped. `PREFLIGHT_BASE=e09b409 make preflight-changed`: exit 0, 44 targeted mutations caught, fixpoint identical, rejection differential 0 newly accepted and 0 newly refused of 69122 programs. Benchmark files under `bench/` deleted. `bench/fuzz/README.md` is stale for `src/`.
     - **Awaiting review:** re-run the seven new tests, `sh scripts/test_origins.sh`, `sh scripts/test_interface_attrs.sh`, `./scripts/mutation-check.sh M144`, `M146`, `M147`, `M148` (one per run), and the `--provenance` differential. Judge: the kind decided by `os_owns` of the stored value's type; `own` for a declared edge only when every stored argument owns; the integer boundary (design note §3) against keeping pointer-width integer edges; `addr` `ParamAddr` keeping a by-value owner's storage (sound, and it newly refuses `addr_edge_by_value_owner_refused.zrl`). Siblings to probe: an `own` edge through the overflow parameter (63); an `own` edge into a global; a moved owner holding a `Param` view; a struct holding both an owner and a reference stored by value; the `Option.take` route above.
 
+    **Feedback from Gemini Argon**
+    **TL;DR:** The implementation in `ad9045c` and `f008948` is clean, minimal, and addresses the core feedback well— preserving the 4-`u64` `.zri` layout via `OS_EDGE_OWN = 130` and pruning primitive store edges at `os_stmt`. All four design judgements are sound for single-kind types, **except** that probing your Siblings #1, #3, and #4 reveals one minor bounds bug on overflow parameter `63` and one soundness hole when a callee packs a non-owning view/pointer derived from a parameter (`v.as_slice()` or `b.data`) into an owning container/struct (`Vec<[i32]>` or `Both`) and moves that container/struct into `*out`.
+
+    **Review of the Four Judgements**
+    - `OS_EDGE_OWN` **encoding (**`code + 130`**):** Spot-on minimalist choice. It preserves the 4-integer `.zri` row layout and backward compatibility without adding schema bloat.
+    - **Declared** `#[stores(..)]` **edges (**`M147`**):** Marking declared edges `own` when every stored argument satisfies `os_owns` is necessary and sound so `Vec.push`'s declaration behaves identically to its inferred body summary.
+    - **Primitive store boundary (**`ILTYPE_PRIMITIVE`, `M146`**):** Pruning primitive stores from summary generation in `os_stmt` while keeping the in-body `os_check_store` check right above it (`int_store_in_body_refused.zrl` vs. `int_store_through_call_accepted.zrl`) cleanly eliminates the arena allocator's `size -> *arena` false edge and is properly documented in `doc/design/provenance.md`.
+    - `addr ParamAddr` **keeping by-value owned storage (**`M148`**):** Gating `os_drop_moved_storage` on `code >= 64 || own` fixes a real pre-existing hole (`addr_edge_by_value_owner_refused.zrl` where `keep` stores `b.data` and drops `b: Buf`).
+    **Analysis of the Five "Siblings to Probe"**
+    - **Sibling 1 (**`own` **edge through overflow parameter** `63`**):**
+      - `os_param_contents_split` (line 6510) properly loops `while k < args.len && (k == i || i == 63 as usize)`.
+      - However, in `os_edge_effects` (line 6610), `if code < 128 as usize && pidx < 63 as usize` skips `pidx == 63`. An `own ParamAddr(63)` edge on argument 63+ will neither populate `moved` nor drop its moved storage from `tv`.
+      - **Fix:** Loop `k` from `pidx` across `args.len` when `pidx == 63` in that block just like `os_param_origin` and `os_param_contents_split` do.
+    - **Sibling 2 (**`own` **edge into a global):**
+      - Sound as written in `os_edge_effects` (lines 6620–6631).
+      - Stripping `S \ O` before checking `bound = os_frame_bound(c, tv)` allows moving a pure heap owner into a global while still rejecting an owner that holds a frame view (`Frame` in `O`) or lives in a local arena (`Frame(a)` in both `O` and `S`).
+    - **Siblings 3 & 4 (Moved owner holding a** `Param` **view, and Mixed struct holding both an owner and a reference/pointer):**
+      - **When built in the caller and moved by the callee:** Sound (`own_contents_edge_frame_views_refused.zrl` passes because the view is in `O(a)` and the buffer is in `S(a)`).
+      - **When built in the callee from a parameter view/pointer and moved into** `*out`: **Unsound** when `own` is decided solely by `os_owns(ty)` at the final `*out = ...` store.
+      - **Reproducer A (Sibling 3 —** `Vec<[i32]>` **built in callee):**
+    ```text
+    import "vec.zrl";
+    use vec::Vec;
+    fn leak_vec(out: &mut Vec<[i32]>, v: &Vec<i32>) {
+        let mut tmp = Vec::<[i32]>.new();
+        tmp.push(v.as_slice());
+        *out = tmp;
+    }
+    fn f(out: &mut Vec<[i32]>) {
+        let mut v = Vec::<i32>.new();
+        v.push(7);
+        leak_vec(out, &v);
+    }
+    ```
+    - Here `v.as_slice()` puts `ParamContents(1)` into `O(tmp)` via an `addr` store (`[i32]`), but `*out = tmp` sees `os_owns(Vec<[i32]>) == true` and emits `own ParamContents(1) -> ParamAddr(0)`. At `leak_vec(out, &v)`, `os_param_contents_split` reads `v` split (`O(v) = {}` into `tv`, `S(v) = { Frame(v_buf) }` into `moved`), so `f` is accepted and `out` dangles when `v` drops.
+      - **Reproducer B (Sibling 4 — Mixed struct built in callee):**
+    ```text
+    import "vec.zrl";
+    use vec::Vec;
+    struct Both { own_v: Vec<i32>, view: [i32] }
+    fn leak_both(out: &mut Both, v: &Vec<i32>) {
+        *out = Both { own_v: Vec::<i32>.new(), view: v.as_slice() };
+    }
+    fn f(out: &mut Both) {
+        let mut v = Vec::<i32>.new();
+        v.push(7);
+        leak_both(out, &v);
+    }
+    ```
+    - (And the `ParamAddr` twin `keep_both(out: &mut BothPtr, b: Buf) { *out = BothPtr { own_v: Vec.new(),` `p: b.data }; }`.) Because `os_owns(Both)` is `true`, `os_stmt` marks `ParamContents(1)` / `ParamAddr(1)` as `own` even though it entered via a non-owning `[i32]` or `*mut u8` field.
+      - **Minimal Fix for Siblings 3 & 4:** A parameter origin (`ParamAddr(i)` or `ParamContents(i)`) inside `ev` should only emit an `own` edge if it remained an unprojected owner all the way to the store. Either:
+        - Track moved-owner parameter bits separately from held-address parameter bits (clearing the owner bits whenever an expression, field projection like `b.data`, call result like `v.as_slice()`, or store like `tmp.push(slice)` has `!os_owns(ty)`), **or**
+        - Only classify a store as `own` when `os_owns(ty)` is true **and** `ty` cannot hold non-owning views/raw pointers (or emit `addr` for any parameter origin that passed through a `!os_owns` expression/field). Note that the first option preserves `own` for `Vec<[i32]>` when the `Vec<[i32]>` itself is moved from a parameter (`own_contents_edge_frame_views_refused.zrl`) while still rejecting `leak_vec`, `leak_both`, and `keep_both`.
+    - **Sibling 5 (**`Option.take` **/** `swap_bytes`**):**
+      - Recording this on Z-0012 (so the legacy check is not removed until `Option.take` and other `swap_bytes` callers use a typed move or summary attribute) is the right call.
+    **Recommended Next Steps for the Agent**
+    1. Probe `leak_vec`, `leak_both`, and `keep_both` above and fix the `own` classification so non-owning views/projections (`!os_owns`) packed into owning structs/containers still emit `addr` edges.
+    2. Fix the `pidx < 63` bound in `os_edge_effects` (line 6610) so overflow parameter `63` handles `own ParamAddr(63)` consistently with `os_param_contents_split`.
+    3. Resume Z-0070 (re-apply the two `store_origin_summary` sites, add mutant `M145`, update the four `Raw` goldens), then proceed to Z-0064.
 
 - [ ] +safety +tests +AI-D Z-0070 B1.7c An `unsafe fn` body writes its origin summary
     > **Created:** 2026-11-05 **Found by:** Z-0063. **Before:** Z-0064, whose measurement it changes; Z-0012, which deletes the old masks the callers of an `unsafe fn` read today. **Check-in:** stop for review after it.
