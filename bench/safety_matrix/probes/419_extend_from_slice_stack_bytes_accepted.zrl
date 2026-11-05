@@ -1,0 +1,14 @@
+// name: Bytes of a stack array appended to the caller's Vec
+// expected: accept
+// The accepted twin of gap_56 and 418: extend_from_slice copies u8 values, which carry no address, so appending a stack array's bytes to a caller's Vec<u8> is legal (Z-0060).
+import "vec.zrl";
+use vec::Vec;
+fn fill(out: &mut Vec<u8>) {
+    let buf = [1 as u8, 2 as u8];
+    out.extend_from_slice(&buf);
+}
+fn main() -> i32 {
+    let mut v: Vec<u8> = Vec.new();
+    fill(&mut v);
+    return v.len() as i32 + v[1] as i32 - 4;
+}
