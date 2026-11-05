@@ -1241,15 +1241,12 @@ impl Driver {
         if origins.errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
             self.had_error = true;
         }
-        let mut grew = false;
-        if !self.module.functions[e.func_idx as usize].is_unsafe {
-            grew = check_zir::store_origin_summary(
-                self.arena,
-                self.module,
-                e.func_idx as usize,
-                &mut origins
-            );
-        }
+        let grew = check_zir::store_origin_summary(
+            self.arena,
+            self.module,
+            e.func_idx as usize,
+            &mut origins
+        );
         if check && self.emit_origins && e.source_file == self.target_source_file {
             check_zir::print_origins(&origins, &e.zir, self.module, self.intern_table);
         }
@@ -1328,17 +1325,14 @@ impl Driver {
         if origins.errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
             self.had_error = true;
         }
-        // The body's summary, for the calls lowered after it. An `unsafe fn` gets none, for the
-        // reason its body is not checked: an address it makes from an integer would reach every
-        // caller as Unknown. Its callers keep the old analyses' masks.
-        if !self.module.functions[self.builder.current_func_idx as usize].is_unsafe {
-            let _ = check_zir::store_origin_summary(
-                self.arena,
-                self.module,
-                self.builder.current_func_idx as usize,
-                &mut origins
-            );
-        }
+        // The body's summary, for the calls lowered after it; an `unsafe fn`'s too, since an address
+        // it makes from an integer is Raw, not Unknown (§3, _Raw operations_).
+        let _ = check_zir::store_origin_summary(
+            self.arena,
+            self.module,
+            self.builder.current_func_idx as usize,
+            &mut origins
+        );
         if in_cycle {
             self.os_pending.push(OsPending {
                 func_idx: self.builder.current_func_idx as u32,

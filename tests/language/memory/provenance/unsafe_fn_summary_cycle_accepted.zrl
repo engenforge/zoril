@@ -1,0 +1,26 @@
+// The cycle twin of unsafe_fn_summary_accepted.zrl: `split_n` is an `unsafe fn` that calls itself,
+// so its summary is written when its recursive cycle closes (the pending re-check), not when it
+// is first lowered. With that summary its result is in the caller's arena and the push is
+// accepted; without one its callers read the old masks, fresh storage of this frame (Z-0070).
+// flags: --provenance
+// expected exit 0
+import "vec.zrl";
+import "string.zrl";
+import "mem_raw.zrl";
+use vec::Vec;
+use mem_raw::ArenaHeader;
+unsafe fn split_n(content: [u8], arena: *mut ArenaHeader, n: i32) -> Vec<[u8]> {
+    if n > 0 { return split_n(content, arena, n - 1); }
+    return content.split_raw('\n' as u8, arena);
+}
+fn first_fields(content: [u8], arena: *mut ArenaHeader) -> Vec<[u8]> {
+    let lines = unsafe { split_n(content, arena, 2) };
+    let mut out = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+    for l in lines.as_slice() { out.push(*l); }
+    return out;
+}
+fn main() -> i32 {
+    let arena = unsafe { mem_raw::arena_init(65536 as u64) };
+    let v = first_fields("a\nbc", arena);
+    return v.len() as i32 - 2;
+}

@@ -1,0 +1,9 @@
+// The must-reject twin: an `unsafe fn`'s summary carries its store edges to the caller, so a view of
+// this frame handed to one that stores it through its other argument is refused (Z-0070).
+// flags: --provenance
+// EXPECT: call store rule
+// expected compile fail
+struct Slot { r: [i32] }
+unsafe fn stash(out: &mut Slot, v: [i32]) { out.r = v; }
+fn f(s: &mut Slot) { let x: [i32; 2] = [1, 2]; unsafe { stash(s, &x); } }
+fn main() -> i32 { return 0; }

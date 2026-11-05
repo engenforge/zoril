@@ -1,6 +1,6 @@
 // `(*b).s = arena_slice` is a projected write into the box: O(b) grows by the view, and the store
 // is not through a pointer, so no destination memory (and no Static from "lit") is consulted.
-// ORIGINS: main b O={Frame(_2), Frame(a), Static} S={Frame(_24)}
+// ORIGINS: main b O={Frame(_2), Frame(a), Static, Raw} S={Frame(_24)}
 // flags: --provenance
 // expected exit 0
 import "mem.zrl";
