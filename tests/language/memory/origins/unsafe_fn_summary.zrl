@@ -1,0 +1,21 @@
+// An `unsafe fn` writes its origin summary like any body: `split_raw` allocates its result in the
+// caller's arena, so `lines` owns no storage of this frame (with the old masks it read as fresh frame
+// storage, `Frame(_6)`) (Z-0070).
+// ORIGINS: first_fields lines O={Param(0), Param(1), ParamContents(0), ParamContents(1)} S={Param(1)}
+// expected exit 0
+import "vec.zrl";
+import "string.zrl";
+import "mem_raw.zrl";
+use vec::Vec;
+use mem_raw::ArenaHeader;
+fn first_fields(content: [u8], arena: *mut ArenaHeader) -> Vec<[u8]> {
+    let lines = unsafe { content.split_raw('\n' as u8, arena) };
+    let mut out = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+    for l in lines.as_slice() { out.push(*l); }
+    return out;
+}
+fn main() -> i32 {
+    let arena = unsafe { mem_raw::arena_init(65536 as u64) };
+    let v = first_fields("a\nbc", arena);
+    return v.len() as i32 - 2;
+}

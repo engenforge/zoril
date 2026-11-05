@@ -1,0 +1,21 @@
+// Views of a caller's buffer split by an `unsafe fn` into the caller's arena are pushed into another
+// Vec in that arena: with the `unsafe fn`'s own summary nothing of this frame moves, and the call
+// store rule accepts it (zman's and zbuild's parsers, Z-0070).
+// flags: --provenance
+// expected exit 0
+import "vec.zrl";
+import "string.zrl";
+import "mem_raw.zrl";
+use vec::Vec;
+use mem_raw::ArenaHeader;
+fn first_fields(content: [u8], arena: *mut ArenaHeader) -> Vec<[u8]> {
+    let lines = unsafe { content.split_raw('\n' as u8, arena) };
+    let mut out = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+    for l in lines.as_slice() { out.push(*l); }
+    return out;
+}
+fn main() -> i32 {
+    let arena = unsafe { mem_raw::arena_init(65536 as u64) };
+    let v = first_fields("a\nbc", arena);
+    return v.len() as i32 - 2;
+}

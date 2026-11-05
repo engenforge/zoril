@@ -1,0 +1,14 @@
+// An `unsafe fn` in a recursive cycle whose store edge exists only through the cycle: `sw` swaps
+// its two views on the recursive call, so `b` reaches `out` only through it. The edge `b -> out` is
+// in the summary written when the cycle closes, not in the one from the first pass, and the call
+// store rule refuses the view of this frame passed as `b` (Z-0070).
+// flags: --provenance
+// EXPECT: the callee stores an address of this frame into memory that outlives it (call store rule)
+// expected compile fail
+struct Slot { r: [i32] }
+unsafe fn sw(out: &mut Slot, a: [i32], b: [i32], n: i32) {
+    if n > 0 { sw(out, b, a, n - 1); return; }
+    out.r = a;
+}
+fn f(s: &mut Slot, keep: [i32]) { let x: [i32; 2] = [1, 2]; unsafe { sw(s, keep, &x, 1); } }
+fn main() -> i32 { return 0; }

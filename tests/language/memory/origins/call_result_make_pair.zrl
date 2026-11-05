@@ -1,7 +1,7 @@
 // An owning call result that holds a Drop type (`Arena`) by value owns fresh storage of this frame,
 // the call's own Frame, even when it is tied to an argument that cannot reach an `Arena` (§3,
 // _Details the transfer needs_): before Z-0048, S(pair) was the tie's Param alone.
-// ORIGINS: f pair O={Param(0)} S={Frame(_2)}
+// ORIGINS: f pair O={Param(0), Raw} S={Frame(_2)}
 // flags: --provenance
 // expected exit 0
 import "mem.zrl";
