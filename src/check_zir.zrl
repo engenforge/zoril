@@ -6796,12 +6796,21 @@ fn os_rvalue(c: &mut OriginSets, module: &ILModule, locals: [Local], rv: &ZirRva
             | ZirRvalue.ArrayRepeat(p, _, _) => {
             let _ = os_read(c, module, locals, &p, vo, vs);
         },
-        // An enum payload is lowered as the address of the payload inside the enum place; a
-        // `match` binding or `?` then reads through it.
-        ZirRvalue.Ref(p, _)
-            | ZirRvalue.RefMut(p, _)
-            | ZirRvalue.EnumPayload(p, _, _) => {
+        ZirRvalue.Ref(p, _) | ZirRvalue.RefMut(p, _) => {
             os_addr(c, module, locals, &p, vo);
+        },
+        // An enum payload is lowered as the address of the payload inside the enum place; a
+        // `match` binding or `?` then reads through it. A `match` on a reference names the
+        // reference itself, and codegen takes the enum's address from its value
+        // (`enum_address`), so the payload lies in what the reference holds, not in its slot.
+        ZirRvalue.EnumPayload(p, _, _) => {
+            let pty = os_walk(c, module, locals, &p);
+            if pty != 0 as u32 && is_any_pointer_tag(os_type_def_tag(module, pty)) {
+                let _ = os_read(c, module, locals, &p, vo, vs);
+                os_clear(c, vs);
+            } else {
+                os_addr(c, module, locals, &p, vo);
+            }
         },
         ZirRvalue.BinaryOp(_, a, b) => {
             let _ = os_read(c, module, locals, &a, vo, vs);

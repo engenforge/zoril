@@ -1,0 +1,14 @@
+// The accepted form of the `get_*` accessors: a binding of a `match` through a `&E` parameter
+// points into the caller's enum, so returning it passes the return rule (Z-0061).
+// flags: --provenance
+// expected exit 0
+struct P { a: i32 }
+enum E { A(P), B(i32) }
+fn get_a(self: &E) -> &P {
+    return match self { E.A(x) => x, E.B(_) => { return get_a(self); } };
+}
+fn main() -> i32 {
+    let e = E.A(P { a: 42 });
+    let p = get_a(&e);
+    return p.a - 42;
+}
