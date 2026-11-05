@@ -1,0 +1,21 @@
+// name: A local Vec holding views of this frame is moved into a callee that pushes it into the caller's Vec
+// expected: known_gap
+// gap: put_v(out, w) with fn put_v(o: &mut Vec<Vec<[i32]>>, w: Vec<[i32]>) { o.push(w); } and w a local Vec<[i32]> holding a view of the stack array buf: a by-value collection argument is not read for the frame views it holds; refused under --provenance by the call store rule (Z-0062)
+// observed: exit 77
+import "vec.zrl";
+use vec::Vec;
+fn put_v(o: &mut Vec<Vec<[i32]>>, w: Vec<[i32]>) { o.push(w); }
+fn f(out: &mut Vec<Vec<[i32]>>) {
+    let buf = [42; 16];
+    let s: [i32] = &buf;
+    let mut w = Vec::<[i32]>.new();
+    w.push(s);
+    put_v(out, w);
+}
+fn clobber_stack() -> i32 { let arr = [77; 256]; return arr[0]; }
+fn main() -> i32 {
+    let mut v: Vec<Vec<[i32]>> = Vec.new();
+    f(&mut v);
+    let c = clobber_stack();
+    return v[0][0][0] + c * 0;
+}
