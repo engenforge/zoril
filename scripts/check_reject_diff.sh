@@ -57,7 +57,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-WORK="$REPO_ROOT/build/reject-diff"
+WORK="${CHECK_REJECT_DIFF_WORK:-$REPO_ROOT/build/reject-diff-$$}"
 rm -rf "$WORK"
 mkdir -p "$WORK"
 WORKTREES=""
@@ -66,6 +66,7 @@ cleanup() {
         git -C "$REPO_ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"
     done
     git -C "$REPO_ROOT" worktree prune >/dev/null 2>&1
+    rm -rf "$WORK"
 }
 trap cleanup EXIT INT TERM
 

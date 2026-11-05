@@ -264,6 +264,10 @@ if [ -d "$STAGE" ]; then
 fi
 
 mkdir -p "$STAGE"
+# Reset per-run result files: an early exit (e.g. from a surviving mutant) leaves survivors/stale
+# behind, which a subsequent run must not falsely report (Z-0069). Cached mutant builds stay.
+rm -f "$STAGE/survivors" "$STAGE/stale"
+rm -f "$STAGE"/*/caught_by "$STAGE"/*/incremental_passed
 printf '%s\n' "$CUR_STAMP" > "$STAGE/stamp"
 # Mutants are built by a saved copy of the unmutated compiler.
 GOOD="$STAGE/zoril-good"

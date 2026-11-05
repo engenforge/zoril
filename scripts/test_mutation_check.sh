@@ -140,5 +140,25 @@ else
     note "a run where every mutant fails to build did not report the stale/broken stage message (rc $broken_rc): $(cat "$WORK/broken.log")"
 fi
 
+# A run following an early-exiting run with a surviving mutant resets result files and does not
+# falsely report stale survivors (Z-0069).
+stale_surv_stage="$WORK/stale_surv_stage"
+rm -rf "$stale_surv_stage"
+mkdir -p "$stale_surv_stage"
+
+r1_rc=0
+MUTATION_LIST="$LIST" MUTATION_STAGE="$stale_surv_stage" MUTATION_CACHE="$WORK/cache" \
+    "$(dirname "$0")/mutation-check.sh" C1 > "$WORK/surv_run1.log" 2>&1 || r1_rc=$?
+
+r2_rc=0
+MUTATION_LIST="$LIST" MUTATION_STAGE="$stale_surv_stage" MUTATION_CACHE="$WORK/cache" \
+    "$(dirname "$0")/mutation-check.sh" C2 > "$WORK/surv_run2.log" 2>&1 || r2_rc=$?
+
+if [ "$r1_rc" -eq 1 ] && [ "$r2_rc" -eq 0 ]; then
+    echo "[PASS] a run following a surviving mutant passes without reporting stale survivors"
+else
+    note "stale survivor leaked into next run: run1 rc=$r1_rc, run2 rc=$r2_rc (see $WORK/surv_run2.log)"
+fi
+
 [ $fail -eq 0 ] || exit 1
 exit 0

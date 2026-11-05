@@ -178,6 +178,9 @@ rc=0
 trace_file="$tmp/trace_case6.log"
 out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
       PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+      PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+      PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
+      PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
       PREFLIGHT_BENCH="$tmp/stub_fail_bench.sh" \
       PREFLIGHT_DENSITY="$tmp/stub_track_density.sh" \
       PREFLIGHT_FUZZ="$tmp/stub_track_fuzz.sh" \
@@ -197,6 +200,9 @@ fi
 rc=0
 out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
       PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+      PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+      PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
+      PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
       PREFLIGHT_BENCH="$tmp/stub_fail_bench.sh" \
       ./scripts/preflight.sh --changed 2>&1) || rc=$?
 if [ $rc -ne 0 ]; then
@@ -210,7 +216,11 @@ rc=0
 trace_file="$tmp/trace_case8.log"
 out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
       PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+      PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+      PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
+      PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
       PREFLIGHT_BENCH="$tmp/stub_pass.sh" \
+      PREFLIGHT_STORE_GRID="$tmp/stub_pass.sh" \
       PREFLIGHT_DENSITY="$tmp/stub_fail_density.sh" \
       PREFLIGHT_FUZZ="$tmp/stub_track_fuzz.sh" \
       PREFLIGHT_TEST_TRACE="$trace_file" \
@@ -229,7 +239,11 @@ fi
 rc=0
 out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
       PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+      PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+      PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
+      PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
       PREFLIGHT_BENCH="$tmp/stub_pass.sh" \
+      PREFLIGHT_STORE_GRID="$tmp/stub_pass.sh" \
       PREFLIGHT_DENSITY="$tmp/stub_pass.sh" \
       PREFLIGHT_FUZZ="$tmp/stub_fail_fuzz.sh" \
       ./scripts/preflight.sh 2>&1) || rc=$?
@@ -268,7 +282,7 @@ out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_pass.
       PREFLIGHT_REJECT_BASE=HEAD PREFLIGHT_REJECT_DIFF="$tmp/stub_fail_reject_diff.sh" \
       PREFLIGHT_BENCH="$tmp/stub_pass.sh" PREFLIGHT_CHECKED="$tmp/stub_pass.sh" PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
       ./scripts/preflight.sh --changed 2>&1) || rc=$?
-if git diff --quiet HEAD -- src/summary_pass.zrl src/check_zir.zrl src/verify.zrl src/main.zrl src/interface_print.zrl src/driver src/lower_zir src/parser src/parser.zrl src/ast.zrl 2>/dev/null; then
+if git diff --quiet HEAD -- src/summary_pass.zrl src/check_zir.zrl src/verify.zrl src/main.zrl src/interface_print.zrl src/driver src/lower_zir src/parser src/parser.zrl src/ast.zrl stdlib 2>/dev/null; then
     if [ $rc -eq 0 ] && echo "$out" | grep -qF "[SKIP] reject-diff"; then
         pass "the rejection differential is skipped, saying so, when no checker differs from its base"
     else
@@ -276,6 +290,28 @@ if git diff --quiet HEAD -- src/summary_pass.zrl src/check_zir.zrl src/verify.zr
     fi
 else
     echo "[SKIP] preflight-selftest: case 11 needs the checkers to equal HEAD's (the tree has uncommitted checker changes)"
+fi
+
+# Case 11b: a stdlib/-only change runs the rejection differential (a stdlib function's summary
+# changes what the checkers refuse, Z-0069).
+tmp_idx="$tmp/test_stdlib_idx"
+GIT_INDEX_FILE="$tmp_idx" git read-tree HEAD
+_blob=$(printf '// stdlib change\n' | git hash-object -w --stdin)
+GIT_INDEX_FILE="$tmp_idx" git update-index --add --cacheinfo 100644 "$_blob" stdlib/test_preflight_dummy.zrl
+_tree=$(GIT_INDEX_FILE="$tmp_idx" git write-tree)
+stdlib_only_base=$(git commit-tree "$_tree" -m "test: stdlib-only change")
+rm -f "$tmp_idx"
+
+rc=0
+out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+      PREFLIGHT_BASE=HEAD \
+      PREFLIGHT_REJECT_BASE="$stdlib_only_base" PREFLIGHT_REJECT_DIFF="$tmp/stub_fail_reject_diff.sh" \
+      PREFLIGHT_BENCH="$tmp/stub_pass.sh" PREFLIGHT_CHECKED="$tmp/stub_pass.sh" PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+      ./scripts/preflight.sh --changed 2>&1) || rc=$?
+if [ $rc -eq 23 ] && echo "$out" | grep -qF "stub: reject-diff failed"; then
+    pass "a stdlib/-only change runs the rejection differential"
+else
+    fail "expected the rejection differential to run for a stdlib/-only change (rc=$rc, out=$out)"
 fi
 
 # Case 12: with no base given, the run either names the base it chose or refuses, naming PREFLIGHT_BASE;
