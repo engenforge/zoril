@@ -1,0 +1,21 @@
+// name: A struct wrapping a local Vec of views of this frame is pushed into the caller's Vec
+// expected: known_gap
+// gap: out.push(H { v: w }) with w a local Vec<[i32]> holding a view of the stack array buf: the struct literal carries the owner, and the frame views it holds are not seen; refused under --provenance by the call store rule (Z-0062)
+// observed: exit 77
+import "vec.zrl";
+use vec::Vec;
+struct H { v: Vec<[i32]> }
+fn f(out: &mut Vec<H>) {
+    let buf = [42; 16];
+    let s: [i32] = &buf;
+    let mut w = Vec::<[i32]>.new();
+    w.push(s);
+    out.push(H { v: w });
+}
+fn clobber_stack() -> i32 { let arr = [77; 256]; return arr[0]; }
+fn main() -> i32 {
+    let mut v: Vec<H> = Vec.new();
+    f(&mut v);
+    let c = clobber_stack();
+    return v[0].v[0][0] + c * 0;
+}
