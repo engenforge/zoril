@@ -25,6 +25,9 @@ pub fn first(h: &H) -> [i32] { return h.r; }
 // A Static result: ret_flags = 1.
 pub fn lit() -> [u8] { return "abc"; }
 
+// A Raw result (`@ptr_from_int`): ret_flags = 8, so a caller still treats it as outside memory.
+pub fn raw(n: u64) -> *mut *i32 { return @ptr_from_int<*mut *i32>(n); }
+
 // A result no parameter owns, so the caller treats it as fresh storage.
 pub fn fresh() -> Vec<i32> { return Vec::<i32>.new(); }
 

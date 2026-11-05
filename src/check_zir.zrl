@@ -5389,6 +5389,10 @@ pub const ORIGIN_STATIC: u64 = 1;
 pub const ORIGIN_UNKNOWN: u64 = 2;
 // A closure body's environment (GetEnv): the caller's, so it outlives the call like a Param.
 pub const ORIGIN_ENV: u64 = 4;
+// An address `@ptr_from_int` made, which the programmer vouched for in `unsafe` code (§3, _Raw
+// operations_). In a value it is exempt from the return and store rules (os_frame_bound); as memory
+// it is outside the frame (os_external), so a frame address stored through it is still refused.
+pub const ORIGIN_RAW: u64 = 8;
 
 const OS_T_M: usize = 0;
 const OS_T_DM: usize = 1;
@@ -6618,7 +6622,7 @@ pub fn store_origin_summary(
     }
     let r = 2 as usize * c.nl * c.words;
     let rs = r + c.words;
-    let mut flags = c.buf[r + OS_W_FLAGS] & ORIGIN_STATIC;
+    let mut flags = c.buf[r + OS_W_FLAGS] & (ORIGIN_STATIC | ORIGIN_RAW);
     let mut fresh = c.buf[rs + OS_W_FLAGS] & ORIGIN_UNKNOWN != 0 as u64;
     if c.buf[r + OS_W_FLAGS] & (ORIGIN_UNKNOWN | ORIGIN_ENV) != 0 as u64 {
         flags = flags | ORIGIN_UNKNOWN;
@@ -6879,21 +6883,24 @@ fn os_rvalue(c: &mut OriginSets, module: &ILModule, locals: [Local], rv: &ZirRva
         ZirRvalue.StructLiteral(_, args)
             | ZirRvalue.Tuple(args)
             | ZirRvalue.Array(_, args)
-            | ZirRvalue.Syscall(args)
             | ZirRvalue.Intrinsic(_, args) => {
             for a in args { let _ = os_read(c, module, locals, a, vo, vs); }
         },
+        // A system call's result is the kernel's integer, not one of its arguments (§3, _Raw
+        // operations_): an address it returns (mmap) becomes one only through `@ptr_from_int`.
+        ZirRvalue.Syscall(_) => {},
         // A cast reinterprets the value, so an owner cast to a pointer is an address into the
         // storage it owns (`b as *i32` for a box): what it owns joins what it holds.
         ZirRvalue.Cast(p, _) => {
             let _ = os_read(c, module, locals, &p, vo, vs);
             let _ = os_or(c, vo, vs);
         },
-        // An address made from an integer: whatever the integer was made from, and Unknown.
+        // An address made from an integer: whatever the integer was made from, still checked (a
+        // frame address round-tripped through `as u64` stays this frame's), and Raw.
         ZirRvalue.PtrFromInt(p, _) => {
             let _ = os_read(c, module, locals, &p, vo, vs);
             let _ = os_or(c, vo, vs);
-            os_add_flag(c, vo, ORIGIN_UNKNOWN);
+            os_add_flag(c, vo, ORIGIN_RAW);
         },
         ZirRvalue.Boxed(p) => {
             let _ = os_read(c, module, locals, &p, vo, vs);
@@ -7225,6 +7232,11 @@ fn os_print_set(c: &OriginSets, set: usize, locals: [Local], table: &InternTable
         if !first { print(", "); }
         first = false;
         print("Env");
+    }
+    if flags & ORIGIN_RAW != 0 as u64 {
+        if !first { print(", "); }
+        first = false;
+        print("Raw");
     }
     if flags & ORIGIN_UNKNOWN != 0 as u64 {
         if !first { print(", "); }

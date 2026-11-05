@@ -1305,13 +1305,9 @@ impl Driver {
         // Computed for every body; `--provenance` also applies its rules (doc/design/provenance.md
         // §3), beside the old ones until Z-0012.
         let sret_name = self.intern_table.intern("__sret");
-        // An `unsafe fn` answers for its addresses to its callers (its CALLER OBLIGATION), and an
-        // address it makes from an integer is Unknown, which the rules always refuse.
-        let rules = if self.module.functions[self.builder.current_func_idx as usize].is_unsafe {
-            check_zir::PROVENANCE_OFF
-        } else {
-            self.provenance
-        };
+        // An `unsafe fn` body is checked like any other: only the addresses it makes from integers
+        // are exempt (ORIGIN_RAW, §3, _Raw operations_).
+        let rules = self.provenance;
         // A body in a recursive cycle (it, or a body nested in it, calls one still being lowered)
         // is computed now for the summary its callers in the cycle read, and checked when the
         // cycle's root finishes, with the final summaries (Z-0059, Driver.os_fixpoint).
