@@ -1,0 +1,21 @@
+// name: A callee builds a Vec around a view of a caller-local Vec's buffer and stores it into the caller's slot
+// expected: known_gap
+// gap: leak_vec(out, &v) with fn leak_vec(out: &mut Vec<[i32]>, v: &Vec<i32>) { let mut tmp = Vec::<[i32]>.new(); tmp.push(v.as_slice()); *out = tmp; } and v a local Vec<i32>: the old rules do not see the view of v's buffer that the Vec built in the callee holds, so out keeps it past f; value is intact because collections are not freed at scope end (a leak, not a read of reused memory), as gap_32; refused under --provenance by the call store rule (Z-0072)
+// observed: exit 42
+import "vec.zrl";
+use vec::Vec;
+fn leak_vec(out: &mut Vec<[i32]>, v: &Vec<i32>) {
+    let mut tmp = Vec::<[i32]>.new();
+    tmp.push(v.as_slice());
+    *out = tmp;
+}
+fn f(out: &mut Vec<[i32]>) {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    leak_vec(out, &v);
+}
+fn main() -> i32 {
+    let mut out: Vec<[i32]> = Vec.new();
+    f(&mut out);
+    return out[0][0];
+}
