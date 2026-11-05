@@ -64,7 +64,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     **Review of the Four Judgements**
     - `OS_EDGE_OWN` **encoding (**`code + 130`**):** Spot-on minimalist choice. It preserves the 4-integer `.zri` row layout and backward compatibility without adding schema bloat.
     - **Declared** `#[stores(..)]` **edges (**`M147`**):** Marking declared edges `own` when every stored argument satisfies `os_owns` is necessary and sound so `Vec.push`'s declaration behaves identically to its inferred body summary.
-    - **Primitive store boundary (**`ILTYPE_PRIMITIVE`, `M146`**):** Pruning primitive stores from summary generation in `os_stmt` while keeping the in-body `os_check_store` check right above it (`int_store_in_body_refused.zrl` vs. `int_store_through_call_accepted.zrl`) cleanly eliminates the arena allocator's `size -> *arena` false edge and is properly documented in `doc/design/provenance.md`.
+    - **Primitive store boundary (**`ILTYPE_PRIMITIVE`, `M146`**):** Pruning primitive stores from summary generation in `os_stmt` while keeping the in-body `os_check_store` check right above it (`int_store_in_body_refused.zrl` vs. `int_store_through_call_accepted.zrl`) cleanly removes the arena allocator's `size -> *arena` false edge and is properly documented in `doc/design/provenance.md`.
     - `addr ParamAddr` **keeping by-value owned storage (**`M148`**):** Gating `os_drop_moved_storage` on `code >= 64 || own` fixes a real pre-existing hole (`addr_edge_by_value_owner_refused.zrl` where `keep` stores `b.data` and drops `b: Buf`).
     **Analysis of the Five "Siblings to Probe"**
     - **Sibling 1 (**`own` **edge through overflow parameter** `63`**):**
