@@ -1,0 +1,17 @@
+// An owner moved through parameters (`dst.push(x)` with `x` popped from `src`) is an `own` edge: at
+// the call, the storage the moved Vecs own joins what `b` owns, not the addresses it holds (Z-0071;
+// with one merged value `b O` also held `Frame(_1)` and `Frame(_3)`). `Frame(a)` is `Vec.pop`'s
+// summary tying its result to `self`'s address, as before.
+// ORIGINS: mk b O={Frame(a)} S={Frame(_1), Frame(_3), Frame(_6)}
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+fn mv(dst: &mut Vec<Vec<i32>>, src: &mut Vec<Vec<i32>>) { match src.pop() { Option.Some(x) => { dst.push(x); }, Option.None => {} } }
+fn mk() -> Vec<Vec<i32>> {
+    let mut a = Vec::<Vec<i32>>.new();
+    a.push(Vec::<i32>.new());
+    let mut b = Vec::<Vec<i32>>.new();
+    mv(&mut b, &mut a);
+    return b;
+}
+fn main() -> i32 { return mk().len() as i32 - 1; }

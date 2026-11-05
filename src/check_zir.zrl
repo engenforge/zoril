@@ -5402,7 +5402,10 @@ const OS_T_D: usize = 15;
 const OS_T_X: usize = 16;
 const OS_T_EV: usize = 17;
 const OS_T_ED: usize = 18;
-const OS_TEMPS: usize = 19;
+const OS_T_PC: usize = 19;
+const OS_T_PO: usize = 20;
+const OS_T_PS: usize = 21;
+const OS_TEMPS: usize = 22;
 
 // The questions os_type_has answers about a type.
 const OS_Q_ARENA: usize = 0;
@@ -5454,7 +5457,11 @@ pub struct OriginSets {
 
 const OS_EDGE_STATIC: usize = 128;
 const OS_EDGE_UNKNOWN: usize = 129;
-const OS_EDGE_ROWS: usize = 130;
+// An edge whose stored value is an owner moved by value (its type owns storage) is `own`: its code
+// is the ParamAddr/ParamContents code plus OS_EDGE_OWN. At the call its owned storage joins the
+// targets' S, not what they hold; every other edge is `addr` (§3, _The summary as built_).
+const OS_EDGE_OWN: usize = 130;
+const OS_EDGE_ROWS: usize = 258;
 const OS_EDGE_GLOBAL: u64 = 1;
 
 fn os_t(c: &OriginSets, k: usize) -> usize { return 2 as usize * c.nl + 2 as usize + k; }
@@ -5901,20 +5908,21 @@ fn os_frame_bound(c: &OriginSets, set: usize) -> bool {
 // body's summary: each parameter origin of the value against each parameter origin of the memory.
 // Memory that is Static, Env or Unknown is a global; a Frame or Env origin of the value reads as
 // Unknown, which is what the caller has to assume. Frame memory is this frame's and no edge.
-fn os_note_edges(c: &mut OriginSets, val: usize, mem: usize) {
+fn os_note_edges(c: &mut OriginSets, val: usize, mem: usize, own: bool) {
     let m = mem * c.words;
     let t_addr = c.buf[m + OS_W_ADDR];
     let t_contents = c.buf[m + OS_W_CONTENTS];
     let t_flags = if c.buf[m + OS_W_FLAGS] != 0 as u64 { OS_EDGE_GLOBAL } else { 0 as u64 };
     if t_addr == 0 as u64 && t_contents == 0 as u64 && t_flags == 0 as u64 { return; }
     let v = val * c.words;
+    let kind = if own { OS_EDGE_OWN } else { 0 as usize };
     let mut i = 0 as usize;
     while i < 64 as usize {
         if (c.buf[v + OS_W_ADDR] >> (i as u64)) & 1 as u64 != 0 as u64 {
-            os_note_edge_row(c, i, t_addr, t_contents, t_flags);
+            os_note_edge_row(c, kind + i, t_addr, t_contents, t_flags);
         }
         if (c.buf[v + OS_W_CONTENTS] >> (i as u64)) & 1 as u64 != 0 as u64 {
-            os_note_edge_row(c, 64 as usize + i, t_addr, t_contents, t_flags);
+            os_note_edge_row(c, kind + 64 as usize + i, t_addr, t_contents, t_flags);
         }
         i = i + 1 as usize;
     }
@@ -6283,7 +6291,7 @@ fn os_unknown_call_effects(
         os_unknown_arg(c, module, locals, args, callee, k);
         let _ = os_or(c, tao, tas);
         os_dest_reach(c, module, locals, tao, ed);
-        os_note_edges(c, ev, ed);
+        os_note_edges(c, ev, ed, false);
         os_reach_all(c, tao, tw);
         os_write_memory(c, module, locals, tw, tsv, tso);
         k = k + 1 as usize;
@@ -6353,10 +6361,14 @@ fn os_summary_store_effects(
     let td = os_t(c, OS_T_D);
     os_clear(c, tsv);
     os_clear(c, tso);
+    // The edges below are `own` when every stored argument is an owner passed by value (moved,
+    // as the drop of its moved storage below assumes), else `addr`.
+    let mut own = true;
     let mut i = 0 as usize;
     while i < args.len {
         if i >= 64 as usize || ((from_mask >> (i as u64)) & 1 as u64) != 0 as u64 {
-            let _ = os_arg(c, module, locals, fn_id, args, i);
+            let aty = os_arg(c, module, locals, fn_id, args, i);
+            if aty == 0 as u32 || !os_owns(c, module, aty) { own = false; }
             let po = os_t(c, OS_T_EV);
             let ps = os_t(c, OS_T_ED);
             os_copy(c, po, tao);
@@ -6426,7 +6438,7 @@ fn os_summary_store_effects(
     if (to_mask >> 63 as u64) & 1 as u64 != 0 as u64 {
         os_clear(c, ed);
         os_add_flag(c, ed, ORIGIN_STATIC);
-        os_note_edges(c, ev, ed);
+        os_note_edges(c, ev, ed, own);
     }
     let mut j = 0 as usize;
     while j < args.len {
@@ -6439,7 +6451,7 @@ fn os_summary_store_effects(
             let _ = os_arg(c, module, locals, fn_id, args, j);
             let _ = os_or(c, tao, tas);
             os_dest_reach(c, module, locals, tao, ed);
-            os_note_edges(c, ev, ed);
+            os_note_edges(c, ev, ed, own);
             os_reach_all(c, tao, tw);
             os_write_memory(c, module, locals, tw, tsv, tso);
         }
@@ -6472,6 +6484,42 @@ fn os_param_origin(
             let _ = os_or(c, dst, tr);
         } else {
             let _ = os_or(c, dst, tao);
+        }
+        k = k + 1 as usize;
+    }
+}
+
+// What argument I reaches by one or more reads (ParamContents(i) at the call), kept apart as
+// os_read keeps a read through a pointer: DST_O gets what each reached local holds, DST_S what it
+// owns. Read so only for an `own` edge, whose stored value is an owner moved by value: an `addr`
+// edge's value may be a view into owned storage (`h.v.as_slice()`), which is an address.
+fn os_param_contents_split(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    fn_id: u32,
+    args: [Place],
+    i: usize,
+    dst_o: usize,
+    dst_s: usize
+) {
+    let cur = os_t(c, OS_T_PC);
+    let po = os_t(c, OS_T_PO);
+    let ps = os_t(c, OS_T_PS);
+    let mut k = i;
+    while k < args.len && (k == i || i == 63 as usize) {
+        let _ = os_arg(c, module, locals, fn_id, args, k);
+        os_copy(c, cur, os_t(c, OS_T_AO));
+        let _ = os_or(c, cur, os_t(c, OS_T_AS));
+        loop {
+            os_clear(c, po);
+            os_clear(c, ps);
+            os_through_split(c, cur, po, ps);
+            let grew_o = os_or(c, dst_o, po);
+            let grew_s = os_or(c, dst_s, ps);
+            if !grew_o && !grew_s { break; }
+            os_copy(c, cur, po);
+            let _ = os_or(c, cur, ps);
         }
         k = k + 1 as usize;
     }
@@ -6529,10 +6577,21 @@ fn os_edge_effects(
     let mut r = 0 as usize;
     while r < rows {
         let row = r * 4 as usize;
-        let code = table[row] as usize;
+        let own = table[row] as usize >= OS_EDGE_OWN
+            && (table[row] as usize) < OS_EDGE_OWN + 128 as usize;
+        let code = if own { table[row] as usize - OS_EDGE_OWN } else { table[row] as usize };
+        let moved = os_t(c, OS_T_EV);
         os_clear(c, tv);
+        os_clear(c, moved);
         if code < 64 as usize {
             os_param_origin(c, module, locals, fn_id, args, code, false, tv);
+        } else if code < 128 as usize && own {
+            os_param_contents_split(c, module, locals, fn_id, args, code - 64 as usize, tv, moved);
+            // The owner read through the argument moves: the storage the reached locals own and
+            // hold no address into goes with it (into the targets' S), as for a ParamAddr below.
+            let pc = os_t(c, OS_T_PC);
+            os_moved_storage(c, pc, tv, moved);
+            os_copy(c, moved, pc);
         } else if code < 128 as usize {
             os_param_origin(c, module, locals, fn_id, args, code - 64 as usize, true, tv);
         } else if code == OS_EDGE_STATIC {
@@ -6540,20 +6599,22 @@ fn os_edge_effects(
         } else {
             os_add_flag(c, tv, ORIGIN_UNKNOWN);
         }
-        // An argument stored by value moves: the frame storage it owns goes with it, into the
-        // target's S, and is neither an address the target holds nor one that escapes. What a
-        // callee reads through a parameter (ParamContents) is what its addresses lead to, never
-        // the parameter's own buffer (that is Frame of the parameter in the callee), so the
-        // moved storage leaves that value too, and what the buffer holds stays.
-        let moved = os_t(c, OS_T_EV);
-        os_clear(c, moved);
+        // An owner stored by value (an `own` edge) moves: the frame storage it owns goes with it,
+        // into the target's S, and is neither an address the target holds nor one that escapes.
+        // An `addr` ParamAddr value keeps that storage: a pointer into a by-value argument's
+        // buffer is an address of it. What a callee reads through a parameter (ParamContents) is
+        // what its addresses lead to, never the parameter's own buffer (that is Frame of the
+        // parameter in the callee), so the moved storage leaves that value too, and what the
+        // buffer holds stays.
         let pidx = if code < 64 as usize { code } else { code - 64 as usize };
         if code < 128 as usize && pidx < 63 as usize {
             let _ = os_arg(c, module, locals, fn_id, args, pidx);
-            if code < 64 as usize {
+            if code < 64 as usize && own {
                 os_moved_storage(c, moved, os_t(c, OS_T_AO), os_t(c, OS_T_AS));
             }
-            os_drop_moved_storage(c, tv, os_t(c, OS_T_AO), os_t(c, OS_T_AS));
+            if code >= 64 as usize || own {
+                os_drop_moved_storage(c, tv, os_t(c, OS_T_AO), os_t(c, OS_T_AS));
+            }
         }
         let bound = os_frame_bound(c, tv);
         if table[row + 3 as usize] & OS_EDGE_GLOBAL != 0 as u64 {
@@ -6566,7 +6627,7 @@ fn os_edge_effects(
             }
             os_clear(c, ed);
             os_add_flag(c, ed, ORIGIN_STATIC);
-            os_note_edges(c, tv, ed);
+            os_note_edges(c, tv, ed, own);
         }
         let mut w = 1 as usize;
         while w <= 2 as usize {
@@ -6588,7 +6649,7 @@ fn os_edge_effects(
                         );
                         refused = true;
                     }
-                    os_note_edges(c, tv, ed);
+                    os_note_edges(c, tv, ed, own);
                     os_write_edge(c, module, locals, tm, tv);
                     if !os_is_empty(c, moved) {
                         let none = os_t(c, OS_T_X);
@@ -7066,14 +7127,19 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
             if c.checking && (ty == 0 as u32 || os_carries(c, module, ty)) {
                 os_check_store(c, module, locals, pl.base, crossed);
             }
-            if crossed && (ty == 0 as u32 || os_carries(c, module, ty)) {
+            // An integer stored records no summary edge (§3, _The summary as built_): a callee's
+            // bookkeeping (`arena.offset = .. + size`) is no address of what it was computed from,
+            // and making a pointer of an integer needs `unsafe`, which answers for the round trip.
+            if crossed
+                && (ty == 0 as u32 || os_carries(c, module, ty))
+                && (ty == 0 as u32 || os_type_def_tag(module, ty) != ILTYPE_PRIMITIVE) {
                 let ev = os_t(c, OS_T_EV);
                 let ed = os_t(c, OS_T_ED);
                 os_copy(c, ev, os_t(c, OS_T_VO));
                 let _ = os_or(c, ev, os_t(c, OS_T_VS));
                 os_drop_moved_storage(c, ev, os_t(c, OS_T_VO), os_t(c, OS_T_VS));
                 os_dest_reach(c, module, locals, dm, ed);
-                os_note_edges(c, ev, ed);
+                os_note_edges(c, ev, ed, ty != 0 as u32 && os_owns(c, module, ty));
             }
             os_store(c, module, locals, pl.base, crossed, ty);
         },
@@ -7357,8 +7423,13 @@ pub fn print_origins(c: &OriginSets, func: &ZirFunction, module: &ILModule, tabl
     }
 }
 
-fn os_print_edge_code(code: usize) {
+fn os_print_edge_code(raw: usize) {
     let mut out = stdout();
+    let mut code = raw;
+    if raw >= OS_EDGE_OWN && raw < OS_EDGE_OWN + 128 as usize {
+        print("own ");
+        code = raw - OS_EDGE_OWN;
+    }
     if code == OS_EDGE_STATIC {
         print("Static");
     } else if code == OS_EDGE_UNKNOWN {

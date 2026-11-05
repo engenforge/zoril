@@ -40,3 +40,6 @@ pub fn mix(a: &Arena, pick: bool) -> Vec<i32> {
     if pick { return Vec::<i32>.new_in(a); }
     return Vec::<i32>.new();
 }
+
+// An owner stored by value: an `own` edge (code 130 + 1), which a caller must read back as one.
+pub fn put_owned(o: &mut Vec<Vec<i32>>, w: Vec<i32>) { o.push(w); }

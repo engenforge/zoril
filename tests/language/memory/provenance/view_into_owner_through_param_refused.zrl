@@ -1,0 +1,12 @@
+// A view into a Vec's buffer that a callee reaches through a parameter is an address, not moved
+// storage: its edge is `addr`, and the call store rule refuses storing it out (Z-0071; a split of
+// the value by set alone would accept it).
+// flags: --provenance
+// EXPECT: call store rule
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+struct Holder { v: &Vec<i32> }
+fn leak(out: &mut [i32], h: &Holder) { *out = h.v.as_slice(); }
+fn f(out: &mut [i32]) { let mut v = Vec::<i32>.new(); v.push(7); let h = Holder { v: &v }; leak(out, &h); }
+fn main() -> i32 { return 0; }

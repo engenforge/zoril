@@ -1,0 +1,18 @@
+// The must-reject twin: a Vec holding a view of this frame moved through parameters into a caller's
+// Vec. The `own` edge keeps the moved Vec's storage owned but forwards the views it holds as
+// addresses, and the call store rule refuses them (Z-0071).
+// flags: --provenance
+// EXPECT: call store rule
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+fn mv(dst: &mut Vec<Vec<[i32]>>, src: &mut Vec<Vec<[i32]>>) { match src.pop() { Option.Some(x) => { dst.push(x); }, Option.None => {} } }
+fn f(out: &mut Vec<Vec<[i32]>>) {
+    let x: [i32; 2] = [1, 2];
+    let mut inner = Vec::<[i32]>.new();
+    inner.push(&x);
+    let mut a = Vec::<Vec<[i32]>>.new();
+    a.push(inner);
+    mv(out, &mut a);
+}
+fn main() -> i32 { return 0; }
