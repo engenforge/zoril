@@ -1,0 +1,17 @@
+// name: An accessor matching through its reference parameter returns into a caller's local enum
+// expected: known_gap
+// gap: return pick(&e) with fn pick(r: &E) -> &P { return match r { E.A(x) => x, .. }; }: the old summary does not tie pick's result to r, because it does not read a binding of a match on r as derived from r, so the caller's return of a pointer into its local e is accepted; refused under --provenance by the return rule (Z-0061)
+// observed: exit 77
+struct P { a: i32 }
+enum E { A(P), B(i32) }
+fn pick(r: &E) -> &P { return match r { E.A(x) => x, E.B(_) => { return pick(r); } }; }
+fn leak(n: i32) -> &P {
+    let e = E.A(P { a: n });
+    return pick(&e);
+}
+fn clobber_stack() -> i32 { let arr = [77; 64]; return arr[0]; }
+fn main() -> i32 {
+    let p = leak(42);
+    let c = clobber_stack();
+    return p.a + c * 0;
+}

@@ -354,7 +354,7 @@ zoril -I <stdlib>  --emit-zil  ->  zilc  ->  qbe  ->  as  ->  ld  (with runtime.
 
 ## Testing
 
-- `make test` runs the standard verification suite: compiler unit tests, syntax checks, error-reporting tests, standard library safety assertions, runtime consistency, and the 476-probe safety matrix across 78 rows.
+- `make test` runs the standard verification suite: compiler unit tests, syntax checks, error-reporting tests, standard library safety assertions, runtime consistency, and the 478-probe safety matrix across 78 rows.
 - For developer-specific pre-merge verification (`make preflight`, `make preflight-changed`), mutation testing, toolchain dependency matrix testing (`make deps-matrix`), and reproducible release validation (`make repro-check`), see the [Developer Guide](doc/developer_guide.md).
 
 ## Contributing and roadmap
