@@ -1,0 +1,16 @@
+// A `match` on a reference lowers to `EnumPayload` on the reference itself, and codegen takes the
+// payload's address from the pointer's value (`enum_address`): the binding points into the memory
+// the argument designates, `Param(0)` (its caller reads `Frame(e)`), not into `self`'s own slot
+// (Z-0061).
+// ORIGINS: get_a x O={Param(0)} S={}
+// expected exit 0
+struct P { a: i32 }
+enum E { A(P), B(i32) }
+fn get_a(self: &E) -> &P {
+    return match self { E.A(x) => x, E.B(_) => { return get_a(self); } };
+}
+fn main() -> i32 {
+    let e = E.A(P { a: 42 });
+    let p = get_a(&e);
+    return p.a - 42;
+}

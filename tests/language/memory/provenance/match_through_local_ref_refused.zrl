@@ -1,0 +1,15 @@
+// The must-reject sibling of match_through_ref_accepted: the scrutinee is a reference to a local
+// enum, so the binding points into this frame and the return rule refuses it (Z-0061).
+// flags: --provenance
+// EXPECT: return rule
+// expected compile fail
+struct P { a: i32 }
+enum E { A(P), B(i32) }
+fn leak(n: i32) -> &P {
+    let e = E.A(P { a: n });
+    return match &e { E.A(x) => x, E.B(_) => { return leak(n); } };
+}
+fn main() -> i32 {
+    let p = leak(42);
+    return p.a - 42;
+}
