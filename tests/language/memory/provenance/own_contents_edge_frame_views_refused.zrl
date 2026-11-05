@@ -1,6 +1,6 @@
 // The must-reject twin: a Vec holding a view of this frame moved through parameters into a caller's
-// Vec. The `own` edge keeps the moved Vec's storage owned but forwards the views it holds as
-// addresses, and the call store rule refuses them (Z-0071).
+// Vec. The views it holds reach the caller as addresses of this frame, and the call store rule
+// refuses them (Z-0071; a per-store edge kind once took them for moved storage, Z-0072).
 // flags: --provenance
 // EXPECT: call store rule
 // expected compile fail

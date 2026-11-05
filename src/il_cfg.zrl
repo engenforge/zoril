@@ -144,8 +144,7 @@ pub struct ILFunction {
     // result's origins and `os_ret_flags` its ORIGIN_STATIC/ORIGIN_RAW/ORIGIN_UNKNOWN (a Frame
     // origin reads as Unknown); `os_ret_fresh` is whether the result's storage holds a Frame or Unknown origin. The
     // store edges are `os_edge_rows` rows of four u64 in the main arena: the stored value's code
-    // (0..63 ParamAddr(i), 64..127 ParamContents(i), 128 Static, 129 Unknown, and 130 + the first
-    // two for an owner moved by value, check_zir::OS_EDGE_OWN) and the target masks
+    // (0..63 ParamAddr(i), 64..127 ParamContents(i), 128 Static, 129 Unknown) and the target masks
     // of ParamAddr bits, ParamContents bits, and bit 0 for a global.
     pub os_known: bool,
     pub os_ret_addr: u64,

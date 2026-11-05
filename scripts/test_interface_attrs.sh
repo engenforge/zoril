@@ -149,7 +149,6 @@ want_summary first "ret_addr = 0, ret_contents = 1"
 want_summary pair "decl_stores = 3, decl_into = 12"
 want_summary lit "ret_flags = 1"
 want_summary raw "ret_flags = 8"
-want_summary put_owned "edge = 131,"
 want_summary fresh "ret_fresh = true"
 want_summary first "ret_fresh = false"
 for prog in "$src"/prov_*.zrl; do

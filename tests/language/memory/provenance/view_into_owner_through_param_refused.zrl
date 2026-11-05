@@ -1,6 +1,6 @@
 // A view into a Vec's buffer that a callee reaches through a parameter is an address, not moved
-// storage: its edge is `addr`, and the call store rule refuses storing it out (Z-0071; a split of
-// the value by set alone would accept it).
+// storage, and the call store rule refuses storing it out (Z-0071; a split of the value by set
+// alone would accept it).
 // flags: --provenance
 // EXPECT: call store rule
 // expected compile fail

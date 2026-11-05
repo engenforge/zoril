@@ -41,5 +41,5 @@ pub fn mix(a: &Arena, pick: bool) -> Vec<i32> {
     return Vec::<i32>.new();
 }
 
-// An owner stored by value: an `own` edge (code 130 + 1), which a caller must read back as one.
+// An owner stored by value: a caller reads its storage as moved, not as an address.
 pub fn put_owned(o: &mut Vec<Vec<i32>>, w: Vec<i32>) { o.push(w); }
