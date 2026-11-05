@@ -82,6 +82,7 @@ Attributes begin with `#[]` and modify the following declaration:
 - **`#[derive(Clone)]`**: On a struct: generates its field-by-field `Clone` impl (§8.5).
 - **`#[borrows(p, ...)]`**: On a function: the reference it returns points into these parameters only; `#[borrows()]` into none of them (§7.2).
 - **`#[stores(p -> q, ...)]`**: On a function: the body stores parameter `p`'s own storage into `q`'s memory. No arrow means `self`; `-> static` means a global. Checked against the body's computed store summary when the body is verified, so a false one is an error in its own module; a `pub fn` that stores a reference parameter without declaring it warns, naming the attribute to add (§7.2).
+- **`#[fresh]`**: On an `unsafe fn` whose result is a raw pointer (`*T` or `*mut T`): each call returns memory that no other live pointer reaches and that the caller owns, such as an allocator's anonymous `mmap`. It is the author's claim, not checked, like any `unsafe` obligation ([`unsafe_policy.md`](unsafe_policy.md) §1). It is recorded for the provenance rules (`doc/design/provenance.md` §3, _Raw operations_), which do not read it yet: today it changes no check. On a safe function, a function returning anything else, or an item that is not a function it is an error. An interface (`.zri`) keeps it.
 
 One more attribute exists but is not part of the checked-code surface: `#[summary(...)]`, which the compiler writes into a `.zri` interface to describe a body's storage behaviour.
 

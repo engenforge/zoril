@@ -1000,6 +1000,7 @@ impl Driver {
             is_extern: f.is_extern
                 && f.body
                     == 0 as ExprId, is_export: f.is_export, is_unsafe: f.is_unsafe, is_local: is_local, is_pub: f.is_pub, must_use: f.must_use,
+            fresh: f.fresh,
             arena_alloc_bytes: if f.has_summary { f.summary_alloc } else { 0 as usize },
             doc_comment: f.doc_comment,
             source_file: source_file,

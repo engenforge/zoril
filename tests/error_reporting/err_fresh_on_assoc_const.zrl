@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_fresh_on_assoc_const.zrl:6:7: error: #[fresh] applies only to an unsafe fn
+// `#[fresh]` on an associated constant in an impl body (Z-0078).
+struct S { x: i32 }
+impl S {
+    #[fresh]
+    const C: i32 = 1;
+}
+fn main() -> i32 { return 0; }

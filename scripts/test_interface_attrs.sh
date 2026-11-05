@@ -38,7 +38,8 @@ has_attr() {
 for want in \
     "gen_must_use|#[must_use]" "gen_borrows|#[borrows(b)]" "gen_stores|#[stores(val -> dst)]" \
     "impl_must_use|#[must_use]" "impl_borrows|#[borrows(self)]" "impl_stores|#[stores(val -> self)]" \
-    "area|#[must_use]" "first|#[borrows(self)]"; do
+    "area|#[must_use]" "first|#[borrows(self)]" \
+    "gen_fresh|#[fresh]" "fresh_block|#[fresh]" "impl_fresh|#[fresh]" "tr_fresh|#[fresh]"; do
     item=${want%%|*}; attr=${want#*|}
     has_attr "$item" "$attr" || fail "the interface lost $attr on $item" "$dir/lib.zri"
 done

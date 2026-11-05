@@ -73,6 +73,8 @@ pub struct ILFunction {
     pub is_local: bool,
     pub is_pub: bool,
     pub must_use: bool,
+    // `#[fresh]` (ast::FnDecl.fresh): the result is memory only the caller reaches.
+    pub fresh: bool,
     pub arena_alloc_bytes: usize,
     pub doc_comment: u32,
     pub source_file: u32,

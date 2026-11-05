@@ -562,6 +562,8 @@ pub struct FnDecl {
     pub is_unsafe: bool,
     pub is_variadic: bool,
     pub must_use: bool,
+    // `#[fresh]`: the author's claim that each call returns memory only the caller reaches (§2.5).
+    pub fresh: bool,
     // Read from a `.zri`: its spans are lines of the interface, not of the module's source, so a
     // diagnostic about the body cannot name a line of the source (the importer reports none that the
     // module's own build can report).

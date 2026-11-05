@@ -26,6 +26,13 @@ pub fn gen_stores<T>(val: &T, dst: &mut Holder<T>) { dst.r = val; }
 
 pub unsafe fn gen_unsafe<T>(p: *mut T) -> *mut T { return p; }
 
+#[fresh]
+pub unsafe fn gen_fresh<T>(p: *mut T) -> *mut T { return p; }
+
+// `#[fresh]` on a plain function: the interface writes it beside the summary (Z-0078).
+#[fresh]
+pub unsafe fn fresh_block(n: u64) -> *mut u8 { return @ptr_from_int<*mut u8>(n); }
+
 impl<T> Cell<T> {
     #[must_use]
     pub fn impl_must_use(self: &Cell<T>) -> bool { return true; }
@@ -37,6 +44,9 @@ impl<T> Cell<T> {
     pub fn impl_stores(self: &mut Cell<&T>, val: &T) { self.item = val; }
 
     pub unsafe fn impl_unsafe(self: &Cell<T>) -> bool { return true; }
+
+    #[fresh]
+    pub unsafe fn impl_fresh(self: &Cell<T>) -> *mut T { return self.slot; }
 }
 
 pub trait Shape {
@@ -45,6 +55,11 @@ pub trait Shape {
 
     #[borrows(self)]
     fn first(self: &Self, o: &Self) -> &Self { return self; }
+}
+
+pub trait FreshSource {
+    #[fresh]
+    unsafe fn tr_fresh(self: &Self, n: u64) -> *mut u8;
 }
 
 type HiddenAlias = i32;
