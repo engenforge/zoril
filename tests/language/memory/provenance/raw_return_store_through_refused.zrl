@@ -1,0 +1,8 @@
+// A raw address is memory outside the frame also in a caller, through the callee's summary (Raw in
+// its result flags): storing a frame address through it is refused by the store rule (Z-0063).
+// flags: --provenance
+// EXPECT: (store rule)
+// expected compile fail
+fn raw(n: u64) -> *mut *i32 { return @ptr_from_int<*mut *i32>(n); }
+fn put() { let x = 5; let p = raw(4096 as u64); unsafe { *p = &x; } }
+fn main() -> i32 { put(); return 0; }

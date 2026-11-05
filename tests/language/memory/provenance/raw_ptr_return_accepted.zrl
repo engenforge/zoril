@@ -1,0 +1,7 @@
+// An address made by `@ptr_from_int` is the programmer's to vouch for: returning it, in a box, passes
+// the return rule (`arena_init` in stdlib/local_mem.zrl, Z-0063).
+// flags: --provenance
+// expected exit 0
+struct H { p: *u8, n: u64 }
+fn mk3(n: u64) -> Box<H> { let p = @ptr_from_int<*u8>(n); return box H { p: p, n: n }; }
+fn main() -> i32 { let b = mk3(8 as u64); return b.n as i32 - 8; }

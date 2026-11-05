@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: (store rule)
+// A raw pointer returned by a callee read from the interface (ret_flags Raw) is memory outside the
+// frame: storing a frame address through it is refused (Z-0063).
+import "lib_summary.zrl";
+
+fn put() { let x = 5; let p = lib_summary::raw(4096 as u64); unsafe { *p = &x; } }
+fn main() -> i32 { put(); return 0; }

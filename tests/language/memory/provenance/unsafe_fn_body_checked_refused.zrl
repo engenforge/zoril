@@ -1,0 +1,29 @@
+// An `unsafe fn` body is checked like any other (only `@ptr_from_int`'s Raw is exempt): gap_47's
+// program with the storer made `unsafe` is refused. With the body-wide exemption it compiled and
+// read the freed arena (exit 77) (Z-0063).
+// flags: --provenance
+// EXPECT: unknown-call store rule
+// expected compile fail
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct Slot { out: &mut [i32] }
+unsafe fn escape_storer(out: &mut [i32]) {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let w = Slot { out: out };
+    let r = &w;
+    let s = v.as_slice();
+    let mut cl = || { *r.out = s; };
+    cl();
+}
+fn main() -> i32 {
+    let mut dest: [i32] = @slice(0 as *i32, 0);
+    unsafe { escape_storer(&mut dest); }
+    let a2 = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v2 = Vec::<i32>.new_in(&a2);
+    v2.push(77);
+    return dest[0];
+}

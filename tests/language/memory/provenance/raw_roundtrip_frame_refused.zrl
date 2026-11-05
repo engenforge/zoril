@@ -1,0 +1,7 @@
+// The Raw exemption covers only what `@ptr_from_int` adds: a frame address turned into an integer and
+// back is still this frame's, and the return rule refuses it (Z-0063).
+// flags: --provenance
+// EXPECT: return rule
+// expected compile fail
+fn rt() -> *i32 { let x = 5; let n = (&x) as *i32 as u64; return @ptr_from_int<*i32>(n); }
+fn main() -> i32 { let p = rt(); return 0; }
