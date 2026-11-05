@@ -1,0 +1,20 @@
+// name: Views of a caller's arena appended to the caller's Vec
+// expected: accept
+// The accepted twin of gap_56 and 418 with reference-carrying elements: views of a Vec in the caller's arena outlive this frame, so copying them into the caller's Vec<[u8]> with extend_from_slice is legal (Z-0060).
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+fn fill(out: &mut Vec<[u8]>, a: &Arena) {
+    let mut w = Vec::<u8>.new_in(a);
+    w.push(7 as u8);
+    let s = w.as_slice();
+    let views = [s];
+    out.extend_from_slice(&views);
+}
+fn main() -> i32 {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v: Vec<[u8]> = Vec.new();
+    fill(&mut v, &a);
+    return v[0][0] as i32 - 7;
+}

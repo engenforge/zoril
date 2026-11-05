@@ -406,9 +406,16 @@ impl<T> Vec<T> {
             self.data = new_data;
             self.cap = new_cap;
         }
-        let dest = (self.data as usize + self.len * sizeof(T)) as *mut u8;
-        // SAFETY: self.cap was ensured to be at least target_len, and slice contains slice.len valid elements.
-        unsafe { memcpy(dest, slice.ptr as *u8, size_of_n(slice.len, sizeof(T))); }
+        // Each element is written as a `T`, not copied with `memcpy`: a bare extern has no store
+        // effect, so the copy would hide from the call summary that the slice's elements (views,
+        // references) now live in `self` (gap_56_extern_copy_extend_from_slice).
+        let dest = self.data as usize + self.len * sizeof(T);
+        let mut i = 0 as usize;
+        while i < slice.len {
+            // SAFETY: self.cap was ensured to be at least target_len, and slice contains slice.len valid elements.
+            unsafe { *((dest + i * sizeof(T)) as *mut T) = slice[i]; }
+            i = i + 1 as usize;
+        }
         self.len = target_len;
     }
 }

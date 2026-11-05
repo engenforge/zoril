@@ -1,0 +1,19 @@
+// name: Frame views copied out of a local Vec by extend_from_slice
+// expected: compile_reject
+// The Vec-source sibling of gap_56: views of fill's stack array, pushed into a local Vec and copied into the caller's Vec with extend_from_slice(views.as_slice()), are refused now that extend_from_slice writes each element as a T rather than through memcpy (Z-0060).
+import "vec.zrl";
+use vec::Vec;
+fn fill(out: &mut Vec<[u8]>) {
+    let buf = [42 as u8; 16];
+    let s: [u8] = &buf;
+    let mut views = Vec::<[u8]>.new();
+    views.push(s);
+    out.extend_from_slice(views.as_slice());
+}
+fn clobber_stack() -> u8 { let arr = [77 as u8; 512]; return arr[0]; }
+fn main() -> i32 {
+    let mut v: Vec<[u8]> = Vec.new();
+    fill(&mut v);
+    let c = clobber_stack();
+    return v[0][0] as i32 + (c as i32) * 0;
+}
