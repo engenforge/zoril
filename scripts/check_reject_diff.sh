@@ -29,7 +29,10 @@
 #   --bins B C   (a test hook) use the directories B and C, each holding `zoril` and `zbuild` and a
 #                `stdlib/`, instead of building anything
 #
-# The scratch worktrees are under build/reject-diff/ and are removed on exit. build/zoril is never touched:
+# Each run works in its own build/reject-diff-<pid>/, so two runs at once (make test runs this script's
+# self-test beside preflight's) do not clear each other's files. The scratch worktrees are removed on exit,
+# and the directory too when the run passes; a failed run keeps its files (report.txt, front_*.txt) until
+# the next run starts, which also removes what a killed run left. build/zoril is never touched:
 # the base worktree's build/ is seeded with copies of it and rebuilt from the base source, or, when the
 # seed refuses the base source, built through stage1 instead.
 set -u
@@ -57,17 +60,30 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-WORK="$REPO_ROOT/build/reject-diff"
+for old in "$REPO_ROOT"/build/reject-diff-*; do
+    pid=${old##*-}
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null || rm -rf "$old"
+done
+git -C "$REPO_ROOT" worktree prune >/dev/null 2>&1
+WORK="$REPO_ROOT/build/reject-diff-$$"
 rm -rf "$WORK"
 mkdir -p "$WORK"
 WORKTREES=""
 cleanup() {
+    rc=$?
     for wt in $WORKTREES; do
         git -C "$REPO_ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"
     done
     git -C "$REPO_ROOT" worktree prune >/dev/null 2>&1
+    if [ "$rc" -eq 0 ]; then
+        rm -rf "$WORK"
+    else
+        echo "check_reject_diff: its files are kept in $WORK" >&2
+    fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 # REJECT_DIFF_MAKE replaces `make` in the scratch builds (a test hook: scripts/test_preflight.sh).
 MAKE_CMD="${REJECT_DIFF_MAKE:-make}"

@@ -35,12 +35,17 @@ printf '%s\n' "$reject" > "$t/base/refuse.list"; : > "$t/change/refuse.list"
 run; rc=$?
 [ "$rc" -eq 1 ] || fail "a newly accepted compile_reject probe did not block (exit $rc)"
 grep -q "^NEWLY_ACCEPTED .*$reject (probe-compile_reject)" "$t/out.txt" || fail "no NEWLY_ACCEPTED line for $reject" "$t/out.txt"
+# A failed run keeps its files for reading; the next run removes them.
+kept=$(sed -n 's/^check_reject_diff: its files are kept in //p' "$t/out.txt")
+[ -n "$kept" ] && grep -q "^NEWLY_ACCEPTED .*$reject" "$kept/report.txt" || fail "a failed run did not keep its report (kept: '$kept')"
 
 # 2. The same, listed in the allow file.
 printf '%s the reason it is excused\n' "$reject" > "$t/allow.txt"
 run --allow "$t/allow.txt"; rc=$?
 [ "$rc" -eq 0 ] || fail "an allowed newly accepted probe still blocked (exit $rc)"
 grep -q "^NEWLY_ACCEPTED" "$t/out.txt" || fail "an allowed line is still printed" "$t/out.txt"
+[ ! -e "$kept" ] || fail "the next run did not remove the failed run's files ($kept)"
+! grep -q 'its files are kept' "$t/out.txt" || fail "a passing run kept its files" "$t/out.txt"
 
 # 3. A probe that is accepted by design, newly accepted.
 printf '%s\n' "$accept" > "$t/base/refuse.list"; : > "$t/change/refuse.list"
