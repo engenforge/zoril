@@ -1,0 +1,7 @@
+// The in-body twin of int_store_through_call_accepted.zrl: the store rule still checks an integer
+// holding this frame's address stored into memory that outlives it, in the body that stores it.
+// flags: --provenance
+// EXPECT: (store rule)
+// expected compile fail
+fn f(slot: &mut usize) { let x = 5; *slot = (&x) as *i32 as usize; }
+fn main() -> i32 { return 0; }

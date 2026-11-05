@@ -1,0 +1,16 @@
+// A Vec the callee builds around a view of a parameter's buffer and stores into the caller's slot:
+// the view reaches the caller as an address of `v`'s buffer, and the call store rule refuses it.
+// A per-store edge kind decided by the stored type (`Vec<[i32]>` owns) took the buffer for storage
+// moved into `out` and accepted this (Z-0071's review, Z-0072).
+// flags: --provenance
+// EXPECT: call store rule
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+fn leak_vec(out: &mut Vec<[i32]>, v: &Vec<i32>) {
+    let mut tmp = Vec::<[i32]>.new();
+    tmp.push(v.as_slice());
+    *out = tmp;
+}
+fn f(out: &mut Vec<[i32]>) { let mut v = Vec::<i32>.new(); v.push(7); leak_vec(out, &v); }
+fn main() -> i32 { return 0; }

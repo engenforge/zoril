@@ -7066,7 +7066,12 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
             if c.checking && (ty == 0 as u32 || os_carries(c, module, ty)) {
                 os_check_store(c, module, locals, pl.base, crossed);
             }
-            if crossed && (ty == 0 as u32 || os_carries(c, module, ty)) {
+            // An integer stored records no summary edge (§3, _The summary as built_): a callee's
+            // bookkeeping (`arena.offset = .. + size`) is no address of what it was computed from,
+            // and making a pointer of an integer needs `unsafe`, which answers for the round trip.
+            if crossed
+                && (ty == 0 as u32 || os_carries(c, module, ty))
+                && (ty == 0 as u32 || os_type_def_tag(module, ty) != ILTYPE_PRIMITIVE) {
                 let ev = os_t(c, OS_T_EV);
                 let ed = os_t(c, OS_T_ED);
                 os_copy(c, ev, os_t(c, OS_T_VO));

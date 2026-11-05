@@ -1,0 +1,10 @@
+// The boundary decided in Z-0071 (design note §3, _The summary as built_): an integer stored records
+// no summary edge, so a caller does not see that a callee stored an address cast to an integer.
+// Here `put` stores this frame's address, as `usize`, into the caller's slot and is accepted; making
+// a pointer of it again needs `@ptr_from_int` in `unsafe`, which answers for it. The same store in
+// the body that makes it is refused (int_store_in_body_refused.zrl).
+// flags: --provenance
+// expected exit 0
+fn put(slot: &mut usize, n: usize) { *slot = n; }
+fn f(slot: &mut usize) { let x = 5; put(slot, (&x) as *i32 as usize); }
+fn main() -> i32 { let mut s = 0 as usize; f(&mut s); if s != 0 as usize { return 0; } return 1; }

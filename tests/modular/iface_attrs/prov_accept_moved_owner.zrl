@@ -1,0 +1,15 @@
+// expected exit 0
+// An owner moved into a caller's Vec through a callee read from the interface: its storage goes
+// with it (the moved-storage rule, design note §3) after the `.zri` round trip too, so the call is
+// accepted; read back as an address of this frame, the call store rule would refuse it.
+import "lib_summary.zrl";
+import "vec.zrl";
+use vec::Vec;
+
+fn add_via(out: &mut Vec<Vec<i32>>) { let w = Vec::<i32>.new(); lib_summary::put_owned(out, w); }
+
+fn main() -> i32 {
+    let mut v: Vec<Vec<i32>> = Vec.new();
+    add_via(&mut v);
+    return v.len() as i32 - 1;
+}
