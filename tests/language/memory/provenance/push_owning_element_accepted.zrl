@@ -1,0 +1,23 @@
+// Pushing an owner (a Vec, a String) into a caller's Vec moves it, with the storage it owns: the
+// call store rule reads the addresses it holds, not that storage (Z-0062). Directly, through a
+// by-value parameter, and a builder returning the Vec it pushed into.
+// flags: --provenance
+// expected exit 0
+import "vec.zrl";
+import "string.zrl";
+use vec::Vec;
+use string::String;
+fn add(v: &mut Vec<Vec<i32>>) { v.push(Vec::<i32>.new()); }
+fn adds(v: &mut Vec<String>) { v.push(String.new()); }
+fn put_p(o: &mut Vec<Vec<i32>>, w: Vec<i32>) { o.push(w); }
+fn add_via(out: &mut Vec<Vec<i32>>) { let w = Vec::<i32>.new(); put_p(out, w); }
+fn mk() -> Vec<Vec<i32>> { let mut v = Vec::<Vec<i32>>.new(); v.push(Vec::<i32>.new()); return v; }
+fn main() -> i32 {
+    let mut v: Vec<Vec<i32>> = Vec.new();
+    add(&mut v);
+    add_via(&mut v);
+    let mut w: Vec<String> = Vec.new();
+    adds(&mut w);
+    let m = mk();
+    return (v.len() + w.len() + m.len()) as i32 - 4;
+}

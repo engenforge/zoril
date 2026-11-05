@@ -1,0 +1,22 @@
+// The must-reject twin where the moved owner holds no other Frame: a Vec in a by-value Arena
+// parameter holds Frame(a) both as an address (the arena tie) and as storage it owns, so moving it
+// must keep that Frame, and the call store rule refuses it (Z-0062, mutant M137; gap_62 is the
+// same program by default).
+// flags: --provenance
+// EXPECT: call store rule
+// expected compile fail
+import "vec.zrl";
+import "mem.zrl";
+use vec::Vec;
+use mem::Arena;
+fn f(out: &mut Vec<Vec<i32>>, a: Arena) {
+    let mut w = Vec::<i32>.new_in(&a);
+    w.push(42);
+    out.push(w);
+}
+fn main() -> i32 {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v: Vec<Vec<i32>> = Vec.new();
+    f(&mut v, a);
+    return v.len() as i32 - 1;
+}

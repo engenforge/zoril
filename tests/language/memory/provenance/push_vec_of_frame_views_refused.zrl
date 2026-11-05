@@ -1,0 +1,15 @@
+// The must-reject twin of push_owning_element_accepted: the pushed Vec holds a view of a stack
+// array, an address it holds (O), so the call store rule still refuses it (Z-0062).
+// flags: --provenance
+// EXPECT: call store rule
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+fn f(out: &mut Vec<Vec<[i32]>>) {
+    let buf = [42; 16];
+    let s: [i32] = &buf;
+    let mut w = Vec::<[i32]>.new();
+    w.push(s);
+    out.push(w);
+}
+fn main() -> i32 { let mut v: Vec<Vec<[i32]>> = Vec.new(); f(&mut v); return 0; }
