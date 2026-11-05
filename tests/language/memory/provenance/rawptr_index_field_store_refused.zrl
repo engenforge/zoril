@@ -1,0 +1,8 @@
+// The must-reject twin through a raw pointer: a view of this frame stored into a field of the
+// caller's element is refused by the store rule (Z-0068).
+// flags: --provenance
+// EXPECT: (store rule)
+// expected compile fail
+struct S { r: [i32] }
+fn f(e: *mut S, i: usize) { let x: [i32; 2] = [1, 2]; unsafe { e[i].r = &x; } }
+fn main() -> i32 { return 0; }

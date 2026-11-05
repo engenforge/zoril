@@ -1,0 +1,10 @@
+// The must-reject twin: an index then field read of a local Vec whose elements hold a view of this
+// frame reads that view through the Vec's buffer, and the return rule refuses it (Z-0068).
+// flags: --provenance
+// EXPECT: return rule
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+struct S { r: [i32] }
+fn f() -> [i32] { let x: [i32; 2] = [1, 2]; let mut v = Vec::<S>.new(); v.push(S { r: &x }); let i = 0 as usize; return v[i].r; }
+fn main() -> i32 { let r = f(); return 0; }

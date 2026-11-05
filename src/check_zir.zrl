@@ -5971,6 +5971,17 @@ fn os_field_type(module: &ILModule, ty: u32, name: u32) -> u32 {
     return 0 as u32;
 }
 
+// The element type of a `Vec<T>`, 0 for any other type: what codegen's index_addr indexes in the
+// Vec's buffer (get_slice_element_type, by the same name test).
+fn os_vec_element(c: &OriginSets, module: &ILModule, ty: u32) -> u32 {
+    if os_type_def_tag(module, ty) != ILTYPE_USER { return 0 as u32; }
+    let u = module.types[ty as usize - 1 as usize].def.get_User();
+    if !type_name_is(c.table.lookup(u.name), "Vec") || u.type_args.len == 0 as usize {
+        return 0 as u32;
+    }
+    return u.type_args[0];
+}
+
 // The memory place P lies in. With no pointer crossed it is the base local's own slot
 // (`c.walk_crossed` false); otherwise OS_T_M holds that memory's origins. A projection on a
 // pointer steps through it, as does an index or dereference of a slice (a field of a slice, its
@@ -5985,6 +5996,12 @@ fn os_walk(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place) ->
     c.walk_len = false;
     let mut ty = os_local_ty(locals, p.base);
     let mut crossed = false;
+    // For the Index at idx_at, as codegen's index_addr sees it: whether the type it starts at is a
+    // `&mut`/`*mut` (a `Vec` reached so is an array of Vecs), and whether a pointer or box layer was
+    // dereferenced for it (indexing what is left is pointer arithmetic over that memory).
+    let mut idx_at = p.projections.len;
+    let mut idx_mut = false;
+    let mut idx_ptr = false;
     let mut i = 0 as usize;
     while i < p.projections.len {
         if ty == 0 as u32 || ty as usize > module.types.len() {
@@ -6001,11 +6018,21 @@ fn os_walk(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place) ->
             return 0 as u32;
         }
         let tag = os_type_def_tag(module, ty);
+        let is_index = match p.projections[i] {
+            Projection.Index(_) => true,
+            Projection.Deref | Projection.Field(_) | Projection.TupleIndex(_) => false,
+        };
+        if is_index && idx_at != i {
+            idx_at = i;
+            idx_mut = is_mut_pointer_tag(tag);
+            idx_ptr = false;
+        }
         if tag == ILTYPE_BOXED || tag == ILTYPE_BOXEDMUT {
             ty = os_pointee(module, ty);
             match p.projections[i] {
                 Projection.Deref => { i = i + 1 as usize; },
-                Projection.Index(_) | Projection.Field(_) | Projection.TupleIndex(_) => {},
+                Projection.Index(_) => { idx_ptr = true; },
+                Projection.Field(_) | Projection.TupleIndex(_) => {},
             }
             continue;
         }
@@ -6031,7 +6058,7 @@ fn os_walk(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place) ->
                 crossed = true;
             }
             ty = os_pointee(module, ty);
-            if consumes { i = i + 1 as usize; }
+            if consumes { i = i + 1 as usize; } else if is_index { idx_ptr = true; }
             continue;
         }
         match p.projections[i] {
@@ -6056,12 +6083,27 @@ fn os_walk(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place) ->
                     ty = 0 as u32;
                 }
             },
+            // As codegen's index_addr: an array is indexed in place; a Vec (not reached through a
+            // `&mut`/`*mut`) through its buffer pointer, so the element is memory the Vec's pointer
+            // reaches, as for a slice; anything else reached through a pointer or box is pointer
+            // arithmetic over that memory, of the same type.
             Projection.Index(_) => {
-                ty = if tag == ILTYPE_ARRAY {
-                    module.types[ty as usize - 1 as usize].def.get_Array().element
-                } else {
-                    0 as u32
-                };
+                let elem = os_vec_element(c, module, ty);
+                if tag == ILTYPE_ARRAY {
+                    ty = module.types[ty as usize - 1 as usize].def.get_Array().element;
+                } else if elem != 0 as u32 && !idx_mut {
+                    if crossed {
+                        os_through(c, tm, ta);
+                        os_copy(c, tm, ta);
+                    } else {
+                        let _ = os_or(c, tm, p.base as usize);
+                        let _ = os_or(c, tm, c.nl + p.base as usize);
+                        crossed = true;
+                    }
+                    ty = elem;
+                } else if !idx_ptr {
+                    ty = 0 as u32;
+                }
             },
             // A dereference of a type that is not a pointer: the walk has lost the type.
             Projection.Deref => {
