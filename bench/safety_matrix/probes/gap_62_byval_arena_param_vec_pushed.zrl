@@ -1,0 +1,22 @@
+// name: A Vec in a by-value Arena parameter is pushed into the caller's Vec
+// expected: known_gap
+// gap: fn f(out: &mut Vec<Vec<i32>>, a: Arena) pushes a Vec made in &a into out: the arena parameter is dropped (freed) when f returns, and the old rules read its storage as external, as gap_32 does for a by-value Vec; the next arena reuses the memory. Refused under --provenance by the call store rule (Z-0062)
+// observed: exit 77
+import "vec.zrl";
+import "mem.zrl";
+use vec::Vec;
+use mem::Arena;
+fn f(out: &mut Vec<Vec<i32>>, a: Arena) {
+    let mut w = Vec::<i32>.new_in(&a);
+    w.push(42);
+    out.push(w);
+}
+fn main() -> i32 {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v: Vec<Vec<i32>> = Vec.new();
+    f(&mut v, a);
+    let b = match Arena.new(65536) { Result.Ok(b) => b, Result.Err(_) => { return 1; } };
+    let mut x = Vec::<i32>.new_in(&b);
+    x.push(77);
+    return v[0][0];
+}
