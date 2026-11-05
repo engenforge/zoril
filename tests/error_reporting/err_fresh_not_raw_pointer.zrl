@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_fresh_not_raw_pointer.zrl:5:3: error: #[fresh] applies only to a function whose result type is written *T or *mut T (not an alias of one)
+// Only a raw pointer is made where the freshness claim is made: not an integer, a reference or
+// nothing (Z-0078).
+#[fresh]
+unsafe fn mk(n: u64) -> u64 { return n; }
+fn main() -> i32 { return 0; }

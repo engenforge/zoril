@@ -623,6 +623,7 @@ impl ZilParser {
                 is_local: false,
                 is_pub: false,
                 must_use: false,
+                fresh: false,
                 arena_alloc_bytes: 0 as usize,
                 doc_comment: 0 as u32,
                 // ZIL text (unlike the surface language) carries no source-file

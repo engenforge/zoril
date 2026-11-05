@@ -3080,6 +3080,7 @@ impl ZirLowerer {
             is_unsafe: false,
             is_variadic: false,
             must_use: false,
+            fresh: false,
             from_interface: false,
             // A closure has no doc comment of its own, but its source file is meaningful: it is
             // written inline in its enclosing function's file (self.file_path; empty interns to 0,

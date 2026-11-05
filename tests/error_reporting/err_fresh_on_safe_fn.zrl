@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_fresh_on_safe_fn.zrl:4:3: error: #[fresh] applies only to an unsafe fn: freshness is a claim its author makes, like any unsafe obligation
+// `#[fresh]` is an `unsafe` obligation's claim, so a safe function may not make it (Z-0078).
+#[fresh]
+fn mk(n: u64) -> *mut u8 { return @ptr_from_int<*mut u8>(n); }
+fn main() -> i32 { return 0; }

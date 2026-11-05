@@ -1182,6 +1182,10 @@ impl InterfacePrinter {
         if f.must_use {
             self.write("#[must_use]\n");
         }
+        // `#[fresh]` is the author's claim about every call, so an importer needs it as the module does.
+        if f.fresh {
+            self.write("#[fresh]\n");
+        }
         if is_gen { self.write_declared_contracts(f, ""); }
         if f.is_export {
             self.write("#[export]\n");
@@ -1220,6 +1224,7 @@ impl InterfacePrinter {
         let mut i = 0 as usize;
         while i < t.methods.len {
             if t.methods[i].must_use { self.write("    #[must_use]\n"); }
+            if t.methods[i].fresh { self.write("    #[fresh]\n"); }
             self.write_declared_contracts(&t.methods[i], "    ");
             self.write("    ");
             if t.methods[i].is_unsafe { self.write("unsafe "); }
@@ -1431,6 +1436,7 @@ impl InterfacePrinter {
             self.write_summary_attr(p_method, "    ");
         }
         if m.must_use { self.write("    #[must_use]\n"); }
+        if m.fresh { self.write("    #[fresh]\n"); }
         if is_gen { self.write_declared_contracts(m, "    "); }
         self.write("    ");
         if m.is_pub { self.write("pub "); }
