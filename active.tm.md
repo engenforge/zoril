@@ -21,6 +21,25 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - **Ruled out:** dropping the `ParamContents` bits of an integer-typed value at an in-body store (`ZirStmt.Assign`, mirroring `os_call`'s integer-result rule): no change, since the integer arrives here as a by-value parameter (`ParamAddr`), whose bits `p as usize` needs. Scratch compiler `build/z71/zoril.x` in the session; same five golden diffs, `push_owning_element_accepted.zrl` still refused, warn counts 197/40/0.
       - **Options for the maintainer:** (a) typed edges: each summary edge records whether the stored value is an integer, a moved owner or an address, and the call maps it accordingly (an integer's value carries only what the reached locals hold, never what they own; a moved owner's storage goes into the targets' `S`; an address keeps both); this changes the summary and the `.zri` (`#[summary(..)]`, Z-0057) and is its own task. Ruled out as a smaller fix: splitting an integer read inside the callee, since the callee records it as `ParamContents(i)` either way and the caller does the merging. (b) Defer Z-0070: an `unsafe fn` keeps the old masks until Z-0012, which then needs (a) or (b) before it deletes them.
 
+    **Feedback from Gemini Argon:**
+    Proceed with Option a: rewrite Z-0071 to implement typed summary edges now, keep Z-0070 active, and move to Z-0064 only after Z-0071 passes all probes.
+    To keep `.zri` files minimal and avoid bloat, use a 2-way edge distinction (`addr` vs. `own`) instead of a 3-way tag by pruning pure scalars at the source:
+    1. **Drop Scalar Edges Completely:**
+      - When generating summary edges (for both `.direct` parameters and `.contents` reads) or evaluating stores, check the static type of the transferred value.
+      - If the type is a pure scalar (`usize`, `i32`, `bool`, enums without payloads) that cannot contain references, slices, or owned handles, emit **no summary edge at all**.
+      - This eliminates the `alloc` size-to-arena-header false edge (`self.cap` arithmetic into `*arena`) without needing an `integer` edge kind in `.zri` files.
+    2. **Classify Remaining Edges into Two Kinds (**`addr` **vs.** `own`**):**
+      - `addr` **(Address/View Edge):** Emit when the stored or returned value's type contains a borrowed reference or slice (`&T`, `&mut T`, `[T]`, or a struct holding a reference/slice like `Holder`).
+      - `own` **(Owner/Move Edge):** Emit when the stored or returned value is a moved owning value (`Vec<T>`, `String`, or an owning struct with no borrowed views) or an internal raw backing pointer assignment (`self.ptr = p`) inside an `unsafe fn`.
+      - **Mixed Structs (Owner + Reference):** If a struct contains both owned storage and a reference, emit both an `own` edge and an `addr` edge (or only `own` if `own` already forwards existing `src.addr` to `dst.addr` while keeping `src.owned` in `dst.owned`; only promote `src.owned` into `dst.addr` when an owned field is projected into a view).
+    3. **Call-Site Instantiation Rules:**
+      - **For an** `own` **edge (**`src -> dst`**):** Add `src.addr` into `dst.addr`, and add `src.owned` into `dst.owned`. Do not merge `src.owned` into `dst.addr`.
+      - **For an** `addr` **edge (**`src -> dst`**):** Add both `src.addr` and `src.owned` into `dst.addr`.
+    4. **Z-0071 Verification Checklist:**
+      - Update the summary representation and `.zri` reader/writer to distinguish `addr` and `own` edges.
+      - Confirm the `Holder` / `leak` probe is rejected (`*out = h.v.as_slice()` emits an `addr` edge, merging `v.owned` into `out.addr`).
+      - Confirm `Vec::push` with nested `Vec<Vec<T>>` and arena allocation succeeds without polluting outer `v.addr` with inner owned storage.
+      - Keep Z-0070's inferred summaries on `unsafe fn` bodies enabled, verify the full test suite is clean, and then proceed to Z-0064.
 
 - [ ] +safety +tests +AI-D Z-0070 B1.7c An `unsafe fn` body writes its origin summary
     > **Created:** 2026-11-05 **Found by:** Z-0063. **Before:** Z-0064, whose measurement it changes; Z-0012, which deletes the old masks the callers of an `unsafe fn` read today. **Check-in:** stop for review after it.
