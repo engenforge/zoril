@@ -5864,6 +5864,35 @@ fn os_external(c: &OriginSets, set: usize) -> bool {
 }
 
 // Whether a value with origins SET may not leave this frame: it has a Frame or an Unknown origin.
+// Takes out of SET the frame storage a stored value owns and does not hold an address into
+// (Frame bits in VS, not in VO): an owner is moved by the store, and the storage it owns goes with
+// it, as an edge into a local leaves out what that local owns (§3, _The summary as built_). A
+// Frame bit also in VO stays: an arena-backed collection holds its local arena's Frame in both.
+fn os_drop_moved_storage(c: &mut OriginSets, set: usize, vo: usize, vs: usize) {
+    let d = set * c.words;
+    let o = vo * c.words;
+    let s = vs * c.words;
+    let mut k = OS_W_FRAME;
+    while k < c.words {
+        c.buf[d + k] = c.buf[d + k] & !(c.buf[s + k] & !c.buf[o + k]);
+        k = k + 1 as usize;
+    }
+}
+
+// DST = the frame storage os_drop_moved_storage takes out: what the stored value owns and holds no
+// address into. It joins the storage a target owner owns, not the addresses it holds.
+fn os_moved_storage(c: &mut OriginSets, dst: usize, vo: usize, vs: usize) {
+    os_clear(c, dst);
+    let d = dst * c.words;
+    let o = vo * c.words;
+    let s = vs * c.words;
+    let mut k = OS_W_FRAME;
+    while k < c.words {
+        c.buf[d + k] = c.buf[s + k] & !c.buf[o + k];
+        k = k + 1 as usize;
+    }
+}
+
 fn os_frame_bound(c: &OriginSets, set: usize) -> bool {
     let d = set * c.words;
     if c.buf[d + OS_W_FLAGS] & ORIGIN_UNKNOWN != 0 as u64 { return true; }
@@ -6282,9 +6311,14 @@ fn os_summary_store_effects(
     while i < args.len {
         if i >= 64 as usize || ((from_mask >> (i as u64)) & 1 as u64) != 0 as u64 {
             let _ = os_arg(c, module, locals, fn_id, args, i);
+            let po = os_t(c, OS_T_EV);
+            let ps = os_t(c, OS_T_ED);
+            os_copy(c, po, tao);
+            os_copy(c, ps, tas);
             let _ = os_or(c, tso, tas);
             let _ = os_or(c, tao, tas);
             os_reach_all(c, tao, tr);
+            if i < 63 as usize { os_drop_moved_storage(c, tr, po, ps); }
             let _ = os_or(c, tsv, tr);
         }
         i = i + 1 as usize;
@@ -6297,8 +6331,13 @@ fn os_summary_store_effects(
         while i < args.len && !refused {
             if i >= 64 as usize || ((from_mask >> (i as u64)) & 1 as u64) != 0 as u64 {
                 let _ = os_arg(c, module, locals, fn_id, args, i);
+                let po = os_t(c, OS_T_EV);
+                let ps = os_t(c, OS_T_ED);
+                os_copy(c, po, tao);
+                os_copy(c, ps, tas);
                 let _ = os_or(c, tao, tas);
                 os_reach_all(c, tao, tv);
+                if i < 63 as usize { os_drop_moved_storage(c, tv, po, ps); }
                 if os_frame_bound(c, tv) {
                     if global {
                         os_refuse(
@@ -6337,6 +6376,7 @@ fn os_summary_store_effects(
     let ed = os_t(c, OS_T_ED);
     os_copy(c, ev, tsv);
     let _ = os_or(c, ev, tso);
+    os_drop_moved_storage(c, ev, tsv, tso);
     if (to_mask >> 63 as u64) & 1 as u64 != 0 as u64 {
         os_clear(c, ed);
         os_add_flag(c, ed, ORIGIN_STATIC);
@@ -6454,6 +6494,21 @@ fn os_edge_effects(
         } else {
             os_add_flag(c, tv, ORIGIN_UNKNOWN);
         }
+        // An argument stored by value moves: the frame storage it owns goes with it, into the
+        // target's S, and is neither an address the target holds nor one that escapes. What a
+        // callee reads through a parameter (ParamContents) is what its addresses lead to, never
+        // the parameter's own buffer (that is Frame of the parameter in the callee), so the
+        // moved storage leaves that value too, and what the buffer holds stays.
+        let moved = os_t(c, OS_T_EV);
+        os_clear(c, moved);
+        let pidx = if code < 64 as usize { code } else { code - 64 as usize };
+        if code < 128 as usize && pidx < 63 as usize {
+            let _ = os_arg(c, module, locals, fn_id, args, pidx);
+            if code < 64 as usize {
+                os_moved_storage(c, moved, os_t(c, OS_T_AO), os_t(c, OS_T_AS));
+            }
+            os_drop_moved_storage(c, tv, os_t(c, OS_T_AO), os_t(c, OS_T_AS));
+        }
         let bound = os_frame_bound(c, tv);
         if table[row + 3 as usize] & OS_EDGE_GLOBAL != 0 as u64 {
             if c.checking && bound && !refused {
@@ -6489,6 +6544,11 @@ fn os_edge_effects(
                     }
                     os_note_edges(c, tv, ed);
                     os_write_edge(c, module, locals, tm, tv);
+                    if !os_is_empty(c, moved) {
+                        let none = os_t(c, OS_T_X);
+                        os_clear(c, none);
+                        os_write_memory(c, module, locals, tm, none, moved);
+                    }
                 }
                 j = j + 1 as usize;
             }
@@ -6962,6 +7022,7 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
                 let ed = os_t(c, OS_T_ED);
                 os_copy(c, ev, os_t(c, OS_T_VO));
                 let _ = os_or(c, ev, os_t(c, OS_T_VS));
+                os_drop_moved_storage(c, ev, os_t(c, OS_T_VO), os_t(c, OS_T_VS));
                 os_dest_reach(c, module, locals, dm, ed);
                 os_note_edges(c, ev, ed);
             }

@@ -1,0 +1,17 @@
+// The must-reject twin with storage the pushed owner does not own: a Vec in a local arena holds
+// the arena's Frame as an address too (the arena tie), so moving it keeps that Frame and the call
+// store rule refuses it (Z-0062).
+// flags: --provenance
+// EXPECT: call store rule
+// expected compile fail
+import "vec.zrl";
+import "mem.zrl";
+use vec::Vec;
+use mem::Arena;
+fn f(out: &mut Vec<Vec<i32>>) {
+    let a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
+    let mut w = Vec::<i32>.new_in(&a);
+    w.push(1);
+    out.push(w);
+}
+fn main() -> i32 { let mut v: Vec<Vec<i32>> = Vec.new(); f(&mut v); return 0; }
