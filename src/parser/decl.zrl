@@ -350,7 +350,8 @@ impl Parser {
             ret_ty = self.parse_type();
         }
         // `#[fresh]` is the author's claim that the result aliases nothing; it is only as good as
-        // an `unsafe` obligation, and only a raw pointer is made where that claim is made (§2.5).
+        // an `unsafe` obligation, and only a raw pointer is made where that claim is made (§2.5). The
+        // parser sees the written type, not an alias's target, so the rule is on the spelling.
         if attr.fresh {
             let mut raw_result = false;
             if ret_ty != 0 as TypeId {
@@ -366,7 +367,7 @@ impl Parser {
                 );
             } else if !raw_result {
                 self.report_error(
-                    "#[fresh] applies only to a function returning a raw pointer (*T or *mut T)",
+                    "#[fresh] applies only to a function whose result type is written *T or *mut T (not an alias of one)",
                     attr.fresh_span
                 );
             }

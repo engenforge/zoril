@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_fresh_alias_result.zrl:6:3: error: #[fresh] applies only to a function whose result type is written *T or *mut T (not an alias of one)
+// The rule is on the written type (surface_syntax.md §2.5): an alias of a raw pointer is refused
+// (Z-0078's review).
+type P = *mut u8;
+#[fresh]
+unsafe fn mk(n: u64) -> P { return @ptr_from_int<*mut u8>(n); }
+fn main() -> i32 { return 0; }
