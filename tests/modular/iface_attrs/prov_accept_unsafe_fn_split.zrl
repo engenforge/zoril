@@ -1,0 +1,22 @@
+// expected exit 0
+// An `unsafe fn` read from the interface carries its own summary (Z-0070): `split_u`'s views are in
+// the caller's arena, pushed into another Vec in that arena and returned. Without the summary its
+// callers read the old masks (fresh storage of this frame), and the call store rule refuses it.
+import "lib_summary.zrl";
+import "vec.zrl";
+import "mem_raw.zrl";
+use vec::Vec;
+use mem_raw::ArenaHeader;
+
+fn first_fields(content: [u8], arena: *mut ArenaHeader) -> Vec<[u8]> {
+    let lines = unsafe { lib_summary::split_u(content, arena) };
+    let mut out = unsafe { Vec::<[u8]>.new_in_raw(arena) };
+    for l in lines.as_slice() { out.push(*l); }
+    return out;
+}
+
+fn main() -> i32 {
+    let arena = unsafe { mem_raw::arena_init(65536 as u64) };
+    let v = first_fields("a\nbc", arena);
+    return v.len() as i32 - 2;
+}

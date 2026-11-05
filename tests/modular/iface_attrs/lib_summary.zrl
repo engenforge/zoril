@@ -2,8 +2,11 @@
 // (Z-0057); scripts/test_interface_attrs.sh checks the interface text and builds the prov_* programs.
 import "mem.zrl";
 import "vec.zrl";
+import "string.zrl";
+import "mem_raw.zrl";
 use mem::Arena;
 use vec::Vec;
+use mem_raw::ArenaHeader;
 
 pub struct H { pub r: [i32], pub t: [i32] }
 pub struct V { pub v: i32 }
@@ -43,3 +46,10 @@ pub fn mix(a: &Arena, pick: bool) -> Vec<i32> {
 
 // An owner stored by value: a caller reads its storage as moved, not as an address.
 pub fn put_owned(o: &mut Vec<Vec<i32>>, w: Vec<i32>) { o.push(w); }
+
+// An `unsafe fn` writes its summary into the interface like any body (Z-0070): `split_u`'s result
+// is in the caller's arena, and `stash_u` stores its view `v` into what `out` reaches.
+pub unsafe fn split_u(content: [u8], arena: *mut ArenaHeader) -> Vec<[u8]> {
+    return content.split_raw('\n' as u8, arena);
+}
+pub unsafe fn stash_u(out: &mut H, v: [i32]) { out.r = v; }

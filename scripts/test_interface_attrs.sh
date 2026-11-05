@@ -152,6 +152,8 @@ want_summary lit "ret_flags = 1"
 want_summary raw "ret_flags = 8"
 want_summary fresh "ret_fresh = true"
 want_summary first "ret_fresh = false"
+want_summary split_u "ret_fresh = true,"         # an `unsafe fn` writes its summary too (Z-0070)
+want_summary stash_u "edge = 1, edge_addr = 1,"  # its store edge v -> out
 for prog in "$src"/prov_*.zrl; do
     [ -f "$prog" ] || continue
     name=$(basename "$prog" .zrl)
