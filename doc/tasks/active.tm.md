@@ -27,7 +27,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     1. **Drop Scalar Edges Completely:**
       - When generating summary edges (for both `.direct` parameters and `.contents` reads) or evaluating stores, check the static type of the transferred value.
       - If the type is a pure scalar (`usize`, `i32`, `bool`, enums without payloads) that cannot contain references, slices, or owned handles, emit **no summary edge at all**.
-      - This eliminates the `alloc` size-to-arena-header false edge (`self.cap` arithmetic into `*arena`) without needing an `integer` edge kind in `.zri` files.
+      - This removes the `alloc` size-to-arena-header false edge (`self.cap` arithmetic into `*arena`) without needing an `integer` edge kind in `.zri` files.
     2. **Classify Remaining Edges into Two Kinds (**`addr` **vs.** `own`**):**
       - `addr` **(Address/View Edge):** Emit when the stored or returned value's type contains a borrowed reference or slice (`&T`, `&mut T`, `[T]`, or a struct holding a reference/slice like `Holder`).
       - `own` **(Owner/Move Edge):** Emit when the stored or returned value is a moved owning value (`Vec<T>`, `String`, or an owning struct with no borrowed views) or an internal raw backing pointer assignment (`self.ptr = p`) inside an `unsafe fn`.
