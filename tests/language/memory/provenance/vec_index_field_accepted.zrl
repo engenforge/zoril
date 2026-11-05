@@ -1,0 +1,19 @@
+// An index into a Vec followed by a field read returns what the caller's Vec holds, which the return
+// rule accepts (`Monomorphizer.instance_type_args`, Z-0068).
+// flags: --provenance
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+struct T { s: [u8] }
+struct D { id: u32, def: T }
+struct Md { types: Vec<D> }
+struct Mo { module: &mut Md }
+fn g(self: &mut Mo, i: usize) -> T { return self.module.types[i].def; }
+fn field(v: &Vec<D>, i: usize) -> &u32 { return &v[i].id; }
+fn main() -> i32 {
+    let mut md = Md { types: Vec::<D>.new() };
+    md.types.push(D { id: 7 as u32, def: T { s: "ab" } });
+    let mut mo = Mo { module: &mut md };
+    let t = g(&mut mo, 0 as usize);
+    return t.s.len as i32 + *field(&md.types, 0 as usize) as i32 - 9;
+}

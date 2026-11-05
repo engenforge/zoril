@@ -1,0 +1,12 @@
+// An index through a raw pointer followed by a field address returns the caller's memory, which the
+// return rule accepts (`HashMap.get`, stdlib/hashmap.zrl, Z-0068).
+// flags: --provenance
+// expected exit 0
+struct S { v: i32 }
+struct H { e: *mut S }
+fn a(self: &H, i: usize) -> &i32 { return unsafe { &self.e[i].v }; }
+fn main() -> i32 {
+    let mut s = S { v: 3 };
+    let h = H { e: &mut s as *mut S };
+    return *a(&h, 0 as usize) - 3;
+}
