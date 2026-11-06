@@ -1,0 +1,9 @@
+// name: A generic function's instance named with type arguments and used as a value lowers to nothing
+// expected: known_gap
+// gap: let f: fn(i32) -> i32 = id::<i32>; f(3) with fn id<T>(x: T) -> T compiles in safe code, but the initializer is dropped in lowering: the fn value's slot is never written, so the call jumps through uninitialized stack memory and faults; a struct field H { f: id::<i32> } does the same, an assignment f = id::<i32> is silently dropped, an argument gives invalid ZIL (found in Z-0092's review)
+// observed: runtime_fault
+fn id<T>(x: T) -> T { return x; }
+fn main() -> i32 {
+    let f: fn(i32) -> i32 = id::<i32>;
+    return f(3) - 3;
+}
