@@ -271,11 +271,28 @@ echo "stub: reject-diff failed"
 exit 23
 EOS
 chmod +x "$tmp/stub_fail_reject_diff.sh"
-older=$(git rev-parse --verify -q '2363209b^' 2>/dev/null || true)
-if [ -n "$older" ]; then
+
+# scratch_base PATH: print a commit of HEAD's tree with PATH replaced by a one-line file, a base that
+# differs from this tree in PATH alone. It is made with a git configuration of its own: under the
+# caller's, `commit-tree` needs an identity and honours commit.gpgsign, and a commit that could not
+# be made left the base empty, so the differential compared the tree with itself (Z-0098).
+scratch_base() {
+    _idx="$tmp/scratch_base_idx"
+    rm -f "$_idx"
+    GIT_INDEX_FILE="$_idx" git read-tree HEAD || return 1
+    _blob=$(printf '// preflight-selftest base\n' | git hash-object -w --stdin) || return 1
+    GIT_INDEX_FILE="$_idx" git update-index --add --cacheinfo 100644 "$_blob" "$1" || return 1
+    _tree=$(GIT_INDEX_FILE="$_idx" git write-tree) || return 1
+    rm -f "$_idx"
+    git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit-tree "$_tree" -p HEAD \
+        -m "preflight-selftest: base differing in $1"
+}
+
+# Case 10: a base whose checker differs.
+if checker_base=$(scratch_base src/check_zir.zrl 2>"$tmp/scratch_base.err") && [ -n "$checker_base" ]; then
     rc=0
     out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
-          PREFLIGHT_REJECT_BASE="$older" PREFLIGHT_REJECT_DIFF="$tmp/stub_fail_reject_diff.sh" \
+          PREFLIGHT_REJECT_BASE="$checker_base" PREFLIGHT_REJECT_DIFF="$tmp/stub_fail_reject_diff.sh" \
           ./scripts/preflight.sh --changed 2>&1) || rc=$?
     if [ $rc -eq 23 ] && echo "$out" | grep -qF "stub: reject-diff failed"; then
         pass "a failing rejection differential fails the preflight when a checker differs from its base"
@@ -283,8 +300,7 @@ if [ -n "$older" ]; then
         fail "the rejection differential did not run or did not fail the preflight (rc=$rc, out=$out)"
     fi
 else
-    skip_case="no history to compare with"
-    echo "[SKIP] preflight-selftest: case 10 needs git history ($skip_case)"
+    fail "cannot make a base commit for case 10: $(cat "$tmp/scratch_base.err")"
 fi
 rc=0
 out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
@@ -303,24 +319,20 @@ fi
 
 # Case 11b: a stdlib/-only change runs the rejection differential (a stdlib function's summary
 # changes what the checkers refuse, Z-0069).
-tmp_idx="$tmp/test_stdlib_idx"
-GIT_INDEX_FILE="$tmp_idx" git read-tree HEAD
-_blob=$(printf '// stdlib change\n' | git hash-object -w --stdin)
-GIT_INDEX_FILE="$tmp_idx" git update-index --add --cacheinfo 100644 "$_blob" stdlib/test_preflight_dummy.zrl
-_tree=$(GIT_INDEX_FILE="$tmp_idx" git write-tree)
-stdlib_only_base=$(git commit-tree "$_tree" -m "test: stdlib-only change")
-rm -f "$tmp_idx"
-
-rc=0
-out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
-      PREFLIGHT_BASE=HEAD \
-      PREFLIGHT_REJECT_BASE="$stdlib_only_base" PREFLIGHT_REJECT_DIFF="$tmp/stub_fail_reject_diff.sh" \
-      PREFLIGHT_BENCH="$tmp/stub_pass.sh" PREFLIGHT_CHECKED="$tmp/stub_pass.sh" PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
-      ./scripts/preflight.sh --changed 2>&1) || rc=$?
-if [ $rc -eq 23 ] && echo "$out" | grep -qF "stub: reject-diff failed"; then
-    pass "a stdlib/-only change runs the rejection differential"
+if stdlib_only_base=$(scratch_base stdlib/test_preflight_dummy.zrl 2>"$tmp/scratch_base.err") && [ -n "$stdlib_only_base" ]; then
+    rc=0
+    out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+          PREFLIGHT_BASE=HEAD \
+          PREFLIGHT_REJECT_BASE="$stdlib_only_base" PREFLIGHT_REJECT_DIFF="$tmp/stub_fail_reject_diff.sh" \
+          PREFLIGHT_BENCH="$tmp/stub_pass.sh" PREFLIGHT_CHECKED="$tmp/stub_pass.sh" PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+          ./scripts/preflight.sh --changed 2>&1) || rc=$?
+    if [ $rc -eq 23 ] && echo "$out" | grep -qF "stub: reject-diff failed"; then
+        pass "a stdlib/-only change runs the rejection differential"
+    else
+        fail "expected the rejection differential to run for a stdlib/-only change (rc=$rc, out=$out)"
+    fi
 else
-    fail "expected the rejection differential to run for a stdlib/-only change (rc=$rc, out=$out)"
+    fail "cannot make a base commit for case 11b: $(cat "$tmp/scratch_base.err")"
 fi
 
 # Case 12: with no base given, the run either names the base it chose or refuses, naming PREFLIGHT_BASE;
@@ -410,9 +422,9 @@ echo "stub: mutation base ${MUTATION_BASE:-none}"
 exit 0
 EOS
 chmod +x "$tmp/stub_echo_base.sh"
-if parent=$(git rev-parse -q --verify HEAD~1 2>/dev/null); then
+if parent=$(scratch_base scripts/preflight.sh 2>"$tmp/scratch_base.err") && [ -n "$parent" ]; then
     rc=0
-    out=$(PREFLIGHT_BASE=HEAD~1 PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_echo_base.sh" \
+    out=$(PREFLIGHT_BASE="$parent" PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_echo_base.sh" \
           PREFLIGHT_BENCH="$tmp/stub_pass.sh" PREFLIGHT_CHECKED="$tmp/stub_pass.sh" PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
           ./scripts/preflight.sh --changed 2>&1) || rc=$?
     if [ $rc -eq 0 ] && echo "$out" | grep -qF "stub: mutation base $parent"; then
@@ -421,7 +433,7 @@ if parent=$(git rev-parse -q --verify HEAD~1 2>/dev/null); then
         fail "mutation-check should receive MUTATION_BASE=$parent (rc=$rc, out=$out)"
     fi
 else
-    echo "[SKIP] preflight-selftest: case 14b needs a parent commit"
+    fail "cannot make a base commit for case 14b: $(cat "$tmp/scratch_base.err")"
 fi
 
 # Case 15: the seed compiler refusing the base source (a stricter rule) must not stop the differential.
