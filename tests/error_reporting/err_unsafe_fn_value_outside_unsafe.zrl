@@ -1,0 +1,33 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_unsafe_fn_value_outside_unsafe.zrl:22:38: error: an unsafe function made into a value requires unsafe block
+// EXPECT: tests/error_reporting/err_unsafe_fn_value_outside_unsafe.zrl:24:30: error: an unsafe function made into a value requires unsafe block
+// EXPECT: tests/error_reporting/err_unsafe_fn_value_outside_unsafe.zrl:25:18: error: an unsafe function made into a value requires unsafe block
+// EXPECT: tests/error_reporting/err_unsafe_fn_value_outside_unsafe.zrl:26:20: error: an unsafe function made into a value requires unsafe block
+// EXPECT: tests/error_reporting/err_unsafe_fn_value_outside_unsafe.zrl:28:9: error: an unsafe function made into a value requires unsafe block
+// EXPECT: tests/error_reporting/err_unsafe_fn_value_outside_unsafe.zrl:29:34: error: an unsafe function made into a value requires unsafe block
+// EXPECT: tests/error_reporting/err_unsafe_fn_value_outside_unsafe.zrl:30:45: error: an unsafe function made into a value requires unsafe block
+// EXPECT: tests/error_reporting/err_unsafe_fn_value_outside_unsafe.zrl:31:49: error: an unsafe function made into a value requires unsafe block
+
+// A call through a `fn` value is never marked, so an `unsafe fn` becomes one only inside `unsafe`
+// (unsafe_policy.md §1): a `let`, an argument, a struct field, an assignment, a method, a return,
+// a closure's return and an `unsafe extern` declaration. Each site was accepted before Z-0095, and
+// safe code then called the function (gap_65).
+unsafe fn rd(p: *i32) -> i32 { return *p; }
+unsafe extern fn memset(p: *mut u8, c: i32, n: usize) -> *mut u8;
+struct H { f: fn(*i32) -> i32 }
+struct S { v: i32 }
+impl S { unsafe fn get(self: &S, p: *i32) -> i32 { return *p; } }
+fn call(f: fn(*i32) -> i32) -> i32 { return 0; }
+fn safe(p: *i32) -> i32 { return 0; }
+fn get() -> fn(*i32) -> i32 { return rd; }
+fn main() -> i32 {
+    let a: fn(*i32) -> i32 = rd;
+    let b = call(rd);
+    let h = H { f: rd };
+    let mut c: fn(*i32) -> i32 = safe;
+    c = rd;
+    let m: fn(&S, *i32) -> i32 = S::get;
+    let cl = || -> fn(*i32) -> i32 { return rd; };
+    let x: fn(*mut u8, i32, usize) -> *mut u8 = memset;
+    return b;
+}

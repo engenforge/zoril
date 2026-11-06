@@ -1248,9 +1248,15 @@ impl ZirLowerer {
         return true;
     }
 
-    // Function FUNC_IDX as a value: its code, with no environment.
+    // Function FUNC_IDX as a value: its code, with no environment. A call through a `fn` value is
+    // never marked, so an `unsafe fn` (an `unsafe extern` too) becomes one only in `unsafe`: that
+    // block claims the function is safe to call with every argument the plain `fn` type admits, as
+    // a safe wrapper around the call would (unsafe_policy.md §1, gap_65).
     fn fn_value(self: &mut ZirLowerer, func_idx: u32, span: Span) -> Place {
         let p_func: ILFunction = self.module.functions[func_idx as usize];
+        if p_func.is_unsafe && self.unsafe_depth == 0 as u32 {
+            self.report_error("an unsafe function made into a value requires unsafe block", span);
+        }
         let fn_ty = self.get_fn_type(&p_func);
         let tmp = self.define_local(0 as *mut Symbol, fn_ty, LOCAL_KIND_TMP);
         self.emit(ZirStmt.Let(tmp, ZirRvalue.FuncAddr(func_idx, 0 as u32), span));

@@ -1,7 +1,6 @@
 // name: An unsafe fn made into a fn value is called from safe code with no unsafe block
-// expected: known_gap
-// gap: let f: fn(*i32) -> i32 = rd; f(p) with unsafe fn rd(p: *i32) -> i32 { return *p; } compiles with no unsafe block anywhere: an unsafe fn coerces to a plain fn type, so its caller-guaranteed precondition is never marked; here the safe caller hands it a forged pointer and the read faults (Z-0092)
-// observed: runtime_fault
+// expected: compile_reject
+// Rejected in lowering: making an unsafe fn into a value requires an unsafe block, the claim that every call through the value meets its precondition (Z-0095).
 unsafe fn rd(p: *i32) -> i32 { return *p; }
 fn call(f: fn(*i32) -> i32) -> i32 { return f(16 as *i32); }
 fn main() -> i32 {

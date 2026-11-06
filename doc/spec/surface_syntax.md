@@ -370,7 +370,7 @@ fn name(param: Type, ...) -> ReturnType {
 ```
 
 - `pub fn` — public visibility
-- `unsafe fn` / `pub unsafe fn` — unsafe function: calling requires an `unsafe` block or an enclosing `unsafe fn` body; the function's entire body is an unsafe context
+- `unsafe fn` / `pub unsafe fn` — unsafe function: calling it, or making it into a `fn` value, requires an `unsafe` block or an enclosing `unsafe fn` body (`unsafe_policy.md` §1); the function's entire body is an unsafe context
 - `extern fn` — external (C FFI) declaration, no body; calling one needs `unsafe`
 - `extern "C" fn name(..) { body }` — a Zoril function C can call: an unmangled symbol `name`, the C calling convention, no environment parameter, a body checked like any other. It may not be generic, and its signature follows the `extern` type rules (§9.1). Zoril code calls it without `unsafe`, because the body is checked. Two of them with one name in a program are an error. `extern fn f() { .. }` without the `"C"` is an error. A trap inside one ends the process with the usual status (134, 136, ...); nothing unwinds through C frames.
 - Variadic: `extern fn printf(fmt: *u8, ...) -> i32;`
