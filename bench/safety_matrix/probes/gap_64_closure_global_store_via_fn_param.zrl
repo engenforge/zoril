@@ -1,0 +1,17 @@
+// name: A closure storing a captured frame address into a global, handed to a function that calls it
+// expected: known_gap
+// gap: run(|| { G = r as *i32; }) with fn run(f: fn()) { f(); } and r = &x for a local x is accepted, with and without --provenance: the closure body stores Env into a global, which is not frame-bound there, and neither the call through f in run nor the call to run sees a store into a global; the direct call cl() of the same closure is refused by the old rules, and a fn item that stores into a global cannot become a value (check_fn_value), but nothing checks a closure; route class of gap_52 with a global destination (Z-0092)
+// observed: exit 77
+static mut G: *i32 = 0 as *i32;
+fn run(f: fn() -> unit) { f(); }
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn stash() {
+    let x = 42;
+    let r = &x;
+    run(|| { G = r as *i32; });
+}
+fn main() -> i32 {
+    stash();
+    let _ = clobber_stack();
+    return unsafe { *G };
+}
