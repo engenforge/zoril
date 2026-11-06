@@ -1,0 +1,10 @@
+// name: An extern function made into a fn value is called from safe code with no unsafe block
+// expected: known_gap
+// gap: let f: fn(*mut u8, i32, usize) -> *mut u8 = memset; compiles with no unsafe block, and a call through a fn value is never marked, so safe code calls C through it; here a safe callee hands memset a forged pointer and the write faults, while the direct call memset(..) is refused outside unsafe (found in Z-0095; Z-0101)
+// observed: runtime_fault
+extern fn memset(p: *mut u8, c: i32, n: usize) -> *mut u8;
+fn call(f: fn(*mut u8, i32, usize) -> *mut u8) -> i32 { let _ = f(16 as *mut u8, 0, 8 as usize); return 0; }
+fn main() -> i32 {
+    let f: fn(*mut u8, i32, usize) -> *mut u8 = memset;
+    return call(f);
+}
