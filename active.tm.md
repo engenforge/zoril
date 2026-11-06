@@ -7,40 +7,127 @@ date: 2026-11-03
 
 # Current Sprint
 
-Open work, in execution order from top to bottom, in four groups. (1) The provenance and liveness hardening series: Z-0060 (the `extend_from_slice` hole Z-0049 found), Z-0061, Z-0062, Z-0069 (two verification gaps the series relies on), Z-0063, Z-0068, Z-0071, Z-0072 and Z-0070 (the over-rejection classes Z-0049 measured: the origins of raw operations, indexing in the origin walk, and summaries for `unsafe fn` bodies; Z-0072 removes Z-0071's edge kinds), Z-0078 (`#[fresh]`, an `unsafe fn`'s claim that its result is fresh storage), Z-0076 and Z-0077 (P2 and P1, the arena over-refusals Z-0070's summaries brought to callers; Z-0077 merged into Z-0076), Z-0082 (an `Arena` taken out of its `Result` by `unwrap`, the one program Z-0076 left), Z-0083 (an owner passed by value through a call and returned, found by Z-0082), Z-0064 (the re-measurement that gates the default flip), Z-0075 (the checkpoint on it: continue the precision work or stop), Z-0084 to Z-0087 (the roots Z-0064 read, done as Z-0075 routes them), Z-0073 (a raw-pointer decision), Z-0011 (checked `#[borrows]`/`#[stores]`/`&self`, narrowing forbidden), Z-0044 (intra-frame `Arena::reset` liveness through pointers), Z-0066 (provenance diagnostics, before users see them), Z-0065 (the new rules on by default beside the old ones: refuses only more), Z-0074 (every program the old rules refuse and the new ones accept, read before they are deleted) and Z-0012 (old classifiers and `summary_pass.zrl` retired: accepts more, with the differential). (2) Post-series twin audits and standing review rounds: Z-0045, Z-0017, Z-0013. (3) Tooling and diagnostics: Z-0014, Z-0015, Z-0016, Z-0067, Z-0079, Z-0080, Z-0081. (4) Z-0004 and Z-0005, the benchmark measurement and decision, last because a session never starts one unprompted. Each `+safety` implementation task in the hardening series is a check-in: stop for review after it. Model tags: `+AI-D` marks tasks needing a deep-thinking model and `+AI-G` tasks suited to a general-purpose model; every `+safety` check-in review uses `+AI-D`. Finished tasks stay at the top until `tm sweep` rotates them. Deferred work is in `future.tm.md`. Every `+safety` task follows the safety rules in `AGENTS.md`: the rejection differential for a change that accepts more, and nothing beyond what the task names in the same commit. **Series rule (2026-11-05, from Z-0071):** a precision fix that removes origins from a set (an exemption, a split, a moved-storage drop) is first measured alone, on top of the task it serves, to show it is needed; and it comes with probes of its sibling routes (the value built inside the callee, returned from a call, packed into a struct beside a view or a raw pointer).
+Open work, in execution order from top to bottom, in four groups. (1) The provenance and liveness hardening series (its finished tasks, Z-0060 to Z-0064 and the precision fixes after them, are in `completed.tm.md`): Z-0075 (the checkpoint on Z-0064's re-measurement: continue the precision work or stop), then the roots of the over-rejections Z-0064 read, done as Z-0075 routes them, the rules that add knowledge first and those that remove origins last: Z-0088 (Decision 3: calls through closures and `fn` values, the largest class), Z-0085 (a value copied out of a referenced collection), Z-0087 (an integer popped from a collection), Z-0084 (arena storage named by an argument's address: all of zbuild's) and Z-0086 (a literal held by a value, after Z-0084); then Z-0073 (a raw-pointer decision), Z-0011 (checked `#[borrows]`/`#[stores]`/`&self`, narrowing forbidden), Z-0044 (intra-frame `Arena::reset` liveness through pointers), Z-0066 (provenance diagnostics, before users see them), Z-0065 (the new rules on by default beside the old ones: refuses only more), Z-0074 (every program the old rules refuse and the new ones accept, read before they are deleted) and Z-0012 (old classifiers and `summary_pass.zrl` retired: accepts more, with the differential). (2) Post-series twin audits and standing review rounds: Z-0045, Z-0017, Z-0013. (3) Tooling and diagnostics: Z-0014, Z-0015, Z-0016, Z-0067, Z-0079, Z-0080. (4) Z-0004 and Z-0005, the benchmark measurement and decision, last because a session never starts one unprompted. Each `+safety` implementation task in the hardening series is a check-in: stop for review after it. Model tags: `+AI-D` marks tasks needing a deep-thinking model and `+AI-G` tasks suited to a general-purpose model; every `+safety` check-in review uses `+AI-D`. Finished tasks stay at the top until `tm sweep` rotates them. Deferred work is in `future.tm.md`. Every `+safety` task follows the safety rules in `AGENTS.md`: the rejection differential for a change that accepts more, and nothing beyond what the task names in the same commit. **Series rule (2026-11-05, from Z-0071):** a precision fix that removes origins from a set (an exemption, a split, a moved-storage drop) is first measured alone, on top of the task it serves, to show it is needed; and it comes with probes of its sibling routes (the value built inside the callee, returned from a call, packed into a struct beside a view or a raw pointer).
 
 - [ ] +safety +decision +AI-D Z-0075 B1.8a Checkpoint: is per-site precision still the route to the default flip?
     > **Created:** 2026-11-05 **Found by:** the review of Z-0071. **Depends:** Z-0064. **Blocks:** Z-0065. Decision only: change no code. **Check-in:** stop and report to the maintainer; the maintainer decides.
 
     - **Why:** the over-rejection fixes of B1.7 moved `--provenance=warn` on `src/main.zrl` from 221 to 196 over several tasks, and every soundness hole found in the series came from a rule that removes origins from a set (Z-0062's moved-storage drop: `addr_edge_by_value_owner_refused.zrl`; Z-0071's `own` split: `leak_vec`). Adding origins over-approximates and is safe; removing them needs a proof per route, and each such rule so far has needed review to find the route it missed.
     - **Read:** Z-0064's classification by kind of fix. **Decide** between (a) continue with precision rules, each measured alone first and probed on its sibling routes (the series rule), when the remaining over-rejections are few or need rules that add knowledge; (b) stop the precision work and accept the remaining over-rejections through annotations (`#[stores(..)]` checked by Z-0011) or code changes at the sites, when most would need more removal rules; (c) re-plan the flip (Z-0065, Z-0012), when user code in `tests/` or the grid's twins would be refused at a rate the maintainer will not ship. Record the choice, the counts it rests on, and what changes in the task list.
+    - **Input from Z-0064 (2026-11-06; its full text is in `completed.tm.md`):** `src/main.zrl`'s 195 warnings come from six roots, counted in the order they were removed: closures and `fn` values 169 (Z-0088), a value copied out of a referenced `Vec` 10, though it alone makes 153 of the 167 "into a global" (Z-0085), an integer popped from a `Vec` 6 (Z-0087), a literal held by the driver's lowerer 8 (Z-0086), `os_pending.push` 2 (a code change, Z-0065), `set_ice_note` 0. zbuild's 25 are all arena storage named by an argument's address (Z-0084); zilc, zman, the corpus and `stdlib/` 0. `tests/`: 11 closures and `fn` values, 3 a literal in an arena (Z-0086's class), 1 real hole refused correctly (`byval_vec_param`), 2 expected. The grid: 13284 safe twins newly refused, mostly closures and `fn` values. By kind: rules that add knowledge (Z-0088, Z-0085, Z-0087) cover most of `src`; rules that remove origins are needed only for Z-0084 and Z-0086. Route each of Z-0084 to Z-0088 here: a rule, a code change at the site, or an accepted refusal.
 
-- [ ] +safety +tests +AI-D Z-0084 B1.9a Arena storage is named by the arena an argument reaches, not by the argument's address
-    > **Created:** 2026-11-06 **Found by:** Z-0064 (root (d1)). **Depends:** Z-0075 (it decides whether over-rejections are fixed by rules). **Check-in:** stop for review after it. Accepts more: the rejection differential and the series rule apply.
+- [ ] +safety +decision +AI-D Z-0088 B1.9a Decision 3: what the rules know about a call through a closure or a `fn` value
+    > **Created:** 2026-11-06 **Found by:** Z-0064 (the largest over-rejection class; its text says the class needs a task of its own before Z-0065). **Depends:** Z-0075. **Blocks:** Z-0065, unless Z-0075 changes the route. Decision first: the implementation is a task of its own that this one names. **Check-in:** stop and report to the maintainer; the maintainer decides.
 
-    - **Now:** `os_call` (`src/check_zir.zrl`) names the storage of an arena-tied result by the arena argument's own origins (`arena_store = tao`), and `os_type_has(.., OS_Q_ARENA_REF)` answers yes for any reference that reaches an `ArenaHeader` through a field: `&mut ZirLowerer` (`arena: *mut ArenaHeader`), `&Vec<..>` (`raw`). So `self.f(&rows)` returning a Vec in `*self.arena` owns `Param(0)` and `Frame(rows)`. Reductions: `build/z64/t/d5.zrl` (7 warnings under `--provenance=warn`), `c3.zrl` (zbuild's `parse_entry(&cols, arena)` shape: the result owns `Frame(cols)`).
-    - **Measured alone (Z-0064, experiment `build/z64/esrc`: `tao` only for a pointer straight to an `Arena`/`ArenaHeader`, else `tr`):** zbuild 25 to 0; `src` unchanged alone (Z-0085 keeps its cascade going). Not probed for soundness.
-    - **Do:** state the rule (the arena's storage is what the reference reaches, at the depth where the `Arena`/`ArenaHeader` is) in the design note §3, implement it, and probe the sibling routes per the series rule: the value built inside the callee, returned from a call, packed into a struct beside a view or a raw pointer, an `&Arena` held in a struct field, an `Arena` held by value in a struct passed by reference, and `arena_reset` between the call and a read. `make test`, `make preflight-changed`, the rejection differential, the store grid.
+    - **Now:** a call through a `fn` value (`ZirRvalue.CallPtr`) or a closure is an unknown call (`os_unknown_call_effects` in `src/check_zir.zrl`): it may store any argument anywhere, and its result holds `Unknown`. Decision 3 (Z-0048) deferred the split of `fn` values from closures until a measurement; Z-0064 made it.
+    - **Counts (Z-0064, under `--provenance`):** the store grid refuses 13284 safe twins it did not refuse by default, of which by path `fn_val` 3284 and `closure` 2822, by destination `closure_owned_capture` 3300, `closure_call_mut` 2694 and `closure_capture_mut` 1708, by carrier `call_closure` 2080 (example: `arena_vec__arena_struct_bundle__closure__call_mut__arena_reset`, an identity closure on the route). 11 of the 17 test programs that warn: `closure_mutates_owning_capture`, `closure_type_inference`, `infer_from_fn_type`, `closure_owned_capture` (origins), `trait_names`, `closure_captures_everywhere`, `flat_fn_ptr_call_result`, `closure_captures_owning_and_other`, `test_stdlib_iter`, `platform_layer/include/{app,platform}`. In `src`, `Monomorphizer::lower_fn` calls the driver through the `fn` value `self.lower_instance` (`src/mono.zrl`, `return lower(..)`); stubbing that call took 169 of the 185 warnings left once Z-0085's root was removed. The tree has 5 `fn`-value call sites (Z-0049).
+    - **Decide between:** (1) a summary for a call whose possible callees are known (a `fn` item passed directly, a closure literal at the call site), joined over them; (2) downward-only closures and `fn` values (one that cannot escape stores only into what its caller passed or it captured); (3) declared effects on a `fn` type, checked where a function becomes the value; (4) no rule: change the compiler's one site, and record the grid's and the tests' refusals as a precision bound in `KNOWN_ISSUES.md` §5. For each, say what the grid and the 11 tests would accept (with a scratch compiler if cheap) and which rules it removes origins by (the series rule). Update Z-0017's note ("`closure`/`fn`-value twins remain `Unknown` by design unless Decision 3 changes") with the outcome.
 
 - [ ] +safety +tests +AI-D Z-0085 B1.9b A value copied out of a referenced collection is not an address into its buffer
     > **Created:** 2026-11-06 **Found by:** Z-0064 (root (d2)). **Depends:** Z-0075. **Check-in:** stop for review after it.
 
-    - **Now:** a body summary's `ParamContents(i)` tie is mapped with `os_through_plus`, everything reached through the argument at any depth, including the buffer a referenced `Vec` owns. A function returning a `Vec` of elements copied out of `&rows` reads as returning addresses into `rows`'s buffer. In `src/lower_zir/exhaust.zrl` this turns `exh_useful`'s summary into every parameter stored into every parameter and a global (167 of `src`'s 195 warnings are "into a global" because of it). Reduction `build/z64/t/d3.zrl` (7 warnings); twin `d4.zrl` (pushes fresh copies, 0).
-    - **Measured alone (Z-0064, `build/z64/src_exp3`, fresh copies at `exhaust.zrl:275`):** 195 to 185, and "into a global" 167 to 14.
-    - **Decide first, then do:** a rule that adds knowledge (a tie by depth, or by type: a `[mut u32]` element cannot address a buffer of `[mut u32]` headers without `unsafe`), or the one-line code change at the site (Z-0075 says which route). If a rule: it removes origins in effect, so the series rule and the rejection differential apply; probe `fn first(v: &Vec<i32>) -> &i32` style results, which must keep the buffer.
+    - **Now:** a body summary's `ParamContents(i)` tie is mapped with `os_through_plus`, everything reached through the argument at any depth, including the buffer a referenced `Vec` owns. A function returning a `Vec` of elements copied out of `&rows` reads as returning addresses into `rows`'s buffer. In `src/lower_zir/exhaust.zrl`, `exh_expand_or` pushes `row` read out of `rows` and calls itself with `&out`, which makes its caller's result own fresh storage; in `exh_useful`, `rows`, `spec`, `def` and `same` then hold `Frame` and `Unknown`, and its summary becomes every parameter stored into every parameter and a global. 167 of `src`'s 195 warnings are "into a global" because of it.
+    - **Reduction:** Z-0084's program with `if again { return self.expand(&out, false); }` added in `expand` before `return out;` (`build/z64/t/d3.zrl`): builds, exits 0, 7 warnings under `--provenance=warn`, with or without Z-0084's experiment. Twin: `expand` pushes a fresh copy (`let c = self.alloc(r.len); out.push(c);`): 0 warnings.
+    - **Measured alone (Z-0064, a copy of `src/` with the same fresh copy at `exhaust.zrl:275`):** 195 to 185, and "into a global" 167 to 14; `exh_useful`'s summary becomes `ParamContents(0) -> Param(0) ParamContents(0)`.
+    - **Decide first, then do:** a rule that adds knowledge (a tie by depth, or by type: a `[mut u32]` element cannot address a buffer of `[mut u32]` headers without `unsafe`), or the one-line code change at the site (Z-0075 says which route). A rule removes origins in effect, so the series rule and the rejection differential apply; probe a result that does point into the buffer (`fn first(v: &Vec<i32>) -> &i32 { return &v.as_slice()[0]; }`, then the `Vec` dropped or pushed to), which must keep it. `make test`, `make preflight-changed`, the store grid.
 
-- [ ] +safety +tests +AI-D Z-0086 B1.9c A literal held by a value does not make what the value reaches a global destination
-    > **Created:** 2026-11-06 **Found by:** Z-0064 (root (e)). **Depends:** Z-0075. **Check-in:** stop for review after it.
-
-    - **Now:** a local that holds `Static` (a string literal in one of its fields, or written into memory it reaches) makes every later store into what it reaches have `Static` among its targets, and the call store rule reads `Static` as a global. Reduction (safe, accepted by default, exits 0; twin with `name: s` gives no warning): `struct W { name: [u8], items: &mut Vec<[u8]> }`, `impl W { fn add(self: &mut W, s: [u8]) { self.items.push(s); } }`, `fn inner(out: &mut Vec<[u8]>, s: [u8]) { let mut w = W { name: "lit", items: out }; w.add(s); }`, `main` calls `inner(&mut v, &data)` with a local array and `Vec` (`build/z64/t/e3.zrl`). Carries the last 8 of `src`'s warnings (the driver's `zir_low`) and the three `arena_raw` test programs of Z-0064.
-    - **Do:** decide whether a `Static` origin reached through a value may be dropped from store targets (a literal is read-only, so storing through it needs `unsafe`), or whether the sites change; a rule removes origins, so the series rule applies, with probes of a `static mut` reached through a value (which must stay a global destination) and a literal beside a `&mut` in one struct.
-
-- [ ] +safety +tests +AI-D Z-0087 B1.9d An integer popped from a collection carries no address
+- [ ] +safety +tests +AI-D Z-0087 B1.9c An integer popped from a collection carries no address
     > **Created:** 2026-11-06 **Found by:** Z-0064 (root (f)). **Depends:** Z-0075. **Check-in:** stop for review after it.
 
-    - **Now:** `os_call` drops a body summary's `ParamContents` ties for a primitive result only, so `Vec<usize>.pop()` (`Option<usize>`) is tied to the `Vec`'s storage; the integer then carries `Frame(widths)` into whatever it is written into. In `src/fmt/doc.zrl` (`Doc::measure`) this gives all six `fmt/` warnings. Reduction (safe, accepted by default, exits 0; twin reading `widths.as_slice()[0]` gives no warning) in Z-0064's text and `build/z64/t/f1.zrl`.
-    - **Measured alone (Z-0064, `build/z64/src_exp7` on top of the earlier experiments, pops replaced by index reads):** 14 to 8, every `fmt/` warning gone.
-    - **Do:** extend the exemption to a result type that holds no pointer at any depth (`os_carries` is the place to check, an `Option<usize>` or a struct of integers), and probe that a type holding a pointer anywhere (an `Option<&i32>`, a struct with a `[u8]` field) keeps its tie. Relates to the `Vec.pop` class recorded in Z-0064 (a non-integer value popped and moved), which this does not cover.
+    - **Now:** `os_call` drops a body summary's `ParamContents` ties for a primitive result only, so `Vec<usize>.pop()` (`Option<usize>`) is tied to the `Vec`'s storage; the integer then carries `Frame(widths)` into whatever it is written into. In `src/fmt/doc.zrl` (`Doc::measure`) this gives all six `fmt/` warnings (`doc.zrl:111`, `:151`, `fmt.zrl:76`, `:122`, `:131`, the cascade through `render`, `file` and `format_source`).
+    - **Reduction** (`build/z64/t/f1.zrl`; builds, exits 0, accepted by default; two warnings at the `set` under `--provenance=warn`, Z-0066's duplicate; twin `let w = widths.as_slice()[0];` gives none):
+
+    ```zoril
+    import "vec.zrl";
+    use vec::Vec;
+
+    struct Cmd { text: [u8], width: usize }
+
+    #[borrows()]
+    fn at0(cmds: &Vec<Cmd>) -> Cmd { let r = cmds.as_slice()[0]; return Cmd { text: r.text, width: r.width }; }
+
+    fn measure(cmds: &mut Vec<Cmd>) {
+        let mut widths = Vec::<usize>.new();
+        widths.push(3 as usize);
+        let w = match widths.pop() { Option.Some(x) => x, Option.None => 0 as usize };
+        let mut c = at0(cmds);
+        c.width = w;
+        cmds.set(0 as usize, c);
+    }
+
+    fn main() -> i32 {
+        let mut cmds: Vec<Cmd> = Vec.new();
+        cmds.push(Cmd { text: "ab", width: 0 as usize });
+        measure(&mut cmds);
+        return cmds.as_slice()[0].width as i32 - 3;
+    }
+    ```
+
+    - **Measured alone (Z-0064, a copy of `src/` on top of the earlier experiments, both pops in `Doc::measure` replaced by an index read and a discarded pop):** 14 to 8, every `fmt/` warning gone.
+    - **Do:** extend the exemption to a result type that holds no pointer at any depth (an `Option<usize>`, a struct of integers; `os_carries` is the place to check), and probe that a type holding a pointer anywhere (an `Option<&i32>`, a struct with a `[u8]` field) keeps its tie. It removes ties, so the rejection differential applies. Relates to the `Vec.pop` class Z-0064 recorded (a non-integer value popped and moved into a returned `Vec`, `git show ad9045c:tests/language/memory/origins/own_contents_edge.zrl`), which this does not cover. `make test`, `make preflight-changed`.
+
+- [ ] +safety +tests +AI-D Z-0084 B1.9d Arena storage is named by the arena an argument reaches, not by the argument's address
+    > **Created:** 2026-11-06 **Found by:** Z-0064 (root (d1)). **Depends:** Z-0075 (it decides whether over-rejections are fixed by rules). **Check-in:** stop for review after it. Accepts more: the rejection differential and the series rule apply.
+
+    - **Now:** `os_call` (`src/check_zir.zrl`) names the storage of an arena-tied result by the arena argument's own origins (`arena_store = tao`), and `os_type_has(.., OS_Q_ARENA_REF)` answers yes for any reference that reaches an `ArenaHeader` through a field: `&mut ZirLowerer` (`arena: *mut ArenaHeader`), `&Vec<..>` (`raw`). So `self.f(&rows)` returning a Vec in `*self.arena` owns `Param(0)` (the struct `self` points at) and `Frame(rows)` (the local Vec). In zbuild, `parse_entry(&cols, arena)`'s result owns `Frame(cols)` (`tools/zbuild/src/manifest.zrl`), which gives all 25 of zbuild's warnings.
+    - **Reduction** (`build/z64/t/d5.zrl`; builds, exits 0; 7 warnings under `--provenance=warn`, 0 with the experiment below):
+
+    ```zoril
+    import "vec.zrl";
+    import "mem_raw.zrl";
+    use vec::Vec;
+    use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
+
+    struct Z { arena: *mut ArenaHeader }
+
+    impl Z {
+        #[borrows()]
+        fn alloc(self: &mut Z, n: usize) -> [mut u32] {
+            return unsafe { @slice(zoril_allocator_alloc(self.arena, ((n + 1 as usize) * 4) as u64) as *mut u32, n) };
+        }
+        #[borrows()]
+        fn expand(self: &mut Z, rows: &Vec<[mut u32]>, again: bool) -> Vec<[mut u32]> {
+            let mut out = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
+            for r in rows.as_slice() { out.push(*r); }
+            return out;
+        }
+        fn walk(self: &mut Z, rows_in: &Vec<[mut u32]>, depth: usize) -> bool {
+            if depth > 3 as usize { return rows_in.len() == 0 as usize; }
+            let rows = self.expand(rows_in, true);
+            let mut same = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
+            for r in rows.as_slice() {
+                let nr = self.alloc(r.len);
+                same.push(nr);
+            }
+            let spec = self.expand(&rows, false);
+            if self.walk(&spec, depth + 1 as usize) { return true; }
+            return self.walk(&same, depth + 1 as usize);
+        }
+        fn top(self: &mut Z) -> bool {
+            let mut rows = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
+            let row = self.alloc(1 as usize);
+            rows.push(row);
+            return self.walk(&rows, 0 as usize);
+        }
+    }
+
+    fn main() -> i32 {
+        let mut z = Z { arena: unsafe { arena_init(65536 as u64) } };
+        if z.top() { return 1; }
+        return 0;
+    }
+    ```
+
+    - **Measured alone (Z-0064, a scratch compiler: in `os_call`'s `in_ties` branch under a body summary, `vs |= arena_store` only when the argument's type is a pointer straight to an `Arena` or `ArenaHeader`, else `vs |= tr`, what the argument reaches):** zbuild 25 to 0; `src` unchanged alone (Z-0085's root keeps its cascade going). A measurement, not a proposed rule: not probed for soundness.
+    - **Do:** state the rule (an arena's storage is what the reference reaches, at the depth where the `Arena`/`ArenaHeader` is) in the design note §3, implement it, and probe the sibling routes per the series rule: the value built inside the callee, returned from a call, packed into a struct beside a view or a raw pointer, an `&Arena` held in a struct field, an `Arena` held by value in a struct passed by reference, and `arena_reset` between the call and a read. `make test`, `make preflight-changed`, the rejection differential, the store grid.
+
+- [ ] +safety +tests +AI-D Z-0086 B1.9e A literal held by a value does not make what the value reaches a global destination
+    > **Created:** 2026-11-06 **Found by:** Z-0064 (root (e)). **Depends:** Z-0075. **After:** Z-0084 (part of the literals' route into the lowerer goes through its naming: `exh_missing` writes literals into a `ByteVec` in `self.arena`, which is named `Param(0)`). **Check-in:** stop for review after it.
+
+    - **Now:** a local that holds `Static` (a string literal in one of its fields, or written into memory it reaches) makes every later store into what it reaches have `Static` among its targets, and the call store rule reads `Static` as a global. In the driver, `ZirLowerer::lower_function`'s summary has `store Static -> Param(0)` (a dozen lowering functions write a literal into `*self`, the first in lowering order `exh_missing`), so `Driver::run_body_passes_in_scratch`'s local `zir_low` holds `Static`; it is the first function in lowering order with a store into a global. That carries the last 8 of `src`'s warnings (`src/driver/module.zrl:666`, `:713`, `:1141`, `:1188`, `:1475`, `:1603` into a global; `:1362`, `:1386` outlives), and the class covers Z-0064's three `arena_raw` test programs (`test_stdlib_string_arena`, `accept_slice_receiver`, `test_empty_compile_and_tool_errors`).
+    - **Reduction** (`build/z64/t/e3.zrl`; builds, exits 0, accepted by default; "into a global" at the call in `main` under `--provenance=warn`; twin with `name: s` gives no warning): `struct W { name: [u8], items: &mut Vec<[u8]> }`, `impl W { fn add(self: &mut W, s: [u8]) { self.items.push(s); } }`, `fn inner(out: &mut Vec<[u8]>, s: [u8]) { let mut w = W { name: "lit", items: out }; w.add(s); }`, and `main` calls `inner(&mut v, &data)` with a local array `data` and a `Vec<[u8]>` `v`, returning `v[0][1] as i32 - 2`.
+    - **Not yet measured alone:** replacing `ZirLowerer.new`'s `file_path: ""` changes none of the 8 (the other sites still write literals), and Z-0084's experiment alone does not remove them either. Find each site's route first (`--emit-origins` with the target-file filter in `src/driver/module.zrl` removed, as Z-0064's debug compiler did).
+    - **Do:** decide whether a `Static` origin reached through a value may be dropped from store targets (a literal is read-only, so storing through it needs `unsafe`), or whether the sites change. A rule removes origins, so the series rule applies, with probes of a `static mut` reached through a value (which must stay a global destination) and a literal beside a `&mut` in one struct. `make test`, `make preflight-changed`, the rejection differential.
 
 - [ ] +safety +decision +AI-D Z-0073 B1.8b Decide whether storing a raw pointer into a by-value owner's buffer, then dropping the owner, is refused
     > **Created:** 2026-11-05 **Found by:** the review of Z-0071. **Before:** Z-0012. Decision first; the fix or the probe is the next step it names.
@@ -81,8 +168,10 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
 - [ ] +safety +tests +AI-D Z-0065 B4a The new rules on by default, beside the old ones
     > **Created:** 2026-11-05 **Split from:** Z-0012. **Depends:** Z-0064, Z-0011, Z-0044, Z-0066. **Check-in:** stop for review after it.
     > **Ordering note:** this task only refuses more, and depends in substance only on Z-0064 (the tree must be clean); the maintainer may move it ahead of Z-0011 and Z-0044 to close the escape holes for users sooner.
+    > **Depends also (2026-11-06, from Z-0064):** Z-0075, and Z-0084 to Z-0088 as Z-0075 routes them (a task it routes to "accepted refusal" or "code change" is done here instead).
 
     - **Do:** make the rules of `--provenance` run by default **in addition to** the old rules (nothing is deleted here; the old rules still run). Keep `--provenance=warn` as a developer option or retire it; decide and record. Resolve whatever the default build of `src/`, `stdlib/`, `tools/` and `tests/` now refuses, per Z-0064's classification (a real escape: fix the code; an over-rejection: it should already have its own task done).
+    - **Code changes Z-0064 left here (2026-11-06):** `Driver::lower_fn_body` pushes `OsPending { zir: zir_func }` into `self.os_pending` (`src/driver/module.zrl`, 2 warnings): `zir_func`'s slices are tied to the local `zir_low` though they live in the driver's scratch arena; change the code or route it to Z-0084's rule. `Driver::set_ice_context` stores an arena-built note into a global through `set_ice_note`'s `#[stores(note -> static)]` (`src/driver/module.zrl:864`): a true store, safe only because the arena lives as long as the program, and no warning of its own once the other roots are gone; if the default build refuses it, an explicit `unsafe` with a `// SAFETY:` comment naming that invariant, not a rule.
     - **Probes:** every `known_gap` probe the new rules refuse flips to `compile_reject` (at Z-0059: all escape gaps except the liveness ones `gap_37`, `gap_38`, `gap_39`, `gap_43`, `gap_44`; since Z-0060 also `gap_56`, since Z-0061 `gap_57` and `gap_58`, since Z-0062 `gap_59` to `gap_62`, since Z-0072 `gap_63`; re-check each), with its Known gaps entry in `doc/spec/safety_model.md` and line in `doc/SAFETY.md` §6 removed. Accept probes newly refused: none allowed without a task.
     - **Store grid:** re-record `bench/fuzz/store_grid_expected_failures.txt` and `store_grid_twin_rejections.txt` (and the modular pair) under the new default; list in the completion note every twin newly refused, by axis.
     - **Verification:** `make test`, `make preflight-changed` (the differential must show 0 newly accepted; list the newly refused programs), `sh scripts/check_store_grid.sh`, the self-hosting fixpoint. The fuzz record goes stale for `src/`. Stop for review.
