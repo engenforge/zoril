@@ -11,11 +11,6 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
 
 **Priority (2026-11-06, the maintainer):** the safety series below is paused for the test-efficiency series (`+testinfra`, Z-0103 to Z-0114), which goes first because every later task pays for testing. Z-0103 is its first task: it fixes the order of the others and may split, merge or drop them. Until it does, the order below is a proposal. **Z-0103's ranking (2026-11-06, awaiting the maintainer's review):** the tasks below are in its order; Z-0115 to Z-0117 are new, Z-0108 is deferred, and Z-0118 (dropping Lua, from the incubator) is in `future.tm.md`.
 
-- [ ] +testinfra +tests +AI-G Z-0104 T1a `test.sh` and `preflight.sh` record how long each item took
-    > **Created:** 2026-11-06 **Before:** Z-0105.
-
-    - **Do:** write `build/tests/timings.tsv` (`seconds<TAB>kind<TAB>name`, kind one of gate, group, test, scenario) on every run. Also write a step-timing line for each preflight step (selfhost, mutation, calibrate, reject-diff, checked, bench, store-grid, density, fuzz) to `build/preflight-timings.tsv`. POSIX only: `date +%s` resolution is enough for gates and steps; per-file tests can be timed in the runner's own loop. The output contract (`[FAIL]`, the count lines, `Total:`) is unchanged, and `scripts/test_runner_output.sh` still passes. `make test`.
-
 - [ ] +testinfra +measurement +AI-G Z-0105 T1b Profile `make test` and `make preflight-changed`
     > **Created:** 2026-11-06 **Depends:** Z-0104.
 
