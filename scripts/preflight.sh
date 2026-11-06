@@ -38,6 +38,7 @@ DENSITY_CMD="${PREFLIGHT_DENSITY:-./scripts/record_marker_density.sh}"
 FUZZ_CMD="${PREFLIGHT_FUZZ:-./scripts/fuzz_safe.sh}"
 LOG="${PREFLIGHT_LOG:-build/preflight-selfhost.log}"
 TIMINGS="${PREFLIGHT_TIMINGS:-build/preflight-timings.tsv}"
+unset PREFLIGHT_TIMINGS
 
 # Check dependencies for preflight (test tools, timeout, git, bench thresholds, fuzzing)
 ./scripts/check_deps.sh preflight || exit $?

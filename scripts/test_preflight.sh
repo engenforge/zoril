@@ -22,7 +22,7 @@ cd "$(dirname "$0")/.." || exit 2
 GIT_CONFIG_GLOBAL=/dev/null; export GIT_CONFIG_GLOBAL
 GIT_CONFIG_SYSTEM=/dev/null; export GIT_CONFIG_SYSTEM
 GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_NOSYSTEM
-unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS PREFLIGHT_TIMINGS
 for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p'); do
     unset "$_v"
 done

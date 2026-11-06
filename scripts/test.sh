@@ -497,6 +497,7 @@ claimed=$(mktemp)
 ITEMS="$TR_WORK/items"
 rm -rf "$ITEMS" && mkdir -p "$ITEMS"
 TIMINGS_FILE="${TR_TIMINGS:-$TR_WORK/timings.tsv}"
+unset TR_TIMINGS
 mkdir -p "$(dirname "$TIMINGS_FILE")"
 : > "$TIMINGS_FILE"
 cleanup() { rm -f "$PLAN" "$claimed"; }
