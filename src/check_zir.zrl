@@ -5402,7 +5402,8 @@ const OS_T_D: usize = 15;
 const OS_T_X: usize = 16;
 const OS_T_EV: usize = 17;
 const OS_T_ED: usize = 18;
-const OS_TEMPS: usize = 19;
+const OS_T_AH: usize = 19;
+const OS_TEMPS: usize = 20;
 
 // The questions os_type_has answers about a type.
 const OS_Q_ARENA: usize = 0;
@@ -6870,6 +6871,8 @@ fn os_call(
         let in_ties = i >= 64 as usize || ((ties >> (i as u64)) & 1 as u64) != 0 as u64;
         if result_carries && (in_storage || in_ties) {
             let aty = os_arg(c, module, locals, fn_id, args, i);
+            let tah = os_t(c, OS_T_AH);
+            os_copy(c, tah, tao);
             let _ = os_or(c, tao, tas);
             if aty == 0 as u32 || os_carries(c, module, aty) {
                 tied = true;
@@ -6885,7 +6888,15 @@ fn os_call(
                     tao
                 };
                 if in_storage {
-                    let _ = os_or(c, vo, tao);
+                    // A body summary's Param(i) is what argument i holds. An owner passed by value
+                    // (`id(v)`, `o.unwrap()`) moves the storage it owns into the call, so that
+                    // storage is no address the result holds; a callee returning an address into
+                    // it says so with Unknown, its own Frame (Z-0083).
+                    if body && aty != 0 as u32 && os_owns(c, module, aty) {
+                        let _ = os_or(c, vo, tah);
+                    } else {
+                        let _ = os_or(c, vo, tao);
+                    }
                     if arena { let _ = os_or(c, vs, arena_store); }
                 }
                 if in_ties {

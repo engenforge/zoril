@@ -1,0 +1,23 @@
+// A raw pointer to the buffer of a Vec passed by value, returned from the callee and then from the
+// caller: the callee's summary marks the address of its parameter's own storage (Unknown), so the
+// return is refused although the owner moved into the call (Z-0083).
+// flags: --provenance
+// expected compile fail
+// EXPECT: moved_vec_raw_buffer_returned_refused.zrl:17:12: error: provenance: the returned value holds an address of this frame (return rule)
+import "vec.zrl";
+use vec::Vec;
+
+fn leak(v: Vec<i32>) -> *i32 {
+    return v.as_ptr();
+}
+
+fn g() -> *i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    return leak(v);
+}
+
+fn main() -> i32 {
+    let p = g();
+    return 0;
+}

@@ -1,0 +1,37 @@
+// An owner passed by value through a call and returned: through an identity function, out of an
+// Option with `unwrap`, and a local Arena out of its Result with `unwrap`. The owner moves into the
+// call, so the storage it owned is no address the result holds, and the return takes nothing of
+// this frame with it (Z-0083).
+// flags: --provenance
+// expected exit 0
+import "vec.zrl";
+import "mem.zrl";
+use vec::Vec;
+use mem::Arena;
+
+fn id(v: Vec<i32>) -> Vec<i32> {
+    return v;
+}
+
+fn through_id() -> Vec<i32> {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    return id(v);
+}
+
+fn through_option() -> Vec<i32> {
+    let o = Option.Some(Vec::<i32>.new());
+    return o.unwrap();
+}
+
+fn arena_unwrapped() -> Arena {
+    let a = Arena.new(4096).unwrap();
+    return a;
+}
+
+fn main() -> i32 {
+    let v = through_id();
+    let w = through_option();
+    let a = arena_unwrapped();
+    return (v.len() + w.len() - 1) as i32;
+}
