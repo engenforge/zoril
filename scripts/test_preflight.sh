@@ -262,6 +262,34 @@ else
     fail "expected non-zero exit on fuzz failure in full mode (rc=$rc, out=$out)"
 fi
 
+# Case 9b: preflight records step timings to PREFLIGHT_TIMINGS
+pf_timings="$tmp/preflight_timings.tsv"
+rc=0
+out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
+      PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+      PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+      PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
+      PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
+      PREFLIGHT_BENCH="$tmp/stub_pass.sh" \
+      PREFLIGHT_STORE_GRID="$tmp/stub_pass.sh" \
+      PREFLIGHT_DENSITY="$tmp/stub_pass.sh" \
+      PREFLIGHT_FUZZ="$tmp/stub_pass.sh" \
+      PREFLIGHT_TIMINGS="$pf_timings" \
+      ./scripts/preflight.sh 2>&1) || rc=$?
+if [ $rc -eq 0 ] && [ -s "$pf_timings" ]; then
+    missing_steps=""
+    for step in selfhost mutation calibrate reject-diff checked bench store-grid density fuzz; do
+        grep -Eq "^[0-9]+	$step$" "$pf_timings" || missing_steps="$missing_steps $step"
+    done
+    if [ -z "$missing_steps" ]; then
+        pass "preflight records timings for all 9 steps"
+    else
+        fail "preflight timings missing steps:$missing_steps (got: $(cat "$pf_timings"))"
+    fi
+else
+    fail "expected preflight to pass and write timings (rc=$rc, out=$out)"
+fi
+
 # Cases 10-11: the rejection differential runs when a checker differs from its base, fails the
 # preflight when it fails, and is skipped (saying so) when none differs. The base is a commit whose
 # checkers differ from this tree's, or this tree's own HEAD for the unchanged case.

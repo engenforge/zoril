@@ -37,11 +37,17 @@ STORE_GRID_CMD="${PREFLIGHT_STORE_GRID:-./scripts/check_store_grid.sh}"
 DENSITY_CMD="${PREFLIGHT_DENSITY:-./scripts/record_marker_density.sh}"
 FUZZ_CMD="${PREFLIGHT_FUZZ:-./scripts/fuzz_safe.sh}"
 LOG="${PREFLIGHT_LOG:-build/preflight-selfhost.log}"
+TIMINGS="${PREFLIGHT_TIMINGS:-build/preflight-timings.tsv}"
 
 # Check dependencies for preflight (test tools, timeout, git, bench thresholds, fuzzing)
 ./scripts/check_deps.sh preflight || exit $?
 
-mkdir -p build "$(dirname "$LOG")"
+mkdir -p build "$(dirname "$LOG")" "$(dirname "$TIMINGS")"
+: > "$TIMINGS"
+
+record_step() {
+    printf '%d\t%s\n' "$2" "$1" >> "$TIMINGS"
+}
 
 # A --changed run measures the change against a base (scripts/lib/preflight_base.sh). Without one,
 # the mutations and the differential compare the tree with itself and find nothing, so the gate
@@ -57,19 +63,23 @@ if [ "$changed" -eq 1 ]; then
 fi
 
 # selfhost-check in the background
+sh_start=$(date +%s)
 $SELFHOST_CMD > "$LOG" 2>&1 &
 selfhost=$!
 
 # mutation-check in the foreground
+mut_start=$(date +%s)
 mutation=0
 if [ "$changed" -eq 1 ]; then
     MUTATION_BASE="$PF_BASE" $MUTATION_CMD --changed || mutation=$?
 else
     $MUTATION_CMD || mutation=$?
 fi
+record_step mutation $(( $(date +%s) - mut_start ))
 
 wait $selfhost
 status=$?
+record_step selfhost $(( $(date +%s) - sh_start ))
 
 echo
 cat "$LOG"
@@ -82,7 +92,11 @@ if [ $status -ne 0 ] || [ $mutation -ne 0 ]; then
     exit 1
 fi
 
-$CALIBRATE_CMD || exit $?
+cal_start=$(date +%s)
+$CALIBRATE_CMD
+cal_rc=$?
+record_step calibrate $(( $(date +%s) - cal_start ))
+[ $cal_rc -eq 0 ] || exit $cal_rc
 
 # The rejection differential (AGENTS.md): a change to what decides acceptance is compared with its base.
 # The base is PREFLIGHT_REJECT_BASE if set; else, for --changed, the base chosen above; else (the full
@@ -106,11 +120,16 @@ fi
 # shellcheck disable=SC2086
 if git diff --quiet "$reject_base" -- $REJECT_PATHS 2>/dev/null; then
     echo "[SKIP] reject-diff: none of $REJECT_PATHS differs from $reject_base ($reject_why; PREFLIGHT_REJECT_BASE=<commit> compares with another base)"
+    record_step reject-diff 0
 else
     echo "reject-diff: $reject_why"
     rd_start=$(date +%s)
-    $REJECT_DIFF_CMD "$reject_base" || exit $?
-    echo "reject-diff: $(( $(date +%s) - rd_start )) s"
+    $REJECT_DIFF_CMD "$reject_base"
+    rd_rc=$?
+    rd_dur=$(( $(date +%s) - rd_start ))
+    record_step reject-diff "$rd_dur"
+    echo "reject-diff: $rd_dur s"
+    [ $rd_rc -eq 0 ] || exit $rd_rc
 fi
 
 # The checked build runs BEFORE the bench step on purpose. The bench step appends to
@@ -120,16 +139,36 @@ fi
 # checkout's preflight fail with "expected ...-dirty, got ..." (found 2026-10-19 while
 # verifying the route-coverage task). Nothing in the checked suite depends on the bench.
 CHECKED_CMD="${PREFLIGHT_CHECKED:-./scripts/test_checked.sh}"
-$CHECKED_CMD || exit $?
+chk_start=$(date +%s)
+$CHECKED_CMD
+chk_rc=$?
+record_step checked $(( $(date +%s) - chk_start ))
+[ $chk_rc -eq 0 ] || exit $chk_rc
 
-$BENCH_CMD || exit $?
+bench_start=$(date +%s)
+$BENCH_CMD
+bench_rc=$?
+record_step bench $(( $(date +%s) - bench_start ))
+[ $bench_rc -eq 0 ] || exit $bench_rc
 
 if [ "$changed" -eq 0 ]; then
-    $STORE_GRID_CMD || exit $?
-    $DENSITY_CMD || exit $?
+    sg_start=$(date +%s)
+    $STORE_GRID_CMD
+    sg_rc=$?
+    record_step store-grid $(( $(date +%s) - sg_start ))
+    [ $sg_rc -eq 0 ] || exit $sg_rc
+
+    den_start=$(date +%s)
+    $DENSITY_CMD
+    den_rc=$?
+    record_step density $(( $(date +%s) - den_start ))
+    [ $den_rc -eq 0 ] || exit $den_rc
+
     fuzz_findings=$(mktemp -d)
+    fuzz_start=$(date +%s)
     FUZZ_FINDINGS="$fuzz_findings" $FUZZ_CMD --seeds 1-25 --count 4 --mode mix
     fuzz_rc=$?
+    record_step fuzz $(( $(date +%s) - fuzz_start ))
     rm -rf "$fuzz_findings"
     [ $fuzz_rc -eq 0 ] || exit $fuzz_rc
 fi

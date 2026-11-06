@@ -306,10 +306,23 @@ if [ "$1" = "--worker" ]; then
         write_status STOPPED
     else
         TR_RESULTS=""
+        _item_start_s=$(date +%s)
+        tr_clock; _item_start_ms=$TR_NOW
         case "$kind" in
             file)     tr_run_file "$name" > "$ITEMS/$idx.out" 2>&1 ;;
             scenario) scenario_run "$name" > "$ITEMS/$idx.out" 2>&1 ;;
             gate)     gate_run "$name" > "$ITEMS/$idx.out" 2>&1 ;;
+        esac
+        tr_clock; _item_ms=$(( TR_NOW - _item_start_ms ))
+        case "$kind" in
+            gate)
+                _dur_s=$(( $(date +%s) - _item_start_s ))
+                printf '%d\t%d\n' "$_dur_s" "$_item_ms" > "$ITEMS/$idx.time"
+                ;;
+            *)
+                _dur_sec=$(printf '%d.%03d' $(( _item_ms / 1000 )) $(( _item_ms % 1000 )))
+                printf '%s\t%d\n' "$_dur_sec" "$_item_ms" > "$ITEMS/$idx.time"
+                ;;
         esac
         # Every item reports the same four counts: run passed failed skipped.
         write_status "$TR_RUN $TR_PASSED $TR_FAILED $TR_SKIPPED"
@@ -483,6 +496,9 @@ PLAN=$(mktemp)
 claimed=$(mktemp)
 ITEMS="$TR_WORK/items"
 rm -rf "$ITEMS" && mkdir -p "$ITEMS"
+TIMINGS_FILE="${TR_TIMINGS:-$TR_WORK/timings.tsv}"
+mkdir -p "$(dirname "$TIMINGS_FILE")"
+: > "$TIMINGS_FILE"
 cleanup() { rm -f "$PLAN" "$claimed"; }
 trap 'cleanup; _tr_sig_handler' INT TERM
 trap cleanup EXIT
@@ -606,6 +622,17 @@ s_run=0; s_passed=0; s_failed=0; s_skipped=0
 cur_suite=""
 cur_section=""
 stopped=0
+grp_ms=0
+
+finish_suite_timing() {
+    case "$cur_suite" in
+        gate:*|-|stray-files|"") ;;
+        *)
+            _grp_sec=$(printf '%d.%03d' $(( grp_ms / 1000 )) $(( grp_ms % 1000 )))
+            printf '%s\tgroup\t%s\n' "$_grp_sec" "$cur_suite" >> "$TIMINGS_FILE"
+            ;;
+    esac
+}
 
 suite_line() {
     printf '  %-28s %5d run %5d passed %5d failed %5d skipped\n' \
@@ -642,9 +669,13 @@ while [ $next -le "$total" ]; do
         echo "[FAIL] $name (the worker left no result)" >> "$ITEMS/$next.out"
     fi
     if [ "$suite" != "$cur_suite" ]; then
-        [ -n "$cur_suite" ] && [ $stopped -eq 0 ] && suite_line
+        if [ -n "$cur_suite" ] && [ $stopped -eq 0 ]; then
+            suite_line
+            finish_suite_timing
+        fi
         cur_suite="$suite"
         s_run=0; s_passed=0; s_failed=0; s_skipped=0
+        grp_ms=0
         case "$suite" in gate:*) section=Gates ;; *) section=Tests ;; esac
         if [ "$section" != "$cur_section" ] && [ $stopped -eq 0 ]; then
             echo "$section"; cur_section=$section
@@ -656,12 +687,24 @@ while [ $next -le "$total" ]; do
         s_run=$((s_run + $1)); s_passed=$((s_passed + $2)); s_failed=$((s_failed + $3)); s_skipped=$((s_skipped + $4))
         tot_run=$((tot_run + $1)); tot_passed=$((tot_passed + $2))
         tot_failed=$((tot_failed + $3)); tot_skipped=$((tot_skipped + $4))
+        item_time_str="0"
+        item_ms=0
+        if [ -f "$ITEMS/$next.time" ]; then
+            read -r item_time_str item_ms < "$ITEMS/$next.time"
+        fi
+        grp_ms=$(( grp_ms + item_ms ))
+        case "$kind" in
+            gate)     printf '%s\tgate\t%s\n' "$item_time_str" "$name" >> "$TIMINGS_FILE" ;;
+            scenario) printf '%s\tscenario\t%s\n' "$item_time_str" "$name" >> "$TIMINGS_FILE" ;;
+            file)     printf '%s\ttest\t%s\n' "$item_time_str" "$name" >> "$TIMINGS_FILE" ;;
+        esac
         if [ -n "$TR_RESULTS" ]; then
             if [ "$3" -gt 0 ]; then st=FAIL; elif [ "$1" -eq 0 ]; then st=SKIP; else st=PASS; fi
             printf '%s\t%s\n' "$st" "$name" >> "$TR_RESULTS"
         fi
         if [ "$3" -gt 0 ] && [ "$TR_FAIL_FAST" -eq 1 ]; then
             suite_line
+            finish_suite_timing
             stopped=1
             echo "Stopping at the first failure (--fail-fast)."
         fi
@@ -670,7 +713,10 @@ while [ $next -le "$total" ]; do
 done
 exec 3<&- 4<&-
 wait $pool
-[ -n "$cur_suite" ] && [ $stopped -eq 0 ] && suite_line
+if [ -n "$cur_suite" ] && [ $stopped -eq 0 ]; then
+    suite_line
+    finish_suite_timing
+fi
 
 # Every test must belong to exactly one group, or the full run silently skips it.
 if [ $full_run -eq 1 ] && [ $stopped -eq 0 ]; then

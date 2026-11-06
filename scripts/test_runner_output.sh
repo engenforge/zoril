@@ -90,6 +90,18 @@ $(echo "$bad" | head -n 5 | sed 's/^/       /')"
                 END { printf "%d %d %d %d", r, p, f, s }' "$out")
     [ "$sums" = "$run $passed $failed $skipped" ] || fail "$mode: suite lines sum to $sums, Total says $run $passed $failed $skipped"
 
+    # Every run writes timings.tsv with format: seconds<TAB>kind<TAB>name
+    timings="$TR_WORK/timings.tsv"
+    [ -s "$timings" ] || fail "$mode: timings.tsv was not written or is empty"
+    bad_timings=$(awk -F'\t' '
+        NF != 3 { printf "line %d: expected 3 tab-separated fields, got %d: %s\n", NR, NF, $0; next }
+        $1 !~ /^[0-9]+(\.[0-9]+)?$/ { printf "line %d: invalid seconds \"%s\": %s\n", NR, $1, $0; next }
+        $2 !~ /^(gate|group|test|scenario)$/ { printf "line %d: invalid kind \"%s\": %s\n", NR, $2, $0; next }
+        $3 == "" { printf "line %d: empty name: %s\n", NR, $0; next }
+    ' "$timings")
+    [ -z "$bad_timings" ] || fail "$mode: lines in timings.tsv outside format:
+$(echo "$bad_timings" | head -n 5 | sed 's/^/       /')"
+
 }
 
 for mode in quiet default verbose opts_hidden; do
