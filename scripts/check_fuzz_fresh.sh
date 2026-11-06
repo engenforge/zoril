@@ -118,10 +118,17 @@ pages() {
 
 # ── the selftest: the three shapes this gate has to tell apart ────────────────────────────────────────
 if [ "${SELFTEST:-0}" = 1 ]; then
+    GIT_CONFIG_GLOBAL=/dev/null; export GIT_CONFIG_GLOBAL
+    GIT_CONFIG_SYSTEM=/dev/null; export GIT_CONFIG_SYSTEM
+    GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_NOSYSTEM
+    unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+    for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p'); do
+        unset "$_v"
+    done
     tmp=$(mktemp -d "${TMPDIR:-/tmp}/fuzz-fresh.XXXXXX") || exit 2
     trap 'rm -rf "$tmp"' EXIT
     fail=0
-    g() { git -C "$tmp/t" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false "$@"; }
+    g() { git -C "$tmp/t" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }
     mkdir -p "$tmp/t/src" "$tmp/t/stdlib" "$tmp/t/tools/zilc" "$tmp/t/tools/zbuild" "$tmp/t/rt" "$tmp/t/doc"
     printf 'compiler\n' > "$tmp/t/src/main.zrl"
     printf 'stdlib\n' > "$tmp/t/stdlib/io.zrl"

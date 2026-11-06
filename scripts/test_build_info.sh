@@ -3,6 +3,16 @@
 # local path, and scripts/dist.sh warns when the host is not Alpine Linux.
 cd "$(dirname "$0")/.." || exit 2
 . scripts/lib/portability.sh
+
+# Tests never sign commits or run user-configured Git hooks, and must not depend on user Git config.
+GIT_CONFIG_GLOBAL=/dev/null; export GIT_CONFIG_GLOBAL
+GIT_CONFIG_SYSTEM=/dev/null; export GIT_CONFIG_SYSTEM
+GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_NOSYSTEM
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p'); do
+    unset "$_v"
+done
+
 command -v git >/dev/null 2>&1 || { echo "[SKIP] build-info: no git"; exit 0; }
 fail() { echo "[FAIL] build-info: $1"; exit 1; }
 t=$(mktemp -d "${TMPDIR:-/tmp}/zoril_buildinfo_XXXXXX")
@@ -11,7 +21,7 @@ mkdir -p "$t/scripts/lib" "$t/stub"
 cp scripts/generate_build_info.sh scripts/version.sh scripts/dist.sh "$t/scripts/"
 cp scripts/lib/portability.sh "$t/scripts/lib/"
 echo 9.9.9 > "$t/VERSION"
-(cd "$t" && git init -q . && git config user.email a@b.invalid && git config user.name t && git config commit.gpgsign false && git add . && git commit -q -m one) || fail "cannot make a scratch repository"
+(cd "$t" && git init -q . && git config user.email a@b.invalid && git config user.name t && git config commit.gpgsign false && git config tag.gpgsign false && git config core.hooksPath /dev/null && git add . && git commit -q -m one) || fail "cannot make a scratch repository"
 head=$(git -C "$t" rev-parse HEAD)
 tree=$(git -C "$t" rev-parse 'HEAD^{tree}')
 gen() { (cd "$t" && env "$@" sh scripts/generate_build_info.sh > "$t/out.txt" 2> "$t/err.txt"); }

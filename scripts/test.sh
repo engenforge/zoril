@@ -65,6 +65,16 @@ ulimit -s 65536 2>/dev/null
 ulimit -c 0 2>/dev/null
 trap 'trap - INT TERM; kill 0 2>/dev/null; exit 130' INT TERM
 case "$0" in */*) cd "${0%/*}/.." ;; *) cd .. ;; esac || exit 2
+
+# Tests never sign commits or run user-configured Git hooks, and must not depend on user Git config.
+GIT_CONFIG_GLOBAL=/dev/null; export GIT_CONFIG_GLOBAL
+GIT_CONFIG_SYSTEM=/dev/null; export GIT_CONFIG_SYSTEM
+GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_NOSYSTEM
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p'); do
+    unset "$_v"
+done
+
 . scripts/lib/test_runner.sh
 . scripts/lib/layout.sh
 
