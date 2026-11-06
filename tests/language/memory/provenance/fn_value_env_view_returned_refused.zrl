@@ -1,0 +1,12 @@
+// A closure returning a view its environment holds: the result of the call reaches the
+// environment, so it holds Frame(x) and the return is refused (§3, _Calls through a `fn` value_).
+// flags: --provenance
+// EXPECT: return rule
+// expected compile fail
+fn mk() -> &i32 {
+    let x = 5;
+    let r = &x;
+    let cl = || -> &i32 { return r; };
+    return cl();
+}
+fn main() -> i32 { return *mk(); }

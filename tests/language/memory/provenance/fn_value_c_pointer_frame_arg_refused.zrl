@@ -1,0 +1,12 @@
+// A C function pointer handed a local's address: its result reaches the argument, as a bare
+// `extern`'s tied result does, so returning it is refused (§3, _Calls through a `fn` value_).
+// flags: --provenance
+// EXPECT: return rule
+// expected compile fail
+extern "C" fn c_id(x: *i32) -> *i32 { return x; }
+fn leak() -> *i32 {
+    let x = 1;
+    let h = c_id as extern "C" fn(*i32) -> *i32;
+    return unsafe { h(&x as *i32) };
+}
+fn main() -> i32 { let p = leak(); if p == 0 as *i32 { return 1; } return 0; }

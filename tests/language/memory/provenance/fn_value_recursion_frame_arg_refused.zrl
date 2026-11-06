@@ -1,0 +1,17 @@
+// Recursion through a `fn` value: `walk` returns what its `fn` value returns, which reaches the
+// arguments, so a caller handing `step` a local's address cannot return the result (§3, _Calls
+// through a `fn` value_).
+// flags: --provenance
+// EXPECT: return rule
+// expected compile fail
+fn walk(f: fn(&i32, i32) -> &i32, p: &i32, n: i32) -> &i32 {
+    if n == 0 { return p; }
+    return f(p, n - 1);
+}
+fn step(p: &i32, n: i32) -> &i32 { return walk(step, p, n); }
+fn leak() -> &i32 {
+    let x = 3;
+    let f: fn(&i32, i32) -> &i32 = step;
+    return f(&x, 4);
+}
+fn main() -> i32 { return *leak(); }

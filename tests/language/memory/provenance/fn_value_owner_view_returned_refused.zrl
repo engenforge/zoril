@@ -1,0 +1,15 @@
+// A `Vec` a `fn` value returns owns fresh storage of this frame, so a view of it cannot be returned
+// (§3, _Calls through a `fn` value_). With S left empty, as Z-0088's experiment B had it, the view
+// held only what the callee value reaches and the return passed: a view of a freed buffer (Z-0092).
+// flags: --provenance
+// EXPECT: return rule
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+fn mkv() -> Vec<i32> { return Vec.new(); }
+fn view_of_fresh(f: fn() -> Vec<i32>) -> [i32] {
+    let mut v = f();
+    v.push(1);
+    return v.as_slice();
+}
+fn main() -> i32 { return view_of_fresh(mkv)[0]; }

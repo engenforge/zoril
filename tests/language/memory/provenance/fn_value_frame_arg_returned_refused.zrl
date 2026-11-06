@@ -1,0 +1,12 @@
+// The result of a call through a `fn` value reaches its arguments: an `unsafe fn` value handed a
+// local's address gives it back, and returning it is refused (§3, _Calls through a `fn` value_).
+// flags: --provenance
+// EXPECT: return rule
+// expected compile fail
+unsafe fn pick(p: &i32, q: &i32) -> &i32 { return q; }
+fn leak(a: &i32) -> &i32 {
+    let x = 1;
+    let f: fn(&i32, &i32) -> &i32 = unsafe { pick };
+    return f(a, &x);
+}
+fn main() -> i32 { let k = 2; return *leak(&k); }

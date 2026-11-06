@@ -1,0 +1,13 @@
+// A closure capturing a local's address is handed to a callee that calls it and stores the result
+// into its other argument: the callee's summary stores what its `fn` argument reaches into that
+// argument, so the caller's call is refused (§3, _Calls through a `fn` value_).
+// flags: --provenance
+// EXPECT: call store rule
+// expected compile fail
+fn call_store(f: fn() -> &i32, out: &mut &i32) { *out = f(); }
+fn escape(out: &mut &i32) {
+    let x = 7;
+    let r = &x;
+    call_store(|| -> &i32 { return r; }, out);
+}
+fn main() -> i32 { let z = 0; let mut d = &z; escape(&mut d); return *d; }

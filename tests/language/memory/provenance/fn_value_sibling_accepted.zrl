@@ -1,0 +1,27 @@
+// The safe twins of Z-0092's sibling routes, each body refused while a call through a `fn` value
+// returned Unknown: a method value handed a parameter, and a `Vec` built in a parameter's arena,
+// returned or pushed out (§3, _Calls through a `fn` value_). The arena functions are not called: a
+// `fn` item passed beside a frame address is a global destination at the caller (Z-0097). A generic
+// instance (`id::<i32>`) as a value is not here: it lowers to nothing and the call faults (gap_66).
+// flags: --provenance
+// expected exit 0
+import "vec.zrl";
+import "mem.zrl";
+use vec::Vec;
+use mem::Arena;
+struct S { v: i32 }
+impl S { fn get(self: &S) -> &i32 { return &self.v; } }
+fn by_method(s: &S) -> &i32 {
+    let f: fn(&S) -> &i32 = S::get;
+    return f(s);
+}
+fn pushed(a: &Arena, g: fn(&Arena) -> Vec<i32>, out: &mut Vec<Vec<i32>>) {
+    let w = g(a);
+    out.push(w);
+}
+fn built(a: &Arena, g: fn(&Arena) -> Vec<i32>) -> Vec<i32> { return g(a); }
+fn main() -> i32 {
+    let s = S { v: 4 };
+    if *by_method(&s) != 4 { return 1; }
+    return 0;
+}

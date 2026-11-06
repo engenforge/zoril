@@ -1,0 +1,37 @@
+// A call through a `fn` value returns only what its arguments and its environment reach, and Static
+// (§3, _Calls through a `fn` value_), so a body that returns that result passes the return rule:
+// `apply`, `fold` over a range with a non-capturing function, a view of a parameter through a `fn`
+// item, an `unsafe fn` and a `fn` value read from raw memory, and a C function pointer. With the
+// result Unknown each of these bodies was refused (Z-0092).
+// flags: --provenance
+// expected exit 0
+import "iter.zrl";
+use iter::{Iterator, range};
+static K: i32 = 7;
+fn apply(f: fn(i32) -> i64, x: i32) -> i64 { return f(x); }
+fn to_wide(x: i32) -> i64 { return x as i64 * 2; }
+fn add_usize(acc: usize, x: usize) -> usize { return acc + x; }
+fn pick(a: &i32, b: &i32) -> &i32 { return b; }
+unsafe fn pick_unsafe(a: &i32, b: &i32) -> &i32 { return a; }
+fn first(f: fn(&i32, &i32) -> &i32, a: &i32, b: &i32) -> &i32 { return f(a, b); }
+fn from_slot(slot: *fn(&i32, &i32) -> &i32, a: &i32) -> &i32 {
+    let f = unsafe { *slot };
+    return f(a, a);
+}
+extern "C" fn c_id(x: *i32) -> *i32 { return x; }
+fn through_c(p: *i32) -> *i32 {
+    let h = c_id as extern "C" fn(*i32) -> *i32;
+    return unsafe { h(p) };
+}
+fn main() -> i32 {
+    if apply(to_wide, 21) != 42 { return 1; }
+    if range(0, 5).fold(0 as usize, add_usize) != 10 { return 2; }
+    if *first(pick, &K, &K) != 7 { return 3; }
+    let u: fn(&i32, &i32) -> &i32 = unsafe { pick_unsafe };
+    if *first(u, &K, &K) != 7 { return 4; }
+    let slot: fn(&i32, &i32) -> &i32 = pick;
+    if *from_slot(&slot as *fn(&i32, &i32) -> &i32, &K) != 7 { return 5; }
+    let p = &K as *i32;
+    if through_c(p) != p { return 6; }
+    return 0;
+}

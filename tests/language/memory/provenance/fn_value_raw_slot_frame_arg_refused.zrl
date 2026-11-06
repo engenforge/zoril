@@ -1,0 +1,12 @@
+// A `fn` value read from raw memory is called with a local's address: the result reaches it, so
+// returning it is refused (§3, _Calls through a `fn` value_).
+// flags: --provenance
+// EXPECT: return rule
+// expected compile fail
+fn id(p: &i32) -> &i32 { return p; }
+fn leak(slot: *fn(&i32) -> &i32) -> &i32 {
+    let x = 2;
+    let f = unsafe { *slot };
+    return f(&x);
+}
+fn main() -> i32 { let s: fn(&i32) -> &i32 = id; return *leak(&s as *fn(&i32) -> &i32); }

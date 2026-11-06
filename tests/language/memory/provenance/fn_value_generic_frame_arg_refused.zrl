@@ -1,0 +1,16 @@
+// A generic function's instance made into a `fn` value, and a generic higher-order function
+// instantiated at a reference type: either way the call's result reaches its arguments, so a
+// local's address given back is refused (§3, _Calls through a `fn` value_; Z-0092's review).
+// flags: --provenance
+// EXPECT: return rule
+// expected compile fail
+fn id<T>(x: &T) -> &T { return x; }
+fn apply<T>(f: fn(T) -> T, x: T) -> T { return f(x); }
+fn same(r: &i32) -> &i32 { return r; }
+fn leak() -> &i32 {
+    let x = 3;
+    let f: fn(&i32) -> &i32 = id::<i32>;
+    return f(&x);
+}
+fn leak_hof() -> &i32 { let y = 9; return apply::<&i32>(same, &y); }
+fn main() -> i32 { return *leak() + *leak_hof(); }

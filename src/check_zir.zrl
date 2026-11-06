@@ -6229,19 +6229,21 @@ fn os_unknown_arg(
 }
 
 // What a call to a callee with no usable summary (a `fn` value, a body not read yet) does to the
-// caller's locals: it may store anything every argument reaches, and Unknown, into anything any
-// argument reaches (§3, "counts as storing every reference argument into every other"). A target's
-// S grows only by what the stored values own, so not by Unknown: otherwise a call would make its
-// own arguments' storage external and refuse itself in the rule pass. NARGS is ARGS.len, plus one
-// for a `CallPtr`'s environment. The rule pass checks every argument against every other, itself
-// included.
+// caller's locals: it may store anything every argument reaches, and EXTRA, into anything any
+// argument reaches (§3, "counts as storing every reference argument into every other"). EXTRA is
+// Unknown for a body not read, Static for a `fn` value, whose body these rules checked where it
+// was made (§3, _Calls through a `fn` value_). A target's S grows only by what the stored values
+// own, so not by EXTRA: otherwise a call would make its own arguments' storage external and refuse
+// itself in the rule pass. NARGS is ARGS.len, plus one for a `CallPtr`'s environment. The rule
+// pass checks every argument against every other, itself included.
 fn os_unknown_call_effects(
     c: &mut OriginSets,
     module: &ILModule,
     locals: [Local],
     args: [Place],
     callee: &Place,
-    nargs: usize
+    nargs: usize,
+    extra: u64
 ) {
     let tao = os_t(c, OS_T_AO);
     let tas = os_t(c, OS_T_AS);
@@ -6268,7 +6270,7 @@ fn os_unknown_call_effects(
     let ev = os_t(c, OS_T_EV);
     os_copy(c, ev, tsv);
     let _ = os_or(c, ev, tso);
-    os_add_flag(c, tsv, ORIGIN_UNKNOWN);
+    os_add_flag(c, tsv, extra);
     if c.checking {
         let mut refused = false;
         let mut i = 0 as usize;
@@ -6306,6 +6308,38 @@ fn os_unknown_call_effects(
         os_write_memory(c, module, locals, tw, tsv, tso);
         k = k + 1 as usize;
     }
+}
+
+// The result of a call through a `fn` value into OS_T_VO/OS_T_VS (§3, _Calls through a `fn`
+// value_): the body was checked by these rules where it was made, so its result holds only what
+// its arguments and its environment reach, and Static. An owning result is fresh storage of this
+// frame (OWNER) or storage that memory reaches (a `Vec` in an arena it was handed). Every
+// argument's reach goes into S, not only a tied arena's as in os_call: with no summary, which
+// argument the result is tied to is not known, and the environment's capture types are not either.
+fn os_fn_value_result(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    args: [Place],
+    callee: &Place,
+    owner: usize
+) {
+    let vo = os_t(c, OS_T_VO);
+    let vs = os_t(c, OS_T_VS);
+    let tao = os_t(c, OS_T_AO);
+    let tas = os_t(c, OS_T_AS);
+    let tr = os_t(c, OS_T_R);
+    let mut k = 0 as usize;
+    while k <= args.len {
+        os_unknown_arg(c, module, locals, args, callee, k);
+        let _ = os_or(c, tao, tas);
+        os_reach_all(c, tao, tr);
+        let _ = os_or(c, vo, tr);
+        let _ = os_or(c, vs, tr);
+        k = k + 1 as usize;
+    }
+    os_add_flag(c, vo, ORIGIN_STATIC);
+    let _ = os_or(c, vs, owner);
 }
 
 // Reads argument I of a direct call to FN_ID into OS_T_AO (what it holds) and OS_T_AS (what it
@@ -6849,7 +6883,7 @@ fn os_call(
         os_add_flag(c, vo, ORIGIN_UNKNOWN);
         os_add_flag(c, vs, ORIGIN_UNKNOWN);
         let none = Place { base: 0 as u32, projections: @slice(0 as *mut Projection, 0 as usize) };
-        os_unknown_call_effects(c, module, locals, args, &none, args.len);
+        os_unknown_call_effects(c, module, locals, args, &none, args.len, ORIGIN_UNKNOWN);
         return;
     }
     let tas = os_t(c, OS_T_AS);
@@ -6994,9 +7028,9 @@ fn os_rvalue(c: &mut OriginSets, module: &ILModule, locals: [Local], rv: &ZirRva
         ZirRvalue.Call(fn_id, args) => { os_call(c, module, locals, fn_id, args, owner); },
         ZirRvalue.CallPtr(callee, args) => {
             os_note_unknown(c, UNKNOWN_FN_VALUE);
-            os_add_flag(c, vo, ORIGIN_UNKNOWN);
-            os_add_flag(c, vs, ORIGIN_UNKNOWN);
-            os_unknown_call_effects(c, module, locals, args, &callee, args.len + 1 as usize);
+            let nargs = args.len + 1 as usize;
+            os_unknown_call_effects(c, module, locals, args, &callee, nargs, ORIGIN_STATIC);
+            os_fn_value_result(c, module, locals, args, &callee, owner);
         },
         // A capturing closure's value is the address of its environment struct: it holds what the
         // environment pointer holds, so a read through it reaches the captures (§3, _Closure

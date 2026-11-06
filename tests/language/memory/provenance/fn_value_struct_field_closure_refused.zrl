@@ -1,0 +1,14 @@
+// A closure kept in a struct field and called later (as `Map` keeps its function): the result
+// reaches the closure's environment, which holds Frame(x), so returning it is refused (§3, _Calls
+// through a `fn` value_).
+// flags: --provenance
+// EXPECT: return rule
+// expected compile fail
+struct Holder { f: fn() -> &i32 }
+fn leak() -> &i32 {
+    let x = 3;
+    let r = &x;
+    let h = Holder { f: || -> &i32 { return r; } };
+    return (h.f)();
+}
+fn main() -> i32 { return *leak(); }

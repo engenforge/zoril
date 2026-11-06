@@ -1,5 +1,6 @@
-// A call through a `fn` value has no summary: its result is Unknown (gap_16).
-// ORIGINS: main routed O={Unknown} S={}
+// A call through a `fn` value has no summary: its result is what its arguments reach, and Static
+// (§3, _Calls through a `fn` value_), so it holds `&x`'s Frame (gap_16). Unknown until Z-0092.
+// ORIGINS: main routed O={Frame(x), Static} S={}
 // expected exit 0
 fn forward(v: &i32) -> &i32 { return v; }
 fn main() -> i32 {

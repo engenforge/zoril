@@ -1,0 +1,14 @@
+// A method made into a `fn` value is a `fn` value like any other: its result reaches its
+// arguments, so a view of a local given back through it cannot be returned (§3, _Calls through a
+// `fn` value_; a sibling route of Z-0092, probed in its review).
+// flags: --provenance
+// EXPECT: return rule
+// expected compile fail
+struct S { v: i32 }
+impl S { fn get(self: &S) -> &i32 { return &self.v; } }
+fn leak() -> &i32 {
+    let s = S { v: 4 };
+    let f: fn(&S) -> &i32 = S::get;
+    return f(&s);
+}
+fn main() -> i32 { return *leak(); }
