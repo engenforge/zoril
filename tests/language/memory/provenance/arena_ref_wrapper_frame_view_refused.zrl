@@ -1,0 +1,31 @@
+// A struct holding a reference to the caller's Arena, passed by value to a function building a Vec
+// in that arena: the arena is reached through a pointer, so it is still named by what the argument
+// holds (the caller's arena, outside this frame), and a frame view pushed into the Vec is refused
+// (Z-0082).
+// flags: --provenance
+// expected compile fail
+// EXPECT: the callee stores an address of this frame into memory that outlives it (call store rule)
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct W {
+    a: &Arena,
+}
+
+fn build(w: W) -> Vec<&i32> {
+    return Vec::<&i32>.new_in(w.a);
+}
+
+fn f(arena: &Arena) {
+    let x = 5;
+    let mut v = build(W { a: arena });
+    v.push(&x);
+}
+
+fn main() -> i32 {
+    let a = Arena.new(4096).unwrap();
+    f(&a);
+    return 0;
+}

@@ -1,0 +1,18 @@
+// The same through `Option<Arena>`: an arena held by value in any enum is named by what it owns
+// (Z-0082).
+// flags: --provenance
+// expected exit 0
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let o = Option.Some(Arena.new(4096).unwrap());
+    let a = o.unwrap();
+    let mut names = Vec::<[u8]>.new_in(&a);
+    names.push("lit");
+    let mut w = Vec::<u64>.new_in(&a);
+    w.push(1 as u64);
+    return (names.len() + w.len() - 2) as i32;
+}

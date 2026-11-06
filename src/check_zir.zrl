@@ -5408,6 +5408,8 @@ const OS_TEMPS: usize = 19;
 const OS_Q_ARENA: usize = 0;
 const OS_Q_HANDLE: usize = 1;
 const OS_Q_FRESH: usize = 2;
+const OS_Q_ARENA_REF: usize = 3;
+const OS_Q_COUNT: usize = 4;
 
 // The rules of §3 (Z-0048): off, refusing, or warning only (`--provenance=warn`).
 pub const PROVENANCE_OFF: u32 = 0;
@@ -5760,7 +5762,9 @@ fn os_owns(c: &mut OriginSets, module: &ILModule, ty: u32) -> bool {
 // pointer, a box or a slice); OS_Q_HANDLE, whether it can hold a mutable handle (`&mut`, `[mut T]`
 // or a `fn` value, the leaves of _Destination reach_; every other type answers for its element or
 // field types); OS_Q_FRESH, whether it is or contains by value a box or a type implementing Drop,
-// so a call returning one owns fresh storage. An unknown type answers yes.
+// so a call returning one owns fresh storage; OS_Q_ARENA_REF, whether it reaches an `Arena` through
+// a pointer or a slice (an `Arena` or `ArenaHeader` held by value answers no, though its header is
+// one). An unknown type answers yes.
 fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool {
     if ty == 0 as u32 || ty as usize > module.types.len() { return true; }
     let m = q * c.nt + ty as usize;
@@ -5772,17 +5776,26 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
         ILType.Var(_) => { yes = true; },
         ILType.Primitive(_) | ILType.FD(_) | ILType.IORing => {},
         ILType.PtrMut(x) => {
-            yes = q == OS_Q_HANDLE || (q == OS_Q_ARENA && os_type_has(c, module, x, q));
+            yes = q == OS_Q_HANDLE
+                || (q == OS_Q_ARENA && os_type_has(c, module, x, q))
+                || (q == OS_Q_ARENA_REF && os_type_has(c, module, x, OS_Q_ARENA));
         },
         ILType.Ptr(x) | ILType.RawPtr(x) | ILType.RawPtrMut(x) => {
-            yes = q != OS_Q_FRESH && os_type_has(c, module, x, q);
+            if q == OS_Q_ARENA_REF {
+                yes = os_type_has(c, module, x, OS_Q_ARENA);
+            } else {
+                yes = q != OS_Q_FRESH && os_type_has(c, module, x, q);
+            }
         },
         ILType.Boxed(x) | ILType.BoxedMut(x) => {
             yes = q == OS_Q_FRESH || os_type_has(c, module, x, q);
         },
         ILType.Slice(sl) => {
             yes = (q == OS_Q_HANDLE && sl.mutable)
-                || (q != OS_Q_FRESH && os_type_has(c, module, sl.element, q));
+                || (q == OS_Q_ARENA_REF && os_type_has(c, module, sl.element, OS_Q_ARENA))
+                || (q != OS_Q_FRESH
+                    && q != OS_Q_ARENA_REF
+                    && os_type_has(c, module, sl.element, q));
         },
         ILType.Fn(_) => { yes = q == OS_Q_HANDLE; },
         ILType.Array(a) => { yes = os_type_has(c, module, a.element, q); },
@@ -5799,6 +5812,10 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
                     || type_name_is(c.table.lookup(u.name), "ArenaHeader")) {
                 // `ArenaHeader` is an arena's raw form (`Vec.new_in_raw(arena)`).
                 yes = true;
+            } else if q == OS_Q_ARENA_REF
+                && (type_name_is(c.table.lookup(u.name), "Arena")
+                    || type_name_is(c.table.lookup(u.name), "ArenaHeader")) {
+                yes = false;
             } else if q == OS_Q_FRESH && os_has_drop(c, module, u.name) {
                 yes = true;
             } else {
@@ -6858,9 +6875,18 @@ fn os_call(
                 tied = true;
                 let arena = owning && os_type_has(c, module, aty, OS_Q_ARENA);
                 if arena { arena_tie = true; }
+                // An argument that holds its arena by value (`unwrap` of a `Result<Arena, _>`)
+                // names the arena's storage by what it owns, S; what it holds, O, is what that
+                // storage holds (a literal a callee put in the arena), never storage (Z-0082).
+                let arena_store = if aty != 0 as u32
+                    && !os_type_has(c, module, aty, OS_Q_ARENA_REF) {
+                    tas
+                } else {
+                    tao
+                };
                 if in_storage {
                     let _ = os_or(c, vo, tao);
-                    if arena { let _ = os_or(c, vs, tao); }
+                    if arena { let _ = os_or(c, vs, arena_store); }
                 }
                 if in_ties {
                     // ParamContents(i) is what is reached through the argument, whatever its type.
@@ -6876,7 +6902,7 @@ fn os_call(
                     // a local arena an external destination.
                     if arena {
                         if body {
-                            let _ = os_or(c, vs, tao);
+                            let _ = os_or(c, vs, arena_store);
                         } else {
                             let _ = os_or(c, vs, tr);
                         }
@@ -7158,7 +7184,9 @@ pub fn compute_origins_zir(
         table: table,
         drop_fns: drop_fns,
         ndrop: ndrop,
-        q_memo: unsafe { @slice(zoril_allocator_alloc(arena, 3 * nt) as *mut u8, 3 * nt) },
+        q_memo: unsafe {
+            @slice(zoril_allocator_alloc(arena, OS_Q_COUNT * nt) as *mut u8, OS_Q_COUNT * nt)
+        },
         nt: nt,
         rules: rules,
         checking: false,
@@ -7179,7 +7207,7 @@ pub fn compute_origins_zir(
         memset(c.buf.ptr as *mut u8, 0, (nsets * words * 8) as u64);
         memset(c.carries_memo.ptr as *mut u8, 0, nt as u64);
         memset(c.owns_memo.ptr as *mut u8, 0, nt as u64);
-        memset(c.q_memo.ptr as *mut u8, 0, (3 * nt) as u64);
+        memset(c.q_memo.ptr as *mut u8, 0, (OS_Q_COUNT * nt) as u64);
     }
     let mut pi = 0 as usize;
     while pi < (*func).params.len {

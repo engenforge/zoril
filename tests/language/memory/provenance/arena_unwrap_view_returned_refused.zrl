@@ -1,0 +1,23 @@
+// A view of a Vec's buffer in a local Arena taken out of its Result with `unwrap`, returned: the
+// arena is this frame's storage whichever way it was unwrapped (Z-0082).
+// flags: --provenance
+// expected compile fail
+// EXPECT: the returned value holds an address of this frame (return rule)
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn f() -> [u64] {
+    let a = Arena.new(4096).unwrap();
+    let mut names = Vec::<[u8]>.new_in(&a);
+    names.push("lit");
+    let mut v = Vec::<u64>.new_in(&a);
+    v.push(1 as u64);
+    return v.as_slice();
+}
+
+fn main() -> i32 {
+    let s = f();
+    return 0;
+}
