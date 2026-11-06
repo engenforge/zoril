@@ -1,0 +1,20 @@
+// A literal pushed into a Vec in a local Arena taken out of `Arena.new`'s Result with `unwrap`, then
+// a push into another Vec in it. The literal lands in what the Result temporary holds; `unwrap`
+// names the arena's storage by what that by-value argument owns, not by what it holds, so the
+// literal's Static is no storage of the arena and the second push stores nothing outside the frame
+// (Z-0082).
+// flags: --provenance
+// expected exit 0
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let a = Arena.new(4096).unwrap();
+    let mut names = Vec::<[u8]>.new_in(&a);
+    names.push("lit");
+    let mut w = Vec::<u64>.new_in(&a);
+    w.push(1 as u64);
+    return (names.len() + w.len() - 2) as i32;
+}
