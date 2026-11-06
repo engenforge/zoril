@@ -1,0 +1,26 @@
+// A view of a local Arena's buffer stored into the caller's struct: the arena is this frame's
+// storage now that its mapping is not `Raw` (Z-0076), and the view still may not leave the frame.
+// flags: --provenance
+// expected compile fail
+// EXPECT: a value holding an address of this frame is stored into memory that outlives it (store rule)
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct Holder {
+    s: [u64],
+}
+
+fn fill(h: &mut Holder) {
+    let a = Arena.new(4096).unwrap();
+    let mut v = Vec::<u64>.new_in(&a);
+    v.push(1 as u64);
+    h.s = v.as_slice();
+}
+
+fn main() -> i32 {
+    let mut h = Holder { s: @slice(0 as *u64, 0) };
+    fill(&mut h);
+    return h.s.len as i32;
+}

@@ -1,0 +1,24 @@
+// A frame address stored through a `#[fresh]` result and the pointer returned. The provenance rules
+// do not follow memory a fresh pointer reaches (the result carries no `Raw`), so only the old
+// region rule refuses this; Z-0073 and Z-0074 read it before the old rules go (Z-0076).
+// flags: --provenance
+// expected compile fail
+// EXPECT: region escape: a pointer to local stack storage is written to memory that outlives this function
+#[fresh]
+unsafe fn block() -> *mut &i32 {
+    return @ptr_from_int<*mut &i32>(
+        @syscall(9, 0 as u64, 4096 as u64, 3 as u64, 34 as u64, -1 as i64 as u64, 0 as u64)
+    );
+}
+
+fn f() -> *mut &i32 {
+    let x = 5;
+    let p = unsafe { block() };
+    unsafe { *p = &x; }
+    return p;
+}
+
+fn main() -> i32 {
+    let p = f();
+    return 0;
+}

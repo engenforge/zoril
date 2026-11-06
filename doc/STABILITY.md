@@ -77,7 +77,7 @@ Zoril confines dangerous or unverified low-level operations behind explicit `uns
 5. A raw system call (`@syscall`).
 6. An uninitialized stack slot (`@alloca`).
 
-Calling an **`unsafe fn`** is a seventh route: a function is declared `unsafe fn` when it requires a precondition the type system cannot prove, and calling one needs an enclosing `unsafe { }` block or an `unsafe fn` body. In `stdlib/` those are the interface contracts - `Args.new`, `Vec::new_in_raw`, `Vec::set_len`, the allocator primitives, `mmap_or_trap`, `munmap_or_trap`, `sys_execve` and the other `*_raw` entry points.
+Calling an **`unsafe fn`** is a seventh route: a function is declared `unsafe fn` when it requires a precondition the type system cannot prove, and calling one needs an enclosing `unsafe { }` block or an `unsafe fn` body. In `stdlib/` those are the interface contracts - `Args.new`, `Vec::new_in_raw`, `Vec::set_len`, the allocator primitives, `mmap_or_trap`, `mmap_anon`, `mmap_anon_or_trap`, `munmap_or_trap`, `sys_execve` and the other `*_raw` entry points.
 
 _Creating_ a raw pointer is not one of them: `n as *T`, `@ptr_from_int<*T>`, `@ptr_cast<*T>` and `@int_cast<U>` are safe, because every _use_ of the pointer is gated on its type, and a marker on the creation would leave a fixed hardware address with no spelling in a `static`.
 

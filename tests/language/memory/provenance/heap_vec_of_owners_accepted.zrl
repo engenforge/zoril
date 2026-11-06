@@ -1,0 +1,15 @@
+// Heap Vecs of Strings grown in one frame: the allocator's null-arena path maps with `mmap_anon`,
+// so a heap block is not `Raw` and growing one is no store into a global (P1, Z-0076).
+// flags: --provenance
+// expected exit 0
+import "vec.zrl";
+import "string.zrl";
+use vec::Vec;
+use string::String;
+
+fn main() -> i32 {
+    let mut w = Vec::<String>.new();
+    w.push(String.new());
+    w.get_mut(0).unwrap().push_str("!");
+    return (w.get(0).unwrap().len() - 1) as i32;
+}

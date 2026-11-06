@@ -1,0 +1,19 @@
+// A local Arena passed by value to a callee that drops it while a Vec in it is still used: the
+// borrow rules refuse the move; the arena being this frame's storage (Z-0076) changes nothing here.
+// flags: --provenance
+// expected compile fail
+// EXPECT: cannot move borrowed value 'a'
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn eat(a: Arena) {}
+
+fn main() -> i32 {
+    let a = Arena.new(4096).unwrap();
+    let mut v = Vec::<u64>.new_in(&a);
+    eat(a);
+    v.push(1 as u64);
+    return 0;
+}

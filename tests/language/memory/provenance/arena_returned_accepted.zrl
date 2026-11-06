@@ -1,0 +1,35 @@
+// A local Arena returned, alone and inside a struct: its storage moves to the caller (Z-0076).
+// Taken out of `Arena.new`'s Result with `match`, not `unwrap` (Z-0082).
+// flags: --provenance
+// expected exit 0
+import "mem.zrl";
+import "io.zrl";
+use mem::Arena;
+use io::Error;
+
+struct W {
+    a: Arena,
+    n: u64,
+}
+
+fn new_arena() -> Result<Arena, Error> {
+    return Arena.new(4096);
+}
+
+fn in_struct() -> Option<W> {
+    let a = match Arena.new(4096) {
+        Ok(x) => x,
+        Err(_) => { return Option.None; },
+    };
+    return Option.Some(W { a: a, n: 1 as u64 });
+}
+
+fn main() -> i32 {
+    let r = new_arena();
+    if r.is_err() { return 1; }
+    let w = match in_struct() {
+        Some(w) => w,
+        None => { return 2; },
+    };
+    return (w.n - 1 as u64) as i32;
+}

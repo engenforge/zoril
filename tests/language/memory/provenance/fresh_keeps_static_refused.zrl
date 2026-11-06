@@ -1,0 +1,23 @@
+// `#[fresh]` takes only the `Raw` of an address made from an integer out of a call's result: a
+// function that claims it and returns a global's address still gives Static, and a frame address
+// stored through it is refused (Z-0076).
+// flags: --provenance
+// expected compile fail
+// EXPECT: a value holding an address of this frame is stored into memory that outlives it (store rule)
+static mut SLOT: *mut i32 = 0 as *mut i32;
+
+#[fresh]
+unsafe fn claims_fresh() -> *mut *mut i32 {
+    return &mut SLOT as *mut *mut i32;
+}
+
+fn f() {
+    let mut x = 5;
+    let p = unsafe { claims_fresh() };
+    unsafe { *p = &mut x as *mut i32; }
+}
+
+fn main() -> i32 {
+    f();
+    return 0;
+}

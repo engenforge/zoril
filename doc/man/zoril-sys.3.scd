@@ -44,6 +44,24 @@ pub unsafe fn mmap_or_trap(addr: *u8, length: u64, prot: u64, flags: u64, fd: i6
 
 	Caller obligation: parameters must specify valid memory protection and mapping flags; traps on kernel failure.
 
+*mmap_anon*
+```
+pub unsafe fn mmap_anon(length: u64) -> *mut u8;
+```
+
+	Maps LENGTH bytes of private, anonymous, read-write memory, returning the kernel's result as a
+	pointer: a new mapping (a null hint and no MAP\_FIXED, so it overlaps none the process holds) or
+	errno, which syscall\_failed(p as u64 as i64) detects.
+	Caller obligation: test the result with syscall\_failed before using it as an address.
+
+*mmap_anon_or_trap*
+```
+pub unsafe fn mmap_anon_or_trap(length: u64) -> *mut u8;
+```
+
+	Maps LENGTH bytes of private, anonymous, read-write memory, as mmap\_anon; traps on kernel failure.
+	Caller obligation: the caller unmaps the result, with LENGTH, at most once.
+
 *munmap_or_trap*
 ```
 pub unsafe fn munmap_or_trap(addr: *u8, length: u64);

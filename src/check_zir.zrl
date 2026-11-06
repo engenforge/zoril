@@ -6819,6 +6819,12 @@ fn os_call(
             from_mask = from_mask | f.stores_declared_from;
             to_mask = to_mask | f.stores_declared_to;
         }
+        // `#[fresh]`: its author's claim that the address the body made from an integer is a new
+        // mapping, not memory outside the frame (§3, _Raw operations_). Only that `Raw` goes; a
+        // tie to an argument, Static and Unknown stay, as the narrowest reading of the claim.
+        if f.fresh {
+            ret_flags = ret_flags & !ORIGIN_RAW;
+        }
     }
     if !known {
         os_note_unknown(c, fn_id);

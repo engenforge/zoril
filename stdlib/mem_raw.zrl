@@ -7,7 +7,7 @@ import "core0.zrl";
 
 use io::{Error, eprint, exit, stderr};
 use fmt::write_u64;
-use sys::{mmap_or_trap, munmap_or_trap, syscall_failed};
+use sys::{mmap_anon, mmap_anon_or_trap, munmap_or_trap, syscall_failed};
 
 // CALLER OBLIGATION: dest and src must point to valid memory of at least size bytes; regions must not overlap.
 pub extern fn memcpy(dest: *mut u8, src: *u8, size: u64);
@@ -31,8 +31,7 @@ pub const ARENA_POISON: i32 = 165;
 // Allocates an arena mapping, returning a raw pointer to ArenaHeader.
 // Traps if mmap fails.
 pub unsafe fn arena_init(capacity: u64) -> *mut ArenaHeader {
-    // PROT_READ|PROT_WRITE = 3, MAP_PRIVATE|MAP_ANONYMOUS = 0x22 (34)
-    let ptr = mmap_or_trap(0 as *mut u8, capacity, 3 as u64, 34 as u64, -1 as i64, 0 as u64);
+    let ptr = mmap_anon_or_trap(capacity);
     let arena = ptr as *mut ArenaHeader;
     (*arena).start = ptr;
     (*arena).offset = 0 as u64;
@@ -46,11 +45,11 @@ pub unsafe fn arena_init_result(capacity: u64) -> Result<*mut ArenaHeader, Error
     if capacity < ARENA_HEADER_SIZE + 8 as u64 {
         return Result.Err(Error.from_linux_errno(22 as i32));
     }
-    let ret = @syscall(9, 0 as u64, capacity, 3 as u64, 34 as u64, -1 as i64 as u64, 0 as u64);
+    let ptr = mmap_anon(capacity);
+    let ret = ptr as u64 as i64;
     if syscall_failed(ret) {
         return Result.Err(Error.from_linux_errno((0 as i64 - ret) as i32));
     }
-    let ptr = @ptr_from_int<*mut u8>(ret);
     let arena = ptr as *mut ArenaHeader;
     (*arena).start = ptr;
     (*arena).offset = 0 as u64;
@@ -90,7 +89,7 @@ fn arena_overflow(capacity: u64, offset: u64, size: u64) -> never {
 // CALLER OBLIGATION: arena must be null (global heap) or point to a valid ArenaHeader.
 pub unsafe fn zoril_allocator_alloc(arena: *mut ArenaHeader, size: u64) -> *mut u8 {
     if arena as u64 == 0 as u64 {
-        return mmap_or_trap(0 as *mut u8, size, 3 as u64, 34 as u64, -1 as i64, 0 as u64);
+        return mmap_anon_or_trap(size);
     }
     if arena.offset > arena.capacity
         || arena.capacity - arena.offset < ARENA_HEADER_SIZE + 7 as u64 {
