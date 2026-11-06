@@ -1,0 +1,20 @@
+// A Vec holding a view of this frame, moved through `Option.unwrap` and returned: what the owner
+// holds still goes with the result; only the storage it owns is not an address (Z-0083).
+// flags: --provenance
+// expected compile fail
+// EXPECT: the returned value holds an address of this frame (return rule)
+import "vec.zrl";
+use vec::Vec;
+
+fn g() -> Vec<&i32> {
+    let x = 5;
+    let mut v = Vec::<&i32>.new();
+    v.push(&x);
+    let o = Option.Some(v);
+    return o.unwrap();
+}
+
+fn main() -> i32 {
+    let v = g();
+    return 0;
+}
