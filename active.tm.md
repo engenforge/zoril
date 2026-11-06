@@ -11,12 +11,6 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
 
 **Priority (2026-11-06, the maintainer):** the safety series below is paused for the test-efficiency series (`+testinfra`, Z-0103 to Z-0114), which goes first because every later task pays for testing. Z-0103 is its first task: it fixes the order of the others and may split, merge or drop them. Until it does, the order below is a proposal. **Z-0103's ranking (2026-11-06, awaiting the maintainer's review):** the tasks below are in its order; Z-0115 to Z-0117 are new, Z-0108 is deferred, and Z-0118 (dropping Lua, from the incubator) is in `future.tm.md`.
 
-- [ ] +testinfra +measurement +AI-G Z-0105 T1b Profile `make test` and `make preflight-changed`
-    > **Created:** 2026-11-06 **Depends:** Z-0104.
-
-    - **Do:** run `make test` and `make preflight-changed` (once with a checker file changed, once with only a doc changed) on a quiet host, with `-j` at the CPU count and at 4. Record in this task the top 20 items by wall time, the share of each gate and group, the critical path (the item the run waits on last), and how much CPU sits idle at the end of each phase. Do the same for the per-file pipeline: the share of zoril, zilc, qbe, as, ld and run in a sample of 100 tests. These figures rank Z-0103's list.
-    - **Narrowed by Z-0103 (2026-11-06):** the 16-core figures it needed to rank are in Z-0103 (F1 to F3). What is left for this task: the same run on 4 jobs (the cloud VM's count, where total CPU time rather than the critical path decides), the CPU time of each gate and group, and the preflight steps' times from Z-0104's `build/preflight-timings.tsv`. Its figures confirm or reorder Z-0103's ranking items 1 to 3.
-
 - [ ] +testinfra +decision +AI-D Z-0106 T2 Change-scoped test tiers: which checks a changed path needs
     > **Created:** 2026-11-06 **Depends:** Z-0105.
 
