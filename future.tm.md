@@ -205,6 +205,12 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
 
 ## Decisions and hygiene
 
+- [ ] +safety +decision +AI-D Z-0102 Whether `unsafe fn` gets a `fn` type of its own, callable only in `unsafe`
+    > **Created:** 2026-11-06 **Found by:** Z-0095's review. **Owner:** the maintainer's decision.
+
+    - **Background:** since Z-0095 an `unsafe fn` becomes a plain `fn` value only inside `unsafe`, and that block claims the function is safe to call with every argument the `fn` type admits (`unsafe_policy.md` §1), the obligation a safe wrapper or a closure calling it in `unsafe` already carries (`build/z95r/d_wrapper.zrl`, `d_closure.zrl`: both compile and fault the same way as the coercion). An `unsafe fn(..) -> R` type would let a value keep the precondition, so each call through it is marked, as Rust's `unsafe fn` pointers are. It is a language feature: the parser, the type checker, monomorphization, `.zri` interfaces, and the stage1 closure (`src/` cannot use it until a re-pin).
+    - **Choices:** keep the Z-0095 rule alone; add the type beside it (the coercion to a plain `fn` stays, in `unsafe`); or add the type and refuse the coercion. Measure first how many `unsafe fn` values the tree and the tests make (none in `src/`, zilc or zbuild as of Z-0095).
+
 - [ ] +release +portability +decision Z-0036 R6 Make the toolchain's output identical on every Linux C library
     > **Created:** 2026-11-03 **Owner:** the maintainer's decision.
 
