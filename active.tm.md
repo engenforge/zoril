@@ -20,11 +20,16 @@ Open work, in execution order from top to bottom, in five groups. (0) First, the
     - **Verified in `zoril-altest` (2026-11-06):** a fresh clone of `7e699fd`: `make` passes, `make test` 3382 run, 3382 passed, 0 failed, 90 skipped (without the wrapper); `./scripts/test_preflight.sh` with the wrapper 20 passed, no failure or skip. `fdcef82` in the same container: 3364 run, 0 failed, the scenario skipped. Here: `make test` 3404 run, 0 failed, 86 skipped. `2f5a778` also dropped the script's execute bit (rewritten through a temporary), which `7e699fd` restored: the runner reported exit 126.
     - **Open:** (1) the maintainer re-runs `make test` from scratch at HEAD on their Alpine machine (the check this task names that the container cannot make yet); (2) the image should carry scdoc 1.11.5 and Lua 5.4 (both missing in `localhost/lang/zoril-altest`), so the container runs what the maintainer's machine runs: the image is outside the repository, the maintainer's. Close this task when (1) passes.
 
-- [ ] +portability +tests +AI-G Z-0099 A clean build and `make test` pass on Debian, checked in a Debian podman-proxy container
+- [x] +portability +tests +AI-G Z-0099 A clean build and `make test` pass on Debian, checked in a Debian podman-proxy container
     > **Created:** 2026-11-06 **Found by:** the maintainer's request beside Z-0098. **After:** Z-0098 (its fixes come first).
+    > **Completed:** 2026-11-06 git:7c42c61
 
-    - **Now:** `/etc/podman-proxy.conf` in the agent's container names only `zoril-altest` (Alpine); `podman-proxy-send info` lists no Debian container. If none is available, stop and ask the maintainer for its name and image (the config is outside the repository).
-    - **Do:** as Z-0098, in the Debian container: a clean clone, `make`, `make test`, the totals recorded; a failure there gets its cause fixed (glibc, GNU coreutils and `dash` as `/bin/sh` are the usual differences from Alpine) or a task of its own.
+    - **Now:** `/etc/podman-proxy.conf` configured with container `zoril-debtest` (`localhost/lang/zoril-debtest`, Debian 13.7 trixie, its `workdir_prefix`).
+    - **Environment:** Debian GNU/Linux 13 (trixie, 13.7), gcc 14.2.0 (Debian 14.2.0-19), GNU Binutils 2.44 (`as`, `ld`), `/bin/sh` -> dash, QBE 1.3, scdoc 1.11.3 (Lua not installed).
+    - **Clean build (`make`):** built from a clean clone of `7c42c61` with 0 warnings. Passes the bootstrap sequence through stage0-C and stage1, passes the self-hosted fixpoint check (21424946 bytes of ZIL, identical across two generations), builds `zoril`, `zilc`, and `zbuild`, and confirms identical binaries on rebuild.
+    - **Test suite (`make test`):** Total: 3382 run, 3382 passed, 0 failed, 90 skipped (182.0s). All 34 gates and all test groups (Language & Syntax, Types & Generics, Ownership & Memory Safety, Stdlib, Diagnostics, Integration, stray-files) reported 0 failures.
+    - **Preflight test scenario (`scripts/test_preflight.sh`):** skipped under `make test` because Debian's packaged scdoc is 1.11.3 (< 1.11.5). Running `test_preflight.sh` with an scdoc 1.11.5 version wrapper passed all 20 test cases with 0 failures or skips.
+    - **Outcome:** Debian 13 (glibc, GNU coreutils, dash as `/bin/sh`) exhibits no portability issues; the fixes from Z-0098 apply cleanly.
 
 - [ ] +safety +tests +AI-D Z-0092 B1.9a1 A call through a `fn` value returns and stores only what its arguments and environment reach
     > **Created:** 2026-11-06 **Found by:** Z-0088 (experiment B). **Depends:** Z-0088. **Before:** Z-0065. **Check-in:** stop for review after it. Accepts more and removes `Unknown`: the rejection differential and the series rule apply.
