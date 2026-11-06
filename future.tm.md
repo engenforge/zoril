@@ -8,6 +8,81 @@ date: 2026-11-03
 
 Deferred work, in the order it is expected to be taken up after `active.tm.md` empties. Move a task to `active.tm.md` before working on it.
 
+## Deferred precision rules of the provenance series (from Z-0075)
+
+Rules Z-0075 deferred: each root is seen today only in the tree's own code (changed at the sites instead) or in a few grid cells accepted as a precision bound. Take one up when user code, the grid or a test shows its class.
+
+- [ ] +safety +tests +AI-D Z-0085 B1.9b A value copied out of a referenced collection is not an address into its buffer
+    > **Created:** 2026-11-06 **Found by:** Z-0064 (root (d2)). **Depends:** Z-0075. **Check-in:** stop for review after it.
+    > **Deferred (2026-11-06, by Z-0075):** the root is seen only in `src`, at one site, which Z-0089 changes instead; none of the grid's or the tests' refusals is from it. Take this rule up when a user program, the grid or a test shows the class, with the reproducer below.
+
+    - **Now:** a body summary's `ParamContents(i)` tie is mapped with `os_through_plus`, everything reached through the argument at any depth, including the buffer a referenced `Vec` owns. A function returning a `Vec` of elements copied out of `&rows` reads as returning addresses into `rows`'s buffer. In `src/lower_zir/exhaust.zrl`, `exh_expand_or` pushes `row` read out of `rows` and calls itself with `&out`, which makes its caller's result own fresh storage; in `exh_useful`, `rows`, `spec`, `def` and `same` then hold `Frame` and `Unknown`, and its summary becomes every parameter stored into every parameter and a global. 167 of `src`'s 195 warnings are "into a global" because of it.
+    - **Reduction:** Z-0084's program with `if again { return self.expand(&out, false); }` added in `expand` before `return out;` (`build/z64/t/d3.zrl`): builds, exits 0, 7 warnings under `--provenance=warn`, with or without Z-0084's experiment. Twin: `expand` pushes a fresh copy (`let c = self.alloc(r.len); out.push(c);`): 0 warnings.
+    - **Measured alone (Z-0064, a copy of `src/` with the same fresh copy at `exhaust.zrl:275`):** 195 to 185, and "into a global" 167 to 14; `exh_useful`'s summary becomes `ParamContents(0) -> Param(0) ParamContents(0)`.
+    - **Decide first, then do:** a rule that adds knowledge (a tie by depth, or by type: a `[mut u32]` element cannot address a buffer of `[mut u32]` headers without `unsafe`), or the one-line code change at the site (Z-0075 says which route). A rule removes origins in effect, so the series rule and the rejection differential apply; probe a result that does point into the buffer (`fn first(v: &Vec<i32>) -> &i32 { return &v.as_slice()[0]; }`, then the `Vec` dropped or pushed to), which must keep it. `make test`, `make preflight-changed`, the store grid.
+
+- [ ] +safety +tests +AI-D Z-0084 B1.9d Arena storage is named by the arena an argument reaches, not by the argument's address
+    > **Created:** 2026-11-06 **Found by:** Z-0064 (root (d1)). **Depends:** Z-0075 (it decides whether over-rejections are fixed by rules). **Check-in:** stop for review after it. Accepts more: the rejection differential and the series rule apply.
+    > **Deferred (2026-11-06, by Z-0075):** the root is seen only in code that uses a raw arena (zbuild's manifest parsing, the compiler), which is `unsafe` already; Z-0090 changes zbuild's sites instead, and none of the grid's or the tests' refusals is from it. Take this rule up when safe user code shows the class, with the reproducer below.
+
+    - **Now:** `os_call` (`src/check_zir.zrl`) names the storage of an arena-tied result by the arena argument's own origins (`arena_store = tao`), and `os_type_has(.., OS_Q_ARENA_REF)` answers yes for any reference that reaches an `ArenaHeader` through a field: `&mut ZirLowerer` (`arena: *mut ArenaHeader`), `&Vec<..>` (`raw`). So `self.f(&rows)` returning a Vec in `*self.arena` owns `Param(0)` (the struct `self` points at) and `Frame(rows)` (the local Vec). In zbuild, `parse_entry(&cols, arena)`'s result owns `Frame(cols)` (`tools/zbuild/src/manifest.zrl`), which gives all 25 of zbuild's warnings.
+    - **Reduction** (`build/z64/t/d5.zrl`; builds, exits 0; 7 warnings under `--provenance=warn`, 0 with the experiment below):
+
+    ```zoril
+    import "vec.zrl";
+    import "mem_raw.zrl";
+    use vec::Vec;
+    use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
+
+    struct Z { arena: *mut ArenaHeader }
+
+    impl Z {
+        #[borrows()]
+        fn alloc(self: &mut Z, n: usize) -> [mut u32] {
+            return unsafe { @slice(zoril_allocator_alloc(self.arena, ((n + 1 as usize) * 4) as u64) as *mut u32, n) };
+        }
+        #[borrows()]
+        fn expand(self: &mut Z, rows: &Vec<[mut u32]>, again: bool) -> Vec<[mut u32]> {
+            let mut out = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
+            for r in rows.as_slice() { out.push(*r); }
+            return out;
+        }
+        fn walk(self: &mut Z, rows_in: &Vec<[mut u32]>, depth: usize) -> bool {
+            if depth > 3 as usize { return rows_in.len() == 0 as usize; }
+            let rows = self.expand(rows_in, true);
+            let mut same = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
+            for r in rows.as_slice() {
+                let nr = self.alloc(r.len);
+                same.push(nr);
+            }
+            let spec = self.expand(&rows, false);
+            if self.walk(&spec, depth + 1 as usize) { return true; }
+            return self.walk(&same, depth + 1 as usize);
+        }
+        fn top(self: &mut Z) -> bool {
+            let mut rows = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
+            let row = self.alloc(1 as usize);
+            rows.push(row);
+            return self.walk(&rows, 0 as usize);
+        }
+    }
+
+    fn main() -> i32 {
+        let mut z = Z { arena: unsafe { arena_init(65536 as u64) } };
+        if z.top() { return 1; }
+        return 0;
+    }
+    ```
+
+    - **Measured alone (Z-0064, a scratch compiler: in `os_call`'s `in_ties` branch under a body summary, `vs |= arena_store` only when the argument's type is a pointer straight to an `Arena` or `ArenaHeader`, else `vs |= tr`, what the argument reaches):** zbuild 25 to 0; `src` unchanged alone (Z-0085's root keeps its cascade going). A measurement, not a proposed rule: not probed for soundness.
+    - **Do:** state the rule (an arena's storage is what the reference reaches, at the depth where the `Arena`/`ArenaHeader` is) in the design note §3, implement it, and probe the sibling routes per the series rule: the value built inside the callee, returned from a call, packed into a struct beside a view or a raw pointer, an `&Arena` held in a struct field, an `Arena` held by value in a struct passed by reference, and `arena_reset` between the call and a read. `make test`, `make preflight-changed`, the rejection differential, the store grid.
+
+- [ ] +safety +tests +AI-D Z-0091 An assignment to a local's field replaces the origins the field held
+    > **Created:** 2026-11-06 **Found by:** Z-0075 (the grid's newly refused twins, read by root). **Deferred (2026-11-06, by Z-0075):** accepted as a precision bound for now (Z-0065 records it in `KNOWN_ISSUES.md` §5); a removal rule, so it waits until the series' other rules are in. **Check-in:** stop for review after it.
+
+    - **Now:** a direct assignment to a field of a local (`carrier_tup.0 = src_val`) adds the new value's origins to the local and keeps the old field's: no strong update. The store grid's safe twins `{ref_local,elem_ref}__{struct_field,tuple_slot,array_slot}__{same_param,store_param_65}__{deref_out,field_out}__frame_ends` (18 cells) are refused under `--provenance` by "the callee stores an address of this frame into memory that outlives it (call store rule)": in `ref_local__tuple_slot__same_param__deref_out__frame_ends.twin.zrl`, `let mut carrier_tup = (&seed, 10); carrier_tup.0 = src_val; let carried = carrier_tup.0;` leaves `carried O={Param(1), Frame(seed)}`, and `stash_pair((out, carried))` stores `Frame(seed)` into the caller's `*out`. The cells are written by `sh scripts/check_store_grid.sh --dir DIR` (as `DIR/<cell>.twin.zrl`); run it with `ZORIL_CC` set to a wrapper that adds `--provenance`, as Z-0064 did.
+    - **Do:** a strong update for an assignment straight to a local's own field, array slot or tuple slot (no pointer on the path, no loop joining the old value back in), stated in the design note §3. It removes origins, so the series rule applies: probe the field assigned on one branch only, inside a loop, through a `&mut` to the local, through a reborrow, and an element of a local array indexed by a variable (which must stay a weak update). Then remove the 18 cells' refusal and the `KNOWN_ISSUES.md` §5 entry. `make test`, `make preflight-changed`, the rejection differential, the store grid.
+
 ## The `Box` drop series (Z-0019 to Z-0028)
 
 Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.md` §5): a leak, which does not break memory safety. The series makes a `Box` free its allocation and drop its contents at scope end without ever shipping a free that some route can observe. **Invariants for every task in it:** (1) the leak stays the default until Z-0028; the freeing code is built behind an off-by-default option, `--box-free` (`zoril` and `zbuild`), so the tree is releasable after every task; (2) the routes that would observe a freed `Box` are closed first (Z-0019 to Z-0023), each a `+safety` change with probes, accepted twins and the rejection differential; (3) each task ends open with an `Awaiting review` bullet and is fix-reviewed by another model before the next starts; (4) the two drop predicates, `type_needs_drop_internal` (`src/lower_zir/utils.zrl`) and `zil_type_needs_drop` (`src/lower_zir_to_zil.zrl`), change together; (5) build warning-free under stage1 (`make preflight-changed`), keep the `if absent_type { return false; }` lines of both predicates textually intact (mutation anchors), add no `zoril_*` symbol in `src/` (`scripts/check_runtimes.sh`), and regenerate `corpus/zrl_whole_program_zil.sha256` in a commit of its own when output changes. **Order:** Z-0019 to Z-0023 in any order; then Z-0024 to Z-0028 in sequence.
