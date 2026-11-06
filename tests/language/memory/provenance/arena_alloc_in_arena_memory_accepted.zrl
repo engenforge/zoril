@@ -1,0 +1,17 @@
+// An arena Vec moved into another Vec in the same local arena: an allocation stored into the
+// arena's own memory is a store into this frame's storage, not into a global (P1 and P2, Z-0076).
+// flags: --provenance
+// expected exit 0
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let a = Arena.new(65536).unwrap();
+    let mut outer = Vec::<Vec<u64>>.new_in(&a);
+    let mut inner = Vec::<u64>.new_in(&a);
+    inner.push(7 as u64);
+    outer.push(inner);
+    return (outer.get(0).unwrap().len() - 1) as i32;
+}

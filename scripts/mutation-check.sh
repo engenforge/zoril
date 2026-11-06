@@ -239,6 +239,9 @@ M151@@src/parser/decl.zrl@@            if !is_unsafe {@@            if false {@@
 M152@@src/parser/decl.zrl@@            } else if !raw_result {@@            } else if false {@@`#[fresh]` is accepted on an `unsafe fn` returning something other than a raw pointer (tests/error_reporting/err_fresh_not_raw_pointer.zrl, Z-0078)
 M153@@src/parser/decl.zrl@@            && !self.is_kind(TokenKind.KExtern) {@@            && false {@@`#[fresh]` on an item that is not a function is silently ignored again (tests/error_reporting/err_fresh_on_struct.zrl, Z-0078)
 M154@@src/parser/decl.zrl@@                if attr.fresh {@@                if false {@@`#[fresh]` on an associated constant in an impl body is silently ignored again (tests/error_reporting/err_fresh_on_assoc_const.zrl, Z-0078)
+M155@@src/check_zir.zrl@@        if f.fresh {@@        if false {@@A call to a `#[fresh]` function keeps the `Raw` of the address its body made, so a local Arena's mapping is memory outside the frame again and an arena Vec pushed into another in the same arena is refused (tests/language/memory/provenance/arena_alloc_in_arena_memory_accepted.zrl, Z-0076)
+M156@@src/check_zir.zrl@@        if f.fresh {@@        if true {@@Every call result loses `Raw`, not only a `#[fresh]` one's, so a frame address stored through a pointer another function made from an integer is no longer refused (tests/language/memory/provenance/raw_return_store_through_refused.zrl, Z-0076)
+M157@@src/check_zir.zrl@@            ret_flags = ret_flags & !ORIGIN_RAW;@@            ret_flags = 0 as u64;@@`#[fresh]` takes Static out of a call's result too, so a function claiming it and returning a global's address hides a frame address stored through it (tests/language/memory/provenance/fresh_keeps_static_refused.zrl, Z-0076)
 MUT
 }
 

@@ -5,7 +5,7 @@
 .nh
 .ad l
 .\" Begin generated content:
-.TH "zoril\-sys" "3" "2026\-10\-30"
+.TH "zoril\-sys" "3" "2026\-11\-06"
 .PP
 .SH NAME
 .PP
@@ -59,6 +59,32 @@ pub unsafe fn mmap_or_trap(addr: *u8, length: u64, prot: u64, flags: u64, fd: i6
 .PP
 .RS 4
 Caller obligation: parameters must specify valid memory protection and mapping flags; traps on kernel failure.\&
+.PP
+.RE
+\fBmmap_anon\fR
+.nf
+.RS 4
+pub unsafe fn mmap_anon(length: u64) \-> *mut u8;
+.fi
+.RE
+.PP
+.RS 4
+Maps LENGTH bytes of private, anonymous, read\-write memory, returning the kernel'\&s result as a
+pointer: a new mapping (a null hint and no MAP_FIXED, so it overlaps none the process holds) or
+errno, which syscall_failed(p as u64 as i64) detects.\&
+Caller obligation: test the result with syscall_failed before using it as an address.\&
+.PP
+.RE
+\fBmmap_anon_or_trap\fR
+.nf
+.RS 4
+pub unsafe fn mmap_anon_or_trap(length: u64) \-> *mut u8;
+.fi
+.RE
+.PP
+.RS 4
+Maps LENGTH bytes of private, anonymous, read\-write memory, as mmap_anon; traps on kernel failure.\&
+Caller obligation: the caller unmaps the result, with LENGTH, at most once.\&
 .PP
 .RE
 \fBmunmap_or_trap\fR

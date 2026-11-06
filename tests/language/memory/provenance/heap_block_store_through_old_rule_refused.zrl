@@ -1,0 +1,20 @@
+// A frame address stored through a heap block from the allocator's null-arena path, and the block
+// returned. Its mapping is `mmap_anon`'s, so the provenance rules see no `Raw` and do not follow the
+// block; only the old region rule refuses this (Z-0076; Z-0073, Z-0074).
+// flags: --provenance
+// expected compile fail
+// EXPECT: region escape: a pointer to local stack storage is written to memory that outlives this function
+import "mem_raw.zrl";
+use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+
+fn f() -> *mut &i32 {
+    let x = 5;
+    let p = unsafe { zoril_allocator_alloc(0 as *mut ArenaHeader, 8 as u64) } as *mut &i32;
+    unsafe { *p = &x; }
+    return p;
+}
+
+fn main() -> i32 {
+    let p = f();
+    return 0;
+}

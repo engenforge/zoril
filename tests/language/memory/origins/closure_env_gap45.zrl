@@ -1,7 +1,7 @@
 // gap_45: the closure call's environment holds `r` (Frame(w)) and `s` (a Frame(a) view), so its
 // unknown-call effects give O(w) Frame(a) and Unknown, and `*out = w.s` is refused. The effects
 // also store into everything the arena reaches, so the closure call is refused as well.
-// ORIGINS: stash w O={Frame(_3), Frame(a), Frame(w), Raw, Unknown} S={}
+// ORIGINS: stash w O={Frame(_3), Frame(a), Frame(w), Unknown} S={}
 // flags: --provenance
 // EXPECT: store rule
 // expected compile fail

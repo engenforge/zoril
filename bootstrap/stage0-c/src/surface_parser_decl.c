@@ -536,10 +536,11 @@ ImplDecl* parse_impl(Parser* parser) {
     return impl;
 }
 
-/* #[must_use] sets *is_must_use. #[borrows(a, b)] and #[stores(..)] are accepted
- * and ignored: they state which parameters a returned reference points into or where
- * a reference parameter is stored, which only the safety checker of the self-hosted
- * compiler uses (stage0-C is not that checker, language_subset.md §1.6).
+/* #[must_use] sets *is_must_use. #[borrows(a, b)], #[stores(..)] and #[fresh] are
+ * accepted and ignored: they state which parameters a returned reference points into,
+ * where a reference parameter is stored, or that a raw pointer result is a new mapping,
+ * which only the safety checker of the self-hosted compiler uses (stage0-C is not that
+ * checker, language_subset.md §1.6).
  * Anything else is an error. */
 void parse_attribute(Parser* parser, bool* is_must_use) {
     parser_consume(parser, TOK_LBRACKET, "Expect '[' after '#'");
@@ -559,6 +560,8 @@ void parse_attribute(Parser* parser, bool* is_must_use) {
             parser_advance(parser);
         }
         parser_consume(parser, TOK_RPAREN, "Expect ')' after #[stores(...");
+    } else if (parser->previous.kind == TOK_IDENT && strcmp(parser->previous.as.ident, "fresh") == 0) {
+        (void)0;
     } else if (parser->previous.kind == TOK_IDENT) {
         char buf[128];
         snprintf(buf, sizeof(buf), "Unknown attribute '%s'", parser->previous.as.ident);

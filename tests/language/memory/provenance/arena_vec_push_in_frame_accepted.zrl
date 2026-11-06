@@ -1,0 +1,16 @@
+// A Vec in a local Arena, pushed to in the same frame: the arena's mapping comes from `mmap_anon`,
+// whose `#[fresh]` takes the `Raw` out of `Arena.new`'s result, so the arena is this frame's storage
+// and the push stores nothing outside it (P2, Z-0076).
+// flags: --provenance
+// expected exit 0
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let a = Arena.new(4096).unwrap();
+    let mut v = Vec::<u64>.new_in(&a);
+    v.push(1 as u64);
+    return (v.len() - 1) as i32;
+}

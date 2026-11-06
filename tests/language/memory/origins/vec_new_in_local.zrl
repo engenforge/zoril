@@ -1,6 +1,6 @@
 // With a local arena, the Vec's storage is this frame's: S(v) names the arena and the `Result` it
 // was moved out of (gap_31's shape: S per local).
-// ORIGINS: main v O={Frame(_2), Frame(a), Raw} S={Frame(a)}
+// ORIGINS: main v O={Frame(_2), Frame(a)} S={Frame(a)}
 // expected exit 0
 import "mem.zrl";
 use mem::Arena;
