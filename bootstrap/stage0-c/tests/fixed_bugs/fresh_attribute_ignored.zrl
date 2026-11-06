@@ -1,0 +1,15 @@
+// expected exit 7
+// `#[fresh]` (surface_syntax.md §2.5) was "Unknown attribute 'fresh'", so every program reaching
+// the allocator failed to parse once stdlib/sys.zrl's `mmap_anon` carried it. stage0-C runs no
+// provenance check, so it accepts the attribute and ignores it.
+static mut SLOT: i32 = 7;
+
+#[fresh]
+unsafe fn slot() -> *mut i32 {
+    return &mut SLOT as *mut i32;
+}
+
+fn main() -> i32 {
+    let p = unsafe { slot() };
+    return unsafe { *p };
+}
