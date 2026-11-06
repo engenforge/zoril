@@ -1,0 +1,21 @@
+// A HashMap in a local Arena, inserted into in the same frame. The allocator's null-arena path maps
+// with `mmap_anon`, so an arena allocation is not `Raw` and growing the map's table is no store into
+// a global (P1, Z-0076; refused by that rule at b1b6a9f).
+// flags: --provenance
+// expected exit 42
+import "hashmap.zrl";
+import "mem.zrl";
+use hashmap::HashMap;
+use mem::Arena;
+
+fn main() -> i32 {
+    let a = Arena.new(1 << 20).unwrap();
+    let mut m = HashMap::<u64, u64>.new(&a);
+    let key = 123456789 as u64;
+    m.insert(key, 42 as u64);
+    let val = match m.get(&key) {
+        Some(v) => *v,
+        None => 0 as u64,
+    };
+    return val as i32;
+}
