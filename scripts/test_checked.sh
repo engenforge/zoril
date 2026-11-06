@@ -11,7 +11,7 @@
 # Then the safety matrix is asked the question it exists for: which of the known memory-safety holes
 # does the checked build detect? Its report is recorded in bench/safety_matrix/README.md.
 #
-# Usage: scripts/test_checked.sh   (make test-checked)
+# Usage: scripts/test_checked.sh [PATH...]   (make test-checked)
 set -u
 # Tests that crash on purpose must not write core dumps (see scripts/test.sh).
 ulimit -c 0 2>/dev/null || true
@@ -22,6 +22,9 @@ cd "$REPO_ROOT" || exit 2
 
 ZORIL_CC="$REPO_ROOT/scripts/zoril-checked.sh"
 export ZORIL_CC
+
+TR_WORK=build/tests-checked
+export TR_WORK
 
 if [ ! -x "$REPO_ROOT/build/zoril" ] || [ ! -x "$REPO_ROOT/build/zilc" ]; then
     echo "[FAIL] checked: build/zoril and build/zilc must be built first (run make)" >&2
@@ -47,15 +50,19 @@ tests/compiler/test_arena.zrl tests/stdlib/test_stdlib_arena_new_result.zrl"
 export TR_EXCLUDE
 
 echo "Checked build: per-file tests, corpus and apps"
-if ./scripts/test.sh --quiet --suite all; then
+if [ $# -gt 0 ]; then
+    ./scripts/test.sh --quiet "$@" || status=1
+elif ./scripts/test.sh --quiet --suite all; then
     echo "[PASS] checked: the test suite passes with every program built by --checked"
 else
     echo "[FAIL] checked: the test suite does not pass under --checked"
     status=1
 fi
 
-echo
-echo "Checked build: which known memory-safety holes does it detect?"
-./scripts/run_safety_matrix.sh --checked || status=1
+if [ $# -eq 0 ]; then
+    echo
+    echo "Checked build: which known memory-safety holes does it detect?"
+    ./scripts/run_safety_matrix.sh --checked || status=1
+fi
 
 exit $status

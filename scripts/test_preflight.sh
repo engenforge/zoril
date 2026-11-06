@@ -14,6 +14,7 @@
 #   14. preflight-changed refuses to start without a base, and hands the base it chose to mutation-check.
 #   15. The rejection differential still runs when the seed compiler refuses the base source: the scratch
 #       tree's compiler is built through stage1 instead (a stand-in make plays both builds).
+#   16. Nested runs do not overwrite the outer run's timings file in the default path.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 . scripts/lib/portability.sh
@@ -22,7 +23,7 @@ cd "$(dirname "$0")/.." || exit 2
 GIT_CONFIG_GLOBAL=/dev/null; export GIT_CONFIG_GLOBAL
 GIT_CONFIG_SYSTEM=/dev/null; export GIT_CONFIG_SYSTEM
 GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_NOSYSTEM
-unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS PREFLIGHT_TIMINGS
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
 for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p'); do
     unset "$_v"
 done
@@ -35,6 +36,12 @@ fi
 tmp="$(mktemp -d)"
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT INT TERM
+
+# Scratch timing and log paths so nested preflight runs do not touch default files (Z-0119)
+scratch_timings="$tmp/preflight_scratch_timings.tsv"
+scratch_log="$tmp/preflight_scratch.log"
+export PREFLIGHT_TIMINGS="$scratch_timings"
+export PREFLIGHT_LOG="$scratch_log"
 
 # Create stub scripts
 cat << 'EOF' > "$tmp/stub_pass.sh"
@@ -123,7 +130,7 @@ status=0
 fail() { echo "[FAIL] preflight-selftest: $1" >&2; status=1; }
 pass() { echo "[PASS] preflight-selftest: $1"; }
 
-# Preserve existing preflight log if present
+# Preserve existing preflight log and timings if present
 saved_log=""
 if [ -f build/preflight-selfhost.log ]; then
     saved_log="$(mktemp)"
@@ -135,7 +142,29 @@ restore_log() {
         rm -f "$saved_log"
     fi
 }
-trap 'cleanup; restore_log' EXIT INT TERM
+saved_timings=""
+if [ -f build/preflight-timings.tsv ]; then
+    saved_timings="$(mktemp)"
+    cp build/preflight-timings.tsv "$saved_timings"
+fi
+restore_timings() {
+    if [ -n "$saved_timings" ] && [ -f "$saved_timings" ]; then
+        cp "$saved_timings" build/preflight-timings.tsv
+        rm -f "$saved_timings"
+    else
+        rm -f build/preflight-timings.tsv
+    fi
+}
+restore_state() {
+    restore_log
+    restore_timings
+}
+trap 'cleanup; restore_state' EXIT INT TERM
+
+# Plant a sentinel in the default path; cases 1-15 must not overwrite it (Z-0119)
+sentinel="999	sentinel_$$"
+mkdir -p build
+printf '%s\n' "$sentinel" > build/preflight-timings.tsv
 
 # Case 1: selfhost failure
 rc=0
@@ -489,6 +518,13 @@ if [ -x build/zoril ] && [ -f build/zilc ] && [ -f build/runtime.o ]; then
     fi
 else
     echo "[SKIP] preflight-selftest: case 15 needs build/zoril, build/zilc and build/runtime.o (run make)"
+fi
+
+# Case 16: nested runs do not overwrite the outer run's timings file in the default path (Z-0119)
+if [ -f build/preflight-timings.tsv ] && [ "$(cat build/preflight-timings.tsv)" = "$sentinel" ]; then
+    pass "nested runs do not overwrite default preflight timings file (sentinel intact)"
+else
+    fail "nested runs overwrote or truncated default preflight timings file (got: $(cat build/preflight-timings.tsv 2>/dev/null))"
 fi
 
 exit $status
