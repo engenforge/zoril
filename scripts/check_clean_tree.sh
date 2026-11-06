@@ -14,6 +14,14 @@ set -u
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [ "${1:-}" = "--selftest" ]; then
+    GIT_CONFIG_GLOBAL=/dev/null; export GIT_CONFIG_GLOBAL
+    GIT_CONFIG_SYSTEM=/dev/null; export GIT_CONFIG_SYSTEM
+    GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_NOSYSTEM
+    unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+    for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p'); do
+        unset "$_v"
+    done
+
     tmp="${TMPDIR:-/tmp}/check_clean_tree_selftest.$$"
     rm -rf "$tmp"
     mkdir -p "$tmp/repo"
@@ -25,6 +33,9 @@ if [ "${1:-}" = "--selftest" ]; then
     fi
     git -C "$tmp/repo" config user.email "test@example.com" 2>/dev/null || true
     git -C "$tmp/repo" config user.name "Test" 2>/dev/null || true
+    git -C "$tmp/repo" config commit.gpgsign false 2>/dev/null || true
+    git -C "$tmp/repo" config tag.gpgsign false 2>/dev/null || true
+    git -C "$tmp/repo" config core.hooksPath /dev/null 2>/dev/null || true
     
     mkdir -p "$tmp/repo/src" "$tmp/repo/build"
     printf 'build/\n*.o\n*.s\n*.ssa\n' > "$tmp/repo/.gitignore"

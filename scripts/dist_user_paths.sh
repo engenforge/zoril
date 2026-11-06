@@ -21,6 +21,13 @@ set -u
 # Run from `make dist-check`, this inherits the Makefile's exported builder variables (ZORIL_BUILDER=build/zoril ...),
 # which a user's shell does not have and which beat `make ZORIL_SEED=...` (`?=`): the recipes would bootstrap from stage0-C.
 unset ZORIL_BUILDER ZILC_BUILDER ZILC_BIN BOOTSTRAP_CC_TIMEOUT BOOTSTRAP_BUILD_TIMEOUT TARGET ZILC MAKEFLAGS MAKELEVEL MFLAGS
+GIT_CONFIG_GLOBAL=/dev/null; export GIT_CONFIG_GLOBAL
+GIT_CONFIG_SYSTEM=/dev/null; export GIT_CONFIG_SYSTEM
+GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_NOSYSTEM
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p'); do
+    unset "$_v"
+done
 if [ $# -ne 2 ]; then echo "usage: dist_user_paths.sh SOURCE-TARBALL BINARY-TARBALL" >&2; exit 2; fi
 SRC=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 BINTAR=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
@@ -56,7 +63,7 @@ rm -rf "$WORK/plain"
 
 # 2. Inside another repository.
 mkdir -p "$WORK/outer"
-(cd "$WORK/outer" && git init -q . && git config user.email dist@example.invalid && git config user.name dist && git config commit.gpgsign false \
+(cd "$WORK/outer" && git init -q . && git config user.email dist@example.invalid && git config user.name dist && git config commit.gpgsign false && git config tag.gpgsign false && git config core.hooksPath /dev/null \
     && echo outer > file && git add file && git commit -q -m outer) || fail "cannot make a scratch repository"
 tree=$(extract "$SRC" "$WORK/outer/sub")
 [ -f "$tree/VERSION" ] || fail "the source tarball has no VERSION"

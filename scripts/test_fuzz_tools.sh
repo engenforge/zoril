@@ -19,6 +19,15 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
+# Tests never sign commits or run user-configured Git hooks, and must not depend on user Git config.
+GIT_CONFIG_GLOBAL=/dev/null; export GIT_CONFIG_GLOBAL
+GIT_CONFIG_SYSTEM=/dev/null; export GIT_CONFIG_SYSTEM
+GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_NOSYSTEM
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p'); do
+    unset "$_v"
+done
+
 # The same fingerprint implementation the harness and the gate use, so a fixture run's line is the
 # line a real run would print.
 . "$HERE/lib/portability.sh"
@@ -41,7 +50,7 @@ trap 'rm -rf "$TMP"' EXIT
 FUZZ_FINDINGS="$TMP/findings"; export FUZZ_FINDINGS; mkdir -p "$FUZZ_FINDINGS"
 fails=0
 # Fixture repositories are scratch: no hooks, a fixed identity.
-gitq() { _r=$1; shift; git -C "$_r" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false "$@"; }
+gitq() { _r=$1; shift; git -C "$_r" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }
 ok() { [ -n "$QUIET" ] || echo "[PASS] $1"; }
 bad() { echo "FAIL: $1"; fails=$((fails + 1)); [ -n "${2:-}" ] && sed 's/^/       /' "$2" | head -12; }
 

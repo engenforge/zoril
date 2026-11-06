@@ -18,6 +18,15 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 . scripts/lib/portability.sh
 
+# Tests never sign commits or run user-configured Git hooks, and must not depend on user Git config.
+GIT_CONFIG_GLOBAL=/dev/null; export GIT_CONFIG_GLOBAL
+GIT_CONFIG_SYSTEM=/dev/null; export GIT_CONFIG_SYSTEM
+GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_NOSYSTEM
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p'); do
+    unset "$_v"
+done
+
 if ! ./scripts/check_deps.sh --required-only preflight >/dev/null 2>&1; then
     echo "[SKIP] preflight-selftest: preflight dependencies not satisfied"
     exit 0
@@ -335,7 +344,7 @@ repo_base() { # repo_base DIR -> "<rc> <PF_BASE or error>"
     ( cd "$1" && unset PREFLIGHT_BASE && . "$OLDPWD/scripts/lib/preflight_base.sh" \
         && if preflight_base; then echo "0 $PF_BASE"; else echo "1 $PF_BASE_ERR"; fi )
 }
-g() { git -c user.name=t -c user.email=t@t -c init.defaultBranch=main "$@" > /dev/null 2>&1; }
+g() { git -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t -c init.defaultBranch=main -c commit.gpgsign=false -c tag.gpgsign=false "$@" > /dev/null 2>&1; }
 r="$tmp/repo13"
 mkdir -p "$r/origin.git" "$r/w"
 g init --bare "$r/origin.git"

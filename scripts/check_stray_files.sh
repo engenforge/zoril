@@ -64,6 +64,13 @@ compare() {
 selftest() {
     _tmp="$(mktemp -d "${TMPDIR:-/tmp}/stray_files_selftest.XXXXXX")" || return 1
     trap 'rm -rf "$_tmp"' EXIT INT TERM
+    GIT_CONFIG_GLOBAL=/dev/null; export GIT_CONFIG_GLOBAL
+    GIT_CONFIG_SYSTEM=/dev/null; export GIT_CONFIG_SYSTEM
+    GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_NOSYSTEM
+    unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+    for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p'); do
+        unset "$_v"
+    done
     _repo="$_tmp/repo"
     _n=0
 
@@ -77,11 +84,13 @@ selftest() {
     git -C "$_repo" config user.email "test@example.com" 2>/dev/null
     git -C "$_repo" config user.name "Test" 2>/dev/null
     git -C "$_repo" config commit.gpgsign false 2>/dev/null
+    git -C "$_repo" config tag.gpgsign false 2>/dev/null
+    git -C "$_repo" config core.hooksPath /dev/null 2>/dev/null
     mkdir -p "$_repo/src" "$_repo/build"
     printf 'build/\n' > "$_repo/.gitignore"
     printf '// main\n' > "$_repo/src/main.zrl"
     git -C "$_repo" add . >/dev/null 2>&1
-    git -C "$_repo" commit -q -m initial >/dev/null 2>&1
+    git -C "$_repo" -c commit.gpgsign=false commit -q -m initial >/dev/null 2>&1
 
     _run() {
         REPO_ROOT="$_repo" "$_self" "$@"
