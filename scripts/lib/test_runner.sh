@@ -16,6 +16,13 @@
 # Common flags (all runners): --verbose, --quiet, --filter PATTERN, --fail-fast,
 # --timeout SECS, --results FILE (appends "STATUS<TAB>path" per test), --jobs N.
 
+# Portability helpers
+if [ -f "$(dirname "$0")/portability.sh" ]; then
+    . "$(dirname "$0")/portability.sh"
+elif [ -f "$(dirname "$0")/lib/portability.sh" ]; then
+    . "$(dirname "$0")/lib/portability.sh"
+fi
+
 TR_VERBOSE=${TR_VERBOSE:-0}
 TR_QUIET=${TR_QUIET:-0}
 TR_FILTER=${TR_FILTER:-}
@@ -23,20 +30,13 @@ TR_FAIL_FAST=${TR_FAIL_FAST:-0}
 TR_TIMEOUT=${TR_TIMEOUT:-${TIMEOUT_SECS:-30}}
 TR_KILL=${KILL_DUR:-2s}
 TR_RESULTS=${TR_RESULTS:-}
-TR_JOBS=${TR_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}
+TR_JOBS=${TR_JOBS:-$(nproc_count 2>/dev/null || echo 1)}
 
 TR_RUN=0
 TR_PASSED=0
 TR_FAILED=0
 TR_SKIPPED=0
 TR_START_MS=0
-
-# Portability helpers
-if [ -f "$(dirname "$0")/portability.sh" ]; then
-    . "$(dirname "$0")/portability.sh"
-elif [ -f "$(dirname "$0")/lib/portability.sh" ]; then
-    . "$(dirname "$0")/lib/portability.sh"
-fi
 
 # Toolchain (the public pipeline: zoril -> zilc -> qbe -> as -> ld).
 ZORIL_CC=${ZORIL_CC:-./build/zoril}

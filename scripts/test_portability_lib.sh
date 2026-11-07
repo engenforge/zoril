@@ -39,6 +39,16 @@ if [ "$np" -lt 1 ]; then
     fail "portability-lib: nproc_count returned $np < 1"
 fi
 
+# Test nproc_count honours affinity mask under taskset (Z-0127)
+if command -v taskset >/dev/null 2>&1; then
+    np_taskset=$(taskset -c 0 sh -c ". \"$PORTABILITY_LIB\"; nproc_count" 2>/dev/null) || np_taskset=""
+    if [ "$np_taskset" != "1" ]; then
+        fail "portability-lib: nproc_count under taskset -c 0 returned '$np_taskset' (expected 1)"
+    fi
+else
+    echo "[SKIP] portability-lib: taskset affinity test needs taskset (Linux)"
+fi
+
 # Test sha256_of and sha256_check
 printf 'hello\n' > "$tmp/good.txt"
 printf 'world\n' > "$tmp/bad.txt"

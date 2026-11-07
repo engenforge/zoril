@@ -5,7 +5,7 @@
 #   now_ms           - Milliseconds since epoch (date +%s%N / EPOCHREALTIME fallback)
 #   sha256_of        - SHA-256 calculation (sha256sum / shasum -a 256 / sha256 -q)
 #   sha256_check     - SHA-256 verification (sha256sum -c / shasum -c / sha256 -c)
-#   nproc_count      - Number of online CPU cores (getconf _NPROCESSORS_ONLN)
+#   nproc_count      - Number of available CPU cores (nproc / getconf _NPROCESSORS_ONLN)
 #   run_with_timeout - Timeout runner that falls back gracefully if timeout is missing
 #   git_checkout_usable - Whether DIR is the top of a git checkout with a HEAD (a source tarball is not)
 
@@ -115,7 +115,29 @@ sha256_check() {
 }
 
 nproc_count() {
-    getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1
+    _np_res=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+    # Check cgroup CPU quota where present (Linux cgroup v2 / v1, e.g. podman / docker --cpus)
+    if [ -f /sys/fs/cgroup/cpu.max ]; then
+        read -r _cg_quota _cg_period < /sys/fs/cgroup/cpu.max 2>/dev/null || _cg_quota="max"
+        if [ "$_cg_quota" != "max" ] && [ -n "${_cg_period:-}" ] && [ "$_cg_period" -gt 0 ] 2>/dev/null; then
+            _cg_cpus=$(( _cg_quota / _cg_period ))
+            [ "$_cg_cpus" -lt 1 ] && _cg_cpus=1
+            if [ "$_cg_cpus" -lt "$_np_res" ]; then
+                _np_res=$_cg_cpus
+            fi
+        fi
+    elif [ -f /sys/fs/cgroup/cpu/cpu.cfs_quota_us ] && [ -f /sys/fs/cgroup/cpu/cpu.cfs_period_us ]; then
+        _cg_quota=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null || echo -1)
+        _cg_period=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null || echo 0)
+        if [ "$_cg_quota" -gt 0 ] && [ "$_cg_period" -gt 0 ] 2>/dev/null; then
+            _cg_cpus=$(( _cg_quota / _cg_period ))
+            [ "$_cg_cpus" -lt 1 ] && _cg_cpus=1
+            if [ "$_cg_cpus" -lt "$_np_res" ]; then
+                _np_res=$_cg_cpus
+            fi
+        fi
+    fi
+    printf '%s\n' "$_np_res"
 }
 
 _TIMEOUT_HAS_FOREGROUND=""

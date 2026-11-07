@@ -270,6 +270,15 @@ GOOD="$STAGE/zoril-good"
 cp build/zoril "$GOOD"
 
 MUTATION_TIMEOUT="${MUTATION_TIMEOUT:-20}"
+if [ -z "${MUTATION_TEST_JOBS:-}" ]; then
+    _ncpus=$(nproc_count 2>/dev/null || echo 1)
+    [ "${_ncpus:-0}" -lt 1 ] && _ncpus=1
+    if [ "$_ncpus" -lt 6 ]; then
+        MUTATION_TEST_JOBS="$_ncpus"
+    else
+        MUTATION_TEST_JOBS=6
+    fi
+fi
 
 # suite_failures COMPILER WORKDIR [MUTANT_ID] — find the first failing test of the mutant.
 # If a previous catching test was cached in $MUTATION_CACHE/MUTANT_ID, it runs that test
@@ -303,7 +312,7 @@ suite_failures() {
             fi
         fi
         if [ -n "${ROW_TEST_PATHS:-}" ]; then
-            if ! TR_JOBS="${MUTATION_TEST_JOBS:-6}" TR_TIMEOUT="$MUTATION_TIMEOUT" \
+            if ! TR_JOBS="$MUTATION_TEST_JOBS" TR_TIMEOUT="$MUTATION_TIMEOUT" \
                 ZORIL_CC="$_cc" ZORIL_STDLIB="$_stdlib" TR_WORK="$_work/tests" \
                 ./scripts/test.sh --quiet $ROW_TEST_PATHS >> "$_work/suite.log" 2>&1; then
                 echo "the row's tests" > "$_work/fails"
@@ -332,7 +341,7 @@ suite_failures() {
                 return 0
             fi
         elif [ -f "$_cached" ]; then
-            _test_jobs=${MUTATION_TEST_JOBS:-6}
+            _test_jobs="$MUTATION_TEST_JOBS"
             TR_JOBS="$_test_jobs" TR_TIMEOUT="$MUTATION_TIMEOUT" ZORIL_CC="$_cc" ZORIL_STDLIB="$_stdlib" TR_WORK="$_work/tests" \
                 ./scripts/test.sh --quiet --results "$_work/results" "$_cached" > "$_work/suite.log" 2>&1 || true
             _fail=$(awk -F'\t' '$1 == "FAIL" { print $2; exit }' "$_work/results" 2>/dev/null)
@@ -345,7 +354,7 @@ suite_failures() {
 
     # Run per-file tests with --fail-fast and short per-test timeout.
     rm -f "$_work/results"
-    _test_jobs=${MUTATION_TEST_JOBS:-6}
+    _test_jobs="$MUTATION_TEST_JOBS"
     TR_JOBS="$_test_jobs" TR_TIMEOUT="$MUTATION_TIMEOUT" ZORIL_CC="$_cc" ZORIL_STDLIB="$_stdlib" TR_WORK="$_work/tests" \
         ./scripts/test.sh --quiet --fail-fast --results "$_work/results" tests corpus > "$_work/suite.log" 2>&1 || true
     _first_fail=$(awk -F'\t' '$1 == "FAIL" { print $2; exit }' "$_work/results" 2>/dev/null)
