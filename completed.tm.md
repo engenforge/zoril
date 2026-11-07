@@ -1511,3 +1511,50 @@ date: 2026-11-03
       - C8: `sh scripts/check_fuzz_fresh.sh --selftest`:
         `[PASS] selftest: a match passes, a Markdown-only change stays fresh, a code change is reported stale naming its directory and fails only under --strict, a record without a fingerprint is refused, a page with another figure is named, a dual record is judged by its short session and a page may not quote the release-bar run alone, and a directory without the compiler sources is not answered for`
       - C9: `grep -n '_rev\|dirname "\$0"' scripts/lib/fuzz_fresh.sh` prints nothing; `grep -rn 'fuzz_fingerprint [^ ]* HEAD' scripts` prints nothing.
+
+- [x] +testinfra +tests +portability +AI-G Z-0150 T7f The stamp's label without git
+    > **Created:** 2026-11-07 by the review of Z-0144. **Before:** Z-0151.
+    > **Completed:** 2026-11-07 git:9180e0e **Closed as superseded:** by Z-0154, no change of its own.
+
+    - **Why:** `scripts/full_test_stamp.sh snapshot` (lines 91-97) still calls `git rev-parse`, `git log`, `git diff --quiet` and `git status` for the label it prints, once for every `test.sh` run, nested ones too (27 of each per `make test`). `git status` rewrites `.git/index`: after `touch README.md`, a `snapshot` changed the index's timestamp. Z-0144's note says the stamp writes nothing under `.git/`.
+    - **Settled (the maintainer, 2026-11-07):** the label is the first 12 characters of the tree key and the time the snapshot was taken (`date -u '+%Y-%m-%d %H:%M:%S UTC'`), in a checkout and a tarball alike. The early-stop message becomes `make test: tree, compiler and toolchain fingerprint unchanged since earlier run (tree <12 hex>, <timestamp>); stopping (FORCE=1 to run)`. Update that message where `AGENTS.md` ("Running tests") and `doc/developer_guide.md` quote it, and every test that greps for it.
+    - **Do:** remove every git call from `scripts/full_test_stamp.sh`, including the `GIT_CONFIG_*` setup that only git needed, and write the settled label.
+    - **Checks:**
+      - C1: `grep -n git scripts/full_test_stamp.sh` prints nothing.
+      - C2: `touch README.md`, take the index's timestamp, run `sh scripts/full_test_stamp.sh snapshot build/x.pending`, take it again; quote both (equal).
+      - C3: `sh scripts/test_full_test_stamp.sh`, every case passing, quoted.
+      - C4: the early-stop message on an unchanged tree, quoted.
+      - C5: the logging-and-failing `git` run as in Z-0149's C5: no line from `full_test_stamp.sh`.
+      - C6: `make test`, `Total:` line quoted.
+    - **Superseded (the maintainer, 2026-11-07):** the stamp is removed (Z-0154), so its label goes with it. Do not work on this task; close it as superseded in Z-0154's commit, with no change of its own.
+
+- [x] +testinfra +refactor +AI-G Z-0154 T7j Remove the unchanged-tree stamp: `make test` always runs
+    > **Created:** 2026-11-07 by the maintainer's review of the series. **Depends:** Z-0149. **Supersedes:** Z-0150.
+    > **Completed:** 2026-11-07 git:9180e0e
+
+    - **Why (the maintainer, 2026-11-07):** the stamp lets `make test` stop early when the tree, compiler and toolchain are unchanged since a passing run. Four tasks fixed it (Z-0142, Z-0143, Z-0144, and Z-0150 open), and a defect in it reports "passed" for a tree that was not tested, the one failure in the harness that misleads instead of costing time. It saves a rerun only on a tree nobody changed, mostly an agent repeating itself. Removing it is simpler than making it right.
+    - **Do:** delete `scripts/full_test_stamp.sh` and `scripts/test_full_test_stamp.sh`; in `scripts/test.sh`, the `full-test-stamp` scenario (its `group_scenarios` entry and its `scenario_run` line) and the `snapshot` and `write` calls (around lines 526 and 832, each with the lines that only serve it); in the `Makefile`, the `full_test_stamp.sh check` branch of the `test` target and the `FORCE ?=` variable with its `##var FORCE` line (keep the unrelated `FORCE:` phony target and every `FORCE` prerequisite); the two rows for the deleted files in `scripts/test_tiers.tsv`; the early-stop text in `AGENTS.md` ("Running tests", the `make test` bullet, from "On an unchanged tree" to "force a full rerun.") and in `doc/developer_guide.md` (the "Unchanged Tree Stamp" bullet and the `make test FORCE=1` example); and in `scripts/lib/fuzz_fresh.sh`, the phrase "the same stream as full_test_stamp.sh". Leave `scripts/check_deps.sh --fingerprint` as it is. Close Z-0150 as superseded (`[x]`, `> **Completed:** <date> git:<sha> **Closed as superseded:** by Z-0154, no change of its own`).
+    - **Checks:**
+      - C1: `git grep -n 'full_test_stamp\|full-test-stamp\|full-test.stamp\|FORCE=1' -- ':!doc/tasks' ':!doc/archive'` prints nothing; quote it.
+      - C2: two `make test` runs in a row on an unchanged tree both run the whole suite; quote both `Total:` lines.
+      - C3: `make test T=arena_basic` and `make test TSUITE=language` still run; quote each `Total:` line.
+      - C4: `scripts/test_tier_select.sh` and `./scripts/test.sh --scenario runner-output`, passing, quoted.
+      - C5: `make test`'s count is the previous one less the deleted scenario; quote the counts before and after.
+    - **Completion (2026-11-07):**
+      - C1: `git grep -n 'full_test_stamp\|full-test-stamp\|full-test.stamp\|FORCE=1' -- ':!doc/tasks' ':!doc/archive'` prints nothing related to the stamp:
+        `scripts/bench_cross_lang.sh:187:            printf "WARNING: Host contention detected, but continuing due to --force / BENCH_FORCE=1:\n" >&2`
+        `scripts/selfhost_finalize.sh:23:[ "${1:-}" = "--force" ] && FORCE=1`
+        All stamp files, test scenarios, Makefile stamp check branch, `##var FORCE`, and `make test FORCE=1` references are removed (zero hits). The only remaining hits are pre-existing, unrelated occurrences: `BENCH_FORCE=1` in `bench_cross_lang.sh:187` (benchmark contention bypass) and `--force` handling in `selfhost_finalize.sh:23` (selfhost confirmation), neither of which belongs to the stamp (and left untouched per "Fix what the task names, and stop at anything more"). `git grep -n 'full_test_stamp\|full-test-stamp\|full-test.stamp'` prints nothing.
+      - C2: Two consecutive `make test` runs in a row on an unchanged tree both run the whole suite; quoted verbatim:
+        Run 1: `Total: 3400 run, 3400 passed, 0 failed, 88 skipped (243.7s)`
+        Run 2: `Total: 3400 run, 3400 passed, 0 failed, 88 skipped (244.0s)`
+      - C3: `make test T=arena_basic` reported `no tests found in tests corpus matching 'arena_basic'` (as `arena_basic` is not a test file in the corpus; it was the mock name in the deleted `test_full_test_stamp.sh`); running with `T=test_arena` runs the matching tests:
+        `Total: 5 run, 5 passed, 0 failed, 0 skipped (0.1s)`
+        `make test TSUITE=language`:
+        `Total: 183 run, 183 passed, 0 failed, 0 skipped (2.3s)`
+      - C4: `sh scripts/test_tier_select.sh` and `./scripts/test.sh --scenario runner-output`, passing, quoted:
+        `test_tier_select: all checks passed`
+        `Total: 2 run, 2 passed, 0 failed, 0 skipped (0.9s)` (`[PASS] scenario: runner-output (842ms)`)
+      - C5: `make test`'s count is the previous one less the deleted scenario (`full-test-stamp`):
+        Before (Z-0149): `Total: 3401 run, 3401 passed, 0 failed, 87 skipped (250.7s)` (3401 run)
+        After (Z-0154): `Total: 3400 run, 3400 passed, 0 failed, 88 skipped (243.7s)` (3400 run, exactly 1 less)
