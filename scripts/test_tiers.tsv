@@ -1,0 +1,183 @@
+# Zoril Test Tier Mapping Table (SPEC-TASKMARK / Z-0115)
+# Plain TSV schema: pattern<TAB>tier<TAB>gates<TAB>exclude_gates<TAB>groups<TAB>exclude_groups<TAB>scenarios<TAB>exclude_scenarios<TAB>flags<TAB>description
+# Rule: Positive lists only for doc tiers and individual test files. All other tiers are "everything except X" with rationale.
+# Union semantics: every matching row applies; an unlisted path matches the default fallback '*' (runs everything).
+
+# --- Canary rows: files that trigger mutation-self-test (derived from scripts/mutation_selftest.list and harness) ---
+scripts/mutation-check.sh	canary_harness	mutation-self-test portability no-new-deps	-	-	-	-	-	script	mutation runner script triggers mutation-self-test
+scripts/mutation_selftest.list	canary_harness	mutation-self-test portability no-new-deps	-	-	-	-	-	script	mutation canary list definition triggers mutation-self-test
+scripts/test_mutation_check.sh	canary_harness	mutation-self-test portability no-new-deps	-	-	-	-	-	script	mutation driver script triggers mutation-self-test
+src/main.zrl	canary_src	ALL	stage0c-fixed-bugs:c-compiler-tests stage0c-unit:c-compiler-tests stage0c-corpus:c-compiler-corpus stage0c-docs:c-compiler-docs stage0c-error-locations:c-compiler-locations stage0c-minimal:c-compiler-build	ALL	-	ALL	-	compiled	mutation canary C1 and C4 target triggers mutation-self-test and compiler suite
+src/lower_zir/expr.zrl	canary_src	ALL	stage0c-fixed-bugs:c-compiler-tests stage0c-unit:c-compiler-tests stage0c-corpus:c-compiler-corpus stage0c-docs:c-compiler-docs stage0c-error-locations:c-compiler-locations stage0c-minimal:c-compiler-build	ALL	-	ALL	-	compiled	mutation canary C2 target triggers mutation-self-test and compiler suite
+src/verify.zrl	canary_src	ALL	stage0c-fixed-bugs:c-compiler-tests stage0c-unit:c-compiler-tests stage0c-corpus:c-compiler-corpus stage0c-docs:c-compiler-docs stage0c-error-locations:c-compiler-locations stage0c-minimal:c-compiler-build	ALL	-	ALL	-	compiled	mutation canary C5 target triggers mutation-self-test and compiler suite
+tests/error_reporting/ec_bool_logical_int.zrl	canary_test	test-strength mutation-self-test	-	diagnostics	-	-	-	test	mutation canary C2 test pins error wording triggering mutation-self-test
+
+# --- Documentation tiers (positive lists only) ---
+doc/tasks/*	tasks	safety-model comment-noise md-check	-	-	-	md-links	-	doc	taskmark files trigger safety-model comment-noise md-check and md-links
+doc/spec/*	spec	safety-model comment-noise md-check stage0c-docs	-	-	-	md-links	-	doc	specification files trigger doc checks and stage0c-docs syntax check
+doc/man/*.scd	man	portability	-	-	-	man-pages	-	doc	scdoc manual pages trigger man-pages generation scenario
+doc/*.md	docs	safety-model safety-figures comment-noise md-check binary-sizes	-	-	-	doc-snippets readme-snippets getting-started md-links	-	doc	general documentation files trigger documentation checks and snippets
+*.md	docs	safety-model safety-figures comment-noise md-check binary-sizes	-	-	-	doc-snippets readme-snippets getting-started md-links	-	doc	top-level markdown files trigger documentation checks and snippets
+
+# --- Core infrastructure and build files (select everything) ---
+scripts/lib/*	core_infra	ALL	-	ALL	-	ALL	-	script	shared script libraries affect test runner and tooling selecting all checks
+scripts/test.sh	core_infra	ALL	-	ALL	-	ALL	-	script	test runner dispatcher script selects all checks
+scripts/lib/test_runner.sh	core_infra	ALL	-	ALL	-	ALL	-	script	test runner execution library selects all checks
+Makefile	core_infra	ALL	-	ALL	-	ALL	-	compiled	top-level makefile defines all build and test targets selecting everything
+config.mk	core_infra	ALL	-	ALL	-	ALL	-	compiled	toolchain configuration defines compiler and linker paths selecting everything
+
+# --- Compiler, runtime, stdlib and tool sources ---
+src/*	src	ALL	mutation-self-test:canary-only stage0c-fixed-bugs:c-compiler-tests stage0c-unit:c-compiler-tests stage0c-corpus:c-compiler-corpus stage0c-docs:c-compiler-docs stage0c-error-locations:c-compiler-locations stage0c-minimal:c-compiler-build	ALL	-	ALL	-	compiled	compiler sources select all checks except mutation harness and independent stage0c gates
+stdlib/*	stdlib	ALL	mutation-self-test:canary-only stage0c-fixed-bugs:c-compiler-tests stage0c-unit:c-compiler-tests stage0c-corpus:c-compiler-corpus stage0c-docs:c-compiler-docs stage0c-error-locations:c-compiler-locations stage0c-minimal:c-compiler-build	ALL	-	ALL	-	compiled	stdlib is imported by compiler and tools so stdlib change selects src tier
+rt/*	runtime	ALL	mutation-self-test:canary-only stage0c-fixed-bugs:c-compiler-tests stage0c-unit:c-compiler-tests stage0c-corpus:c-compiler-corpus stage0c-docs:c-compiler-docs stage0c-error-locations:c-compiler-locations stage0c-minimal:c-compiler-build	ALL	-	ALL	-	compiled	runtime symbols linked into all binaries select full suite except mutation
+tools/zilc/*	tools_zilc	ALL	mutation-self-test:canary-only stage0c-fixed-bugs:c-compiler-tests stage0c-unit:c-compiler-tests stage0c-corpus:c-compiler-corpus stage0c-docs:c-compiler-docs stage0c-error-locations:c-compiler-locations stage0c-minimal:c-compiler-build	ALL	-	ALL	-	compiled	zilc is in every test pipeline selecting all groups and safety-matrix
+tools/zbuild/*	tools_zbuild	ALL	mutation-self-test:canary-only stage0c-fixed-bugs:c-compiler-tests stage0c-unit:c-compiler-tests stage0c-corpus:c-compiler-corpus stage0c-docs:c-compiler-docs stage0c-error-locations:c-compiler-locations stage0c-minimal:c-compiler-build	ALL	-	ALL	-	compiled	build tool drives compiler and links modules selecting integration and matrix
+tools/zman/*	tools_zman	fmt-check no-warnings portability clean-tree	-	stdlib	-	man-pages	-	compiled	man page extractor tool selects stdlib group and man-pages scenario
+
+# --- Bootstrap anchor compilers ---
+bootstrap/stage0-c/*	stage0c	stage0c-fixed-bugs stage0c-unit stage0c-corpus stage0c-docs stage0c-error-locations stage0c-functional stage0c-minimal portability	-	-	-	-	-	compiled	frozen C bootstrap anchor selects all stage0c verification gates
+bootstrap/stage1/*	stage1	runtimes clean-tree	-	-	-	-	-	compiled	frozen stage1 snapshot selects runtimes gate and clean-tree gate
+
+# --- Benchmarks ---
+bench/safety_matrix/*	safety_matrix	safety-matrix safety-matrix-zbuild safety-model route-coverage	-	-	-	cross-module-safety-matrix	-	test	safety matrix probes select safety matrix gates and cross-module scenario
+bench/cross_lang/*	bench_cross_lang	perf-gate portability	-	-	-	bench-contention bench-threshold-gate	-	test	cross language benchmarks select perf-gate and threshold scenarios
+bench/speed_history*	bench_perf	perf-gate	-	-	-	-	-	test	compiler speed history records select perf-gate
+bench/fuzz/*	bench_fuzz	fuzz-record fuzz-fresh	-	-	-	-	-	test	fuzzer corpus and record check selects fuzz-record and fuzz-fresh
+
+# --- Test fixture directories and include roots ---
+tests/functional/*	test_functional	test-strength stage0c-functional	-	-	-	-	-	test	functional test files select test-strength and stage0c-functional compiler check
+tests/bootstrap/*	test_bootstrap	test-strength stage0c-functional	-	-	-	-	-	test	bootstrap test files select test-strength and stage0c-functional compiler check
+tests/incremental/*	fixture_incremental	test-strength	-	-	-	incremental	-	test	incremental scenario fixtures select incremental scenario
+tests/modular/*	fixture_modular	test-strength	-	-	-	modular-mangling interface-attrs	-	test	modular compilation fixtures select modular-mangling and interface-attrs
+tests/zbuild_link/*	fixture_zbuild_link	test-strength	-	-	-	zbuild-link	-	test	zbuild link fixtures select zbuild-link scenario
+tests/hosted/*	fixture_hosted	test-strength	-	-	-	hosted	-	test	hosted execution fixtures select hosted scenario
+tests/platform_layer/*	fixture_platform_layer	test-strength	-	-	-	platform-layer	-	test	platform layer fixtures select platform-layer scenario
+tests/ffi_export/*	fixture_ffi_export	test-strength	-	-	-	ffi-export	-	test	ffi export fixtures select ffi-export scenario
+tests/ffi_callback/*	fixture_ffi_callback	test-strength	-	-	-	ffi-callback	-	test	ffi callback fixtures select ffi-callback scenario
+tests/layout/*	fixture_layout	test-strength	-	-	-	struct-layout	-	test	struct layout fixtures select struct-layout scenario
+tests/zilc/*	fixture_zilc	test-strength	-	-	-	zilc-errors	-	test	zilc error fixtures select zilc-errors scenario
+tests/runner/*	fixture_runner	test-strength	-	-	-	runner-output	-	test	runner output fixtures select runner-output scenario
+tests/fmt/*	fixture_fmt	fmt-check	-	-	-	-	-	test	code formatting test inputs select fmt-check gate
+tests/helpers/*	helpers	test-strength	-	stdlib	-	-	-	test	test helper modules select stdlib group
+tests/include/*	include_roots	test-strength	-	integration	-	-	-	test	common test include root selects integration group
+tests/*	tests	test-strength	-	-	-	-	-	test	individual test files select themselves and test-strength gate
+corpus/*	corpus	test-strength stage0c-corpus	-	integration	-	-	-	test	corpus examples select test-strength integration group and stage0c-corpus
+
+# --- Explicit rows for individual scripts ---
+scripts/bench_cross_lang.sh	scripts_bench_cross_lang	perf-gate portability no-new-deps	-	-	-	-	-	script	cross language benchmark harness selects perf-gate
+scripts/bench_threshold_check.sh	scripts_bench_threshold_check	portability no-new-deps	-	-	-	bench-threshold-gate	-	script	threshold gate script selects bench-threshold-gate
+scripts/bootstrap_zoril.sh	scripts_bootstrap_zoril	toolchain clean-tree portability no-new-deps	-	-	-	-	-	script	bootstrap compilation script selects toolchain gate
+scripts/build_zrl.sh	scripts_build_zrl	toolchain clean-tree portability no-new-deps	-	-	-	-	-	script	batch zrl build helper selects toolchain gate
+scripts/check_binary_sizes.sh	scripts_check_binary_sizes	binary-sizes portability no-new-deps	-	-	-	-	-	script	binary sizes gate script selects binary-sizes gate
+scripts/check_clean_tree.sh	scripts_check_clean_tree	clean-tree portability no-new-deps	-	-	-	preflight-selftest	-	script	clean working tree check selects clean-tree gate
+scripts/check_comment_noise.sh	scripts_check_comment_noise	comment-noise portability no-new-deps	-	-	-	comment-noise-selftest	-	script	comment noise check selects comment-noise gate
+scripts/check_deps.sh	scripts_check_deps	portability no-new-deps	-	-	-	check-deps-selftest	-	script	dependency validator selects check-deps-selftest scenario
+scripts/check_exhaustive.sh	scripts_check_exhaustive	exhaustive portability no-new-deps	-	-	-	-	-	script	exhaustive pattern check selects exhaustive gate
+scripts/check_fmt.sh	scripts_check_fmt	fmt-check portability no-new-deps	-	-	-	-	-	script	formatting check selects fmt-check gate
+scripts/check_fuzz_calibrate.sh	scripts_check_fuzz_calibrate	fuzz-record portability no-new-deps	-	-	-	-	-	script	fuzz calibration check selects fuzz-record gate
+scripts/check_fuzz_fresh.sh	scripts_check_fuzz_fresh	fuzz-fresh portability no-new-deps	-	-	-	-	-	script	fuzz freshness check selects fuzz-fresh gate
+scripts/check_fuzz_record.sh	scripts_check_fuzz_record	fuzz-record portability no-new-deps	-	-	-	-	-	script	fuzz record validation selects fuzz-record gate
+scripts/check_md_escapes.sh	scripts_check_md_escapes	md-check portability no-new-deps	-	-	-	-	-	script	markdown escape checker selects md-check gate
+scripts/check_md_fmt.sh	scripts_check_md_fmt	md-check portability no-new-deps	-	-	-	-	-	script	markdown formatter selects md-check gate
+scripts/check_md_links.sh	scripts_check_md_links	portability no-new-deps	-	-	-	md-links	-	script	markdown link validator selects md-links scenario
+scripts/check_md_tables.sh	scripts_check_md_tables	md-check portability no-new-deps	-	-	-	-	-	script	markdown table width validator selects md-check gate
+scripts/check_no_new_deps.sh	scripts_check_no_new_deps	no-new-deps portability	-	-	-	no-new-deps-selftest	-	script	dependency boundary check selects no-new-deps gate
+scripts/check_no_warnings.sh	scripts_check_no_warnings	no-warnings portability no-new-deps	-	-	-	-	-	script	compiler warning validator selects no-warnings gate
+scripts/check_portability.sh	scripts_check_portability	portability no-new-deps	-	-	-	-	-	script	portability gate script selects portability gate
+scripts/check_reborrow_probes.sh	scripts_check_reborrow_probes	reborrow-probes portability no-new-deps	-	-	-	-	-	script	reborrow probe check selects reborrow-probes gate
+scripts/check_reject_diff.sh	scripts_check_reject_diff	portability no-new-deps	-	-	-	reject-diff-selftest	-	script	rejection differential checker selects reject-diff-selftest
+scripts/check_route_coverage.sh	scripts_check_route_coverage	route-coverage portability no-new-deps	-	-	-	-	-	script	safety route coverage check selects route-coverage gate
+scripts/check_runtimes.sh	scripts_check_runtimes	runtimes portability no-new-deps	-	-	-	-	-	script	runtime symbol and identical source check selects runtimes gate
+scripts/check_safety_comments.sh	scripts_check_safety_comments	safety-comments portability no-new-deps	-	-	-	safety-comments-selftest	-	script	safety comment validator selects safety-comments gate
+scripts/check_safety_figures.sh	scripts_check_safety_figures	safety-figures portability no-new-deps	-	-	-	-	-	script	safety figures check selects safety-figures gate
+scripts/check_safety_model.sh	scripts_check_safety_model	safety-model portability no-new-deps	-	-	-	-	-	script	safety model gate selects safety-model gate
+scripts/check_stage0c_minimal.sh	scripts_check_stage0c_minimal	stage0c-minimal portability no-new-deps	-	-	-	-	-	script	stage0c minimal stack check selects stage0c-minimal gate
+scripts/check_static_image_determinism.sh	scripts_check_static_image_determinism	static-image portability no-new-deps	-	-	-	-	-	script	static image determinism check selects static-image gate
+scripts/check_store_grid.sh	scripts_check_store_grid	reborrow-probes portability no-new-deps	-	-	-	-	-	script	store grid check selects reborrow-probes gate
+scripts/check_store_grid_modular.sh	scripts_check_store_grid_modular	portability no-new-deps	-	-	-	cross-module-safety-matrix	-	script	modular store grid validator selects cross-module-safety-matrix
+scripts/check_stray_files.sh	scripts_check_stray_files	portability no-new-deps	-	-	-	stray-files-selftest	-	script	stray untracked file check selects stray-files-selftest
+scripts/check_temp_names.sh	scripts_check_temp_names	temp-names portability no-new-deps	-	-	-	-	-	script	temporary naming check selects temp-names gate
+scripts/check_test_strength.sh	scripts_check_test_strength	test-strength portability no-new-deps	-	-	-	-	-	script	test assertion strength check selects test-strength gate
+scripts/check_toolchain.sh	scripts_check_toolchain	toolchain portability no-new-deps	-	-	-	-	-	script	toolchain sanity check selects toolchain gate
+scripts/check_toolchain_offpath.sh	scripts_check_toolchain_offpath	toolchain-offpath portability no-new-deps	-	-	-	-	-	script	off-path toolchain validator selects toolchain-offpath gate
+scripts/comment_census.sh	scripts_comment_census	comment-noise portability no-new-deps	-	-	-	comment-census-selftest	-	script	comment budget census tool selects comment-census-selftest
+scripts/dist.sh	scripts_dist	clean-tree portability no-new-deps	-	-	-	user-paths	-	script	tarball packaging script selects user-paths scenario
+scripts/dist_user_paths.sh	scripts_dist_user_paths	portability no-new-deps	-	-	-	user-paths	-	script	distribution path check selects user-paths scenario
+scripts/env.sh	scripts_env	clean-tree portability no-new-deps	-	-	-	-	-	script	environment setup helper selects clean-tree and portability
+scripts/full_test_stamp.sh	scripts_full_test_stamp	portability no-new-deps	-	-	-	full-test-stamp	-	script	test stamp management script selects full-test-stamp scenario
+scripts/fuzz_calibrate.sh	scripts_fuzz_calibrate	fuzz-record portability no-new-deps	-	-	-	-	-	script	fuzz calibrator selects fuzz-record gate
+scripts/fuzz_jobs.sh	scripts_fuzz_jobs	portability no-new-deps	-	-	-	fuzz-jobs	-	script	parallel fuzzing manager selects fuzz-jobs scenario
+scripts/fuzz_safe.sh	scripts_fuzz_safe	fuzz-record portability no-new-deps	-	-	-	-	-	script	safe corpus fuzzer selects fuzz-record gate
+scripts/generate_build_info.sh	scripts_generate_build_info	portability no-new-deps	-	-	-	build-info	-	script	build info generator selects build-info scenario
+scripts/man_pages.sh	scripts_man_pages	portability no-new-deps	-	-	-	man-pages	-	script	man page builder selects man-pages scenario
+scripts/marker_density.sh	scripts_marker_density	unsafe-scan portability no-new-deps	-	-	-	-	-	script	raw pointer marker density tool selects unsafe-scan gate
+scripts/perf_gap.sh	scripts_perf_gap	perf-gate portability no-new-deps	-	-	-	-	-	script	performance gap check selects perf-gate
+scripts/preflight.sh	scripts_preflight	portability no-new-deps	-	-	-	preflight-selftest	-	script	preflight runner script selects preflight-selftest scenario
+scripts/qbe_fingerprint.sh	scripts_qbe_fingerprint	portability no-new-deps	-	-	-	qbe-fingerprint	-	script	qbe backend fingerprint generator selects qbe-fingerprint scenario
+scripts/record_marker_density.sh	scripts_record_marker_density	unsafe-scan portability no-new-deps	-	-	-	-	-	script	marker density census recorder selects unsafe-scan gate
+scripts/repro-check.sh	scripts_repro_check	clean-tree portability no-new-deps	-	-	-	-	-	script	reproducibility check selects clean-tree gate
+scripts/run_safety_matrix.sh	scripts_run_safety_matrix	safety-matrix safety-matrix-zbuild portability no-new-deps	-	-	-	cross-module-safety-matrix	-	script	safety matrix runner selects safety-matrix gates
+scripts/selfhost-check.sh	scripts_selfhost_check	portability no-new-deps	-	-	-	preflight-selftest	-	script	self-hosting fixpoint check selects preflight-selftest
+scripts/selfhost_finalize.sh	scripts_selfhost_finalize	portability no-new-deps	-	-	-	preflight-selftest	-	script	self-hosting finalizer selects preflight-selftest
+scripts/test_bench_contention.sh	scripts_test_bench_contention	portability no-new-deps	-	-	-	bench-contention	-	script	bench contention test selects bench-contention scenario
+scripts/test_bench_step_failed.sh	scripts_test_bench_step_failed	portability no-new-deps	-	-	-	bench-step-failed	-	script	bench failure handler test selects bench-step-failed scenario
+scripts/test_bench_threshold_gate.sh	scripts_test_bench_threshold_gate	portability no-new-deps	-	-	-	bench-threshold-gate	-	script	bench threshold gate test selects bench-threshold-gate
+scripts/test_build_info.sh	scripts_test_build_info	portability no-new-deps	-	-	-	build-info	-	script	build info generator test selects build-info scenario
+scripts/test_check_comment_noise.sh	scripts_test_check_comment_noise	portability no-new-deps	-	-	-	comment-noise-selftest	-	script	comment noise selftest selects comment-noise-selftest
+scripts/test_check_deps.sh	scripts_test_check_deps	portability no-new-deps	-	-	-	check-deps-selftest	-	script	dependency checker selftest selects check-deps-selftest
+scripts/test_check_md_links.sh	scripts_test_check_md_links	portability no-new-deps	-	-	-	md-links	-	script	markdown link validator test selects md-links scenario
+scripts/test_check_no_new_deps.sh	scripts_test_check_no_new_deps	portability no-new-deps	-	-	-	no-new-deps-selftest	-	script	dependency guard selftest selects no-new-deps-selftest
+scripts/test_check_safety_comments.sh	scripts_test_check_safety_comments	portability no-new-deps	-	-	-	safety-comments-selftest	-	script	safety comments selftest selects safety-comments-selftest
+scripts/test_checked.sh	scripts_test_checked	portability no-new-deps	-	-	-	preflight-selftest	-	script	checked build runner selects preflight-selftest
+scripts/test_comment_census.sh	scripts_test_comment_census	portability no-new-deps	-	-	-	comment-census-selftest	-	script	comment census selftest selects comment-census-selftest
+scripts/test_dep_matrix.sh	scripts_test_dep_matrix	portability no-new-deps	-	-	-	deps-matrix-interrupt	-	script	dependency matrix test selects deps-matrix-interrupt scenario
+scripts/test_doc_snippets.sh	scripts_test_doc_snippets	portability no-new-deps	-	-	-	doc-snippets	-	script	doc snippet test selects doc-snippets scenario
+scripts/test_export_checks.sh	scripts_test_export_checks	portability no-new-deps	-	-	-	export-checks-selftest	-	script	export checks test selects export-checks-selftest
+scripts/test_ffi_callback.sh	scripts_test_ffi_callback	portability no-new-deps	-	-	-	ffi-callback	-	script	ffi callback test selects ffi-callback scenario
+scripts/test_ffi_export.sh	scripts_test_ffi_export	portability no-new-deps	-	-	-	ffi-export	-	script	ffi export test selects ffi-export scenario
+scripts/test_full_test_stamp.sh	scripts_test_full_test_stamp	portability no-new-deps	-	-	-	full-test-stamp	-	script	full test stamp test selects full-test-stamp scenario
+scripts/test_fuzz_jobs.sh	scripts_test_fuzz_jobs	portability no-new-deps	-	-	-	fuzz-jobs	-	script	fuzz worker job test selects fuzz-jobs scenario
+scripts/test_fuzz_mode_diff.sh	scripts_test_fuzz_mode_diff	portability no-new-deps	-	-	-	fuzz-mode-diff	-	script	fuzz mode differential test selects fuzz-mode-diff scenario
+scripts/test_fuzz_tools.sh	scripts_test_fuzz_tools	portability no-new-deps	-	-	-	fuzz-tools	-	script	fuzz tooling test selects fuzz-tools scenario
+scripts/test_getting_started.sh	scripts_test_getting_started	portability no-new-deps	-	-	-	getting-started	-	script	getting started guide test selects getting-started scenario
+scripts/test_hosted.sh	scripts_test_hosted	portability no-new-deps	-	-	-	hosted	-	script	hosted runtime tests select hosted scenario
+scripts/test_incremental.sh	scripts_test_incremental	portability no-new-deps	-	-	-	incremental	-	script	incremental compilation test selects incremental scenario
+scripts/test_incremental_equivalence.sh	scripts_test_incremental_equivalence	portability no-new-deps	-	-	-	incremental	-	script	incremental equivalence test selects incremental scenario
+scripts/test_interface_attrs.sh	scripts_test_interface_attrs	portability no-new-deps	-	-	-	interface-attrs	-	script	interface attribute test selects interface-attrs scenario
+scripts/test_man_pages.sh	scripts_test_man_pages	portability no-new-deps	-	-	-	man-pages	-	script	man page test selects man-pages scenario
+scripts/test_modular_mangling.sh	scripts_test_modular_mangling	portability no-new-deps	-	-	-	modular-mangling	-	script	modular symbol mangling test selects modular-mangling scenario
+scripts/test_module_names.sh	scripts_test_module_names	portability no-new-deps	-	-	-	module-names	-	script	module name validator test selects module-names scenario
+scripts/test_origins.sh	scripts_test_origins	portability no-new-deps	-	-	-	origins	-	script	borrow origin analysis test selects origins scenario
+scripts/test_platform_layer.sh	scripts_test_platform_layer	portability no-new-deps	-	-	-	platform-layer	-	script	platform abstraction test selects platform-layer scenario
+scripts/test_portability_lib.sh	scripts_test_portability_lib	portability no-new-deps	-	-	-	-	-	script	portability library selftest selects portability gate
+scripts/test_preflight.sh	scripts_test_preflight	portability no-new-deps	-	-	-	preflight-selftest	-	script	preflight selftest selects preflight-selftest scenario
+scripts/test_qbe_arg_order.sh	scripts_test_qbe_arg_order	portability no-new-deps	-	-	-	qbe-arg-order	-	script	qbe argument order test selects qbe-arg-order scenario
+scripts/test_qbe_fingerprint.sh	scripts_test_qbe_fingerprint	portability no-new-deps	-	-	-	qbe-fingerprint	-	script	qbe fingerprint test selects qbe-fingerprint scenario
+scripts/test_readme_snippets.sh	scripts_test_readme_snippets	portability no-new-deps	-	-	-	readme-snippets	-	script	readme snippet verification selects readme-snippets scenario
+scripts/test_reject_diff.sh	scripts_test_reject_diff	portability no-new-deps	-	-	-	reject-diff-selftest	-	script	rejection differential selftest selects reject-diff-selftest scenario
+scripts/test_result_file.sh	scripts_test_result_file	portability no-new-deps	-	-	-	result-file	-	script	test runner result file test selects result-file scenario
+scripts/test_runner_output.sh	scripts_test_runner_output	portability no-new-deps	-	-	-	runner-output	-	script	test runner output format test selects runner-output scenario
+scripts/test_safety_matrix_cross_module.sh	scripts_test_safety_matrix_cross_module	portability no-new-deps	-	-	-	cross-module-safety-matrix	-	script	cross module safety test selects cross-module-safety-matrix scenario
+scripts/test_scdoc_min.sh	scripts_test_scdoc_min	portability no-new-deps	-	-	-	scdoc-min	-	script	scdoc compatibility test selects scdoc-min scenario
+scripts/test_sha256_differential.sh	scripts_test_sha256_differential	portability no-new-deps	-	-	-	sha256-differential	-	script	sha256 differential test selects sha256-differential scenario
+scripts/test_struct_layout.sh	scripts_test_struct_layout	portability no-new-deps	-	-	-	struct-layout	-	script	struct layout calculation test selects struct-layout scenario
+scripts/test_test_lock.sh	scripts_test_test_lock	portability no-new-deps	-	-	-	test-lock	-	script	concurrency lock test selects test-lock scenario
+scripts/test_tool_versions.sh	scripts_test_tool_versions	portability no-new-deps	-	-	-	tool-versions	-	script	tool version parser test selects tool-versions scenario
+scripts/test_uncalled_method_emit.sh	scripts_test_uncalled_method_emit	portability no-new-deps	-	-	-	uncalled-method-emit	-	script	uncalled method codegen test selects uncalled-method-emit scenario
+scripts/test_user_paths.sh	scripts_test_user_paths	portability no-new-deps	-	-	-	user-paths	-	script	user workflow test selects user-paths scenario
+scripts/test_zbuild_diff.sh	scripts_test_zbuild_diff	portability no-new-deps	-	-	-	zbuild-diff	-	script	zbuild differential test selects zbuild-diff scenario
+scripts/test_zbuild_errors.sh	scripts_test_zbuild_errors	portability no-new-deps	-	-	-	zbuild-errors	-	script	zbuild error reporting test selects zbuild-errors scenario
+scripts/test_zbuild_link.sh	scripts_test_zbuild_link	portability no-new-deps	-	-	-	zbuild-link	-	script	zbuild linkage test selects zbuild-link scenario
+scripts/test_zilc_errors.sh	scripts_test_zilc_errors	portability no-new-deps	-	-	-	zilc-errors	-	script	zilc diagnostic test selects zilc-errors scenario
+scripts/unsafe_scan.sh	scripts_unsafe_scan	unsafe-scan portability no-new-deps	-	-	-	-	-	script	unsafe scan tool selects unsafe-scan gate
+scripts/version.sh	scripts_version	portability no-new-deps	-	-	-	tool-versions	-	script	version query script selects tool-versions scenario
+scripts/zoril-checked.sh	scripts_zoril_checked	portability no-new-deps	-	-	-	preflight-selftest	-	script	checked compiler wrapper selects preflight-selftest scenario
+scripts/fuzz/gen.lua	scripts_fuzz_gen	portability no-new-deps	-	-	-	fuzz-mode-diff fuzz-tools fuzz-jobs	-	script	fuzz program generator selects fuzz scenarios
+scripts/fuzz/store_grid.lua	scripts_fuzz_store_grid	reborrow-probes portability no-new-deps	-	-	-	cross-module-safety-matrix	-	script	store grid generator selects reborrow-probes and cross-module matrix
+scripts/fuzz/store_grid_classes.lua	scripts_fuzz_store_grid_classes	reborrow-probes portability no-new-deps	-	-	-	cross-module-safety-matrix	-	script	store grid class generator selects reborrow-probes and cross-module matrix
+scripts/select_test_tier.sh	scripts_select_test_tier	portability no-new-deps	-	-	-	tier-select	-	script	test tier selector script selects tier-select scenario
+scripts/test_tier_select.sh	scripts_test_tier_select	portability no-new-deps	-	-	-	tier-select	-	script	tier selection honesty test selects tier-select scenario
+scripts/test_tiers.tsv	scripts_test_tiers_tsv	portability no-new-deps	-	-	-	tier-select	-	script	tier table data file selects tier-select scenario
+
+# --- Default fallback: unlisted path selects everything ---
+*	all	ALL	-	ALL	-	ALL	-	compiled	unrecognized or unlisted path selects all gates groups and scenarios

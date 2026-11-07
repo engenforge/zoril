@@ -122,7 +122,7 @@ group_scenarios() {
             ;;
         integration)
             echo incremental fuzz-jobs fuzz-mode-diff fuzz-tools modular-mangling uncalled-method-emit runner-output readme-snippets doc-snippets getting-started struct-layout ffi-export ffi-callback zbuild-link module-names interface-attrs hosted platform-layer man-pages tool-versions md-links safety-comments-selftest no-new-deps-selftest comment-noise-selftest comment-census-selftest export-checks-selftest bench-contention bench-threshold-gate test-lock preflight-selftest check-deps-selftest result-file scdoc-min stray-files-selftest
-            echo bench-step-failed reject-diff-selftest zbuild-errors zbuild-diff user-paths build-info qbe-arg-order qbe-fingerprint full-test-stamp deps-matrix-interrupt
+            echo bench-step-failed reject-diff-selftest zbuild-errors zbuild-diff user-paths build-info qbe-arg-order qbe-fingerprint full-test-stamp deps-matrix-interrupt tier-select
             ;;
         diagnostics) echo zilc-errors ;;
     esac
@@ -176,7 +176,8 @@ scenario_run() {
         qbe-fingerprint)            tr_run_scenario "$1" ./scripts/test_qbe_fingerprint.sh ;;
         full-test-stamp)            tr_run_scenario "$1" ./scripts/test_full_test_stamp.sh ;;
         deps-matrix-interrupt)  tr_run_scenario "$1" ./scripts/test_dep_matrix.sh --selftest ;;
-        zilc-errors)                tr_run_scenario "$1" ./scripts/test_zilc_errors.sh ;;
+        zilc-errors)            tr_run_scenario "$1" ./scripts/test_zilc_errors.sh ;;
+        tier-select)            tr_run_scenario "$1" ./scripts/test_tier_select.sh ;;
     esac
 }
 
