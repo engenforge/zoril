@@ -1558,3 +1558,91 @@ date: 2026-11-03
       - C5: `make test`'s count is the previous one less the deleted scenario (`full-test-stamp`):
         Before (Z-0149): `Total: 3401 run, 3401 passed, 0 failed, 87 skipped (250.7s)` (3401 run)
         After (Z-0154): `Total: 3400 run, 3400 passed, 0 failed, 88 skipped (243.7s)` (3400 run, exactly 1 less)
+
+- [x] +testinfra +measurement +AI-G Z-0124 T13 Where `mutation-self-test`'s time goes, and what a cheaper one would share
+    > **Created:** 2026-11-06 by the review. **After:** Z-0106 (whether the `src/` tier runs it).
+    > **Completed:** 2026-11-07 git:ea46c62
+
+    - **Why:** it is the critical path of `make test` at every job count (Z-0103 F1, Z-0105: 193 s at 4 jobs, ending at 219 s at 16). The tiers take it out of runs that touch neither the harness nor what its canaries patch, but a `src/` change, the common case in the safety series, may still select it (Z-0106 decides).
+    - **Do:** time its phases from `build/gates/mutation-self-test.log` and `scripts/mutation-check.sh` (building the four canary compilers from `scripts/mutation_selftest.list`, then running the suite with each). Measure whether the canary compilers can be cached by the hash of the patched sources (C1 and C4 patch the same line of `src/main.zrl`), whether one build can serve two canaries, and whether the suite each runs can be the smoke list without losing what the canaries prove (C2 needs `tests/error_reporting/ec_bool_logical_int.zrl`, C5 the interface path). Record the options with the time each saves; an implementation follows as its own task.
+    - **Moved up by the review of Z-0120 (2026-11-07):** on 4 CPUs it is 356 s of wall time and 858 of the run's 1,594 CPU-seconds (54%). Its suite runs use `MUTATION_TEST_JOBS:-6` whatever the host has (Z-0127). If Z-0106 keeps it in the `src/` tier, a cheaper gate is worth more than any task after the tiers, so it now follows Z-0112.
+    - **Baseline moved (review of Z-0127, 2026-11-07):** since git:723326c, and again after Z-0128, the mutants' suite job count depends on the host. Re-measure the gate on 4 CPUs after Z-0128 before comparing options, and do not compare with Z-0120's 356 s.
+    - **Post-Z-0128 Baseline Profile:**
+    - On 4 CPUs (`taskset -c 0-3 ./scripts/test_mutation_check.sh`): wall time **360.06 s**, CPU time **779.51 CPU-seconds** (user 447.74 s, sys 331.77 s). Under `taskset -c 0-3`, `MUTATION_JOBS=4`, `_eval_jobs=2`, `MUTATION_TEST_JOBS=2` (Z-0128's bounded formula avoiding host oversubscription). Compare with Z-0120's 356.00 s wall / 858.23 s CPU.
+    - On 16 CPUs (`./scripts/test_mutation_check.sh`): wall time **186.02 s**, CPU time **933.83 CPU-seconds** (user 462.29 s, sys 471.54 s).
+    - **Phase Breakdown of `test_mutation_check.sh`:**
+    - `phase1_main` (C1, C2, C4, C5 canaries): **117.48 s (32.7%)** on 4 CPUs [16 CPUs: 59.89 s (32.4%)].
+    - Baseline evaluation (`suite_failures "$GOOD" "$STAGE/baseline"`): 35.24 s (test.sh 32.49 s, perf-gate 2.30 s, fmt-check 0.42 s, static-image 0.02 s).
+    - Mutant compilation (C1, C2, C4, C5 parallel batch): 6.53 s (individual compiles: C1 6.40 s, C2 6.24 s, C4 6.41 s, C5 6.53 s).
+    - Mutant evaluation (parallel batches of 2): 75.59 s (batch 1: C1 34.34 s test.sh + 2.53 s secondary gates, C2 14.06 s test.sh; batch 2: C4 36.18 s test.sh + 2.53 s secondary gates, C5 21.76 s test.sh).
+    - `phase2_bad_list` (malformed syntax rejection): **0.08 s (0.0%)** on 4 CPUs [16 CPUs: 0.09 s].
+    - `phase3_stale_stage` (stale stage cleanup and restamp): **76.42 s (21.3%)** on 4 CPUs [16 CPUs: 39.21 s (21.2%)]. Baseline 35.06 s, build C1 6.06 s, evaluate C1 35.18 s (test.sh 32.52 s, perf-gate 2.22 s, fmt-check 0.42 s, static-image 0.02 s).
+    - `phase4_broken_build` (broken compiler build rejection): **35.17 s (9.8%)** on 4 CPUs [16 CPUs: 16.77 s (9.1%)]. Baseline 34.95 s, build B1 0.14 s (immediate syntax error).
+    - `phase5_surv_stage` (stale survivor reset across runs): **129.60 s (36.1%)** on 4 CPUs [16 CPUs: 68.71 s (37.2%)]. Run 1 (C1): 75.91 s (baseline 35.04 s, build C1 5.81 s, eval C1 34.95 s); Run 2 (C2): 53.69 s (baseline 35.25 s, build C2 5.95 s, eval C2 11.97 s).
+    - **Key Structural Findings:**
+    - (1) Baseline suite duplication: `suite_failures` runs the identical unmutated baseline compiler five times across the gate (Phase 1, Phase 3, Phase 4, Phase 5 Run 1, Phase 5 Run 2), consuming **175.54 s (48.9% of gate wall time)** on 4 CPUs (83.5 s on 16 CPUs).
+    - (2) Secondary assertions dominate the gate: Phases 3, 4, 5 account for **241.19 s (67.2%)** of gate wall time. The four canaries themselves (`phase1_main`) take only 117.48 s (32.7%).
+    - (3) Test suite evaluation dwarfs compilation: Across all phases, mutant evaluation takes 157.69 s (44.0%) and baseline evaluation takes 175.54 s (48.9%), totaling 333.23 s (92.9% of gate time). Mutant compilation takes only 24.49 s wall time (6.8%) across all phases.
+    - **Measured Options and Savings:**
+    - Option 1 (One build serves two canaries & source-hash caching): C1 and C4 patch the exact same line in `src/main.zrl` with identical text; the staged `src/` tree for C1 and C4 is byte-identical (SHA-256 `d68edf9c8f9a150b47c0c95c2357f16a80e85fcc67d0033652e902025448901a`). One build can serve both canaries directly. Across the entire gate, C1 is compiled 3 times and C2 is compiled 2 times (7 builds total). Caching mutant compiler builds by source-tree hash reduces compilations from 7 to 3 (C1, C2, C5), saving **17.82 s wall time** on 4 CPUs and ~24 CPU-seconds.
+    - Option 2 (Targeted canary suite via smoke list): Today `suite_failures` runs all 1,194 per-file tests in `tests/` and `corpus/` (taking 32.49 s on 4 CPUs with `TR_JOBS=2`). Running `tests/smoke.list` (51 tests) plus `tests/error_reporting/ec_bool_logical_int.zrl` (1 test) plus `tests/interproc_summary/cross_module/global_stash_caller.zrl` (1 test) = 53 tests total takes **1,492 ms (~1.5 s)** on 4 CPUs with `TR_JOBS=2` (a **21.8x speedup**, saving 31.0 s per evaluation). What the canaries prove is preserved: C1 has 0 failures and is reported SURVIVED; C2 fails `ec_bool_logical_int.zrl` in 458 ms and is reported caught by `ec_bool_logical_int`; C4 has 0 failures and is reported SURVIVED; C5 fails `global_stash_caller.zrl` in 631 ms and is reported caught by `global_stash_caller`. Under Option 2 alone, Phase 1 drops from 117.48 s to **16.0 s** (-101.5 s, 86.4% saving), and the full gate drops from 358.77 s to **48.5 s** (-310.3 s, **86.5% saving**).
+    - Option 3 (Secondary phase assertions optimized): Phase 3 (`stale_stage`) tests only stage clearing and restamping (lines 280-296 of `mutation-check.sh`). Running with an empty list (`MUTATION_LIST=/dev/null`) tests the exact same cleanup in **0.05 s** instead of 76.42 s (saving **76.37 s**). Phase 4 (`broken_build`): Building mutants before running the baseline suite allows immediate exit 2 when all mutants fail to build, dropping Phase 4 from 35.17 s to **0.2 s** (saving **34.97 s**). Phase 5 (`stale_surv_stage`): Under the smoke suite and cached builds, drops from 129.60 s to **~7.5 s** (saving **122.1 s**).
+    - **Combined Expected Gate Times (4 CPUs):**
+    - Baseline today: **360.06 s wall / 779.51 CPU-s** (4 CPUs); **186.02 s wall / 933.83 CPU-s** (16 CPUs).
+    - With Option 2 (smoke suite alone): **~48.5 s wall** on 4 CPUs (-310 s, **-86%**).
+    - With Options 1 + 2 (smoke suite + build cache): **~30.7 s wall** on 4 CPUs (-328 s, **-91%**).
+    - With Options 1 + 2 + 3 (all combined): **~18 s wall** on 4 CPUs (-342 s, **-95%**) and **~8 s wall** on 16 CPUs (-176 s, **-95%**).
+    - **Measurement Patch:**
+
+    ```diff
+    --- a/scripts/mutation-check.sh
+    +++ b/scripts/mutation-check.sh
+    @@ -56,2 +56,7 @@ cd "$REPO"
+     . "$REPO/scripts/env.sh"
+    +mutation_time_log() {
+    +    if [ -n "${MUTATION_TIMING_LOG:-}" ]; then
+    +        printf '%s\t%s\t%s\n' "$(now_ms)" "$1" "$2" >> "$MUTATION_TIMING_LOG"
+    +    fi
+    +}
+    @@ -348,2 +353,4 @@ suite_failures() {
+         _id="${3:-}"
+    +    _id_label="${_id:-baseline}"
+    +    mutation_time_log "$_id_label/eval" "start"
+    @@ -410,2 +417,3 @@ suite_failures() {
+         _test_jobs="$MUTATION_TEST_JOBS"
+    +    _t_test0=$(now_ms)
+         TR_JOBS="$_test_jobs" TR_TIMEOUT="$MUTATION_TIMEOUT" ZORIL_CC="$_cc" ZORIL_STDLIB="$_stdlib" TR_WORK="$_work/tests" \
+    @@ -413,2 +421,3 @@ suite_failures() {
+             ./scripts/test.sh --quiet --fail-fast --results "$_work/results" tests corpus > "$_work/suite.log" 2>&1 || true
+    +    mutation_time_log "$_id_label/test.sh" "$(( $(now_ms) - _t_test0 ))ms"
+    @@ -464,2 +473,4 @@ suite_failures() {
+     build_mutant() {
+    +    _t_b0=$(now_ms)
+    +    mutation_time_log "$1/build" "start"
+         _d="$STAGE/$1"
+    @@ -485,2 +496,3 @@ build_mutant() {
+             echo BUILT > "$_d/status"
+    +        mutation_time_log "$1/build" "BUILT $(( $(now_ms) - _t_b0 ))ms"
+         else
+    @@ -487,2 +499,3 @@ build_mutant() {
+             echo BUILD-FAILED > "$_d/status"
+    +        mutation_time_log "$1/build" "BUILD-FAILED $(( $(now_ms) - _t_b0 ))ms"
+         fi
+    --- a/scripts/test_mutation_check.sh
+    +++ b/scripts/test_mutation_check.sh
+    @@ -27,2 +27,8 @@ cd "$(dirname "$0")/.." || exit 2
+     . scripts/lib/portability.sh
+    +phase_log() {
+    +    if [ -n "${MUTATION_TIMING_LOG:-}" ]; then
+    +        printf '%s\t%s\t%s\n' "$(now_ms)" "$1" "$2" >> "$MUTATION_TIMING_LOG"
+    +    fi
+    +}
+    ```
+    - **Checks:**
+    - C1: `taskset -c 0-3 ./scripts/test_mutation_check.sh` post-Z-0128 baseline: wall time 360.06 s, CPU time 779.51 s (user 447.74 s, sys 331.77 s); output quoted: `[PASS] a no-op mutation is reported SURVIVED`, `[PASS] a changed diagnostic is reported caught by ec_bool_logical_int`, `[PASS] exactly the no-op canary survived (C1 C4 )`, `[PASS] the interface canary C5 is caught by the incremental scenario`.
+    - C2: Phase breakdown timed on 4 CPUs and 16 CPUs across all five phases; quoted above (`phase1_main` 117.48 s / 32.7%, `phase2_bad_list` 0.08 s, `phase3_stale_stage` 76.42 s / 21.3%, `phase4_broken_build` 35.17 s / 9.8%, `phase5_surv_stage` 129.60 s / 36.1%).
+    - C3: C1 and C4 source hash comparison: SHA-256 `d68edf9c8f9a150b47c0c95c2357f16a80e85fcc67d0033652e902025448901a` identical; one build serves both; compiler caching reduces gate builds from 7 to 3, saving 17.82 s wall time on 4 CPUs.
+    - C4: Smoke list plus canary catchers (`tests/smoke.list` + `ec_bool_logical_int.zrl` + `global_stash_caller.zrl`) runs in 1,492 ms on 4 CPUs vs 32,492 ms for 1,194 per-file tests (21.8x speedup); C1/C4 survive, C2 caught in 458 ms, C5 caught in 631 ms; all proofs preserved.
+    - C5: Combined options and savings calculated: drops gate from 360.06 s to ~48.5 s (Option 2 alone), ~30.7 s (Options 1 + 2), and ~18 s (Options 1 + 2 + 3) on 4 CPUs. Implementation follows as a separate task.
+    - C6: `tm validate doc/tasks/*.tm.md` passes.
+    - C7: `scripts/check_safety_model.sh` passes with 0 banned safety phrases across 50 exported Markdown documents.
