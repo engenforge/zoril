@@ -91,6 +91,9 @@ TIMEOUT_DUR ?= 30s
 KILL_DUR ?= 2s
 ##var QUIET Set to empty string to disable quiet mode (e.g. QUIET=)
 QUIET ?= --quiet
+##var BASE Base commit to compare changed files against in test-changed (default: preflight_base)
+BASE ?= $(PREFLIGHT_BASE)
+TEST_RUNNER ?= ./scripts/test.sh
 
 GATE = TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) ./scripts/test.sh $(QUIET) --gate
 
@@ -400,6 +403,25 @@ preflight-changed: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/runtime_
 	@./scripts/preflight.sh --changed
 
 ##@ Testing
+test-changed: $(TARGET) $(ZILC) build/zbuild build/runtime.o build/runtime_hosted.o ## Run tests scoped to changed files (BASE=<commit>, default: preflight_base)
+	@./scripts/check_deps.sh test
+	@if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		echo "test-changed: not inside a git checkout, running all tests"; \
+		TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) $(TEST_RUNNER) $(QUIET) --gates; \
+	else \
+		. scripts/lib/preflight_base.sh; \
+		if [ -n "$(BASE)" ]; then \
+			PREFLIGHT_BASE="$(BASE)"; \
+		fi; \
+		if ! preflight_base; then \
+			echo "[FAIL] test-changed: no base to check the change against: $$PF_BASE_ERR" >&2; \
+			exit 1; \
+		fi; \
+		echo "test-changed: base $$PF_BASE ($$PF_BASE_WHY)"; \
+		args=$$( (git diff --name-only --no-renames "$$PF_BASE" 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null) | sort -u | ./scripts/select_test_tier.sh ) || exit $$?; \
+		TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) $(TEST_RUNNER) $(QUIET) $$args; \
+	fi
+
 test-checked: $(TARGET) $(ZILC) build/runtime.o ## Run the tests, corpus, apps and safety probes under `zoril --checked`
 	@./scripts/test_checked.sh
 
@@ -530,7 +552,7 @@ clean: ## Remove build artifacts
 	-@rm -rf bootstrap/*/framework/lowered/ bootstrap/*/relowered/ bootstrap/*/build/ 2>/dev/null
 
 # `make help` lists only these; `make help-all` lists every documented target and variable.
-HELP_COMMON := all install uninstall clean help-all test test-fast test-checked test-docs \
+HELP_COMMON := all install uninstall clean help-all test test-changed test-fast test-checked test-docs \
 	preflight-changed preflight PREFIX DESTDIR SYSTEM_ZORIL TSUITE T
 
 help: HELP_ONLY = $(HELP_COMMON)
@@ -609,7 +631,7 @@ help help-all:
 		} \
 	' $(MAKEFILE_LIST)
 
-.PHONY: $(GATES) all test test-fast stage0c-build install install-files uninstall clean help help-all dist dist-bin dist-check \
+.PHONY: $(GATES) all test test-changed test-fast stage0c-build install install-files uninstall clean help help-all dist dist-bin dist-check \
         selfhost-check selfhost-confirm selfhost-build-check repro-check mutation-check \
         stage0c-suites fuzz-short fuzz fuzz-release fuzz-calibrate preflight preflight-changed \
         md-fmt test-readme test-docs test-getting-started zbuild test-versions man test-man

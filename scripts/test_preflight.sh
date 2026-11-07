@@ -15,6 +15,9 @@
 #   15. The rejection differential still runs when the seed compiler refuses the base source: the scratch
 #       tree's compiler is built through stage1 instead (a stand-in make plays both builds).
 #   16. Nested runs do not touch default preflight timings or log files.
+#   17. A doc-only change skips preflight-changed, reporting [SKIP] and exiting 0.
+#   18. A change to scripts/preflight.sh does not skip preflight-changed.
+#   19. A test-only change does not skip preflight-changed and runs the checked pass.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 . scripts/lib/portability.sh
@@ -316,6 +319,7 @@ scratch_base() {
     _idx="$tmp/scratch_base_idx"
     rm -f "$_idx"
     GIT_INDEX_FILE="$_idx" git read-tree HEAD || return 1
+    GIT_INDEX_FILE="$_idx" git add -A || return 1
     _blob=$(printf '// preflight-selftest base\n' | git hash-object -w --stdin) || return 1
     GIT_INDEX_FILE="$_idx" git update-index --add --cacheinfo 100644 "$_blob" "$1" || return 1
     _tree=$(GIT_INDEX_FILE="$_idx" git write-tree) || return 1
@@ -497,6 +501,61 @@ if [ -x build/zoril ] && [ -f build/zilc ] && [ -f build/runtime.o ]; then
     fi
 else
     echo "[SKIP] preflight-selftest: case 15 needs build/zoril, build/zilc and build/runtime.o (run make)"
+fi
+
+# Case 17: a doc-only change skips preflight-changed (reporting [SKIP] and exiting 0).
+if doc_base=$(scratch_base doc/tasks/active.tm.md 2>"$tmp/scratch_base.err") && [ -n "$doc_base" ]; then
+    rc=0
+    out=$(PREFLIGHT_BASE="$doc_base" PREFLIGHT_SELFHOST="$tmp/stub_fail_selfhost.sh" \
+          PREFLIGHT_MUTATION="$tmp/stub_fail_mutation.sh" PREFLIGHT_BENCH="$tmp/stub_fail_bench.sh" \
+          ./scripts/preflight.sh --changed 2>&1) || rc=$?
+    if [ $rc -eq 0 ] && echo "$out" | grep -qF "[SKIP] preflight-changed: only documentation changed since $doc_base"; then
+        pass "a doc-only change skips preflight-changed"
+    else
+        fail "doc-only change should skip preflight-changed (rc=$rc, out=$out)"
+    fi
+else
+    fail "cannot make a base commit for case 17: $(cat "$tmp/scratch_base.err")"
+fi
+
+# Case 18: a change to scripts/preflight.sh does not skip preflight-changed.
+if script_base=$(scratch_base scripts/preflight.sh 2>"$tmp/scratch_base.err") && [ -n "$script_base" ]; then
+    rc=0
+    out=$(PREFLIGHT_BASE="$script_base" PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
+          PREFLIGHT_MUTATION="$tmp/stub_pass.sh" PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+          PREFLIGHT_BENCH="$tmp/stub_pass.sh" PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
+          PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
+          ./scripts/preflight.sh --changed 2>&1) || rc=$?
+    if [ $rc -eq 0 ] && ! echo "$out" | grep -qF "[SKIP] preflight-changed:" && echo "$out" | grep -qF "stub: selfhost ok"; then
+        pass "a change to scripts/preflight.sh does not skip preflight-changed"
+    else
+        fail "change to scripts/preflight.sh must not skip preflight-changed (rc=$rc, out=$out)"
+    fi
+else
+    fail "cannot make a base commit for case 18: $(cat "$tmp/scratch_base.err")"
+fi
+
+# Case 19: a test-only change does not skip preflight-changed and runs checked.
+cat << 'EOS' > "$tmp/stub_fail_checked.sh"
+#!/bin/sh
+echo "stub: test-checked ran"
+exit 37
+EOS
+chmod +x "$tmp/stub_fail_checked.sh"
+if test_base=$(scratch_base tests/functional/test_dummy_case19.zrl 2>"$tmp/scratch_base.err") && [ -n "$test_base" ]; then
+    rc=0
+    out=$(PREFLIGHT_BASE="$test_base" PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
+          PREFLIGHT_MUTATION="$tmp/stub_pass.sh" PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+          PREFLIGHT_BENCH="$tmp/stub_pass.sh" PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
+          PREFLIGHT_CHECKED="$tmp/stub_fail_checked.sh" \
+          ./scripts/preflight.sh --changed 2>&1) || rc=$?
+    if [ $rc -eq 37 ] && ! echo "$out" | grep -qF "[SKIP] preflight-changed:" && echo "$out" | grep -qF "stub: test-checked ran"; then
+        pass "a test-only change runs checked"
+    else
+        fail "test-only change should run checked pass (rc=$rc, out=$out)"
+    fi
+else
+    fail "cannot make a base commit for case 19: $(cat "$tmp/scratch_base.err")"
 fi
 
 # Case 16: nested runs do not touch default timings or log files (Z-0119, Z-0126, Z-0128)

@@ -177,6 +177,7 @@ scripts/fuzz/store_grid.lua	scripts_fuzz_store_grid	reborrow-probes portability 
 scripts/fuzz/store_grid_classes.lua	scripts_fuzz_store_grid_classes	reborrow-probes portability no-new-deps	-	-	-	cross-module-safety-matrix	-	script	store grid class generator selects reborrow-probes and cross-module matrix
 scripts/select_test_tier.sh	scripts_select_test_tier	portability no-new-deps	-	-	-	tier-select	-	script	test tier selector script selects tier-select scenario
 scripts/test_tier_select.sh	scripts_test_tier_select	portability no-new-deps	-	-	-	tier-select	-	script	tier selection honesty test selects tier-select scenario
+scripts/test_test_changed.sh	scripts_test_test_changed	portability no-new-deps	-	-	-	test-changed	-	script	test-changed scenario test selects test-changed scenario
 scripts/test_tiers.tsv	scripts_test_tiers_tsv	portability no-new-deps	-	-	-	tier-select	-	script	tier table data file selects tier-select scenario
 
 # --- Default fallback: unlisted path selects everything ---
