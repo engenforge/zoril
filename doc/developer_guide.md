@@ -40,9 +40,9 @@ Before submitting changes, all contributions must pass rigorous verification sui
 
 ### Verification Rules
 
-- **Scoped Tier While Editing:** Run `make test-changed` while editing to run only what the tier table (`scripts/test_tiers.tsv`) selects for modified and untracked files. Use `make test-changed BASE=<commit>` to select changes against a base commit.
+- **Scoped Tier While Editing:** Run `make test-changed` while editing to run only what the tier table (`scripts/test_tiers.tsv`) selects for changed and untracked files. The base commit is chosen by `preflight_base` (the upstream branch or default branch merge base when unpushed commits exist, else HEAD for uncommitted working tree changes). Pass `BASE=HEAD` while editing to scope checks only to uncommitted changes, or `BASE=HEAD~1` after committing task or doc files to test only that commit and avoid running the tiers of unpushed commits. Use `make test-changed BASE=<commit>` to select changes against an arbitrary base commit.
 - **Code Changes:** Any task modifying `src/`, `stdlib/`, or `tools/` must pass both `make test` and `make preflight-changed` once, after the last change to compiled code.
-- **Documentation or Task Only Changes:** If a passing whole test run has already run on the tree, a commit modifying only documentation or task files reruns only the doc tier (`make test-changed` or its gates).
+- **Documentation or Task Only Changes:** If a passing whole test run has already run on the tree, a commit modifying only documentation or task files reruns only the doc tier (`make test-changed BASE=HEAD~1` or its gates).
 - **Smoke Tests:** While editing, run `make test-fast` for sub-second feedback on core functionality (`make test-fast` alone is never enough for a code change).
 - **Unchanged Tree Stamp:** On an unchanged tree (tree, compiler, and toolchain fingerprint unchanged since the last passing whole run), `make test` stops early and prints `make test: tree, compiler and toolchain fingerprint unchanged since earlier run (git:<sha>, <timestamp>); stopping (FORCE=1 to run)` followed by the earlier run's `Total:` summary line. Run `make test FORCE=1` to force a full rerun.
 
@@ -50,9 +50,13 @@ Before submitting changes, all contributions must pass rigorous verification sui
 # Fast smoke tests during development
 make test-fast
 
-# Scoped tier for changed files during development
+# Scoped tier for changed files during development (defaults to upstream if unpushed commits exist)
 make test-changed
-# Scoped tier against a base commit
+# Scoped tier for uncommitted changes while editing
+make test-changed BASE=HEAD
+# Scoped tier for the latest commit (e.g. after committing doc or task files)
+make test-changed BASE=HEAD~1
+# Scoped tier against an arbitrary base commit
 make test-changed BASE=main
 
 # Full test suite (stops early if tree and compiler are unchanged)

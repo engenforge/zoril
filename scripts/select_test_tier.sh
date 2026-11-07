@@ -148,40 +148,6 @@ is_excluded_gate() {
     return 1
 }
 
-# Helper to get the group a scenario belongs to
-scenario_group() {
-    case "$1" in
-        cross-module-safety-matrix|origins)
-            echo "memory" ;;
-        sha256-differential)
-            echo "stdlib" ;;
-        zilc-errors)
-            echo "diagnostics" ;;
-        *)
-            echo "integration" ;;
-    esac
-}
-
-# Helper to get the group a test file or module belongs to
-test_file_group() {
-    case "$1" in
-        tests/language/enums/*|tests/language/generics/*|tests/language/structs/*|tests/language/traits/*|tests/functional/enums/*|tests/functional/structs/*)
-            echo "types" ;;
-        tests/language/memory/*|tests/language/pointers/*|tests/language/closures/*|tests/functional/pointers/*|tests/interproc_summary/*)
-            echo "memory" ;;
-        tests/stdlib/*|tests/functional/stdlib/*|tests/helpers/*)
-            echo "stdlib" ;;
-        tests/error_reporting/*)
-            echo "diagnostics" ;;
-        tests/integration/*|tests/regressions/*|tests/bootstrap/*|corpus/*|tests/include/*)
-            echo "integration" ;;
-        tests/language/*|tests/functional/*|tests/compiler/*|tests/unit/*|tests/benchmarks/*)
-            echo "language" ;;
-        *)
-            echo "" ;;
-    esac
-}
-
 # Helper to check if a path matches a pattern
 path_matches() {
     _p="$1"; _pat="$2"
@@ -348,15 +314,6 @@ for path in $INPUT_PATHS; do
     # If the path is a runnable test file, record it in SEL_PATHS
     if is_test_file "$path"; then
         has_word "$path" "$SEL_PATHS" || SEL_PATHS="$SEL_PATHS $path"
-    else
-        case "$path" in
-            *_lib.zrl|*/include/*)
-                _lib_grp=$(test_file_group "$path")
-                if [ -n "$_lib_grp" ]; then
-                    has_word "$_lib_grp" "$SEL_GROUPS" || SEL_GROUPS="$SEL_GROUPS $_lib_grp"
-                fi
-                ;;
-        esac
     fi
 done
 
@@ -426,16 +383,10 @@ case "$MODE" in
             ARGS="$ARGS --group $gr"
         done
         for sc in $SEL_SCENARIOS; do
-            _sc_grp=$(scenario_group "$sc")
-            if ! has_word "$_sc_grp" "$SEL_GROUPS"; then
-                ARGS="$ARGS --scenario $sc"
-            fi
+            ARGS="$ARGS --scenario $sc"
         done
         for tp in $SEL_PATHS; do
-            _tp_grp=$(test_file_group "$tp")
-            if ! has_word "$_tp_grp" "$SEL_GROUPS"; then
-                ARGS="$ARGS $tp"
-            fi
+            ARGS="$ARGS $tp"
         done
 
         printf '%s\n' "$ARGS" | sed 's/^ *//; s/ *$//'
@@ -454,16 +405,10 @@ case "$MODE" in
             ARGS="$ARGS --group $gr"
         done
         for sc in $SEL_SCENARIOS; do
-            _sc_grp=$(scenario_group "$sc")
-            if ! has_word "$_sc_grp" "$SEL_GROUPS"; then
-                ARGS="$ARGS --scenario $sc"
-            fi
+            ARGS="$ARGS --scenario $sc"
         done
         for tp in $SEL_PATHS; do
-            _tp_grp=$(test_file_group "$tp")
-            if ! has_word "$_tp_grp" "$SEL_GROUPS"; then
-                ARGS="$ARGS $tp"
-            fi
+            ARGS="$ARGS $tp"
         done
 
         eval "exec ./scripts/test.sh $ARGS"

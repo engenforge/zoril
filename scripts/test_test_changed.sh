@@ -13,6 +13,16 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 . scripts/lib/portability.sh
 
+if ! command -v git >/dev/null 2>&1; then
+    echo "[SKIP] test-changed: git is not installed"
+    exit 0
+fi
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "[SKIP] test-changed: not inside a git checkout"
+    exit 0
+fi
+
 tmp="$(mktemp -d)"
 
 cleanup() {

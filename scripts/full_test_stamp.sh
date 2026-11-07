@@ -109,20 +109,18 @@ case "${1:-}" in
         mkdir -p build
         _pending="${2:-${TR_WORK:-build/tests}/stamp.pending}"
         _total_line="${3:-}"
-        # If pending file does not exist, compute snapshot directly
+        # A snapshot must be recorded at run start; fail if none exists
         if [ ! -f "$_pending" ]; then
-            _pending="$STAMP.pending_direct"
-            sh "$0" snapshot "$_pending" || exit 0
+            echo "full_test_stamp: snapshot not found: $_pending" >&2
+            exit 1
         fi
-        if [ -f "$_pending" ]; then
-            {
-                cat "$_pending"
-                if [ -n "$_total_line" ]; then
-                    printf 'total:%s\n' "$_total_line"
-                fi
-            } > "$STAMP.tmp" && mv "$STAMP.tmp" "$STAMP"
-            rm -f "$_pending" "$_pending.tmp"
-        fi
+        {
+            cat "$_pending"
+            if [ -n "$_total_line" ]; then
+                printf 'total:%s\n' "$_total_line"
+            fi
+        } > "$STAMP.tmp" && mv "$STAMP.tmp" "$STAMP"
+        rm -f "$_pending" "$_pending.tmp"
         ;;
     check)
         [ -f "$STAMP" ] || { echo "no whole 'make test' has passed in this tree (no $STAMP): run make test" >&2; exit 1; }

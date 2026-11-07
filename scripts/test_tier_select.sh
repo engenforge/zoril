@@ -249,13 +249,21 @@ else
     fail "helper module and functional test union" "got '$helper_func_args', expected '$expected_hf'"
 fi
 
-# Case 14: foo_lib.zrl selects its group (language)
+# Case 14: foo_lib.zrl matches tests/functional/* row (not runnable as a single test)
 foo_lib_args=$(printf 'tests/functional/basic/foo_lib.zrl\n' | "$SELECTOR")
-expected_foo="--gate stage0c-functional --gate test-strength --group language"
+expected_foo="--gate stage0c-functional --gate test-strength"
 if [ "$foo_lib_args" = "$expected_foo" ]; then
-    pass "foo_lib.zrl selects language group"
+    pass "foo_lib.zrl selects functional gates without group copies"
 else
     fail "foo_lib.zrl group selection" "got '$foo_lib_args', expected '$expected_foo'"
+fi
+
+# Case 14b: Group and contained test path are both passed without group-copy filtering
+dup_args=$(printf 'stdlib/arena.zrl\ntests/functional/basic/bool.zrl\n' | "$SELECTOR")
+if echo "$dup_args" | grep -qw -- "--group language" && echo "$dup_args" | grep -qw "tests/functional/basic/bool.zrl"; then
+    pass "selector passes both group and individual test without dropping paths"
+else
+    fail "selector preserves paths alongside groups" "got '$dup_args'"
 fi
 
 # Case 15: doc/spec/* selects doc-snippets and md-links
