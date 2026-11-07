@@ -252,7 +252,7 @@ impl Driver {
             let p_decl: Decl = self.resolver.ast.decls[i];
             match p_decl {
                 Decl.Fn(f) => {
-                    if f.type_params.len == 0 as usize {
+                    if f.type_params.len == 0 as usize && !self.lowers_on_demand(&f) {
                         let func_id = self.mono.instantiate_function(
                             i as u32,
                             @slice(0 as *mut u32, 0 as usize)
@@ -275,6 +275,22 @@ impl Driver {
         if !self.compile_only && !self.had_error {
             self.check_uncalled_methods();
         }
+    }
+
+    // An imported stdlib function is lowered when lowered code first names it (a call or a function
+    // value resolves its `SymbolKind.Global` through `instantiate_function`), not up front: a
+    // program's verdict depends only on the stdlib bodies it reaches, which are still lowered and
+    // checked, and the unreached ones were most of a small program's compile time. The root
+    // module and every other import are lowered in full, so an error in a function nothing calls is
+    // still reported there; `--lower-all` lowers the stdlib in full too, which is how its own gate
+    // checks every body. A `-c` build reads its imports from interfaces and has no such bodies.
+    fn lowers_on_demand(self: &Driver, f: &FnDecl) -> bool {
+        return !self.lower_all
+            && !self.compile_only
+            && f.source_is_stdlib
+            && f.source_file != self.target_source_file
+            && f.body != 0 as ExprId
+            && !f.is_export;
     }
 
     // Checks every non-generic method body the program declares, whether or not anything calls it:
@@ -331,7 +347,9 @@ impl Driver {
             // default_of set) and is checked here like any other: it is a body of this program, and
             // whether it type-checks can depend on the impl's Self (a field it names).
             for m in imp.methods {
-                if m.type_params.len == 0 as usize && m.body != 0 as ExprId {
+                if m.type_params.len == 0 as usize
+                    && m.body != 0 as ExprId
+                    && !self.lowers_on_demand(m) {
                     self.mono.instantiate_method(m, no_args, type_name, m.name, &imp, base_ty);
                 }
             }

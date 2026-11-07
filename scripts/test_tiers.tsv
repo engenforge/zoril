@@ -97,6 +97,7 @@ scripts/check_store_grid.sh	scripts_check_store_grid	reborrow-probes portability
 scripts/check_store_grid_modular.sh	scripts_check_store_grid_modular	portability no-new-deps	-	-	-	cross-module-safety-matrix	-	script	modular store grid validator selects cross-module-safety-matrix
 scripts/check_stray_files.sh	scripts_check_stray_files	portability no-new-deps	-	-	-	stray-files-selftest	-	script	stray untracked file check selects stray-files-selftest
 scripts/check_temp_names.sh	scripts_check_temp_names	temp-names portability no-new-deps	-	-	-	-	-	script	temporary naming check selects temp-names gate
+scripts/check_stdlib_bodies.sh	scripts_check_stdlib_bodies	stdlib-bodies portability no-new-deps	-	-	-	-	-	script	stdlib full-lowering check selects stdlib-bodies gate
 scripts/check_test_strength.sh	scripts_check_test_strength	test-strength portability no-new-deps	-	-	-	-	-	script	test assertion strength check selects test-strength gate
 scripts/check_toolchain.sh	scripts_check_toolchain	toolchain portability no-new-deps	-	-	-	-	-	script	toolchain sanity check selects toolchain gate
 scripts/check_toolchain_offpath.sh	scripts_check_toolchain_offpath	toolchain-offpath portability no-new-deps	-	-	-	-	-	script	off-path toolchain validator selects toolchain-offpath gate

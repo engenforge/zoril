@@ -5,7 +5,7 @@
 .nh
 .ad l
 .\" Begin generated content:
-.TH "zoril" "1" "2026\-10\-30"
+.TH "zoril" "1" "2026\-11\-07"
 .PP
 .SH NAME
 .PP
@@ -97,6 +97,11 @@ Print the dependency import graph reachable from the input module.\&
 \fB\-\-emit\-zir\-stats\fR
 .RS 4
 Print a census of the ZIR constructs and CFG shape the input lowers to, one line per construct, and exit without emitting ZIL.\& Used by \fBscripts/check_route_coverage.\&sh\fR to check that the probes cited by a safety matrix row walk every route the row lists.\&
+.PP
+.RE
+\fB\-\-lower\-all\fR
+.RS 4
+Developer option.\& A whole\-program build lowers and checks a function of an imported standard\-library module only when the program reaches it; the input module and every other import are lowered in full.\& This option lowers the standard library'\&s functions in full too, as a build did before, so that a check sees every body.\& Used by \fBscripts/check_stdlib_bodies.\&sh\fR, which compiles each standard\-library module this way.\&
 .PP
 .RE
 \fB\-v\fR, \fB\-\-verbose\fR

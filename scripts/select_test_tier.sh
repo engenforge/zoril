@@ -31,7 +31,7 @@ TIERS_TABLE="${TEST_TIERS_TABLE:-scripts/test_tiers.tsv}"
 TIER_TEST_SH="${TIER_TEST_SH:-./scripts/test.sh}"
 MODE="args"
 
-ALL_GATES="fmt-check md-check no-new-deps binary-sizes no-warnings test-strength fuzz-record fuzz-fresh safety-matrix safety-matrix-zbuild safety-model safety-comments safety-figures comment-noise reborrow-probes exhaustive route-coverage temp-names unsafe-scan runtimes static-image perf-gate toolchain portability toolchain-offpath stage0c-fixed-bugs stage0c-unit stage0c-corpus stage0c-docs stage0c-error-locations stage0c-functional stage0c-minimal mutation-self-test"
+ALL_GATES="fmt-check md-check no-new-deps binary-sizes no-warnings test-strength fuzz-record fuzz-fresh safety-matrix safety-matrix-zbuild safety-model safety-comments safety-figures comment-noise reborrow-probes exhaustive route-coverage temp-names stdlib-bodies unsafe-scan runtimes static-image perf-gate toolchain portability toolchain-offpath stage0c-fixed-bugs stage0c-unit stage0c-corpus stage0c-docs stage0c-error-locations stage0c-functional stage0c-minimal mutation-self-test"
 if [ -x "scripts/test.sh" ]; then
     _detected_gates=$(./scripts/test.sh --list-gates 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')
     [ -n "$_detected_gates" ] && ALL_GATES="$_detected_gates"

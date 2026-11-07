@@ -216,7 +216,7 @@ group_alias() {
 # every line after it. The slowest is last for that reason - mutation-self-test builds four mutant
 # compilers (about a minute and a half), and it used to sit in the middle, freezing the count lines
 # of the twenty gates that had already finished.
-GATES_ALL="fmt-check md-check no-new-deps binary-sizes no-warnings test-strength fuzz-record fuzz-fresh safety-matrix safety-matrix-zbuild safety-model safety-comments safety-figures comment-noise reborrow-probes exhaustive route-coverage temp-names unsafe-scan runtimes static-image perf-gate toolchain portability toolchain-offpath stage0c-fixed-bugs stage0c-unit
+GATES_ALL="fmt-check md-check no-new-deps binary-sizes no-warnings test-strength fuzz-record fuzz-fresh safety-matrix safety-matrix-zbuild safety-model safety-comments safety-figures comment-noise reborrow-probes exhaustive route-coverage temp-names stdlib-bodies unsafe-scan runtimes static-image perf-gate toolchain portability toolchain-offpath stage0c-fixed-bugs stage0c-unit
            stage0c-corpus stage0c-docs stage0c-error-locations stage0c-functional stage0c-minimal mutation-self-test"
 
 gate_command() {
@@ -241,6 +241,7 @@ gate_command() {
         exhaustive)              echo "./scripts/check_exhaustive.sh --selftest && ./scripts/check_exhaustive.sh" ;;
         route-coverage)          echo ./scripts/check_route_coverage.sh ;;
         temp-names)              echo ./scripts/check_temp_names.sh ;;
+        stdlib-bodies)           echo ./scripts/check_stdlib_bodies.sh ;;
         unsafe-scan)             echo ./scripts/unsafe_scan.sh ;;
         runtimes)                echo ./scripts/check_runtimes.sh ;;
         static-image)            echo ./scripts/check_static_image_determinism.sh ;;

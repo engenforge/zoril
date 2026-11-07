@@ -63,6 +63,9 @@ The compiler accepts exactly one input file. Specifying more than one input file
 *--emit-zir-stats*
 	Print a census of the ZIR constructs and CFG shape the input lowers to, one line per construct, and exit without emitting ZIL. Used by *scripts/check_route_coverage.sh* to check that the probes cited by a safety matrix row walk every route the row lists.
 
+*--lower-all*
+	Developer option. A whole-program build lowers and checks a function of an imported standard-library module only when the program reaches it; the input module and every other import are lowered in full. This option lowers the standard library's functions in full too, as a build did before, so that a check sees every body. Used by *scripts/check_stdlib_bodies.sh*, which compiles each standard-library module this way.
+
 *-v*, *--verbose*
 	Report compilation progress, printing each phase, source file, and function as it is processed.
 

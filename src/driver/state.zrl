@@ -68,6 +68,9 @@ pub struct Driver {
     // compile does no counting.
     pub collect_zir_stats: bool,
     pub zir_stats: ZirStats,
+    // `zoril --lower-all`: lower an imported stdlib function even when nothing reaches it
+    // (Driver.lowers_on_demand).
+    pub lower_all: bool,
 }
 
 impl Driver {
@@ -202,6 +205,7 @@ impl Driver {
                 hosted: false,
                 collect_zir_stats: false,
                 zir_stats: ZirStats.new(),
+                lower_all: false,
             };
         }
         return l;
