@@ -126,7 +126,7 @@ group_scenarios() {
             ;;
         integration)
             echo incremental fuzz-jobs fuzz-mode-diff modular-mangling uncalled-method-emit runner-output readme-snippets doc-snippets getting-started struct-layout ffi-export ffi-callback zbuild-link module-names interface-attrs hosted platform-layer man-pages tool-versions md-links safety-comments-selftest no-new-deps-selftest comment-noise-selftest comment-census-selftest export-checks-selftest bench-contention bench-threshold-gate test-lock check-deps-selftest result-file scdoc-min stray-files-selftest
-            echo bench-step-failed zbuild-errors zbuild-diff user-paths qbe-arg-order qbe-fingerprint full-test-stamp deps-matrix-interrupt tier-select
+            echo bench-step-failed zbuild-errors zbuild-diff user-paths qbe-arg-order qbe-fingerprint deps-matrix-interrupt tier-select
             ;;
         git)
             echo clean-tree test-changed build-info preflight-selftest reject-diff-selftest fuzz-tools
@@ -194,7 +194,6 @@ scenario_run() {
         build-info)                 tr_run_scenario "$1" ./scripts/test_build_info.sh ;;
         qbe-arg-order)              tr_run_scenario "$1" ./scripts/test_qbe_arg_order.sh ;;
         qbe-fingerprint)            tr_run_scenario "$1" ./scripts/test_qbe_fingerprint.sh ;;
-        full-test-stamp)            tr_run_scenario "$1" ./scripts/test_full_test_stamp.sh ;;
         deps-matrix-interrupt)  tr_run_scenario "$1" ./scripts/test_dep_matrix.sh --selftest ;;
         zilc-errors)            tr_run_scenario "$1" ./scripts/test_zilc_errors.sh ;;
         tier-select)            tr_run_scenario "$1" ./scripts/test_tier_select.sh ;;
@@ -522,7 +521,6 @@ printf '%s\n' "$$" > "$TR_WORK/.lock"
 # work in progress from failing the run, and ignored paths (build/) never enter the comparison.
 stray_start="$TR_WORK/stray.start"
 ./scripts/check_stray_files.sh --record "$stray_start" 2>/dev/null || stray_start=""
-./scripts/full_test_stamp.sh snapshot "$TR_WORK/stamp.pending" 2>/dev/null || true
 
 if [ ! -f "$TR_RUNTIME" ]; then
     case "$TR_RUNTIME" in */*) mkdir -p "${TR_RUNTIME%/*}" ;; esac
@@ -823,11 +821,4 @@ fi
 secs=$(awk -v ms="$(( $(tr_now_ms) - ALL_START ))" 'BEGIN { printf "%.1f", ms / 1000 }')
 _tot_line="Total: $tot_run run, $tot_passed passed, $tot_failed failed, $tot_skipped skipped (${secs}s)"
 echo "$_tot_line"
-# A whole run (every gate and group, no filter) that passes leaves a stamp naming the tree it tested:
-# scripts/export_public_release.sh refuses to export a tree that has changed since (A0: an export was
-# made from a tree whose `make test` had not run after the last change).
-if [ $tot_failed -eq 0 ] && [ "${full_run:-0}" = 1 ] && [ -z "$paths" ] && [ -z "$TR_FILTER" ] \
-    && [ "$(echo $gates)" = "$(echo $GATES_ALL)" ] && [ -z "${TR_EXCLUDE:-}" ]; then
-    ./scripts/full_test_stamp.sh write "$TR_WORK/stamp.pending" "$_tot_line" 2> /dev/null || true
-fi
 [ $tot_failed -eq 0 ]

@@ -44,7 +44,6 @@ Before submitting changes, all contributions must pass rigorous verification sui
 - **Code Changes:** Any task modifying `src/`, `stdlib/`, or `tools/` must pass both `make test` and `make preflight-changed` once, after the last change to compiled code.
 - **Documentation or Task Only Changes:** If a passing whole test run has already run on the tree, a commit modifying only documentation or task files reruns only the doc tier (`make test-changed BASE=HEAD~1` or its gates).
 - **Smoke Tests:** While editing, run `make test-fast` for sub-second feedback on core functionality (`make test-fast` alone is never enough for a code change).
-- **Unchanged Tree Stamp:** On an unchanged tree (tree, compiler, and toolchain fingerprint unchanged since the last passing whole run), `make test` stops early and prints `make test: tree, compiler and toolchain fingerprint unchanged since earlier run (git:<sha>, <timestamp>); stopping (FORCE=1 to run)` followed by the earlier run's `Total:` summary line. Run `make test FORCE=1` to force a full rerun.
 
 ```sh
 # Fast smoke tests during development
@@ -59,10 +58,8 @@ make test-changed BASE=HEAD~1
 # Scoped tier against an arbitrary base commit
 make test-changed BASE=main
 
-# Full test suite (stops early if tree and compiler are unchanged)
+# Full test suite
 make test
-# Force full test suite run even if tree is unchanged
-make test FORCE=1
 
 # Fast pre-merge gate: 4-generation bootstrap fixpoint + mutation tests on changed files
 make preflight-changed

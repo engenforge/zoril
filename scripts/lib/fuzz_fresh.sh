@@ -54,7 +54,7 @@ fuzz_fingerprint_scope() {
 
 # fuzz_tree_code_hash REPO DIR -- SHA-256 of the directory's non-Markdown files, or
 # nothing (status 1) when the directory cannot be read.
-# Hashed stream: sorted path<TAB>sha256 lines (path relative to DIR), the same stream as full_test_stamp.sh.
+# Hashed stream: sorted path<TAB>sha256 lines (path relative to DIR).
 fuzz_tree_code_hash() {
     _repo=$1; _dir=$2
     [ -d "$_repo/$_dir" ] || return 1

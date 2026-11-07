@@ -259,8 +259,6 @@ FORCE:
 TSUITE ?= all
 ##var T Name of the test to run (for a single test run)
 T ?=
-##var FORCE Set to 1 to force full test run even on an unchanged tree
-FORCE ?=
 
 ##@ Gates
 selfhost-build-check: ## Gate: stage0-C builds stage1/, and stage1 builds src/
@@ -444,12 +442,7 @@ test-getting-started: $(TARGET) $(ZILC) $(RT_HOST) build/zbuild build/runtime_ho
 TEST_DEPS ?= $(if $(T),,$(TEST_GATE_DEPS)) $(TARGET) $(ZILC) build/zbuild
 test: $(TEST_DEPS) ## Run tests (TSUITE=all|..., T=<pattern> for verbose matching tests)
 	@./scripts/check_deps.sh test
-	@if [ "$(FORCE)" != "1" ] && [ -z "$(T)" ] && { [ -z "$(TSUITE)" ] || [ "$(TSUITE)" = "all" ]; } && \
-		./scripts/full_test_stamp.sh check 2>/dev/null; then \
-		exit 0; \
-	else \
-		TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) $(TEST_RUNNER) $(if $(T),--verbose --filter '$(T)' tests corpus,$(QUIET) --suite '$(TSUITE)'); \
-	fi
+	@TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) $(TEST_RUNNER) $(if $(T),--verbose --filter '$(T)' tests corpus,$(QUIET) --suite '$(TSUITE)')
 
 deps-matrix: $(TARGET) $(ZILC) build/zbuild ## Run the tool dependency matrix (optional, configurable, required tools)
 	@./scripts/test_dep_matrix.sh $(FILTER)

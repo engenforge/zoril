@@ -104,7 +104,6 @@ scripts/comment_census.sh	scripts_comment_census	comment-noise portability no-ne
 scripts/dist.sh	scripts_dist	portability no-new-deps	-	-	-	clean-tree user-paths	-	script	tarball packaging script selects user-paths scenario
 scripts/dist_user_paths.sh	scripts_dist_user_paths	portability no-new-deps	-	-	-	user-paths	-	script	distribution path check selects user-paths scenario
 scripts/env.sh	scripts_env	portability no-new-deps	-	-	-	clean-tree	-	script	environment setup helper selects clean-tree and portability
-scripts/full_test_stamp.sh	scripts_full_test_stamp	portability no-new-deps	-	-	-	full-test-stamp	-	script	test stamp management script selects full-test-stamp scenario
 scripts/fuzz_calibrate.sh	scripts_fuzz_calibrate	fuzz-record portability no-new-deps	-	-	-	-	-	script	fuzz calibrator selects fuzz-record gate
 scripts/fuzz_jobs.sh	scripts_fuzz_jobs	portability no-new-deps	-	-	-	fuzz-jobs	-	script	parallel fuzzing manager selects fuzz-jobs scenario
 scripts/fuzz_safe.sh	scripts_fuzz_safe	fuzz-record portability no-new-deps	-	-	-	-	-	script	safe corpus fuzzer selects fuzz-record gate
@@ -135,7 +134,6 @@ scripts/test_doc_snippets.sh	scripts_test_doc_snippets	portability no-new-deps	-
 scripts/test_export_checks.sh	scripts_test_export_checks	portability no-new-deps	-	-	-	export-checks-selftest	-	script	export checks test selects export-checks-selftest
 scripts/test_ffi_callback.sh	scripts_test_ffi_callback	portability no-new-deps	-	-	-	ffi-callback	-	script	ffi callback test selects ffi-callback scenario
 scripts/test_ffi_export.sh	scripts_test_ffi_export	portability no-new-deps	-	-	-	ffi-export	-	script	ffi export test selects ffi-export scenario
-scripts/test_full_test_stamp.sh	scripts_test_full_test_stamp	portability no-new-deps	-	-	-	full-test-stamp	-	script	full test stamp test selects full-test-stamp scenario
 scripts/test_fuzz_jobs.sh	scripts_test_fuzz_jobs	portability no-new-deps	-	-	-	fuzz-jobs	-	script	fuzz worker job test selects fuzz-jobs scenario
 scripts/test_fuzz_mode_diff.sh	scripts_test_fuzz_mode_diff	portability no-new-deps	-	-	-	fuzz-mode-diff	-	script	fuzz mode differential test selects fuzz-mode-diff scenario
 scripts/test_fuzz_tools.sh	scripts_test_fuzz_tools	portability no-new-deps	-	-	-	fuzz-tools	-	script	fuzz tooling test selects fuzz-tools scenario
