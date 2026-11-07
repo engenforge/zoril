@@ -1146,3 +1146,17 @@ date: 2026-11-03
         - **Z-0106 & Z-0124:** `mutation-self-test` takes 356 s wall on 4 CPUs and creates an 87.4 s tail of 3 idle cores (262.2 core-s). Scoping it to mutation harness changes reduces 4-CPU `make test` from 437.6 s to ~160–180 s (~60% reduction).
         - **Z-0114:** `reject-diff` takes 625 s, of which base build is only 9 s and program checks take 609 s. Caching base compiler binaries saves negligible time (9 s); caching program verdicts and removing stdlib imports targets the 609 s (97.4%) bulk.
     - **Checks:** `make test`: Total 3415 run, 3414 passed, 0 failed, 88 skipped (437.6 s wall). `make preflight-changed` (checker-changed scratch branch): Total 823 s wall, fixpoint PASS, mutations PASS, reject-diff PASS. `scripts/check_safety_model.sh`: PASS (78 rows proven, 0 GAP, no banned phrases).
+
+- [x] +testinfra +tests +AI-G Z-0126 T1e `test_preflight.sh` checks the default timings file without writing it
+    > **Created:** 2026-11-07 by the review of Z-0119.
+    > **Completed:** 2026-11-07 git:f80c167
+
+    - **Found (2026-11-07):** Z-0119's case 16 (git:17baac6) writes a sentinel into the real `build/preflight-timings.tsv` and restores the saved copy from its `EXIT` trap. `preflight-selftest` also runs inside a real preflight's `checked` step (`scripts/test_checked.sh` does not exclude it), so for the scenario's length the outer run's file holds the sentinel, and a scenario killed by `timeout -k` (no trap) leaves it there.
+    - **Do:** record the default file's state before case 1 (absent, or its `sha256` through the shared helper) and compare after case 15, writing nothing to it; drop the save-and-restore of the timings file that only the sentinel needed. Also settle the path argument Z-0119 added to `scripts/test_checked.sh` (git:17baac6), which no task asked for: with paths it prints no `[PASS]`/`[FAIL]` summary line and skips the safety matrix without saying so. Either document it in `doc/developer_guide.md` ("The Checked Build") and make it print its summary and a `[SKIP]` for the matrix, or remove it.
+    - **Checks:** remove the scratch `PREFLIGHT_TIMINGS` export and watch case 16 fail, both with the default file present and with it absent. Run `scripts/test_preflight.sh` while a stand-in outer file is in place and find it byte-identical afterwards. `make test`.
+    - **Implemented & Verified (git:f80c167):**
+        - In `scripts/test_preflight.sh`, recorded initial existence and `sha256_of` hash of `build/preflight-timings.tsv` before running cases, dropped the sentinel file write and trap restore, and verified in Case 16 that the file is not created if absent or remains byte-identical if present.
+        - Verified Case 16 failure: commenting out `export PREFLIGHT_TIMINGS` failed Case 16 with `nested runs created default preflight timings file` when absent, and failed with `nested runs modified default preflight timings file` when a stand-in file was present.
+        - Verified byte-identity: ran `scripts/test_preflight.sh` with a stand-in outer timings file and confirmed SHA-256 match before and after.
+        - In `scripts/test_checked.sh`, removed path-argument handling to return to its single-invocation contract while keeping `TR_WORK=build/tests-checked` isolation.
+        - Verified `make test`: Total 3415 run, 3415 passed, 0 failed, 88 skipped (239.8s). Portability, comment-noise, no-new-deps, and safety-model gates passed.
