@@ -14,7 +14,7 @@ Each tool belongs to the lowest role whose command needs it (`AGENTS.md`, Portab
 - **Contributor** (`make test-changed`, `make preflight-changed`, fuzzing, the documentation): the user's tools, plus git, Lua, scdoc, dprint, rustc and valgrind.
 - **Maintainer** (`make preflight`, `make dist`, a release): the contributor's tools, plus bsdtar.
 
-Today `make test` also needs `flock` and `mkfifo` for its parallel pool, `bash` for `scripts/check_md_links.sh`, `scripts/check_safety_model.sh` and the stage0-c suite scripts, and some of its items call git; all are being removed (the `tools/ztest` series ending with Z-0140, Z-0111 with Z-0144, and Z-0146 and Z-0147). The list below says what each tool is used for:
+Today `make test` also needs `flock` and `mkfifo` for its parallel pool, `bash` for `scripts/check_md_links.sh`, `scripts/check_safety_model.sh` and the stage0-c suite scripts, and in a checkout one of its items still calls git when it is there; all are being removed (the `tools/ztest` series ending with Z-0140, Z-0152, and Z-0146 and Z-0147). The list below says what each tool is used for:
 
 - **flock (`util-linux` or BusyBox):** Required for process synchronization in the parallel test runner.
 - **Lua (5.3 or 5.4):** Required for the generative fuzzer (`scripts/fuzz/gen.lua`) and benchmark generators.
@@ -126,7 +126,7 @@ The fuzzer generates programs from a grammar, compiles and runs them through the
 
 ```sh
 make fuzz-short       # 25 seeds x 4 programs, every oracle
-make fuzz-calibrate   # one program per known hole: each must still be refused (23 rows)
+make fuzz-calibrate   # one program per known hole: each row must stay in its fixed state (26 rows)
 ```
 
 **2. Your own session.** Foreground, all cores, output under `build/fuzz/<NAME>/`; nothing is filed and nothing is cited:
