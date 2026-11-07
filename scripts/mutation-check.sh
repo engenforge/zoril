@@ -239,6 +239,25 @@ case "$STAGE" in
 esac
 MUTATION_CACHE="${MUTATION_CACHE:-build/mutation_cache}"
 
+MUTATION_SUITE_PATHS=""
+if [ -n "${MUTATION_SUITE:-}" ]; then
+    if [ ! -e "$MUTATION_SUITE" ]; then
+        echo "$MUTATION_SUITE does not exist" >&2
+        exit 2
+    fi
+    while IFS= read -r _p || [ -n "$_p" ]; do
+        _p=$(printf '%s' "$_p" | sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//')
+        if [ -z "$_p" ]; then
+            continue
+        fi
+        if [ ! -e "$_p" ]; then
+            echo "$MUTATION_SUITE: $_p does not exist" >&2
+            exit 2
+        fi
+        MUTATION_SUITE_PATHS="${MUTATION_SUITE_PATHS}${MUTATION_SUITE_PATHS:+ }$_p"
+    done < "$MUTATION_SUITE"
+fi
+
 current_toolchain_stamp() {
     _commit=$(git rev-parse HEAD 2>/dev/null || ./scripts/version.sh 2>/dev/null || echo "no-commit")
     _hashes=""
@@ -382,8 +401,13 @@ suite_failures() {
     # Run per-file tests with --fail-fast and short per-test timeout.
     rm -f "$_work/results"
     _test_jobs="$MUTATION_TEST_JOBS"
-    TR_JOBS="$_test_jobs" TR_TIMEOUT="$MUTATION_TIMEOUT" ZORIL_CC="$_cc" ZORIL_STDLIB="$_stdlib" TR_WORK="$_work/tests" \
-        ./scripts/test.sh --quiet --fail-fast --results "$_work/results" tests corpus > "$_work/suite.log" 2>&1 || true
+    if [ -n "$MUTATION_SUITE_PATHS" ]; then
+        TR_JOBS="$_test_jobs" TR_TIMEOUT="$MUTATION_TIMEOUT" ZORIL_CC="$_cc" ZORIL_STDLIB="$_stdlib" TR_WORK="$_work/tests" \
+            ./scripts/test.sh --quiet --fail-fast --results "$_work/results" $MUTATION_SUITE_PATHS > "$_work/suite.log" 2>&1 || true
+    else
+        TR_JOBS="$_test_jobs" TR_TIMEOUT="$MUTATION_TIMEOUT" ZORIL_CC="$_cc" ZORIL_STDLIB="$_stdlib" TR_WORK="$_work/tests" \
+            ./scripts/test.sh --quiet --fail-fast --results "$_work/results" tests corpus > "$_work/suite.log" 2>&1 || true
+    fi
     _first_fail=$(awk -F'\t' '$1 == "FAIL" { print $2; exit }' "$_work/results" 2>/dev/null)
     if [ -n "$_first_fail" ]; then
         # Re-verify the single failing test in isolation to guard against transient fork/scheduler flakes.
@@ -591,6 +615,34 @@ fi
 if [ "$ONLY" = "--changed" ] && [ -n "$CHANGED_DESC" ]; then
     printf 'Targeting %d mutation(s) in files changed in %s.\n' "$selected" "$CHANGED_DESC"
 fi
+launched=0
+while IFS='@' read -r id _a file _b find _c repl _d desc; do
+    wanted "$id" "$file" || continue
+    build_mutant "$id" "$file" "$find" "$repl" &
+    launched=$((launched + 1))
+    [ $((launched % MUTATION_JOBS)) -eq 0 ] && wait
+done < "$STAGE/list"
+wait
+
+total_wanted=0
+total_built=0
+total_build_failed=0
+while IFS='@' read -r id _a file _b find _c repl _d desc; do
+    wanted "$id" "$file" || continue
+    total_wanted=$((total_wanted + 1))
+    st=$(cat "$STAGE/$id/status" 2>/dev/null || true)
+    if [ "$st" = "BUILT" ]; then
+        total_built=$((total_built + 1))
+    elif [ "$st" = "BUILD-FAILED" ]; then
+        total_build_failed=$((total_build_failed + 1))
+    fi
+done < "$STAGE/list"
+
+if [ "$total_wanted" -gt 0 ] && [ "$total_built" -eq 0 ] && [ "$total_build_failed" -gt 0 ]; then
+    printf '\nERROR: the mutation stage is stale or broken (every mutant failed to build).\n' >&2
+    exit 2
+fi
+
 # Baseline failing set, so a mutation is judged by what it ADDS.
 suite_failures "$GOOD" "$STAGE/baseline" ""
 baseline_fails=$(wc -l < "$STAGE/baseline/fails")
@@ -600,15 +652,6 @@ if [ "$baseline_fails" -gt 0 ]; then
     cat "$STAGE/baseline/fails"
     exit 1
 fi
-
-launched=0
-while IFS='@' read -r id _a file _b find _c repl _d desc; do
-    wanted "$id" "$file" || continue
-    build_mutant "$id" "$file" "$find" "$repl" &
-    launched=$((launched + 1))
-    [ $((launched % MUTATION_JOBS)) -eq 0 ] && wait
-done < "$STAGE/list"
-wait
 
 evaluate_mutant() {
     _id="$1"
@@ -630,25 +673,6 @@ evaluate_mutant() {
     fi
     printf '%s' "$_new" > "$_d/caught_by"
 }
-
-total_wanted=0
-total_built=0
-total_build_failed=0
-while IFS='@' read -r id _a file _b find _c repl _d desc; do
-    wanted "$id" "$file" || continue
-    total_wanted=$((total_wanted + 1))
-    st=$(cat "$STAGE/$id/status" 2>/dev/null || true)
-    if [ "$st" = "BUILT" ]; then
-        total_built=$((total_built + 1))
-    elif [ "$st" = "BUILD-FAILED" ]; then
-        total_build_failed=$((total_build_failed + 1))
-    fi
-done < "$STAGE/list"
-
-if [ "$total_wanted" -gt 0 ] && [ "$total_built" -eq 0 ] && [ "$total_build_failed" -gt 0 ]; then
-    printf '\nERROR: the mutation stage is stale or broken (every mutant failed to build).\n' >&2
-    exit 2
-fi
 
 eval_launched=0
 _eval_jobs="${MUTATION_EVAL_JOBS:-2}"

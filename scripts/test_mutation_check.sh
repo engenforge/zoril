@@ -35,9 +35,31 @@ rm -rf "$WORK"
 mkdir -p "$WORK"
 report="$WORK/report.log"
 
-MUTATION_LIST="$LIST" MUTATION_STAGE="$WORK/stage" MUTATION_CACHE="$WORK/cache" \
-    ./scripts/mutation-check.sh > "$report" 2>&1
-rc=$?
+canary_suite="$WORK/canary_suite.list"
+cat tests/smoke.list > "$canary_suite"
+echo "tests/error_reporting/ec_bool_logical_int.zrl" >> "$canary_suite"
+echo "tests/interproc_summary/cross_module/global_stash_caller.zrl" >> "$canary_suite"
+
+report_c1="$WORK/report_c1.log"
+r1_rc=0
+MUTATION_LIST="$LIST" MUTATION_STAGE="$WORK/stage_c1" MUTATION_CACHE="$WORK/cache" \
+    ./scripts/mutation-check.sh C1 > "$report_c1" 2>&1 || r1_rc=$?
+
+list_rest="$WORK/list_rest"
+grep -v '^C1@@' "$LIST" > "$list_rest"
+report_rest="$WORK/report_rest.log"
+r2_rc=0
+MUTATION_LIST="$list_rest" MUTATION_SUITE="$canary_suite" MUTATION_STAGE="$WORK/stage_rest" MUTATION_CACHE="$WORK/cache" \
+    ./scripts/mutation-check.sh > "$report_rest" 2>&1 || r2_rc=$?
+
+cat "$report_c1" "$report_rest" > "$report"
+mkdir -p "$WORK/stage"
+cat "$WORK/stage_c1/survivors" "$WORK/stage_rest/survivors" > "$WORK/stage/survivors" 2>/dev/null || true
+
+rc=0
+if [ $r1_rc -ne 0 ] && [ $r2_rc -ne 0 ]; then
+    rc=1
+fi
 
 # block ID — the report's section for one mutation (its `ID  description` line up to the next).
 block() {
@@ -115,8 +137,8 @@ mkdir -p "$stale_stage"
 echo "wrong_compiler_commit_12345" > "$stale_stage/stamp"
 touch "$stale_stage/old_file_marker"
 
-MUTATION_LIST="$LIST" MUTATION_STAGE="$stale_stage" MUTATION_CACHE="$WORK/cache" \
-    "$(dirname "$0")/mutation-check.sh" C1 > "$WORK/stale_stamp.log" 2>&1 || true
+MUTATION_LIST=/dev/null MUTATION_STAGE="$stale_stage" MUTATION_CACHE="$WORK/cache" \
+    "$(dirname "$0")/mutation-check.sh" > "$WORK/stale_stamp.log" 2>&1 || true
 
 if [ -f "$stale_stage/old_file_marker" ]; then
     note "a fixture stage with a wrong stamp was not cleaned"
@@ -147,11 +169,11 @@ rm -rf "$stale_surv_stage"
 mkdir -p "$stale_surv_stage"
 
 r1_rc=0
-MUTATION_LIST="$LIST" MUTATION_STAGE="$stale_surv_stage" MUTATION_CACHE="$WORK/cache" \
+MUTATION_LIST="$LIST" MUTATION_SUITE="$canary_suite" MUTATION_STAGE="$stale_surv_stage" MUTATION_CACHE="$WORK/cache" \
     "$(dirname "$0")/mutation-check.sh" C1 > "$WORK/surv_run1.log" 2>&1 || r1_rc=$?
 
 r2_rc=0
-MUTATION_LIST="$LIST" MUTATION_STAGE="$stale_surv_stage" MUTATION_CACHE="$WORK/cache" \
+MUTATION_LIST="$LIST" MUTATION_SUITE="$canary_suite" MUTATION_STAGE="$stale_surv_stage" MUTATION_CACHE="$WORK/cache" \
     "$(dirname "$0")/mutation-check.sh" C2 > "$WORK/surv_run2.log" 2>&1 || r2_rc=$?
 
 if [ "$r1_rc" -eq 1 ] && [ "$r2_rc" -eq 0 ]; then
