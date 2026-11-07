@@ -1653,3 +1653,52 @@ date: 2026-11-03
     - **Why:** every line the `safety-model` gate flagged in agents' own writing (the maintainer's agent transcripts, 201 matches) used "eliminate" or "prevent" in their ordinary sense: "eliminates ~7 minutes of idle wait per commit", "eliminating parallel stage0c build race", "eliminating the 31 ms stdlib import overhead", "stays to prevent child processes from inheriting the parent's file targets". No false alarm came from "memory-safe", "guarantees memory safety", "provably" or "no dangling pointers". The maintainer's global pre-commit hook runs only `tm validate` and the personal-information screen; the phrases are checked only by the gate.
     - **The maintainer (2026-11-07):** keep the four claim-shaped phrases; flag "prevent" and "eliminate" only in a sentence (split at `.`, `!`, `?`, `;`) that also names a memory-bug class: use-after-free, dangling, double free, leak, data race, overflow, out-of-bounds, an escaping address, an invalid pointer or reference, a memory error, bug or corruption.
     - **Completion:** `phrase_violations` in `scripts/check_safety_model.sh` changed so; the self-test gains two claims (`The borrow rule prevents a reference from dangling.`, `Ownership eliminates double frees and leaks.`) and five lines that must pass (the four transcript lines, and `This prevents a rebuild. A later step checks for overflow.`, where the verb and the class are in different sentences). With the old matcher put back in a scratch copy, the self-test fails: `[FAIL] phrases selftest: false positive: doc.md:11: Skipping compiled gates on doc-only commits eliminates ~7 minutes of idle wait per commit.`; with the new one: `[PASS] phrases selftest: 9 claims reported, 0 false positives` and `[PASS] no banned safety phrases across 50 exported Markdown documents`. The wording rules in `doc/SAFETY.md` §7 and `doc/developer_guide.md` say the same. `make test-changed BASE=HEAD`: `Total: 142 run, 142 passed, 0 failed, 0 skipped (15.7s)`.
+
+- [x] +testinfra +tests +AI-G Z-0156 T13a `mutation-self-test` runs the full suite once, for the no-op canary
+    > **Created:** 2026-11-07 by the review of Z-0124. **Depends:** Z-0124 (the measurement). **Before:** Z-0122. **Completed:** 2026-11-07 git:fea01ee
+
+    - **Why:** Z-0124 measured the gate at 360 s on 4 CPUs (`taskset -c 0-3 ./scripts/test_mutation_check.sh`): the baseline suite runs five times (175.5 s), the survivor canaries C1 and C4 run all 1,194 per-file tests (about 35 s each, every time C1 is used), and phases 3 to 5 (`scripts/test_mutation_check.sh`, stale stage, broken build, stale survivors) repeat that work to check the harness's mechanics.
+    - **Settled (the maintainer, 2026-11-07):** the gate exists because mutant compilers were once built in an environment that made a test outside the smoke list fail (`strict_name_errors.zrl`), so every mutant was reported caught and SURVIVED was unreachable. Only C1 surviving the **full** suite shows that no test in it fails in the mutant environment; that run stays. Everything else checks the harness's mechanics and runs on a small suite. Z-0124's Option 2 (every canary on the smoke list) is rejected because it drops that proof; its Option 1 (a build cache) is not taken, since it adds a store of results for about 18 s. So:
+      - `scripts/mutation-check.sh` reads `MUTATION_SUITE`: when set, a file of test paths, one per line, `#` comments and blank lines ignored, every path checked to exist (exit 2 naming it, as `--smoke` does in `scripts/test.sh`); `suite_failures` passes those paths to `./scripts/test.sh` in place of `tests corpus`. Unset, nothing changes: `make preflight`'s mutation run keeps the full suite. The secondary gates (`perf-gate`, `fmt-check`, `static-image`) run in both cases.
+      - `scripts/mutation-check.sh` builds the mutants before it runs the baseline, so a run where every mutant fails to build stops with `the mutation stage is stale or broken` without running the suite. Move the build loop and the all-failed check above `suite_failures "$GOOD" "$STAGE/baseline" ""`; change nothing else in either.
+      - `scripts/test_mutation_check.sh`: phase 1 becomes two runs in their own stages: C1 alone with the full suite, then C2, C4 and C5 with `MUTATION_SUITE` set to a file the script writes under `$WORK`: the lines of `tests/smoke.list` plus `tests/error_reporting/ec_bool_logical_int.zrl` and `tests/interproc_summary/cross_module/global_stash_caller.zrl`. Phase 3 (stale stage) runs with `MUTATION_LIST=/dev/null`. Phase 5 (stale survivors) runs both of its runs with that `MUTATION_SUITE`. Phases 2 and 4 keep their lists. Every `[PASS]` line the script prints stays word for word, and so does every condition it checks.
+    - **Checks:**
+      - C1: before the change, `taskset -c 0-3 ./scripts/test_mutation_check.sh`: its wall time (`time`) and every `[PASS]` line, quoted.
+      - C2: after the change, the same command: wall time and every `[PASS]` line, quoted; the `[PASS]` lines equal C1's (`diff` of the two sets prints nothing). The estimate is about 110 s on 4 CPUs (phase 1's C1 run about 76 s, the small-suite runs about 35 s together); quote the figure measured, whatever it is.
+      - C3: the founding check still sees its defect. In a scratch copy of `scripts/mutation-check.sh`, make the mutant build stage a copy of `stdlib/` and compile with `-I` pointing at it (the old defect: `strict_name_errors.zrl` pins the include root in a diagnostic path); run the self-test with that copy; quote the `[FAIL]` line that reports C1 not surviving. If that defect cannot be reproduced any more, instead make one test outside `tests/smoke.list` fail only for mutants (a scratch copy of `suite_failures` that adds a failing path when `_id` is set), and quote that `[FAIL]`. Remove the scratch copy.
+      - C4: `MUTATION_SUITE` naming a path that does not exist: exit 2 and the path named; quote it.
+      - C5: phase 4's broken-build run takes under 5 s; quote its time from the gate log or `time`.
+      - C6: `grep -n 'tests corpus' scripts/mutation-check.sh` still shows the full-suite call for an unset `MUTATION_SUITE`; `MUTATION_LIST=scripts/mutation_selftest.list MUTATION_STAGE=build/z156 MUTATION_CACHE=build/z156c ./scripts/mutation-check.sh C1` without `MUTATION_SUITE` runs the full suite for the baseline: quote the `Total:` line of `build/z156/baseline/suite.log` (about 1,194 run).
+      - C7: `scripts/check_portability.sh` passes; `make test` and `make preflight-changed`, each `Total:` line quoted.
+    - **Completion (2026-11-07):**
+      - C1: Before the change, `taskset -c 0-3 ./scripts/test_mutation_check.sh` took wall time 5m58.725s (user 7m27.496s, sys 5m29.946s); quoted lines:
+        `[PASS] a no-op mutation is reported SURVIVED (the verdict the 2026-10-09..12 defect lost)`
+        `[PASS] a changed diagnostic is reported caught by ec_bool_logical_int`
+        `[PASS] exactly the no-op canary survived (C1 C4 )`
+        `[PASS] a malformed list fails at once, naming the line`
+        `[PASS] the interface canary C5 is caught by the incremental scenario`
+        `[PASS] a fixture stage with a wrong stamp is rebuilt and restamped`
+        `[PASS] a run where every mutant fails to build stops with 'the mutation stage is stale or broken'`
+        `[PASS] a run following a surviving mutant passes without reporting stale survivors`
+      - C2: After the change, `taskset -c 0-3 ./scripts/test_mutation_check.sh` took wall time 1m58.630s (user 2m16.512s, sys 1m17.592s, 118.6 s wall time); quoted lines:
+        `[PASS] a no-op mutation is reported SURVIVED (the verdict the 2026-10-09..12 defect lost)`
+        `[PASS] a changed diagnostic is reported caught by ec_bool_logical_int`
+        `[PASS] exactly the no-op canary survived (C1 C4 )`
+        `[PASS] a malformed list fails at once, naming the line`
+        `[PASS] the interface canary C5 is caught by the incremental scenario`
+        `[PASS] a fixture stage with a wrong stamp is rebuilt and restamped`
+        `[PASS] a run where every mutant fails to build stops with 'the mutation stage is stale or broken'`
+        `[PASS] a run following a surviving mutant passes without reporting stale survivors`
+        `diff -u build/z156_pass_before.txt build/z156_pass_after.txt` printed nothing.
+      - C3: `strict_name_errors.zrl` no longer pins the include root in EXPECT, so the old include-root defect no longer reproduces; with a scratch copy of `scripts/mutation-check.sh` adding `strict_name_errors` to `$_work/fails` when `_id` is set, `scripts/test_mutation_check.sh` failed as expected:
+        `[FAIL] C1 (a comment-only edit, no behaviour change) was not reported SURVIVED (caught by: 'strict_name_errors'):`
+        Scratch copy removed.
+      - C4: Non-existent test in `MUTATION_SUITE`:
+        `/tmp/tmp.mRoeUtvgl1: tests/this_test_does_not_exist_at_all.zrl does not exist`, exit code 2.
+        Non-existent `MUTATION_SUITE` file: `nonexistent_suite_file.list does not exist`, exit code 2.
+      - C5: Phase 4 broken-build run timed at `real 0m0.227s` (`user 0m0.142s`, `sys 0m0.097s`) under `time`; gate log: `ERROR: the mutation stage is stale or broken (every mutant failed to build).`
+      - C6: `grep -n 'tests corpus' scripts/mutation-check.sh` shows `435:            ./scripts/test.sh --quiet --fail-fast --results "$_work/results" tests corpus > "$_work/suite.log" 2>&1 || true`. Without `MUTATION_SUITE`, baseline `build/z156/baseline/suite.log` Total line:
+        `Total: 1194 run, 1194 passed, 0 failed, 0 skipped (12.2s)`
+      - C7: `scripts/check_portability.sh` passed.
+        `make test`: `Total: 3400 run, 3400 passed, 0 failed, 88 skipped (130.7s)`
+        `make preflight-changed`: `Total: 1259 run, 1259 passed, 0 failed, 0 skipped (46.8s)`
