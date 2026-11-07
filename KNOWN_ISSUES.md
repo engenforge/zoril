@@ -4,9 +4,9 @@ This document records known limitations, bootstrap dialect boundaries, and open 
 
 ---
 
-## 1. Bootstrap Compiler (`stage0-C`) Known Issues
+## 1. Bootstrap Compilers (`stage0-C` and `stage1`) Known Issues
 
-`stage0-C` is a frozen C99 bootstrap compiler whose sole purpose is compiling the pinned `stage1` snapshot. It is modified only when a bug blocks the bootstrap process.
+`stage0-C` is a frozen C99 bootstrap compiler whose sole purpose is compiling the pinned `stage1` snapshot. It is modified only when a bug blocks the bootstrap process. `stage1` (`bootstrap/stage1/`, built as `build/zoril-stage1`) is that snapshot; on a fresh checkout it compiles `src/` and the stdlib modules `src/` imports, so those modules may use only what it handles (see the `stage1` issues below).
 
 ### Bug #14: Local variable named `ast` misresolves when importing `ast.zrl`
 
@@ -28,6 +28,19 @@ This document records known limitations, bootstrap dialect boundaries, and open 
 - No number-to-`char` conversion: `n as char` and `@int_cast<char>(n)` are both rejected with `type mismatch: expected type_27, found u32`, so no stdlib module it compiles can make a char from a number. `stdlib/unicode.zrl`, whose `char_from_u32` does (`unsafe { n as char }`), is therefore kept out of the modules `src/` and the stage0-C test suite import; the self-hosted compiler accepts the cast.
 
 These limits do not affect user code because user code is compiled by the self-hosted compiler (`build/zoril`), which supports the full language.
+
+### `stage1`: two modules with a private function of the same name are refused
+
+- **Symptom:** when two imported modules each define a private function with the same name, and each calls its own, `build/zoril-stage1` reports `cannot access private function: <name>` at the call in the second module. `build/zoril` accepts the program. Reproduction: modules `ma.zrl` and `mb.zrl`, each with a private `fn helper(x: i32) -> bool` and a `pub fn` that calls it, both imported by one `main` (`use ma::a_check; use mb::b_check;`); stage1 fails with `mb.zrl:2:41: error: cannot access private function: helper`.
+- **Impact:** none on user code or on today's bootstrap. It constrains the modules `src/` imports: no two of them may define a private function of the same name. `stdlib/proc.zrl` and `stdlib/fsys.zrl` each define a private `has_interior_nul`, so stage1 refuses any program importing both (`tools/zbuild/src/main.zrl` among them); `src/` does not import `proc.zrl`.
+- **Workaround:** give the private functions distinct names in any module that joins the `src/` closure (`build/zoril -I stdlib=stdlib -I build/gen --emit-deps src/main.zrl` lists it).
+- **Why not fixed:** `stage1` changes only by a re-pin or a recorded backport (`doc/bootstrap/two_stage.md` §3), which is the maintainer's decision. Tracked in task Z-0135.
+
+### `stage1`: some stdlib paths are built into programs that crash
+
+- **Symptom:** built by `build/zoril-stage1` and `build/zilc-stage1` (the pipeline `build/zilc-boot` uses), `tests/stdlib/test_stdlib_fd.zrl` and `tests/stdlib/test_stdlib_io_result.zrl` compile without a diagnostic and then crash with a segmentation fault: in `zoril_allocator_alloc` (`stdlib/mem_raw.zrl`), called from `test_pipe_large_buffer`, and in `arena_free` (`stdlib/mem_raw.zrl`), called from `Arena::drop` (`stdlib/mem.zrl`) in `test_command_redirect_stdout`. Built by `build/zoril` through the same steps, both exit 0. The cause is not yet known.
+- **Impact:** none on user code, which `build/zoril` compiles. `mem.zrl` and `mem_raw.zrl` are among the modules `src/` imports, so an edit to `src/` that starts reaching such a path would get a compiler built wrongly on a fresh checkout, seen only if the self-hosting fixpoint differs.
+- **Why not fixed:** the cause is under investigation in task Z-0135; a fix to `stage1` itself is a re-pin or a recorded backport, the maintainer's decision.
 
 ---
 
