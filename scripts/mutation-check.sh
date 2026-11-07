@@ -269,15 +269,39 @@ printf '%s\n' "$CUR_STAMP" > "$STAGE/stamp"
 GOOD="$STAGE/zoril-good"
 cp build/zoril "$GOOD"
 
+_ncpus=$(nproc_count 2>/dev/null || echo 1)
+[ "${_ncpus:-0}" -lt 1 ] && _ncpus=1
+
+# Each mutant build is a whole self-compile (~0.7 GB peak): started all at once, 74 of them
+# exhausted a 32 GB machine. Build in batches of MUTATION_JOBS, by default one per CPU and
+# per GB of available memory.
+if [ -z "${MUTATION_JOBS:-}" ]; then
+    if [ -f /proc/meminfo ]; then
+        avail_gb=$(awk '/MemAvailable/ { print int($2 / 1048576) }' /proc/meminfo)
+    else
+        avail_gb=""
+    fi
+    MUTATION_JOBS="$_ncpus"
+    if [ -n "$avail_gb" ] && [ "${avail_gb:-0}" -lt "$MUTATION_JOBS" ]; then
+        MUTATION_JOBS=$avail_gb
+    fi
+    [ "$MUTATION_JOBS" -lt 1 ] && MUTATION_JOBS=1
+fi
+
+_eval_jobs="${MUTATION_EVAL_JOBS:-2}"
+if [ "$_eval_jobs" -gt "$MUTATION_JOBS" ]; then
+    _eval_jobs="$MUTATION_JOBS"
+fi
+[ "$_eval_jobs" -lt 1 ] && _eval_jobs=1
+
 MUTATION_TIMEOUT="${MUTATION_TIMEOUT:-20}"
 if [ -z "${MUTATION_TEST_JOBS:-}" ]; then
-    _ncpus=$(nproc_count 2>/dev/null || echo 1)
-    [ "${_ncpus:-0}" -lt 1 ] && _ncpus=1
-    if [ "$_ncpus" -lt 6 ]; then
-        MUTATION_TEST_JOBS="$_ncpus"
-    else
-        MUTATION_TEST_JOBS=6
+    _test_jobs=$(( _ncpus / _eval_jobs ))
+    [ "$_test_jobs" -lt 1 ] && _test_jobs=1
+    if [ "$_test_jobs" -gt 6 ]; then
+        _test_jobs=6
     fi
+    MUTATION_TEST_JOBS="$_test_jobs"
 fi
 
 # suite_failures COMPILER WORKDIR [MUTANT_ID] — find the first failing test of the mutant.
@@ -563,21 +587,6 @@ if [ "$selected" -eq 0 ]; then
 fi
 if [ "$ONLY" = "--changed" ] && [ -n "$CHANGED_DESC" ]; then
     printf 'Targeting %d mutation(s) in files changed in %s.\n' "$selected" "$CHANGED_DESC"
-fi
-# Each mutant build is a whole self-compile (~0.7 GB peak): started all at once, 74 of them
-# exhausted a 32 GB machine. Build in batches of MUTATION_JOBS, by default one per CPU and
-# per GB of available memory.
-if [ -z "$MUTATION_JOBS" ]; then
-    if [ -f /proc/meminfo ]; then
-        avail_gb=$(awk '/MemAvailable/ { print int($2 / 1048576) }' /proc/meminfo)
-    else
-        avail_gb=""
-    fi
-    MUTATION_JOBS=$(nproc_count)
-    if [ -n "$avail_gb" ] && [ "${avail_gb:-0}" -lt "$MUTATION_JOBS" ]; then
-        MUTATION_JOBS=$avail_gb
-    fi
-    [ "$MUTATION_JOBS" -lt 1 ] && MUTATION_JOBS=1
 fi
 # Baseline failing set, so a mutation is judged by what it ADDS.
 suite_failures "$GOOD" "$STAGE/baseline" ""

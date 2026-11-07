@@ -39,14 +39,25 @@ if [ "$np" -lt 1 ]; then
     fail "portability-lib: nproc_count returned $np < 1"
 fi
 
-# Test nproc_count honours affinity mask under taskset (Z-0127)
+# Test nproc_count honours affinity mask under taskset (Z-0127, Z-0128)
 if command -v taskset >/dev/null 2>&1; then
-    np_taskset=$(taskset -c 0 sh -c ". \"$PORTABILITY_LIB\"; nproc_count" 2>/dev/null) || np_taskset=""
-    if [ "$np_taskset" != "1" ]; then
-        fail "portability-lib: nproc_count under taskset -c 0 returned '$np_taskset' (expected 1)"
+    first_cpu=$(taskset -c -p $$ 2>/dev/null | sed -n 's/.*affinity list: *\([0-9][0-9]*\).*/\1/p')
+    if [ -n "$first_cpu" ]; then
+        np_taskset=$(taskset -c "$first_cpu" sh -c ". \"$PORTABILITY_LIB\"; nproc_count" 2>/dev/null) || np_taskset=""
+        if [ "$np_taskset" != "1" ]; then
+            fail "portability-lib: nproc_count under taskset -c $first_cpu returned '$np_taskset' (expected 1)"
+        fi
+    else
+        echo "[SKIP] portability-lib: taskset affinity test could not determine current CPU mask"
     fi
 else
     echo "[SKIP] portability-lib: taskset affinity test needs taskset (Linux)"
+fi
+
+# Test nproc_count ignores OMP_NUM_THREADS and OMP_THREAD_LIMIT (Z-0128)
+np_omp=$(OMP_NUM_THREADS=1 sh -c ". \"$PORTABILITY_LIB\"; nproc_count")
+if [ "$np_omp" != "$np" ]; then
+    fail "portability-lib: OMP_NUM_THREADS=1 changed nproc_count from $np to $np_omp"
 fi
 
 # Test sha256_of and sha256_check

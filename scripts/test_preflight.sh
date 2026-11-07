@@ -14,7 +14,7 @@
 #   14. preflight-changed refuses to start without a base, and hands the base it chose to mutation-check.
 #   15. The rejection differential still runs when the seed compiler refuses the base source: the scratch
 #       tree's compiler is built through stage1 instead (a stand-in make plays both builds).
-#   16. Nested runs do not touch the default preflight timings file.
+#   16. Nested runs do not touch default preflight timings or log files.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 . scripts/lib/portability.sh
@@ -130,26 +130,19 @@ status=0
 fail() { echo "[FAIL] preflight-selftest: $1" >&2; status=1; }
 pass() { echo "[PASS] preflight-selftest: $1"; }
 
-# Preserve existing preflight log if present
-saved_log=""
-if [ -f build/preflight-selfhost.log ]; then
-    saved_log="$(mktemp)"
-    cp build/preflight-selfhost.log "$saved_log"
-fi
-restore_log() {
-    if [ -n "$saved_log" ] && [ -f "$saved_log" ]; then
-        cp "$saved_log" build/preflight-selfhost.log
-        rm -f "$saved_log"
-    fi
-}
-trap 'cleanup; restore_log' EXIT INT TERM
-
-# Record default timings file state before cases run (Z-0126)
+# Record default timings and log file state before cases run (Z-0126, Z-0128)
 timings_existed_before=0
 timings_hash_before=""
 if [ -f build/preflight-timings.tsv ]; then
     timings_existed_before=1
     timings_hash_before=$(sha256_of build/preflight-timings.tsv 2>/dev/null | awk '{print $1}')
+fi
+
+log_existed_before=0
+log_hash_before=""
+if [ -f build/preflight-selfhost.log ]; then
+    log_existed_before=1
+    log_hash_before=$(sha256_of build/preflight-selfhost.log 2>/dev/null | awk '{print $1}')
 fi
 
 # Case 1: selfhost failure
@@ -506,7 +499,7 @@ else
     echo "[SKIP] preflight-selftest: case 15 needs build/zoril, build/zilc and build/runtime.o (run make)"
 fi
 
-# Case 16: nested runs do not touch the default timings file (Z-0119, Z-0126)
+# Case 16: nested runs do not touch default timings or log files (Z-0119, Z-0126, Z-0128)
 if [ "$timings_existed_before" -eq 1 ]; then
     if [ -f build/preflight-timings.tsv ]; then
         timings_hash_after=$(sha256_of build/preflight-timings.tsv 2>/dev/null | awk '{print $1}')
@@ -523,6 +516,25 @@ else
         pass "nested runs do not create default preflight timings file"
     else
         fail "nested runs created default preflight timings file (got: $(cat build/preflight-timings.tsv 2>/dev/null))"
+    fi
+fi
+
+if [ "$log_existed_before" -eq 1 ]; then
+    if [ -f build/preflight-selfhost.log ]; then
+        log_hash_after=$(sha256_of build/preflight-selfhost.log 2>/dev/null | awk '{print $1}')
+        if [ "$log_hash_after" = "$log_hash_before" ]; then
+            pass "nested runs do not touch default preflight log file (content unchanged)"
+        else
+            fail "nested runs modified default preflight log file (hash changed from $log_hash_before to $log_hash_after)"
+        fi
+    else
+        fail "nested runs deleted default preflight log file"
+    fi
+else
+    if [ ! -e build/preflight-selfhost.log ]; then
+        pass "nested runs do not create default preflight log file"
+    else
+        fail "nested runs created default preflight log file (got: $(cat build/preflight-selfhost.log 2>/dev/null))"
     fi
 fi
 
