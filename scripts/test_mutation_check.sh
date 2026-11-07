@@ -86,7 +86,7 @@ fi
 # silently, so `preflight-changed` passed while the full gate went red.
 bad="$WORK/bad.list"
 { echo "M9001@@src/main.zrl@@a@@b@@reason"; echo; echo "  orphaned continuation line"; } > "$bad"
-if MUTATION_LIST="$bad" MUTATION_STAGE="$WORK/badstage" MUTATION_CACHE="$WORK/badcache" \
+if MUTATION_LIST="$bad" MUTATION_STAGE="$WORK/badstage" MUTATION_CACHE="$WORK/badcache" MUTATION_CHANGED="src/main.zrl" \
    "$(dirname "$0")/mutation-check.sh" --changed > "$WORK/bad.log" 2>&1; then
     note "a malformed list was accepted in --changed mode"
 elif grep -q 'list line 3' "$WORK/bad.log"; then

@@ -27,14 +27,9 @@ pass() { echo "[PASS] $1"; }
 
 LOCKED="another test run is using"
 
-# The workload is 26 per-file tests plus the runner's own "stray-files" item, which needs git; a tree
-# without git (an optional tool) reports that item as [SKIP], so the whole suite is one item fewer.
+# The workload is 26 per-file tests plus the runner's own "stray-files" item.
 whole_suite() { # whole_suite LOG
-    if git_checkout_usable .; then
-        grep -q '^Total: 27 run, 27 passed' "$1"
-    else
-        grep -q '^Total: 26 run, 26 passed, 0 failed, 1 skipped' "$1"
-    fi
+    grep -q '^Total: 27 run, 27 passed' "$1"
 }
 
 # Wait for a background run to take the lock (it writes its pid there), up to ~10s.

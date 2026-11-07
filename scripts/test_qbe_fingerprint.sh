@@ -38,12 +38,9 @@ cp scripts/qbe_fingerprint.sh "$t/bare/scripts/"; cp scripts/lib/portability.sh 
 out=$(sh "$t/bare/scripts/qbe_fingerprint.sh" "$t/qbe_a") && fail "a tree with no fixtures exited 0"
 case "$out" in "qbe_fingerprint: unknown (no fixtures"*) ;; *) fail "no reason for missing fixtures: $out" ;; esac
 
-# The fixtures are in git, not only on disk: *.ssa is ignored elsewhere, and an ignored fixture is missing
-# from every clone while this test still passes here.
-if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    for f in scripts/qbe_probe/*.ssa; do
-        if git check-ignore --no-index -q "$f"; then fail "$f is matched by a .gitignore rule, so a fresh clone or an export lacks it"; fi
-    done
+# The fixtures are tracked in the repository and exempt from the *.ssa ignore rule.
+if [ -f .gitignore ]; then
+    grep -q '!scripts/qbe_probe/\*\.ssa' .gitignore || fail "scripts/qbe_probe/*.ssa is not exempted in .gitignore"
 fi
 
 # Every row of the pins table is a 64-digit fingerprint and a name.

@@ -68,6 +68,7 @@ done
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
 . "$SELF_DIR/lib/portability.sh"
 . "$SELF_DIR/lib/fuzz_fresh.sh"
+. "$SELF_DIR/lib/tree_files.sh"
 SCOPE=$(fuzz_fingerprint_scope | tr '\n' ' ')
 
 current_fingerprint() {   # prints "src=<h> stdlib=<h> tools/zilc=<h> tools/zbuild=<h> rt=<h>", or nothing outside a git repo
@@ -111,9 +112,9 @@ with_commas() {
     }'
 }
 
-# Every tracked Markdown page except the record itself and the task records that quote runs by date.
+# Every Markdown page except the record itself and the task records that quote runs by date.
 pages() {
-    git -C "$REPO" ls-files '*.md' 2>/dev/null | grep -v '^doc/tasks/' | grep -v '^bench/fuzz/README\.md$'
+    tree_files "$REPO" | grep '\.md$' | grep -v '^doc/tasks/' | grep -v '^bench/fuzz/README\.md$'
 }
 
 # ── the selftest: the three shapes this gate has to tell apart ────────────────────────────────────────
@@ -244,17 +245,15 @@ if [ "${SELFTEST:-0}" = 1 ]; then
 fi
 
 # ── the gate ──────────────────────────────────────────────────────────────────────────────────────────
-if ! command -v git >/dev/null 2>&1 || ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
-    echo "[SKIP] fuzz-fresh: git is not available here, so the record's fingerprint cannot be compared"
-    exit 0
-fi
 # A directory inside some *other* repository would answer every question about that repository, not about
 # this tree: a not-yet-initialised export directory is exactly that, and it once made this gate report
 # "0 page(s)" and a fingerprint it had not read. Require $REPO to be the root of its own repository.
-top=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$top" ] || [ "$(cd "$top" && pwd -P)" != "$(cd "$REPO" && pwd -P)" ]; then
-    echo "[SKIP] fuzz-fresh: $REPO is not the root of its own git repository, so its compiler sources cannot be read unambiguously"
-    exit 0
+if command -v git >/dev/null 2>&1 && git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    top=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)
+    if [ -z "$top" ] || [ "$(cd "$top" && pwd -P)" != "$(cd "$REPO" && pwd -P)" ]; then
+        echo "[SKIP] fuzz-fresh: $REPO is not the root of its own git repository, so its compiler sources cannot be read unambiguously"
+        exit 0
+    fi
 fi
 if [ ! -f "$RECORD" ]; then
     echo "[FAIL] fuzz-fresh: $RECORD does not exist, so the release-bar record cannot be checked"
@@ -288,7 +287,7 @@ for d in $SCOPE; do
 done
 stale=${stale%; }
 
-head=$(git -C "$REPO" rev-parse --short=8 HEAD 2>/dev/null || echo unknown)
+head=$(git -C "$REPO" rev-parse --short=8 HEAD 2>/dev/null || echo tarball)
 if [ -z "$stale" ]; then
     echo "[PASS] fuzz-fresh: the $ENTRY record's fingerprint matches the code of src, stdlib, tools/zilc, tools/zbuild and rt at $head"
 else

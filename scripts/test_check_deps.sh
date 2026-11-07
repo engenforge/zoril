@@ -276,14 +276,8 @@ fi
 # -----------------------------------------------------------------------------
 scratch="$tmp/scratch"
 mkdir -p "$scratch"
-if git_checkout_usable .; then
-    git archive HEAD | tar -x -C "$scratch"
-else
-    tar --exclude="./build*" --exclude="build" --exclude="./.git*" --exclude=".git" --exclude="./scratch*" \
-        --exclude="./.agx*" --exclude="./.aiauto*" --exclude="./.agent-data*" \
-        --exclude="./.claude*" --exclude="./.antigravity*" --exclude="./.reasonix*" \
-        -cf - . | (cd "$scratch" && tar -xf -)
-fi
+tar --exclude="./build*" --exclude="build" --exclude="./.git*" --exclude=".git" \
+    -cf - . | (cd "$scratch" && tar -xf -)
 cp Makefile config.mk scripts/check_deps.sh scripts/test.sh scripts/preflight.sh "$scratch/" 2>/dev/null || true
 cp scripts/check_deps.sh "$scratch/scripts/"
 cp scripts/test.sh "$scratch/scripts/"

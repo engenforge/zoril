@@ -193,6 +193,43 @@ else
     fail "expected background selfhost to complete before report (rc=$rc, out=$out)"
 fi
 
+cat << 'EOS' > "$tmp/stub_fail_git.sh"
+#!/bin/sh
+exit 1
+EOS
+chmod +x "$tmp/stub_fail_git.sh"
+
+cat << 'EOS' > "$tmp/stub_track_bench.sh"
+#!/bin/sh
+echo "bench" >> "$PREFLIGHT_TEST_TRACE"
+exit 0
+EOS
+chmod +x "$tmp/stub_track_bench.sh"
+
+# Case 5b: git failure in full mode aborts and suppresses bench, density, fuzz
+rc=0
+trace_file="$tmp/trace_case5b.log"
+out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
+      PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+      PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+      PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
+      PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
+      PREFLIGHT_GIT="$tmp/stub_fail_git.sh" \
+      PREFLIGHT_BENCH="$tmp/stub_track_bench.sh" \
+      PREFLIGHT_DENSITY="$tmp/stub_track_density.sh" \
+      PREFLIGHT_FUZZ="$tmp/stub_track_fuzz.sh" \
+      PREFLIGHT_TEST_TRACE="$trace_file" \
+      ./scripts/preflight.sh 2>&1) || rc=$?
+if [ $rc -ne 0 ]; then
+    if [ ! -f "$trace_file" ]; then
+        pass "git failure in full mode aborts with non-zero exit and suppresses bench/density/fuzz"
+    else
+        fail "git failure in full mode executed subsequent steps: $(cat "$trace_file")"
+    fi
+else
+    fail "expected non-zero exit on git failure in full mode (rc=$rc, out=$out)"
+fi
+
 # Case 6: bench failure in full mode aborts and suppresses density and fuzz
 rc=0
 trace_file="$tmp/trace_case6.log"
@@ -201,6 +238,7 @@ out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
       PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
       PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
       PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
+      PREFLIGHT_GIT="$tmp/stub_pass.sh" \
       PREFLIGHT_BENCH="$tmp/stub_fail_bench.sh" \
       PREFLIGHT_DENSITY="$tmp/stub_track_density.sh" \
       PREFLIGHT_FUZZ="$tmp/stub_track_fuzz.sh" \
@@ -240,6 +278,7 @@ out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
       PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
       PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
       PREFLIGHT_BENCH="$tmp/stub_pass.sh" \
+      PREFLIGHT_GIT="$tmp/stub_pass.sh" \
       PREFLIGHT_STORE_GRID="$tmp/stub_pass.sh" \
       PREFLIGHT_DENSITY="$tmp/stub_fail_density.sh" \
       PREFLIGHT_FUZZ="$tmp/stub_track_fuzz.sh" \
@@ -263,6 +302,7 @@ out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
       PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
       PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
       PREFLIGHT_BENCH="$tmp/stub_pass.sh" \
+      PREFLIGHT_GIT="$tmp/stub_pass.sh" \
       PREFLIGHT_STORE_GRID="$tmp/stub_pass.sh" \
       PREFLIGHT_DENSITY="$tmp/stub_pass.sh" \
       PREFLIGHT_FUZZ="$tmp/stub_fail_fuzz.sh" \
@@ -282,6 +322,7 @@ out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
       PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
       PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
       PREFLIGHT_BENCH="$tmp/stub_pass.sh" \
+      PREFLIGHT_GIT="$tmp/stub_pass.sh" \
       PREFLIGHT_STORE_GRID="$tmp/stub_pass.sh" \
       PREFLIGHT_DENSITY="$tmp/stub_pass.sh" \
       PREFLIGHT_FUZZ="$tmp/stub_pass.sh" \
@@ -289,11 +330,11 @@ out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
       ./scripts/preflight.sh 2>&1) || rc=$?
 if [ $rc -eq 0 ] && [ -s "$pf_timings" ]; then
     missing_steps=""
-    for step in selfhost mutation calibrate reject-diff checked bench store-grid density fuzz; do
+    for step in selfhost mutation calibrate reject-diff checked git bench store-grid density fuzz; do
         grep -Eq "^[0-9]+	$step$" "$pf_timings" || missing_steps="$missing_steps $step"
     done
     if [ -z "$missing_steps" ]; then
-        pass "preflight records timings for all 9 steps"
+        pass "preflight records timings for all 10 steps"
     else
         fail "preflight timings missing steps:$missing_steps (got: $(cat "$pf_timings"))"
     fi

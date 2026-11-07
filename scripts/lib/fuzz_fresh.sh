@@ -54,10 +54,22 @@ fuzz_fingerprint_scope() {
 # fuzz_tree_code_hash REPO REV DIR -- SHA-256 of the directory's tracked non-Markdown blobs, or
 # nothing (status 1) when the tree cannot be read.
 fuzz_tree_code_hash() {
-    _repo=$1; _rev=$2; _dir=$3
+    _repo=$1; _rev=${2:-HEAD}; _dir=$3
     _tmp=$(mktemp "${TMPDIR:-/tmp}/fuzz-code-hash.XXXXXX") || return 1
-    if ! git -C "$_repo" ls-tree -r "$_rev" -- "$_dir" 2>/dev/null | grep -v '\.md$' > "$_tmp"; then
-        rm -f "$_tmp"; return 1
+    if command -v git >/dev/null 2>&1 && git -C "$_repo" rev-parse --git-dir >/dev/null 2>&1; then
+        git -C "$_repo" ls-tree -r "$_rev" -- "$_dir" 2>/dev/null | grep -v '\.md$' > "$_tmp" || true
+    fi
+    if [ ! -s "$_tmp" ] && [ -d "$_repo/$_dir" ]; then
+        (
+            cd "$_repo/$_dir" || exit 1
+            find . \( -name build -o -name '.?*' \) -type d -prune -o -type f -print \
+                | sed 's|^\./||' \
+                | grep -v '\.md$' \
+                | LC_ALL=C sort \
+                | while IFS= read -r _f || [ -n "$_f" ]; do
+                    [ -f "$_f" ] && sha256_of "$_f"
+                done
+        ) > "$_tmp" 2>/dev/null || true
     fi
     if [ ! -s "$_tmp" ]; then rm -f "$_tmp"; return 1; fi
     _sum=$(sha256_of "$_tmp" 2>/dev/null) || { rm -f "$_tmp"; return 1; }

@@ -90,6 +90,7 @@ group_title() {
         stdlib)      echo "Stdlib" ;;
         diagnostics) echo "Diagnostics" ;;
         integration) echo "Integration" ;;
+        git)         echo "Git & Contributor Tools" ;;
     esac
 }
 
@@ -108,6 +109,7 @@ group_paths() {
         stdlib)      echo tests/stdlib tests/functional/stdlib ;;
         diagnostics) echo tests/error_reporting ;;
         integration) echo tests/integration tests/regressions tests/bootstrap corpus ;;
+        git)         echo "" ;;
     esac
 }
 
@@ -123,15 +125,18 @@ group_scenarios() {
             echo sha256-differential
             ;;
         integration)
-            echo incremental fuzz-jobs fuzz-mode-diff fuzz-tools modular-mangling uncalled-method-emit runner-output readme-snippets doc-snippets getting-started struct-layout ffi-export ffi-callback zbuild-link module-names interface-attrs hosted platform-layer man-pages tool-versions md-links safety-comments-selftest no-new-deps-selftest comment-noise-selftest comment-census-selftest export-checks-selftest bench-contention bench-threshold-gate test-lock preflight-selftest check-deps-selftest result-file scdoc-min stray-files-selftest
-            echo bench-step-failed reject-diff-selftest zbuild-errors zbuild-diff user-paths build-info qbe-arg-order qbe-fingerprint full-test-stamp deps-matrix-interrupt tier-select test-changed
+            echo incremental fuzz-jobs fuzz-mode-diff modular-mangling uncalled-method-emit runner-output readme-snippets doc-snippets getting-started struct-layout ffi-export ffi-callback zbuild-link module-names interface-attrs hosted platform-layer man-pages tool-versions md-links safety-comments-selftest no-new-deps-selftest comment-noise-selftest comment-census-selftest export-checks-selftest bench-contention bench-threshold-gate test-lock check-deps-selftest result-file scdoc-min stray-files-selftest
+            echo bench-step-failed zbuild-errors zbuild-diff user-paths qbe-arg-order qbe-fingerprint full-test-stamp deps-matrix-interrupt tier-select
+            ;;
+        git)
+            echo clean-tree test-changed build-info preflight-selftest reject-diff-selftest fuzz-tools
             ;;
         diagnostics) echo zilc-errors ;;
     esac
 }
 
 scenario_group() {
-    for _g in $GROUPS_ALL; do
+    for _g in $GROUPS_ALL git; do
         for _s in $(group_scenarios "$_g"); do
             if [ "$_s" = "$1" ]; then
                 echo "$_g"
@@ -144,6 +149,7 @@ scenario_group() {
 
 scenario_run() {
     case "$1" in
+        clean-tree)                 tr_run_scenario "$1" ./scripts/check_clean_tree.sh ;;
         cross-module-safety-matrix) tr_run_scenario "$1" ./scripts/test_safety_matrix_cross_module.sh ;;
         sha256-differential)        tr_run_scenario "$1" ./scripts/test_sha256_differential.sh ;;
         incremental)                tr_run_scenario "$1" ./scripts/test_incremental.sh --quiet ;;
@@ -211,7 +217,7 @@ group_alias() {
 # every line after it. The slowest is last for that reason - mutation-self-test builds four mutant
 # compilers (about a minute and a half), and it used to sit in the middle, freezing the count lines
 # of the twenty gates that had already finished.
-GATES_ALL="fmt-check md-check no-new-deps binary-sizes no-warnings test-strength fuzz-record fuzz-fresh safety-matrix safety-matrix-zbuild safety-model safety-comments safety-figures comment-noise reborrow-probes exhaustive route-coverage temp-names unsafe-scan runtimes static-image perf-gate toolchain portability clean-tree toolchain-offpath stage0c-fixed-bugs stage0c-unit
+GATES_ALL="fmt-check md-check no-new-deps binary-sizes no-warnings test-strength fuzz-record fuzz-fresh safety-matrix safety-matrix-zbuild safety-model safety-comments safety-figures comment-noise reborrow-probes exhaustive route-coverage temp-names unsafe-scan runtimes static-image perf-gate toolchain portability toolchain-offpath stage0c-fixed-bugs stage0c-unit
            stage0c-corpus stage0c-docs stage0c-error-locations stage0c-functional stage0c-minimal mutation-self-test"
 
 gate_command() {
@@ -798,7 +804,7 @@ cur_suite="stray-files"
 s_run=0; s_passed=0; s_failed=0; s_skipped=0
 if [ -z "$stray_start" ]; then
     tot_skipped=$((tot_skipped + 1)); s_skipped=$((s_skipped + 1))
-    [ "$TR_QUIET" -eq 1 ] || echo "[SKIP] stray-files (this tree is not a git checkout, or the work directory is not writable)"
+    [ "$TR_QUIET" -eq 1 ] || echo "[SKIP] stray-files (the work directory is not writable)"
 else
     _stray=$(./scripts/check_stray_files.sh --compare "$stray_start" 2>/dev/null)
     tot_run=$((tot_run + 1)); s_run=$((s_run + 1))

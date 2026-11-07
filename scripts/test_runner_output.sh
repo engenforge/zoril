@@ -22,10 +22,8 @@ cd "$(dirname "$0")/.." || exit 2
 export TR_WORK=build/tests-runner-output TR_QUIET=0 TR_VERBOSE=0 TR_FAIL_FAST=0 TR_FILTER= TR_RESULTS=
 FIXTURES="tests/runner/fixtures/tests --gate fixture-good --gate fixture-fails
           --gate fixture-bad-format --gate fixture-silent-failure --gate fixture-empty"
-# 13 fixture items, plus the run's own "stray-files" item, which needs git: with git hidden from
-# PATH (opts_hidden), or absent on the host, it is reported as [SKIP] instead of [PASS].
+# 13 fixture items, plus the run's own "stray-files" item (which needs no git).
 EXPECTED_TOTAL="Total: 14 run, 7 passed, 7 failed, 2 skipped"
-EXPECTED_TOTAL_NO_GIT="Total: 13 run, 6 passed, 7 failed, 3 skipped"
 
 errors=0
 fail() { echo "[FAIL] $1"; errors=$((errors + 1)); }
@@ -34,9 +32,6 @@ check_mode() {
     mode="$1"
     out="$TR_WORK/output.$mode"
     expected="$EXPECTED_TOTAL"
-    # git is optional; without it on the host the stray-files item skips in every mode, which is the
-    # total opts_hidden pins with git explicitly hidden.
-    git_checkout_usable . || expected="$EXPECTED_TOTAL_NO_GIT"
     mkdir -p "$TR_WORK"
     case "$mode" in
         quiet)   ./scripts/test.sh --quiet $FIXTURES > "$out" 2>&1 ;;
@@ -45,7 +40,6 @@ check_mode() {
         opts_hidden)
             shim="$TR_WORK/shim_opts"
             path_without "$shim" git timeout setsid valgrind dprint rustc
-            expected="$EXPECTED_TOTAL_NO_GIT"
             PATH="$shim" ./scripts/test.sh $FIXTURES > "$out" 2>&1
             ;;
     esac

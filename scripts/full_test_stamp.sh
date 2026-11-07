@@ -11,6 +11,7 @@
 # naming the earlier run and the earlier Total: line, then stops unless FORCE=1.
 cd "$(dirname "$0")/.." || exit 2
 . scripts/lib/portability.sh
+. scripts/lib/tree_files.sh
 
 # Tests and stamp checks isolate from user git configurations.
 GIT_CONFIG_GLOBAL=/dev/null; export GIT_CONFIG_GLOBAL
@@ -25,34 +26,32 @@ ASSEMBLER_BIN="${ASSEMBLER_BIN:-as}"
 LINKER_BIN="${LINKER_BIN:-ld}"
 LINK_CC="${LINK_CC:-${CC:-cc}}"
 
-# tree_hash computes a deterministic hash of the working tree excluding doc/tasks/ and build/.
-# Does not write loose objects to .git/objects: uses HEAD tree hash plus git status and
-# git hash-object without -w for any modified or untracked files outside doc/tasks and build.
-tree_hash() {
-    git rev-parse --verify -q HEAD >/dev/null 2>&1 || return 1
-    _head_tree=$(git rev-parse HEAD^{tree} 2>/dev/null) || return 1
-    _status=$(git status --porcelain -uall -- . ':!doc/tasks' ':!build' 2>/dev/null) || return 1
-    if [ -z "$_status" ]; then
-        printf '%s\n' "$_head_tree"
-        return 0
+# tree_hash computes a deterministic sha256 hash of all files listed by tree_files excluding doc/tasks/.
+# Format of the hashed stream: sorted lines of path<TAB>sha256.
+_hash_batch() {
+    set --
+    _count=0
+    while IFS= read -r _f || [ -n "$_f" ]; do
+        set -- "$@" "$_f"
+        _count=$((_count + 1))
+        if [ "$_count" -ge 80 ]; then
+            sha256_of "$@"
+            set --
+            _count=0
+        fi
+    done
+    if [ "$_count" -gt 0 ]; then
+        sha256_of "$@"
     fi
-    (
-        printf 'head:%s\n' "$_head_tree"
-        printf '%s\n' "$_status" | while IFS= read -r _line; do
-            [ -n "$_line" ] || continue
-            _st=$(printf '%s' "$_line" | cut -c 1-2)
-            _file=$(printf '%s' "$_line" | cut -c 4-)
-            case "$_file" in
-                *" -> "*) _file="${_file#* -> }" ;;
-            esac
-            if [ -e "$_file" ]; then
-                _h=$(git hash-object "$_file" 2>/dev/null || echo "missing")
-            else
-                _h="deleted"
-            fi
-            printf '%s %s %s\n' "$_st" "$_file" "$_h"
-        done
-    ) | sha256_of | awk '{print $1}'
+}
+
+tree_hash() {
+    tree_files . \
+        | grep -v '^doc/tasks/' \
+        | _hash_batch \
+        | awk '{ printf "%s\t%s\n", substr($0, 67), substr($0, 1, 64) }' \
+        | sha256_of \
+        | awk '{print $1}'
 }
 
 compiler_hash() {
@@ -86,15 +85,20 @@ case "${1:-}" in
     snapshot)
         _target="${2:-${TR_WORK:-build/tests}/stamp.pending}"
         mkdir -p "$(dirname "$_target")"
-        git_checkout_usable . || exit 0
         cur_tree=$(tree_hash) || exit 0
         cur_compiler=$(compiler_hash)
         cur_toolchain=$(toolchain_fp)
-        commit_full=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-        commit_short=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-        commit_date=$(git log -1 --format='%ci' HEAD 2>/dev/null || date -u '+%Y-%m-%d %H:%M:%S UTC')
-        if ! git diff --quiet HEAD 2>/dev/null || [ -n "$(git status --porcelain -uall -- . ':!doc/tasks' ':!build' 2>/dev/null)" ]; then
-            commit_short="${commit_short}+dirty"
+        if git_checkout_usable .; then
+            commit_full=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+            commit_short=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            commit_date=$(git log -1 --format='%ci' HEAD 2>/dev/null || date -u '+%Y-%m-%d %H:%M:%S UTC')
+            if ! git diff --quiet HEAD 2>/dev/null || [ -n "$(git status --porcelain -uall -- . ':!doc/tasks' ':!build' 2>/dev/null)" ]; then
+                commit_short="${commit_short}+dirty"
+            fi
+        else
+            commit_full="tarball"
+            commit_short="tarball"
+            commit_date=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
         fi
         {
             printf 'commit:%s\n' "$commit_full"
@@ -124,8 +128,7 @@ case "${1:-}" in
         ;;
     check)
         [ -f "$STAMP" ] || { echo "no whole 'make test' has passed in this tree (no $STAMP): run make test" >&2; exit 1; }
-        git_checkout_usable . || { echo "full_test_stamp: this is not a git tree" >&2; exit 1; }
-        cur_tree=$(tree_hash) || { echo "full_test_stamp: cannot read git tree" >&2; exit 1; }
+        cur_tree=$(tree_hash) || { echo "full_test_stamp: cannot read tree" >&2; exit 1; }
         cur_compiler=$(compiler_hash)
         cur_toolchain=$(toolchain_fp)
         stamp_commit=""

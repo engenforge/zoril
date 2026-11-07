@@ -75,17 +75,10 @@ if [ $# -ge 1 ]; then
     exit 0
 fi
 
-# git is an optional tool (the dependency matrix's `git missing` row), and the export is also checked
-# before its fresh history exists, so a tree without git or without a checkout still gets checked:
-# every file on disk except build output and hidden state directories, which are not this
-# repository's files.
-if files="$(git -C "$REPO_ROOT" ls-files 2>/dev/null)"; then
-    source="tracked files"
-else
-    files="$(cd "$REPO_ROOT" && find . \( -name build -o -name '.?*' \) -type d -prune -o -type f -print \
-        | sed 's|^\./||' | LC_ALL=C sort)"
-    source="files in the working tree (no git checkout; build/ and hidden directories skipped)"
-fi
+# Every file in the tree is checked (build/ and hidden directories skipped).
+. "$REPO_ROOT/scripts/lib/tree_files.sh"
+files="$(tree_files "$REPO_ROOT")"
+source="files in the tree"
 count=0
 bad=0
 for f in $files; do

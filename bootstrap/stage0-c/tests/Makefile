@@ -30,7 +30,7 @@ export ASSEMBLER_BIN
 export LINKER_BIN
 export LINK_CC
 
-GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_HASH ?= unknown
 # cproc does not support -MMD -MP (dependency file generation)
 ifeq ($(notdir $(firstword $(CC))),cproc)
     DEPFLAGS =

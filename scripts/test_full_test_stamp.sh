@@ -11,7 +11,6 @@ for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p');
     unset "$_v"
 done
 
-command -v git >/dev/null 2>&1 || { echo "[SKIP] full-test-stamp: no git"; exit 0; }
 fail() { echo "[FAIL] full-test-stamp: $1"; exit 1; }
 pass() { echo "  [PASS] full-test-stamp: $1"; }
 
@@ -49,17 +48,25 @@ mkdir -p "$TR_WORK" "$t/scripts/lib" "$t/build"
 cp scripts/full_test_stamp.sh "$t/scripts/"
 cp scripts/check_deps.sh "$t/scripts/"
 cp scripts/lib/portability.sh "$t/scripts/lib/"
+cp scripts/lib/tree_files.sh "$t/scripts/lib/"
 cp scripts/lib/scdoc_version.sh "$t/scripts/lib/"
 [ -f config.mk ] && cp config.mk "$t/"
 
-(
-    cd "$t" && git init -q . && \
-    git config user.email a@b.invalid && git config user.name t && \
-    git config commit.gpgsign false && git config tag.gpgsign false && \
-    git config core.hooksPath /dev/null && \
-    echo "build/" > .gitignore && \
-    echo one > f && git add . && git commit -q -m one
-) || fail "cannot make a scratch repository"
+have_git=0
+if command -v git >/dev/null 2>&1; then
+    (
+        cd "$t" && git init -q . && \
+        git config user.email a@b.invalid && git config user.name t && \
+        git config commit.gpgsign false && git config tag.gpgsign false && \
+        git config core.hooksPath /dev/null && \
+        echo "build/" > .gitignore && \
+        echo one > f && git add . && git commit -q -m one
+    ) && have_git=1 || fail "cannot make a scratch repository"
+else
+    mkdir -p "$t"
+    echo "build/" > "$t/.gitignore"
+    echo one > "$t/f"
+fi
 
 stamp() { (cd "$t" && env TR_WORK="$TR_WORK" sh scripts/full_test_stamp.sh "$@" > "$t/build/out.txt" 2>&1); }
 
@@ -101,10 +108,38 @@ stamp check || fail "stamp check failed after write"
 printf "x" >> "$t/tests/t.zrl"
 stamp check && fail "one-byte change to test file did not invalidate stamp"
 grep -q "changed since" "$t/build/out.txt" || fail "one-byte change to test did not explain why stamp failed"
-(cd "$t" && git add -A tests && git commit -q -m "tests") || fail "cannot commit tests"
 stamp snapshot "$t/build/stamp.pending" || fail "snapshot failed"
-stamp write "$t/build/stamp.pending" || fail "stamp write failed after commit"
-stamp check || fail "stamp check failed after commit write"
+stamp write "$t/build/stamp.pending" || fail "stamp write failed after test edit"
+stamp check || fail "stamp check failed after test edit write"
+
+if [ "$have_git" -eq 1 ]; then
+    (cd "$t" && git add -A tests && git commit -q -m "tests") || fail "cannot commit tests"
+    # Stamp stops after committing the tested edit (tree hash does not change)
+    stamp check || fail "committing a tested edit invalidated stamp"
+    grep -q "stopping (FORCE=1 to run)" "$t/build/out.txt" || fail "committing tested edit did not stop"
+
+    # doc/tasks-only commit also stops
+    mkdir -p "$t/doc/tasks"
+    echo "task" > "$t/doc/tasks/active.tm.md"
+    (cd "$t" && git add -A doc/tasks && git commit -q -m "doc/tasks only") || fail "cannot commit doc/tasks"
+    stamp check || fail "doc/tasks commit invalidated stamp"
+    grep -q "stopping (FORCE=1 to run)" "$t/build/out.txt" || fail "doc/tasks commit did not stop"
+    rm -rf "$t/doc/tasks"
+fi
+
+# 5b. File whose name has a space: reruns on edit
+echo "spaced content" > "$t/tests/file with space.zrl"
+stamp check && fail "untracked file with space in name did not invalidate stamp"
+stamp snapshot "$t/build/stamp.pending" || fail "snapshot failed with spaced file"
+stamp write "$t/build/stamp.pending" || fail "stamp write failed with spaced file"
+stamp check || fail "stamp check failed after spaced file write"
+echo "modified space" >> "$t/tests/file with space.zrl"
+stamp check && fail "editing file with space in name did not invalidate stamp"
+grep -q "changed since" "$t/build/out.txt" || fail "editing file with space in name did not explain why stamp failed"
+rm -f "$t/tests/file with space.zrl"
+stamp snapshot "$t/build/stamp.pending" || fail "snapshot failed after removing spaced file"
+stamp write "$t/build/stamp.pending" || fail "stamp write failed after removing spaced file"
+stamp check || fail "stamp check failed after spaced file removal"
 
 # 6. One-byte change to a script reruns
 mkdir -p "$t/scripts"
@@ -116,7 +151,9 @@ stamp check || fail "stamp check failed after script write"
 printf " " >> "$t/scripts/helper.sh"
 stamp check && fail "one-byte change to script did not invalidate stamp"
 grep -q "changed since" "$t/build/out.txt" || fail "one-byte script change did not explain why stamp failed"
-(cd "$t" && git add -A scripts/helper.sh && git commit -q -m "helper") || fail "cannot commit helper"
+if [ "$have_git" -eq 1 ]; then
+    (cd "$t" && git add -A scripts/helper.sh && git commit -q -m "helper") || fail "cannot commit helper"
+fi
 stamp snapshot "$t/build/stamp.pending" || fail "snapshot failed"
 stamp write "$t/build/stamp.pending" || fail "stamp write failed after script commit"
 stamp check || fail "stamp check failed after script commit"
@@ -145,18 +182,22 @@ stamp_nc check || fail "negative test: taking compiler hash out of key was expec
 grep -q "stopping (FORCE=1 to run)" "$t/build/out.txt" || fail "no-compiler stamp did not stop when it should have failed"
 
 # 9. Loose objects: tree_hash does not write loose objects into .git/objects on dirty working tree
-mkdir -p "$t/tests"
-echo "dirty test" > "$t/tests/dirty.zrl"
-echo "untracked test" > "$t/tests/untracked.zrl"
-obj_before=$(find "$t/.git/objects" -type f | wc -l)
-stamp snapshot "$t/build/obj_test.pending" || fail "snapshot failed"
-stamp check >/dev/null 2>&1 || true
-obj_after=$(find "$t/.git/objects" -type f | wc -l)
-[ "$obj_before" -eq "$obj_after" ] || fail "tree_hash wrote loose objects into .git/objects (before=$obj_before, after=$obj_after)"
-rm -f "$t/tests/dirty.zrl" "$t/tests/untracked.zrl" "$t/build/obj_test.pending"
+if [ "$have_git" -eq 1 ]; then
+    mkdir -p "$t/tests"
+    echo "dirty test" > "$t/tests/dirty.zrl"
+    echo "untracked test" > "$t/tests/untracked.zrl"
+    obj_before=$(find "$t/.git/objects" -type f | wc -l)
+    stamp snapshot "$t/build/obj_test.pending" || fail "snapshot failed"
+    stamp check >/dev/null 2>&1 || true
+    obj_after=$(find "$t/.git/objects" -type f | wc -l)
+    [ "$obj_before" -eq "$obj_after" ] || fail "tree_hash wrote loose objects into .git/objects (before=$obj_before, after=$obj_after)"
+    rm -f "$t/tests/dirty.zrl" "$t/tests/untracked.zrl" "$t/build/obj_test.pending"
+fi
 
 # 10. Snapshot vs Write: editing a test file between snapshot and write reruns
-(cd "$t" && git add -A && git commit -q -m "clean") || fail "clean commit failed"
+if [ "$have_git" -eq 1 ]; then
+    (cd "$t" && git add -A && git commit -q -m "clean") || fail "clean commit failed"
+fi
 stamp snapshot "$t/build/stamp.pending" || fail "snapshot failed"
 printf "modified-during-run" >> "$t/tests/t.zrl"
 # Write using the pending snapshot taken before the edit
@@ -170,7 +211,9 @@ rm -f "$TR_WORK/stamp.pending" "$t/build/nonexistent.pending"
 stamp write "$t/build/nonexistent.pending" "Total: 10 run, 10 passed, 0 failed, 0 skipped (1.0s)" && fail "write without snapshot was expected to fail"
 
 # 11. Toolchain fingerprint tracks tool absence / presence
-(cd "$t" && git add -A && git commit -q -m "clean2") || fail "clean2 commit failed"
+if [ "$have_git" -eq 1 ]; then
+    (cd "$t" && git add -A && git commit -q -m "clean2") || fail "clean2 commit failed"
+fi
 # Initially optional_probe_tool is absent
 out_absent=$(cd "$t" && env CPROC=optional_probe_tool sh scripts/check_deps.sh --fingerprint 2>/dev/null)
 echo "$out_absent" | grep -q "optional_probe_tool: absent" || fail "probe tool was not detected as absent"

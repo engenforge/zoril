@@ -15,10 +15,7 @@ if [ -z "${ZORIL_REPO_ROOT:-}" ]; then
     elif [ -f "$(dirname "$0")/../../src/main.zrl" ]; then
         ZORIL_REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
     else
-        # The checkout around the working directory, when it is this project's and not one the tree
-        # was unpacked inside.
-        _zrr_top="$(git rev-parse --show-toplevel 2>/dev/null)" || _zrr_top=""
-        if [ -f "$_zrr_top/src/main.zrl" ]; then ZORIL_REPO_ROOT="$_zrr_top"; else ZORIL_REPO_ROOT="$(pwd)"; fi
+        ZORIL_REPO_ROOT="$(pwd)"
     fi
 fi
 

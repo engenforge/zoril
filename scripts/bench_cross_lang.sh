@@ -284,7 +284,8 @@ if [ "$UPDATE_DOC" -eq 1 ] || [ "$RECORD_BASELINE" -eq 1 ]; then
 fi
 
 # ── Version discovery ──────────────────────────────────────────────────────────
-ZORIL_COMMIT=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+ZORIL_COMMIT=$("$ZORIL_BIN" --version 2>/dev/null | awk '{print $2}')
+[ -n "$ZORIL_COMMIT" ] || ZORIL_COMMIT="unknown"
 ZIG_VER=$(zig version 2>/dev/null || echo "n/a")
 RUST_VER=$(rustc --version 2>/dev/null | awk '{print $2}' || echo "n/a")
 HARE_VER=$(hare version 2>/dev/null | awk '{print $2}' || echo "n/a")

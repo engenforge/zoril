@@ -36,6 +36,7 @@ BENCH_CMD="${PREFLIGHT_BENCH:-./scripts/bench_threshold_check.sh}"
 STORE_GRID_CMD="${PREFLIGHT_STORE_GRID:-./scripts/check_store_grid.sh}"
 DENSITY_CMD="${PREFLIGHT_DENSITY:-./scripts/record_marker_density.sh}"
 FUZZ_CMD="${PREFLIGHT_FUZZ:-./scripts/fuzz_safe.sh}"
+GIT_CMD="${PREFLIGHT_GIT:-./scripts/test.sh --quiet --group git}"
 LOG="${PREFLIGHT_LOG:-build/preflight-selfhost.log}"
 TIMINGS="${PREFLIGHT_TIMINGS:-build/preflight-timings.tsv}"
 unset PREFLIGHT_TIMINGS PREFLIGHT_LOG
@@ -141,18 +142,25 @@ else
     [ $rd_rc -eq 0 ] || exit $rd_rc
 fi
 
-# The checked build runs BEFORE the bench step on purpose. The bench step appends to
-# bench/*_history.tsv and rewrites bench/cross_lang/last_zoril_metrics.tsv, which makes the
+# The checked build and the git group run BEFORE the bench step on purpose. The bench step
+# appends to bench/*_history.tsv and rewrites bench/cross_lang/last_zoril_metrics.tsv, which makes the
 # working tree dirty; `tool-versions` compares each tool's stamped version against the tree as
-# it is when the test runs, so running the checked suite after the bench made a clean
-# checkout's preflight fail with "expected ...-dirty, got ..." (found 2026-10-19 while
-# verifying the route-coverage task). Nothing in the checked suite depends on the bench.
+# it is when the test runs, and `clean-tree` / `preflight-selftest` in the git group assert a clean
+# tree. Nothing in the checked suite or git group depends on the bench.
 CHECKED_CMD="${PREFLIGHT_CHECKED:-./scripts/test_checked.sh}"
 chk_start=$(date +%s)
 $CHECKED_CMD
 chk_rc=$?
 record_step checked $(( $(date +%s) - chk_start ))
 [ $chk_rc -eq 0 ] || exit $chk_rc
+
+if [ "$changed" -eq 0 ]; then
+    git_start=$(date +%s)
+    TR_WORK=build/tests-git $GIT_CMD
+    git_rc=$?
+    record_step git $(( $(date +%s) - git_start ))
+    [ $git_rc -eq 0 ] || exit $git_rc
+fi
 
 bench_start=$(date +%s)
 $BENCH_CMD

@@ -45,11 +45,8 @@ case "${1:-}" in -h|--help) sed -n '2,15p' "$0"; exit 0 ;; esac
 cd "$(dirname "$0")/.." || exit 2
 files="$*"
 if [ -z "$files" ]; then
-    if git rev-parse --git-dir >/dev/null 2>&1; then
-        files=$(git ls-files '*.md')
-    else
-        files=$(find . \( -name .git -o -name build \) -prune -o -name '*.md' -type f -print | sed 's|^\./||')
-    fi
+    . scripts/lib/tree_files.sh
+    files=$(tree_files . | grep '\.md$')
     files=$(printf '%s\n' "$files" | grep -v -e '^doc/tasks/' -e '^doc/archive/' -e '^stage0-C/' -e '^stage1/' -e '^bootstrap/')
 fi
 

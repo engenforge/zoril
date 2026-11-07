@@ -376,5 +376,14 @@ for t in fuzz-session fuzz-start fuzz-status fuzz-stop fuzz-summary fuzz-preflig
 done
 ok "every fuzz target exists (make -n)"
 
+# ── 10. fuzz-record release refusal checks (requires git and timeout) ─────────────────────────────────
+if [ "$have_git" -eq 1 ] && command -v timeout >/dev/null 2>&1; then
+    if "$HERE/check_fuzz_record.sh" --release > "$TMP/fuzz_rec_rel.log" 2>&1; then
+        ok "check_fuzz_record.sh --release passes"
+    else
+        bad "check_fuzz_record.sh --release failed" "$TMP/fuzz_rec_rel.log"
+    fi
+fi
+
 if [ "$fails" -ne 0 ]; then echo "FAIL: fuzz-tools: $fails check(s) failed"; exit 1; fi
 echo "[PASS] fuzz-tools: banner, [STATUS], findings in the main log, status/stop/summary/plan/preflight/record-update on fixtures"
