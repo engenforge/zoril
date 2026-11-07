@@ -318,9 +318,10 @@ list_normative_citations() {
 
 # ── banned safety phrases ──────────────────────────────────────────────────────
 # Wording rules (doc/SAFETY.md, CONTRIBUTING.md): do not write "memory-safe", "guarantees memory
-# safety", "eliminates", "prevents", "provably" or "no dangling pointers" without the tier and the
-# test behind the claim. Every form of each word is matched (prevent/prevented/preventing, ...);
-# the noun "memory safety" is not banned. Code spans, fenced blocks, link targets and quoted
+# safety", "provably" or "no dangling pointers" without the tier and the test behind the claim, nor
+# "eliminates" or "prevents" in a sentence that names a memory-bug class (use-after-free, dangling,
+# double free, leak, data race, overflow, out-of-bounds, an escaping address). Every form of each
+# word is matched (prevent/prevented/preventing, ...); the noun "memory safety" is not banned. Code spans, fenced blocks, link targets and quoted
 # text ("...") are skipped, since a rule that names the words has to quote them. A line that must
 # keep a phrase - another language's property, a defined category name - carries an explicit
 # `<!-- allow-phrase: <reason> -->` on the line itself or on the line before; nothing is skipped
@@ -340,8 +341,19 @@ phrase_violations() {
             gsub(/\]\([^)]*\)/, "]", line)
             gsub(/"[^"]*"/, "", line)
             lower = tolower(line)
-            if (lower ~ /memory[- ]safe([^t]|$)|guarantee[sd]? memory safety|eliminat(e|es|ed|ing)([^a-z]|$)|prevent(s|ed|ing)?([^a-z]|$)|provabl[ey]|no dangling pointer/)
+            if (lower ~ /memory[- ]safe([^t]|$)|guarantee[sd]? memory safety|provabl[ey]|no dangling pointer/) {
                 print file_disp ":" FNR ": " $0
+                next
+            }
+            # "prevent" and "eliminate" are ordinary verbs ("eliminates a build race"); they are a
+            # claim only in a sentence that also names a memory-bug class.
+            ns = split(lower, sent, /[.!?;]( |$)/)
+            for (i = 1; i <= ns; i++)
+                if (sent[i] ~ /eliminat(e|es|ed|ing)([^a-z]|$)|prevent(s|ed|ing)?([^a-z]|$)/ \
+                    && sent[i] ~ /use[- ]after[- ]free|dangl|double[- ]free|leak|data race|overflow|out[- ]of[- ]bounds|escap|invalid (pointer|reference)|memory (error|bug|corruption)/) {
+                    print file_disp ":" FNR ": " $0
+                    next
+                }
         }
     ' "$1"
 }
@@ -357,7 +369,9 @@ phrases_selftest() {
                'Zoril provably rejects every dangling reference.' \
                'Zoril eliminates use-after-free.' \
                'The compiler guarantees memory safety.' \
-               'There are no dangling pointers in safe code.'; do
+               'There are no dangling pointers in safe code.' \
+               'The borrow rule prevents a reference from dangling.' \
+               'Ownership eliminates double frees and leaks.'; do
         printf '%s\n' "$bad" > "$st_dir/doc.md"
         if [ -z "$(phrase_violations "$st_dir/doc.md" doc.md)" ]; then
             echo "[FAIL] phrases selftest: not reported: $bad"; st_fail=1
@@ -367,11 +381,15 @@ phrases_selftest() {
     printf '%s\n' '## Memory safety' 'Zoril checks memory safety at compile time where it can.' \
         'Do not write "memory-safe" or "prevents" about Zoril.' 'The `eliminated` flag.' \
         '```' 'prevents' '```' 'Rust is memory-safe. <!-- allow-phrase: another language -->' \
-        '<!-- allow-phrase: another language -->' 'Cyclone was a memory-safe dialect of C.' > "$st_dir/doc.md"
+        '<!-- allow-phrase: another language -->' 'Cyclone was a memory-safe dialect of C.' \
+        'Skipping compiled gates on doc-only commits eliminates ~7 minutes of idle wait per commit.' \
+        'The new order runs zbuild first, eliminating the parallel stage0c build race.' \
+        'The unset stays to prevent child processes from inheriting the parent'"'"'s file targets.' \
+        'This prevents a rebuild. A later step checks for overflow.' > "$st_dir/doc.md"
     out=$(phrase_violations "$st_dir/doc.md" doc.md)
     if [ -n "$out" ]; then echo "[FAIL] phrases selftest: false positive: $out"; st_fail=1; fi
     rm -rf "$st_dir"
-    if [ "$st_fail" -eq 0 ]; then echo "[PASS] phrases selftest: 7 claims reported, 0 false positives"; fi
+    if [ "$st_fail" -eq 0 ]; then echo "[PASS] phrases selftest: 9 claims reported, 0 false positives"; fi
     return "$st_fail"
 }
 
