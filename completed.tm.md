@@ -1160,3 +1160,18 @@ date: 2026-11-03
         - Verified byte-identity: ran `scripts/test_preflight.sh` with a stand-in outer timings file and confirmed SHA-256 match before and after.
         - In `scripts/test_checked.sh`, removed path-argument handling to return to its single-invocation contract while keeping `TR_WORK=build/tests-checked` isolation.
         - Verified `make test`: Total 3415 run, 3415 passed, 0 failed, 88 skipped (239.8s). Portability, comment-noise, no-new-deps, and safety-model gates passed.
+
+- [x] +testinfra +tests +portability +AI-G Z-0127 T1f Job counts follow the CPUs the process may use
+    > **Created:** 2026-11-07 by the review of Z-0120.
+    > **Completed:** 2026-11-07 git:723326c
+
+    - **Found (2026-11-07, Z-0120):** under `taskset -c 0-3`, `getconf _NPROCESSORS_ONLN` still reports 16, so `TR_JOBS` (`scripts/lib/test_runner.sh`), `nproc_count` (`scripts/lib/portability.sh`, which tries `getconf` before `nproc`) and through it `MUTATION_JOBS` and `fuzz_cores` oversubscribe a host whose CPUs are limited by affinity or a container cpuset. `scripts/mutation-check.sh` also fixes each mutant's suite at `MUTATION_TEST_JOBS:-6` whatever the host has.
+    - **Do:** `nproc_count` tries `nproc` (which honours the affinity mask) first and falls back to `getconf _NPROCESSORS_ONLN`, then `1`, so a BSD without `nproc` keeps today's answer; `test_runner.sh` uses `nproc_count` instead of its own `getconf`. Derive `MUTATION_TEST_JOBS`'s default from the count. Decide, and record here, whether a cgroup CPU quota (`podman --cpus`) is read, and if so only where the file exists (Linux), skipping cleanly elsewhere.
+    - **Checks:** a case in a script self-test that runs `nproc_count` under `taskset -c 0` and gets `1` (skip with `[SKIP] ... needs taskset (Linux)` where it is missing). `scripts/check_portability.sh`. `make test`.
+    - **Implemented & Verified (git:723326c):**
+        - `nproc_count` in `scripts/lib/portability.sh` probes `nproc` first before falling back to `getconf _NPROCESSORS_ONLN` and then `1`.
+        - **Decision on cgroup CPU quota:** Base container environments (such as Alpine Linux) lack GNU coreutils and provide BusyBox `nproc`, which relies on `sysconf` and is blind to cgroup quotas. `nproc_count` directly inspects cgroup v2 (`/sys/fs/cgroup/cpu.max`) and cgroup v1 (`/sys/fs/cgroup/cpu/cpu.cfs_quota_us`) where they exist on Linux, clamping the core count to the quota (`quota / period`), and skips cleanly on platforms without `/sys/fs/cgroup`.
+        - `scripts/lib/test_runner.sh` sources `portability.sh` ahead of flag defaults and sets `TR_JOBS` to default to `nproc_count`.
+        - `scripts/mutation-check.sh` derives `MUTATION_TEST_JOBS`'s default from `nproc_count` (`min(6, ncpus)` with a floor of 1) rather than hardcoding `6`.
+        - `scripts/test_portability_lib.sh` asserts that `nproc_count` under `taskset -c 0` returns 1; verified that removing the `nproc` priority caused the test to fail with exit code 1 (got 16, expected 1).
+        - Verified `make test`: Total 3415 run, 3415 passed, 0 failed, 88 skipped (237.3s). Gates `portability`, `comment-noise`, `no-new-deps`, and `safety-model` passed cleanly.
