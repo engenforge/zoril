@@ -6,7 +6,15 @@ This guide is for developers and contributors working on the Zoril compiler tool
 
 ## 1. Developer Prerequisites
 
-Compiling Zoril from source requires only a C compiler, GNU Make, QBE, and GNU binutils (as detailed in the [README](../README.md)). However, developing changes, running the full verification test suites, fuzzing, and executing pre-merge gates require additional tools:
+Compiling Zoril from source requires only a C compiler, GNU Make, QBE, and GNU binutils (as detailed in the [README](../README.md)). However, developing changes, running the full verification test suites, fuzzing, and executing pre-merge gates require additional tools.
+
+Each tool belongs to the lowest role whose command needs it (`AGENTS.md`, Portability), and a change never moves a tool into a lower role:
+
+- **User** (`make`, `make install`, `make test`, from a checkout or a source tarball): a C compiler, QBE, `as`, `ld`, GNU make, a POSIX shell and the POSIX utilities.
+- **Contributor** (`make test-changed`, `make preflight-changed`, fuzzing, the documentation): the user's tools, plus git, Lua, scdoc, dprint, rustc and valgrind.
+- **Maintainer** (`make preflight`, `make dist`, a release): the contributor's tools, plus bsdtar.
+
+Today `make test` also needs `flock` and `mkfifo` for its parallel pool, `bash` for `scripts/check_md_links.sh`, `scripts/check_safety_model.sh` and the stage0-c suite scripts, and some of its items call git; all are being removed (the `tools/ztest` series ending with Z-0140, Z-0111 with Z-0144, and Z-0146 and Z-0147). The list below says what each tool is used for:
 
 - **flock (`util-linux` or BusyBox):** Required for process synchronization in the parallel test runner.
 - **Lua (5.3 or 5.4):** Required for the generative fuzzer (`scripts/fuzz/gen.lua`) and benchmark generators.
