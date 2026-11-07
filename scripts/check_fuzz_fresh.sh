@@ -8,8 +8,8 @@
 # changed `tools/zilc/`, and every one of them had passed every gate; the record kept looking current
 # through two documentation sweeps. A record that describes a compiler nobody can build is not evidence.
 #
-# The fingerprint is five hashes, one per compiler-source directory, over that directory's tracked
-# blobs _minus Markdown_ (`scripts/lib/fuzz_fresh.sh` computes them; the harness prints the same line):
+# The fingerprint is five hashes, one per compiler-source directory, over that directory's files
+# _minus Markdown_ (`scripts/lib/fuzz_fresh.sh` computes them; the harness prints the same line):
 #
 #     fingerprint: src=<h> stdlib=<h> tools/zilc=<h> tools/zbuild=<h> rt=<h>
 #
@@ -67,12 +67,12 @@ done
 # this script's own directory: --repo names the tree being checked, which need not carry the scripts.
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
 . "$SELF_DIR/lib/portability.sh"
-. "$SELF_DIR/lib/fuzz_fresh.sh"
 . "$SELF_DIR/lib/tree_files.sh"
+. "$SELF_DIR/lib/fuzz_fresh.sh"
 SCOPE=$(fuzz_fingerprint_scope | tr '\n' ' ')
 
-current_fingerprint() {   # prints "src=<h> stdlib=<h> tools/zilc=<h> tools/zbuild=<h> rt=<h>", or nothing outside a git repo
-    fuzz_fingerprint "$REPO" HEAD
+current_fingerprint() {   # prints "src=<h> stdlib=<h> tools/zilc=<h> tools/zbuild=<h> rt=<h>", or nothing on failure
+    fuzz_fingerprint "$REPO"
 }
 
 # A record holds one or two entries, each a `## ` section with its own `fingerprint:` and `headline:` lines:
@@ -143,7 +143,7 @@ if [ "${SELFTEST:-0}" = 1 ]; then
     g init -q -b main .
     g add -A
     g commit -q -m one
-    fp() { printf 'fingerprint: %s\n' "$(fuzz_fingerprint "$tmp/t" HEAD)"; }
+    fp() { printf 'fingerprint: %s\n' "$(fuzz_fingerprint "$tmp/t")"; }
 
     # 1. A matching fingerprint passes, and so does a page quoting the same figure.
     { printf '%s\n' "$(fp)"; echo; cat "$tmp/t/bench/fuzz/README.md"; } > "$tmp/rec.$$"
@@ -229,32 +229,28 @@ if [ "${SELFTEST:-0}" = 1 ]; then
         echo "[FAIL] selftest: a stale short session passed --strict"; sed 's/^/       /' "$tmp/dual3.log"; fail=1
     fi
 
-    # 5. A directory inside another repository is refused, not answered about that repository.
+    # 5. A directory without the compiler sources is skipped, not answered for.
     mkdir -p "$tmp/t/src/sub"
     "$SELF" --repo "$tmp/t/src/sub" > "$tmp/sub.log" 2>&1
-    if [ $? -ne 0 ] || ! grep -q 'not the root of its own git repository' "$tmp/sub.log"; then
-        echo "[FAIL] selftest: a directory inside another repository was not refused"; sed 's/^/       /' "$tmp/sub.log"; fail=1
+    if [ $? -ne 0 ] || ! grep -q 'compiler sources could not be read from this tree' "$tmp/sub.log"; then
+        echo "[FAIL] selftest: a directory without the compiler sources was not skipped"; sed 's/^/       /' "$tmp/sub.log"; fail=1
     fi
 
     if [ "$fail" -ne 0 ]; then
         echo "FAIL: the fuzz-record freshness gate does not behave as its own documentation says."
         exit 1
     fi
-    echo "[PASS] selftest: a match passes, a Markdown-only change stays fresh, a code change is reported stale naming its directory and fails only under --strict, a record without a fingerprint is refused, a page with another figure is named, a dual record is judged by its short session and a page may not quote the release-bar run alone, and a directory inside another repository is not answered for it"
+    echo "[PASS] selftest: a match passes, a Markdown-only change stays fresh, a code change is reported stale naming its directory and fails only under --strict, a record without a fingerprint is refused, a page with another figure is named, a dual record is judged by its short session and a page may not quote the release-bar run alone, and a directory without the compiler sources is not answered for"
     exit 0
 fi
 
 # ── the gate ──────────────────────────────────────────────────────────────────────────────────────────
-# A directory inside some *other* repository would answer every question about that repository, not about
-# this tree: a not-yet-initialised export directory is exactly that, and it once made this gate report
-# "0 page(s)" and a fingerprint it had not read. Require $REPO to be the root of its own repository.
-if command -v git >/dev/null 2>&1 && git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
-    top=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)
-    if [ -z "$top" ] || [ "$(cd "$top" && pwd -P)" != "$(cd "$REPO" && pwd -P)" ]; then
-        echo "[SKIP] fuzz-fresh: $REPO is not the root of its own git repository, so its compiler sources cannot be read unambiguously"
-        exit 0
-    fi
+current=$(current_fingerprint)
+if [ -z "$current" ]; then
+    echo "[SKIP] fuzz-fresh: compiler sources could not be read from this tree"
+    exit 0
 fi
+
 if [ ! -f "$RECORD" ]; then
     echo "[FAIL] fuzz-fresh: $RECORD does not exist, so the release-bar record cannot be checked"
     exit 1
@@ -265,12 +261,6 @@ recorded=$(recorded_fingerprint)
 if [ -z "$recorded" ]; then
     echo "[FAIL] fuzz-fresh: the record's $ENTRY entry carries no 'fingerprint: src=<h> stdlib=<h> tools/zilc=<h> tools/zbuild=<h> rt=<h>' line, so nothing ties it to the compiler code it describes (add the five hashes from the run's 'fuzz: pipeline: fingerprint:' line)"
     exit 1
-fi
-
-current=$(current_fingerprint)
-if [ -z "$current" ]; then
-    echo "[SKIP] fuzz-fresh: this tree has no HEAD to read the compiler sources from"
-    exit 0
 fi
 
 rc=0
@@ -287,15 +277,14 @@ for d in $SCOPE; do
 done
 stale=${stale%; }
 
-head=$(git -C "$REPO" rev-parse --short=8 HEAD 2>/dev/null || echo tarball)
 if [ -z "$stale" ]; then
-    echo "[PASS] fuzz-fresh: the $ENTRY record's fingerprint matches the code of src, stdlib, tools/zilc, tools/zbuild and rt at $head"
+    echo "[PASS] fuzz-fresh: the $ENTRY record's fingerprint matches the code of src, stdlib, tools/zilc, tools/zbuild and rt in the working tree"
 else
     if [ "$STRICT" -eq 1 ]; then
-        echo "[FAIL] fuzz-fresh: STALE - the $ENTRY record describes other code than HEAD $head: $stale. Re-run the release-bar budget before citing the record, or record why the change needs no run."
+        echo "[FAIL] fuzz-fresh: STALE - the $ENTRY record describes other code than the working tree: $stale. Re-run the release-bar budget before citing the record, or record why the change needs no run."
         rc=1
     else
-        echo "[PASS] fuzz-fresh: STALE - the $ENTRY record describes other code than HEAD $head: $stale. A release-bar run is owed before the record is cited; this is reported here and fails only under --strict."
+        echo "[PASS] fuzz-fresh: STALE - the $ENTRY record describes other code than the working tree: $stale. A release-bar run is owed before the record is cited; this is reported here and fails only under --strict."
     fi
 fi
 

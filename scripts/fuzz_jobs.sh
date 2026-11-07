@@ -26,6 +26,7 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/lib/portability.sh" 2>/dev/null || true
+. "$HERE/lib/tree_files.sh" 2>/dev/null || true
 . "$HERE/lib/fuzz_progress.sh"
 DRIVER="$HERE/fuzz_safe.sh"
 GEN="${FUZZ_GEN:-$HERE/fuzz/gen.lua}"
@@ -77,6 +78,7 @@ rm -rf "$OUT"/w* "$OUT/cov" "$OUT"/*.log "$OUT/run.status" "$OUT/run.args" "$OUT
 
 # A run that will be cited checks its compiler and its oracles once, here, before any worker starts.
 if [ -n "$STRICT" ]; then
+    . "$HERE/lib/tree_files.sh"
     . "$HERE/lib/fuzz_fresh.sh"
     REPO_ROOT=$(cd "$HERE/.." && pwd)
     fuzz_require_fresh "${ZORIL_BIN:-$REPO_ROOT/build/zoril}" "${ZILC_BIN:-$REPO_ROOT/build/zilc}" $(fuzz_zbuild_bin "$REPO_ROOT" "$ZBUILD_OPT") || exit 2
@@ -86,6 +88,7 @@ fi
 # The mode-diff reading builds every program with an installed `zbuild` as well: stage the install once here and
 # give it to the workers (FUZZ_STAGE), so sixteen of them do not run `make install` over one another.
 REPO_ROOT=${REPO_ROOT:-$(cd "$HERE/.." && pwd)}
+. "$HERE/lib/tree_files.sh"
 . "$HERE/lib/fuzz_fresh.sh"
 if [ "$ZBUILD_OPT" = 1 ] || { [ "$ZBUILD_OPT" != 0 ] && fuzz_own_compilers "$REPO_ROOT"; }; then
     FUZZ_STAGE="$OUT/stage"
@@ -109,6 +112,7 @@ START=$(date +%s)
 printf '%s\n' "$ORIG_ARGS" > "$OUT/run.args"
 echo "fuzz: run directory $OUT"
 echo "fuzz: seeds $first-$last x $COUNT, mode $MODE, $JOBS worker(s)${RAN_TARGET:+, target $(fmt_num "$RAN_TARGET") compiled and ran}, started $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+. "$HERE/lib/tree_files.sh"
 . "$HERE/lib/fuzz_fresh.sh"
 REPO_ROOT=${REPO_ROOT:-$(cd "$HERE/.." && pwd)}
 echo "fuzz: pipeline: $(fuzz_version "${ZORIL_BIN:-$REPO_ROOT/build/zoril}"); $(fuzz_version "${ZILC_BIN:-$REPO_ROOT/build/zilc}")"

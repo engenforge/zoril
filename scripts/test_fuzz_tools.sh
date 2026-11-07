@@ -31,6 +31,7 @@ done
 # The same fingerprint implementation the harness and the gate use, so a fixture run's line is the
 # line a real run would print.
 . "$HERE/lib/portability.sh"
+. "$HERE/lib/tree_files.sh"
 . "$HERE/lib/fuzz_fresh.sh"
 if ! "$HERE/check_deps.sh" --required-only fuzz >/dev/null 2>&1; then
     echo "[SKIP] fuzz-tools: fuzz dependencies (lua, timeout) not satisfied"
@@ -235,7 +236,7 @@ REC
 }
 mkrunfix() { # dir repo faults ran
     d=$1; mkdir -p "$d"
-    fp=$(fuzz_fingerprint "$2" HEAD)
+    fp=$(fuzz_fingerprint "$2")
     printf 'state=finished\nstart=1000\nend=4600\npid=1\njobs=2\nfirst=1\nlastseed=10\ncount=8\nhb=60\nmode=mix\nran_target=1500\nrelease=1\nend=4600\n' > "$d/run.status"
     { echo "fuzz: pipeline: /x/zoril -> /x/zilc -> qbe -> as -> ld"; echo "fuzz: pipeline: zoril 0.0.1-g1234567; zilc 0.0.1-g1234567"
       echo "fuzz: pipeline: fingerprint: $fp"

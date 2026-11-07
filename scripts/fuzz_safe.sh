@@ -190,6 +190,7 @@ for f in "$ZORIL" "$ZILC" "$QBE" "$AS" "$LD" "$RUNTIME_O"; do
 done
 # Which pipeline this run uses, in its own log: a run's evidence is only as good as the components it names,
 # and the backend is the one that varies.
+. "$HERE/lib/tree_files.sh"
 . "$HERE/lib/fuzz_fresh.sh"
 echo "fuzz: pipeline: $ZORIL -> $ZILC -> $QBE -> $AS -> $LD"
 echo "fuzz: pipeline: $(fuzz_version "$ZORIL"); $(fuzz_version "$ZILC")"
@@ -197,7 +198,7 @@ echo "fuzz: pipeline: $(fuzz_version "$ZORIL"); $(fuzz_version "$ZILC")"
 # minus Markdown, so the record can say which code its figures describe and a later commit can be
 # compared against them (scripts/check_fuzz_fresh.sh reads the same four, from lib/fuzz_fresh.sh).
 # One line, in the form the record quotes.
-_fp=$(fuzz_fingerprint "$REPO_ROOT" HEAD)
+_fp=$(fuzz_fingerprint "$REPO_ROOT")
 if [ -n "${_fp:-}" ]; then
     echo "fuzz: pipeline: fingerprint: $_fp"
 else

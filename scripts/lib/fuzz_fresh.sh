@@ -38,53 +38,62 @@ fuzz_require_fresh() {
 }
 
 # ── the fingerprint: which compiler *code* a record's figures describe ────────────────────────────
-# Five directories, each hashed from its tracked blobs minus Markdown. A document is not a compiler
+# Five directories, each hashed from its files minus Markdown. A document is not a compiler
 # input: the record is about the compiler a run used, and a README-only change must not demand a
-# 15-hour re-run. `git ls-tree -r` lines carry the mode, type, blob hash and path, so the hash moves
-# when a code file is added, removed, renamed or edited, and stays put when only a page changes.
+# 15-hour re-run. The hash moves when a code file is added, removed, renamed or edited, and stays put
+# when only a page changes.
 # One implementation, sourced by the harness that prints the line (fuzz_safe.sh), the gate that
 # compares it (check_fuzz_fresh.sh) and the runner that records it (fuzz_jobs.sh, record_update.sh):
-# a second copy is how the two drift apart. Requires sha256_of (lib/portability.sh).
+# a second copy is how the two drift apart.
+# Requires sha256_of (lib/portability.sh) and tree_files (lib/tree_files.sh).
 
 # fuzz_fingerprint_scope -- the directories whose code the record is about, in the record's order.
 fuzz_fingerprint_scope() {
     printf '%s\n' "src stdlib tools/zilc tools/zbuild rt"
 }
 
-# fuzz_tree_code_hash REPO REV DIR -- SHA-256 of the directory's tracked non-Markdown blobs, or
-# nothing (status 1) when the tree cannot be read.
+# fuzz_tree_code_hash REPO DIR -- SHA-256 of the directory's non-Markdown files, or
+# nothing (status 1) when the directory cannot be read.
+# Hashed stream: sorted path<TAB>sha256 lines (path relative to DIR), the same stream as full_test_stamp.sh.
 fuzz_tree_code_hash() {
-    _repo=$1; _rev=${2:-HEAD}; _dir=$3
+    _repo=$1; _dir=$2
+    [ -d "$_repo/$_dir" ] || return 1
     _tmp=$(mktemp "${TMPDIR:-/tmp}/fuzz-code-hash.XXXXXX") || return 1
-    if command -v git >/dev/null 2>&1 && git -C "$_repo" rev-parse --git-dir >/dev/null 2>&1; then
-        git -C "$_repo" ls-tree -r "$_rev" -- "$_dir" 2>/dev/null | grep -v '\.md$' > "$_tmp" || true
-    fi
-    if [ ! -s "$_tmp" ] && [ -d "$_repo/$_dir" ]; then
-        (
-            cd "$_repo/$_dir" || exit 1
-            find . \( -name build -o -name '.?*' \) -type d -prune -o -type f -print \
-                | sed 's|^\./||' \
-                | grep -v '\.md$' \
-                | LC_ALL=C sort \
-                | while IFS= read -r _f || [ -n "$_f" ]; do
-                    [ -f "$_f" ] && sha256_of "$_f"
+    (
+        cd "$_repo/$_dir" || exit 1
+        tree_files . \
+            | grep -v '\.md$' \
+            | (
+                set --
+                _count=0
+                while IFS= read -r _f || [ -n "$_f" ]; do
+                    set -- "$@" "$_f"
+                    _count=$((_count + 1))
+                    if [ "$_count" -ge 80 ]; then
+                        sha256_of "$@"
+                        set --
+                        _count=0
+                    fi
                 done
-        ) > "$_tmp" 2>/dev/null || true
-    fi
+                if [ "$_count" -gt 0 ]; then
+                    sha256_of "$@"
+                fi
+            ) \
+            | awk '{ printf "%s\t%s\n", substr($0, 67), substr($0, 1, 64) }'
+    ) > "$_tmp" 2>/dev/null || { rm -f "$_tmp"; return 1; }
     if [ ! -s "$_tmp" ]; then rm -f "$_tmp"; return 1; fi
     _sum=$(sha256_of "$_tmp" 2>/dev/null) || { rm -f "$_tmp"; return 1; }
     rm -f "$_tmp"
     printf '%s\n' "${_sum%% *}"
 }
 
-# fuzz_fingerprint REPO [REV] -- "src=<h> stdlib=<h> tools/zilc=<h> tools/zbuild=<h> rt=<h>", or nothing when REV
-# cannot be read (outside a git checkout). REV defaults to HEAD; any commit or tree may be asked for,
-# which is how a record written at a freeze can be re-derived later.
+# fuzz_fingerprint REPO -- "src=<h> stdlib=<h> tools/zilc=<h> tools/zbuild=<h> rt=<h>", or nothing when
+# any directory cannot be hashed. The hash describes the working tree.
 fuzz_fingerprint() {
-    _repo=$1; _rev=${2:-HEAD}
+    _repo=$1
     _out=""
     for _d in $(fuzz_fingerprint_scope); do
-        _h=$(fuzz_tree_code_hash "$_repo" "$_rev" "$_d") || { printf '\n'; return 0; }
+        _h=$(fuzz_tree_code_hash "$_repo" "$_d") || { printf '\n'; return 0; }
         _out="$_out${_out:+ }$_d=$_h"
     done
     printf '%s\n' "$_out"
