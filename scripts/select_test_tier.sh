@@ -28,6 +28,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 TIERS_TABLE="${TEST_TIERS_TABLE:-scripts/test_tiers.tsv}"
+TIER_TEST_SH="${TIER_TEST_SH:-./scripts/test.sh}"
 MODE="args"
 
 ALL_GATES="fmt-check md-check no-new-deps binary-sizes no-warnings test-strength fuzz-record fuzz-fresh safety-matrix safety-matrix-zbuild safety-model safety-comments safety-figures comment-noise reborrow-probes exhaustive route-coverage temp-names unsafe-scan runtimes static-image perf-gate toolchain portability clean-tree toolchain-offpath stage0c-fixed-bugs stage0c-unit stage0c-corpus stage0c-docs stage0c-error-locations stage0c-functional stage0c-minimal mutation-self-test"
@@ -314,6 +315,16 @@ for path in $INPUT_PATHS; do
     # If the path is a runnable test file, record it in SEL_PATHS
     if is_test_file "$path"; then
         has_word "$path" "$SEL_PATHS" || SEL_PATHS="$SEL_PATHS $path"
+    else
+        # A module the group's tests import selects that group; scripts/test.sh owns the
+        # group lists, so it is asked rather than copied.
+        case "$path" in
+            *_lib.zrl)
+                if _lib_grp=$("$TIER_TEST_SH" --group-of "$path" 2>/dev/null) && [ -n "$_lib_grp" ]; then
+                    has_word "$_lib_grp" "$SEL_GROUPS" || SEL_GROUPS="$SEL_GROUPS $_lib_grp"
+                fi
+                ;;
+        esac
     fi
 done
 

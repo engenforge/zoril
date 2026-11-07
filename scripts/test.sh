@@ -10,6 +10,7 @@
 #   scripts/test.sh [options] --suite S        suite: all, group, corpus, incremental, chain, or tests/<dir>
 #   scripts/test.sh [options] PATH...          only these test files or directories
 #   scripts/test.sh [options] --smoke          the smoke suite, tests/smoke.list (make test-fast)
+#   scripts/test.sh --group-of PATH            print the group whose paths hold PATH (exit 1: none)
 #
 # Groups: language, types, memory, stdlib, diagnostics, integration (--list-groups).
 # Gates: the repository checks make test runs first (--list-gates).
@@ -437,6 +438,20 @@ while [ "$#" -gt 0 ]; do
         --list-groups)
             for g in $GROUPS_ALL; do printf '%-12s %s\n' "$g" "$(group_title "$g")"; done
             exit 0 ;;
+        --group-of)
+            [ -n "${2:-}" ] || { echo "test.sh: --group-of requires a path" >&2; exit 2; }
+            _q="${2#./}"
+            for g in $GROUPS_ALL; do
+                for _e in $(group_paths "$g"); do
+                    case "$_q" in "$_e"|"$_e"/*) echo "$g"; exit 0 ;; esac
+                    # A glob entry (tests/functional/*.zrl) lists only files that exist; a
+                    # deleted or new file beside them is in the same group.
+                    if [ -f "$_e" ] && [ "${_q%/*}" = "${_e%/*}" ]; then
+                        case "$_q" in *.zrl) echo "$g"; exit 0 ;; esac
+                    fi
+                done
+            done
+            exit 1 ;;
         -h|--help) sed -n '2,/^[^#]/ { /^[^#]/d; s/^# \{0,1\}//; p; }' "$0"; exit 0 ;;
         -*) echo "test.sh: unknown option $1" >&2; exit 2 ;;
         *) paths="$paths $1"; shift ;;

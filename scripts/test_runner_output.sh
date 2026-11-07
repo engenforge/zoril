@@ -113,4 +113,20 @@ for mode in quiet default verbose opts_hidden; do
         echo "       output: $TR_WORK/output.$mode"
     fi
 done
+
+# A scenario that exits 77 is reported as [SKIP] with the reason from its last [SKIP] line, and
+# is not counted as run; one that prints [SKIP] and exits 0 would be counted as passed.
+skip_out=$(
+    TR_WORK="$TR_WORK/skip-exit"; mkdir -p "$TR_WORK"
+    . scripts/lib/test_runner.sh
+    TR_RUN=0; TR_PASSED=0; TR_FAILED=0; TR_SKIPPED=0
+    tr_run_logged scenario skip-probe "$TR_WORK/skip.log" sh -c 'echo "[SKIP] needs a probe tool"; exit 77'
+    echo "counts: $TR_RUN run $TR_PASSED passed $TR_FAILED failed $TR_SKIPPED skipped"
+)
+if printf '%s\n' "$skip_out" | grep -q '^\[SKIP\] scenario: skip-probe (needs a probe tool)' \
+    && printf '%s\n' "$skip_out" | grep -qx 'counts: 0 run 0 passed 0 failed 1 skipped'; then
+    echo "[PASS] a scenario exiting 77 is reported as skipped, with its reason"
+else
+    fail "a scenario exiting 77 was not reported as skipped: $skip_out"
+fi
 [ $errors -eq 0 ]

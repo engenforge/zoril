@@ -249,13 +249,23 @@ else
     fail "helper module and functional test union" "got '$helper_func_args', expected '$expected_hf'"
 fi
 
-# Case 14: foo_lib.zrl matches tests/functional/* row (not runnable as a single test)
+# Case 14: a *_lib.zrl selects the group whose tests import it, as scripts/test.sh --group-of
+# names it; with a test.sh that knows no group (the lookup taken out), it selects none.
 foo_lib_args=$(printf 'tests/functional/basic/foo_lib.zrl\n' | "$SELECTOR")
-expected_foo="--gate stage0c-functional --gate test-strength"
+expected_foo="--gate stage0c-functional --gate test-strength --group language"
 if [ "$foo_lib_args" = "$expected_foo" ]; then
-    pass "foo_lib.zrl selects functional gates without group copies"
+    pass "foo_lib.zrl selects its group (language)"
 else
     fail "foo_lib.zrl group selection" "got '$foo_lib_args', expected '$expected_foo'"
+fi
+no_group_sh="$(mktemp "${TMPDIR:-/tmp}/tier_no_group.XXXXXX")"
+printf '#!/bin/sh\nexit 1\n' > "$no_group_sh"; chmod +x "$no_group_sh"
+foo_lib_off=$(printf 'tests/functional/basic/foo_lib.zrl\n' | TIER_TEST_SH="$no_group_sh" "$SELECTOR")
+rm -f "$no_group_sh"
+if [ "$foo_lib_off" = "--gate stage0c-functional --gate test-strength" ]; then
+    pass "without test.sh's group lookup, foo_lib.zrl selects no group (the case above sees the lookup)"
+else
+    fail "foo_lib.zrl with the group lookup taken out" "got '$foo_lib_off'"
 fi
 
 # Case 14b: Group and contained test path are both passed without group-copy filtering

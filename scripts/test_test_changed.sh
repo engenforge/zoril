@@ -13,14 +13,17 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 . scripts/lib/portability.sh
 
+# Exit 77 is reported as skipped (scripts/lib/test_runner.sh, tr_run_logged).
 if ! command -v git >/dev/null 2>&1; then
-    echo "[SKIP] test-changed: git is not installed"
-    exit 0
+    echo "[SKIP] needs git, which is not installed"
+    exit 77
 fi
 
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    echo "[SKIP] test-changed: not inside a git checkout"
-    exit 0
+# A tarball extracted inside some other checkout is not a checkout of this tree.
+_top=$(git rev-parse --show-toplevel 2>/dev/null) && _top=$(cd "$_top" && pwd -P) || _top=""
+if [ "$_top" != "$(pwd -P)" ]; then
+    echo "[SKIP] needs a git checkout of this tree"
+    exit 77
 fi
 
 tmp="$(mktemp -d)"

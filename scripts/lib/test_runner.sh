@@ -317,7 +317,10 @@ tr_discover() {
 
 # tr_run_logged KIND NAME LOG CMD... — run a command as one result line ("[PASS] KIND:
 # NAME"). Its output goes to LOG; a failure shows the log's last lines (all of it with
-# --verbose).
+# --verbose). Exit 77 (TR_EXIT_SKIP, the automake convention) reports it as skipped, with
+# the reason from its last "[SKIP] ..." line: an exit 0 would count a check that did not run
+# as passed.
+TR_EXIT_SKIP=77
 tr_run_logged() {
     _kind="$1"; _name="$2"; _log="$3"; shift 3
     TR_RUN=$((TR_RUN + 1))
@@ -329,6 +332,12 @@ tr_run_logged() {
     _ms=$(( $(tr_now_ms) - _t0 ))
     if [ $_rc -eq 0 ]; then
         tr_report PASS "$_kind: $_name" "" "$_ms" "$_log"
+        return 0
+    fi
+    if [ $_rc -eq $TR_EXIT_SKIP ]; then
+        TR_RUN=$((TR_RUN - 1))
+        _why=$(sed -n 's/^.*\[SKIP\] *//p' "$_log" | tail -n 1)
+        tr_report SKIP "$_kind: $_name" "${_why:-exit $TR_EXIT_SKIP, no reason given; log: $_log}" "$_ms"
         return 0
     fi
     tr_report FAIL "$_kind: $_name" "exit $_rc; log: $_log" "$_ms"
