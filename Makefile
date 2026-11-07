@@ -405,7 +405,9 @@ preflight-changed: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/runtime_
 	@./scripts/preflight.sh --changed
 
 ##@ Testing
-test-changed: $(TARGET) $(ZILC) build/zbuild build/runtime.o build/runtime_hosted.o ## Run tests scoped to changed files (BASE=<commit>, default: preflight_base)
+TEST_GATE_DEPS ?= $(RT_HOST) build/runtime_hosted.o $(STAGE0_C_DIR)/build/zoril-c.release stage0c-build
+TEST_CHANGED_DEPS ?= $(TEST_GATE_DEPS) $(TARGET) $(ZILC) build/zbuild
+test-changed: $(TEST_CHANGED_DEPS) ## Run tests scoped to changed files (BASE=<commit>, default: preflight_base)
 	@./scripts/check_deps.sh test
 	@if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		echo "test-changed: not inside a git checkout, running all tests"; \
@@ -439,14 +441,14 @@ test-docs: $(TARGET) $(ZILC) $(RT_HOST) ## Compile the Zoril code blocks in the 
 test-getting-started: $(TARGET) $(ZILC) $(RT_HOST) build/zbuild build/runtime_hosted.o ## Test code snippets and walkthrough commands in doc/getting_started.md
 	@./scripts/test_getting_started.sh
 
-TEST_GATE_DEPS = $(RT_HOST) build/runtime_hosted.o $(STAGE0_C_DIR)/build/zoril-c.release stage0c-build
-test: $(if $(T),,$(TEST_GATE_DEPS)) $(TARGET) $(ZILC) build/zbuild ## Run tests (TSUITE=all|..., T=<pattern> for verbose matching tests)
+TEST_DEPS ?= $(if $(T),,$(TEST_GATE_DEPS)) $(TARGET) $(ZILC) build/zbuild
+test: $(TEST_DEPS) ## Run tests (TSUITE=all|..., T=<pattern> for verbose matching tests)
 	@./scripts/check_deps.sh test
 	@if [ "$(FORCE)" != "1" ] && [ -z "$(T)" ] && { [ -z "$(TSUITE)" ] || [ "$(TSUITE)" = "all" ]; } && \
 		./scripts/full_test_stamp.sh check 2>/dev/null; then \
 		exit 0; \
 	else \
-		TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) ./scripts/test.sh $(if $(T),--verbose --filter '$(T)' tests corpus,$(QUIET) --suite '$(TSUITE)'); \
+		TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) $(TEST_RUNNER) $(if $(T),--verbose --filter '$(T)' tests corpus,$(QUIET) --suite '$(TSUITE)'); \
 	fi
 
 deps-matrix: $(TARGET) $(ZILC) build/zbuild ## Run the tool dependency matrix (optional, configurable, required tools)

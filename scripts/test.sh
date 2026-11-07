@@ -6,6 +6,7 @@
 #   scripts/test.sh [options] --gates          every gate, then every group (make test)
 #   scripts/test.sh [options] --gate NAME ...  only the named gates (repeatable)
 #   scripts/test.sh [options] --group G ...    only the named groups (repeatable)
+#   scripts/test.sh [options] --scenario NAME ... only the named scenarios (repeatable)
 #   scripts/test.sh [options] --suite S        suite: all, group, corpus, incremental, chain, or tests/<dir>
 #   scripts/test.sh [options] PATH...          only these test files or directories
 #   scripts/test.sh [options] --smoke          the smoke suite, tests/smoke.list (make test-fast)
@@ -126,6 +127,18 @@ group_scenarios() {
             ;;
         diagnostics) echo zilc-errors ;;
     esac
+}
+
+scenario_group() {
+    for _g in $GROUPS_ALL; do
+        for _s in $(group_scenarios "$_g"); do
+            if [ "$_s" = "$1" ]; then
+                echo "$_g"
+                return 0
+            fi
+        done
+    done
+    return 1
 }
 
 scenario_run() {
@@ -360,6 +373,7 @@ fi
 groups=""
 gates=""
 paths=""
+scenarios=""
 label="Selected tests"
 suite_incremental=0
 while [ "$#" -gt 0 ]; do
@@ -403,6 +417,12 @@ while [ "$#" -gt 0 ]; do
             g=$(group_alias "$2")
             [ -n "$(group_title "$g")" ] || { echo "test.sh: unknown group '$2' ($GROUPS_ALL)" >&2; exit 2; }
             groups="$groups $g"; shift 2 ;;
+        --scenario)
+            [ -n "${2:-}" ] || { echo "test.sh: --scenario requires an argument" >&2; exit 2; }
+            _sc="$2"
+            _sc_grp=$(scenario_group "$_sc")
+            [ -n "$_sc_grp" ] || { echo "test.sh: unknown scenario '$_sc'" >&2; exit 2; }
+            scenarios="$scenarios $_sc"; shift 2 ;;
         --gates) gates="$GATES_ALL"; shift ;;
         --gate)
             [ -n "$(gate_command "$2")" ] || { echo "test.sh: unknown gate '$2'" >&2; exit 2; }
@@ -481,6 +501,7 @@ printf '%s\n' "$$" > "$TR_WORK/.lock"
 # work in progress from failing the run, and ignored paths (build/) never enter the comparison.
 stray_start="$TR_WORK/stray.start"
 ./scripts/check_stray_files.sh --record "$stray_start" 2>/dev/null || stray_start=""
+./scripts/full_test_stamp.sh snapshot "$TR_WORK/stamp.pending" 2>/dev/null || true
 
 if [ ! -f "$TR_RUNTIME" ]; then
     case "$TR_RUNTIME" in */*) mkdir -p "${TR_RUNTIME%/*}" ;; esac
@@ -509,17 +530,14 @@ trap cleanup EXIT
 for g in $gates; do echo "gate:$g gate $g" >> "$PLAN"; done
 
 full_run=0
-if [ -n "$paths" ]; then
-    filtered "$(tr_discover $paths)" | sed '/^$/d; s/^/- file /' >> "$PLAN"
-    if ! grep -q ' file ' "$PLAN"; then
-        echo "no tests found in$paths${TR_FILTER:+ matching '$TR_FILTER'}" >&2
-        exit 1
-    fi
-elif [ -n "$groups" ] || [ -z "$gates" ] || [ "$gates" = "$GATES_ALL" ]; then
-    if [ -z "$groups" ]; then
+if [ -z "$paths" ] && [ -z "$groups" ] && [ -z "$scenarios" ]; then
+    if [ -z "$gates" ] || [ "$gates" = "$GATES_ALL" ]; then
         groups="$GROUPS_ALL"
         [ -z "$TR_FILTER" ] && full_run=1
     fi
+fi
+
+if [ -n "$groups" ]; then
     for g in $groups; do
         all=$(tr_discover $(group_paths "$g"))
         printf '%s\n' "$all" >> "$claimed"
@@ -529,10 +547,38 @@ elif [ -n "$groups" ] || [ -z "$gates" ] || [ "$gates" = "$GATES_ALL" ]; then
             for sc in $(group_scenarios "$g"); do echo "$g scenario $sc" >> "$PLAN"; done
         fi
     done
-    if [ ! -s "$PLAN" ]; then
-        echo "no tests matched${TR_FILTER:+ '$TR_FILTER'}" >&2
+fi
+
+if [ -n "$paths" ]; then
+    _disc=$(filtered "$(tr_discover $paths)")
+    if [ -z "$_disc" ]; then
+        echo "no tests found in$paths${TR_FILTER:+ matching '$TR_FILTER'}" >&2
         exit 1
     fi
+    printf '%s\n' "$_disc" | while IFS= read -r _p; do
+        [ -n "$_p" ] || continue
+        if ! grep -q " file $_p\$" "$PLAN" 2>/dev/null; then
+            echo "- file $_p" >> "$PLAN"
+        fi
+    done
+fi
+
+if [ -n "$scenarios" ] && [ -z "$TR_FILTER" ]; then
+    for sc in $scenarios; do
+        _sc_grp=$(scenario_group "$sc")
+        if ! grep -q " scenario $sc\$" "$PLAN" 2>/dev/null; then
+            echo "$_sc_grp scenario $sc" >> "$PLAN"
+        fi
+    done
+fi
+
+if [ ! -s "$PLAN" ]; then
+    if [ -n "$paths" ]; then
+        echo "no tests found in$paths${TR_FILTER:+ matching '$TR_FILTER'}" >&2
+    else
+        echo "no tests matched${TR_FILTER:+ '$TR_FILTER'}" >&2
+    fi
+    exit 1
 fi
 
 # TR_EXCLUDE: space-separated test paths or scenario names this run leaves out, counted nowhere.
@@ -754,12 +800,13 @@ fi
 [ $stopped -eq 0 ] && suite_line
 
 secs=$(awk -v ms="$(( $(tr_now_ms) - ALL_START ))" 'BEGIN { printf "%.1f", ms / 1000 }')
-echo "Total: $tot_run run, $tot_passed passed, $tot_failed failed, $tot_skipped skipped (${secs}s)"
+_tot_line="Total: $tot_run run, $tot_passed passed, $tot_failed failed, $tot_skipped skipped (${secs}s)"
+echo "$_tot_line"
 # A whole run (every gate and group, no filter) that passes leaves a stamp naming the tree it tested:
 # scripts/export_public_release.sh refuses to export a tree that has changed since (A0: an export was
 # made from a tree whose `make test` had not run after the last change).
 if [ $tot_failed -eq 0 ] && [ "${full_run:-0}" = 1 ] && [ -z "$paths" ] && [ -z "$TR_FILTER" ] \
     && [ "$(echo $gates)" = "$(echo $GATES_ALL)" ] && [ -z "${TR_EXCLUDE:-}" ]; then
-    ./scripts/full_test_stamp.sh write 2> /dev/null || true
+    ./scripts/full_test_stamp.sh write "$TR_WORK/stamp.pending" "$_tot_line" 2> /dev/null || true
 fi
 [ $tot_failed -eq 0 ]

@@ -3,9 +3,10 @@
 #
 # Asserts that:
 #   1. An untracked new test is included in the changed path list and executed by the runner.
-#   2. A renamed test's old and new paths are both in the changed list (via --no-renames).
+#   2. A renamed test's old and new paths are both passed to the runner (via --no-renames).
 #   3. Outside a checkout everything runs, printing a notice and selecting --gates.
-#   4. Taking out the untracked-file collection causes untracked test detection to fail.
+#   4. Taking --no-renames out of the Makefile causes renamed old path detection to fail.
+#   5. Taking git ls-files out of the Makefile causes untracked test detection to fail.
 set -eu
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -52,7 +53,7 @@ EOF
 # Case 1: An untracked new test is run
 rc=0
 out=$(env GIT_DIR="$r_untracked/.git" GIT_WORK_TREE="$r_untracked" \
-      make test-changed BASE=HEAD TEST_RUNNER="$tmp/stub_runner.sh" QUIET= 2>&1) || rc=$?
+      make test-changed TEST_CHANGED_DEPS= BASE=HEAD TEST_RUNNER="$tmp/stub_runner.sh" QUIET= 2>&1) || rc=$?
 
 if [ $rc -eq 0 ] && echo "$out" | grep -qF "stub runner args:" \
     && echo "$out" | grep -qF "tests/unit/test_probe_untracked.zrl"; then
@@ -61,7 +62,7 @@ else
     fail "an untracked new test is run" "rc=$rc, out=$out"
 fi
 
-# Case 2: A renamed test's old and new paths are both in the list (--no-renames)
+# Case 2: A renamed test's old and new paths are both passed to the runner via --no-renames
 r_rename="$tmp/repo_rename"
 mkdir -p "$r_rename/tests/unit"
 (
@@ -75,23 +76,24 @@ mkdir -p "$r_rename/tests/unit"
     git mv tests/unit/test_old.zrl tests/unit/test_new.zrl
 )
 
-with_no_renames=$( (git -C "$r_rename" diff --name-only --no-renames HEAD 2>/dev/null; git -C "$r_rename" ls-files --others --exclude-standard 2>/dev/null) | sort -u )
-without_no_renames=$( (git -C "$r_rename" diff --name-only HEAD 2>/dev/null; git -C "$r_rename" ls-files --others --exclude-standard 2>/dev/null) | sort -u )
+rc=0
+out=$(env GIT_DIR="$r_rename/.git" GIT_WORK_TREE="$r_rename" \
+      make test-changed TEST_CHANGED_DEPS= BASE=HEAD TEST_RUNNER="$tmp/stub_runner.sh" QUIET= 2>&1) || rc=$?
 
 has_old=0
 has_new=0
-echo "$with_no_renames" | grep -qxF "tests/unit/test_old.zrl" && has_old=1 || true
-echo "$with_no_renames" | grep -qxF "tests/unit/test_new.zrl" && has_new=1 || true
+if echo "$out" | grep -qF "tests/unit/test_old.zrl"; then has_old=1; fi
+if echo "$out" | grep -qF "tests/unit/test_new.zrl"; then has_new=1; fi
 
-if [ $has_old -eq 1 ] && [ $has_new -eq 1 ] && ! echo "$without_no_renames" | grep -qxF "tests/unit/test_old.zrl"; then
+if [ $rc -eq 0 ] && [ $has_old -eq 1 ] && [ $has_new -eq 1 ]; then
     pass "a renamed test's old and new paths are both in the list via --no-renames"
 else
-    fail "renamed test paths" "has_old=$has_old, has_new=$has_new, without_no_renames='$without_no_renames'"
+    fail "renamed test paths" "rc=$rc, has_old=$has_old, has_new=$has_new, out=$out"
 fi
 
 # Case 3: Outside a checkout everything runs
 rc=0
-out=$(env GIT_DIR=/dev/null make test-changed TEST_RUNNER="$tmp/stub_runner.sh" QUIET= 2>&1) || rc=$?
+out=$(env GIT_DIR=/dev/null make test-changed TEST_CHANGED_DEPS= TEST_RUNNER="$tmp/stub_runner.sh" QUIET= 2>&1) || rc=$?
 if [ $rc -eq 0 ] && echo "$out" | grep -qF "not inside a git checkout, running all tests" \
     && echo "$out" | grep -qF "stub runner args: --gates"; then
     pass "outside a checkout everything runs"
@@ -99,19 +101,28 @@ else
     fail "outside a checkout everything runs" "rc=$rc, out=$out"
 fi
 
-# Case 4: Take out the untracked-file part and watch its case fail
-list_with_untracked=$( (git -C "$r_untracked" diff --name-only --no-renames HEAD 2>/dev/null; git -C "$r_untracked" ls-files --others --exclude-standard 2>/dev/null) | sort -u )
-list_without_untracked=$( (git -C "$r_untracked" diff --name-only --no-renames HEAD 2>/dev/null) | sort -u )
+# Case 4: Negative test — taking --no-renames out of the Makefile drops the renamed old path
+sed 's/--no-renames//' Makefile > "$tmp/Makefile.no_renames"
+rc=0
+out=$(env GIT_DIR="$r_rename/.git" GIT_WORK_TREE="$r_rename" \
+      make -f "$tmp/Makefile.no_renames" test-changed TEST_CHANGED_DEPS= BASE=HEAD TEST_RUNNER="$tmp/stub_runner.sh" QUIET= 2>&1) || rc=$?
 
-found_with=0
-found_without=0
-echo "$list_with_untracked" | grep -qxF "tests/unit/test_probe_untracked.zrl" && found_with=1 || true
-echo "$list_without_untracked" | grep -qxF "tests/unit/test_probe_untracked.zrl" && found_without=1 || true
-
-if [ $found_with -eq 1 ] && [ $found_without -eq 0 ]; then
-    pass "taking out untracked-file part causes untracked test check to fail"
+if [ $rc -eq 0 ] && ! echo "$out" | grep -qF "tests/unit/test_old.zrl"; then
+    pass "taking out --no-renames drops the old path as expected"
 else
-    fail "taking out untracked-file part check" "found_with=$found_with, found_without=$found_without"
+    fail "taking out --no-renames check" "rc=$rc, out=$out"
+fi
+
+# Case 5: Negative test — taking git ls-files out of the Makefile drops untracked tests
+sed 's/git ls-files[^;)]*//' Makefile > "$tmp/Makefile.no_ls_files"
+rc=0
+out=$(env GIT_DIR="$r_untracked/.git" GIT_WORK_TREE="$r_untracked" \
+      make -f "$tmp/Makefile.no_ls_files" test-changed TEST_CHANGED_DEPS= BASE=HEAD TEST_RUNNER="$tmp/stub_runner.sh" QUIET= 2>&1) || rc=$?
+
+if [ $rc -eq 0 ] && ! echo "$out" | grep -qF "tests/unit/test_probe_untracked.zrl"; then
+    pass "taking out git ls-files drops untracked test as expected"
+else
+    fail "taking out git ls-files check" "rc=$rc, out=$out"
 fi
 
 if [ $errors -gt 0 ]; then

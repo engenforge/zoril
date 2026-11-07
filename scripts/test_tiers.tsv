@@ -14,7 +14,7 @@ tests/error_reporting/ec_bool_logical_int.zrl	canary_test	test-strength mutation
 
 # --- Documentation tiers (positive lists only) ---
 doc/tasks/*	tasks	safety-model comment-noise md-check	-	-	-	md-links	-	doc	taskmark files trigger safety-model comment-noise md-check and md-links
-doc/spec/*	spec	safety-model comment-noise md-check stage0c-docs	-	-	-	md-links	-	doc	specification files trigger doc checks and stage0c-docs syntax check
+doc/spec/*	spec	safety-model comment-noise md-check stage0c-docs	-	-	-	md-links doc-snippets	-	doc	specification files trigger doc checks, stage0c-docs syntax check and doc snippets
 doc/man/*.scd	man	portability	-	-	-	man-pages	-	doc	scdoc manual pages trigger man-pages generation scenario
 doc/*.md	docs	safety-model safety-figures comment-noise md-check binary-sizes	-	-	-	doc-snippets readme-snippets getting-started md-links	-	doc	general documentation files trigger documentation checks and snippets
 *.md	docs	safety-model safety-figures comment-noise md-check binary-sizes	-	-	-	doc-snippets readme-snippets getting-started md-links	-	doc	top-level markdown files trigger documentation checks and snippets

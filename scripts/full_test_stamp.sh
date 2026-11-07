@@ -1,12 +1,14 @@
 #!/bin/sh
-# scripts/full_test_stamp.sh write|check — which tree the last whole `make test` passed on.
+# scripts/full_test_stamp.sh snapshot|write|check — which tree the last whole `make test` passed on.
 #
-#   write   record the current tree, compiler and toolchain fingerprint in
-#           build/full-test.stamp (scripts/test.sh calls this after a whole run that passed)
-#   check   exit 0 when the stamp matches the tree as it is now; otherwise print why and exit 1
+#   snapshot [OUT]  record tree hash, compiler and toolchain fingerprint to a pending key file
+#                   (scripts/test.sh calls this before the first item starts)
+#   write [IN] [TOT] move pending key to build/full-test.stamp with passing Total: line
+#                   (scripts/test.sh calls this after a whole run that passed)
+#   check           exit 0 when stamp matches current tree; otherwise print why and exit 1
 #
 # make test checks this before running tests: on an identical tree and toolchain, it prints one line
-# naming the earlier run and stops unless FORCE=1.
+# naming the earlier run and the earlier Total: line, then stops unless FORCE=1.
 cd "$(dirname "$0")/.." || exit 2
 . scripts/lib/portability.sh
 
@@ -23,26 +25,34 @@ ASSEMBLER_BIN="${ASSEMBLER_BIN:-as}"
 LINKER_BIN="${LINKER_BIN:-ld}"
 LINK_CC="${LINK_CC:-${CC:-cc}}"
 
-# tree_hash computes the git tree hash of the working tree excluding doc/tasks/ and build/.
-# Taskmark tracking files in doc/tasks/ are updated on every task iteration and do
-# not affect compiler, stdlib, tooling, or test outcomes. build/ holds generated artifacts
-# including full-test.stamp and build/zoril (tracked separately via compiler_hash).
+# tree_hash computes a deterministic hash of the working tree excluding doc/tasks/ and build/.
+# Does not write loose objects to .git/objects: uses HEAD tree hash plus git status and
+# git hash-object without -w for any modified or untracked files outside doc/tasks and build.
 tree_hash() {
     git rev-parse --verify -q HEAD >/dev/null 2>&1 || return 1
-    _tmp="$(mktemp -d "${TMPDIR:-/tmp}/zoril_tree_hash.XXXXXX")" || return 1
-    _idx="$_tmp/idx"
-    if ! GIT_INDEX_FILE="$_idx" git read-tree HEAD 2>/dev/null; then
-        rm -rf "$_tmp"
-        return 1
+    _head_tree=$(git rev-parse HEAD^{tree} 2>/dev/null) || return 1
+    _status=$(git status --porcelain -uall -- . ':!doc/tasks' ':!build' 2>/dev/null) || return 1
+    if [ -z "$_status" ]; then
+        printf '%s\n' "$_head_tree"
+        return 0
     fi
-    if ! GIT_INDEX_FILE="$_idx" git add -A -- . ':!doc/tasks' 2>/dev/null; then
-        rm -rf "$_tmp"
-        return 1
-    fi
-    GIT_INDEX_FILE="$_idx" git rm -r -q --cached doc/tasks build 2>/dev/null || true
-    _tree=$(GIT_INDEX_FILE="$_idx" git write-tree 2>/dev/null) || { rm -rf "$_tmp"; return 1; }
-    rm -rf "$_tmp"
-    printf '%s\n' "$_tree"
+    (
+        printf 'head:%s\n' "$_head_tree"
+        printf '%s\n' "$_status" | while IFS= read -r _line; do
+            [ -n "$_line" ] || continue
+            _st=$(printf '%s' "$_line" | cut -c 1-2)
+            _file=$(printf '%s' "$_line" | cut -c 4-)
+            case "$_file" in
+                *" -> "*) _file="${_file#* -> }" ;;
+            esac
+            if [ -e "$_file" ]; then
+                _h=$(git hash-object "$_file" 2>/dev/null || echo "missing")
+            else
+                _h="deleted"
+            fi
+            printf '%s %s %s\n' "$_st" "$_file" "$_h"
+        done
+    ) | sha256_of | awk '{print $1}'
 }
 
 compiler_hash() {
@@ -66,12 +76,16 @@ toolchain_fp() {
         if [ -f build/zilc ]; then
             sha256_of build/zilc 2>/dev/null | awk '{print "zilc: " $1}'
         fi
+        if [ -f scripts/check_deps.sh ]; then
+            sh scripts/check_deps.sh --fingerprint 2>/dev/null || echo "check_deps: error"
+        fi
     ) | sha256_of | awk '{print $1}'
 }
 
 case "${1:-}" in
-    write)
-        mkdir -p build
+    snapshot)
+        _target="${2:-${TR_WORK:-build/tests}/stamp.pending}"
+        mkdir -p "$(dirname "$_target")"
         git_checkout_usable . || exit 0
         cur_tree=$(tree_hash) || exit 0
         cur_compiler=$(compiler_hash)
@@ -79,7 +93,7 @@ case "${1:-}" in
         commit_full=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
         commit_short=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
         commit_date=$(git log -1 --format='%ci' HEAD 2>/dev/null || date -u '+%Y-%m-%d %H:%M:%S UTC')
-        if ! git diff --quiet HEAD 2>/dev/null || [ -n "$(git status --porcelain -- . ':!doc/tasks' 2>/dev/null)" ]; then
+        if ! git diff --quiet HEAD 2>/dev/null || [ -n "$(git status --porcelain -uall -- . ':!doc/tasks' ':!build' 2>/dev/null)" ]; then
             commit_short="${commit_short}+dirty"
         fi
         {
@@ -89,7 +103,26 @@ case "${1:-}" in
             printf 'tree:%s\n' "$cur_tree"
             printf 'compiler:%s\n' "$cur_compiler"
             printf 'toolchain:%s\n' "$cur_toolchain"
-        } > "$STAMP.tmp" && mv "$STAMP.tmp" "$STAMP"
+        } > "$_target.tmp" && mv "$_target.tmp" "$_target"
+        ;;
+    write)
+        mkdir -p build
+        _pending="${2:-${TR_WORK:-build/tests}/stamp.pending}"
+        _total_line="${3:-}"
+        # If pending file does not exist, compute snapshot directly
+        if [ ! -f "$_pending" ]; then
+            _pending="$STAMP.pending_direct"
+            sh "$0" snapshot "$_pending" || exit 0
+        fi
+        if [ -f "$_pending" ]; then
+            {
+                cat "$_pending"
+                if [ -n "$_total_line" ]; then
+                    printf 'total:%s\n' "$_total_line"
+                fi
+            } > "$STAMP.tmp" && mv "$STAMP.tmp" "$STAMP"
+            rm -f "$_pending" "$_pending.tmp"
+        fi
         ;;
     check)
         [ -f "$STAMP" ] || { echo "no whole 'make test' has passed in this tree (no $STAMP): run make test" >&2; exit 1; }
@@ -103,6 +136,7 @@ case "${1:-}" in
         stamp_tree=""
         stamp_compiler=""
         stamp_toolchain=""
+        stamp_total=""
         while IFS= read -r line || [ -n "$line" ]; do
             case "$line" in
                 commit:*) stamp_commit="${line#commit:}" ;;
@@ -111,6 +145,7 @@ case "${1:-}" in
                 tree:*)   stamp_tree="${line#tree:}" ;;
                 compiler:*) stamp_compiler="${line#compiler:}" ;;
                 toolchain:*) stamp_toolchain="${line#toolchain:}" ;;
+                total:*)  stamp_total="${line#total:}" ;;
             esac
         done < "$STAMP"
         if [ -z "$stamp_tree" ] || [ -z "$stamp_compiler" ] || [ -z "$stamp_toolchain" ]; then
@@ -132,7 +167,10 @@ case "${1:-}" in
         desc="git:${stamp_short:-unknown}"
         [ -n "$stamp_date" ] && desc="$desc, $stamp_date"
         printf 'make test: tree, compiler and toolchain fingerprint unchanged since earlier run (%s); stopping (FORCE=1 to run)\n' "$desc"
+        if [ -n "$stamp_total" ]; then
+            printf '%s\n' "$stamp_total"
+        fi
         exit 0
         ;;
-    *) echo "usage: full_test_stamp.sh write|check" >&2; exit 2 ;;
+    *) echo "usage: full_test_stamp.sh snapshot|write|check" >&2; exit 2 ;;
 esac

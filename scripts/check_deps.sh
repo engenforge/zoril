@@ -45,7 +45,49 @@ elif [ -f "$_d/lib/scdoc_version.sh" ]; then
     . "$_d/lib/scdoc_version.sh"
 fi
 
+lua_too_old() {
+    ! "$1" -e 'if not math.tointeger then os.exit(1) end' >/dev/null 2>&1
+}
+
 REQUIRED_ONLY=0
+if [ "${1:-}" = "--fingerprint" ]; then
+    CC_BIN="${CC:-cc}"
+    BACKEND_BIN="${BACKEND_BIN:-qbe}"
+    ASSEMBLER_BIN="${ASSEMBLER_BIN:-as}"
+    LINKER_BIN="${LINKER_BIN:-ld}"
+    CPROC_BIN="${CPROC:-cproc}"
+    MINIMAL_CPP_BIN="${MINIMAL_CPP:-mcpp}"
+    for _t in "$BACKEND_BIN" "$ASSEMBLER_BIN" "$LINKER_BIN" "$CC_BIN" awk sed bash flock mkfifo xargs lua rustc scdoc setsid valgrind dprint timeout git "$CPROC_BIN" "$MINIMAL_CPP_BIN"; do
+        _bin="${_t%% *}"
+        if command -v "$_bin" >/dev/null 2>&1; then
+            _ver=""
+            case "$_t" in
+                lua)
+                    if lua_too_old "$_bin"; then
+                        _ver="unsupported (< 5.3)"
+                    else
+                        _ver=$("$_bin" -v 2>&1 | head -n1)
+                    fi
+                    ;;
+                scdoc)
+                    if _sv=$(scdoc_found) && scdoc_old "$_sv"; then
+                        _ver="unsupported ($_sv < $SCDOC_MIN)"
+                    else
+                        _ver=$(scdoc_found 2>/dev/null || echo "present")
+                    fi
+                    ;;
+                *)
+                    _ver=$("$_bin" --version 2>/dev/null | head -n1 || true)
+                    [ -n "$_ver" ] || _ver="present"
+                    ;;
+            esac
+            printf '%s: %s\n' "$_t" "$_ver"
+        else
+            printf '%s: absent\n' "$_t"
+        fi
+    done
+    exit 0
+fi
 if [ "${1:-}" = "--required-only" ]; then
     REQUIRED_ONLY=1
     shift
@@ -76,9 +118,6 @@ LIST_TOOLS_MODE=0
 # The fuzzer's generator needs Lua 5.3 or newer: it draws its random stream from 64-bit integer
 # arithmetic and calls math.tointeger, and Lua 5.1 and LuaJIT, which have only doubles, produce other
 # programs from the same seeds. math.tointeger exists exactly from 5.3.
-lua_too_old() {
-    ! "$1" -e 'if not math.tointeger then os.exit(1) end' >/dev/null 2>&1
-}
 
 check_required() {
     _id="$1"

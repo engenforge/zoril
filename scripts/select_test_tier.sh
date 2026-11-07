@@ -31,6 +31,10 @@ TIERS_TABLE="${TEST_TIERS_TABLE:-scripts/test_tiers.tsv}"
 MODE="args"
 
 ALL_GATES="fmt-check md-check no-new-deps binary-sizes no-warnings test-strength fuzz-record fuzz-fresh safety-matrix safety-matrix-zbuild safety-model safety-comments safety-figures comment-noise reborrow-probes exhaustive route-coverage temp-names unsafe-scan runtimes static-image perf-gate toolchain portability clean-tree toolchain-offpath stage0c-fixed-bugs stage0c-unit stage0c-corpus stage0c-docs stage0c-error-locations stage0c-functional stage0c-minimal mutation-self-test"
+if [ -x "scripts/test.sh" ]; then
+    _detected_gates=$(./scripts/test.sh --list-gates 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')
+    [ -n "$_detected_gates" ] && ALL_GATES="$_detected_gates"
+fi
 ALL_GROUPS="language types memory stdlib diagnostics integration"
 
 # Parse command line flags
@@ -112,6 +116,7 @@ INPUT_PATHS=$(printf '%s\n' "$INPUT_PATHS" | tr '\t\r\n' ' ' | sed 's/^ *//; s/ 
 
 # If no paths were given at all, default to full run (outside git checkout / unknown tree)
 if [ -z "$INPUT_PATHS" ]; then
+    echo "test-changed: no changed files, running all tests" >&2
     INPUT_PATHS="__EMPTY_INPUT_RUN_ALL__"
 fi
 
@@ -141,6 +146,40 @@ is_excluded_gate() {
         if [ "$_ex_name" = "$_g" ]; then return 0; fi
     done
     return 1
+}
+
+# Helper to get the group a scenario belongs to
+scenario_group() {
+    case "$1" in
+        cross-module-safety-matrix|origins)
+            echo "memory" ;;
+        sha256-differential)
+            echo "stdlib" ;;
+        zilc-errors)
+            echo "diagnostics" ;;
+        *)
+            echo "integration" ;;
+    esac
+}
+
+# Helper to get the group a test file or module belongs to
+test_file_group() {
+    case "$1" in
+        tests/language/enums/*|tests/language/generics/*|tests/language/structs/*|tests/language/traits/*|tests/functional/enums/*|tests/functional/structs/*)
+            echo "types" ;;
+        tests/language/memory/*|tests/language/pointers/*|tests/language/closures/*|tests/functional/pointers/*|tests/interproc_summary/*)
+            echo "memory" ;;
+        tests/stdlib/*|tests/functional/stdlib/*|tests/helpers/*)
+            echo "stdlib" ;;
+        tests/error_reporting/*)
+            echo "diagnostics" ;;
+        tests/integration/*|tests/regressions/*|tests/bootstrap/*|corpus/*|tests/include/*)
+            echo "integration" ;;
+        tests/language/*|tests/functional/*|tests/compiler/*|tests/unit/*|tests/benchmarks/*)
+            echo "language" ;;
+        *)
+            echo "" ;;
+    esac
 }
 
 # Helper to check if a path matches a pattern
@@ -198,6 +237,10 @@ is_test_file() {
 
 # Process each input path
 for path in $INPUT_PATHS; do
+    if [ "$ALL_RUN" -eq 1 ]; then
+        break
+    fi
+
     if [ "$path" = "__EMPTY_INPUT_RUN_ALL__" ]; then
         ALL_RUN=1
         SEL_TIERS="$SEL_TIERS all"
@@ -305,6 +348,15 @@ for path in $INPUT_PATHS; do
     # If the path is a runnable test file, record it in SEL_PATHS
     if is_test_file "$path"; then
         has_word "$path" "$SEL_PATHS" || SEL_PATHS="$SEL_PATHS $path"
+    else
+        case "$path" in
+            *_lib.zrl|*/include/*)
+                _lib_grp=$(test_file_group "$path")
+                if [ -n "$_lib_grp" ]; then
+                    has_word "$_lib_grp" "$SEL_GROUPS" || SEL_GROUPS="$SEL_GROUPS $_lib_grp"
+                fi
+                ;;
+        esac
     fi
 done
 
@@ -356,7 +408,7 @@ case "$MODE" in
         ;;
     args)
         # If nothing was selected (e.g. table without fallback and unlisted path)
-        if [ -z "$SEL_GATES" ] && [ -z "$SEL_GROUPS" ] && [ -z "$SEL_PATHS" ]; then
+        if [ -z "$SEL_GATES" ] && [ -z "$SEL_GROUPS" ] && [ -z "$SEL_SCENARIOS" ] && [ -z "$SEL_PATHS" ]; then
             exit 1
         fi
 
@@ -370,16 +422,21 @@ case "$MODE" in
         for g in $SEL_GATES; do
             ARGS="$ARGS --gate $g"
         done
-
-        if [ -n "$SEL_GROUPS" ]; then
-            for gr in $SEL_GROUPS; do
-                ARGS="$ARGS --group $gr"
-            done
-        elif [ -n "$SEL_PATHS" ]; then
-            for tp in $SEL_PATHS; do
+        for gr in $SEL_GROUPS; do
+            ARGS="$ARGS --group $gr"
+        done
+        for sc in $SEL_SCENARIOS; do
+            _sc_grp=$(scenario_group "$sc")
+            if ! has_word "$_sc_grp" "$SEL_GROUPS"; then
+                ARGS="$ARGS --scenario $sc"
+            fi
+        done
+        for tp in $SEL_PATHS; do
+            _tp_grp=$(test_file_group "$tp")
+            if ! has_word "$_tp_grp" "$SEL_GROUPS"; then
                 ARGS="$ARGS $tp"
-            done
-        fi
+            fi
+        done
 
         printf '%s\n' "$ARGS" | sed 's/^ *//; s/ *$//'
         exit 0
@@ -393,33 +450,21 @@ case "$MODE" in
         for g in $SEL_GATES; do
             ARGS="$ARGS --gate $g"
         done
-
-        if [ -n "$SEL_GROUPS" ]; then
-            for gr in $SEL_GROUPS; do
-                ARGS="$ARGS --group $gr"
-            done
-        elif [ -n "$SEL_PATHS" ]; then
-            for tp in $SEL_PATHS; do
-                ARGS="$ARGS $tp"
-            done
-        fi
-
-        # If doc-only tier has scenarios (like md-links) and no groups were selected
-        if [ -z "$SEL_GROUPS" ] && [ -n "$SEL_SCENARIOS" ]; then
-            # Run test.sh with gates first
-            if [ -n "$ARGS" ]; then
-                eval "./scripts/test.sh $ARGS" || exit $?
+        for gr in $SEL_GROUPS; do
+            ARGS="$ARGS --group $gr"
+        done
+        for sc in $SEL_SCENARIOS; do
+            _sc_grp=$(scenario_group "$sc")
+            if ! has_word "$_sc_grp" "$SEL_GROUPS"; then
+                ARGS="$ARGS --scenario $sc"
             fi
-            # Run standalone scenarios
-            for sc in $SEL_SCENARIOS; do
-                case "$sc" in
-                    md-links) ./scripts/test_check_md_links.sh || exit $? ;;
-                    man-pages) ./scripts/test_man_pages.sh || exit $? ;;
-                    *) ./scripts/test.sh --group integration || exit $? ;;
-                esac
-            done
-            exit 0
-        fi
+        done
+        for tp in $SEL_PATHS; do
+            _tp_grp=$(test_file_group "$tp")
+            if ! has_word "$_tp_grp" "$SEL_GROUPS"; then
+                ARGS="$ARGS $tp"
+            fi
+        done
 
         eval "exec ./scripts/test.sh $ARGS"
         ;;

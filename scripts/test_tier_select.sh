@@ -124,9 +124,7 @@ done
 
 . scripts/lib/test_runner.sh 2>/dev/null || true
 . scripts/lib/layout.sh 2>/dev/null || true
-all_scenarios=$(sed -n '/^group_scenarios()/,/^}/p' scripts/test.sh | grep -E '^\s*echo' | sed 's/echo//' | tr '\n' ' ')
-# Also include tier-select scenario
-all_scenarios="$all_scenarios tier-select"
+all_scenarios=$(sed -n '/^group_scenarios()/,/^}/p' scripts/test.sh | grep -E '^[[:space:]]*echo' | sed 's/echo//' | tr '\n' ' ')
 
 missing_scenarios=""
 for sc in $all_scenarios; do
@@ -203,6 +201,78 @@ if echo "$union_gates" | grep -qw "comment-noise" && echo "$union_gates" | grep 
     pass "union semantics combine checks across different tiers cleanly"
 else
     fail "union semantics combine checks across different tiers cleanly" "gates='$union_gates', paths='$union_paths'"
+fi
+
+# Case 11: ALL_GATES match between test.sh and select_test_tier.sh
+runner_gates=$(./scripts/test.sh --list-gates | sort -u | tr '\n' ' ' | sed 's/ *$//')
+selector_gates=$(printf 'scripts/lib/portability.sh\n' | "$SELECTOR" --gates)
+if [ "$runner_gates" = "$selector_gates" ]; then
+    pass "ALL_GATES matches between scripts/test.sh and select_test_tier.sh"
+else
+    fail "ALL_GATES match" "runner='$runner_gates', selector='$selector_gates'"
+fi
+
+# Case 12: Every scenario row emits --scenario in selector output
+scen_rows_ok=1
+scen_mismatch=""
+while IFS="	" read -r t_pat t_tier t_gates t_ex_gates t_groups t_ex_groups t_scen t_ex_scen t_flags t_desc || [ -n "$t_pat" ]; do
+    case "$t_pat" in
+        ""|"#"*|\*) continue ;;
+    esac
+    if [ "$t_scen" != "-" ] && [ "$t_scen" != "ALL" ]; then
+        sample_path="$t_pat"
+        case "$sample_path" in
+            *\*) sample_path="${sample_path%\*}sample.txt" ;;
+        esac
+        emitted_args=$(printf '%s\n' "$sample_path" | "$SELECTOR")
+        for sc in $t_scen; do
+            if ! echo "$emitted_args" | grep -qw -- "--scenario $sc"; then
+                scen_rows_ok=0
+                scen_mismatch="$scen_mismatch ($sample_path missing --scenario $sc in '$emitted_args')"
+            fi
+        done
+    fi
+done < "$TABLE"
+
+if [ "$scen_rows_ok" -eq 1 ]; then
+    pass "every row with explicit scenarios emits --scenario in selector output"
+else
+    fail "scenario row emission" "mismatches: $scen_mismatch"
+fi
+
+# Case 13: Helper and functional test union
+helper_func_args=$(printf 'tests/helpers/x.zrl\ntests/functional/assign_type_checked.zrl\n' | "$SELECTOR")
+expected_hf="--gate stage0c-functional --gate test-strength --group stdlib tests/functional/assign_type_checked.zrl"
+if [ "$helper_func_args" = "$expected_hf" ]; then
+    pass "helper module and functional test run both stdlib group and individual test"
+else
+    fail "helper module and functional test union" "got '$helper_func_args', expected '$expected_hf'"
+fi
+
+# Case 14: foo_lib.zrl selects its group (language)
+foo_lib_args=$(printf 'tests/functional/basic/foo_lib.zrl\n' | "$SELECTOR")
+expected_foo="--gate stage0c-functional --gate test-strength --group language"
+if [ "$foo_lib_args" = "$expected_foo" ]; then
+    pass "foo_lib.zrl selects language group"
+else
+    fail "foo_lib.zrl group selection" "got '$foo_lib_args', expected '$expected_foo'"
+fi
+
+# Case 15: doc/spec/* selects doc-snippets and md-links
+spec_args=$(printf 'doc/spec/surface_syntax.md\n' | "$SELECTOR")
+if echo "$spec_args" | grep -qw -- "--scenario doc-snippets" && echo "$spec_args" | grep -qw -- "--scenario md-links"; then
+    pass "doc/spec/* selects both doc-snippets and md-links scenarios"
+else
+    fail "doc/spec/* scenario selection" "got '$spec_args'"
+fi
+
+# Case 16: Empty change list prints notice to stderr and selects --gates
+empty_err=$(printf '' | "$SELECTOR" 2>&1 >/dev/null)
+empty_out=$(printf '' | "$SELECTOR" 2>/dev/null)
+if echo "$empty_err" | grep -qF "test-changed: no changed files, running all tests" && [ "$empty_out" = "--gates" ]; then
+    pass "empty change list prints notice to stderr and selects --gates"
+else
+    fail "empty change list" "stderr='$empty_err', stdout='$empty_out'"
 fi
 
 if [ "$errors" -gt 0 ]; then
