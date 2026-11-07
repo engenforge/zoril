@@ -1702,3 +1702,41 @@ date: 2026-11-03
       - C7: `scripts/check_portability.sh` passed.
         `make test`: `Total: 3400 run, 3400 passed, 0 failed, 88 skipped (130.7s)`
         `make preflight-changed`: `Total: 1259 run, 1259 passed, 0 failed, 0 skipped (46.8s)`
+
+- [x] +testinfra +measurement +AI-D Z-0122 T11a Where a small program's 31 ms of stdlib goes
+    > **Created:** 2026-11-06, split from Z-0116 by the review (a measurement and a decision are separate tasks). **Before:** Z-0116.
+    > **Completed:** 2026-11-07 git:57adc86
+
+    - **Do:** Z-0116's **Measure** bullet: the share of parse, name resolution, type checking, the checkers and the lowering of unused stdlib items in `zoril --emit-zil` on a store-grid cell, from a phase timer or `perf` over a loop of runs. Record the commands and the figures here, and in Z-0116.
+    - **Also (review of Z-0120, 2026-11-07):** 138,240 front-end runs at about 31 ms are about 4,300 CPU-seconds, about 270 s of wall time on 16 CPUs, but the differential's program phases took 609 s. Measure the differential's loop (`scripts/check_reject_diff.sh` and `run_front.sh`): jobs used, CPU busy over the phase, and the per-program cost beyond `zoril` itself, so Z-0116 compares its options with the loop's own overhead.
+    - **Host and inputs (2026-11-07, git:57adc86):** AMD Ryzen 7 3700X, 8 cores, 16 threads. The cell is `arena_vec__arena_struct_bundle__closure__call_mut__drop.twin.zrl` from `lua scripts/fuzz/store_grid.lua --generate-all build/z122/grid` (68,640 programs; with the 487 probes, 69,127 per side). Every grid cell imports `vec.zrl` and `mem.zrl`, which parse 8 stdlib files. Controls: `build/z122/noimp.zrl` (`fn main() -> i32 { return 0; }`) and `build/z122/imp.zrl` (the same with the two imports). `perf` is not permitted on this host (`perf_event_paranoid`), so phases were timed from `-v`'s `PROGRESS:` lines and the work split with `valgrind --tool=callgrind`.
+    - **Finding 1, how far a run goes:** mean of 100 runs, ms per run, by the last stage requested:
+
+    | Program   | `--emit-deps` | `--emit-interface` | `--emit-zir-stats` | `--emit-zil` |
+    | --------- | ------------: | -----------------: | -----------------: | -----------: |
+    | no import |          0.59 |               0.93 |               0.92 |         0.86 |
+    | `imp.zrl` |          3.24 |               4.67 |              28.50 |        29.86 |
+    | the cell  |          3.29 |               6.03 |              29.54 |        31.39 |
+
+    The cell's own code costs about 1.5 ms; the other 30 ms are the stdlib, and most of it lies between the interface (resolution and type checking) and ZIR.
+    - **Finding 2, phases** (mean of 40 `-v` runs, a reader process timestamping each `PROGRESS:` line): for the cell, startup 0.87 ms, parsing 2.98, resolving 0.32, lowering 21.59, verifying 3.65, emitting 1.95, total 31.4 ms. The lowering phase includes the per-function body passes, the ZIR checker among them. With only `core0.zrl` imported (15 functions lowered) lowering is 1.74 ms; with `io.zrl` (56) 15.43; with `mem.zrl` or `vec.zrl` (83) 20.6. It grows with the number of stdlib functions lowered, about 0.25 ms each.
+    - **Finding 3, what is lowered:** every non-generic function of every imported stdlib module is lowered, checked and emitted, whether the program reaches it or not: 83 functions for `imp.zrl`, whose `main` returns 0 (generic ones are instantiated on use). Its ZIL is 263,827 bytes; the cell's 297,022. Reachable from `main` and from the runtime's entry points (every `zoril_*` function, kept conservatively) are 28 of the cell's 74 ZIL functions: 33% of the function bytes. Counted with `build/z122/reach.awk` (a breadth-first walk over the `fN` references in each function body of the `.zil`).
+    - **Finding 4, the work by pass** (callgrind on `imp.zrl`, 289 M instructions): `Driver::lower_module` 73.0% inclusive, of which `ZirVerifier::verify` (the ZIR checker) 47.4% and the lowering itself the rest; `verify_module` 12.8% (`Verifier::verify` 8.0%, `InterprocSummaryPass` 4.6%); `Parser::parse_module` 9.7%; `write_zil` 4.0%. By module, exclusive: `check_zir` 38.9%, runtime assembly (`memcpy` and the like) 11.6%, `stdlib/bytevec` 7.0%, `verify` 5.5%, `summary_pass` 3.7%, the lexer 3.6%, `stdlib/core` 3.5%, `stdlib/vec` 3.3%. Peak RSS is about 23 MB a run.
+    - **Finding 5, the rest of the pipeline:** for the cell, `zilc` 8.7 ms, `qbe` 17.9, `as` 5.0, `ld` 2.4, the program 0.5 (30 runs each, `build/z122/pipe.sh`); for `imp.zrl` 7.9, 16.4, 4.6, 2.4. A per-file test that imports the stdlib spends about 62 ms in the pipeline, almost all of it on stdlib code it does not reach. In `make test` (131.5 s, `timings.tsv`), the per-file tests sum to 143 item-seconds, the gates to 752 and the scenarios to 349; 467 of the 1,283 per-file tests import a module.
+    - **Finding 6, the differential's loop** (every 17th grid program, 4,037, `xargs -P 16 -n 40` as `check_reject_diff.sh` runs it, `run_front.sh` taken verbatim from the script; host busy from `/proc/stat`): `run_front.sh` 18.3 s wall, 260.3 CPU-s (user 189.7, sys 70.6), 64.5 ms CPU per program, host 94.1% busy; `zoril` alone in the same `xargs` 15.8 s, 224.1 CPU-s (user 189.5, sys 34.6), 55.5 ms per program, 93.9% busy. So the 16 jobs keep the host busy; a program costs 55 ms of CPU under load against 31 ms on a quiet core (8 cores shared by 16 jobs, and system time from page faults more than doubles); and the wrapper adds 9 ms a program (16%), nearly all system time: per program it forks a command substitution, `timeout`, and `head`, `sed` and `cut`. 69,127 programs a side at this rate is 313 s a side, 626 s for both, against Z-0120's 609 s.
+    - **Scripts** (under `build/z122/`, not committed; the two that carry a method are here so the figures can be taken again):
+
+    ```sh
+    # phases.sh N FILE: mean ms at each PROGRESS line (each line opens a phase; the difference is the phase before it)
+    for ((i=0;i<n;i++)); do t0=$EPOCHREALTIME
+      ./build/zoril -I stdlib=stdlib -v --emit-zil -o /dev/null "$f" 2>&1 </dev/null | while IFS= read -r l; do
+        case "$l" in PROGRESS:*) echo "$EPOCHREALTIME ${l#PROGRESS: }";; esac; done | awk -v t0=$t0 '{ printf "%s %.3f\n", $2, ($1 - t0) * 1000 }'
+    done | awk '{ s[$1] += $2; c[$1]++ } END { for (k in s) print k, s[k] / c[k] }'
+    # reach.awk FILE.zil: roots are main and every zoril_* function; edges are the fN names in a function body
+    /^(extern )?f[0-9]+: / { cur = $0; sub(/^extern /, "", cur); sub(/:.*/, "", cur); name = $0; sub(/\(.*/, "", name); n = split(name, w, " "); fname[cur] = w[n]; if (w[n] ~ /(^|::)(main|zoril_.*)$/) root[cur] = 1 }
+    cur != "" { bytes[cur] += length($0) + 1; s = $0; while (match(s, /f[0-9]+/)) { edge[cur, substr(s, RSTART, RLENGTH)] = 1; s = substr(s, RSTART + RLENGTH) } }
+    /^}/ { cur = "" }
+    # END: a breadth-first walk from the roots over edge[], then the reachable share of functions and of bytes
+    ```
+
+    - **Completion:** measurements only; no file in the tree changed. The commands are above; `make test` for Finding 5's breakdown: `Total: 3400 run, 3400 passed, 0 failed, 88 skipped (131.5s)`.
