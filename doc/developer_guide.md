@@ -40,16 +40,25 @@ Before submitting changes, all contributions must pass rigorous verification sui
 
 ### Verification Rules
 
-- **Code Changes:** Any task modifying `src/`, `stdlib/`, or `tools/` must pass both `make test` and `make preflight-changed` prior to commit.
-- **Documentation or Test Only Changes:** Must pass `make test`.
-- **Smoke Tests:** While editing, run `make test-fast` for sub-second feedback on core functionality.
+- **Scoped Tier While Editing:** Run `make test-changed` while editing to run only what the tier table (`scripts/test_tiers.tsv`) selects for modified and untracked files. Use `make test-changed BASE=<commit>` to select changes against a base commit.
+- **Code Changes:** Any task modifying `src/`, `stdlib/`, or `tools/` must pass both `make test` and `make preflight-changed` once, after the last change to compiled code.
+- **Documentation or Task Only Changes:** If a passing whole test run has already run on the tree, a commit modifying only documentation or task files reruns only the doc tier (`make test-changed` or its gates).
+- **Smoke Tests:** While editing, run `make test-fast` for sub-second feedback on core functionality (`make test-fast` alone is never enough for a code change).
+- **Unchanged Tree Stamp:** On an unchanged tree (tree, compiler, and toolchain fingerprint unchanged since the last passing whole run), `make test` stops early and prints `make test: tree, compiler and toolchain fingerprint unchanged since earlier run (git:<sha>, <timestamp>); stopping (FORCE=1 to run)` followed by the earlier run's `Total:` summary line. Run `make test FORCE=1` to force a full rerun.
 
 ```sh
 # Fast smoke tests during development
 make test-fast
 
-# Full fast test suite: unit, functional, error-reporting, and safety matrix
+# Scoped tier for changed files during development
+make test-changed
+# Scoped tier against a base commit
+make test-changed BASE=main
+
+# Full test suite (stops early if tree and compiler are unchanged)
 make test
+# Force full test suite run even if tree is unchanged
+make test FORCE=1
 
 # Fast pre-merge gate: 4-generation bootstrap fixpoint + mutation tests on changed files
 make preflight-changed
