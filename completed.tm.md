@@ -1292,7 +1292,7 @@ date: 2026-11-03
         - Verified preflight: `Total: 1264 run, 1264 passed, 0 failed, 0 skipped (52.7s)` in checked pass, fixpoint identical, all gates passed.
 
 - [x] +testinfra +tests +AI-G Z-0129 T2d `make test-changed` and `preflight-changed`'s skip, wired to the tier table
-    > **Completed:** 2026-11-07
+    > **Completed:** 2026-11-07 git:aab7dc2
     > **Created:** 2026-11-07, split from Z-0115 by the review of Z-0106. **Depends:** Z-0115. **Before:** Z-0121, Z-0112.
 
     - **Do:** `make test-changed BASE=<commit>` builds the changed-path list in the Makefile only (the series rule: no git in `scripts/test.sh` or the selector): `git diff --name-only --no-renames <base>` (so a rename lists its old path too, and deletions are listed), plus untracked files (`git ls-files --others --exclude-standard`), which `git diff` does not list. It feeds the list to Z-0115's selector on stdin and runs `scripts/test.sh` with what the selector prints. Outside a git checkout (a source tarball), `test-changed` says so and runs everything.
@@ -1307,7 +1307,7 @@ date: 2026-11-03
         - Verified preflight-changed: `Total: 1265 run, 1265 passed, 0 failed, 0 skipped (52.8s)` in checked pass, fixpoint identical, performance thresholds within tolerance.
 
 - [x] +testinfra +tests +AI-G Z-0121 T2c `make test` on a tree identical to the last passing run says so and stops
-    > **Completed:** 2026-11-07
+    > **Completed:** 2026-11-07 git:f485fd3
     > **Created:** 2026-11-06, split from Z-0115 by the review. **Depends:** Z-0115.
 
     - **Do:** `build/full-test.stamp` records the tree the last whole passing run saw. `make test` on the same tree, compiler and toolchain fingerprint prints one line naming the earlier run and stops, unless `FORCE=1`. Decide, and record here, which paths are left out of the stamp's hash (`doc/tasks/` only, or what Z-0106's doc tier lists) and why each cannot change a result.
@@ -1325,7 +1325,7 @@ date: 2026-11-03
         - Verified `make preflight-changed`: `Total: 1265 run, 1265 passed, 0 failed, 0 skipped (52.1s)` in checked pass, fixpoint byte-identical, benchmarks within thresholds. Cleaned host benchmark files from `bench/`.
 
 - [x] +testinfra +tests +AI-G Z-0141 T2e `make test-changed` runs everything the tier table selects
-    > **Completed:** 2026-11-07
+    > **Completed:** 2026-11-07 git:9a564d9
     > **Created:** 2026-11-07 by the review of Z-0115 and Z-0129. **Depends:** Z-0129. **Before:** Z-0112.
 
     - **Why:** the selector picks the right scenarios, but they never reach `scripts/test.sh`, and the tests of Z-0115 and Z-0129 check what is selected rather than what runs. Findings, each reproduced on git:ceb3e40:
@@ -1351,7 +1351,7 @@ date: 2026-11-03
         - Verified `make preflight-changed`: `Total: 1265 run, 1265 passed, 0 failed, 0 skipped (53.5s)`.
 
 - [x] +testinfra +tests +AI-G Z-0142 T2f The unchanged-tree stamp records the tree a run started on
-    > **Completed:** 2026-11-07
+    > **Completed:** 2026-11-07 git:9a564d9
     > **Created:** 2026-11-07 by the review of Z-0121. **Depends:** Z-0121. **Before:** Z-0112.
 
     - **Why:** `scripts/test.sh` calls `full_test_stamp.sh write` after its last item, and `tree_hash` hashes the tree as it is then. A file edited during the run (about four minutes) is recorded as passed, and the next `make test` stops without testing it. Before Z-0121 this misled only the export guard; now it skips real runs.
@@ -1374,7 +1374,7 @@ date: 2026-11-03
         - Verified `make preflight-changed`: `Total: 1265 run, 1265 passed, 0 failed, 0 skipped (53.5s)`.
 
 - [x] +testinfra +docs +AI-G Z-0112 T8 `AGENTS.md`: when in a task each suite runs
-    > **Completed:** 2026-11-07
+    > **Completed:** 2026-11-07 git:c3433b2
     > **Created:** 2026-11-06 **After:** Z-0106 (it names the tiers).
 
     - **Do:** rewrite `AGENTS.md` "Running tests" and the completion-note rule: run the scoped tier while editing. Run `make test` and `make preflight-changed` once, after the last change to compiled code. A commit that changes only task files or prose after a passing run reruns only the doc tier and cites the earlier run in its note. A rerun is needed only after a change the tier table says can affect it. Keep the rule that `make test-fast` alone is never enough for a code change.
