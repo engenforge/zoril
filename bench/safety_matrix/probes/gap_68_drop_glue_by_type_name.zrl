@@ -1,0 +1,10 @@
+// name: A type named like another module's type with a Drop impl is dropped with that impl
+// expected: known_gap
+// gap: struct Arena { x: i64 } beside import "mem.zrl" is dropped at scope end by stdlib::mem::Arena::drop, which unmaps the user's field as an arena header and faults: the drop glue is found by the bare name `Arena::drop` (find_drop_fn in src/lower_zir_to_zil.zrl, has_drop_impl in the lowering, check_zir and verify), with no module; route class: a type's function found by its unqualified name (Z-0162)
+// observed: runtime_fault
+import "mem.zrl";
+struct Arena { x: i64 }
+fn main() -> i32 {
+    let local = Arena { x: 1 };
+    return (local.x - 1) as i32;
+}
