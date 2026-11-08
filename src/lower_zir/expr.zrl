@@ -143,11 +143,16 @@ impl ZirLowerer {
         let mut decl_id = match sym.kind {
             SymbolKind.Type(ty) => { return (ty, 0 as u32); },
             SymbolKind.Global(d) => d,
+            _ => 0 as u32,
+        };
+        // A function, constant or static is `Global` too (a function until it is lowered).
+        match self.resolver.ast.decls[decl_id as usize] {
+            Decl.Struct(_) | Decl.Enum(_) | Decl.TypeAlias(_) => {},
             _ => {
                 self.report_error_with_symbol("not a struct: ", s.struct_name, span);
                 return (0 as u32, 0 as u32);
             },
-        };
+        }
         if let Decl.TypeAlias(ta) = self.resolver.ast.decls[decl_id as usize] {
             let target = self.resolver.resolve_type(ta.target);
             if target != 0 as u32 {
