@@ -1,0 +1,10 @@
+// name: Generic null-cast hole through a type parameter named like a global struct
+// expected: compile_reject
+struct P { a: i32 }
+fn mk<P>(n: u64) -> P {
+    return n as P;
+}
+fn main() -> i32 {
+    let r: &i32 = mk::<&i32>(8 as u64);
+    return *r;
+}

@@ -1830,12 +1830,10 @@ impl Resolver {
                 let name = path.0;
                 let self_id = self.intern_table.intern("Self");
                 if name == self_id { return false; }
-                // Bound to a type here, and not the name of a global type.
+                // Bound to a type here: every `SymbolKind.Type` other than `Self` is a type
+                // parameter, even when a global type, function or constant has its name.
                 if let Option.Some(s) = self.lookup_ptr(name) {
                     if let SymbolKind.Type(_) = s.kind {
-                        if let Option.Some(root) = self.lookup_global_ptr(name) {
-                            if root.global_decl().is_some() { return false; }
-                        }
                         return true;
                     }
                 }

@@ -1317,9 +1317,6 @@ impl Driver {
                 self.resolver.define(type_params[i].name, SymbolKind.Type(type_args[i]), false);
             }
         }
-        if self_name != 0 as u32 {
-            self.resolver.define(self_name, SymbolKind.Type(self_ty), false);
-        }
         let self_id = self.intern_table.intern("Self");
         self.resolver.define(self_id, SymbolKind.Type(self_ty), false);
         let saved_implicit_self_ty = self.implicit_self_ty;

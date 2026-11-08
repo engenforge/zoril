@@ -3881,11 +3881,14 @@ impl ZirLowerer {
             );
             return;
         }
-        let is_target_ref = self.resolver.is_ref_type(c.target_ty);
-        let is_target_fn = (self.resolver.is_fn_type(c.target_ty) || self.is_fn_type(target_ty))
-            && !self.is_c_fn_pointer_type(target_ty);
         let is_target_param = self.resolver.is_type_param(c.target_ty)
             || (target_ty != 0 as u32 && self.get_type_tag(target_ty) == ILTYPE_VAR);
+        let is_target_ref = self.resolver.is_ref_type(c.target_ty)
+            || (!is_target_param
+                && !self.resolver.is_assoc_type_path(c.target_ty)
+                && is_reference_tag(target_tag));
+        let is_target_fn = (self.resolver.is_fn_type(c.target_ty) || self.is_fn_type(target_ty))
+            && !self.is_c_fn_pointer_type(target_ty);
         if is_target_ref {
             let src_ty = self.get_place_type(inner_place);
             if self.is_integer_primitive_type(src_ty) {

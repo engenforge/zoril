@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: cannot cast integer to reference type: references cannot be null
+type Ref = &i32;
+impl Ref { fn forge(n: u64) -> Self { return n as Self; } }
+fn main() -> i32 { let f = Ref::forge; let r: &i32 = f(8 as u64); return *r; }

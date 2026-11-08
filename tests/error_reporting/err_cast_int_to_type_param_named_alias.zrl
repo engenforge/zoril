@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: cannot cast integer to type parameter: type parameters may be reference types
+type P = u64;
+fn mk<P>(n: u64) -> P { return n as P; }
+fn main() -> i32 { let r: &i32 = mk::<&i32>(8 as u64); return *r; }
