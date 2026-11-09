@@ -1,9 +1,3 @@
----
-project: zoril
-status: Archive
-date: 2026-11-03
----
-
 # Completed Archive
 
 ## Sprint 2026-S1

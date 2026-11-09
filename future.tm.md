@@ -1,9 +1,3 @@
----
-project: zoril
-status: Planned
-date: 2026-11-03
----
-
 # Planned Work
 
 Deferred work, in the order it is expected to be taken up after `active.tm.md` empties. Move a task to `active.tm.md` before working on it.
