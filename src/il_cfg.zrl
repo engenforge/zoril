@@ -647,7 +647,8 @@ impl ILModule {
         let mut fi = 0 as usize;
         while fi < self.functions.len() {
             let p_f = &self.functions[fi];
-            if p_f.name == drop_name && p_f.params_len > 0 as usize
+            if p_f.name == drop_name
+                && p_f.params_len > 0 as usize
                 && self.points_to(p_f.param(0 as usize).ty, ty_id) {
                 return fi as u32;
             }
