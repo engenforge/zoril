@@ -6,7 +6,7 @@ Thanks for your interest. Zoril is an early alpha, so bug reports, test cases, d
 
 Use whichever you prefer; each one reaches the maintainer, and email works as well as the forges.
 
-- **Report a problem or suggest a change:** email `code@engenforge.com`, or open an issue on [GitHub](https://github.com/engenforge/zoril/issues) or [GitLab](https://gitlab.com/engenforge/zoril/-/issues).
+- **Report a problem or suggest a change:** email `code@engenforge.com`, or open an issue on [GitHub](https://github.com/engenforge/zoril/issues) or [GitLab](https://gitlab.com/engenforge/zoril/-/issues) (report security vulnerabilities privately; see [Security Policy](SECURITY.md)). Open work is tracked on the `tasks` branch (`active.tm.md`, readable on any forge by switching to that branch, or with `git worktree add doc/tasks tasks`), and a pull request against the `tasks` branch may propose a task.
 - **Send a change:** email a patch to `code@engenforge.com` (`git send-email` works well; <https://git-send-email.io/> shows how to set it up), or open a pull request on GitHub or a merge request on GitLab.
 
 A project mailing list will follow; `code@engenforge.com` serves until then.

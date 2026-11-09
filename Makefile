@@ -505,7 +505,7 @@ install-files:
 	$(INSTALL_DATA) stdlib/*.zrl $(DESTDIR)$(DATADIR)/zoril/stdlib/
 	for d in $(MAN_SUBDIRS); do $(INSTALL_DIR) $(DESTDIR)$(DATADIR)/zoril/stdlib/$$d && $(INSTALL_DATA) stdlib/$$d/*.zrl $(DESTDIR)$(DATADIR)/zoril/stdlib/$$d/; done
 	$(INSTALL_DIR) $(DESTDIR)$(DOCDIR)
-	$(INSTALL_DATA) README.md LICENSE NOTICE KNOWN_ISSUES.md CHANGELOG.md CONTRIBUTING.md $(DESTDIR)$(DOCDIR)/
+	$(INSTALL_DATA) README.md LICENSE NOTICE KNOWN_ISSUES.md CHANGELOG.md CONTRIBUTING.md SECURITY.md $(DESTDIR)$(DOCDIR)/
 	$(INSTALL_DIR) $(DESTDIR)$(DOCDIR)/doc
 	$(INSTALL_DATA) doc/getting_started.md doc/dependencies.md doc/tour.md doc/SAFETY.md doc/developer_guide.md doc/ROADMAP.md doc/STABILITY.md doc/zero_overhead.md doc/reproducible_builds.md $(DESTDIR)$(DOCDIR)/doc/
 	$(INSTALL_DIR) $(DESTDIR)$(MANDIR)/man1 $(DESTDIR)$(MANDIR)/man3 $(DESTDIR)$(MANDIR)/man7

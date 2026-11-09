@@ -359,7 +359,7 @@ zoril -I <stdlib>  --emit-zil  ->  zilc  ->  qbe  ->  as  ->  ld  (with runtime.
 
 ## Contributing and roadmap
 
-See [Contributing](CONTRIBUTING.md) for how to send changes, the [Developer Guide](doc/developer_guide.md) for contributor workflows and pre-merge gates, and [Roadmap](doc/ROADMAP.md) for planned directions, including how the bootstrap is expected to evolve.
+See [Contributing](CONTRIBUTING.md) for how to send changes, the [Developer Guide](doc/developer_guide.md) for contributor workflows and pre-merge gates, and [Roadmap](doc/ROADMAP.md) for planned directions, including how the bootstrap is expected to evolve. Open work is tracked on the `tasks` branch (`doc/tasks/active.tm.md`); security vulnerabilities should be reported privately per [Security Policy](SECURITY.md).
 
 ## AI Policy
 
