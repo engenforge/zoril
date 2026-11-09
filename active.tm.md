@@ -6,8 +6,9 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
 
 **Branches (2026-11-09, the maintainer):** the history after v0.1.0-alpha was split by line of work (Z-0163). The provenance series (`+safety` tasks numbered `B1` to `B4`, Z-0047 onward, and the precision tasks that serve it) is developed on the `provenance` branch; the `+testinfra` series, the `tools/ztest` and `proc.zrl` series (Z-0130 to Z-0140) and Z-0157's follow-ups (Z-0158 to Z-0161) on `testinfra`; everything else, the known-gap probes and the default-mode safety fixes among it (Z-0162, Z-0100, Z-0101, Z-0135), on `main`. Both branches stay open until their series is reviewed.
 
-- [ ] +docs +AI-G Z-0164 Security reports go to a private channel, and the docs point to the public `tasks` branch
+- [x] +docs +AI-G Z-0164 Security reports go to a private channel, and the docs point to the public `tasks` branch
     > **Created:** 2026-11-09 by the maintainer's request, after Z-0163. **Branch:** `main`. **After:** Z-0163 (the `tasks` branch is published).
+    > **Completed:** 2026-11-09 git:f20b2ce
 
     - **Why:** the `tasks` branch is published with the code, and it is the project's tracker in place of forge issues. That has two consequences. A hole written into a public task is disclosed as soon as it is pushed, so an unfixed, exploitable bug needs a private channel first. And the default branch's files never say where open work is, so a reader browsing the forge does not find the tasks. Known gaps already listed in `doc/spec/safety_model.md` are public and are not affected.
     - **Settled (the maintainer may change these at review):** private reports go to `code@engenforge.com` (the address `CONTRIBUTING.md` already gives) or to the forge's private vulnerability report where it is enabled. A report is acknowledged, fixed, and only then written into a task, with the fix's commit, as a `known_gap` probe flipped in the same change. Intake stays as it is (email, or an issue on a forge, triaged into a task that links it); a pull request against the `tasks` branch is accepted too.
@@ -22,6 +23,11 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C2: `rg -n -i 'public' AGENTS.md` shows the new bullet under "Working on tasks".
       - C3: `bash scripts/check_md_links.sh` passes with `SECURITY.md` linked from both files. Change the link in `README.md` to `SECURITY.mdx`, watch the gate fail and quote its `[FAIL]` line, then put the link back.
       - C4: `make test-changed BASE=HEAD~1` (the doc tier: md links, formatting, the banned-phrase check) passes; quote its `Total:` line.
+    - **Results:**
+      - C1: `rg -n 'SECURITY.md' README.md CONTRIBUTING.md` printed matching lines for each file; `rg -n 'tasks. branch' README.md CONTRIBUTING.md` printed matching lines for each file.
+      - C2: `rg -n -i 'public' AGENTS.md` output: `58:- **The task files are public.** The `tasks` branch is published with the code. An exploitable hole that no `known_gap` probe records and no fix closes is not written into a task or a commit message; stop and tell the maintainer, who decides when to disclose it.`
+      - C3: `bash scripts/check_md_links.sh .` passed (`[PASS] all relative markdown links resolve`). Changing the link in `README.md` to `SECURITY.mdx` failed with `[FAIL] README.md:362: SECURITY.mdx`, then passed upon restoring `SECURITY.md`.
+      - C4: `make test-changed BASE=HEAD~1` is not on `main` (it belongs to the `+testinfra` series); ran doc-tier gates directly (`./scripts/test.sh --gate md-check --gate safety-model`): `Total: 107 run, 107 passed, 0 failed, 0 skipped (15.4s)` and full test suite (`make test`): `Total: 3198 run, 3198 passed, 0 failed, 90 skipped (211.5s)`.
 
 - [ ] +safety +tests +AI-D Z-0162 A type is dropped with its own `Drop`, not another module's of the same name
     > **Created:** 2026-11-08, found while reviewing Z-0157's git:8ff8720. **Before:** Z-0159, which changes the same lookup. Probe `gap_68_drop_glue_by_type_name.zrl` (`known_gap`).
