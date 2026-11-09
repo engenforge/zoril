@@ -31,9 +31,10 @@
 # Rule 2b - private documents. `doc/performance`, `doc/release`, `doc/archive` and `doc/stage0-C`
 # name a document no tree exports, so naming one fails with no existence check: the private tree
 # may carry it and the export still never will. It is the same leak `check_export_docs.sh` closes
-# for Markdown. `doc/tasks` and `doc/design` (and the `.tm.md` files under them) are carried by the
-# tree, so they are held only to Rule 2a: a comment may cite `doc/tasks/active.tm.md` while that
-# file exists, and a citation of one that does not fails as any stale path does.
+# for Markdown. `doc/design` is carried by the tree, and `doc/tasks` (the `.tm.md` files) is the
+# `tasks` branch where it is mounted; both are held only to Rule 2a: a comment may cite
+# `doc/tasks/active.tm.md` while that file exists, and a citation of one that does not fails as any
+# stale path does, so a tree without the mount refuses a source comment that cites a task file.
 # A document that exists here but is dropped from the curated export (`doc/spec/bootstrap_subset.md`,
 # the `doc/language/debugging-*` notes) cannot be listed here - Rule 2a resolves it - which is why
 # `scripts/export_public_release.sh` runs this gate on the exported tree as well.

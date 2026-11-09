@@ -31,3 +31,6 @@ vgcore.*
 
 # Cache and local artifacts
 .zoril-cache/
+
+# Task files: the orphan `tasks` branch, mounted here as a worktree (AGENTS.md, Working on tasks)
+/doc/tasks/

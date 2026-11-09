@@ -1,0 +1,2 @@
+# Taskmark (SPEC-TASKMARK-04 section 9): the task files are the `tasks` branch, mounted at doc/tasks.
+tasks_dir: doc/tasks
