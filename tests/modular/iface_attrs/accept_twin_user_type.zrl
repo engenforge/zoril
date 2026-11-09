@@ -1,0 +1,33 @@
+// expected exit 11
+// A type named like an imported type with a `Drop` is not dropped with that `drop` (probe 421): not
+// as a local, a by-value parameter, a struct field, a tuple or array element, or a `Vec` element.
+// Only the imported module's own `S` and `G` count.
+import "lib_twin_drop.zrl";
+import "vec.zrl";
+use vec::Vec;
+
+struct S { x: i64 }
+impl S { fn get(self: &S) -> i64 { return self.x; } }
+struct G<T> { v: T }
+struct W { s: S }
+
+fn take(s: S) -> i64 { return s.x; }
+
+fn main() -> i32 {
+    let mut sum = 0 as i64;
+    {
+        let s = S { x: 1 };
+        let w = W { s: S { x: 2 } };
+        let t = (S { x: 3 }, 4 as i64);
+        let a = [S { x: 5 }, S { x: 6 }];
+        let g = G::<i64> { v: 7 };
+        let h = G::<u8> { v: 8 as u8 };
+        let mut v = Vec::<S>.new();
+        v.push(S { x: 9 });
+        sum = s.get() + w.s.x + t.0.x + a[1].x + g.v + (h.v as i64) + (v.len() as i64) + take(S { x: 10 });
+        let theirs = lib_twin_drop::S { x: 0 };
+        let theirs_g = lib_twin_drop::G::<i64> { v: 0 };
+    }
+    if sum != 38 { return 100; }
+    return lib_twin_drop::drops();
+}

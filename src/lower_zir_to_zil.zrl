@@ -1202,40 +1202,7 @@ impl ZirToZilLowerer {
         if is_any_pointer_tag(vt_tag) || vt_tag == ILTYPE_BOXED || vt_tag == ILTYPE_BOXEDMUT {
             base_ty = p_ty.def.get_Ptr();
         }
-        if base_ty == 0 as u32 { return 999999 as u32; }
-        let p_base = self.builder.get_type_decl(base_ty);
-        let type_name_id = (*p_base).name;
-
-        if type_name_id == 0 as u32 {
-            return 999999 as u32;
-        }
-
-        let type_str = self.intern_table.lookup(type_name_id);
-
-        let name_len = type_str.len + 6 as usize;
-        let name_buf_ptr = unsafe {
-            zoril_allocator_alloc(self.scratch_arena, name_len)
-        } as *mut u8;
-        let mut name_buf = unsafe { @slice(name_buf_ptr, name_len) };
-        unsafe { memcpy(name_buf_ptr, type_str.ptr, type_str.len as u64); }
-        name_buf[type_str.len] = ':' as u8;
-        name_buf[type_str.len + 1 as usize] = ':' as u8;
-        name_buf[type_str.len + 2 as usize] = 'd' as u8;
-        name_buf[type_str.len + 3 as usize] = 'r' as u8;
-        name_buf[type_str.len + 4 as usize] = 'o' as u8;
-        name_buf[type_str.len + 5 as usize] = 'p' as u8;
-
-        let mangled = self.intern_table.intern(name_buf);
-
-        let mut fi = 0 as usize;
-        while fi < self.zil_module.functions.len() {
-            let p_func = self.zil_module.get_function_mut(fi);
-            if p_func.name == mangled {
-                return fi as u32;
-            }
-            fi = fi + 1 as usize;
-        }
-        return 999999 as u32;
+        return self.zil_module.drop_fn_index(self.intern_table, base_ty);
     }
     fn emit_narrow_wrap_mask(self: &mut ZirToZilLowerer, val: u32, ty: u32) -> u32 {
         if ty == 0 as u32 { return val; }

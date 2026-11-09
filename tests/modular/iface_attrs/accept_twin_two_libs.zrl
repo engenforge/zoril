@@ -1,0 +1,11 @@
+// expected exit 1
+// Two imported modules each declare an `S` and a `G`, one with a `Drop`: the other module's values
+// are not dropped with it (probe 421).
+import "lib_twin_drop.zrl";
+import "lib_twin_plain.zrl";
+
+fn main() -> i32 {
+    let r = lib_twin_plain::make() + lib_twin_plain::make_g() + lib_twin_drop::make_one();
+    if r != 0 { return 100; }
+    return lib_twin_drop::drops();
+}

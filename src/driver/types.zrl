@@ -159,10 +159,18 @@ impl Driver {
         return false;
     }
 
+    fn type_origin_decl(self: &mut Driver, ty_id: u32) -> u32 {
+        if let ILType.User(u) = self.builder.get_type_decl(ty_id).def {
+            if let Option.Some(d) = self.mono.typedef_to_decl.get(u.id as usize) { return *d; }
+        }
+        return 0 as u32;
+    }
+
     pub fn find_method_in_impls(self: &mut Driver, ty_id: u32, method_name: u32) -> Option<u32> {
         if ty_id == 0 as u32 { return Option.None; }
 
         if ty_id == 0 as u32 { ICE("a type id of 0 where a type is needed"); }
+        let type_decl = self.type_origin_decl(ty_id);
         let p_ty: &ILTypeDecl = self.builder.get_type_decl(ty_id);
         let struct_name_id = (*p_ty).name;
         let ast: &AST = self.resolver.ast;
@@ -252,6 +260,13 @@ impl Driver {
                                 matched = true;
                             }
                         }
+                    }
+                }
+                // Two modules can each have a type of one name: the impl must be for this one.
+                if matched && target_name != 0 as u32 {
+                    let impl_decl = self.resolver.impl_type_decl(i as u32);
+                    if type_decl != 0 as u32 && impl_decl != 0 as u32 && type_decl != impl_decl {
+                        matched = false;
                     }
                 }
 
@@ -794,7 +809,12 @@ impl Driver {
                 if imp.trait_name == copy_name {
                     let name = self.get_ast_path_name(imp.target_ty);
                     if imp.type_params.len == 0 as usize {
+                        let saved_module = self.resolver.current_module;
+                        if imp.source_file != 0 as u32 {
+                            self.resolver.current_module = imp.source_file;
+                        }
                         let ty = self.resolver.resolve_type(imp.target_ty);
+                        self.resolver.current_module = saved_module;
                         if ty != 0 as u32 && !self.is_copy_type(ty) {
                             let saved_path = self.file_path;
                             if imp.source_file != 0 as u32 {

@@ -1,0 +1,17 @@
+// expected exit 0
+// A type named like a standard-library type with a `Drop` (`io::File`, `mem::Arena`) is `Copy` by
+// the same rule as any other (probe 421's Copy route): implicitly, and with `impl Copy`.
+import "io.zrl";
+import "mem.zrl";
+
+struct File { fd: i32 }
+struct Arena { x: i64 }
+impl Copy for Arena {}
+
+fn main() -> i32 {
+    let f = File { fd: 1 };
+    let g = f;
+    let a = Arena { x: 2 };
+    let b = a;
+    return (f.fd + g.fd) + (a.x + b.x - 6) as i32;
+}

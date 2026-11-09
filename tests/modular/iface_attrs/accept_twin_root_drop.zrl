@@ -1,0 +1,21 @@
+// expected exit 12
+// The root module's `S` and `G` have a `Drop`, an imported module's of the same names do not:
+// only the root's values are dropped with it (probe 421).
+import "lib_twin_plain.zrl";
+
+static mut OWN_DROPS: i32 = 0;
+struct S { x: i64 }
+impl Drop for S { fn drop(self: &mut S) { OWN_DROPS = OWN_DROPS + 1; } }
+struct G<T> { v: T }
+impl<T> Drop for G<T> { fn drop(self: &mut G<T>) { OWN_DROPS = OWN_DROPS + 10; } }
+
+fn main() -> i32 {
+    {
+        let s = S { x: 1 };
+        let g = G::<i64> { v: 2 };
+        let r = lib_twin_plain::make() + lib_twin_plain::make_g();
+        if r != 0 || s.x + g.v != 3 { return 100; }
+    }
+    { let s2 = S { x: 3 }; }
+    return OWN_DROPS;
+}

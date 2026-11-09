@@ -15,7 +15,7 @@ import "route_set.zrl";
 use ast::Span;
 use bytevec::ByteVec;
 use diag::diag_start;
-use il_cfg::{ILFunction, ILModule};
+use il_cfg::{ILFunction, ILModule, NO_DROP_FN};
 use il_type::{is_raw_pointer_tag, is_reference_tag, type_name_is, ILPRIM_BOOL, ILPRIM_CHAR, ILPRIM_F32, ILPRIM_I16, ILPRIM_I32, ILPRIM_I8, ILPRIM_NEVER, ILPRIM_U16, ILPRIM_U32, ILPRIM_U8, ILPRIM_UNIT, ILPRIM_USIZE, ILTYPE_ARRAY, ILTYPE_BOXED, ILTYPE_BOXEDMUT, ILTYPE_FD, ILTYPE_FN, ILTYPE_IORING, ILTYPE_PRIMITIVE, ILTYPE_PTR, ILTYPE_PTRMUT, ILTYPE_RAWPTR, ILTYPE_RAWPTRMUT, ILTYPE_SLICE, ILTYPE_TUPLE, ILTYPE_USER, ILType, ILTypeDecl, IL_TYPEDEF_ENUM, IL_TYPEDEF_STRUCT, is_any_pointer_tag, is_mut_pointer_tag, is_shared_pointer_tag};
 use intern::InternTable;
 use io::{eprint, stderr};
@@ -762,7 +762,7 @@ impl ZirVerifier {
         if tag != ILTYPE_USER { return false; }
         let user = p_ty.def.get_User();
         if self.is_collection_type_name(user.name) { return true; }
-        if self.has_drop_impl(user.name) { return true; }
+        if self.has_drop_impl(ty) { return true; }
         let user_id = user.id;
         if user_id == 0xffffffff as u32 || user_id as usize >= self.zil_module.typedefs.len() {
             return false;
@@ -2978,7 +2978,7 @@ impl ZirVerifier {
             return self.type_has_drop(p_ty.def.get_BoxedMut(), depth + 1 as usize);
         }
         if tag != ILTYPE_USER { return false; }
-        if self.has_drop_impl(p_ty.def.get_User().name) { return true; }
+        if self.has_drop_impl(ty_id) { return true; }
         let user_id = p_ty.def.get_User().id;
         if user_id == 0xffffffff as u32 || user_id as usize >= self.zil_module.typedefs.len() {
             return false;
@@ -4288,25 +4288,8 @@ impl ZirVerifier {
         return ty_id;
     }
 
-    fn has_drop_impl(self: &mut ZirVerifier, type_name_id: u32) -> bool {
-        if type_name_id == 0 as u32 { return false; }
-        let type_str = self.intern_table.lookup(type_name_id);
-        let mut name_buf: &mut ByteVec = unsafe { ByteVec.new_raw(self.arena) };
-        name_buf.push_slice(type_str);
-        name_buf.push(':' as u8);
-        name_buf.push(':' as u8);
-        name_buf.push_slice("drop");
-        let mangled = self.intern_table.intern(name_buf.as_slice());
-
-        let mut fi = 0 as usize;
-        while fi < self.zil_module.functions.len() {
-            let p_func = &self.zil_module.functions[fi];
-            if p_func.name == mangled {
-                return true;
-            }
-            fi = fi + 1 as usize;
-        }
-        return false;
+    fn has_drop_impl(self: &mut ZirVerifier, type_id: u32) -> bool {
+        return self.zil_module.drop_fn_index(self.intern_table, type_id) != NO_DROP_FN;
     }
 
     pub fn is_copy_type(self: &mut ZirVerifier, type_id: u32) -> bool {
@@ -4353,7 +4336,7 @@ impl ZirVerifier {
         }
         if tag == ILTYPE_USER {
             let u = p_ty.def.get_User();
-            if self.has_drop_impl(u.name) { return false; }
+            if self.has_drop_impl(type_id) { return false; }
             let user_id = u.id;
             if user_id as usize >= self.zil_module.typedefs.len() { return true; }
             let p_def = self.zil_module.typedefs[user_id as usize];

@@ -1,0 +1,10 @@
+// expected compile fail
+// A type named like an imported type does not get that type's methods (probe 421's sibling route).
+import "lib_twin_drop.zrl";
+
+struct S { x: i64 }
+
+fn main() -> i32 {
+    let s = S { x: 5 };
+    return (s.get() - 100) as i32;
+}

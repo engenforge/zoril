@@ -632,7 +632,40 @@ impl ILModule {
         }
         return 0 as *mut ILFunction;
     }
+
+    // The index of the `drop` of the named type TY_ID, or NO_DROP_FN. Two modules may each declare
+    // a type of one name, and both `drop`s are then named `<Type>::drop`, so the name alone picks
+    // whichever was lowered first (probe 421). The `self: &mut T` parameter names the type itself.
+    pub fn drop_fn_index(self: &ILModule, table: &mut InternTable, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 || ty_id as usize > self.types.len() { return NO_DROP_FN; }
+        let type_name_id = self.types[ty_id as usize - 1 as usize].name;
+        if type_name_id == 0 as u32 { return NO_DROP_FN; }
+        let mut name_buf = unsafe { ByteVec.new_raw(self.arena) };
+        name_buf.push_slice(table.lookup(type_name_id));
+        name_buf.push_slice("::drop");
+        let drop_name = table.intern(name_buf.as_slice());
+        let mut fi = 0 as usize;
+        while fi < self.functions.len() {
+            let p_f = &self.functions[fi];
+            if p_f.name == drop_name && p_f.params_len > 0 as usize
+                && self.points_to(p_f.param(0 as usize).ty, ty_id) {
+                return fi as u32;
+            }
+            fi = fi + 1 as usize;
+        }
+        return NO_DROP_FN;
+    }
+
+    fn points_to(self: &ILModule, ptr_ty: u32, ty_id: u32) -> bool {
+        if ptr_ty == 0 as u32 || ptr_ty as usize > self.types.len() { return false; }
+        return match self.types[ptr_ty as usize - 1 as usize].def {
+            ILType.Ptr(inner) | ILType.PtrMut(inner) => inner == ty_id,
+            _ => false,
+        };
+    }
 }
+
+pub const NO_DROP_FN: u32 = 999999;
 
 pub fn il_module_set_typedef(module: &mut ILModule, id: u32, def: ILTypeDef) {
     module.typedefs.ensure_len(id as usize + 1 as usize);
