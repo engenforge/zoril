@@ -22,6 +22,23 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **Not run:** `make preflight-changed` on any branch (its mutations of every file a branch changed against `main` take hours, and no compiler source changed beyond the split; run it on each branch before it merges).
     - **Awaiting review:** the maintainer reads the three branches (`git log --stat main..provenance`, `main..testinfra`), then replaces the published history (the commands are in the report of this session) and mounts the task branch; a reviewer re-runs C1 to C4 on the pushed branches.
 
+- [ ] +docs +AI-G Z-0164 Security reports go to a private channel, and the docs point to the public `tasks` branch
+    > **Created:** 2026-11-09 by the maintainer's request, after Z-0163. **Branch:** `main`. **After:** Z-0163 (the `tasks` branch is published).
+
+    - **Why:** the `tasks` branch is published with the code, and it is the project's tracker in place of forge issues. That has two consequences. A hole written into a public task is disclosed as soon as it is pushed, so an unfixed, exploitable bug needs a private channel first. And the default branch's files never say where open work is, so a reader browsing the forge does not find the tasks. Known gaps already listed in `doc/spec/safety_model.md` are public and are not affected.
+    - **Settled (the maintainer may change these at review):** private reports go to `code@engenforge.com` (the address `CONTRIBUTING.md` already gives) or to the forge's private vulnerability report where it is enabled. A report is acknowledged, fixed, and only then written into a task, with the fix's commit, as a `known_gap` probe flipped in the same change. Intake stays as it is (email, or an issue on a forge, triaged into a task that links it); a pull request against the `tasks` branch is accepted too.
+    - **Do:**
+      1. Add `SECURITY.md` at the root: which versions are supported (the latest release and `main`, before 1.0); how to report privately (the two routes above, not a public issue or task); what happens next (acknowledgement, a fix, then disclosure in a task and in `doc/SAFETY.md` §6 if it was a known gap); and what is not a vulnerability report (a program the checkers accept that `safety_model.md` already lists under Known gaps).
+      2. `CONTRIBUTING.md`: in the "Report a problem" bullet, send security problems to `SECURITY.md`, and add one sentence saying that open work is tracked on the `tasks` branch (`active.tm.md`, readable on any forge by switching to that branch, or with `git worktree add doc/tasks tasks`) and that a pull request against `tasks` may propose a task.
+      3. `README.md`: one line in the contributing or links part naming the `tasks` branch as the tracker and linking `SECURITY.md`.
+      4. `AGENTS.md`, under "Working on tasks": a bullet saying that the task files are public. An exploitable hole that no `known_gap` probe records and no fix closes is not written into a task or a commit message; stop and tell the maintainer, who decides when to disclose it.
+    - **Maintainer, not this task:** turn on private vulnerability reporting on GitHub (and GitLab's confidential issues, if wanted), and protect `tasks` against force-pushes on every remote.
+    - **Checks:**
+      - C1: `rg -n 'SECURITY.md' README.md CONTRIBUTING.md` prints a line from each; `rg -n 'tasks. branch' README.md CONTRIBUTING.md` prints a line from each.
+      - C2: `rg -n -i 'public' AGENTS.md` shows the new bullet under "Working on tasks".
+      - C3: `bash scripts/check_md_links.sh` passes with `SECURITY.md` linked from both files. Change the link in `README.md` to `SECURITY.mdx`, watch the gate fail and quote its `[FAIL]` line, then put the link back.
+      - C4: `make test-changed BASE=HEAD~1` (the doc tier: md links, formatting, the banned-phrase check) passes; quote its `Total:` line.
+
 - [ ] +safety +tests +AI-D Z-0162 A type is dropped with its own `Drop`, not another module's of the same name
     > **Created:** 2026-11-08, found while reviewing Z-0157's git:8ff8720. **Before:** Z-0159, which changes the same lookup. Probe `gap_68_drop_glue_by_type_name.zrl` (`known_gap`).
 
