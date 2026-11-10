@@ -24,8 +24,9 @@ Active priority series to reduce verification runtimes. Order of execution:
 
 **`main` merged in (the maintainer, 2026-11-10):** `main` up to git:97df9b6 (Z-0162's drop lookup, Z-0165, the branch rule in `AGENTS.md`) is merged into `testinfra` in git:4ce794e. Z-0135, a `main` task, is not on this branch until it lands and is merged again; Z-0131 and Z-0133 depend on it. Before starting a task that needs a `main` commit, check `git merge-base --is-ancestor <sha> testinfra`; if the commit is missing, stop and ask the maintainer for another merge.
 
-- [ ] +bug +AI-D Z-0160 `lowering_drop_impl` is still set while a `Drop` body's callees are lowered
+- [x] +bug +AI-D Z-0160 `lowering_drop_impl` is still set while a `Drop` body's callees are lowered
     > **Created:** 2026-11-08 by Z-0157's review (B3). **Branch:** `testinfra`.
+    > **Completed:** 2026-11-10 git:616fc22
 
     - **Lead, not a reproduced bug:** `Driver.instantiate_impl_methods` sets `self.lowering_drop_impl = true` around `instantiate_method` for `Drop::drop`, and `Driver.lower_fn_instance` does not save and clear it, so a function first lowered from inside a `drop` body sees it set. `is_local_function` (`src/driver/module.zrl`) reads it, but returns early unless the build is `-c`, and stdlib on-demand lowering never happens under `-c`; so the only effect could be the linkage of a private function of the module being compiled, called first from its own `Drop` impl, in a `-c` build. It predates Z-0157 (the review found it there).
     - **Note from Z-0159:** If on-demand drop lowering in `ZirLowerer.has_drop_impl` is ever re-introduced, the same flag leak (`lowering_drop_impl` set around `instantiate_method`) would apply to that entry point as well.
@@ -41,6 +42,10 @@ Active priority series to reduce verification runtimes. Order of execution:
     - **Checks:**
       - C1: a module with `struct S { a: i32 }`, `impl Drop for S { fn drop(self: &mut S) { helper(); } }`, a private `fn helper()`, and a public function that makes an `S`: build it with `-c --emit-zil` and quote `helper`'s line; then the same with `helper` also called from the public function before `S` is made; and link two such modules into one program (`tests/modular/`). Quote what differs.
       - C2 (only if fixed): the C1 programs again, a regression test under `tests/modular/`, and the fix taken out (a scratch edit) to see it fail; `make test` and `make preflight-changed`, each `Total:` line quoted.
+    - **Completion:**
+      - C1: reproduced; quoted in **C1 reproduced** above: before the fix, m1 and b1 emit `f1: unit build::z160::m1::helper() {` (no `local`) under `-c --emit-zil`, the controls c1 and d1 emit `local`; the linked two-module programs build and run (`rc=0`) with `T z5build4z1602m16helperE` and `T z5build4z1602m26helperE`, against `t z5build4z1602c16helperE` for the control. A function exported that should not be, so the **Do**'s fix applies; no duplicate or missing symbol.
+      - C2: the C1 programs again after git:616fc22: `local f1: unit build::z160::m1::helper() {` (b1 the same), `nm` `t ...m16helperE` / `T ...m11S4dropE`, run `rc=0` (quoted in **Fixed** above). Regression test: `scripts/test_modular_mangling.sh` Test 4 over `tests/modular/drop_callee/`; with the clear taken out, `FAIL: lib_a::helper is not local in compile-only ZIL`; restored, `./scripts/test.sh --scenario modular-mangling`: `Total: 2 run, 2 passed, 0 failed, 0 skipped (0.2s)`. `make test` (at git:616fc22): `Total: 3207 run, 3207 passed, 0 failed, 88 skipped (113.7s)`. `make preflight-changed PREFLIGHT_BASE=5f4b33a` (the branch has no upstream, so the default base found nothing): `Total: 1163 run, 1163 passed, 0 failed, 0 skipped (42.3s)`, rc 0; its rejection differential: `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69130 programs against 5f4b33a3f485500a81b8074aa583b2bf7af092de`.
+      - The fuzz record (`bench/fuzz/README.md`) is stale for `src/`.
 
 - [ ] +bug +tests +AI-G Z-0161 A generic function's name is not taken as its result's enum type in `f.Variant`
     > **Created:** 2026-11-08 by Z-0157's review (B4). **Branch:** `testinfra`.
