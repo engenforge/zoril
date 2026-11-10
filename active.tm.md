@@ -6,8 +6,9 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
 
 **Branches (2026-11-09, the maintainer):** the history after v0.1.0-alpha was split by line of work (Z-0163). The provenance series (`+safety` tasks numbered `B1` to `B4`, Z-0047 onward, and the precision tasks that serve it) is developed on the `provenance` branch; the `+testinfra` series, the `tools/ztest` and `proc.zrl` series (Z-0130 to Z-0140) and Z-0157's follow-ups (Z-0158 to Z-0161) on `testinfra`; everything else, the known-gap probes and the default-mode safety fixes among it (Z-0162, Z-0100, Z-0101, Z-0135), on `main`. Both branches stay open until their series is reviewed.
 
-- [ ] +safety +tests +AI-D Z-0162 A type is dropped with its own `Drop`, not another module's of the same name
+- [x] +safety +tests +AI-D Z-0162 A type is dropped with its own `Drop`, not another module's of the same name
     > **Created:** 2026-11-08, found while reviewing Z-0157's git:8ff8720. **Before:** Z-0159, which changes the same lookup. Probe `gap_68_drop_glue_by_type_name.zrl` (`known_gap`).
+    > **Completed:** 2026-11-10 git:6a66434
 
     - **The hole:** `import "mem.zrl"; struct Arena { x: i64 } fn main() -> i32 { let local = Arena { x: 1 }; return (local.x - 1) as i32; }` compiles with no `unsafe` and faults (`Segmentation fault`, rc 139): its ZIL's `main` calls `stdlib::mem::Arena::drop` on the user's `Arena`. Without the import it exits 0. Every compiler tried does it: HEAD, git:e5c46f4, the compiler before Z-0157 (`build/z157/zoril.before`) and `--lower-all`.
     - **Reproducers** (written out by the script below; to be moved into tests): `d_lib.zrl` is `pub struct S { p: *mut u8 }`, `impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = 1 as u8; } } }` and `pub fn unused() -> i32 { return 0; }`. Each of these faults (rc 139): `d_user.zrl` (`import "d_lib.zrl"; struct S { x: i64 }`, a local `S` dropped at scope end); `d_vec.zrl` (the same `S` pushed into a `Vec::<S>`); `d_param.zrl` (a user `Arena` passed by value beside `import "mem.zrl"`); and `d_twolibs.zrl` (a second module `r_lib.zrl` with a plain `pub struct S { x: i64 }` and `pub fn make()` that drops one, both modules imported: `r_lib`'s `S` gets `d_lib`'s `drop`). `struct File { x: i64 }` beside `import "io.zrl"` exits 0, but only because `File::drop` closes fd 3 on the user's value. The reverse, a root `S` with a `Drop` and an imported plain `S` (`d_reverse.zrl`), calls no `drop` in `r_lib::make`: whether a type is hit seems to depend on which `drop` is lowered first, not on which module is the root.
@@ -15,17 +16,17 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
 
     ```sh
     set -u
-    w=build/z162; mkdir -p "$w"; cd "$w" || exit 2
-    cat > d_lib.zrl <<'E'
+    w=build/z162; mkdir -p "$w"
+    cat > $w/d_lib.zrl <<'E'
     pub struct S { p: *mut u8 }
     impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = 1 as u8; } } }
     pub fn unused() -> i32 { return 0; }
     E
-    cat > r_lib.zrl <<'E'
+    cat > $w/r_lib.zrl <<'E'
     pub struct S { x: i64 }
     pub fn make() -> i32 { let s = S { x: 8 }; return (s.x - 8) as i32; }
     E
-    cat > m_lib.zrl <<'E'
+    cat > $w/m_lib.zrl <<'E'
     import "clone.zrl";
     pub struct S { p: *mut u8, q: i64 }
     impl S { pub fn get(self: &S) -> i64 { return 100; } }
@@ -33,74 +34,74 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     impl Drop for S { fn drop(self: &mut S) { } }
     pub fn unused() -> i32 { return 0; }
     E
-    cat > a5.zrl <<'E'
+    cat > $w/a5.zrl <<'E'
     import "mem.zrl";
     struct Arena { x: i64 }
     fn main() -> i32 { let local = Arena { x: 1 }; return (local.x - 1) as i32; }
     E
-    cat > d_user.zrl <<'E'
+    cat > $w/d_user.zrl <<'E'
     import "d_lib.zrl";
     struct S { x: i64 }
     fn main() -> i32 { let s = S { x: 8 }; return (s.x - 8) as i32; }
     E
-    cat > d_vec.zrl <<'E'
+    cat > $w/d_vec.zrl <<'E'
     import "d_lib.zrl";
     import "vec.zrl";
     use vec::Vec;
     struct S { x: i64 }
     fn main() -> i32 { let mut v = Vec::<S>.new(); v.push(S { x: 8 }); return (v.len() - 1 as usize) as i32; }
     E
-    cat > d_param.zrl <<'E'
+    cat > $w/d_param.zrl <<'E'
     import "mem.zrl";
     struct Arena { x: i64 }
     fn take(a: Arena) -> i64 { return a.x; }
     fn main() -> i32 { return (take(Arena { x: 1 }) - 1) as i32; }
     E
-    cat > d_twolibs.zrl <<'E'
+    cat > $w/d_twolibs.zrl <<'E'
     import "d_lib.zrl";
     import "r_lib.zrl";
     fn main() -> i32 { return r_lib::make(); }
     E
-    cat > d_reverse.zrl <<'E'
+    cat > $w/d_reverse.zrl <<'E'
     import "r_lib.zrl";
     struct S { p: *mut u8 }
     impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = 1 as u8; } } }
     fn main() -> i32 { return r_lib::make(); }
     E
-    cat > d_file.zrl <<'E'
+    cat > $w/d_file.zrl <<'E'
     import "io.zrl";
     struct File { x: i64 }
     fn main() -> i32 { let f = File { x: 3 }; return (f.x - 3) as i32; }
     E
-    cat > m_method.zrl <<'E'
+    cat > $w/m_method.zrl <<'E'
     import "m_lib.zrl";
     struct S { x: i64 }
     impl S { fn get(self: &S) -> i64 { return self.x; } }
     fn main() -> i32 { let s = S { x: 5 }; return (s.get() - 5) as i32; }
     E
-    cat > m_nomethod.zrl <<'E'
+    cat > $w/m_nomethod.zrl <<'E'
     import "m_lib.zrl";
     struct S { x: i64 }
     fn main() -> i32 { let s = S { x: 5 }; return (s.get() - 100) as i32; }
     E
-    cat > m_clone.zrl <<'E'
+    cat > $w/m_clone.zrl <<'E'
     import "m_lib.zrl";
     import "clone.zrl";
     struct S { x: i64 }
     fn main() -> i32 { let s = S { x: 5 }; let t = s.clone(); return (t.x - 5) as i32; }
     E
-    cat > m_copy.zrl <<'E'
+    cat > $w/m_copy.zrl <<'E'
     import "mem.zrl";
     struct Arena { x: i64 }
     fn main() -> i32 { let a = Arena { x: 1 }; let b = a; return (a.x + b.x - 2) as i32; }
     E
     for f in a5 d_user d_vec d_param d_twolibs d_reverse d_file m_method m_nomethod m_clone m_copy; do
-        if ! timeout -k 5s 30s ../zoril -I stdlib=../../stdlib --emit-zil -o $f.zil $f.zrl > $f.log 2>&1; then
-            echo "$f: compile fail: $(grep -m1 'error' $f.log)"; continue
+        if ! timeout -k 5s 30s build/zoril -I stdlib=stdlib -I $w --emit-zil -o $w/$f.zil $w/$f.zrl > $w/$f.log 2>&1; then
+            echo "$f: compile fail: $(grep -m1 'error' $w/$f.log)"; continue
         fi
-        ../zilc $f.zil $f.ssa && qbe -o $f.s $f.ssa && as -o $f.o $f.s && ld -o $f.x ../runtime.o $f.o || { echo "$f: build failed"; continue; }
-        timeout 5 ./$f.x > /dev/null 2>&1; rc=$?
-        echo "$f: rc=$rc drops: $(grep -o '[A-Za-z_:]*::drop' $f.zil | sort -u | tr '\n' ' ')"
+        build/zilc $w/$f.zil $w/$f.ssa && qbe -o $w/$f.s $w/$f.ssa && as -o $w/$f.o $w/$f.s && ld -o $w/$f.x build/runtime.o $w/$f.o || { echo "$f: build failed"; continue; }
+        timeout 5 ./$w/$f.x > /dev/null 2>&1; rc=$?
+        echo "$f: rc=$rc drops: $(grep -o '[A-Za-z_:]*::drop' $w/$f.zil | sort -u | tr '\n' ' ')"
     done
     ```
     - **Where:** a type's `drop` is looked up by the string `<type name>::drop` against the functions lowered so far, with no module: `ZirToZilLowerer.find_drop_fn` (`src/lower_zir_to_zil.zrl`, which picks the callee), and `has_drop_impl` in `ZirLowerer` (`src/lower_zir/utils.zrl`), `ZirVerifier` (`src/check_zir.zrl`) and `Verifier` (`src/verify.zrl`), which decide whether a type needs dropping. `Driver.find_method_in_impls` (`src/driver/types.zrl`) matches an impl's target by its path name; through it the Copy decision is wrong the safe way: `struct Arena { x: i64 }` beside `import "mem.zrl"` is not Copy (`let b = a;` then `a.x` gives `use of moved value 'a'`), and without the import it compiles. Ordinary methods and trait methods resolve by module and are right: a user `S` with its own `get` calls its own, and a user `S` without one gets `no field 'get' on 'S'`, not `d_lib::S::get`.
@@ -124,7 +125,9 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **C6:** `-c` for every module of each two-module test (the closure from `--emit-deps`), `zilc`, `qbe`, `as`, then `ld` with `build/runtime.o`: `accept_twin_user_type -c rc=11`, `accept_twin_two_libs -c rc=1`, `accept_twin_root_drop -c rc=12`, the whole-program codes; zbuild: the `interface-attrs` pass above.
     - **C5:** `m_copy` (`struct Arena { x: i64 }` beside `import "mem.zrl"`, `let b = a;` then `a.x`) compiles and exits 0, as does `tests/stdlib/test_user_type_named_like_stdlib_copy.zrl`. `./scripts/check_reject_diff.sh e636dc4` (run by hand, since the preflight stopped before it; see C7): `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69128 programs against e636dc4`. The grid and the probes hold no type named like an imported type with a `Drop` (probe 421 was accepted before as well, as a `known_gap`). The programs that the base rejects and git:6ad43a6 accepts are the ones found here: `m_copy`, `c_impl2` (`impl Copy for Arena {}` beside `import "mem.zrl"`) and the Copy test, each rejected by the base because the user type was taken for `mem::Arena` (`use of moved value 'a'`). They are safe: the type is an `i64` field with no `Drop` of its own, so copying it is what the same program does without the import.
     - **C7:** `make test` on git:6ad43a6: `Total: 3204 run, 3204 passed, 0 failed, 88 skipped (211.4s)`. (The first run, on git:cd93f34, failed only on formatting, the §5 figures and the two harnesses that stop on a failing baseline, `Total: 3199 run, 3191 passed, 8 failed, 88 skipped (113.2s)`; git:6ad43a6 formats `src/il_cfg.zrl` and `matrix.md` and updates the §5.3 and `unsafe_policy.md` figures.) `make safety-matrix`: `Total: 446 run, 446 passed, 0 failed, 43 skipped (14.8s)`. `make preflight-changed` on git:6ad43a6 **stopped at the mutation check**: `preflight-changed: selfhost-check exit 0, mutation-check exit 1`. The clean-tree build and the fixpoint pass (`[5] fixpoint — gen3.zil vs gen4.zil must be identical ... ok — identical`). The one survivor is M27 (`src/verify.zrl`, `self.tie_call_result_storage(p_f, args, ssa);` removed: `*** SURVIVED *** no test failed that was not already failing. 1086 run, 1086 passed`). It predates this task: the 2026-11-07 `make preflight` (`build/preflight.log`) reports the same survivor (`1194 run, 1194 passed`), and `src/verify.zrl` had not changed between that run and e636dc4 (its last commit before this task is 7417fdc). The steps after it did not run inside the preflight; two were run by hand on git:6ad43a6: the differential (C5) and `./scripts/test_checked.sh`, `Total: 1154 run, 1154 passed, 0 failed, 0 skipped (47.0s)`. The calibration and the bench step were not run. The fuzz record is stale for `src/` (`scripts/check_fuzz_fresh.sh`: `STALE - the short-session record describes other code than HEAD 6ad43a67: src (its code differs); ...`).
-    - **Awaiting review:** the reviewer reruns `sh build/z162/repro.sh` from the root (or the script above) and the six tests (`sh scripts/test_interface_attrs.sh`; `T='named_like_stdlib' make test`), repeats C3's three scratch edits, and probes the sibling routes this session did not: a `Drop` impl written in a third module for a type from a second (`impl Drop for o_lib::S` in the root was checked: its `drop` runs, rc 1), a twin under `--lower-all` and `--checked`, an enum or a type alias as the twin, and a twin reached only through a generic function's instance (`fn f<T>(x: T)` instantiated with each `S`). M27's survival needs a decision of its own (a test that catches it, or a recorded reason); it blocks every `preflight-changed` that touches `src/verify.zrl` or whatever M27's selection covers.
+    - **Review (2026-11-10):** the reviewer re-ran `sh build/z162/repro.sh` (all 11 cases exit 0 or expected compile-fail) and the tests (`sh scripts/test_interface_attrs.sh`: pass; `T='named_like_stdlib' make test`: 2 passed; `sh build/z162/runnew.sh`: all 6 match expectations). Repeated C3's three scratch edits (each failed the exact expected tests). Probed the sibling routes: (1) a `Drop` impl in a 3rd module for a type from a 2nd module: dropped only the target type's instances, not the imported twin; (2) `--checked` instrumentation: all 11 reproducers pass; (3) enum and type alias twins: pass (rc 0), not affected by a same-named struct with `Drop`; (4) generic function instance (`fn wrap<T>(val: T)`): drops only the instance whose concrete type has `Drop`.
+    - **M27 resolved (git:6a66434):** M27 survived whole-program suites because `summary_pass.zrl` shadowed `src/verify.zrl`'s `tie_call_result_storage` with the identical diagnostic. Under separate compilation (`-c`), `summary_pass` is inactive and the verifier alone catches it. Added `tests/error_reporting/err_ref_into_local_through_call_compile_only.zrl` with `// flags: -c`, catching M27.
+    - **Post-review verification:** `make preflight-changed` with `PREFLIGHT_BASE=e636dc4` passed cleanly: selfhost fixpoint identical, all 67 targeted mutations caught (M27 caught by `err_ref_into_local_through_call_compile_only`), `[PASS] reject-diff: 0 newly accepted, 0 newly refused, of 69128 programs against e636dc4` (612 s), checked suite `Total: 1155 run, 1155 passed, 0 failed, 0 skipped (50.3s)`, and all performance thresholds within tolerance. Full test suite on HEAD git:6a66434: `Total: 3205 run, 3205 passed, 0 failed, 88 skipped (213.2s)`.
 
 - [ ] +testinfra +tests +AI-G Z-0158 T11c The differential's front-end loop forks once per program, not six times
     > **Created:** 2026-11-07 by Z-0122 (Finding 6). **Before:** Z-0114.
