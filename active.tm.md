@@ -24,6 +24,10 @@ Active priority series to reduce verification runtimes. Order of execution:
 
 **`main` merged in (the maintainer, 2026-11-10):** `main` up to git:97df9b6 (Z-0162's drop lookup, Z-0165, the branch rule in `AGENTS.md`) is merged into `testinfra` in git:4ce794e. Z-0135, a `main` task, is not on this branch until it lands and is merged again; Z-0131 and Z-0133 depend on it. Before starting a task that needs a `main` commit, check `git merge-base --is-ancestor <sha> testinfra`; if the commit is missing, stop and ask the maintainer for another merge.
 
+**`main` merged in again (the maintainer, 2026-11-10):** `main` up to git:215ff53 (the `tm sweep`/`tm sync` and `.taskmarkrc` wording in `AGENTS.md`) is merged into `testinfra` in git:d483b03.
+
+**What `make preflight-changed` measures on this branch (the maintainer, 2026-11-10):** with no `PREFLIGHT_BASE`, its base is the merge base with `main` (Z-0166), so a run covers the whole series, not one task: at git:fa097e0, 47 mutations and a 408 s differential, against 5 and 279 s for one task's commit. Every such run reports `2 newly refused`: probe `422_generic_null_cast_param_named_struct.zrl`, once whole-program and once under zbuild, the hole git:8ff8720 closed on this branch (Z-0157, B2). That is expected until the series merges into `main`, where the hole is still open; the maintainer chose to close it there by that merge, not by a port. A completion note cites it as such; a newly *accepted* program is still listed, whichever task it comes from. To measure one task alone, name the commit before it: `make preflight-changed PREFLIGHT_BASE=<sha>`.
+
 - [ ] +bug +tests +AI-G Z-0161 A generic function's name is not taken as its result's enum type in `f.Variant`
     > **Created:** 2026-11-08 by Z-0157's review (B4). **Branch:** `testinfra`.
 
