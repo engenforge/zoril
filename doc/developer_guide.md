@@ -19,12 +19,14 @@ Today `make test` also needs `flock` and `mkfifo` for its parallel pool, `bash` 
 - **flock (`util-linux` or BusyBox):** Required for process synchronization in the parallel test runner.
 - **Lua (5.3 or 5.4):** Required for the generative fuzzer (`scripts/fuzz/gen.lua`) and benchmark generators.
 - **coreutils (`mkfifo`, `xargs`, `timeout`):** Required for parallel test runners and stage timeout enforcement.
-- **git:** Required for self-hosting repository isolation checks, clean tree checks, and version stamping.
+- **git:** Required for self-hosting repository isolation checks, clean tree checks, and version stamping. `zoril-c --version` reports `unknown` for the git hash, because no `make` passes `GIT_HASH` (passing one from the top-level Makefile would change stage0-c's generated header between gate runs and rebuild it, the `build/zoril-c.tmp` race).
 - **dprint:** Optional markdown formatting checker (used by `make md-check` and `make md-fmt`).
 - **valgrind:** Optional memory profiling checker (used by `make perf-gate`).
 - **rustc:** Optional differential oracle for fuzz testing (`make fuzz`).
 - **scdoc 1.11.5 or newer:** Required for development: the roff man pages in `doc/man/` are committed, so building, installing and `make test` need no scdoc (`make test` skips the page check without it, and with a scdoc older than 1.11.5, the version the pages are generated with, because older releases write other roff for the same source), but `make preflight` and `make man` require 1.11.5 or newer and fails when a committed page does not match its `.scd` source. `make man` regenerates them.
 - **bsdtar (libarchive):** Required only to build the release archives (`make dist`, `make dist-bin`, `make dist-check`): `libarchive-tools` on Alpine and Debian, part of `libarchive` on Arch, built in on FreeBSD and macOS.
+
+The repository-hygiene gates (`no-new-deps`, `stray-files` and the Markdown checks) read every file in the tree, untracked and ignored ones too, so a stray local file fails `make test`.
 
 You can verify all developer dependencies on your machine by running:
 

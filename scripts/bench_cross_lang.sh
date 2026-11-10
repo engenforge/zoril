@@ -284,8 +284,8 @@ if [ "$UPDATE_DOC" -eq 1 ] || [ "$RECORD_BASELINE" -eq 1 ]; then
 fi
 
 # ── Version discovery ──────────────────────────────────────────────────────────
-ZORIL_COMMIT=$("$ZORIL_BIN" --version 2>/dev/null | awk '{print $2}')
-[ -n "$ZORIL_COMMIT" ] || ZORIL_COMMIT="unknown"
+ZORIL_VERSION=$("$ZORIL_BIN" --version 2>/dev/null | awk '{print $2}')
+[ -n "$ZORIL_VERSION" ] || ZORIL_VERSION="unknown"
 ZIG_VER=$(zig version 2>/dev/null || echo "n/a")
 RUST_VER=$(rustc --version 2>/dev/null | awk '{print $2}' || echo "n/a")
 HARE_VER=$(hare version 2>/dev/null | awk '{print $2}' || echo "n/a")
@@ -302,7 +302,7 @@ printf "  Compile runs: %d (best-of-N with 1 discarded warm-up)\n" "$COMPILE_RUN
 printf "\n"
 
 printf "Detected Toolchains:\n"
-printf "  zoril   : %s\n" "$ZORIL_COMMIT"
+printf "  zoril   : %s\n" "$ZORIL_VERSION"
 printf "  zig     : %s\n" "$ZIG_VER"
 printf "  rust    : %s\n" "$RUST_VER"
 printf "  hare    : %s\n" "$HARE_VER"
@@ -1290,34 +1290,34 @@ fi
 
 while IFS="$(printf '\t')" read -r label tc c_ms c_rss r_ms bin_sz; do
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tfib(38)x3\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$RUN_TS" "$ZORIL_COMMIT" "$ZORIL_COMMIT" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$label" "$tc" "$r_ms" "$c_rss" "$RUN_STATUS" \
+        "$RUN_TS" "$ZORIL_VERSION" "$ZORIL_VERSION" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$label" "$tc" "$r_ms" "$c_rss" "$RUN_STATUS" \
         "$HOST_OS" "$HOST_CPU" "$HOST_CORES" "$HOST_RAM" "$HOST_GOVERNOR" "$HOST_LOAD1M_START" "$HOST_LOAD1M_END" \
         >> "$SPEED_HISTORY"
 done < "$HIST_FIB"
 
 while IFS="$(printf '\t')" read -r label tc c_ms c_rss r_ms bin_sz; do
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tarray_loop_500k\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$RUN_TS" "$ZORIL_COMMIT" "$ZORIL_COMMIT" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$label" "$tc" "$r_ms" "$c_rss" "$RUN_STATUS" \
+        "$RUN_TS" "$ZORIL_VERSION" "$ZORIL_VERSION" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$label" "$tc" "$r_ms" "$c_rss" "$RUN_STATUS" \
         "$HOST_OS" "$HOST_CPU" "$HOST_CORES" "$HOST_RAM" "$HOST_GOVERNOR" "$HOST_LOAD1M_START" "$HOST_LOAD1M_END" \
         >> "$SPEED_HISTORY"
 done < "$HIST_ARR"
 
 while IFS="$(printf '\t')" read -r label fns loc c_ms c_rss touch_ms edit_ms bin_sz sig_ms; do
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s_clean\tcomp\tmultifile_clean\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$RUN_TS" "$ZORIL_COMMIT" "$ZORIL_COMMIT" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$label" "$c_ms" "$c_rss" "$RUN_STATUS" \
+        "$RUN_TS" "$ZORIL_VERSION" "$ZORIL_VERSION" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$label" "$c_ms" "$c_rss" "$RUN_STATUS" \
         "$HOST_OS" "$HOST_CPU" "$HOST_CORES" "$HOST_RAM" "$HOST_GOVERNOR" "$HOST_LOAD1M_START" "$HOST_LOAD1M_END" \
         >> "$SPEED_HISTORY"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s_touch\tcomp\tmultifile_touch\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$RUN_TS" "$ZORIL_COMMIT" "$ZORIL_COMMIT" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$label" "$touch_ms" "$c_rss" "$RUN_STATUS" \
+        "$RUN_TS" "$ZORIL_VERSION" "$ZORIL_VERSION" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$label" "$touch_ms" "$c_rss" "$RUN_STATUS" \
         "$HOST_OS" "$HOST_CPU" "$HOST_CORES" "$HOST_RAM" "$HOST_GOVERNOR" "$HOST_LOAD1M_START" "$HOST_LOAD1M_END" \
         >> "$SPEED_HISTORY"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s_edit\tcomp\tmultifile_edit\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$RUN_TS" "$ZORIL_COMMIT" "$ZORIL_COMMIT" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$label" "$edit_ms" "$c_rss" "$RUN_STATUS" \
+        "$RUN_TS" "$ZORIL_VERSION" "$ZORIL_VERSION" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$label" "$edit_ms" "$c_rss" "$RUN_STATUS" \
         "$HOST_OS" "$HOST_CPU" "$HOST_CORES" "$HOST_RAM" "$HOST_GOVERNOR" "$HOST_LOAD1M_START" "$HOST_LOAD1M_END" \
         >> "$SPEED_HISTORY"
     if [ -n "$sig_ms" ] && [ "$sig_ms" -gt 0 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s_sig\tcomp\tmultifile_sig\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-            "$RUN_TS" "$ZORIL_COMMIT" "$ZORIL_COMMIT" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$label" "$sig_ms" "$c_rss" "$RUN_STATUS" \
+            "$RUN_TS" "$ZORIL_VERSION" "$ZORIL_VERSION" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$label" "$sig_ms" "$c_rss" "$RUN_STATUS" \
             "$HOST_OS" "$HOST_CPU" "$HOST_CORES" "$HOST_RAM" "$HOST_GOVERNOR" "$HOST_LOAD1M_START" "$HOST_LOAD1M_END" \
             >> "$SPEED_HISTORY"
     fi
@@ -1351,7 +1351,7 @@ z_runtime_ratio="${r_ms_pair_ratio:-$(awk "BEGIN { if ($r_ms_gcc2_fib > 0) print
 z_rss_mb_per_kloc=$(awk "BEGIN { if ($loc_z > 0) printf \"%.3f\", (($rss_z_clean / 1024.0) / ($loc_z / 1000.0)); else print 0 }")
 
 printf '%s\t%s\t%s\t%s\t%s\t%s\truntime_ratio_vs_gcc_o2\tzoril_vs_gcc\tfib(38)x3\t%s\t0\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$RUN_TS" "$ZORIL_COMMIT" "$ZORIL_COMMIT" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$z_runtime_ratio" "$RUN_STATUS" \
+    "$RUN_TS" "$ZORIL_VERSION" "$ZORIL_VERSION" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$z_runtime_ratio" "$RUN_STATUS" \
     "$HOST_OS" "$HOST_CPU" "$HOST_CORES" "$HOST_RAM" "$HOST_GOVERNOR" "$HOST_LOAD1M_START" "$HOST_LOAD1M_END" \
     >> "$SPEED_HISTORY"
 

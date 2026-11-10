@@ -144,8 +144,7 @@ fi
 
 # The checked build and the git group run BEFORE the bench step on purpose. The bench step
 # appends to bench/*_history.tsv and rewrites bench/cross_lang/last_zoril_metrics.tsv, which makes the
-# working tree dirty; `tool-versions` compares each tool's stamped version against the tree as
-# it is when the test runs, and `clean-tree` / `preflight-selftest` in the git group assert a clean
+# working tree dirty; `clean-tree` and `preflight-selftest` in the git group assert a clean
 # tree. Nothing in the checked suite or git group depends on the bench.
 CHECKED_CMD="${PREFLIGHT_CHECKED:-./scripts/test_checked.sh}"
 chk_start=$(date +%s)

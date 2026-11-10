@@ -13,6 +13,7 @@ cd "$(dirname "$0")/.." || exit 2
 . scripts/lib/portability.sh
 . scripts/lib/path_shim.sh
 . scripts/lib/layout.sh
+. scripts/lib/tree_files.sh
 
 tmp="$(mktemp -d /tmp/test_check_deps_XXXXXX)"
 cleanup() { rm -rf "$tmp"; }
@@ -276,8 +277,7 @@ fi
 # -----------------------------------------------------------------------------
 scratch="$tmp/scratch"
 mkdir -p "$scratch"
-tar --exclude="./build*" --exclude="build" --exclude="./.git*" --exclude=".git" \
-    -cf - . | (cd "$scratch" && tar -xf -)
+tree_files . | while IFS= read -r f; do mkdir -p "$scratch/$(dirname "$f")"; cp -p "$f" "$scratch/$f"; done
 # A nested git worktree (a task branch mounted under doc/) is not source, and the rule that hides
 # it from the gates can live in the outer .git, which the copy leaves out: md-check in the copy
 # then fails on files the real tree never checks.

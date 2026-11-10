@@ -53,6 +53,8 @@ set -e
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 . "$REPO/scripts/env.sh"
+. "$REPO/scripts/lib/tree_files.sh"
+. "$REPO/scripts/lib/fuzz_fresh.sh"
 
 ONLY="$1"
 ROW=""
@@ -259,7 +261,8 @@ if [ -n "${MUTATION_SUITE:-}" ]; then
 fi
 
 current_toolchain_stamp() {
-    _commit=$(git rev-parse HEAD 2>/dev/null || ./scripts/version.sh 2>/dev/null || echo "no-commit")
+    _src_hash=$(fuzz_tree_code_hash "$REPO" src 2>/dev/null || echo "no-src")
+    _stdlib_hash=$(fuzz_tree_code_hash "$REPO" stdlib 2>/dev/null || echo "no-stdlib")
     _hashes=""
     for _b in build/zoril build/zilc build/runtime.o; do
         if [ -f "$_b" ]; then
@@ -267,7 +270,7 @@ current_toolchain_stamp() {
             _hashes="${_hashes}:${_h}"
         fi
     done
-    printf '%s%s' "$_commit" "$_hashes"
+    printf '%s:%s%s' "$_src_hash" "$_stdlib_hash" "$_hashes"
 }
 
 CUR_STAMP=$(current_toolchain_stamp)
