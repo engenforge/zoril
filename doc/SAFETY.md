@@ -202,8 +202,8 @@ Safe code is only as good as the `unsafe` code under it, so the project measures
 | Figure                           | Value  |
 | -------------------------------- | ------ |
 | stdlib modules                   | 30     |
-| stdlib lines                     | 6,268  |
-| stdlib `unsafe { }` blocks       | 171    |
+| stdlib lines                     | 6,338  |
+| stdlib `unsafe { }` blocks       | 173    |
 | stdlib modules with such a block | 23     |
 | stdlib `unsafe fn` declarations  | 63     |
 | of those, public                 | 59     |

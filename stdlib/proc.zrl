@@ -50,6 +50,17 @@ impl ExitStatus {
 // Handle representing a running or completed child process.
 pub struct Child {
     pub pid: i64,
+    // Set once the child has been reaped, by `wait` or by `wait_any`: the pid may be reused after
+    // that, so a later `wait` must not wait4 it again.
+    status: Option<ExitStatus>,
+}
+
+fn decode_status(st: i32) -> ExitStatus {
+    let sig = st & 0x7f;
+    if sig == 0 {
+        return ExitStatus.Exited((st >> 8) & 0xff);
+    }
+    return ExitStatus.Signaled(sig);
 }
 
 // wait4 until the child's status is observed. EINTR is retried; any other failure is an error,
@@ -68,19 +79,78 @@ fn wait_for_pid(pid: i64) -> Result<ExitStatus, Error> {
     if r < 0 {
         return Result.Err(Error.from_linux_errno((0 as i64 - r) as i32));
     }
-    let st = *wstatus_ptr;
-    let sig = st & 0x7f;
-    if sig == 0 {
-        let c = (st >> 8) & 0xff;
-        return Result.Ok(ExitStatus.Exited(c));
+    return Result.Ok(decode_status(*wstatus_ptr));
+}
+
+// Reaps whichever unreaped child in `children` ends first and records its status on that `Child`;
+// returns its index, or none when `nohang` is set and none has ended. wait4(-1) reaps any child of
+// the process, so a child outside `children` that ends first would lose its status: that is
+// reported as ECHILD, and callers pass every child they have spawned.
+fn reap_any(children: [mut Child], nohang: bool) -> Result<Option<usize>, Error> {
+    let mut pending = false;
+    let mut k = 0 as usize;
+    while k < children.len {
+        if children[k].status.is_none() {
+            pending = true;
+        }
+        k = k + 1;
     }
-    return Result.Ok(ExitStatus.Signaled(sig));
+    if !pending {
+        return Result.Err(Error.from_linux_errno(10));
+    }
+    let options = if nohang { 1 as u64 } else { 0 as u64 };
+    // SAFETY: one uninitialized `i32` slot in this frame, which wait4 fills before anything
+    // reads it.
+    let wstatus_ptr = unsafe { @alloca<i32>(1) };
+    let mut r = -4 as i64;
+    while r == -4 as i64 {
+        *wstatus_ptr = 0;
+        // SAFETY: wait4(61) with pid -1 writes the status of whichever child ended through
+        // `wstatus_ptr`, the slot allocated just above.
+        r = unsafe { @syscall(61, -1 as i64 as u64, wstatus_ptr as u64, options, 0 as u64) } as i64;
+    }
+    if r < 0 {
+        return Result.Err(Error.from_linux_errno((0 as i64 - r) as i32));
+    }
+    if r == 0 {
+        return Result.Ok(Option.None);
+    }
+    let mut i = 0 as usize;
+    while i < children.len {
+        if children[i].pid == r && children[i].status.is_none() {
+            children[i].status = Option.Some(decode_status(*wstatus_ptr));
+            return Result.Ok(Option.Some(i));
+        }
+        i = i + 1;
+    }
+    return Result.Err(Error.from_linux_errno(10));
+}
+
+// Blocks until one of the unreaped children in `children` ends, and returns its index. That call
+// reaps it: the status is kept on the `Child`, and its `wait` returns it without calling wait4.
+// Children that were already reaped are skipped; with none left the result is an error (ECHILD).
+pub fn wait_any(children: [mut Child]) -> Result<usize, Error> {
+    let r = reap_any(children, false);
+    if r.is_err() {
+        return Result.Err(r.err().unwrap());
+    }
+    return Result.Ok(r.ok().unwrap().unwrap());
+}
+
+// As `wait_any`, but returns none at once when no child has ended yet.
+pub fn try_wait_any(children: [mut Child]) -> Result<Option<usize>, Error> {
+    return reap_any(children, true);
 }
 
 impl Child {
     // Waits for the child process to complete and returns its exit status.
     pub fn wait(self: &mut Child) -> Result<ExitStatus, Error> {
-        return wait_for_pid(self.pid);
+        if self.status.is_some() {
+            return Result.Ok(self.status.unwrap());
+        }
+        let st = wait_for_pid(self.pid)?;
+        self.status = Option.Some(st);
+        return Result.Ok(st);
     }
 
     // Forcibly terminates the child process (SIGKILL on the Unixes).
@@ -434,7 +504,7 @@ impl Command {
             return Result.Err(Error.from_linux_errno(errno_val));
         }
 
-        return Result.Ok(Child { pid: pid });
+        return Result.Ok(Child { pid: pid, status: Option.None });
     }
 
     // Spawns the command and waits for completion, returning the process exit status.
