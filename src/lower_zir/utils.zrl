@@ -3128,6 +3128,33 @@ impl ZirLowerer {
         return is_raw_pointer_tag(self.module.types[ty as usize - 1 as usize].def.get_tag());
     }
 
+    // Whether PL is reached through a raw pointer (`*p`, `(*p).f`, `p[i]` with `p` raw). What a
+    // raw pointer points at may be uninitialized - a fresh slot in a `Vec`'s buffer, an allocator
+    // block - so a store there writes without dropping the old value: dropping it ran `drop` on
+    // garbage under safe callers such as `Vec::push`. Replacing a live value through one is `let old = *p;`
+    // before the store.
+    pub fn place_through_raw_pointer(self: &mut ZirLowerer, pl: &Place) -> bool {
+        if pl.base == 0 as u32 || pl.base as usize > self.locals.len() { return false; }
+        let mut curr_ty = self.locals[pl.base as usize - 1 as usize].ty;
+        for proj in pl.projections {
+            let through_raw = match *proj {
+                Projection.Deref | Projection.Index(_) => self.is_raw_pointer_ty(curr_ty),
+                Projection.Field(_) | Projection.TupleIndex(_) => false,
+            };
+            if through_raw { return true; }
+            curr_ty = match *proj {
+                Projection.Field(name) => self.get_field_type(
+                    curr_ty,
+                    self.get_field_index(curr_ty, name)
+                ),
+                Projection.TupleIndex(idx) => self.get_tuple_elem_type(curr_ty, idx),
+                Projection.Deref => self.get_ptr_inner_type(curr_ty),
+                Projection.Index(_) => self.get_slice_element_type(curr_ty),
+            };
+        }
+        return false;
+    }
+
     fn is_char_ty(self: &ZirLowerer, ty: u32) -> bool {
         if ty == 0 as u32 || ty as usize > self.module.types.len() { return false; }
         let p_ty: &ILTypeDecl = &self.module.types[ty as usize - 1 as usize];

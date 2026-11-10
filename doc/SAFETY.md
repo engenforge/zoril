@@ -202,13 +202,13 @@ Safe code is only as good as the `unsafe` code under it, so the project measures
 | Figure                           | Value  |
 | -------------------------------- | ------ |
 | stdlib modules                   | 30     |
-| stdlib lines                     | 6,263  |
-| stdlib `unsafe { }` blocks       | 170    |
+| stdlib lines                     | 6,268  |
+| stdlib `unsafe { }` blocks       | 171    |
 | stdlib modules with such a block | 23     |
 | stdlib `unsafe fn` declarations  | 63     |
 | of those, public                 | 59     |
 | compiler modules                 | 50     |
-| compiler lines                   | 46,815 |
+| compiler lines                   | 46,843 |
 | compiler `unsafe { }` blocks     | 838    |
 
 How each one is counted: every `.zrl` file under the directory, recursively; **lines** are physical lines (`wc -l`); **`unsafe { }` blocks** are occurrences of `unsafe` followed by `{` on the same line; **`unsafe fn` declarations** are lines that start with `unsafe fn` or `pub unsafe fn`. That is a different question from `scripts/marker_density.sh`, which counts raw-pointer dereference sites over non-comment lines (58 marker lines for `stdlib`, 264 for `src`).

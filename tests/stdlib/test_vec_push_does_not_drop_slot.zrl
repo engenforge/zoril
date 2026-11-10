@@ -1,0 +1,36 @@
+// expected exit 0
+// A `Vec` element type with a `Drop` is dropped once per value, never on the uninitialized slot
+// `push` writes into: a store through a raw pointer does not drop what was there before
+// (P-0001). `set` overwrites a live element and drops the old one exactly once.
+import "vec.zrl";
+use vec::Vec;
+
+static mut DROPS: i64 = 0;
+static mut DROPPED_IDS: i64 = 0;
+struct S { id: i64 }
+impl Drop for S {
+    fn drop(self: &mut S) {
+        DROPS = DROPS + 1;
+        DROPPED_IDS = DROPPED_IDS + self.id;
+    }
+}
+
+fn main() -> i32 {
+    {
+        let mut v = Vec::<S>.new();
+        let mut i = 0 as i64;
+        // Ten pushes, past the first capacity of 8, so one goes in after the buffer grows.
+        while i < 10 { v.push(S { id: 1 << i }); i = i + 1; }
+        if DROPS != 0 { return 1; }
+        v.set(3, S { id: 1 << 20 });
+        if DROPS != 1 || DROPPED_IDS != 1 << 3 { return 2; }
+        let mut popped = 0 as i64;
+        while popped < 10 {
+            match v.pop() { Option.Some(s) => { @drop(s); }, Option.None => { return 3; }, }
+            popped = popped + 1;
+        }
+    }
+    if DROPS != 11 { return 4; }
+    if DROPPED_IDS != (1023 - 8) + (1 << 20) + 8 { return 5; }
+    return 0;
+}

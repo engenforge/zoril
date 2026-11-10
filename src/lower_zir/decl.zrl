@@ -733,7 +733,8 @@ impl ZirLowerer {
                     self.emit(ZirStmt.Drop(lhs_place, span));
                 }
                 self.set_local_consumed(lhs_place.base, false);
-            } else if lhs_place.projections.len > 0 as usize {
+            } else if lhs_place.projections.len > 0 as usize
+                && !self.place_through_raw_pointer(&lhs_place) {
                 self.emit(ZirStmt.Drop(lhs_place, span));
             }
             self.consume_place_if_move(rhs_place);
