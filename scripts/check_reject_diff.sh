@@ -137,11 +137,17 @@ cat > "$WORK/run_front.sh" << 'EOF'
 . scripts/lib/portability.sh
 # run_front.sh TREE FILE... -> "<file> <rc> <first error>"
 tree="$1"; shift
+d=$(mktemp -d)
+out_file="$d/out"
 for f in "$@"; do
-    out=$(run_with_timeout -k 2s 60s "$tree/build/zoril" -I "stdlib=$tree/stdlib" --emit-zil -o /dev/null "$f" 2>&1 < /dev/null)
+    run_with_timeout -k 2s 60s "$tree/build/zoril" -I "stdlib=$tree/stdlib" --emit-zil -o /dev/null "$f" > "$out_file" 2>&1 < /dev/null
     rc=$?
-    echo "$f $rc $(printf '%s' "$out" | head -n 1 | sed 's/^[^ ]* //' | cut -c1-90)"
+    first=
+    IFS= read -r first < "$out_file"
+    err=${first#* }
+    printf '%s %s %.90s\n' "$f" "$rc" "$err"
 done
+rm -rf "$d"
 EOF
 cat > "$WORK/run_zbuild.sh" << 'EOF'
 #!/bin/sh
