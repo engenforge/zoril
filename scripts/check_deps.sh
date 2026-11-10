@@ -9,7 +9,7 @@
 #   seed      - C compiler (needed only for initial stage0-C seed compiler)
 #   build     - backend, assembler, linker, awk, sed (optional: timeout, git)
 #   install   - build (the man pages are committed, so installing needs no scdoc)
-#   test      - build + bash, flock, mkfifo, xargs (optional: lua, setsid, valgrind, dprint, rustc, scdoc)
+#   test      - build + flock, mkfifo, xargs (optional: lua, setsid, valgrind, dprint, rustc, scdoc)
 #   preflight - test + git, timeout, scdoc
 #   fuzz      - bash, lua, timeout (optional: rustc)
 #   repro     - git, tar, sha256sum/shasum/sha256
@@ -300,7 +300,6 @@ add_profile_man() {
 
 add_profile_test() {
     add_profile_build
-    check_required "bash" "bash" "the safety-model and Markdown link checks (check_safety_model.sh, check_md_links.sh)"
     check_required "flock" "flock" "test runner concurrency locking"
     check_optional "lua" "fuzzer and benchmark test generator"
     check_required "mkfifo" "mkfifo" "parallel test runner IPC"

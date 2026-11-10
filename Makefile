@@ -386,6 +386,9 @@ mutation-check: ## Break the compiler on purpose; require the suite to notice
 selfhost-check: ## Full gate: self-hosting fixpoint
 	@./scripts/selfhost-check.sh
 
+user-tools: $(TARGET) $(ZILC) build/zbuild build/runtime.o ## Full gate: make test with only user tools (export + checkout run)
+	@./scripts/check_user_tools.sh
+
 selfhost-confirm: $(TARGET) $(ZILC) build/zbuild ## Rebuild zoril, zilc and zbuild with themselves; keep the self-built ones if they differ from build/'s
 	@./scripts/selfhost_finalize.sh --force
 
@@ -396,14 +399,14 @@ repro-check: ## Gate: bootstrap from scratch twice and require identical results
 # rules -- the fresh-checkout path -- plus the self-hosting fixpoint) in the BACKGROUND,
 # beside mutation-check, and WAIT for it before the bench step: the bench thresholds refuse a
 # loaded host, so nothing else may still be running when they start.
-preflight: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/runtime_hosted.o ## Full pre-merge gate: selfhost + mutation + bench thresholds
+preflight: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/runtime_hosted.o user-tools ## Full pre-merge gate: selfhost + mutation + bench thresholds
 	@./scripts/preflight.sh
 
 preflight-changed: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/runtime_hosted.o ## Fast pre-merge gate: selfhost + mutations of changed files
 	@./scripts/preflight.sh --changed
 
 ##@ Testing
-TEST_GATE_DEPS ?= $(RT_HOST) build/runtime_hosted.o $(STAGE0_C_DIR)/build/zoril-c.release stage0c-build
+TEST_GATE_DEPS ?= $(RT_HOST) build/runtime_hosted.o $(STAGE0_C_DIR)/build/zoril-c.release stage0c-build tools/zman/build/zman
 TEST_CHANGED_DEPS ?= $(TEST_GATE_DEPS) $(TARGET) $(ZILC) build/zbuild
 test-changed: $(TEST_CHANGED_DEPS) ## Run tests scoped to changed files (BASE=<commit>, default: preflight_base)
 	@./scripts/check_deps.sh test
@@ -634,6 +637,6 @@ help help-all:
 	' $(MAKEFILE_LIST)
 
 .PHONY: $(GATES) all test test-changed test-fast stage0c-build install install-files uninstall clean help help-all dist dist-bin dist-check \
-        selfhost-check selfhost-confirm selfhost-build-check repro-check mutation-check \
+        selfhost-check selfhost-confirm selfhost-build-check repro-check mutation-check user-tools \
         stage0c-suites fuzz-short fuzz fuzz-release fuzz-calibrate preflight preflight-changed \
         md-fmt test-readme test-docs test-getting-started zbuild test-versions man test-man
