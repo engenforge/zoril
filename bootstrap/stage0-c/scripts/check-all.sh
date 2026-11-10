@@ -1,10 +1,10 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # scripts/check-all.sh
 #
 # Robust, parallel test orchestrator.
 # Prints one "SUITE: P/T passed" total per suite, and [FAIL] lines for failures.
 
-set -uo pipefail
+set -u
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$REPO_ROOT/build"
@@ -22,19 +22,18 @@ mkdir -p "$BUILD_DIR"
 # Its [FAIL] lines (and the full log) are printed when it fails.
 # wait_bg PID LOG_FILE SUITE_NAME FALLBACK_TOTAL
 wait_bg() {
-    local pid="$1"
-    local log="$2"
-    local name="$3"
-    local fallback_total="$4"
+    pid="$1"
+    log="$2"
+    name="$3"
+    fallback_total="$4"
 
     wait "$pid"
-    local status=$?
+    status=$?
 
     # We use grep -a to handle potential non-text output from tools
-    local summary
     summary=$(grep -aE "^[a-z_]+: [0-9]+/[0-9]+ passed" "$log" | tail -n 1 || true)
     if [ -z "$summary" ]; then
-        if [ $status -eq 0 ]; then
+        if [ "$status" -eq 0 ]; then
             summary="$name: $fallback_total/$fallback_total passed"
         else
             summary="$name: 0/$fallback_total passed"
@@ -42,10 +41,9 @@ wait_bg() {
     fi
     printf -- "%s\n" "$summary"
 
-    local counts passed total
     counts=$(printf '%s' "$summary" | grep -oE '[0-9]+/[0-9]+')
     passed=${counts%/*}; total=${counts#*/}
-    if [ $status -ne 0 ] || [ "$passed" -ne "$total" ]; then
+    if [ "$status" -ne 0 ] || [ "$passed" -ne "$total" ]; then
         OVERALL_RESULT=1
         printf -- "[FAIL] %s (%s)\n" "$name" "$summary"
         printf -- "\n--- Details for %s ---\n" "$name"

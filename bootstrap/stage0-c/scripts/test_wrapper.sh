@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 
 # test_wrapper.sh - Briefly reports test success or failure with detailed logs on failure.
 #
@@ -22,10 +22,13 @@ TEST_NAME=$(basename "$COMMAND")
 
 if [ "$COMMAND" = "valgrind" ]; then
     for ARG in "$@"; do
-        if [[ "$ARG" != -* ]]; then
-            TEST_NAME="valgrind ($(basename "$ARG"))"
-            break
-        fi
+        case "$ARG" in
+            -*) ;;
+            *)
+                TEST_NAME="valgrind ($(basename "$ARG"))"
+                break
+                ;;
+        esac
     done
 fi
 

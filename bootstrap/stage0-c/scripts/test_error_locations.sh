@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # scripts/test_error_locations.sh
 #
 # Compiles each .zrl file in tests/error_cases/ with --json-errors and verifies
@@ -11,7 +11,7 @@
 #
 # The file is expected to fail compilation (exit code != 0).
 
-set -uo pipefail
+set -u
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -d "$REPO_ROOT/../../stdlib" ]; then
@@ -57,12 +57,11 @@ fi
 # check_error FILE LINE COL_OR_0 MESSAGE_SUBSTR
 # Returns 0 if the JSON output from compiling FILE contains a matching error.
 check_error() {
-    local f="$1" lineno="$2" col="$3" msg="$4"
-    local extra_flags=""
-    if [[ "$f" == *.zil ]]; then
-        extra_flags="--il"
-    fi
-    local json
+    f="$1"; lineno="$2"; col="$3"; msg="$4"
+    extra_flags=""
+    case "$f" in
+        *.zil) extra_flags="--il" ;;
+    esac
     json=$(ASAN_OPTIONS=detect_leaks=0 run_timed "$ZORIL_BIN" $extra_flags --json-errors "$f" -o /dev/null 2>/dev/null || true)
 
     if [ -z "$json" ]; then
