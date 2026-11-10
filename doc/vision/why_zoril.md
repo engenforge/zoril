@@ -26,7 +26,7 @@ Zoril is not a subset of Rust. It aims first at systems software: data-oriented,
 
 ## 2. What Zoril Does Today
 
-Every capability below is exercised by the running compiler (`build/zoril`) during `make test`, including the safety matrix in [`doc/spec/safety_model.md`](../spec/safety_model.md) (78 rows at the time of writing, with no row marked **GAP**).
+Every capability below is exercised by the running compiler (`build/zoril`) during `make test`, including the safety matrix in [`doc/spec/safety_model.md`](../spec/safety_model.md) (79 rows at the time of writing, with no row marked **GAP**).
 
 ### A. One Build Configuration
 

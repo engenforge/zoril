@@ -1,7 +1,6 @@
 // name: `?` on a `Result` larger than the function's return type writes past the return slot
-// expected: known_gap
-// gap: `e?` copied `e` whole into the caller's return slot, so a `Result<[i64; 8], i64>` propagated out of a function returning `Result<u8, i64>` writes 72 bytes into a 16-byte slot and overwrites the caller's frame; here the write faults
-// observed: runtime_fault
+// expected: accept
+// Accepted and correct since Z-0167: the early return builds a `Result<u8, i64>` holding the `Err` payload, where it used to copy the 72-byte operand into the 16-byte return slot and fault.
 import "core.zrl";
 fn inner() -> Result<[i64; 8], i64> { return Result.Err(5 as i64); }
 fn outer() -> Result<u8, i64> {

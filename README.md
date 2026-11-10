@@ -20,7 +20,7 @@ Zoril is an early experiment in a combination that has not been explored much: c
 ### Key Highlights
 
 - **Small toolchain:** `zoril`, `zilc` and the `qbe` backend are about **1.5 MB** of stripped binaries, built from ~42k lines of Zoril and ~15k lines of C (QBE). See [Zero Overhead](doc/zero_overhead.md).
-- **Memory safety checks in every build:** array and slice bounds are checked at run time (exit 134); ownership, moves, borrows, stack regions and arenas are checked at compile time; no check is compiled out. Each claim is backed by probes in the [78-row safety matrix](doc/spec/safety_model.md). No row is marked **GAP**; the open holes are listed as known gaps in [What Zoril Checks](doc/SAFETY.md), which also says what is checked, what is checked at run time and what is left to the programmer.
+- **Memory safety checks in every build:** array and slice bounds are checked at run time (exit 134); ownership, moves, borrows, stack regions and arenas are checked at compile time; no check is compiled out. Each claim is backed by probes in the [79-row safety matrix](doc/spec/safety_model.md). No row is marked **GAP**; the open holes are listed as known gaps in [What Zoril Checks](doc/SAFETY.md), which also says what is checked, what is checked at run time and what is left to the programmer.
 - **Fuzzed:** the release bar of 2,638,155 generated programs compiled and ran with no fault on the previous code, and a shorter session of 755,772 programs did the same on this code, each built whole-program and with `zbuild`; a full release-bar run on this code is planned. See [bench/fuzz/README.md](bench/fuzz/README.md).
 - **No lifetime annotations:** ownership without lifetime parameters in signatures, using arenas and analysis of function bodies. See [Why Zoril](doc/vision/why_zoril.md).
 - **No C runtime dependency:** executables link a small assembly runtime that makes Linux system calls directly: no libc and no dynamic linker.
@@ -354,7 +354,7 @@ zoril -I <stdlib>  --emit-zil  ->  zilc  ->  qbe  ->  as  ->  ld  (with runtime.
 
 ## Testing
 
-- `make test` runs the standard verification suite: compiler unit tests, syntax checks, error-reporting tests, standard library safety assertions, runtime consistency, and the 491-probe safety matrix across 78 rows.
+- `make test` runs the standard verification suite: compiler unit tests, syntax checks, error-reporting tests, standard library safety assertions, runtime consistency, and the 491-probe safety matrix across 79 rows.
 - For developer-specific pre-merge verification (`make preflight`, `make preflight-changed`), mutation testing, toolchain dependency matrix testing (`make deps-matrix`), and reproducible release validation (`make repro-check`), see the [Developer Guide](doc/developer_guide.md).
 
 ## Contributing and roadmap

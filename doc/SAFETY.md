@@ -180,7 +180,7 @@ An `extern` declaration is the unsafe contract. The compiler checks the shape of
 
 ### 5.1 The safety matrix
 
-The repository keeps 491 probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes), each recording its expectation in its first lines: **355 `compile_reject`**, **71 `accept`**, **8 `runtime_trap`**, **11 `runtime_fault`**, and **46 `known_gap`**. `scripts/run_safety_matrix.sh` runs all of them and fails when an observation differs from the recorded expectation; `make test` gates it (`safety-matrix`) together with `safety-model`, which keeps [`doc/spec/safety_model.md`](spec/safety_model.md) and the probes consistent in both directions.
+The repository keeps 491 probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes), each recording its expectation in its first lines: **357 `compile_reject`**, **72 `accept`**, **8 `runtime_trap`**, **11 `runtime_fault`**, and **43 `known_gap`**. `scripts/run_safety_matrix.sh` runs all of them and fails when an observation differs from the recorded expectation; `make test` gates it (`safety-matrix`) together with `safety-model`, which keeps [`doc/spec/safety_model.md`](spec/safety_model.md) and the probes consistent in both directions.
 
 Each matrix row carries an evidence level: **6 rows at `routes`**, **72 at `example`**, and **0 at `fuzzed`** or `argued`. `example` means the cited probes fire the mechanism on the shapes they name; `routes` means every route the row lists is named by a cited `compile_reject` probe (`scripts/check_route_coverage.sh`); `fuzzed` adds generated programs for the row's routes, and `argued` adds an argument that the invariant holds for every route. The levels are defined in [`safety_model.md`](spec/safety_model.md) and validated by `scripts/check_safety_model.sh`.
 
@@ -208,7 +208,7 @@ Safe code is only as good as the `unsafe` code under it, so the project measures
 | stdlib `unsafe fn` declarations  | 63     |
 | of those, public                 | 59     |
 | compiler modules                 | 50     |
-| compiler lines                   | 46,843 |
+| compiler lines                   | 46,945 |
 | compiler `unsafe { }` blocks     | 838    |
 
 How each one is counted: every `.zrl` file under the directory, recursively; **lines** are physical lines (`wc -l`); **`unsafe { }` blocks** are occurrences of `unsafe` followed by `{` on the same line; **`unsafe fn` declarations** are lines that start with `unsafe fn` or `pub unsafe fn`. That is a different question from `scripts/marker_density.sh`, which counts raw-pointer dereference sites over non-comment lines (58 marker lines for `stdlib`, 264 for `src`).
@@ -250,7 +250,6 @@ The open classes:
 - **(K) Owners holding frame views, moved out:** a local `Vec` whose elements are views of a stack array is accepted when it is pushed into the caller's `Vec` ([`gap_59_pushed_vec_holding_frame_views.zrl`](../bench/safety_matrix/probes/gap_59_pushed_vec_holding_frame_views.zrl)), passed by value to a callee that pushes it ([`gap_60_vec_holding_frame_views_moved_to_pushing_callee.zrl`](../bench/safety_matrix/probes/gap_60_vec_holding_frame_views_moved_to_pushing_callee.zrl)), or wrapped in a struct first ([`gap_61_struct_wrapping_vec_of_frame_views_pushed.zrl`](../bench/safety_matrix/probes/gap_61_struct_wrapping_vec_of_frame_views_pushed.zrl)); and a `Vec` a callee builds around a view of a caller-local `Vec`'s buffer is accepted when the callee stores it into the caller's slot ([`gap_63_vec_built_around_param_view_in_callee.zrl`](../bench/safety_matrix/probes/gap_63_vec_built_around_param_view_in_callee.zrl)).
 - **(L) A generic instance made into a `fn` value:** `id::<i32>` written as a value rather than called is accepted but lowers to nothing, so `let f: fn(i32) -> i32 = id::<i32>;` leaves the value uninitialized and the call jumps through stack garbage ([`gap_66_generic_instance_as_fn_value_uninit.zrl`](../bench/safety_matrix/probes/gap_66_generic_instance_as_fn_value_uninit.zrl)).
 - **(M) An `extern` function made into a `fn` value:** a bare `extern` converts to a plain `fn` type with no `unsafe` block, so safe code calls C through the value while a direct call needs `unsafe`; a safe callee hands `memset` a forged pointer and the write faults ([`gap_67_extern_fn_as_fn_value.zrl`](../bench/safety_matrix/probes/gap_67_extern_fn_as_fn_value.zrl)).
-- **(N) The early return of `?`:** `e?` returns `e` whole whatever the enclosing function returns, so an error of another type is reinterpreted as the function's ([`gap_68_try_err_type_reinterpreted.zrl`](../bench/safety_matrix/probes/gap_68_try_err_type_reinterpreted.zrl)), an `Option`'s `None` becomes a `Result`'s `Ok` ([`gap_69_try_option_into_result.zrl`](../bench/safety_matrix/probes/gap_69_try_option_into_result.zrl)), and a larger `Result` overruns the return slot ([`gap_70_try_larger_ok_overruns_slot.zrl`](../bench/safety_matrix/probes/gap_70_try_larger_ok_overruns_slot.zrl)).
 
 ---
 

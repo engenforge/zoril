@@ -2967,8 +2967,9 @@ impl ZirLowerer {
         self.terminate(ZirTerminator.Branch(cond_place, success_block, error_block));
 
         self.switch_to_block(error_block);
+        let early = self.lower_try_early_return(val_place, enum_ty, success_v_idx, span);
         self.emit_scope_cleanup(0 as usize, span, 0 as u32, true);
-        self.terminate(ZirTerminator.Ret(val_place));
+        self.terminate(ZirTerminator.Ret(early));
 
         self.switch_to_block(success_block);
         let payload_ty = self.get_variant_payload_type(enum_ty, success_v_idx);
@@ -2990,6 +2991,107 @@ impl ZirLowerer {
         }
         return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
         return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+    }
+
+    // The value `e?` returns early (standard_library.md §5.3). `e` itself only when it already has
+    // the function's return type, or refers to a value of it; otherwise a fresh value of the return
+    // type holding `e`'s `Err` payload, or its `None`. Returning `e` whole into a slot of another
+    // type wrote past the slot when `e` was larger and reinterpreted the payload when the error
+    // types differed (probes gap_68 to gap_70). The result points into no lowerer storage, as
+    // `lower_expr`'s does.
+    #[borrows()]
+    fn lower_try_early_return(
+        self: &mut ZirLowerer,
+        val_place: Place,
+        op_ty: u32,
+        success_v_idx: u32,
+        span: Span
+    ) -> Place {
+        let ret_ty = self.current_ret_ty;
+        if success_v_idx == 0xffffffff as u32 {
+            self.report_prefix(span);
+            eprint("`?` needs a `Result` or an `Option`, found `");
+            eprint(self.mono.type_display(op_ty));
+            eprint("`\n");
+            return val_place;
+        }
+        if ret_ty != 0 as u32 && self.types_match(ret_ty, op_ty) {
+            return val_place;
+        }
+        let pointee = self.get_ptr_inner_type(op_ty);
+        if pointee != 0 as u32 {
+            // A fresh value would copy the payload out of a borrow; only the referenced value
+            // itself, of the return type, can be returned.
+            if ret_ty != 0 as u32 && self.types_match(ret_ty, pointee) {
+                return val_place;
+            }
+            self.report_prefix(span);
+            eprint(
+                "`?` on a reference returns the value it refers to, so the function must return `"
+            );
+            eprint(self.mono.type_display(pointee));
+            eprint("`, not `");
+            eprint(self.mono.type_display(ret_ty));
+            eprint("`\n");
+            return val_place;
+        }
+
+        let is_result = self.get_variant_index(op_ty, self.intern_table.intern("Ok")).is_some();
+        let early_name = self.intern_table.intern(if is_result { "Err" } else { "None" });
+        let src_idx = self.get_variant_index(op_ty, early_name);
+        let dst_idx = self.get_variant_index(ret_ty, early_name);
+        let mut fits = src_idx.is_some() && dst_idx.is_some();
+        let mut src_payload = 0 as u32;
+        if fits {
+            src_payload = self.get_variant_payload_type(op_ty, src_idx.unwrap());
+            let dst_payload = self.get_variant_payload_type(ret_ty, dst_idx.unwrap());
+            fits = if src_payload == 0 as u32 || dst_payload == 0 as u32 {
+                src_payload == dst_payload
+            } else {
+                self.types_match(dst_payload, src_payload)
+            };
+        }
+        if !fits {
+            self.report_prefix(span);
+            eprint("`?` on `");
+            eprint(self.mono.type_display(op_ty));
+            eprint(
+                if is_result {
+                    "` returns its `Err` early, which `"
+                } else {
+                    "` returns its `None` early, which `"
+                }
+            );
+            eprint(if ret_ty == 0 as u32 { "()" } else { self.mono.type_display(ret_ty) });
+            eprint("` cannot hold\n");
+            return val_place;
+        }
+
+        let mut payload_place = Place {
+            base: 0,
+            projections: @slice(0 as *mut Projection, 0 as usize)
+        };
+        if src_payload != 0 as u32 {
+            let payload_ptr_ty = self.get_ptr_type(src_payload);
+            let payload_tmp = self.define_local(0 as *mut Symbol, payload_ptr_ty, LOCAL_KIND_TMP);
+            self.emit(
+                ZirStmt.Let(
+                    payload_tmp,
+                    ZirRvalue.EnumPayload(val_place, op_ty, src_idx.unwrap()),
+                    span
+                )
+            );
+            let payload_base = Place {
+                base: payload_tmp,
+                projections: @slice(0 as *mut Projection, 0 as usize)
+            };
+            payload_place = self.append_deref(&payload_base);
+        }
+        let fresh = self.define_local(0 as *mut Symbol, ret_ty, LOCAL_KIND_TMP);
+        self.emit(
+            ZirStmt.Let(fresh, ZirRvalue.EnumVariant(ret_ty, dst_idx.unwrap(), payload_place), span)
+        );
+        return Place { base: fresh, projections: @slice(0 as *mut Projection, 0 as usize) };
     }
 
     fn lower_return_expr(self: &mut ZirLowerer, inner_id: ExprId, span: Span) -> Place {

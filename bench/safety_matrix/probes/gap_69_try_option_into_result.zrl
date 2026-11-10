@@ -1,7 +1,6 @@
 // name: `?` on an `Option` in a function returning a `Result`
-// expected: known_gap
-// gap: `e?` on an `Option<i32>` returned the `Option` whole from a function returning `Result<i32, i32>`, so its `None` reaches the caller as an `Ok` whose payload nothing wrote; the probe returns 7 for that `Ok`
-// observed: exit 7
+// expected: compile_reject
+// Refused by the lowering of `?` (Z-0167): `Result<i32, i32>` has no `None` variant. It used to return the `Option` whole, so its `None` reached the caller as an `Ok`.
 import "core.zrl";
 fn inner() -> Option<i32> { return Option.None; }
 fn outer() -> Result<i32, i32> {
