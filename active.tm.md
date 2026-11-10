@@ -24,45 +24,6 @@ Active priority series to reduce verification runtimes. Order of execution:
 
 **`main` merged in (the maintainer, 2026-11-10):** `main` up to git:97df9b6 (Z-0162's drop lookup, Z-0165, the branch rule in `AGENTS.md`) is merged into `testinfra` in git:4ce794e. Z-0135, a `main` task, is not on this branch until it lands and is merged again; Z-0131 and Z-0133 depend on it. Before starting a task that needs a `main` commit, check `git merge-base --is-ancestor <sha> testinfra`; if the commit is missing, stop and ask the maintainer for another merge.
 
-- [x] +testinfra +tests +AI-G Z-0158 T11c The differential's front-end loop forks once per program, not six times
-    > **Created:** 2026-11-07 by Z-0122 (Finding 6). **Branch:** `testinfra`. **Before:** Z-0114. **Completed:** 2026-11-10 git:5f4b33a
-
-    - **Why:** `run_front.sh`, written by `scripts/check_reject_diff.sh`, runs each program as `out=$(run_with_timeout ... "$tree/build/zoril" ... 2>&1)` and then `printf | head -n 1 | sed | cut`: a command substitution, `timeout`, and three filters per program, which cost 9 ms CPU a program (16% of the loop, nearly all system time) on 69,127 programs a side.
-    - **Do:** in the `run_front.sh` heredoc, write the compiler's output to a file in a scratch directory made once per batch (`mktemp -d` before the loop, removed after it), read its first line with `IFS= read -r first < "$out_file"`, drop everything up to the first space with `${first#* }`, and cut it to 90 characters with `printf '%.90s'`; keep `run_with_timeout` (a hung compiler must still be stopped) and the output format `<file> <rc> <first error>` byte for byte. Change nothing else in the script.
-    - **Checks:**
-      - C1: before the change, Z-0122's loop measurement (`build/z122/loop_front.sh`, every 17th grid program, 16 jobs): the `run_front.sh` line, quoted.
-      - C2: after, the same; quoted; the CPU per program is within 2 ms of the `zoril alone` line.
-      - C3: the old and the new `run_front.sh` over the 4,037-program sample, each output sorted: `diff` prints nothing. Include a program whose first error line is longer than 90 characters, one with no output, and one whose output's first line has no space (a scratch file each), and quote their three lines from both.
-      - C4: a hang is still stopped: a scratch `zoril` that sleeps 120 s, run through the new script with the 60 s timeout lowered to 2 s for the check, returns within 5 s with rc 124 or 137; quote it.
-      - C5: `sh scripts/test_reject_diff.sh` passes; `scripts/check_portability.sh` passes.
-      - C6: `make test` and `make preflight-changed`, each `Total:` line quoted.
-    - **Completed:**
-      - C1: before, `build/z122/loop_front.sh build/z122/sample.txt 16`:
-        `run_front.sh (xargs -n 40)    9.3 s wall    137.2 CPU-s (user 73.1 sys 64.0)  33.98 ms CPU/program  host busy 97.2%  (4037 programs, 16 jobs)`
-        `zoril alone (xargs -n 40)     7.0 s wall    103.7 CPU-s (user 72.3 sys 31.5)  25.70 ms CPU/program  host busy 97.2%  (4037 programs, 16 jobs)`
-      - C2: after, the same command:
-        `run_front.sh (xargs -n 40)    7.5 s wall    110.3 CPU-s (user 73.2 sys 37.1)  27.31 ms CPU/program  host busy 96.7%  (4037 programs, 16 jobs)`
-        `zoril alone (xargs -n 40)     7.1 s wall    103.7 CPU-s (user 72.4 sys 31.4)  25.70 ms CPU/program  host busy 97.0%  (4037 programs, 16 jobs)`
-        Overhead above `zoril alone` dropped from 8.28 ms to 27.31 - 25.70 = 1.61 ms CPU/program, within 2 ms.
-      - C3: `diff -u` between sorted old and new `run_front.sh` output on 4,040 programs (the 4,037-program sample plus three scratch files) printed nothing; the three lines from both:
-        Old:
-        `build/z158/scratch_empty.zrl 0 `
-        `build/z158/scratch_long.zrl 1 error: unresolved symbol: very_long_identifier_aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeee`
-        `build/z158/scratch_nospace.zrl 1 NOSPACE_ERROR_OUTPUT`
-        New:
-        `build/z158/scratch_empty.zrl 0 `
-        `build/z158/scratch_long.zrl 1 error: unresolved symbol: very_long_identifier_aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeee`
-        `build/z158/scratch_nospace.zrl 1 NOSPACE_ERROR_OUTPUT`
-      - C4: `build/z158/run_front_hang.sh build/z158/hang_tree build/z158/scratch_empty.zrl` with 2 s timeout and a scratch `zoril` sleeping 120 s returned in 2.01 s with rc 124:
-        `build/z158/scratch_empty.zrl 124 `
-      - C5: `sh scripts/test_reject_diff.sh`:
-        `[PASS] reject-diff-selftest: a newly accepted must-refuse probe blocks unless allowed; accepted-by-design and newly refused programs are listed only`
-        `sh scripts/check_portability.sh`: all 17 checks passed.
-      - C6: `make test`:
-        `Total: 3207 run, 3207 passed, 0 failed, 88 skipped (114.5s)`
-        `make preflight-changed`:
-        `Total: 1163 run, 1163 passed, 0 failed, 0 skipped (42.2s)`
-
 - [ ] +testinfra +tests +AI-G Z-0159 T11d A stdlib `Drop` implementation is lowered only when a dropped type needs it
     > **Created:** 2026-11-08 by Z-0157's review (G1). **Branch:** `testinfra`. **After:** Z-0157 closes, and Z-0162 (it changes the drop lookup this task extends). **Before:** Z-0114.
 
