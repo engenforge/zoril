@@ -1,0 +1,9 @@
+// name: A type named like another module's type with a Drop impl is not dropped with that impl
+// expected: accept
+// Was gap_68: struct Arena { x: i64 } beside import "mem.zrl" was dropped at scope end by stdlib::mem::Arena::drop, which unmapped the user's field as an arena header and faulted. A type's drop is now found by the type itself, its name and its `self` parameter's type (ILModule.drop_fn_index in src/il_cfg.zrl), not by the bare name `Arena::drop` (Z-0162).
+import "mem.zrl";
+struct Arena { x: i64 }
+fn main() -> i32 {
+    let local = Arena { x: 1 };
+    return (local.x - 1) as i32;
+}

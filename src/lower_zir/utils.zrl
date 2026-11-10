@@ -17,7 +17,7 @@ import "il_cfg.zrl";
 use ast::{AST, BINARY_ADD, BINARY_ADD_ASSIGN, BINARY_AND, BINARY_ASSIGN, BINARY_EQ, BINARY_GE, BINARY_GT, BINARY_LE, BINARY_LT, BINARY_MULWRAP, BINARY_NE, BINARY_OR, BINARY_SHL, BINARY_SHR, BINARY_SHR_ASSIGN, BINARY_SUB, BINARY_XOR, CastExpr, DECL_FN, DECL_IMPL, DECL_STRUCT, Decl, EXPR_BINARY, Expr, ExprId, FieldValue, FnDecl, FnType, ImplDecl, LITERAL_BOOL, LITERAL_CHAR, LITERAL_INT, Literal, Param, Span, StmtId, TYPE_ARRAY, TYPE_FN, TYPE_PATH, TYPE_PRIMITIVE, TYPE_PTR, TYPE_PTRMUT, TYPE_REF, TYPE_REFMUT, TYPE_SLICE, TYPE_SLICE_MUT, TYPE_TUPLE, Type, TypeId, TypeParam, UNARY_DEREF, UNARY_NOT};
 use bytevec::ByteVec;
 use decl::ZirLowerer;
-use il_cfg::{ILFunction, fn_type_of};
+use il_cfg::{ILFunction, NO_DROP_FN, fn_type_of};
 use il_layout::{type_align, type_size};
 use il_type::{type_name_is, ILField, ILPRIM_BOOL, ILPRIM_CHAR, ILPRIM_F32, ILPRIM_F64, ILPRIM_I16, ILPRIM_I32, ILPRIM_I64, ILPRIM_I8, ILPRIM_ISIZE, ILPRIM_NEVER, ILPRIM_U16, ILPRIM_U32, ILPRIM_U64, ILPRIM_U8, ILPRIM_UNIT, ILPRIM_USIZE, ILPrimitive, ILSlice, ILTYPE_ARRAY, ILTYPE_BOXED, ILTYPE_BOXEDMUT, ILTYPE_FD, ILTYPE_FN, ILTYPE_IORING, ILTYPE_PRIMITIVE, ILTYPE_PTR, ILTYPE_PTRMUT, ILTYPE_RAWPTR, ILTYPE_RAWPTRMUT, ILTYPE_SLICE, ILTYPE_TUPLE, ILTYPE_USER, ILTYPE_VAR, ILType, ILTypeDecl, ILTypeDef, IL_TYPEDEF_ENUM, IL_TYPEDEF_STRUCT, is_any_pointer_tag, is_mut_pointer_tag, is_raw_pointer_tag, is_reference_tag, is_shared_pointer_tag};
 use io::{eprint, exit, stderr};
@@ -194,25 +194,8 @@ impl ZirLowerer {
         }
     }
 
-    pub fn has_drop_impl(self: &mut ZirLowerer, type_name_id: u32) -> bool {
-        if type_name_id == 0 as u32 { return false; }
-        let type_str = self.intern_table.lookup(type_name_id);
-        let mut name_buf = unsafe { ByteVec.new_raw(self.arena) };
-        name_buf.push_slice(type_str);
-        name_buf.push(':' as u8);
-        name_buf.push(':' as u8);
-        name_buf.push_slice("drop");
-        let mangled = self.intern_table.intern(name_buf.as_slice());
-
-        let mut fi = 0 as usize;
-        while fi < self.module.functions.len() {
-            let p_func = &self.module.functions[fi];
-            if p_func.name == mangled {
-                return true;
-            }
-            fi = fi + 1 as usize;
-        }
-        return false;
+    pub fn has_drop_impl(self: &mut ZirLowerer, type_id: u32) -> bool {
+        return self.module.drop_fn_index(self.intern_table, type_id) != NO_DROP_FN;
     }
 
     pub fn is_copy_type(self: &mut ZirLowerer, type_id: u32) -> bool {
@@ -258,7 +241,7 @@ impl ZirLowerer {
         }
         if tag == ILTYPE_USER {
             let u = p_ty.def.get_User();
-            if self.has_drop_impl(u.name) { return false; }
+            if self.has_drop_impl(type_id) { return false; }
             let user_id = u.id;
             if user_id as usize >= self.module.typedefs.len() { return true; }
             let p_def: ILTypeDef = self.module.typedefs[user_id as usize];
@@ -313,7 +296,7 @@ impl ZirLowerer {
         }
         if tag != ILTYPE_USER { return false; }
         let u = p_ty.def.get_User();
-        if self.has_drop_impl(u.name) { return true; }
+        if self.has_drop_impl(type_id) { return true; }
         let ty_name = self.intern_table.lookup(u.name);
         if type_name_is(ty_name, "Vec")
             || type_name_is(ty_name, "String")
@@ -374,7 +357,7 @@ impl ZirLowerer {
         }
         if tag != ILTYPE_USER { return false; }
         let u = p_ty.def.get_User();
-        if self.has_drop_impl(u.name) { return true; }
+        if self.has_drop_impl(type_id) { return true; }
         // The one case that is not structural: a type the lowering could not resolve contributes
         // nothing (the ZIL-side mirror has the same guard).
         if u.id == 0 as u32 || u.id as usize >= self.module.typedefs.len() {
@@ -3143,6 +3126,33 @@ impl ZirLowerer {
     pub fn is_raw_pointer_ty(self: &ZirLowerer, ty: u32) -> bool {
         if ty == 0 as u32 || ty as usize > self.module.types.len() { return false; }
         return is_raw_pointer_tag(self.module.types[ty as usize - 1 as usize].def.get_tag());
+    }
+
+    // Whether PL is reached through a raw pointer (`*p`, `(*p).f`, `p[i]` with `p` raw). What a
+    // raw pointer points at may be uninitialized - a fresh slot in a `Vec`'s buffer, an allocator
+    // block - so a store there writes without dropping the old value: dropping it ran `drop` on
+    // garbage under safe callers such as `Vec::push`. Replacing a live value through one is `let old = *p;`
+    // before the store.
+    pub fn place_through_raw_pointer(self: &mut ZirLowerer, pl: &Place) -> bool {
+        if pl.base == 0 as u32 || pl.base as usize > self.locals.len() { return false; }
+        let mut curr_ty = self.locals[pl.base as usize - 1 as usize].ty;
+        for proj in pl.projections {
+            let through_raw = match *proj {
+                Projection.Deref | Projection.Index(_) => self.is_raw_pointer_ty(curr_ty),
+                Projection.Field(_) | Projection.TupleIndex(_) => false,
+            };
+            if through_raw { return true; }
+            curr_ty = match *proj {
+                Projection.Field(name) => self.get_field_type(
+                    curr_ty,
+                    self.get_field_index(curr_ty, name)
+                ),
+                Projection.TupleIndex(idx) => self.get_tuple_elem_type(curr_ty, idx),
+                Projection.Deref => self.get_ptr_inner_type(curr_ty),
+                Projection.Index(_) => self.get_slice_element_type(curr_ty),
+            };
+        }
+        return false;
     }
 
     fn is_char_ty(self: &ZirLowerer, ty: u32) -> bool {

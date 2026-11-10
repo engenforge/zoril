@@ -13,7 +13,7 @@ import "progress.zrl";
 use ast::Span;
 use bytevec::ByteVec;
 use diag::diag_start;
-use il_cfg::{ILFunction, ILModule};
+use il_cfg::{ILFunction, ILModule, NO_DROP_FN};
 use il_instr::{AllocInstr, CALL_BY_NAME, CallInstr, CallPtrInstr, CastInstr, ConstInstr, FieldAddrInstr, ILInstr, NO_SSA, SSAId, StoreInstr};
 use il_type::{ILTYPE_ARRAY, ILTYPE_BOXED, ILTYPE_BOXEDMUT, ILTYPE_FN, ILTYPE_PRIMITIVE, ILTYPE_PTR, ILTYPE_PTRMUT, ILTYPE_SLICE, ILTYPE_TUPLE, ILTYPE_USER, Region, is_any_pointer_tag, is_mut_pointer_tag, is_reference_tag};
 use il_typecheck::type_check_function;
@@ -224,25 +224,8 @@ impl Verifier {
         return true;
     }
 
-    fn has_drop_impl(self: &mut Verifier, type_name_id: u32) -> bool {
-        if type_name_id == 0 as u32 { return false; }
-        let type_str = self.intern_table.lookup(type_name_id);
-        let mut name_buf: &mut ByteVec = unsafe { ByteVec.new_raw(self.arena) };
-        name_buf.push_slice(type_str);
-        name_buf.push(':' as u8);
-        name_buf.push(':' as u8);
-        name_buf.push_slice("drop");
-        let mangled = self.intern_table.intern(name_buf.as_slice());
-
-        let mut fi = 0 as usize;
-        while fi < self.module.functions.len() {
-            let p_func = &self.module.functions[fi];
-            if p_func.name == mangled {
-                return true;
-            }
-            fi = fi + 1 as usize;
-        }
-        return false;
+    fn has_drop_impl(self: &mut Verifier, type_id: u32) -> bool {
+        return self.module.drop_fn_index(self.intern_table, type_id) != NO_DROP_FN;
     }
 
     fn is_state_owned(self: &Verifier, state: OwnerState) -> bool {
@@ -1398,7 +1381,7 @@ impl Verifier {
             },
             ILType.User(u) => {
                 if u.id == 0 as u32 { return true; }
-                if self.has_drop_impl(u.name) { return false; }
+                if self.has_drop_impl(ty_id) { return false; }
                 if u.id as usize >= self.module.typedefs.len() { return true; }
                 let p_def = self.module.typedefs[u.id as usize];
                 match p_def {

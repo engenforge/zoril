@@ -1,0 +1,47 @@
+// expected exit 0
+// A type named like a standard-library type with a `Drop` (`mem::Arena`, `io::File`) is not
+// dropped with that `drop` (probe 421): not as a local, a by-value parameter or a `Vec` element. The
+// standard library's own `File` is still closed when it goes out of scope.
+import "mem.zrl";
+import "io.zrl";
+import "file.zrl";
+import "vec.zrl";
+use file::OpenOptions;
+use vec::Vec;
+
+struct Arena { x: i64 }
+struct File { fd: i32 }
+
+fn take(a: Arena) -> i64 { return a.x; }
+
+fn null_fd() -> i32 {
+    let f = match OpenOptions.new().read(true).open("/dev/null") {
+        Ok(f) => f,
+        Err(_) => { return -1; },
+    };
+    return f.fd().unix_raw();
+}
+
+fn main() -> i32 {
+    let first = null_fd();
+    if first < 0 { return 1; }
+    // `null_fd`'s File was closed on return, so its descriptor is the lowest free one again.
+    if null_fd() != first { return 2; }
+    let kept = match OpenOptions.new().read(true).open("/dev/null") {
+        Ok(f) => f,
+        Err(_) => { return 3; },
+    };
+    {
+        // Dropped with `io::File::drop`, this would close `kept`'s descriptor.
+        let mine = File { fd: kept.fd().unix_raw() };
+        let a = Arena { x: 1 };
+        let mut v = Vec::<Arena>.new();
+        v.push(Arena { x: 2 });
+        if a.x + take(Arena { x: 3 }) + (v.len() as i64) + (mine.fd as i64) - (kept.fd().unix_raw() as i64) != 5 {
+            return 4;
+        }
+    }
+    // `kept` is open, so a new descriptor is not its number.
+    if null_fd() == kept.fd().unix_raw() { return 5; }
+    return 0;
+}

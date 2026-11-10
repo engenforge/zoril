@@ -202,27 +202,27 @@ Safe code is only as good as the `unsafe` code under it, so the project measures
 | Figure                           | Value  |
 | -------------------------------- | ------ |
 | stdlib modules                   | 30     |
-| stdlib lines                     | 6,263  |
-| stdlib `unsafe { }` blocks       | 170    |
+| stdlib lines                     | 6,268  |
+| stdlib `unsafe { }` blocks       | 171    |
 | stdlib modules with such a block | 23     |
 | stdlib `unsafe fn` declarations  | 63     |
 | of those, public                 | 59     |
 | compiler modules                 | 50     |
-| compiler lines                   | 46,880 |
-| compiler `unsafe { }` blocks     | 843    |
+| compiler lines                   | 46,878 |
+| compiler `unsafe { }` blocks     | 838    |
 
 How each one is counted: every `.zrl` file under the directory, recursively; **lines** are physical lines (`wc -l`); **`unsafe { }` blocks** are occurrences of `unsafe` followed by `{` on the same line; **`unsafe fn` declarations** are lines that start with `unsafe fn` or `pub unsafe fn`. That is a different question from `scripts/marker_density.sh`, which counts raw-pointer dereference sites over non-comment lines (58 marker lines for `stdlib`, 264 for `src`).
 
 - **The standard library** holds 170 `unsafe { }` blocks in 23 of its 30 modules. Every one states the invariant it relies on in a `// SAFETY:` comment, and `scripts/check_safety_comments.sh` fails `make test` when a block does not. The comments are a review artifact, not a proof.
 - **An audit of those invariants** asked which of them checked code could break. Five could, all of one shape (arithmetic or a field the block trusted): a `Vec` capacity that overflowed to zero ([`163_vec_capacity_overflow.zrl`](../bench/safety_matrix/probes/163_vec_capacity_overflow.zrl)), an allocation size that wrapped ([`161_arena_allocator_size_wrap.zrl`](../bench/safety_matrix/probes/161_arena_allocator_size_wrap.zrl)), a string `sub` skipping its clamp ([`tests/stdlib/test_stdlib_str_sub_clamp.zrl`](../tests/stdlib/test_stdlib_str_sub_clamp.zrl)), an `Args::get` index truncated to `i32` ([`162_args_get_index_truncation.zrl`](../bench/safety_matrix/probes/162_args_get_index_truncation.zrl)), and a public `Vec::len` field ([`164_vec_len_forge.zrl`](../bench/safety_matrix/probes/164_vec_len_forge.zrl)). Sizes now go through `mem::size_of_n` and `grow_cap`, which trap instead of wrapping, and the collections' fields are private behind narrow accessors.
-- **The compiler** is 50 modules of Zoril, with 843 `unsafe { }` blocks, because a self-hosted compiler also carries its own allocator and IL machinery. The calibration against rustc and Rust's standard library is in [`doc/spec/unsafe_policy.md`](spec/unsafe_policy.md) §5, with about 2-3% line density for `src/` as the target. `rt/runtime.s` and the hand-written summaries are outside the verifier.
+- **The compiler** is 50 modules of Zoril, with 838 `unsafe { }` blocks, because a self-hosted compiler also carries its own allocator and IL machinery. The calibration against rustc and Rust's standard library is in [`doc/spec/unsafe_policy.md`](spec/unsafe_policy.md) §5, with about 2-3% line density for `src/` as the target. `rt/runtime.s` and the hand-written summaries are outside the verifier.
 - **An application written against the safe interface needs no `unsafe` at all.** An example JSON tool written in Zoril (a CLI to query, format and validate JSON; 9 modules and 1,992 non-comment lines; not yet published) holds **0 `unsafe { }` blocks** and measures 0.00% under `scripts/marker_density.sh`. Its test suite fails if an `unsafe` block returns.
 
 ---
 
 ## 6. Known gaps in checked code
 
-The matrix has no row marked `GAP`. The holes that remain open in checked code are tracked as 44 `known_gap` probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes) and listed in the [Known gaps](spec/safety_model.md#known-gaps) table. Ordinary code rarely reaches them: each needs a view of storage the function owns (or a reference to its stack) to be stored or returned through one of the routes below. They are known, and the unified provenance model planned for after the launch is meant to close all of them. For example, this function is accepted although the arena dies when it returns while `out` keeps the view (class A, [`gap_07_path_same_param.zrl`](../bench/safety_matrix/probes/gap_07_path_same_param.zrl)):
+The matrix has no row marked `GAP`. The holes that remain open in checked code are tracked as 43 `known_gap` probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes) and listed in the [Known gaps](spec/safety_model.md#known-gaps) table. Ordinary code rarely reaches them: each needs a view of storage the function owns (or a reference to its stack) to be stored or returned through one of the routes below. They are known, and the unified provenance model planned for after the launch is meant to close all of them. For example, this function is accepted although the arena dies when it returns while `out` keeps the view (class A, [`gap_07_path_same_param.zrl`](../bench/safety_matrix/probes/gap_07_path_same_param.zrl)):
 
 ```zoril,no-test
 fn stash_pair(p: (&mut [i32], [i32])) { *p.0 = p.1; }
@@ -250,7 +250,6 @@ The open classes:
 - **(K) Owners holding frame views, moved out:** a local `Vec` whose elements are views of a stack array is accepted when it is pushed into the caller's `Vec` ([`gap_59_pushed_vec_holding_frame_views.zrl`](../bench/safety_matrix/probes/gap_59_pushed_vec_holding_frame_views.zrl)), passed by value to a callee that pushes it ([`gap_60_vec_holding_frame_views_moved_to_pushing_callee.zrl`](../bench/safety_matrix/probes/gap_60_vec_holding_frame_views_moved_to_pushing_callee.zrl)), or wrapped in a struct first ([`gap_61_struct_wrapping_vec_of_frame_views_pushed.zrl`](../bench/safety_matrix/probes/gap_61_struct_wrapping_vec_of_frame_views_pushed.zrl)); and a `Vec` a callee builds around a view of a caller-local `Vec`'s buffer is accepted when the callee stores it into the caller's slot ([`gap_63_vec_built_around_param_view_in_callee.zrl`](../bench/safety_matrix/probes/gap_63_vec_built_around_param_view_in_callee.zrl)).
 - **(L) A generic instance made into a `fn` value:** `id::<i32>` written as a value rather than called is accepted but lowers to nothing, so `let f: fn(i32) -> i32 = id::<i32>;` leaves the value uninitialized and the call jumps through stack garbage ([`gap_66_generic_instance_as_fn_value_uninit.zrl`](../bench/safety_matrix/probes/gap_66_generic_instance_as_fn_value_uninit.zrl)).
 - **(M) An `extern` function made into a `fn` value:** a bare `extern` converts to a plain `fn` type with no `unsafe` block, so safe code calls C through the value while a direct call needs `unsafe`; a safe callee hands `memset` a forged pointer and the write faults ([`gap_67_extern_fn_as_fn_value.zrl`](../bench/safety_matrix/probes/gap_67_extern_fn_as_fn_value.zrl)).
-- **(N) Drop glue found by a type's bare name:** a type named like another module's type that has a `Drop` impl is dropped with that impl, so `struct Arena { x: i64 }` in a program that imports `mem.zrl` is unmapped as an arena when it goes out of scope, and faults ([`gap_68_drop_glue_by_type_name.zrl`](../bench/safety_matrix/probes/gap_68_drop_glue_by_type_name.zrl)).
 
 ---
 

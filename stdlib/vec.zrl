@@ -272,9 +272,14 @@ impl<T> Vec<T> {
             unsafe { @syscall(231 as u64, 134 as u64) };
             zoril_abort();
         }
-        // SAFETY: the bounds check above proves the slot is inside the allocation, and
-        // `&mut self` makes the write exclusive.
+        // A store through a raw pointer does not drop the old value, so it is moved out first
+        // and dropped here.
+        // SAFETY: the bounds check above proves the slot is inside the allocation and holds an
+        // initialized element; it is written back on the next line, before anything reads it.
+        let old = unsafe { *((self.data as usize + index * sizeof(T)) as *mut T) };
+        // SAFETY: the same slot, and `&mut self` makes the write exclusive.
         unsafe { *((self.data as usize + index * sizeof(T)) as *mut T) = val; }
+        @drop(old);
     }
 
     // Returns the number of elements in the vector.

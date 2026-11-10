@@ -812,6 +812,8 @@ fn write_field(ptr: *mut Node, val: i32) {
 
 Both read and write compile to direct memory operations through the pointer; no copy of the pointed-to struct is made. This extends to chained accesses: `(*ptr.inner).field = val` loads `ptr.inner` (a `*mut Inner`) and writes directly through that pointer.
 
+**A store through a raw pointer does not drop the old value.** An assignment whose place is reached through a raw pointer (`*p = v`, `(*p).f = v`, `p[i] = v` with `p` a `*mut T`) writes `v` and runs no `drop` on what the place held, because what a raw pointer points at may be uninitialized: a fresh slot in an allocation, as in `Vec::push`. A store through a reference (`*r = v` with `r: &mut T`) does drop the old value, because a reference's target is always initialized. To replace a live value through a raw pointer, move it out first and let it drop (`let old = *p; *p = v;`), as `Vec::set` does; leaving that out leaks the old value, which is safe ([`tests/stdlib/test_vec_push_does_not_drop_slot.zrl`](../../tests/stdlib/test_vec_push_does_not_drop_slot.zrl)).
+
 ### 7.3 Drop Order
 
 When a scope exits:
