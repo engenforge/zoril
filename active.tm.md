@@ -39,25 +39,6 @@ Active priority series to reduce verification runtimes. Order of execution:
     - **Not ready for `+AI-G` (review, 2026-11-07):** this task still holds two decisions: whether the saving left after Z-0116 is worth a cache at all, and how a cache that decides what not to run avoids the stamp's failures (Z-0113's bullet "The stamp's record"); a wrong hit here lets a newly accepted unsafe program through. Do not start it as written: after Z-0116 closes, an `+AI-D` session re-measures, decides, and either drops it or rewrites it with settled keys and numbered checks (each key input changed in turn, and a planted stale entry caught).
     - **Next (2026-11-10):** Z-0116 has closed (`completed.tm.md`), so the condition above is met. The next session on this task is that `+AI-D` re-measurement and decision, not the implementation; an `+AI-G` session does not start it.
 
-- [x] +testinfra +tests +portability +AI-G Z-0151 T7g `fuzz-tools`' checks that need no git go back into `make test`
-    > **Created:** 2026-11-07 by the review of Z-0144. **Branch:** `testinfra`. **Before:** Z-0152.
-    > **Completed:** 2026-11-10 git:af1fbec
-
-    - **Why:** Z-0144 moved the whole `fuzz-tools` scenario into the `git` group, which only a full `make preflight` runs. Only its sections 7, 7b, 8 and 10 use git (`scripts/test_fuzz_tools.sh`, the `have_git` branches and the `--release` call); sections 1 to 6, 8b, 8c and 9 (banner, `[STATUS]`, summary, status, stop, plan, the expected-value oracle, swarm testing, the targets) need none, and a user no longer runs them.
-    - **Do:** split the script in two: `scripts/test_fuzz_tools.sh` keeps sections 1 to 6, 8b, 8c and 9 as the `fuzz-tools` scenario in the `integration` group; a new `scripts/test_fuzz_tools_git.sh` holds sections 7, 7b, 8 and 10 as the `fuzz-tools-git` scenario in the `git` group. Move the code unchanged; move a helper both need into the new file too, without changing it. Add rows for the new file to `scripts/test_tiers.tsv` beside the old one's.
-    - **Checks:**
-      - C1: `grep -n git scripts/test_fuzz_tools.sh` prints nothing.
-      - C2: the `ok` and `bad` lines of the old script (from the commit before) and of the two new ones, sorted and compared: the same set; quote the counts.
-      - C3: `./scripts/test.sh --scenario fuzz-tools` and `--scenario fuzz-tools-git`, each passing, quoted.
-      - C4: `scripts/test_tier_select.sh` passes.
-      - C5: `make test`, `Total:` line quoted.
-    - **Completion:**
-      - C1: `grep -n git scripts/test_fuzz_tools.sh`: prints nothing (exit code 1).
-      - C2: `ok` and `bad` lines of the old script (`git:52d3a99`): 62 lines; combined new scripts (`scripts/test_fuzz_tools.sh` and `scripts/test_fuzz_tools_git.sh`, `git:af1fbec`): 62 lines. `diff -u` between sorted lists is empty (0 differences).
-      - C3: `./scripts/test.sh --scenario fuzz-tools`: `[PASS] scenario: fuzz-tools (6303ms)`, `Total: 2 run, 2 passed, 0 failed, 0 skipped (6.4s)`; `./scripts/test.sh --scenario fuzz-tools-git`: `[PASS] scenario: fuzz-tools-git (7442ms)`, `Total: 2 run, 2 passed, 0 failed, 0 skipped (7.5s)`.
-      - C4: `sh scripts/test_tier_select.sh`: `test_tier_select: all checks passed` (exit code 0).
-      - C5: at git:af1fbec, `make test`: `Total: 3211 run, 3211 passed, 0 failed, 88 skipped (115.4s)`.
-
 - [ ] +testinfra +tests +portability +AI-G Z-0152 T7h Z-0144's smaller findings, and its checks that were not run
     > **Created:** 2026-11-07 by the review of Z-0144. **Branch:** `testinfra`. **Depends:** Z-0149, Z-0150, Z-0151.
 
