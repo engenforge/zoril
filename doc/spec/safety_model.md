@@ -183,7 +183,7 @@ Regarding runtime abort conventions: `zoril_abort()` exits **1** (unhandled logi
 
 ### Gap summary
 
-No row above is marked **GAP** today. That does not mean no hole is open: the 17 holes still open in checked code are routes inside rows the matrix counts as closed, and each is a `known_gap` probe listed under [Known gaps](#known-gaps).
+No row above is marked **GAP** today. That does not mean no hole is open: the 18 holes still open in checked code are routes inside rows the matrix counts as closed, and each is a `known_gap` probe listed under [Known gaps](#known-gaps).
 
 Every program that showed a hole in one of the rows is kept as a `compile_reject` probe (or, for the two drop-count probes, an `accept` that asserts one drop), so the hole cannot reopen unnoticed.
 
@@ -255,6 +255,9 @@ Every probe in `bench/safety_matrix/probes/` whose expectation is `known_gap` is
 - **[`gap_44_borrows_attr_reset.zrl`](../../bench/safety_matrix/probes/gap_44_borrows_attr_reset.zrl)**: A `#[borrows()]` method returning a view its receiver holds gives a result that holds no borrow, so an arena reset passes while the result is read; without the attribute the reset is refused. Route class: the liveness route of the `#[borrows()]` laundering that `gap_30` closes for stores
 - **[`gap_66_generic_instance_as_fn_value_uninit.zrl`](../../bench/safety_matrix/probes/gap_66_generic_instance_as_fn_value_uninit.zrl)**: A generic function's instance named with type arguments and used as a value (`let f: fn(i32) -> i32 = id::<i32>;`) is accepted, but lowering drops the initializer: the `fn` value's slot is never written and the call faults. A struct field (`H { f: id::<i32> }`) faults the same way, an assignment (`f = id::<i32>;`) is dropped and leaves the old value, an argument gives invalid ZIL, a `return` reports a missing return value. Route class: a conversion site that turns a function into a value (a `let` with a `fn` type, an argument, a struct field, an assignment, a return).
 - **[`gap_67_extern_fn_as_fn_value.zrl`](../../bench/safety_matrix/probes/gap_67_extern_fn_as_fn_value.zrl)**: A bare `extern` function converts to a plain `fn` type with no `unsafe` block (`let f: fn(*mut u8, i32, usize) -> *mut u8 = memset;`), and a call through a `fn` value is never marked, so safe code calls C through it: here a safe callee hands `memset` a forged pointer and the write faults. A direct call is refused outside `unsafe`. Route class: a conversion site that turns a function into a value, the `extern` twin of the `unsafe fn` rule (Z-0095).
+- **[`gap_68_try_err_type_reinterpreted.zrl`](../../bench/safety_matrix/probes/gap_68_try_err_type_reinterpreted.zrl)**: `e?` returns `e` whole from the enclosing function whatever that function returns, so a `Result<i32, Pair>` propagated out of a function returning `Result<i32, [u8]>` reaches the caller as a slice whose pointer and length are the `Pair`'s two integers. Route class: the early return of `?`, a conversion site with no type check (Z-0167).
+- **[`gap_69_try_option_into_result.zrl`](../../bench/safety_matrix/probes/gap_69_try_option_into_result.zrl)**: The same early return of an `Option<i32>` from a function returning `Result<i32, i32>`: its `None` reaches the caller as an `Ok` whose payload nothing wrote. Route class: as gap_68.
+- **[`gap_70_try_larger_ok_overruns_slot.zrl`](../../bench/safety_matrix/probes/gap_70_try_larger_ok_overruns_slot.zrl)**: The same early return of a `Result<[i64; 8], i64>` from a function returning `Result<u8, i64>`: the error types agree, but the whole 72-byte value is copied into the 16-byte return slot and overwrites the caller's frame, and the probe faults. Route class: as gap_68.
 
 ---
 

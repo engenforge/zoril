@@ -1,0 +1,17 @@
+// name: `?` returns an error of another type, reinterpreted as the function's
+// expected: known_gap
+// gap: `e?` returned `e` whole from the function, whatever its return type, so `Result<i32, Pair>` propagated out of a function returning `Result<i32, [u8]>` hands the caller a slice whose pointer and length are the two integers of the `Pair`; here the length 42 comes back
+// observed: exit 42
+import "core.zrl";
+struct Pair { a: i64, b: i64 }
+fn inner() -> Result<i32, Pair> { return Result.Err(Pair { a: 4096 as i64, b: 42 as i64 }); }
+fn outer() -> Result<i32, [u8]> {
+    let v = inner()?;
+    return Result.Ok(v);
+}
+fn main() -> i32 {
+    return match outer() {
+        Ok(_) => 1,
+        Err(s) => s.len as i32,
+    };
+}
