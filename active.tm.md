@@ -219,6 +219,20 @@ Standalone tasks developed and committed directly on `main`:
 3. Compiler quality & tools: Z-0013 (reviewer rotation), Z-0014 (`zilc` input validation), Z-0015 (`zoril` error bounds), Z-0016 (`zbuild` ZIL handling), Z-0067 (diagnostic source location), Z-0079 (generic interface roundtrip), Z-0080 (mutation list integrity).
 4. Benchmarks: Z-0004 (cloud session variance measurement), Z-0005 (baseline decision).
 
+- [ ] +safety +tests +AI-D Z-0167 `e?` returns a value of the function's return type, never `e` reinterpreted
+    > **Created:** 2026-11-10. **Branch:** `main`. **Found by:** Z-0130 (a segfault in `proc::wait_any` written with `?`). **Check-in:** stop for review after it: a fix to a safety rule. **Before:** Z-0131 (the `testinfra` series continues once this is merged into `testinfra`).
+
+    - **Found (2026-11-10):** `lower_try_expr` (`src/lower_zir/expr.zrl`) ended its error block with `Ret(val_place)`: the operand returned whole, whatever the function returns, and no checker looks at `Expr.Try`. Recorded in git:25e2147 as gap_68 (an error of another type reinterpreted: `Result<i32, Pair>` out of `Result<i32, [u8]>` gives a slice of length 42), gap_69 (`Option<i32>`'s `None` arrives as `Ok` of `Result<i32, i32>`, exit 7) and gap_70 (`Result<[i64; 8], i64>` into `Result<u8, i64>`: `blit ..., %v__sret_1, 72` into a 16-byte slot, segfault). Each was run against `build/fresh-bootstrap.gen3` (the compiler before the fix): exit 42, exit 7, exit 139.
+    - **Route class:** the early return of `?`, a conversion site. Members probed: the error type differs (gap_68); `Option` into `Result` (gap_69); the same error type and a larger `Ok` (gap_70); a function that returns no enum (`Result<i32, i64>` in a function returning `i32`: refused today, but by an unrelated "region escape" error); an operand that is no enum (`5?`: refused by "invalid ZIL (a compiler bug)"); a reference operand of the return type (`r?` with `r: &Result<i32, i64>`: correct, exit 5); a user enum with `Ok`/`Err` variants into `Result` (correct only because the layouts coincide); a named local with a `Drop` error payload (`x?`: refused, "use of moved value"). The same-type case (`Result<i32, i64>` into `Result<i64, i64>`) was correct.
+    - **Do:** `?` returns its operand unchanged only when it has the function's return type, or refers to a value of it; otherwise a fresh value of the return type, built from the operand's `Err` payload (or its `None`), when the return type has that variant with the same payload type; otherwise a located compile error. Write the rule into `doc/spec/standard_library.md` §5.3, which says only that `?` "returns its `Err` from the enclosing function early".
+    - **Checks:**
+      - C1: gap_68 and gap_69 flip to `compile_reject` with the new diagnostic, gap_70 to `accept`; the Known gaps entries and `doc/SAFETY.md` §6 (N) are removed; `sh scripts/run_safety_matrix.sh` passes.
+      - C2: error tests under `tests/error_reporting/` for each refused member (the error type, `Option` into `Result`, a non-enum return type, a non-enum operand, a reference of another type), each with its `// EXPECT:` line.
+      - C3: a run-time test for the members that stay accepted (a larger and a smaller `Ok`, a reference operand, a user enum), each returning the payload it propagated.
+      - C4: take the fix out (`Ret(val_place)` again) and watch C1's probes and C3's test fail; quote it; restore.
+      - C5: `scripts/check_reject_diff.sh` against the commit before the fix, listing every program it newly refuses with its reason; none newly accepted.
+      - C6: `make test` and `make preflight-changed`, each `Total:` line quoted; build through stage1 (`rm build/zoril && make`) without a warning.
+
 - [ ] +safety +tests +AI-D Z-0101 An `extern` function made into a `fn` value needs `unsafe`
     > **Created:** 2026-11-06. **Branch:** `main`. **Found by:** Z-0095 (its structural twin). **Check-in:** stop for review after it: a fix to a safety rule. A hole in the default mode, reachable from safe code; beside Z-0095 and Z-0100.
 
