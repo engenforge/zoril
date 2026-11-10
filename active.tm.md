@@ -20,6 +20,10 @@ Active priority series to reduce verification runtimes. Order of execution:
 3. Process management and runner: Z-0130 to Z-0140 (`proc.zrl`, `ztest`, retiring `test.sh` pool).
 4. Result caching, parallel execution, and test reduction: Z-0123, Z-0113, Z-0109, Z-0110, Z-0107, Z-0125.
 
+**Tier selection frozen (the maintainer, 2026-11-07):** the tier selection is frozen as it is: no new rows or rules; a reported miss is fixed by widening a row, and a path it does not list keeps selecting everything. A selection miss costs time only, since `make test` before a commit is the backstop; nearly every defect the series found was in code that decides what not to run.
+
+**`main` fixes this branch lacks (2026-11-10):** `testinfra` does not contain Z-0162's fix (git:cd93f34, the drop lookup by type) or Z-0135's work when it lands. Z-0159 extends that lookup, and Z-0131 and Z-0133 depend on Z-0135. Before starting any of them, check `git merge-base --is-ancestor <sha> testinfra`; if the commit is missing, stop and ask the maintainer whether to merge `main` into `testinfra`.
+
 - [ ] +testinfra +tests +AI-G Z-0158 T11c The differential's front-end loop forks once per program, not six times
     > **Created:** 2026-11-07 by Z-0122 (Finding 6). **Branch:** `testinfra`. **Before:** Z-0114.
 
@@ -35,6 +39,8 @@ Active priority series to reduce verification runtimes. Order of execution:
 
 - [ ] +testinfra +tests +AI-G Z-0159 T11d A stdlib `Drop` implementation is lowered only when a dropped type needs it
     > **Created:** 2026-11-08 by Z-0157's review (G1). **Branch:** `testinfra`. **After:** Z-0157 closes, and Z-0162 (it changes the drop lookup this task extends). **Before:** Z-0114.
+
+    - **Blocked on a merge (2026-11-10):** Z-0162's fix (git:cd93f34) is on `main` only: `git merge-base --is-ancestor cd93f34 testinfra` fails. Do not start this task on `testinfra` until the maintainer decides whether `main` is merged into it; built on the old lookup, the change would extend code `main` has already replaced.
 
     - **Why:** Z-0157 left concrete `Drop` implementations eager (`Driver.instantiate_impl_methods`, `src/driver/module.zrl`, the `Drop` branch), so every program that imports `io.zrl` or `mem.zrl` lowers `File::drop`, `Arena::drop` and their callees whether it drops one or not: `import "vec.zrl"; import "mem.zrl"; fn main() -> i32 { return 0; }` emits 7 functions (`stdlib::io::File::drop`, `stdlib::io::raw_close`, `stdlib::mem::Arena::drop`, `stdlib::mem_raw::arena_free`, `stdlib::mem_raw::munmap_or_trap`, `stdlib::mem_raw::syscall_failed`, `stdlib::core0::zoril_user_trap`), 14,970 B of ZIL, 5.0 ms against 0.9 ms with no imports. A grid cell uses an `Arena`, so it saves less.
     - **Do:** in the `Drop` branch of `instantiate_impl_methods`, skip a method `m` for which `self.lowers_on_demand(m)` holds. In `ZirLowerer.has_drop_impl` (`src/lower_zir/utils.zrl`), when no lowered function has the name `Type::drop`, find the type's `Drop` impl (`find_method_in_impls(type_id, drop_id)`) and instantiate it with `self.mono.instantiate_method`, setting `lowering_drop_impl` around the call exactly as `instantiate_impl_methods` does; then return true. Change nothing else. **Stop rule:** if C1's cell figure is under 1 ms of front end, record C1 and stop: the change is not worth its risk.
@@ -76,6 +82,7 @@ Active priority series to reduce verification runtimes. Order of execution:
     - **Review (2026-11-06):** the figures in **Why first** come from the session analysis and from the 2026-11-04 `build/preflight-changed.log` (612 s), not from Z-0105; Z-0120 measures the base build against the program runs, which is this task's before-figure. A stale verdict served from this cache would let a newly accepted unsafe program through the safety rule's own gate, so this task is a **check-in**: it ends with its fix committed and an **Awaiting review** bullet (the reviewer reruns the planted-invalidation case and changes each key input in turn: a probe, the generator, a stdlib file, the base commit, the toolchain fingerprint). Also measure whether the clean-tree compiler `selfhost-check` builds in the same preflight can be the change side's compiler here, so a preflight builds it once.
     - **Narrowed by Z-0120 (review, 2026-11-07):** the base build is 9 s of 625 s; the base side's programs 305 s, the change side's 304 s, the comparison 5 s. Drop the base-compiler cache and the shared-compiler measurement above: they save seconds. What is left is the verdict cache: about 305 s on a rerun against an unchanged base after a `src/` edit, and the full 609 s only on a rerun of an identical tree (the reviewer's), and then only if the cache reaches the reviewer's session (Z-0113's open question). It now follows Z-0116, whose batch or interface route cuts both sides on every run, cached or not; re-measure this task's saving on top of whatever Z-0116 chose before implementing it.
     - **Not ready for `+AI-G` (review, 2026-11-07):** this task still holds two decisions: whether the saving left after Z-0116 is worth a cache at all, and how a cache that decides what not to run avoids the stamp's failures (Z-0113's bullet "The stamp's record"); a wrong hit here lets a newly accepted unsafe program through. Do not start it as written: after Z-0116 closes, an `+AI-D` session re-measures, decides, and either drops it or rewrites it with settled keys and numbered checks (each key input changed in turn, and a planted stale entry caught).
+    - **Next (2026-11-10):** Z-0116 has closed (`completed.tm.md`), so the condition above is met. The next session on this task is that `+AI-D` re-measurement and decision, not the implementation; an `+AI-G` session does not start it.
 
 - [ ] +testinfra +tests +portability +AI-G Z-0151 T7g `fuzz-tools`' checks that need no git go back into `make test`
     > **Created:** 2026-11-07 by the review of Z-0144. **Branch:** `testinfra`. **Before:** Z-0152.
@@ -121,7 +128,7 @@ Active priority series to reduce verification runtimes. Order of execution:
       - C5: `make test`, `Total:` line quoted.
 
 - [ ] +testinfra +tests +portability +AI-G Z-0146 T7c `check_md_links.sh` and the stage0-c suite scripts in POSIX `sh`
-    > **Created:** 2026-11-07,. **Branch:** `testinfra`. split from Z-0145. **Before:** Z-0145.
+    > **Created:** 2026-11-07, split from Z-0145. **Branch:** `testinfra`. **Before:** Z-0145.
 
     - **Why:** `make test` runs these `#!/bin/bash` scripts: `scripts/check_md_links.sh` (89 lines, the `md-links` scenario) and, through the `stage0c-*` gates, `bootstrap/stage0-c/scripts/test_functional.sh` (168), `test_corpus.sh` (135), `test_docs.sh` (142), `test_error_locations.sh` (140), `test_wrapper.sh` (116), `check-all.sh` (126) and `verify_test_failure.sh` (69). A text search for bash-only constructs (`[[`, arrays, `(( ))`, `${x//a/b}`, `<( )`, `$'...'`, `&>`) hits all but `verify_test_failure.sh`; no strict POSIX shell was on the review host, so none was run under one. `scripts/test_check_no_new_deps.sh` matches a bash-shebang search only because it writes one as a fixture; `scripts/fuzz_safe.sh` is the fuzzer's (contributor role).
     - **The maintainer (2026-11-07):** the stage0-c freeze covers the compiler, not its test scripts; they may be ported when the `stage0c-*` gates report the same counts before and after (`AGENTS.md`, "The seeds are frozen").
@@ -136,7 +143,7 @@ Active priority series to reduce verification runtimes. Order of execution:
       - C7: `scripts/check_portability.sh` passes; `make test`, `Total:` line quoted.
 
 - [ ] +testinfra +tests +portability +AI-G Z-0147 T7d `check_safety_model.sh` without bash
-    > **Created:** 2026-11-07,. **Branch:** `testinfra`. split from Z-0145. **Before:** Z-0145.
+    > **Created:** 2026-11-07, split from Z-0145. **Branch:** `testinfra`. **Before:** Z-0145.
 
     - **Why:** the `safety-model` gate, in `make test` and in every doc tier, runs `scripts/check_safety_model.sh`: 930 lines of bash, with about 32 lines a text search marks bash-only. At that size the portability rule (`AGENTS.md`: logic longer than a short script goes into a Zoril tool) applies.
     - **Do:** first record here what it checks (each rule, and the file it reads), then port it to POSIX `sh` and awk, kept as close to the original as the shell allows. If the port needs much more than the original, stop, record why, and propose a Zoril tool under `tools/` instead, as a task of its own. Its banned-phrase list and every message it prints stay as they are, since tasks and agents grep for them.
@@ -180,6 +187,8 @@ Active priority series to reduce verification runtimes. Order of execution:
 - [ ] +stdlib +tests +AI-G Z-0131 Z1b `proc.zrl`: a child in a process group of its own, signalled as a group
     > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Depends:** Z-0135 (what stage1 builds wrong, since `stdlib/os/linux.zrl` is in the `src/` closure).
 
+    - **Cross-branch dependency (2026-11-10):** Z-0135 is a `main` task. Start this one only once Z-0135's commit is on `testinfra` (`git merge-base --is-ancestor <sha> testinfra`); merging `main` into `testinfra` is the maintainer's decision.
+
     - **Do:** a `Command` option that puts the child in a new process group (`setpgid(0, 0)` in the child between fork and exec), and a `Child` method that sends a signal to the whole group (`kill(-pgid, sig)`). `sys_setpgid` goes in `stdlib/os/linux.zrl`.
     - **Checks:**
       - C1: a stdlib test whose child, in a new group, starts a grandchild (`sh -c 'sleep 30 & echo $! > <file>; wait'`, the grandchild's pid written to a file under the test's work directory); the test sends the group SIGTERM and finds both pids gone within 5 s (`/proc/<pid>` absent; the test skips, naming `/proc`, where `/proc` is missing). Quote its output.
@@ -203,6 +212,8 @@ Active priority series to reduce verification runtimes. Order of execution:
 
 - [ ] +safety +stdlib +tests +AI-D Z-0133 Z1d Signals: the runtime records which arrived, and a stdlib module reads it
     > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Depends:** Z-0135. **Check-in:** it touches `rt/`.
+
+    - **Cross-branch dependency (2026-11-10):** Z-0135 is a `main` task. Start this one only once Z-0135's commit is on `testinfra` (`git merge-base --is-ancestor <sha> testinfra`); merging `main` into `testinfra` is the maintainer's decision.
 
     - **Do:** in `rt/runtime.s`, a handler that sets a bit per signal number in a runtime word and returns (with the `sa_restorer` that Linux x86_64 `rt_sigaction` needs); nothing else runs in it. A stdlib module (new, outside the `src/` closure) with `watch(sig)` (install the handler), `ignore(sig)`, `default(sig)` and `take_pending() -> u64` (read and clear the bits atomically). `bootstrap/stage1/rt/runtime.s` stays a byte-identical copy of `rt/runtime.s` (the `runtimes` gate), and `rt/runtime.s` keeps every symbol the pinned stage1 can emit. State in `doc/spec/safety_model.md` what the module claims, if anything, with its test.
     - **Checks:** a test that watches SIGUSR1, sends it to itself, and reads it once from `take_pending` and not twice; a child that watches nothing still gets the default action. `scripts/run_safety_matrix.sh`. `make test`, `make preflight-changed`. Ends with **Awaiting review**.
@@ -279,7 +290,7 @@ Active priority series to reduce verification runtimes. Order of execution:
       - C5: `scripts/check_portability.sh` passes; `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +testinfra +measurement +AI-D Z-0123 T9a Is a build and a test result the same from the same inputs?
-    > **Created:** 2026-11-06,. **Branch:** `testinfra`. split from Z-0113 by the review. **Before:** Z-0113.
+    > **Created:** 2026-11-06, split from Z-0113 by the review. **Branch:** `testinfra`. **Before:** Z-0113.
 
     - **Do:** Z-0113's **Measure first** bullet: is `build/zoril` byte-identical when built from one commit in two checkouts (through stage1 and through `build/zoril`)? Do two `make test` runs on one tree give the same `--results` and the same output digests per item (list every item that differs, and why)? Record the commands and the answers here, and in Z-0113.
 
