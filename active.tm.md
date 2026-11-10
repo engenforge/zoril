@@ -39,18 +39,26 @@ Active priority series to reduce verification runtimes. Order of execution:
     - **Not ready for `+AI-G` (review, 2026-11-07):** this task still holds two decisions: whether the saving left after Z-0116 is worth a cache at all, and how a cache that decides what not to run avoids the stamp's failures (Z-0113's bullet "The stamp's record"); a wrong hit here lets a newly accepted unsafe program through. Do not start it as written: after Z-0116 closes, an `+AI-D` session re-measures, decides, and either drops it or rewrites it with settled keys and numbered checks (each key input changed in turn, and a planted stale entry caught).
     - **Next (2026-11-10):** Z-0116 has closed (`completed.tm.md`), so the condition above is met. The next session on this task is that `+AI-D` re-measurement and decision, not the implementation; an `+AI-G` session does not start it.
 
-- [ ] +testinfra +tests +portability +AI-G Z-0145 T7b `make test` with only the user's tools, as a gate
+- [x] +testinfra +tests +portability +AI-G Z-0145 T7b `make test` with only the user's tools, as a gate
     > **Created:** 2026-11-07 by the maintainer's portability rule. **Branch:** `testinfra`. **Depends:** Z-0144.
+    > **Completed:** 2026-11-10 git:33fffd1
 
     - **Split (2026-11-07):** the bash ports are Z-0146 and Z-0147, which this task also depends on. It keeps the gate and the `check_deps.sh` change.
     - **Do:** drop `bash` from `scripts/check_deps.sh`'s `test` profile if nothing else on the `make test` path needs it (`scripts/fuzz_safe.sh` is the fuzzer's: contributor role). Add a gate to `make preflight` (it needs git to export the tree): extract `git archive HEAD` outside the checkout, put on `PATH` only the user role's tools (`AGENTS.md`, Portability; the shim `scripts/test_dep_matrix.sh` builds), then `make` and `make test`. It passes when `make test` passes and every skip names a missing tool; it lists the skips. Bring `scripts/check_deps.sh`'s profiles, `doc/developer_guide.md` §1 and the exceptions list in `AGENTS.md` into line with what the gate shows.
     - **No git, even when present (the maintainer, 2026-11-07):** a run with git off `PATH` misses a script that uses git when it finds it and falls back otherwise; Z-0144 passed that run and still made 818 git calls in a checkout. So the gate has a second run, in the checkout: `make test` with a `git` first on `PATH` that appends its arguments and the calling script's name to a log under `build/` and exits 1. It fails when the log has a line other than `scripts/version.sh` under `make`'s build (the Z-0111 decision), and prints the lines.
     - **Checks:**
-      - C1: the gate passes on this host; quote its summary lines.
-      - C2: give the export a script calling git from a `make test` item, and watch the first run fail; then one calling `bash`, and watch it fail; quote both failures.
-      - C3: give a `make test` item `command -v git >/dev/null && git rev-parse HEAD`, and watch the second run fail, naming the script; quote it.
-      - C4: `scripts/check_portability.sh`, passing.
-      - C5: `make test` and `make preflight`, each `Total:` line quoted.
+      - C1: `make user-tools` (running `scripts/check_user_tools.sh`):
+        `[PASS] user-tools (export): make and make test passed with only user tools on PATH`
+        `[PASS] user-tools (checkout): make test invoked git only for scripts/version.sh`
+        `PASS: user tools gate passed.`
+      - C2: Planted failure cases under export:
+        - Calling git: `./scripts/check_test_strength.sh: line 30: git: command not found` and `[FAIL] user-tools: make or make test failed in exported tree with only user tools on PATH`
+        - Calling bash: `./scripts/check_test_strength.sh: line 30: bash: command not found` and `[FAIL] user-tools: make or make test failed in exported tree with only user tools on PATH`
+      - C3: Planted `command -v git >/dev/null && git rev-parse HEAD` in `scripts/check_test_strength.sh`: caught by checkout run with `[FAIL] user-tools: make test made unexpected git invocations: /bin/sh ./scripts/check_test_strength.sh: git rev-parse HEAD`
+      - C4: `./scripts/check_portability.sh` passed with 0 failures across all checks.
+      - C5:
+        - `make test`: `Total: 3214 run, 3214 passed, 0 failed, 88 skipped (116.1s)`
+        - `make preflight`: `Total: 1169 run, 1169 passed, 0 failed, 0 skipped (43.9s)` (checked build) and `Total: 7 run, 7 passed, 0 failed, 0 skipped (19.7s)` (git group).
 
 - [ ] +stdlib +tests +AI-G Z-0130 Z1a `proc.zrl`: wait for whichever child ends first, with or without blocking
     > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Before:** Z-0137.
