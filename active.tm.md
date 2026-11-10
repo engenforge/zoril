@@ -6,22 +6,6 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
 
 **Branches (2026-11-09, the maintainer):** the history after v0.1.0-alpha was split by line of work (Z-0163). The provenance series (`+safety` tasks numbered `B1` to `B4`, Z-0047 onward, and the precision tasks that serve it) is developed on the `provenance` branch; the `+testinfra` series, the `tools/ztest` and `proc.zrl` series (Z-0130 to Z-0140) and Z-0157's follow-ups (Z-0158 to Z-0161) on `testinfra`; everything else, the known-gap probes and the default-mode safety fixes among it (Z-0162, Z-0100, Z-0101, Z-0135), on `main`. Both branches stay open until their series is reviewed.
 
-- [x] +safety +AI-D Z-0165 Store through a raw pointer without dropping the old value (`Vec::push` uninitialized slot drop)
-    > **Created:** 2026-11-09, found while working on Z-0162. **Branch:** `main`.
-    > **Completed:** 2026-11-10 git:70b5361
-
-    - **The hole:** `Vec::push` writes its new element with `*slot = val` through a raw pointer. The lowering previously emitted a drop of the old value before every assignment to a projected place, so `Vec::push` ran the element type's `drop` on the uninitialized slot before writing the value. From safe code, pushing a type whose `drop` writes through a pointer field (or reads garbage) faulted (rc 139).
-    - **Reach:** any `Vec<T>` whose `T` (or a field of `T`, or generic instance) has a `Drop`, without the caller writing `unsafe`.
-    - **Fix (git:cf3a710):** `place_through_raw_pointer` in `src/lower_zir/utils.zrl`, checked in `handle_assign_drop_and_move` (`src/lower_zir/decl.zrl`): an assignment whose place is reached through a raw pointer (`*p = v`, `(*p).f = v`, `p[i] = v`) writes without dropping the old value, because raw pointer targets may be uninitialized memory. A store through a reference (`*r = v`) still drops. `Vec::set` overwrites a live element, so it moves the old element out and drops it explicitly. Documented in `doc/spec/surface_syntax.md` §7.2.
-    - **Expected result update (git:70b5361):** re-recorded the whole-program ZIL hash of `corpus/zrl/33_vec_and_string.zrl`; only source-line comments moved (282 to 287) because `Vec::set` grew by five lines; emitted code is unchanged.
-    - **Checks:**
-      - C1: new test `tests/stdlib/test_vec_push_does_not_drop_slot.zrl` (10 pushes past initial capacity, a `set`, and 10 pops; verifies drop counts and dropped IDs). Passes (rc 0).
-      - C2: reproducers `pg3`, `pg4`, `pg5` exit 0 (previously rc 139). `pg6` and `sib_field` exit 0.
-      - C3: fix taken out (scratch edits): (a) lowering change reverted -> test fails with exit 1; (b) lowering change kept, `Vec::set` explicit drop reverted -> test fails with exit 2. Both halves are required.
-      - C4: sibling routes probed: (1) struct/Box holding raw pointer (`*holder.ptr = v`) writes without drop (rc 0); (2) slice element store (`s[0] = v`) drops overwritten element as expected for initialized slice memory (rc 0); (3) generic `G<S>` whose field needs drop: `Vec::push` does not drop uninitialized slot (rc 0); (4) separate compilation and `zbuild`: multi-module `Vec::push` with `Drop` compiles and links cleanly (rc 0).
-      - C5: `make test`: `Total: 3207 run, 3207 passed, 0 failed, 88 skipped (213.3s)`.
-      - C6: `PREFLIGHT_BASE=6a66434 make preflight-changed`: rc 0; fixpoint identical; all mutations caught; `[PASS] reject-diff: 0 newly accepted, 0 newly refused, of 69128 programs against 6a664342c1a35ac6043b8fe04cdee93091de493a`; checked suite `Total: 1156 run, 1156 passed, 0 failed, 0 skipped (50.0s)`.
-
 - [ ] +testinfra +tests +AI-G Z-0158 T11c The differential's front-end loop forks once per program, not six times
     > **Created:** 2026-11-07 by Z-0122 (Finding 6). **Before:** Z-0114.
 
