@@ -278,6 +278,12 @@ scratch="$tmp/scratch"
 mkdir -p "$scratch"
 tar --exclude="./build*" --exclude="build" --exclude="./.git*" --exclude=".git" \
     -cf - . | (cd "$scratch" && tar -xf -)
+# A nested git worktree (a task branch mounted under doc/) is not source, and the rule that hides
+# it from the gates can live in the outer .git, which the copy leaves out: md-check in the copy
+# then fails on files the real tree never checks.
+find . \( -path './build*' -o -path ./.git \) -prune -o -name .git -print | while IFS= read -r g; do
+    case "$g" in ./*/.git) rm -rf "$scratch/${g%/.git}" ;; esac
+done
 cp Makefile config.mk scripts/check_deps.sh scripts/test.sh scripts/preflight.sh "$scratch/" 2>/dev/null || true
 cp scripts/check_deps.sh "$scratch/scripts/"
 cp scripts/test.sh "$scratch/scripts/"
