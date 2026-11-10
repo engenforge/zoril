@@ -119,17 +119,9 @@ pages() {
 
 # ── the selftest: the three shapes this gate has to tell apart ────────────────────────────────────────
 if [ "${SELFTEST:-0}" = 1 ]; then
-    GIT_CONFIG_GLOBAL=/dev/null; export GIT_CONFIG_GLOBAL
-    GIT_CONFIG_SYSTEM=/dev/null; export GIT_CONFIG_SYSTEM
-    GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_NOSYSTEM
-    unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
-    for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p'); do
-        unset "$_v"
-    done
     tmp=$(mktemp -d "${TMPDIR:-/tmp}/fuzz-fresh.XXXXXX") || exit 2
     trap 'rm -rf "$tmp"' EXIT
     fail=0
-    g() { git -C "$tmp/t" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }
     mkdir -p "$tmp/t/src" "$tmp/t/stdlib" "$tmp/t/tools/zilc" "$tmp/t/tools/zbuild" "$tmp/t/rt" "$tmp/t/doc"
     printf 'compiler\n' > "$tmp/t/src/main.zrl"
     printf 'stdlib\n' > "$tmp/t/stdlib/io.zrl"
@@ -140,15 +132,11 @@ if [ "${SELFTEST:-0}" = 1 ]; then
     mkdir -p "$tmp/t/bench/fuzz"
     mv "$tmp/t/bench-fuzz-README.md" "$tmp/t/bench/fuzz/README.md"
     printf '# A page\n\nThe release bar was 1,000 programs that compiled and ran.\n' > "$tmp/t/doc/PAGE.md"
-    g init -q -b main .
-    g add -A
-    g commit -q -m one
     fp() { printf 'fingerprint: %s\n' "$(fuzz_fingerprint "$tmp/t")"; }
 
     # 1. A matching fingerprint passes, and so does a page quoting the same figure.
     { printf '%s\n' "$(fp)"; echo; cat "$tmp/t/bench/fuzz/README.md"; } > "$tmp/rec.$$"
     mv "$tmp/rec.$$" "$tmp/t/bench/fuzz/README.md"
-    g add -A; g commit -q -m "record"
     if out=$("$SELF" --repo "$tmp/t" 2>&1) && printf '%s' "$out" | grep -q '^\[PASS\] fuzz-fresh: the release-bar record'; then
         case "$out" in
             *'STALE'*) echo "[FAIL] selftest: a matching fingerprint was reported stale"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1 ;;
@@ -162,12 +150,10 @@ if [ "${SELFTEST:-0}" = 1 ]; then
     #    compiler input. Then a code change is reported stale, naming the directory, and fails only
     #    under --strict.
     printf '# Notes\n\nNot a compiler input.\n' > "$tmp/t/src/NOTES.md"
-    g add -A; g commit -q -m "src note"
     if ! "$SELF" --repo "$tmp/t" > "$tmp/note.log" 2>&1; then
         echo "[FAIL] selftest: a Markdown-only change in src/ staled the record"; sed 's/^/       /' "$tmp/note.log"; fail=1
     fi
     printf 'stdlib changed\n' > "$tmp/t/stdlib/io.zrl"
-    g add -A; g commit -q -m "change stdlib"
     out=$("$SELF" --repo "$tmp/t" 2>&1)
     rc=$?
     if [ "$rc" -ne 0 ]; then
@@ -188,7 +174,6 @@ if [ "${SELFTEST:-0}" = 1 ]; then
 
     # 3. A record with no fingerprint fails at both strengths.
     printf '# Record\n\nThe release-bar run: 1,000 programs compiled and ran.\n\nheadline: 1000 programs compiled and ran\n' > "$tmp/t/bench/fuzz/README.md"
-    g add -A; g commit -q -m "no fingerprint"
     "$SELF" --repo "$tmp/t" > "$tmp/nofp.log" 2>&1
     if [ $? -eq 0 ] || ! grep -q 'carries no' "$tmp/nofp.log"; then
         echo "[FAIL] selftest: a record without a fingerprint was not refused"; sed 's/^/       /' "$tmp/nofp.log"; fail=1
@@ -198,13 +183,11 @@ if [ "${SELFTEST:-0}" = 1 ]; then
     { printf '%s\n' "$(fp)"; echo; cat "$tmp/t/bench/fuzz/README.md"; } > "$tmp/rec2.$$"
     mv "$tmp/rec2.$$" "$tmp/t/bench/fuzz/README.md"
     printf '# A page\n\nThe release bar was 1,500 programs that compiled and ran.\n' > "$tmp/t/doc/PAGE.md"
-    g add -A; g commit -q -m "stale page"
     "$SELF" --repo "$tmp/t" > "$tmp/page.log" 2>&1
     if [ $? -eq 0 ] || ! grep -q 'doc/PAGE.md' "$tmp/page.log"; then
         echo "[FAIL] selftest: a page quoting another figure was not refused"; sed 's/^/       /' "$tmp/page.log"; fail=1
     fi
     printf '# A page\n\nThe release bar was 1,000 programs that compiled and ran.\n' > "$tmp/t/doc/PAGE.md"
-    g add -A; g commit -q -m "page agrees"
     if ! "$SELF" --repo "$tmp/t" > "$tmp/page2.log" 2>&1; then
         echo "[FAIL] selftest: a page quoting the record's figure was refused"; sed 's/^/       /' "$tmp/page2.log"; fail=1
     fi
@@ -212,18 +195,15 @@ if [ "${SELFTEST:-0}" = 1 ]; then
     # 6. A dual record: the release-bar entry on other code, and a short session on this code. The short session
     #    is the current entry: --strict passes on it, and a page quoting only the release-bar figure is named.
     printf '# Record\n\n## The release-bar run\n\nfingerprint: src=0 stdlib=0 tools/zilc=0 tools/zbuild=0 rt=0\n\nheadline: 1000 programs compiled and ran\n\n## The short session on the launched code\n\nentry: short-session\n\n%s\n\nheadline: 500 programs compiled and ran\n' "$(fp)" > "$tmp/t/bench/fuzz/README.md"
-    g add -A; g commit -q -m "dual record"
     "$SELF" --repo "$tmp/t" --strict > "$tmp/dual.log" 2>&1
     if [ $? -eq 0 ] || ! grep -q 'doc/PAGE.md' "$tmp/dual.log" || ! grep -q '^\[PASS\] fuzz-fresh: the short-session record' "$tmp/dual.log"; then
         echo "[FAIL] selftest: a dual record did not compare its short session, or let a page quote the release-bar run alone"; sed 's/^/       /' "$tmp/dual.log"; fail=1
     fi
     printf '# A page\n\nThe release bar, 1,000 programs that compiled and ran, was met on the previous code; on this code a short session ran 500.\n' > "$tmp/t/doc/PAGE.md"
-    g add -A; g commit -q -m "page pairs the runs"
     if ! "$SELF" --repo "$tmp/t" --strict > "$tmp/dual2.log" 2>&1; then
         echo "[FAIL] selftest: a dual record whose page quotes both runs was refused"; sed 's/^/       /' "$tmp/dual2.log"; fail=1
     fi
     sed 's/^fingerprint: src=[0-9a-f]\{8,\}/fingerprint: src=1/' "$tmp/t/bench/fuzz/README.md" > "$tmp/rec3.$$" && mv "$tmp/rec3.$$" "$tmp/t/bench/fuzz/README.md"
-    g add -A; g commit -q -m "stale short session"
     "$SELF" --repo "$tmp/t" --strict > "$tmp/dual3.log" 2>&1
     if [ $? -eq 0 ] || ! grep -q 'STALE - the short-session record' "$tmp/dual3.log"; then
         echo "[FAIL] selftest: a stale short session passed --strict"; sed 's/^/       /' "$tmp/dual3.log"; fail=1

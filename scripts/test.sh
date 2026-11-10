@@ -230,7 +230,7 @@ gate_command() {
         no-warnings)             echo ./scripts/check_no_warnings.sh ;;
         test-strength)           echo ./scripts/check_test_strength.sh ;;
         fuzz-record)             echo ./scripts/check_fuzz_record.sh ;;
-        fuzz-fresh)              echo ./scripts/check_fuzz_fresh.sh ;;
+        fuzz-fresh)              echo "./scripts/check_fuzz_fresh.sh --selftest && ./scripts/check_fuzz_fresh.sh" ;;
         safety-matrix)           echo ./scripts/run_safety_matrix.sh ;;
         safety-matrix-zbuild)    echo ./scripts/run_safety_matrix.sh --zbuild ;;
         safety-model)            echo ./scripts/check_safety_model.sh ;;
@@ -272,7 +272,7 @@ gate_run() {
     _gname="$1"
     _glog="build/gates/$_gname.log"
     mkdir -p build/gates
-    QUIET=0 $(gate_command "$_gname") > "$_glog" 2>&1
+    eval "QUIET=0 $(gate_command "$_gname")" > "$_glog" 2>&1
     _grc=$?
     [ $_grc -eq 130 ] && exit 130
     eval "$(awk -v g="$_gname" -v quiet="$TR_QUIET" -v out="$_glog.items" '
