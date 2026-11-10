@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # scripts/check_safety_model.sh — verify the safety matrix (bench/safety_matrix/matrix.md): its "Proven by"
 # column is truthful, that the GAP count in the prose of doc/spec/safety_model.md matches the rows
 # actually marked **GAP**, and that the readable entries on that page equal the rows.
@@ -150,7 +150,7 @@ check_normative_sentences() {
             print "TOTAL\t" count "\t" missing
         }
 
-        function flush_item() {
+        function flush_item(    _unused) {
             if (item == "") return
             check_item(item, start_line)
             item = ""
@@ -254,7 +254,7 @@ list_normative_citations() {
             flush_item()
         }
 
-        function flush_item() {
+        function flush_item(    _unused) {
             if (item == "") return
             check_item(item, start_line)
             item = ""
