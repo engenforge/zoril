@@ -2,6 +2,71 @@
 
 ## 2026-11
 
+- [x] +testinfra +tests +portability +AI-G Z-0146 T7c `check_md_links.sh` and the stage0-c suite scripts in POSIX `sh`
+    > **Created:** 2026-11-07, split from Z-0145. **Branch:** `testinfra`. **Before:** Z-0145.
+    > **Completed:** 2026-11-10 git:113209a
+
+    - **Why:** `make test` runs these `#!/bin/bash` scripts: `scripts/check_md_links.sh` (89 lines, the `md-links` scenario) and, through the `stage0c-*` gates, `bootstrap/stage0-c/scripts/test_functional.sh` (168), `test_corpus.sh` (135), `test_docs.sh` (142), `test_error_locations.sh` (140), `test_wrapper.sh` (116), `check-all.sh` (126) and `verify_test_failure.sh` (69). A text search for bash-only constructs (`[[`, arrays, `(( ))`, `${x//a/b}`, `<( )`, `$'...'`, `&>`) hits all but `verify_test_failure.sh`; no strict POSIX shell was on the review host, so none was run under one. `scripts/test_check_no_new_deps.sh` matches a bash-shebang search only because it writes one as a fixture; `scripts/fuzz_safe.sh` is the fuzzer's (contributor role).
+    - **The maintainer (2026-11-07):** the stage0-c freeze covers the compiler, not its test scripts; they may be ported when the `stage0c-*` gates report the same counts before and after (`AGENTS.md`, "The seeds are frozen").
+    - **Do:** port each to `#!/bin/sh` and POSIX awk, one script per commit; change nothing it checks. Run each under a strict POSIX shell (`dash`, or BusyBox `ash`; record which, and how it was installed or built, here) as well as under `sh`.
+    - **Checks:** (on this host `/bin/sh` is bash, so "runs under `sh`" proves nothing; every strict-shell run below names `dash` or `busybox ash` explicitly.)
+      - C1: before any change, `./scripts/test.sh --gate stage0c-fixed-bugs --gate stage0c-unit --gate stage0c-corpus --gate stage0c-docs --gate stage0c-error-locations --gate stage0c-functional --gate stage0c-minimal` and `./scripts/test.sh --scenario md-links`: every count line and `Total:` line, quoted here.
+      - C2: the strict shell: which one, its path (`command -v dash`), and how it got onto the host (package name and version, or the build command).
+      - C3: for each script, the command that runs it, found in `bootstrap/stage0-c/Makefile`, `bootstrap/stage0-c/tests/Makefile` or `scripts/test.sh` (quote the line), run again with `dash` in front of the script path; quote the result line of each.
+      - C4: for each script, `head -n 1` is `#!/bin/sh` and `dash -n <script>` prints nothing.
+      - C5: after the ports, C1's command again; `diff` of the before and after count lines prints nothing.
+      - C6: a ported checker that always passes is the failure to fear, so plant one failure per script and watch it reported: for each stage0-c script, change one expected-output file it compares against (or one test's expected exit) in the working tree, run C3's command under `dash`, quote the failure, and restore the file (`git diff --stat` empty afterwards). For `check_md_links.sh`, a scratch page under `doc/` with a link to a missing file: quote the failure, delete the page.
+      - C7: `scripts/check_portability.sh` passes; `make test`, `Total:` line quoted.
+    - **Completion:**
+      - C1: baseline counts recorded:
+        `stage0c-fixed-bugs              17 run    17 passed     0 failed     0 skipped`
+        `stage0c-unit                    98 run    98 passed     0 failed     0 skipped`
+        `stage0c-corpus                  62 run    62 passed     0 failed     1 skipped`
+        `stage0c-docs                    22 run    22 passed     0 failed     0 skipped`
+        `stage0c-error-locations         13 run    13 passed     0 failed     0 skipped`
+        `stage0c-functional             191 run   191 passed     0 failed     1 skipped`
+        `stage0c-minimal                  1 run     1 passed     0 failed     0 skipped`
+        `stray-files                      1 run     1 passed     0 failed     0 skipped`
+        `Total: 405 run, 405 passed, 0 failed, 2 skipped (23.0s)`
+        and for `md-links`:
+        `Integration                      1 run     1 passed     0 failed     0 skipped`
+        `stray-files                      1 run     1 passed     0 failed     0 skipped`
+        `Total: 2 run, 2 passed, 0 failed, 0 skipped (0.4s)`
+      - C2: strict shell: dash 0.5.12 at `/usr/local/bin/dash` (`command -v dash`); built from release tarball `http://gondor.apana.org.au/~herbert/dash/files/dash-0.5.12.tar.gz` with `./configure --prefix=/usr/local && make` and installed to `/usr/local/bin/dash`.
+      - C3: for each script, invocation run under `dash`:
+        `scripts/check_md_links.sh` (`scripts/test.sh:176`): `dash ./scripts/check_md_links.sh <fixture-tree>` -> `[PASS] all relative markdown links resolve`.
+        `bootstrap/stage0-c/scripts/test_functional.sh` (`bootstrap/stage0-c/Makefile:206`): `QUIET=1 dash ./scripts/test_functional.sh` -> `test_functional: 191/191 passed`.
+        `bootstrap/stage0-c/scripts/test_corpus.sh` (`bootstrap/stage0-c/Makefile:415`): `QUIET=1 dash ./scripts/test_corpus.sh` -> `test_corpus: 62/62 passed`.
+        `bootstrap/stage0-c/scripts/test_docs.sh` (`bootstrap/stage0-c/Makefile:419`): `QUIET=1 dash ./scripts/test_docs.sh <repo>/doc/spec/surface_syntax.md <repo>/doc/spec/intermediate_language.md` -> `test_docs: 22/22 passed`.
+        `bootstrap/stage0-c/scripts/test_error_locations.sh` (`bootstrap/stage0-c/Makefile:411`): `QUIET=1 dash ./scripts/test_error_locations.sh` -> `test_error_locations: 13/13 passed`.
+        `bootstrap/stage0-c/scripts/test_wrapper.sh` (`bootstrap/stage0-c/tests/Makefile:100`): `QUIET=0 dash ./scripts/test_wrapper.sh build/tests/bin/cc/release/unit/test_arena` -> `[PASS] test_arena`.
+        `bootstrap/stage0-c/scripts/check-all.sh` (`dash ./scripts/check-all.sh`): `=== ALL CHECKS PASSED ===`.
+        `bootstrap/stage0-c/scripts/verify_test_failure.sh` (`bootstrap/stage0-c/Makefile:244`): `dash ./scripts/verify_test_failure.sh` -> `=== All Infrastructure Integrity Checks Passed ===`.
+      - C4: for each of the 8 scripts, `head -n 1` is `#!/bin/sh` and `dash -n <script>` prints nothing.
+      - C5: rerun C1 commands after ports; `diff` of before and after count lines prints nothing.
+      - C6: planted failures reported under `dash`:
+        `check_md_links.sh`: added `doc/test_scratch.md` linking to `nonexistent_link_target.md`: `[FAIL] test_scratch.md:1: nonexistent_link_target.md` (scratch file deleted).
+        `test_functional.sh`: changed expected exit in `tests/functional/basic/bool_ops.zrl` from 0 to 42: `[FAIL] bool_ops.zrl (execution failed with 0, expected 42)` (restored).
+        `test_corpus.sh`: added `// expected exit code: 42` to `corpus/zrl/01_hello_syscall.zrl`: `[FAIL] 01_hello_syscall.zrl (execution failed with 0, expected 42)` (restored).
+        `test_docs.sh`: syntax error in `doc/spec/surface_syntax.md:92`: `[FAIL] doc/spec/surface_syntax.md:92 (zoril)` (restored).
+        `test_error_locations.sh`: column check changed in `tests/error_reporting/ec_type_mismatch.zrl` from :5 to :99: `[FAIL] ec_type_mismatch.zrl line 5:99: expected error "type mismatch: expected i32"` (restored).
+        `test_wrapper.sh`: changed assertion in `bootstrap/stage0-c/tests/unit/test_arena.c`: `[FAIL] test_arena (Exit Code: 134)` (restored).
+        `check-all.sh`: planted failure in `01_hello_syscall.zrl`: `[FAIL] test_corpus (test_corpus: 61/62 passed)` and `=== CHECKS FAILED (see [FAIL] lines above) ===` (restored).
+        `verify_test_failure.sh`: checked for exit code 99 instead of 42: `[ ERROR ] Failed to detect basic exit code (Got: 42)!` (restored).
+      - C7: `scripts/check_portability.sh` passed. `make test`: `Total: 3214 run, 3214 passed, 0 failed, 88 skipped (116.0s)`.
+
+    - **Why:** `make test` runs these `#!/bin/bash` scripts: `scripts/check_md_links.sh` (89 lines, the `md-links` scenario) and, through the `stage0c-*` gates, `bootstrap/stage0-c/scripts/test_functional.sh` (168), `test_corpus.sh` (135), `test_docs.sh` (142), `test_error_locations.sh` (140), `test_wrapper.sh` (116), `check-all.sh` (126) and `verify_test_failure.sh` (69). A text search for bash-only constructs (`[[`, arrays, `(( ))`, `${x//a/b}`, `<( )`, `$'...'`, `&>`) hits all but `verify_test_failure.sh`; no strict POSIX shell was on the review host, so none was run under one. `scripts/test_check_no_new_deps.sh` matches a bash-shebang search only because it writes one as a fixture; `scripts/fuzz_safe.sh` is the fuzzer's (contributor role).
+    - **The maintainer (2026-11-07):** the stage0-c freeze covers the compiler, not its test scripts; they may be ported when the `stage0c-*` gates report the same counts before and after (`AGENTS.md`, "The seeds are frozen").
+    - **Do:** port each to `#!/bin/sh` and POSIX awk, one script per commit; change nothing it checks. Run each under a strict POSIX shell (`dash`, or BusyBox `ash`; record which, and how it was installed or built, here) as well as under `sh`.
+    - **Checks:** (on this host `/bin/sh` is bash, so "runs under `sh`" proves nothing; every strict-shell run below names `dash` or `busybox ash` explicitly.)
+      - C1: before any change, `./scripts/test.sh --gate stage0c-fixed-bugs --gate stage0c-unit --gate stage0c-corpus --gate stage0c-docs --gate stage0c-error-locations --gate stage0c-functional --gate stage0c-minimal` and `./scripts/test.sh --scenario md-links`: every count line and `Total:` line, quoted here.
+      - C2: the strict shell: which one, its path (`command -v dash`), and how it got onto the host (package name and version, or the build command).
+      - C3: for each script, the command that runs it, found in `bootstrap/stage0-c/Makefile`, `bootstrap/stage0-c/tests/Makefile` or `scripts/test.sh` (quote the line), run again with `dash` in front of the script path; quote the result line of each.
+      - C4: for each script, `head -n 1` is `#!/bin/sh` and `dash -n <script>` prints nothing.
+      - C5: after the ports, C1's command again; `diff` of the before and after count lines prints nothing.
+      - C6: a ported checker that always passes is the failure to fear, so plant one failure per script and watch it reported: for each stage0-c script, change one expected-output file it compares against (or one test's expected exit) in the working tree, run C3's command under `dash`, quote the failure, and restore the file (`git diff --stat` empty afterwards). For `check_md_links.sh`, a scratch page under `doc/` with a link to a missing file: quote the failure, delete the page.
+      - C7: `scripts/check_portability.sh` passes; `make test`, `Total:` line quoted.
+
 - [x] +testinfra +tests +portability +AI-G Z-0153 T7i The fuzz-fresh self-test runs in `make test`, without git
     > **Created:** 2026-11-07 by the review of Z-0149. **Branch:** `testinfra`. **Depends:** Z-0149.
     > **Completed:** 2026-11-10 git:d48e168
