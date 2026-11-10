@@ -39,30 +39,6 @@ Active priority series to reduce verification runtimes. Order of execution:
     - **Not ready for `+AI-G` (review, 2026-11-07):** this task still holds two decisions: whether the saving left after Z-0116 is worth a cache at all, and how a cache that decides what not to run avoids the stamp's failures (Z-0113's bullet "The stamp's record"); a wrong hit here lets a newly accepted unsafe program through. Do not start it as written: after Z-0116 closes, an `+AI-D` session re-measures, decides, and either drops it or rewrites it with settled keys and numbered checks (each key input changed in turn, and a planted stale entry caught).
     - **Next (2026-11-10):** Z-0116 has closed (`completed.tm.md`), so the condition above is met. The next session on this task is that `+AI-D` re-measurement and decision, not the implementation; an `+AI-G` session does not start it.
 
-- [x] +testinfra +tests +portability +AI-G Z-0153 T7i The fuzz-fresh self-test runs in `make test`, without git
-    > **Created:** 2026-11-07 by the review of Z-0149. **Branch:** `testinfra`. **Depends:** Z-0149.
-    > **Completed:** 2026-11-10 git:d48e168
-
-    - **Why:** no gate, scenario or Makefile target runs `scripts/check_fuzz_fresh.sh --selftest` (`git grep -n 'check_fuzz_fresh.sh --selftest'` finds only its usage comment, before Z-0144 and now), so the cases it holds protect nothing: a regression in the gate passes `make test`. The self-test commits into a scratch repository (`g add -A; g commit`, `scripts/check_fuzz_fresh.sh:132` onward) because the old hash read `git ls-tree HEAD`; Z-0149's hash reads files, so the commits do nothing.
-    - **Do:** remove every `g` call and the `g()` helper from the self-test, and the `git init` that creates the scratch repository; keep every case and its expected result. Make the `fuzz-fresh` gate's command `./scripts/check_fuzz_fresh.sh --selftest && ./scripts/check_fuzz_fresh.sh` (`gate_command` in `scripts/test.sh`, as `exhaustive` does).
-    - **Checks:**
-      - C1: `sed -n '/SELFTEST:-0/,/^fi$/p' scripts/check_fuzz_fresh.sh | grep -n git` prints nothing (0 hits).
-      - C2: `sh scripts/check_fuzz_fresh.sh --selftest`:
-        `[PASS] selftest: a match passes, a Markdown-only change stays fresh, a code change is reported stale naming its directory and fails only under --strict, a record without a fingerprint is refused, a page with another figure is named, a dual record is judged by its short session and a page may not quote the release-bar run alone, and a directory without the compiler sources is not answered for`
-        Duration: `1.230s`.
-      - C3: Taking Z-0149's Fix 1 out (restoring the `.git` directory walk at line 228 of `scripts/check_fuzz_fresh.sh`): case 5 fails when run in an enclosing checkout/worktree (`TMPDIR=build`):
-        `[FAIL] selftest: a directory without the compiler sources was not skipped`
-        `       [SKIP] fuzz-fresh: <path>/build/fuzz-fresh.7ekqqe/t/src/sub is not the root of its own git repository, so its compiler sources cannot be read unambiguously`
-        `FAIL: the fuzz-record freshness gate does not behave as its own documentation says.`
-        Put fix back; tests pass.
-      - C4: `./scripts/test.sh --gate fuzz-fresh`:
-        `[PASS] fuzz-fresh: selftest: a match passes, a Markdown-only change stays fresh, a code change is reported stale naming its directory and fails only under --strict, a record without a fingerprint is refused, a page with another figure is named, a dual record is judged by its short session and a page may not quote the release-bar run alone, and a directory without the compiler sources is not answered for`
-        `[PASS] fuzz-fresh: fuzz-fresh: STALE - the short-session record describes other code than the working tree: src (its code differs); stdlib (its code differs); rt (its code differs). A release-bar run is owed before the record is cited; this is reported here and fails only under --strict.`
-        `[PASS] fuzz-fresh: fuzz-fresh: every page that discusses the fuzz record quotes the short-session record's 755,772 programs (3 page(s))`
-        `Total: 4 run, 4 passed, 0 failed, 0 skipped (1.5s)`
-      - C5: `make test`:
-        `Total: 3214 run, 3214 passed, 0 failed, 88 skipped (116.2s)`
-
 - [ ] +testinfra +tests +portability +AI-G Z-0146 T7c `check_md_links.sh` and the stage0-c suite scripts in POSIX `sh`
     > **Created:** 2026-11-07, split from Z-0145. **Branch:** `testinfra`. **Before:** Z-0145.
 
