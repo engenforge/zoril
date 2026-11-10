@@ -479,6 +479,44 @@ if [ "$res" = "0 $c1" ]; then
 else
     fail "an uncommitted change should be measured from HEAD $c1 (got: $res)"
 fi
+# A remote not named origin, no remote at all, and a remote main behind a local one merged in since.
+r="$tmp/repo13b"
+mkdir -p "$r/hom.git" "$r/w"
+g init --bare "$r/hom.git"
+g -C "$r/w" init
+echo a > "$r/w/f"; g -C "$r/w" add f; g -C "$r/w" commit -m one
+m1=$(git -C "$r/w" rev-parse HEAD)
+g -C "$r/w" checkout -b feature
+echo b > "$r/w/g"; g -C "$r/w" add g; g -C "$r/w" commit -m feature-one
+res=$(repo_base "$r/w")
+if [ "$res" = "0 $m1" ]; then
+    pass "with no remote, a feature branch is measured from its merge base with the local main"
+else
+    fail "with no remote, the base should be the merge base $m1 with main (got: $res)"
+fi
+g -C "$r/w" remote add hom "$r/hom.git"
+g -C "$r/w" push hom main
+g -C "$r/w" fetch hom
+g -C "$r/w" branch -D main
+res=$(repo_base "$r/w")
+if [ "$res" = "0 $m1" ]; then
+    pass "a feature branch whose only remote is not origin is measured from its merge base with that remote's main"
+else
+    fail "the base should be the merge base $m1 with hom/main (got: $res)"
+fi
+g -C "$r/w" branch main hom/main
+g -C "$r/w" checkout main
+echo c > "$r/w/f"; g -C "$r/w" commit -am two
+m2=$(git -C "$r/w" rev-parse HEAD)
+g -C "$r/w" checkout feature
+g -C "$r/w" merge --no-edit main
+echo d > "$r/w/g"; g -C "$r/w" commit -am feature-two
+res=$(repo_base "$r/w")
+if [ "$res" = "0 $m2" ]; then
+    pass "a local main merged in since the remote's is the nearer base"
+else
+    fail "the base should be the local merge base $m2, not hom/main's $m1 (got: $res)"
+fi
 
 # Case 14: preflight-changed refuses to start without a base, and passes the one it chose to mutation-check.
 trace14="$tmp/trace14"
