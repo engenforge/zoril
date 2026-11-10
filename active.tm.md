@@ -39,8 +39,9 @@ Active priority series to reduce verification runtimes. Order of execution:
     - **Not ready for `+AI-G` (review, 2026-11-07):** this task still holds two decisions: whether the saving left after Z-0116 is worth a cache at all, and how a cache that decides what not to run avoids the stamp's failures (Z-0113's bullet "The stamp's record"); a wrong hit here lets a newly accepted unsafe program through. Do not start it as written: after Z-0116 closes, an `+AI-D` session re-measures, decides, and either drops it or rewrites it with settled keys and numbered checks (each key input changed in turn, and a planted stale entry caught).
     - **Next (2026-11-10):** Z-0116 has closed (`completed.tm.md`), so the condition above is met. The next session on this task is that `+AI-D` re-measurement and decision, not the implementation; an `+AI-G` session does not start it.
 
-- [ ] +testinfra +tests +portability +AI-G Z-0147 T7d `check_safety_model.sh` without bash
+- [x] +testinfra +tests +portability +AI-G Z-0147 T7d `check_safety_model.sh` without bash
     > **Created:** 2026-11-07, split from Z-0145. **Branch:** `testinfra`. **Before:** Z-0145.
+    > **Completed:** 2026-11-10 git:b1bc937
 
     - **Why:** the `safety-model` gate, in `make test` and in every doc tier, runs `scripts/check_safety_model.sh`: 930 lines of bash, with about 32 lines a text search marks bash-only. At that size the portability rule (`AGENTS.md`: logic longer than a short script goes into a Zoril tool) applies.
     - **Do:** first record here what it checks (each rule, and the file it reads), then port it to POSIX `sh` and awk, kept as close to the original as the shell allows. If the port needs much more than the original, stop, record why, and propose a Zoril tool under `tools/` instead, as a task of its own. Its banned-phrase list and every message it prints stay as they are, since tasks and agents grep for them.
@@ -53,6 +54,43 @@ Active priority series to reduce verification runtimes. Order of execution:
       - C6: in a scratch copy of the port, remove one rule's call; its planted failure from C3 now passes; quote it.
       - C7: if the port is much longer than the original, stop before C4 and record the line counts and why (the task's **Do**).
       - C8: `scripts/check_portability.sh` passes; `make test`, `Total:` line quoted.
+    - **Completion:** ported `scripts/check_safety_model.sh` from bash to `#!/bin/sh` and POSIX awk; adjusted awk function flush_item dummy parameter to avoid false-positive shell function grep matches.
+      - C1: inventory of 14 rules and files read:
+        1. proven_by_valid: check_proven_by_valid reads bench/safety_matrix/matrix.md, bench/safety_matrix/probes/*.zrl, and cited tests across tests/.
+        2. section_citations: check_section_citations reads bench/safety_matrix/matrix.md, doc/spec/safety_model.md, and doc/spec/surface_syntax.md.
+        3. gap_prose_count: check_gap_prose_count reads doc/spec/safety_model.md and bench/safety_matrix/matrix.md.
+        4. gap_prose_list: check_gap_prose_list reads doc/spec/safety_model.md and bench/safety_matrix/matrix.md.
+        5. probe_headers: check_probe_headers reads bench/safety_matrix/probes/*.zrl.
+        6. known_gaps_table: check_known_gaps_table reads bench/safety_matrix/probes/*.zrl and doc/spec/safety_model.md.
+        7. why_zoril_citations: check_why_zoril_citations reads doc/vision/why_zoril.md and cited tests under tests/.
+        8. doc_links: check_doc_links reads doc/spec/safety_model.md, bench/safety_matrix/matrix.md, doc/spec/unsafe_policy.md, and doc/spec/surface_syntax.md.
+        9. readable_entries: check_readable_entries reads doc/spec/safety_model.md and bench/safety_matrix/matrix.md.
+        10. normative_sentences: check_normative_sentences reads doc/spec/safety_model.md, bench/safety_matrix/matrix.md, doc/spec/unsafe_policy.md, and doc/spec/surface_syntax.md.
+        11. stdlib_raw_ptr_deref: check_stdlib_raw_ptr_deref reads stdlib modules.
+        12. document_counts: check_document_counts reads README.md, doc/spec/safety_model.md, bench/safety_matrix/matrix.md, doc/spec/STABILITY.md, and doc/vision/why_zoril.md.
+        13. banned_safety_phrases: check_banned_safety_phrases reads exported doc/ Markdown files and README.md.
+        14. route_coverage: check_route_coverage reads bench/safety_matrix/matrix.md and doc/spec/safety_model.md.
+      - C2: `./scripts/check_safety_model.sh > build/z147/before.tree.txt 2>&1`; exit status 0 (`PASS: safety_model.md is self-consistent.`).
+      - C3: 14 planted failures in scratch worktree:
+        1. proven_by_valid: `[FAIL] row '**Intra-procedural Arena Analysis** (§11.2.1)' cites missing path: <repo>/build/z147/scratch/tests/error_reporting/nonexistent_test_12345.zrl`
+        2. section_citations: `[FAIL] cited §99.99.99 has no matching section in surface_syntax.md`
+        3. gap_prose_count: `[FAIL] prose says 1 GAP rows but 0 rows are marked **GAP**`
+        4. gap_prose_list: `[FAIL] GAP row 'Array Length Fits' cites no known_gap probe`
+        5. probe_headers: `[FAIL] probe 01_use_after_move.zrl has no recognised '// expected:' header (found 'unknown_vocab')`
+        6. known_gaps_table: `[FAIL] known_gap probe gap_07_path_same_param.zrl is not listed under Known gaps`
+        7. why_zoril_citations: `[FAIL] why_zoril.md cites nonexistent test: tests/error_reporting/err_nonexistent_xyz.zrl`
+        8. doc_links: `[FAIL] doc/spec/safety_model.md:4: broken relative link: nonexistent_link_xyz.md`
+        9. readable_entries: `[FAIL] the readable entries differ from the matrix rows (< matrix, > page):`
+        10. normative_sentences: `[FAIL] doc/spec/safety_model.md:10: normative sentence has no test citation: Returning a dangling pointer is rejected at compile time.`
+        11. stdlib_raw_ptr_deref: `[FAIL] public safe stdlib function dereferences raw pointer argument:`
+        12. document_counts: `[FAIL] README says 77 rows; the matrix has 78`
+        13. banned_safety_phrases: `[FAIL] banned safety phrase without the tier and test behind it (reword, or mark the line <!-- allow-phrase: reason -->): README.md:373: Zoril eliminates use-after-free.`
+        14. route_coverage: `[FAIL] row '**Borrow Aliasing (Exclusive Mutable)** (§7.2)' has unknown evidence level 'unknown_ev' (example|routes|fuzzed|argued)`
+      - C4: after port, `diff -u build/z147/before.tree.txt build/z147/after.tree.txt` printed nothing; diff between each before.<rule>.txt and after.<rule>.txt pair printed nothing.
+      - C5: `dash scripts/check_safety_model.sh > build/z147/dash.tree.txt 2>&1` and `diff -u build/z147/after.tree.txt build/z147/dash.tree.txt` printed nothing; `dash -n scripts/check_safety_model.sh` printed nothing.
+      - C6: removed `check_document_counts` call in scratch copy with C3 planted failure: passed with `PASS: safety_model.md is self-consistent.` and exit status 0.
+      - C7: line count identical before and after (948 lines).
+      - C8: `scripts/check_portability.sh` passed with 0 failures; `make test`: `Total: 3214 run, 3214 passed, 0 failed, 88 skipped (116.0s)`.
 
 - [ ] +testinfra +tests +portability +AI-G Z-0145 T7b `make test` with only the user's tools, as a gate
     > **Created:** 2026-11-07 by the maintainer's portability rule. **Branch:** `testinfra`. **Depends:** Z-0144.
