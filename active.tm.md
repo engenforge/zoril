@@ -24,6 +24,17 @@ Active priority series to reduce verification runtimes. Order of execution:
 
 **`main` merged in (the maintainer, 2026-11-10):** `main` up to git:97df9b6 (Z-0162's drop lookup, Z-0165, the branch rule in `AGENTS.md`) is merged into `testinfra` in git:4ce794e. Z-0135, a `main` task, is not on this branch until it lands and is merged again; Z-0131 and Z-0133 depend on it. Before starting a task that needs a `main` commit, check `git merge-base --is-ancestor <sha> testinfra`; if the commit is missing, stop and ask the maintainer for another merge.
 
+- [ ] +testinfra +bug +AI-G Z-0166 `preflight-changed` finds a base in a clone whose remote is not named `origin`
+    > **Created:** 2026-11-10 at the maintainer's request (Z-0160's session). **Branch:** `testinfra`.
+
+    - **Why:** in a clone with remotes `hom` and `github` and no `origin`, plain `make preflight-changed` on `testinfra` (no upstream, 30+ commits beyond `main`) fails before running anything: `[FAIL] preflight-changed: no base to check the change against: nothing to compare: the working tree equals HEAD, and HEAD has no commit beyond its upstream or a default branch; set PREFLIGHT_BASE=<commit> to name the base`. `scripts/lib/preflight_base.sh` step 3 looks only at `origin/HEAD`, `origin/main`, `origin/master`. Setting an upstream does not cure it: once `testinfra` is pushed, step 2 finds nothing ahead, and step 3 still has no `origin`.
+    - **Decided (this session, at the maintainer's request to fix it):** step 3's candidates are every remote's default branch (`<remote>/HEAD` when symbolic, else `<remote>/main`, `<remote>/master`) and the local `main` and `master`; of their merge bases with HEAD that are not HEAD, the one with the fewest commits up to HEAD is the base. The nearest is the right one: here `hom/main` and `github/main` are at git:70b5361, but `main` was merged into `testinfra` at git:97df9b6 (`git merge-base testinfra main`), and a base of 70b5361 would count `main`'s own commits as this branch's change. Where `origin` exists and is the only remote, the result is unchanged.
+    - **Checks:**
+      - C1: before, `make preflight-changed` on `testinfra` with a clean tree fails with the message above; quote it.
+      - C2: after, `. scripts/lib/preflight_base.sh; preflight_base; echo "$PF_BASE $PF_BASE_WHY"` names git:97df9b6 and `main`.
+      - C3: `scripts/test_preflight.sh` case 13 gains: a feature branch in a repository whose only remote is not `origin` gets its merge base with that remote's `main`; with no remote, its merge base with the local `main`; with a remote `main` behind the local one, the nearer local merge base. The existing case (a committed change on `main` with no remote has no base) still passes. With step 3's change taken out (a scratch edit), the new cases fail; quote them; restore.
+      - C4: `sh scripts/test_preflight.sh` passing; `make preflight-changed` (no `PREFLIGHT_BASE`) on `testinfra` runs and names its base; `make test`; each `Total:` line quoted.
+
 - [ ] +bug +tests +AI-G Z-0161 A generic function's name is not taken as its result's enum type in `f.Variant`
     > **Created:** 2026-11-08 by Z-0157's review (B4). **Branch:** `testinfra`.
 
