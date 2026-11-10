@@ -712,6 +712,10 @@ impl Driver {
         let needs_env = self.needs_env_ptr(f.is_extern, name);
         let params = self.il_params(f, ret_ty, is_sret, needs_env);
         let il_func_id = self.declare_function(f, name, ret_ty, params);
+        // The flag exports a Drop impl's `drop` (another TU's drop glue calls it), not what its
+        // body is first to call: a private callee lowered from here keeps its own linkage.
+        let saved_drop_impl = self.lowering_drop_impl;
+        self.lowering_drop_impl = false;
         if f.is_export {
             self.check_unique_export(f, name, il_func_id);
         }
@@ -739,6 +743,7 @@ impl Driver {
                 is_void_main
             );
         }
+        self.lowering_drop_impl = saved_drop_impl;
         self.current_fn_name = saved_fn_name;
         self.file_path = saved_file_path;
         if saved_fn_name != 0 as u32 { self.set_ice_context(saved_fn_name); }

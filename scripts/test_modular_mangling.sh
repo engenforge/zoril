@@ -78,4 +78,24 @@ grep -q "\$z7cli_mod7get_twoE" "$WORK_DIR/cli_mod.ssa" || { echo "FAIL: -m cli_m
 grep -q "\$z8cli_mod27get_twoE" "$WORK_DIR/cli_mod2.ssa" || { echo "FAIL: --module=cli_mod2 mangling failed"; exit 1; }
 echo "  [PASS] -m and --module CLI flags propagate module prefix correctly"
 
+# ── Test 4: a private function first called from a Drop impl stays local ───
+echo "4. Drop callee linkage: a private helper called from drop is local, drop is exported..."
+ZORIL_BIN="${ZORIL_BIN:-build/zoril}"
+ZBUILD_BIN="${ZBUILD_BIN:-build/zbuild}"
+DC=tests/modular/drop_callee
+run_with_timeout -k 5s 30s "$ZORIL_BIN" -I stdlib=stdlib -c --emit-zil -o "$WORK_DIR/dc_lib_a.zil" "$DC/lib_a.zrl"
+grep -q '^local f[0-9]*: unit .*lib_a::helper(' "$WORK_DIR/dc_lib_a.zil" \
+    || { echo "FAIL: lib_a::helper is not local in compile-only ZIL"; grep -n 'helper(' "$WORK_DIR/dc_lib_a.zil"; exit 1; }
+grep -q '^f[0-9]*: unit .*lib_a::S::drop(' "$WORK_DIR/dc_lib_a.zil" \
+    || { echo "FAIL: lib_a::S::drop is not exported in compile-only ZIL"; grep -n 'drop(' "$WORK_DIR/dc_lib_a.zil"; exit 1; }
+rm -rf "$WORK_DIR/dc_cache"
+run_with_timeout -k 5s 120s "$ZBUILD_BIN" -I stdlib=stdlib --cache-dir "$WORK_DIR/dc_cache" -o "$WORK_DIR/dc.bin" "$DC/main.zrl" >"$WORK_DIR/dc.log" 2>&1 \
+    || { echo "FAIL: drop_callee does not build under zbuild"; cat "$WORK_DIR/dc.log"; exit 1; }
+"$WORK_DIR/dc.bin" </dev/null || { echo "FAIL: drop_callee exited $?"; exit 1; }
+for m in lib_a lib_b; do
+    nm "$WORK_DIR/dc.bin" | grep -q " t .*${m}6helperE\$" || { echo "FAIL: ${m}::helper is not a local symbol"; nm "$WORK_DIR/dc.bin" | grep helper; exit 1; }
+    nm "$WORK_DIR/dc.bin" | grep -q " T .*${m}1S4dropE\$" || { echo "FAIL: ${m}::S::drop is not a global symbol"; nm "$WORK_DIR/dc.bin" | grep drop; exit 1; }
+done
+echo "  [PASS] drop is exported, its private callee is local, and the two modules link and run"
+
 echo "PASS: all modular mangling acceptance tests passed."

@@ -1,0 +1,8 @@
+// expected exit 0
+import "lib_a.zrl";
+import "lib_b.zrl";
+fn main() -> i32 {
+    if lib_a::make() + lib_b::make() != 2 { return 1; }
+    if lib_a::HITS != 2 || lib_b::HITS != 2 { return 2; }
+    return 0;
+}
