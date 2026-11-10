@@ -1,13 +1,27 @@
 # Current Sprint
 
-Open work, in execution order from top to bottom, in four groups. (1) The provenance and liveness hardening series (its finished tasks, Z-0060 to Z-0064 and the precision fixes after them, are in `completed.tm.md`): the roots of the over-rejections Z-0064 read, as Z-0075 routed them (continue the precision work; a rule where users meet the class, a code change where only the tree does), first the closure series Z-0088 decided, because it is 99% of the false refusals and whether it succeeds decides whether the flip goes ahead (Z-0075's fallback is to re-plan it): Z-0095 (an `unsafe fn` made into a `fn` value with no `unsafe`, `gap_65`; implemented, awaiting review), Z-0101 (an `extern` made into a `fn` value with no `unsafe`, `gap_67`) and Z-0100 (a generic instance made into a `fn` value lowers to nothing, `gap_66`), holes in the default mode, independent of the series, so they go first, Z-0093 (closure bodies summarised over `__env`), Z-0094 (a known callee's summary at the call), Z-0096 (a closure storing into a global through a callee, `gap_64`, after Z-0093's design) and Z-0097 (an edge into a `fn` argument's environment, an over-refusal of higher-order calls); then the other rules, the one that adds knowledge before the one that removes origins: Z-0087 (an integer popped from a collection) and Z-0086 (a literal held beside a reference); then the code changes Z-0089 (`exh_expand_or`) and Z-0090 (zbuild's manifest parsing), whose rules wait in `future.tm.md`; then Z-0073 (a raw-pointer decision), Z-0011 (checked `#[borrows]`/`#[stores]`/`&self`, narrowing forbidden), Z-0044 (intra-frame `Arena::reset` liveness through pointers), Z-0066 (provenance diagnostics, before users see them), Z-0065 (the new rules on by default beside the old ones: refuses only more), Z-0074 (every program the old rules refuse and the new ones accept, read before they are deleted) and Z-0012 (old classifiers and `summary_pass.zrl` retired: accepts more, with the differential). (2) Post-series twin audits and standing review rounds: Z-0045, Z-0017, Z-0013. (3) Tooling and diagnostics: Z-0014, Z-0015, Z-0016, Z-0067, Z-0079, Z-0080. (4) Z-0004 and Z-0005, the benchmark measurement and decision, last because a session never starts one unprompted. Each `+safety` implementation task in the hardening series is a check-in: stop for review after it. Model tags (`+AI-D`, `+AI-G`) are defined in `AGENTS.md`, "Working on tasks". Finished tasks stay at the top until `tm sweep` rotates them. Deferred work is in `future.tm.md`. Every `+safety` task follows the safety rules in `AGENTS.md`: the rejection differential for a change that accepts more, and nothing beyond what the task names in the same commit. **Series rule (2026-11-05, from Z-0071):** a precision fix that removes origins from a set (an exemption, a split, a moved-storage drop) is first measured alone, on top of the task it serves, to show it is needed; and it comes with probes of its sibling routes (the value built inside the callee, returned from a call, packed into a struct beside a view or a raw pointer).
+Open work across three branches (`testinfra`, `main`, `provenance`), tracked on the orphan `tasks` branch (SPEC-TASKMARK-04, `AGENTS.md`).
 
-**Priority (2026-11-06, the maintainer):** the safety series below is paused for the test-efficiency series (`+testinfra`, Z-0103 to Z-0125), which goes first because every later task pays for testing. Z-0103 is its first task: it fixes the order of the others and may split, merge or drop them. **Z-0103's ranking (2026-11-06, closed by the maintainer in 80b6480):** the tasks below are in its order; Z-0115 to Z-0117 are new, Z-0108 is deferred, and Z-0118 (dropping Lua, from the incubator) is in `future.tm.md`. Z-0117's direction is not decided; the maintainer leans towards the portable route (a Zoril runner, gates and scenarios in POSIX `sh`). **Review of Z-0103 to Z-0105 (2026-11-06):** Z-0104's timing files are overwritten by nested runs (Z-0119, first); Z-0105 did not run the checker-changed preflight or emulate a 4-vCPU host (Z-0120); Z-0117 moves up to follow Z-0106, because Z-0109, Z-0110, Z-0113 and the tier selection take their shape from it; Z-0115's stamp check is split out (Z-0121), and so are the measurements inside Z-0116 (Z-0122) and Z-0113 (Z-0123); `mutation-self-test` gets its own task (Z-0124), and `make retest-failed`, which Z-0103 neither ranked nor dropped, is Z-0125. **Review of Z-0119 and Z-0120 (2026-11-07):** Z-0119's sentinel case writes into the file it protects (Z-0126); CPU counts ignore affinity and container limits (Z-0127); Z-0120 found the base compiler builds in 9 s of the differential's 625 s and the two sides' program runs take 609 s, so the front-end work (Z-0122, Z-0116) moves ahead of the differential's caches (Z-0114), and `mutation-self-test` is 858 of 1,594 CPU-seconds of a 4-CPU `make test`, so Z-0124 moves up. Order: Z-0126, Z-0127, Z-0106, Z-0117, Z-0115, Z-0121, Z-0112, Z-0124, Z-0122, Z-0116, Z-0114, Z-0111, Z-0123, Z-0113, Z-0109, Z-0110, Z-0107, Z-0125. **Review of Z-0126 and Z-0127 (2026-11-07):** both done as asked; Z-0128 takes what Z-0127 left (an environment variable that changes the job count, the mutation harness's job product, a self-test that assumes CPU 0) and the log twin of Z-0126's fix, and goes first. Order: Z-0128, then as above from Z-0106. **Review of Z-0128 and Z-0106 (2026-11-07):** Z-0128 is done (its one stray comment removed in git:f9e7f3a). Z-0106's table would skip checks that a change can break (stage0c gates on `src/`, `stdlib/` and test edits; a `stdlib/` change treated as less than a compiler change; zilc in three groups; groups taken for directories; a preflight skip that skips for script changes; untracked files left out); the corrections are on Z-0115, which is split: Z-0129 wires `test-changed` and the preflight skip. Order: Z-0117, Z-0115, Z-0129, Z-0121, Z-0112, then as above. **Z-0117 decided (the maintainer, 2026-11-07):** a Zoril runner (`tools/ztest`), its pool first, built by `build/zoril` on its own inputs only, with runtime signal handling; stage1 cannot build it, and the measurement found stage1 building closure-module paths wrong (Z-0135). Order: Z-0115, Z-0129, Z-0121, Z-0112, Z-0124, Z-0122, Z-0116, Z-0114, Z-0135, Z-0130, Z-0131, Z-0132, Z-0133, Z-0136, Z-0137, Z-0138, Z-0139, Z-0134, Z-0140, Z-0111, Z-0123, Z-0113, Z-0109, Z-0110, Z-0107, Z-0125. **Review of Z-0115, Z-0129 and Z-0121 (2026-11-07):** `make test-changed` never runs a selected scenario, can fail its stage0c gates on a race, and drops tests in three more cases (Z-0141); the stamp records the tree as it is when a run ends, so an edit made during the run is skipped afterwards (Z-0142). Both go before Z-0112, which documents them. Order: Z-0141, Z-0142, Z-0112, then as above from Z-0124. **Review of Z-0141, Z-0142 and Z-0112, and the portability rule (the maintainer, 2026-11-07):** a source tarball with git off `PATH` fails `make test` (the `test-changed` scenario calls git), and the stamp is invalidated by every commit and loses its snapshot to its own scenario (Z-0143). The maintainer set the rule now in `AGENTS.md` (Portability): three roles with their own tools, `make test` uses no git, and harness logic longer than a short script goes into Zoril tools so Windows can be reached. Z-0111 moves up to inventory the git uses against that rule; Z-0144 takes git out of `make test` and rebuilds the stamp on content hashes; Z-0145 takes `bash` out and adds the gate that runs `make test` with only the user's tools. Order: Z-0143, Z-0111, Z-0144, Z-0145, Z-0124, Z-0122, Z-0116, Z-0114, Z-0135, Z-0130, Z-0131, Z-0132, Z-0133, Z-0136, Z-0137, Z-0138, Z-0139, Z-0134, Z-0140, Z-0123, Z-0113, Z-0109, Z-0110, Z-0107, Z-0125. **bash (the maintainer, 2026-11-07):** the target is POSIX `sh`; `make test` also runs bash through `check_md_links.sh`, `check_safety_model.sh` and seven stage0-c suite scripts, whose port the maintainer allowed (the freeze covers the compiler, not its scripts). Z-0145 is split: Z-0146 ports `check_md_links.sh` and the stage0-c scripts, Z-0147 `check_safety_model.sh`, and Z-0145 keeps the gate. Order: Z-0143, Z-0111, Z-0144, Z-0146, Z-0147, Z-0145, then as above from Z-0124. **Review of Z-0143 (2026-11-07):** it undid Z-0141's `*_lib.zrl` selection and changed the test to match, and a scenario's skip counted as a pass; fixed directly in Z-0148, before Z-0111. **Review of Z-0144 (2026-11-07):** the tarball run passes, but in a checkout `make test` still calls git 818 times (a `git` on `PATH` that logs its arguments): the fuzz fingerprint falls back to a hash that cannot match the checkout's (Z-0149), the stamp's label calls git and rewrites `.git/index` (Z-0150), `fuzz-tools` left `make test` whole, not only its git cases (Z-0151), and its `rg` check and `make preflight` were not run (Z-0152, with the smaller findings). The maintainer's response: checks are numbered and answered by number, an `+AI-G` task leaves nothing to decide (`AGENTS.md`, "Working on tasks"), and Z-0145's gate puts a failing `git` on `PATH`. Order: Z-0149, Z-0150, Z-0151, Z-0152, Z-0146, Z-0147, Z-0145, then as above from Z-0124. **Review of Z-0149's stop (2026-11-07):** record 1 keeps its fingerprint (settled on the task); three fixes and a redone C5 are on the task; the fuzz-fresh self-test has never run in any gate (Z-0153, after Z-0152). **Review of the series (the maintainer, 2026-11-07):** two days in, `make test` is no faster (249 s; 182-237 s before the series), and nearly every defect found was in code that decides what not to run: the tier selection and the unchanged-tree stamp. A selection miss costs time only, since `make test` before a commit is the backstop; a stamp defect reports a pass for a tree that was not tested. So: the stamp is removed (Z-0154, which supersedes Z-0150); the tier selection is frozen as it is (no new rows or rules; a reported miss is fixed by widening a row, and a path it does not list keeps selecting everything); the speed work goes next, `mutation-self-test` first (54% of `make test`'s CPU); the remaining portability tasks follow it, because the runtime is Linux-only today; and the `tools/ztest` series (Z-0135, Z-0130 to Z-0134, Z-0136 to Z-0140), which rewrites the runner for portability, not speed, follows them. Z-0113, a result cache keyed by inputs, is another mechanism that decides what not to run: its decision weighs the stamp's record before choosing one. Order: Z-0149, Z-0154, Z-0124, Z-0122, Z-0116, Z-0114, Z-0151, Z-0152, Z-0153, Z-0146, Z-0147, Z-0145, Z-0135, Z-0130, Z-0131, Z-0132, Z-0133, Z-0136, Z-0137, Z-0138, Z-0139, Z-0134, Z-0140, Z-0123, Z-0113, Z-0109, Z-0110, Z-0107, Z-0125. **Review of Z-0124 (the maintainer, 2026-11-07):** its measurements stand; its Option 2 (every canary on the smoke list) is rejected, because only the no-op canary surviving the whole suite shows that no test fails in the mutant environment, the defect the gate was written for. Z-0156 keeps that one full-suite run and moves the rest to a small suite (about 110 s on 4 CPUs, from 360 s), and goes next. The banned-phrase check now flags "prevent" and "eliminate" only beside a memory-bug class (Z-0155, done). Every open `+AI-G` task now carries numbered checks; Z-0114, Z-0080 and Z-0005 still hold decisions and wait for an `+AI-D` session (a bullet on each). Order: Z-0156, Z-0122, Z-0116, Z-0114, then as above from Z-0151. **Z-0122 measured, Z-0116 recommended (2026-11-07):** a cell's 31.4 ms is about 30 ms of stdlib work, mostly lowering and checking the 83 non-generic stdlib functions every import brings, reached or not; the recommendation is to lower a stdlib function only when the program reaches it (Z-0157, after the maintainer's decision on Z-0116), and the differential's wrapper loses five of its six forks a program (Z-0158). Order: Z-0116, Z-0157, Z-0158, Z-0114, then as above from Z-0151. **Z-0116 decided (the maintainer, 2026-11-07):** (c), narrowed to the stdlib. Order: Z-0157, Z-0158, Z-0114, then as above from Z-0151. **Review of Z-0157 (2026-11-08):** two defects it brought (an ICE on a struct literal naming a stdlib function; a type parameter named like one let `n as T` through with T a reference, an older hole for other top-level names that Z-0157 widened) and a gate that could not see `--lower-all` break are fixed on the task, which goes back for review; lazy `Drop` implementations (Z-0159), a flag left set under `-c` (Z-0160) and `pick.B` read as an enum variant (Z-0161) follow it. Order: Z-0157, Z-0158, Z-0159, Z-0160, Z-0161, Z-0114, then as above from Z-0151. **Review of git:8ff8720 (2026-11-08):** it stands; while probing it, drop glue was found to be looked up by a type's bare name, so a type named like another module's type with a `Drop` is dropped with that `drop` and faults, in every compiler since before the series (`gap_68`, Z-0162, a hole in the default mode). Z-0162 goes before Z-0159, which changes the same lookup; where it goes against the `+testinfra` priority is the maintainer's call. Order: Z-0157, Z-0158, Z-0162, Z-0159, Z-0160, Z-0161, Z-0114, then as above from Z-0151. **Z-0162 first (the maintainer, 2026-11-08):** Z-0157 is done; the drop-glue hole goes ahead of the `+testinfra` series. Order: Z-0162, Z-0158, Z-0159, Z-0160, Z-0161, Z-0114, then as above from Z-0151.
+**Branches (2026-11-09, the maintainer, Z-0163):**
+The history after `v0.1.0-alpha` is split by line of work:
+1. `testinfra`: the test-efficiency series (`+testinfra`, Z-0103 to Z-0125, Z-0145 to Z-0153), `tools/ztest` and `proc.zrl` (Z-0130 to Z-0140), and Z-0157 follow-ups (Z-0158 to Z-0161).
+2. `main`: standalone work, known-gap probes, and default-mode safety fixes (Z-0100, Z-0101, Z-0135, and generic tools/diagnostics/benchmarks).
+3. `provenance`: the provenance and liveness hardening series (`+safety` tasks numbered B1 to B4, Z-0047 onward, and precision tasks that serve it).
+Both code branches (`testinfra`, `provenance`) stay open until their respective series is reviewed before merging into `main`.
 
-**Branches (2026-11-09, the maintainer):** the history after v0.1.0-alpha was split by line of work (Z-0163). The provenance series (`+safety` tasks numbered `B1` to `B4`, Z-0047 onward, and the precision tasks that serve it) is developed on the `provenance` branch; the `+testinfra` series, the `tools/ztest` and `proc.zrl` series (Z-0130 to Z-0140) and Z-0157's follow-ups (Z-0158 to Z-0161) on `testinfra`; everything else, the known-gap probes and the default-mode safety fixes among it (Z-0162, Z-0100, Z-0101, Z-0135), on `main`. Both branches stay open until their series is reviewed.
+**Priority (2026-11-06, the maintainer):**
+The provenance hardening series is paused for the test-efficiency series (`+testinfra`), which goes first because every later task pays for testing on 4-vCPU machines. Critical default-mode drop-glue safety fixes on `main` (Z-0162 and Z-0165) are completed and archived in `completed.tm.md`. Active execution proceeds in the `+testinfra` series starting at Z-0158. Model tags (`+AI-D`, `+AI-G`) and commit conventions follow `AGENTS.md`.
+
+## `testinfra` Branch: Test Efficiency & Runner Series (Active Priority)
+
+Active priority series to reduce verification runtimes. Order of execution:
+1. Differential optimizations: Z-0158 (front-end loop forks), Z-0159 (on-demand stdlib drop lowering), Z-0160 (lowering drop flag), Z-0161 (generic fn enum variant member), Z-0114 (rejection differential caching).
+2. Harness portability and bash removal: Z-0151, Z-0152, Z-0153, Z-0146, Z-0147, Z-0145.
+3. Process management and runner: Z-0130 to Z-0140 (`proc.zrl`, `ztest`, retiring `test.sh` pool).
+4. Result caching, parallel execution, and test reduction: Z-0123, Z-0113, Z-0109, Z-0110, Z-0107, Z-0125.
 
 - [ ] +testinfra +tests +AI-G Z-0158 T11c The differential's front-end loop forks once per program, not six times
-    > **Created:** 2026-11-07 by Z-0122 (Finding 6). **Before:** Z-0114.
+    > **Created:** 2026-11-07 by Z-0122 (Finding 6). **Branch:** `testinfra`. **Before:** Z-0114.
 
     - **Why:** `run_front.sh`, written by `scripts/check_reject_diff.sh`, runs each program as `out=$(run_with_timeout ... "$tree/build/zoril" ... 2>&1)` and then `printf | head -n 1 | sed | cut`: a command substitution, `timeout`, and three filters per program, which cost 9 ms CPU a program (16% of the loop, nearly all system time) on 69,127 programs a side.
     - **Do:** in the `run_front.sh` heredoc, write the compiler's output to a file in a scratch directory made once per batch (`mktemp -d` before the loop, removed after it), read its first line with `IFS= read -r first < "$out_file"`, drop everything up to the first space with `${first#* }`, and cut it to 90 characters with `printf '%.90s'`; keep `run_with_timeout` (a hung compiler must still be stopped) and the output format `<file> <rc> <first error>` byte for byte. Change nothing else in the script.
@@ -20,7 +34,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C6: `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +testinfra +tests +AI-G Z-0159 T11d A stdlib `Drop` implementation is lowered only when a dropped type needs it
-    > **Created:** 2026-11-08 by Z-0157's review (G1). **After:** Z-0157 closes, and Z-0162 (it changes the drop lookup this task extends). **Before:** Z-0114.
+    > **Created:** 2026-11-08 by Z-0157's review (G1). **Branch:** `testinfra`. **After:** Z-0157 closes, and Z-0162 (it changes the drop lookup this task extends). **Before:** Z-0114.
 
     - **Why:** Z-0157 left concrete `Drop` implementations eager (`Driver.instantiate_impl_methods`, `src/driver/module.zrl`, the `Drop` branch), so every program that imports `io.zrl` or `mem.zrl` lowers `File::drop`, `Arena::drop` and their callees whether it drops one or not: `import "vec.zrl"; import "mem.zrl"; fn main() -> i32 { return 0; }` emits 7 functions (`stdlib::io::File::drop`, `stdlib::io::raw_close`, `stdlib::mem::Arena::drop`, `stdlib::mem_raw::arena_free`, `stdlib::mem_raw::munmap_or_trap`, `stdlib::mem_raw::syscall_failed`, `stdlib::core0::zoril_user_trap`), 14,970 B of ZIL, 5.0 ms against 0.9 ms with no imports. A grid cell uses an `Arena`, so it saves less.
     - **Do:** in the `Drop` branch of `instantiate_impl_methods`, skip a method `m` for which `self.lowers_on_demand(m)` holds. In `ZirLowerer.has_drop_impl` (`src/lower_zir/utils.zrl`), when no lowered function has the name `Type::drop`, find the type's `Drop` impl (`find_method_in_impls(type_id, drop_id)`) and instantiate it with `self.mono.instantiate_method`, setting `lowering_drop_impl` around the call exactly as `instantiate_impl_methods` does; then return true. Change nothing else. **Stop rule:** if C1's cell figure is under 1 ms of front end, record C1 and stop: the change is not worth its risk.
@@ -34,7 +48,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C7: `make test` and `make preflight-changed`, each `Total:` line quoted; the fuzz record is stale for `src/`.
 
 - [ ] +bug +AI-D Z-0160 `lowering_drop_impl` is still set while a `Drop` body's callees are lowered
-    > **Created:** 2026-11-08 by Z-0157's review (B3).
+    > **Created:** 2026-11-08 by Z-0157's review (B3). **Branch:** `testinfra`.
 
     - **Lead, not a reproduced bug:** `Driver.instantiate_impl_methods` sets `self.lowering_drop_impl = true` around `instantiate_method` for `Drop::drop`, and `Driver.lower_fn_instance` does not save and clear it, so a function first lowered from inside a `drop` body sees it set. `is_local_function` (`src/driver/module.zrl`) reads it, but returns early unless the build is `-c`, and stdlib on-demand lowering never happens under `-c`; so the only effect could be the linkage of a private function of the module being compiled, called first from its own `Drop` impl, in a `-c` build. It predates Z-0157 (the review found it there).
     - **Do:** C1 decides. If C1 shows a difference that matters (a duplicate or a missing symbol at link, or a function exported that should not be), save and clear the flag in `lower_fn_instance` after `declare_function` and restore it at the end; else record C1 here and close.
@@ -43,7 +57,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C2 (only if fixed): the C1 programs again, a regression test under `tests/modular/`, and the fix taken out (a scratch edit) to see it fail; `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +bug +tests +AI-G Z-0161 A generic function's name is not taken as its result's enum type in `f.Variant`
-    > **Created:** 2026-11-08 by Z-0157's review (B4).
+    > **Created:** 2026-11-08 by Z-0157's review (B4). **Branch:** `testinfra`.
 
     - **Why:** `enum E { A, B }`, `fn pick<T>(x: T) -> E { return E.A; }`, then `let e = pick.B;` compiles, as `E.B`: `lower_member_access_expr` (`src/lower_zir/expr.zrl`) calls `resolve_sym_type` on any `SymbolKind.Global` before `try_lower_enum_variant_member`, and for a generic function `resolve_sym_type` gives its return type. It is accepted by the compiler before Z-0157 too. Not unsafe (the value is a valid `E`), but a name that is not a type is read as one.
     - **Do:** in `lower_member_access_expr`, try the enum-variant member only when the symbol names a type (`Decl.Struct`, `Decl.Enum`, `Decl.TypeAlias`, or a `SymbolKind.Type`), so a function's name falls through to the field-access error it gets when it is not generic (`no field 'B' on ...`). Change nothing else.
@@ -54,7 +68,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C4: the rejection differential is not needed (it refuses more); `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +testinfra +tests +AI-G Z-0114 T10 The rejection differential caches each side's verdicts
-    > **Created:** 2026-11-06 **After:** Z-0105 (confirm the share). **Why first among the caches:** the session analysis puts the differential at 620 s of an 800 to 900 s `preflight-changed`, and an author and a reviewer run it against the same base.
+    > **Created:** 2026-11-06. **Branch:** `testinfra`. **After:** Z-0105 (confirm the share). **Why first among the caches:** the session analysis puts the differential at 620 s of an 800 to 900 s `preflight-changed`, and an author and a reviewer run it against the same base.
 
     - **Do:** `scripts/check_reject_diff.sh` builds the base compiler in a scratch worktree on every run, then runs both sides over about 69,000 programs (the store grid from `scripts/fuzz/store_grid.lua` and the safety probes). Each side's verdict on a program depends only on that side's compiler, zbuild and stdlib, and on the program. Cache under `build/reject-diff-cache/`: the base compiler, keyed by the base commit and the toolchain fingerprint, and each side's front-end verdict file, keyed by a hash of its `zoril` and `zbuild` binaries and stdlib, and of the program set (the generator script and the probe directory). A second run on the same base and the same tree does only the comparison. A run after a `src/` edit reruns only the change side.
     - **Checks:** `scripts/test_reject_diff.sh` gains a case where a cached run and an uncached run print the same report. Take the cache's invalidation out (change a probe) and watch the test fail. Time a cold run and a warm run and record both here. `make test`, `make preflight-changed`.
@@ -64,7 +78,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **Not ready for `+AI-G` (review, 2026-11-07):** this task still holds two decisions: whether the saving left after Z-0116 is worth a cache at all, and how a cache that decides what not to run avoids the stamp's failures (Z-0113's bullet "The stamp's record"); a wrong hit here lets a newly accepted unsafe program through. Do not start it as written: after Z-0116 closes, an `+AI-D` session re-measures, decides, and either drops it or rewrites it with settled keys and numbered checks (each key input changed in turn, and a planted stale entry caught).
 
 - [ ] +testinfra +tests +portability +AI-G Z-0151 T7g `fuzz-tools`' checks that need no git go back into `make test`
-    > **Created:** 2026-11-07 by the review of Z-0144. **Before:** Z-0152.
+    > **Created:** 2026-11-07 by the review of Z-0144. **Branch:** `testinfra`. **Before:** Z-0152.
 
     - **Why:** Z-0144 moved the whole `fuzz-tools` scenario into the `git` group, which only a full `make preflight` runs. Only its sections 7, 7b, 8 and 10 use git (`scripts/test_fuzz_tools.sh`, the `have_git` branches and the `--release` call); sections 1 to 6, 8b, 8c and 9 (banner, `[STATUS]`, summary, status, stop, plan, the expected-value oracle, swarm testing, the targets) need none, and a user no longer runs them.
     - **Do:** split the script in two: `scripts/test_fuzz_tools.sh` keeps sections 1 to 6, 8b, 8c and 9 as the `fuzz-tools` scenario in the `integration` group; a new `scripts/test_fuzz_tools_git.sh` holds sections 7, 7b, 8 and 10 as the `fuzz-tools-git` scenario in the `git` group. Move the code unchanged; move a helper both need into the new file too, without changing it. Add rows for the new file to `scripts/test_tiers.tsv` beside the old one's.
@@ -76,7 +90,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C5: `make test`, `Total:` line quoted.
 
 - [ ] +testinfra +tests +portability +AI-G Z-0152 T7h Z-0144's smaller findings, and its checks that were not run
-    > **Created:** 2026-11-07 by the review of Z-0144. **Depends:** Z-0149, Z-0150, Z-0151.
+    > **Created:** 2026-11-07 by the review of Z-0144. **Branch:** `testinfra`. **Depends:** Z-0149, Z-0150, Z-0151.
 
     - **Z-0150 superseded (2026-11-07):** this task depends on Z-0154 in its place; C2's allowed log lines no longer include the stamp's.
 
@@ -95,7 +109,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C5: `make test`, `make preflight-changed` and `make preflight`, each `Total:` line quoted. `make preflight` is the run Z-0144 owed.
 
 - [ ] +testinfra +tests +portability +AI-G Z-0153 T7i The fuzz-fresh self-test runs in `make test`, without git
-    > **Created:** 2026-11-07 by the review of Z-0149. **Depends:** Z-0149.
+    > **Created:** 2026-11-07 by the review of Z-0149. **Branch:** `testinfra`. **Depends:** Z-0149.
 
     - **Why:** no gate, scenario or Makefile target runs `scripts/check_fuzz_fresh.sh --selftest` (`git grep -n 'check_fuzz_fresh.sh --selftest'` finds only its usage comment, before Z-0144 and now), so the cases it holds protect nothing: a regression in the gate passes `make test`. The self-test commits into a scratch repository (`g add -A; g commit`, `scripts/check_fuzz_fresh.sh:132` onward) because the old hash read `git ls-tree HEAD`; Z-0149's hash reads files, so the commits do nothing.
     - **Do:** remove every `g` call and the `g()` helper from the self-test, and the `git init` that creates the scratch repository; keep every case and its expected result. Make the `fuzz-fresh` gate's command `./scripts/check_fuzz_fresh.sh --selftest && ./scripts/check_fuzz_fresh.sh` (`gate_command` in `scripts/test.sh`, as `exhaustive` does).
@@ -107,7 +121,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C5: `make test`, `Total:` line quoted.
 
 - [ ] +testinfra +tests +portability +AI-G Z-0146 T7c `check_md_links.sh` and the stage0-c suite scripts in POSIX `sh`
-    > **Created:** 2026-11-07, split from Z-0145. **Before:** Z-0145.
+    > **Created:** 2026-11-07,. **Branch:** `testinfra`. split from Z-0145. **Before:** Z-0145.
 
     - **Why:** `make test` runs these `#!/bin/bash` scripts: `scripts/check_md_links.sh` (89 lines, the `md-links` scenario) and, through the `stage0c-*` gates, `bootstrap/stage0-c/scripts/test_functional.sh` (168), `test_corpus.sh` (135), `test_docs.sh` (142), `test_error_locations.sh` (140), `test_wrapper.sh` (116), `check-all.sh` (126) and `verify_test_failure.sh` (69). A text search for bash-only constructs (`[[`, arrays, `(( ))`, `${x//a/b}`, `<( )`, `$'...'`, `&>`) hits all but `verify_test_failure.sh`; no strict POSIX shell was on the review host, so none was run under one. `scripts/test_check_no_new_deps.sh` matches a bash-shebang search only because it writes one as a fixture; `scripts/fuzz_safe.sh` is the fuzzer's (contributor role).
     - **The maintainer (2026-11-07):** the stage0-c freeze covers the compiler, not its test scripts; they may be ported when the `stage0c-*` gates report the same counts before and after (`AGENTS.md`, "The seeds are frozen").
@@ -122,7 +136,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C7: `scripts/check_portability.sh` passes; `make test`, `Total:` line quoted.
 
 - [ ] +testinfra +tests +portability +AI-G Z-0147 T7d `check_safety_model.sh` without bash
-    > **Created:** 2026-11-07, split from Z-0145. **Before:** Z-0145.
+    > **Created:** 2026-11-07,. **Branch:** `testinfra`. split from Z-0145. **Before:** Z-0145.
 
     - **Why:** the `safety-model` gate, in `make test` and in every doc tier, runs `scripts/check_safety_model.sh`: 930 lines of bash, with about 32 lines a text search marks bash-only. At that size the portability rule (`AGENTS.md`: logic longer than a short script goes into a Zoril tool) applies.
     - **Do:** first record here what it checks (each rule, and the file it reads), then port it to POSIX `sh` and awk, kept as close to the original as the shell allows. If the port needs much more than the original, stop, record why, and propose a Zoril tool under `tools/` instead, as a task of its own. Its banned-phrase list and every message it prints stay as they are, since tasks and agents grep for them.
@@ -137,7 +151,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C8: `scripts/check_portability.sh` passes; `make test`, `Total:` line quoted.
 
 - [ ] +testinfra +tests +portability +AI-G Z-0145 T7b `make test` with only the user's tools, as a gate
-    > **Created:** 2026-11-07 by the maintainer's portability rule. **Depends:** Z-0144.
+    > **Created:** 2026-11-07 by the maintainer's portability rule. **Branch:** `testinfra`. **Depends:** Z-0144.
 
     - **Split (2026-11-07):** the bash ports are Z-0146 and Z-0147, which this task also depends on. It keeps the gate and the `check_deps.sh` change.
     - **Do:** drop `bash` from `scripts/check_deps.sh`'s `test` profile if nothing else on the `make test` path needs it (`scripts/fuzz_safe.sh` is the fuzzer's: contributor role). Add a gate to `make preflight` (it needs git to export the tree): extract `git archive HEAD` outside the checkout, put on `PATH` only the user role's tools (`AGENTS.md`, Portability; the shim `scripts/test_dep_matrix.sh` builds), then `make` and `make test`. It passes when `make test` passes and every skip names a missing tool; it lists the skips. Bring `scripts/check_deps.sh`'s profiles, `doc/developer_guide.md` §1 and the exceptions list in `AGENTS.md` into line with what the gate shows.
@@ -149,17 +163,8 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C4: `scripts/check_portability.sh`, passing.
       - C5: `make test` and `make preflight`, each `Total:` line quoted.
 
-- [ ] +bootstrap +audit +AI-D Z-0135 Z0 stage1 accepts modules in the `src/` closure and builds some of their paths wrong
-    > **Created:** 2026-11-07 by Z-0117's measurement. **Before:** Z-0131, Z-0133 (they edit closure modules).
-
-    - **Found (Z-0117, git:e932d51):** built by `build/zoril-stage1` and `build/zilc-stage1` (the `build/zilc-boot` pipeline, linked with `build/runtime.o` or `build/runtime-stage1.o`), `tests/stdlib/test_stdlib_fd.zrl` and `tests/stdlib/test_stdlib_io_result.zrl` segfault in `mem_raw.zrl`'s `zoril_allocator_alloc` (from `test_pipe_large_buffer`) and `arena_free` (from `Arena::drop` in `test_command_redirect_stdout`); built by `build/zoril` they exit 0. Separately, stage1 refuses a program in which two modules each define a private function of the same name (reproduction in Z-0117: `cannot access private function: helper`), which `build/zoril` accepts.
-    - **Why it matters:** the stage1 constraint in `AGENTS.md` says the closure "may use only what the pinned stage1 accepts". Accepting is not enough if stage1 builds an accepted function wrong. The self-hosting fixpoint covers only what `src/` reaches; an edit to `src/` that starts reaching one of these paths would get a generation-1 compiler built wrong, found (if at all) only by the fixpoint differing.
-    - **Do:** reduce each crash to a minimal program against stage1 (`AGENTS.md`: before blaming a seed compiler, reproduce against it), and name what stage1 does differently (a language rule that changed since the pin, such as a drop or layout rule, or a stage1 bug). Find whether any function `src/` reaches today takes the same route (`--emit-deps`, and the generation-1 compiler run over the stdlib tests). Then propose, for the maintainer: a rule added to the stage1 constraint and `doc/bootstrap/two_stage.md` (for example "no two modules in the closure share a private name", and the construct stage1 builds wrong), and whether a check can enforce it (build the closure modules' own tests through stage1 in a gate). Fixing stage1 itself is a re-pin or a recorded backport, the maintainer's decision: stop and ask.
-    - **Checks:** the minimal reproductions recorded here, each run against stage1 and `build/zoril`.
-    - **Filed (2026-11-07):** both issues are in `KNOWN_ISSUES.md` §1 (the two `stage1` entries), the crash with its cause marked unknown. When this task names the cause, replace that sentence with it, and add the rule it proposes to the entry's **Workaround**.
-
 - [ ] +stdlib +tests +AI-G Z-0130 Z1a `proc.zrl`: wait for whichever child ends first, with or without blocking
-    > **Created:** 2026-11-07 by Z-0117. **Before:** Z-0137.
+    > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Before:** Z-0137.
 
     - **Do:** a safe function in `proc.zrl` that waits for any child of the calling process (`sys_wait4(-1, ...)`), returning which child ended and its `ExitStatus`, and a non-blocking form (`WNOHANG`) that returns none when no child has ended. EINTR is retried as in `Child::wait`. A `Child` whose pid came back this way is marked reaped, so its own `wait` does not wait4 a pid that may have been reused (decide and state how: a status cached on the `Child`, or an error).
     - **Settled (review, 2026-11-07):** the status is cached on the `Child`, and its `wait` returns it without calling `wait4`, so code that waits on each child keeps working whichever call reaped it.
@@ -173,7 +178,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C7: `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +stdlib +tests +AI-G Z-0131 Z1b `proc.zrl`: a child in a process group of its own, signalled as a group
-    > **Created:** 2026-11-07 by Z-0117. **Depends:** Z-0135 (what stage1 builds wrong, since `stdlib/os/linux.zrl` is in the `src/` closure).
+    > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Depends:** Z-0135 (what stage1 builds wrong, since `stdlib/os/linux.zrl` is in the `src/` closure).
 
     - **Do:** a `Command` option that puts the child in a new process group (`setpgid(0, 0)` in the child between fork and exec), and a `Child` method that sends a signal to the whole group (`kill(-pgid, sig)`). `sys_setpgid` goes in `stdlib/os/linux.zrl`.
     - **Checks:**
@@ -185,7 +190,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C6: `make man-gen` and `sh scripts/test_man_pages.sh` pass; `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +stdlib +tests +AI-G Z-0132 Z1c `proc.zrl`: a child's working directory and environment, set without `unsafe`
-    > **Created:** 2026-11-07 by Z-0117. **Before:** Z-0137.
+    > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Before:** Z-0137.
 
     - **Do:** `Command` methods to set the child's working directory (`chdir` in the child before exec; a failure reaches the parent through the existing errno pipe) and to set, remove or clear environment variables, built into an `envp` in the command's arena, so callers no longer need `unsafe set_envp`. Interior NULs are refused as for arguments.
     - **Checks:**
@@ -197,13 +202,13 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C6: `make man-gen` and `sh scripts/test_man_pages.sh` pass; `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +safety +stdlib +tests +AI-D Z-0133 Z1d Signals: the runtime records which arrived, and a stdlib module reads it
-    > **Created:** 2026-11-07 by Z-0117. **Depends:** Z-0135. **Check-in:** it touches `rt/`.
+    > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Depends:** Z-0135. **Check-in:** it touches `rt/`.
 
     - **Do:** in `rt/runtime.s`, a handler that sets a bit per signal number in a runtime word and returns (with the `sa_restorer` that Linux x86_64 `rt_sigaction` needs); nothing else runs in it. A stdlib module (new, outside the `src/` closure) with `watch(sig)` (install the handler), `ignore(sig)`, `default(sig)` and `take_pending() -> u64` (read and clear the bits atomically). `bootstrap/stage1/rt/runtime.s` stays a byte-identical copy of `rt/runtime.s` (the `runtimes` gate), and `rt/runtime.s` keeps every symbol the pinned stage1 can emit. State in `doc/spec/safety_model.md` what the module claims, if anything, with its test.
     - **Checks:** a test that watches SIGUSR1, sends it to itself, and reads it once from `take_pending` and not twice; a child that watches nothing still gets the default action. `scripts/run_safety_matrix.sh`. `make test`, `make preflight-changed`. Ends with **Awaiting review**.
 
 - [ ] +testinfra +refactor +AI-G Z-0136 Z2a The test plan as data: gates, group paths and scenarios in one file both runners read
-    > **Created:** 2026-11-07 by Z-0117. **Before:** Z-0137. **Related:** Z-0115 (its selector reads the same names).
+    > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Before:** Z-0137. **Related:** Z-0115 (its selector reads the same names).
 
     - **Now:** the plan lives in `case` blocks in `scripts/test.sh`: `GATES_ALL` and each gate's command, `group_paths`, `group_scenarios` and each scenario's command.
     - **Do:** move them to a plain TSV file under `scripts/` (kind, name, group, command), which `scripts/test.sh` reads instead of its `case` blocks; the order of the file is the display order. A refactor: the output of `make test` is unchanged.
@@ -216,7 +221,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C6: `make test`, `Total:` line quoted.
 
 - [ ] +testinfra +tests +AI-G Z-0137 Z2b `ztest` runs the plan one item at a time, with today's output
-    > **Created:** 2026-11-07 by Z-0117. **Depends:** Z-0130, Z-0132, Z-0136.
+    > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Depends:** Z-0130, Z-0132, Z-0136.
 
     - **Do:** `tools/ztest` reads the plan file (Z-0136) and the options `scripts/test.sh` takes (`--quiet`, `--verbose`, `--filter`, `--fail-fast`, `--timeout`, `--results`, `--suite`, `--gate`, paths, and the `TR_*` variables it reads), runs each item through `sh` as `test.sh`'s worker does (gates, scenarios, and a per-file test through `scripts/lib/test_runner.sh`), one at a time, with its own per-item timeout, and writes the output contract, `build/gates/<name>.log`, `build/tests/scenarios/<name>.log` and `timings.tsv`. The Makefile builds `build/ztest` on its own inputs only (Z-0117 decision 2). `make test RUNNER=ztest` uses it; the default stays `test.sh`.
     - **Planted fixtures:** a test that fails, one that crashes, one that hangs past its timeout, one with a malformed header, and a gate that exits 0 having printed a failure; each reported as it is, by both runners, in every `make test`.
@@ -230,7 +235,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C7: `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +testinfra +tests +AI-G Z-0138 Z2c `ztest` runs N items at once and becomes the default
-    > **Created:** 2026-11-07 by Z-0117. **Depends:** Z-0131, Z-0133, Z-0137.
+    > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Depends:** Z-0131, Z-0133, Z-0137.
 
     - **Do:** a pool of `--jobs` items (default `nproc_count`'s answer, passed in by the Makefile), each in its own process group (Z-0131), started slowest first from the last `timings.tsv`, printed in plan order as each finishes; fail-fast stops new items and kills the running groups; `SIGINT`/`SIGTERM` (Z-0133) kills every group and exits 130; a work-directory lock as `test.sh`'s (`fsys.zrl` `acquire_file_lock`). `make test` uses `ztest` by default; `RUNNER=sh` keeps `test.sh`.
     - **Checks:**
@@ -244,7 +249,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C8: `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +testinfra +tests +AI-G Z-0139 Z2d The per-file pipeline in `ztest`, compared file by file with the `sh` one
-    > **Created:** 2026-11-07 by Z-0117. **Depends:** Z-0138.
+    > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Depends:** Z-0138.
 
     - **Do:** `ztest` reads each test's header directives (`// expected exit`, `// expected compile fail`, `// EXPECT:`, `// expected compile success`, `// flags:`, `// link:`, `// @skip:`) and runs zoril, zilc, qbe, as, ld and the program itself, with `ZORIL_CC` and the other tool variables honoured, instead of starting `sh` per file. The `sh` pipeline stays as the fallback.
     - **Checks:**
@@ -256,13 +261,13 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C6: `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +stdlib +portability +tests +AI-D Z-0134 Z1e The environment read from the startup stack, not `/proc/self/environ`
-    > **Created:** 2026-11-07 by Z-0117 (decision 5). **Before:** Z-0140. **Check-in:** it touches `rt/`.
+    > **Created:** 2026-11-07 by Z-0117 (decision 5). **Branch:** `testinfra`. **Before:** Z-0140. **Check-in:** it touches `rt/`.
 
     - **Do:** `_start` in `rt/runtime.s` records `envp` beside argc and argv (the hosted entry likewise); `getenv` in `stdlib/fsys.zrl` reads it instead of `/proc/self/environ`, so it works where `/proc` is absent. `fsys.zrl` is in the `src/` closure: build through stage1 too. `bootstrap/stage1/rt/runtime.s` stays a copy.
     - **Checks:** a test whose parent sets one variable, sets another to the empty string and leaves a third unset, and that `getenv` returns the value, the empty value and none for them. Where `unshare` can mount a namespace without `/proc`, the same test passes there (skip, saying why, where it cannot). `make test`, `make preflight-changed`. Ends with **Awaiting review**.
 
 - [ ] +testinfra +portability +tests +AI-G Z-0140 Z2e Retire `test.sh`'s pool: no `flock`, `mkfifo`, `setsid`, `xargs -P` or `read -t` on the test path
-    > **Created:** 2026-11-07 by Z-0117. **Depends:** Z-0138, Z-0139, Z-0134, and a release cycle of `ztest` as the default with no disagreement.
+    > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Depends:** Z-0138, Z-0139, Z-0134, and a release cycle of `ztest` as the default with no disagreement.
 
     - **Do:** remove the pool, the dispatcher and their dependency checks from `scripts/test.sh`, keeping `scripts/lib/test_runner.sh` and a serial fallback over `tests/smoke.list` (`make test-fallback`), which `make test` runs, saying so, when `build/ztest` cannot be built. Remove `flock`, `mkfifo` and `setsid` from `scripts/check_deps.sh`'s `test` set. Update `AGENTS.md` "Running tests" and `doc/developer_guide.md`.
     - **Portability rule (the maintainer, 2026-11-07):** this task removes the pool's entries from the exceptions list in `AGENTS.md` (Portability) and `doc/developer_guide.md` §1, and Z-0145's gate then runs `make test` without `flock`, `mkfifo` and `setsid` on `PATH`. The reason for the series is recorded there: the harness reaches macOS and Windows through Zoril tools, not through more `sh`.
@@ -274,12 +279,12 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C5: `scripts/check_portability.sh` passes; `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +testinfra +measurement +AI-D Z-0123 T9a Is a build and a test result the same from the same inputs?
-    > **Created:** 2026-11-06, split from Z-0113 by the review. **Before:** Z-0113.
+    > **Created:** 2026-11-06,. **Branch:** `testinfra`. split from Z-0113 by the review. **Before:** Z-0113.
 
     - **Do:** Z-0113's **Measure first** bullet: is `build/zoril` byte-identical when built from one commit in two checkouts (through stage1 and through `build/zoril`)? Do two `make test` runs on one tree give the same `--results` and the same output digests per item (list every item that differs, and why)? Record the commands and the answers here, and in Z-0113.
 
 - [ ] +testinfra +decision +AI-D Z-0113 T9 One verification record for the author and the reviewer: a result cache keyed by inputs
-    > **Created:** 2026-11-06 **Asked by:** the maintainer. **Before:** Z-0112 (the review rule it changes), Z-0114.
+    > **Created:** 2026-11-06. **Branch:** `testinfra`. **Asked by:** the maintainer. **Before:** Z-0112 (the review rule it changes), Z-0114.
 
     - **The stamp's record (the maintainer, 2026-11-07):** a cache keyed by inputs decides what not to run, as the unchanged-tree stamp did. The stamp needed four fixes (Z-0142, Z-0143, Z-0144, Z-0150) and was removed (Z-0154), because a defect in it reports a pass for code that was not tested. Before recommending a cache, say what in its design keeps it from failing the same ways (a key that misses an input, a record taken at the wrong moment, a lookup that depends on git), and how a reviewer sees a wrong hit.
 
@@ -292,7 +297,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **Review (2026-11-06):** the header's **Before:** Z-0112, Z-0114 is stale: by the bullet above and Z-0112's own order bullet, this task follows Z-0114 and Z-0115, and Z-0112 precedes it. The **Measure first** bullet is Z-0123, done first; this task decides from its answers.
 
 - [ ] +testinfra +tests +AI-G Z-0109 T5 Run the serial parts in parallel, longest first
-    > **Created:** 2026-11-06 **Depends:** Z-0105.
+    > **Created:** 2026-11-06. **Branch:** `testinfra`. **Depends:** Z-0105.
 
     - **Do:** from the profile, schedule items longest first using the last `timings.tsv`, keeping the display order. Run the stage0c `make` targets with `-j`. Run the preflight steps that share nothing at the same time; the bench step keeps its quiet-host rule. (The reject differential's caches are Z-0114.) Measure before and after on 16 cores and on 4.
     - **Narrowed by Z-0103 (2026-11-06):** the pool already dispatches the non-file items from the slow end of the plan first (F1), so longest-first saves little on 16 cores. What is left: the stage0c `make` targets with `-j`, and the preflight steps side by side. Any change to the pool itself waits for Z-0117 (the series' dependency rule).
@@ -307,7 +312,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C6: `make test`, `make preflight-changed` and `make preflight`, each `Total:` line quoted.
 
 - [ ] +testinfra +tests +AI-G Z-0110 T6 Test progress: what is running, a heartbeat, and grouped fast items
-    > **Created:** 2026-11-06 **Asked by:** the maintainer.
+    > **Created:** 2026-11-06. **Branch:** `testinfra`. **Asked by:** the maintainer.
 
     - **Now:** a gate's lines appear only when it ends, and results print in plan order, so one slow item looks like a hang. This is worst on a slow host.
     - **Do:** on a terminal, print a line when a slow item starts (one that took over a few seconds last time, from `timings.tsv`, or any gate). Refresh one status line at least every 10 s: items done of total, the slowest still running and its elapsed time. Fold items that finish quickly into their group's count line. Off a terminal (a log, `make test 2>&1 | grep`), keep today's line-oriented output byte for byte, apart from optional start lines that the grep patterns in `AGENTS.md` ignore. POSIX `sh` only, no `tput` dependency beyond a plain `\r`. `scripts/test_runner_output.sh` covers both modes. `make test`.
@@ -322,13 +327,13 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C6: `make test`, `Total:` line quoted.
 
 - [ ] +testinfra +audit +AI-D Z-0107 T3 Find redundant and obsolete tests
-    > **Created:** 2026-11-06 **Depends:** Z-0105.
+    > **Created:** 2026-11-06. **Branch:** `testinfra`. **Depends:** Z-0105.
 
     - **Do:** list candidates, removing nothing yet. Look for: per-file tests whose normalised ZIL or diagnostic output equals another's; `stage0c-*` items that duplicate `make -C bootstrap/stage0-c` targets run elsewhere; tests of features or bugs whose code is gone (search each test's subject in `src/`); gates whose check another gate already makes. Also list the tests that only one person can say are needed, for the maintainer. Each candidate gets its evidence and what would be lost. Removals are a separate task, with `make test` totals before and after.
     - **Narrowed by Z-0103 (2026-11-06):** per-file tests cost about 34 ms each (F2), so duplicates among them save seconds. Look first at the gates, the 48 scenarios and the seven `stage0c-*` gates (about 400 items), whose times Z-0105 records. Per-file duplicates are still listed, but for clarity, not for time.
 
 - [ ] +testinfra +tests +AI-G Z-0125 T14 `make retest-failed` reruns only the items that failed last time
-    > **Created:** 2026-11-06 by the review (Z-0103 listed it in its brainstorm, but neither ranked nor dropped it). **After:** Z-0117 (written in the runner that stays).
+    > **Created:** 2026-11-06 by the review (Z-0103 listed it in its brainstorm, but neither ranked nor dropped it). **Branch:** `testinfra`. **After:** Z-0117 (written in the runner that stays).
 
     - **Do:** read the last `--results` file, rerun its `FAIL` items (files by path, gates and scenarios by name) with fail-fast off, and print the usual contract. With no results file, or none failed, say so and exit 0.
     - **Settled (review, 2026-11-07):** the rerun writes its own results to `retest.results` beside the file it read and never overwrites that file, so a second `make retest-failed` reruns the same items.
@@ -340,47 +345,189 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C5: two `make retest-failed` in a row rerun the same items (the file read is unchanged; `cmp` before and after).
       - C6: `make test`, `Total:` line quoted.
 
+## `main` Branch: Standalone Soundness Fixes, Bootstrap & General Items
+
+Standalone tasks developed and committed directly on `main`:
+1. Default-mode safety holes: Z-0101 (`extern fn` as `fn` value, `gap_67`), Z-0100 (generic instance as `fn` value, `gap_66`).
+2. Bootstrap integrity: Z-0135 (stage1 closure module paths audit; runs before closure module edits in Z-0131/Z-0133).
+3. Compiler quality & tools: Z-0013 (reviewer rotation), Z-0014 (`zilc` input validation), Z-0015 (`zoril` error bounds), Z-0016 (`zbuild` ZIL handling), Z-0067 (diagnostic source location), Z-0079 (generic interface roundtrip), Z-0080 (mutation list integrity).
+4. Benchmarks: Z-0004 (cloud session variance measurement), Z-0005 (baseline decision).
+
 - [ ] +safety +tests +AI-D Z-0101 An `extern` function made into a `fn` value needs `unsafe`
-    > **Created:** 2026-11-06 **Found by:** Z-0095 (its structural twin). **Check-in:** stop for review after it: a fix to a safety rule. A hole in the default mode, reachable from safe code; beside Z-0095 and Z-0100.
+    > **Created:** 2026-11-06. **Branch:** `main`. **Found by:** Z-0095 (its structural twin). **Check-in:** stop for review after it: a fix to a safety rule. A hole in the default mode, reachable from safe code; beside Z-0095 and Z-0100.
 
     - **Now:** a bare `extern` declaration (`extern fn memset(p: *mut u8, c: i32, n: usize) -> *mut u8;`) named as a value converts to a plain `fn` type with no `unsafe`, and a call through the value is never marked, so safe code calls C with a forged pointer and faults (`bench/safety_matrix/probes/gap_67_extern_fn_as_fn_value.zrl`; `build/z95/x_extern_call.zrl`, exit 139). A direct call is refused ("call to extern function requires unsafe block"); Z-0095's check in `ZirLowerer.fn_value` does not reach it: a bare `extern` is not `is_unsafe` (an `unsafe extern fn` is, and is refused since Z-0095's review).
     - **Decide, then do:** refuse the conversion outside `unsafe` as Z-0095 does (one condition in `fn_value`), or refuse it everywhere: a plain `fn` value is called with the Zoril convention, two words and an environment argument, and an `extern` is a C symbol, which `extern "C" fn(..)` (the C function pointer, its call already `unsafe`) is the type for. Probe every conversion site, an exported (`is_export`) function, and an `extern` with `#[borrows]`/`#[stores]`; flip `gap_67` with its Known gaps entry and the `doc/SAFETY.md` §6 class (M) removed. `make test`, `make preflight-changed`, `sh scripts/run_safety_matrix.sh`.
 
 - [ ] +safety +tests +AI-D Z-0100 A generic instance made into a `fn` value is lowered, not dropped
-    > **Created:** 2026-11-06 **Found by:** Z-0092's review (a sibling-route probe crashed). **Check-in:** stop for review after it: a fix to a safety rule. Independent of the provenance series; a hole in the default mode, reachable from safe code, so it goes beside Z-0095.
+    > **Created:** 2026-11-06. **Branch:** `main`. **Found by:** Z-0092's review (a sibling-route probe crashed). **Check-in:** stop for review after it: a fix to a safety rule. Independent of the provenance series; a hole in the default mode, reachable from safe code, so it goes beside Z-0095.
 
     - **Now:** a generic function's instance named with type arguments and not called (`id::<i32>` with `fn id<T>(x: T) -> T`) type-checks as a `fn` value, but lowering emits nothing for it. `let f: fn(i32) -> i32 = id::<i32>; return f(3) - 3;` allocates `f`'s slot and never writes it (the ZIL has `alloc` and then the `call_ptr`, with no store between them), so the call jumps through stack garbage and faults (`bench/safety_matrix/probes/gap_66_generic_instance_as_fn_value_uninit.zrl`, exit 139). By site (`build/z92r/r_*.zrl`, `c3.zrl`, `c5.zrl`): a `let` with a `fn` type and a struct field (`H { f: id::<i32> }`) fault; an assignment (`f = id::<i32>;`) is dropped and `f` keeps its earlier closure (exit 43 where 3 was expected); an argument (`call(id::<i32>)`) gives "invalid ZIL (a compiler bug): an instruction names an operand that no value defines"; `return id::<i32>;` gives "control reaches end of non-void function without a return value"; `let f = id::<i32>;` gives "Failed to resolve callee". A non-generic `fn` item, a method value (`S::get`) and a generic instance chosen by the expected type are not this class: the last is refused, "unknown type `T`", at `let f: fn(i32) -> i32 = id;`.
     - **Do:** find where a turbofish path is lowered only as a callee (`build/zoril -v` on `gap_66`, then the lowering of a path expression with type arguments) and lower it as the instance's `FuncAddr` at every value site, through `ZirLowerer.fn_value` so Z-0095's check applies (a generic `unsafe fn` named with turbofish, `unsafe fn id<T>(p: T) -> T` as `id::<*i32>`, is accepted outside `unsafe` today only because the value is dropped: `build/z95r/b2.zrl`, from Z-0095's review), or refuse it in the type checker with a diagnostic if instantiating is out of scope; decide which and say why. Probe every site above, a generic method (`B.id::<i32>`, refused today: "type arguments are only accepted on a call or a struct literal here"), and the instance passed to a generic higher-order function. Flip `gap_66` to `accept` (exit 0) or `compile_reject`, and remove its Known gaps entry and the `doc/SAFETY.md` §6 class (L) (lettered (M) until Z-0095 closed the first (L)). `make test`, `make preflight-changed`, `sh scripts/run_safety_matrix.sh`.
 
+- [ ] +bootstrap +audit +AI-D Z-0135 Z0 stage1 accepts modules in the `src/` closure and builds some of their paths wrong
+    > **Created:** 2026-11-07 by Z-0117's measurement. **Branch:** `main`. **Before:** Z-0131, Z-0133 (they edit closure modules).
+
+    - **Found (Z-0117, git:e932d51):** built by `build/zoril-stage1` and `build/zilc-stage1` (the `build/zilc-boot` pipeline, linked with `build/runtime.o` or `build/runtime-stage1.o`), `tests/stdlib/test_stdlib_fd.zrl` and `tests/stdlib/test_stdlib_io_result.zrl` segfault in `mem_raw.zrl`'s `zoril_allocator_alloc` (from `test_pipe_large_buffer`) and `arena_free` (from `Arena::drop` in `test_command_redirect_stdout`); built by `build/zoril` they exit 0. Separately, stage1 refuses a program in which two modules each define a private function of the same name (reproduction in Z-0117: `cannot access private function: helper`), which `build/zoril` accepts.
+    - **Why it matters:** the stage1 constraint in `AGENTS.md` says the closure "may use only what the pinned stage1 accepts". Accepting is not enough if stage1 builds an accepted function wrong. The self-hosting fixpoint covers only what `src/` reaches; an edit to `src/` that starts reaching one of these paths would get a generation-1 compiler built wrong, found (if at all) only by the fixpoint differing.
+    - **Do:** reduce each crash to a minimal program against stage1 (`AGENTS.md`: before blaming a seed compiler, reproduce against it), and name what stage1 does differently (a language rule that changed since the pin, such as a drop or layout rule, or a stage1 bug). Find whether any function `src/` reaches today takes the same route (`--emit-deps`, and the generation-1 compiler run over the stdlib tests). Then propose, for the maintainer: a rule added to the stage1 constraint and `doc/bootstrap/two_stage.md` (for example "no two modules in the closure share a private name", and the construct stage1 builds wrong), and whether a check can enforce it (build the closure modules' own tests through stage1 in a gate). Fixing stage1 itself is a re-pin or a recorded backport, the maintainer's decision: stop and ask.
+    - **Checks:** the minimal reproductions recorded here, each run against stage1 and `build/zoril`.
+    - **Filed (2026-11-07):** both issues are in `KNOWN_ISSUES.md` §1 (the two `stage1` entries), the crash with its cause marked unknown. When this task names the cause, replace that sentence with it, and add the rule it proposes to the entry's **Workaround**.
+
+- [ ] +safety +research +AI-D Z-0013 Review rounds: rotate reviewers over the compiler until the findings dwindle
+    > **Created:** 2026-11-03. **Branch:** `main`. **Standing task;** a round reads and probes only, so it can run beside anything except a change to the area it reviews.
+
+    - **A round:** one reviewer (a model or a prompt not used in the last round) takes one area - the type matcher and conversion sites, the borrow checker and its summaries, drop and move semantics, the stdlib's `unsafe` interiors against what safe code can reach, the FFI boundary, the runtime and `zilc` - probes what it suspects against `build/zoril`, and records each lead here as confirmed, refuted or unprobed, with its reproducer.
+    - **Checklist:** every site that puts a value into an expected type (`let`, call argument, return, struct field, enum constructor, array literal and repeat, closure capture, method receiver, `match` arm, pattern binding); every type-matching and conversion function at depth above zero; every cast and what it lets safe code build; every place a size or length is narrowed; every check skipped for a special case (unit, `never`, zero length, constant operand); borrows of `static mut` held across a call or an assignment; the FFI boundary; the stdlib's `unsafe` blocks.
+    - **Each confirmed hole** becomes a `known_gap` probe, a route class in `doc/spec/safety_model.md`, and a generator feature in `scripts/fuzz/gen.lua`; it is fixed by another session and fix-reviewed by a third before the next round. A fix states the rule it enforces in one sentence and defaults to the strict side for anything it cannot classify.
+    - **Stopping rule:** rounds continue while a round with a fresh reviewer confirms a new hole; stop after two consecutive rounds from different reviewers confirm none.
+    - **Generator debt (2026-11-05):** route classes added in the hardening series without a `scripts/fuzz/gen.lua` feature (Z-0055 noted one for `gap_47`/`gap_48`); before the fuzz renewal after Z-0012 (Z-0003), list each `known_gap` route class added since the last record and whether the generator covers it, and add the missing features. At least: closures capturing a reference to a struct holding `&mut` (`gap_47`, `gap_48`), a closure passed to a callee that calls it (`gap_52`), a cycle storing through a local (`gap_54`), a closure parameter forwarding a view (`gap_55`), an element copy through an `extern` (Z-0060), a closure storing into a global through a callee (`gap_64`), and an `unsafe fn` made into a `fn` value at each conversion site (`gap_65`).
+
+- [ ] +tools +AI-G Z-0014 `zilc` refuses text it does not recognise between declarations, and a file that is not ZIL
+    > **Created:** 2026-11-03. **Branch:** `main`.
+
+    - **Now:** `zilc` exits 0 with no message on random bytes, and on `printf '\x01\x02 zz garbage\n'` it writes a stray global parsed out of the word `garbage`. `ZilParser.parse_module` (`tools/zilc/src/zil_parse.zrl`) dispatches on a declaration's first byte and skips any other byte, so text between declarations is dropped silently.
+    - **Do:** at top level, after trivia, accept only the declaration forms of `doc/spec/intermediate_language.md` and report anything else as `zilc: line N: expected a declaration, found '<token>'` with exit 1; before parsing, refuse a NUL byte or invalid UTF-8 with one line. Keep the first-error behaviour.
+    - **Checks:**
+      - C1: before the change, `printf '\x01\x02 zz garbage\n' > build/z14/g.zil; timeout 10 build/zilc build/z14/g.zil -o build/z14/g.ssa; echo $?` and the `.ssa` it writes; quote both (exit 0 and a stray global today).
+      - C2: one `tests/zilc/` case per refusal: a stray word between two functions, control bytes, a NUL byte, invalid UTF-8; each fails before the change (run the new tests against the old `build/zilc` and quote) and passes after.
+      - C3: each refusal's message is the one in **Do** (`zilc: line N: expected a declaration, found '<token>'`, or the one-line NUL/UTF-8 refusal), with exit 1; quote each.
+      - C4: every file in `corpus/zil/` still compiles and gives its expected exit (`./scripts/test.sh corpus/zil` or the scenario that runs them); quote its `Total:` line.
+      - C5: take the top-level check out (a scratch edit) and watch the stray-word case pass silently again; restore.
+      - C6: the `KNOWN_ISSUES.md` entry removed or updated; `make test` and `make preflight-changed`, each `Total:` line quoted; the completion note says the fuzz record is stale for `tools/zilc/`.
+
+- [ ] +diagnostics +AI-G Z-0015 `zoril` stops after a bounded number of errors, and says when a file does not look like Zoril source
+    > **Created:** 2026-11-03. **Branch:** `main`.
+
+    - **Now:** 300 KB of random bytes named `junk.zrl` gives about 139,000 error lines (12 MB); 160 KB of prose about 33,000. `zbuild` passes the same output through. Reproduce: `head -c 300000 /dev/urandom > junk.zrl; ./build/zoril -I stdlib=stdlib --emit-zil -o o.zil junk.zrl 2>&1 | wc -l`.
+    - **Do:** count errors in `diag_start` (`src/diag.zrl`); past the limit (default 20) print one line naming `--error-limit N` (0 removes the limit) and exit 1. `zbuild --error-limit N` passes it to every `zoril -c`; both man pages and `--help` say so. Before lexing, refuse a NUL byte or invalid UTF-8 with one line; if the limit is reached before the first declaration, the stopping line says the file does not look like Zoril source. `src/diag.zrl` is in stage1's closure: use only what stage1 accepts (a `static mut` counter).
+    - **Checks:**
+      - C1: before the change, the reproducer in **Now**: the line count, quoted. And no existing error test expects more than 20 errors: `grep -c 'EXPECT:'` per file under `tests/`, the largest count quoted (if one is over 20, stop and report: the default changes).
+      - C2: a program with 25 type errors: 20 error lines, then the stopping line naming `--error-limit N`, exit 1; with `--error-limit 0`, all 25; with `--error-limit 3`, 3; quote each count.
+      - C3: a NUL byte, invalid UTF-8, and 160 KB of prose: one line each, the prose one saying the file does not look like Zoril source; the reproducer from **Now** prints at most 21 lines; quote each.
+      - C4: the same through `zbuild --error-limit N` in `scripts/test_zbuild_errors.sh`, passing.
+      - C5: `zoril --help`, `zbuild --help` and both man pages name `--error-limit` (`make man`, `sh scripts/test_man_pages.sh`).
+      - C6: `rm build/zoril && make` (stage1 builds `src/diag.zrl`) and `make`, no warning.
+      - C7: take the counter's check out (a scratch edit) and watch C2 fail; restore.
+      - C8: the `KNOWN_ISSUES.md` entry removed or updated; `make test` and `make preflight-changed`, each `Total:` line quoted; the fuzz record is stale for `src/`.
+
+- [ ] +tools +AI-G Z-0016 `zbuild` builds a program written in ZIL, and refuses any other input with one line
+    > **Created:** 2026-11-03. **Branch:** `main`.
+
+    - **Now:** `zbuild 01_arithmetic.zil` (from `corpus/zil/`) parses the ZIL as Zoril and prints about thirty `expected declaration` errors; the manual pipeline (`zilc`, `qbe`, `as`, `ld` with the runtime) works and exits 30.
+    - **Do:** a root ending in `.zil` skips the module graph and the front end and runs `zilc`, `qbe`, `as` and the link with `zbuild`'s usual linker and runtime choice, honouring `-o` and the cache directory; `--checked` with a `.zil` root is refused with one line. A root ending in neither `.zrl` nor `.zil` is refused with one line naming both. Update `doc/man/zbuild.1.scd` (`make man`), `zbuild --help`, and "Starting from ZIL" in `doc/getting_started.md`.
+    - **Checks:**
+      - C1: before the change, `build/zbuild corpus/zil/01_arithmetic.zil -o build/z16/a; echo $?` and the first three error lines, quoted.
+      - C2: after, the same builds and `build/z16/a; echo $?` prints 30; every file in `corpus/zil/` gives its expected exit code (a loop in a new scenario, or in `scripts/test_user_paths.sh` with the installed `zbuild`); quote the loop's summary.
+      - C3: `-o` and the cache directory are honoured: the binary lands at the `-o` path, and a second build of the same `.zil` reuses the cache (the scenario checks the cache directory's contents).
+      - C4: `zbuild foo.txt` and `zbuild --checked x.zil`: one line each, exit nonzero; quote both.
+      - C5: take the `.zil` branch out (a scratch edit) and watch C2's scenario fail; restore.
+      - C6: `doc/man/zbuild.1.scd` (`make man`), `zbuild --help` and "Starting from ZIL" in `doc/getting_started.md` updated; `sh scripts/test_man_pages.sh` passes; the doc snippet scenario (`./scripts/test.sh --scenario getting-started`) passes.
+      - C7: the `KNOWN_ISSUES.md` entry removed or updated; `make test` and `make preflight-changed`, each `Total:` line quoted; the fuzz record is stale for `tools/zbuild/`.
+
+- [ ] +diagnostics +types +AI-G Z-0067 `v.push(Vec.new())` reports `unknown type 'T'` at a standard-library line under the user's file name
+    > **Created:** 2026-11-05. **Branch:** `main`. **Found by:** Z-0049's review (correction 9). Default mode; not a safety issue.
+
+    - **Now:** `import "vec.zrl"; use vec::Vec; fn main() -> i32 { let mut v: Vec<Vec<i32>> = Vec.new(); v.push(Vec.new()); return v.len() as i32 - 1; }` fails with `<file>.zrl:23:13: error: unknown type 'T'`: line 23 is `stdlib/vec.zrl`'s `impl<T> Vec<T>`, printed with the user's file name. `v.push(Vec::<i32>.new())` compiles, as does `let mut w: Vec<String> = Vec.new(); w.push(String.new());`.
+    - **Two defects:** (1) the element type of a generic constructor in argument position is not inferred from the parameter's type (`T` of `push` is known from `v`); (2) a diagnostic raised inside an instantiated generic carries the instance's line with the caller's file. Fix (2) in any case; fix (1) if inference from the expected argument type is in the spec (`doc/spec/`), or else make the message say that the type argument must be written, and fix the spec if it is silent.
+    - **Checks:**
+      - C1: what `doc/spec/` says about inferring a constructor's type arguments from the parameter it is passed to: the section and the sentence quoted, or "silent" with the sections searched. This decides (1): fix it if the spec says so; otherwise word the message so it says to write the type argument, and add the rule to the spec in the same commit.
+      - C2: the program in **Now** as a test: exit 0 after (1), or, if (1) is not fixed, an `// EXPECT:` with the new message naming the user's file and line.
+      - C3: a test where an error is raised inside a generic instance: the diagnostic names `stdlib/vec.zrl` (or the instance's file) and its line, not the caller's file with the instance's line; it fails before the change (run against the old compiler and quote).
+      - C4: `v.push(Vec::<i32>.new())` and the `String` form still compile (tests).
+      - C5: take the file fix out (a scratch edit) and watch C3 fail; restore.
+      - C6: `make test` and `make preflight-changed`, each `Total:` line quoted; the fuzz record is stale for `src/` if `src/` changed.
+
+- [ ] +modular +tools +AI-G Z-0079 A generic body using a type-argument builtin cannot be read back from its interface
+    > **Created:** 2026-11-05. **Branch:** `main`. **Found by:** Z-0078. Refuses more, never less: not a safety issue.
+
+    - **Now:** the interface printer writes `@ptr_from_int<*mut T>(n)` in a generic body as `@ptr_from_int::<*mut T>(n)`, which the parser refuses when it reads the `.zri` (`expected (, but found ::`). Whole-program builds it; zbuild does not. Reproducer: `plib.zrl` = `pub fn at<T>(n: u64) -> *mut T { return @ptr_from_int<*mut T>(n); }`, `pmain.zrl` = `import "plib.zrl"; fn main() -> i32 { let p = plib::at::<i32>(64 as u64); return (p as u64 - 64 as u64) as i32; }`; `build/zoril` accepts `pmain.zrl`, `build/zbuild -o p pmain.zrl` fails in the cache's `plib.zri`. The same for `@ptr_cast`, `@int_cast` and `@alloca` (each probed, 2026-11-05).
+    - **Do:** print a builtin's type argument as written (`@name<T>(..)`), or have the parser accept `::<` after a builtin; say which and why. A `tests/modular/iface_attrs/` fixture with one generic body per builtin, built whole-program and through zbuild. `make test`, `make preflight-changed`.
+    - **Settled (review, 2026-11-07):** the printer writes `@name<T>(..)`, as the source does; the parser stays as it is, so the language accepts no new spelling.
+    - **Checks:**
+      - C1: the reproducer in **Now**, before the change: `build/zbuild -o build/z79/p pmain.zrl` fails with `expected (, but found ::`; quote it.
+      - C2: after, it builds and `build/z79/p; echo $?` prints 0.
+      - C3: a `tests/modular/iface_attrs/` fixture with one generic body each for `@ptr_from_int`, `@ptr_cast`, `@int_cast` and `@alloca`, built whole-program and through zbuild with the same exit code (`sh scripts/test_interface_attrs.sh` passes; quote it).
+      - C4: the `.zri` written for the fixture contains `@ptr_from_int<` and no `@ptr_from_int::<` (`grep` on the cache's `.zri`; quote the line).
+      - C5: take the printer change out (a scratch edit) and watch C3 fail; restore.
+      - C6: `make test` and `make preflight-changed`, each `Total:` line quoted; the fuzz record is stale for `src/`.
+
+- [ ] +tests +tools +AI-G Z-0080 The mutation harness's two lists exist, or its header stops claiming them
+    > **Created:** 2026-11-05. **Branch:** `main`. **Found by:** Z-0078 (and its review).
+
+    - **Now:** `scripts/mutation-check.sh`'s header says `scripts/mutation_uncovered.list` holds the mutations it deliberately does not run (M106, M107, M85, M112) and `scripts/mutation_incremental.list` the ids run against the incremental scenario (`-c` / `.zri`). Neither file exists: `incremental_list_path` returns a missing file, `incremental_mutation` is always false, so no mutant is ever run against the incremental scenario, and nothing records the deliberately unrun ones. `git log --all` shows neither file was ever committed. A mutant of the interface printer (Z-0078's `#[fresh]` printing) is caught only by `scripts/test_interface_attrs.sh`, a gate the harness does not run.
+    - **Do:** find in git history whether the lists existed and were lost (`git log --all -- scripts/mutation_incremental.list`), then either restore them with their entries, or make the harness say plainly that it runs neither; and decide whether a mutant may name a gate (the interface gate) as its catcher. Add an interface-printer mutant (`if f.fresh {` -> `if false {` in `src/interface_print.zrl`) that the chosen route catches. `make test`, `sh scripts/test_mutation_check.sh`.
+    - **Not ready for `+AI-G` (review, 2026-11-07):** **Do** leaves two decisions: whether the harness runs an incremental list at all, and whether a gate (`scripts/test_interface_attrs.sh`) may be a mutant's catcher, which adds its run time to every surviving mutant's evaluation (the harness already runs `perf-gate`, `fmt-check` and `static-image` that way). An `+AI-D` session, or the maintainer, settles both here first, with the gate's run time measured; then this task gets numbered checks: the new mutant reported caught by the chosen route, and that route taken out and the mutant reported SURVIVED.
+
+- [ ] +bench +measurement +AI-G Z-0004 Measure how far the benchmark gate's measures move between cloud sessions
+    > **Created:** 2026-11-03. **Branch:** `main`.
+    > **Session rule:** a new session records one sample only if asked to, so this task never starts a session.
+
+    - **Why:** `bench/cross_lang/thresholds.cfg` is not in the tree, so `scripts/bench_threshold_check.sh` records a baseline on its first run on a host. Every cloud session starts on a fresh VM, so there the gate compares a run with itself and cannot fail. Of its three measures, `runtime_ratio_vs_gcc_o2` is relative to gcc on the same host; `clean_throughput_loc_s` and `incremental_rebuild_ms` are absolute and depend on the VM.
+    - **Do:** in three to five separate cloud sessions, run `sh scripts/bench_cross_lang.sh --check-thresholds` on the same commit and record each measure, the CPU model (`/proc/cpuinfo`) and the load. Report the spread of each measure against the gate's 15% tolerance. Delete the files the run writes under `bench/`; commit nothing but this task's text.
+    - **Sample 1 (2026-11-03, commit `289bddb`):** `Intel(R) Xeon(R) Processor @ 2.30GHz`, 4 vCPUs, 1-minute load average 2.46 at the start (a `make test` had just finished, so the host was not quiet). `clean_throughput_loc_s` 10177 (the run's own spread 288..297 ms, +3.1%), `incremental_rebuild_ms` 22, `runtime_ratio_vs_gcc_o2` 4.182, `peak_rss_mb_per_kloc` 2.973; the run took 42 s. Earlier on this same VM, an unrelated preflight recorded `clean_throughput_loc_s` 10072, 1.0% below this sample. That is one VM twice, not a spread between sessions.
+    - **Sample 2 (2026-11-03, commit `289bddb`):** the same conversation, but on a freshly booted VM (booted 14:49 UTC, after the setup script changed), so not the VM of sample 1. `Intel(R) Xeon(R) Processor @ 2.30GHz`, 4 vCPUs, 1-minute load average 0.36 at the start. Run in a scratch worktree of `289bddb` whose `build/zoril` was built from that commit's compiler source and which rebuilt its own `zilc` and `zbuild`. `clean_throughput_loc_s` 9705 (the run's own spread 302..330 ms, +9.3%), `incremental_rebuild_ms` 20, `runtime_ratio_vs_gcc_o2` 4.095, `peak_rss_mb_per_kloc` 2.973; the run took 56 s. Against sample 1: clean -4.6%, incremental -9.1%, ratio -2.1%, RSS unchanged, all inside 15%. The bench outputs were deleted with the worktree.
+    - **Still to do:** one to three more samples, each from a new cloud session on this commit. This task stays open until they exist; two samples are not a spread.
+    - **Checks (for each new sample):**
+      - C1: the session is new: the VM's boot time (`uptime -s`) differs from every earlier sample's; quote it.
+      - C2: the commit is `289bddb`, in a scratch worktree whose `build/zoril`, `build/zilc` and `build/zbuild` were built from it (as sample 2 did); quote `git -C <worktree> rev-parse --short HEAD`.
+      - C3: the CPU model (`grep -m1 'model name' /proc/cpuinfo`), the vCPU count, and the 1-minute load average before the run; quote them.
+      - C4: `sh scripts/bench_cross_lang.sh --check-thresholds`: the four measures and the run's own spread line, quoted as samples 1 and 2 are.
+      - C5: `git status --short bench/` after deleting what the run wrote prints nothing.
+      - C6: once three or more samples exist: a table of each measure's minimum, maximum and spread against the 15% tolerance.
+
+- [ ] +bench +decision +AI-G Z-0005 Decide the benchmark gate's behaviour on a host without a committed baseline
+    > **Created:** 2026-11-03. **Branch:** `main`. **Depends:** Z-0004.
+
+    - **Options, from the measurement:** commit a baseline for the measures whose spread stays inside the tolerance; make the gate print a `[SKIP]` naming the reason for those that do not; and when no committed baseline exists, have the gate say so instead of recording one and passing.
+    - **Recommendation (2026-11-03, until Z-0004's spread data decides it):**
+        1. A host with no committed baseline gets a statement, not a pass. The gate stops recording a baseline on a first run and then printing "All performance thresholds within tolerance"; it prints `[SKIP] bench-thresholds: no committed baseline for <axis> (<reason>)` per axis and exits 0. Recording stays an explicit act (`sh scripts/bench_cross_lang.sh --record`).
+        2. Commit a baseline for `runtime_ratio_vs_gcc_o2` only (4.182 in Z-0004's sample 1): it is relative to gcc -O2 on the same host, so it moves with the compiler and not with the VM. It is committed once Z-0004's samples keep its spread inside the 15% tolerance; otherwise it gets the `[SKIP]` too.
+        3. `clean_throughput_loc_s` and `incremental_rebuild_ms` stay host-local. A host that has recorded its own baseline (a developer's machine) still compares against it; anywhere else they print `[SKIP]` naming "absolute measure, no baseline for this host".
+    - **Why:** on a fresh VM the present gate compares a run with itself, so it cannot fail, and it says "within tolerance" anyway. A committed absolute baseline would pass or fail with the VM's speed, which tests the VM. Z-0004's single sample says nothing yet about other VMs; rule 2 is the part its data can overturn.
+    - **Not done here:** the change to `scripts/bench_threshold_check.sh` and its tests. It needs a task of its own once Z-0004 has its samples.
+    - **Reopened (2026-11-03):** the decision depends on Z-0004's measurements, so the task stays open until they exist; the recommendation above is not a decision yet.
+    - **Tag (review, 2026-11-07):** a decision is `+AI-D` work (`AGENTS.md`, "Model tags"): this task is taken by an `+AI-D` session or the maintainer, whatever its title line says. The implementation it names under **Not done here** becomes an `+AI-G` task with numbered checks when it is written.
+
+## `provenance` Branch: Hardening & Precision Series (Paused)
+
+Provenance and liveness hardening series (`+safety` B1 to B4). Paused until the test-efficiency series finishes:
+1. Closure summaries and environments: Z-0093, Z-0094, Z-0096, Z-0097.
+2. Value precision & compiler refactoring: Z-0087 (integers from collections), Z-0086 (literals), Z-0089 (`exh_expand_or`), Z-0090 (`zbuild` manifest).
+3. Core provenance rules and diagnostics: Z-0073 (raw pointer decision), Z-0011 (borrows/stores decl check), Z-0044 (local field liveness), Z-0066 (diagnostics), Z-0065 (parallel checking), Z-0074 (differential review), Z-0012 (retirement of old passes).
+4. Post-series audits: Z-0045 (reference carrier through phi/let), Z-0017 (safe store-grid twins).
+
+**Series rule (2026-11-05, from Z-0071):** a precision fix that removes origins from a set (an exemption, a split, a moved-storage drop) is first measured alone, on top of the task it serves, to show it is needed; and it comes with probes of its sibling routes (the value built inside the callee, returned from a call, packed into a struct beside a view or a raw pointer). Stop for review after each `+safety` check-in.
+
 - [ ] +safety +tests +AI-D Z-0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
-    > **Created:** 2026-11-06 **Found by:** Z-0088 (why experiment A was unsound). **Depends:** Z-0088. **After:** Z-0092. **Before:** Z-0094, Z-0065. **Check-in:** stop for review after it. **Split here** if the design note and the implementation take more than a session: the design (§3 text and probes) first.
+    > **Created:** 2026-11-06. **Branch:** `provenance`. **Found by:** Z-0088 (why experiment A was unsound). **Depends:** Z-0088. **After:** Z-0092. **Before:** Z-0094, Z-0065. **Check-in:** stop for review after it. **Split here** if the design note and the implementation take more than a session: the design (§3 text and probes) first.
 
     - **Now:** inside a closure body every capture is read as the `Env` flag (`out O={Env}`), which `os_note_edges` turns into an `Unknown` value stored into a global: `|| { *out = routed; }` has the summary `store Unknown -> global`. An owned capture (moved into the environment) is also marked as storage of the body's own frame (`os_stmt`, "an owned capture's storage dies with the closure"), so a view of it cannot leave the body, but a store *into* it is a store into this frame and records no summary edge. A caller applying such a summary sees no store at all: Z-0088's experiment A did, and accepted 1490 unsafe grid cells (all `closure_owned_capture`, e.g. `arena_vec__arena_struct_bundle__direct__closure_owned_capture__frame_ends`, where the closure owns `h` and stores the view `routed` into it).
     - **Do:** summarise a closure body over its `__env` parameter (the last one, `lower_rv_call_ptr`): a capture is what `__env` reaches (`ParamContents(env)`); a store into a capture is an edge into it; an owned capture is storage the environment owns, so a store into it is an edge into `ParamContents(env)`, while a view of it that leaves the body (returned, stored outside the environment) is still refused. State it in the design note §3 (_Closure environments_), with the routes: by-reference and by-value captures, an owned capture, a nested closure, a closure capturing another closure, and `move` of the environment.
     - **Checks:** the store grid's 1490 cells refused by the body's own rules, not by the unknown-call rule (run the grid with Z-0094's pre-scan applied on top, as Z-0088 built it in `build/z88/esrc_ab`, and count 0 unsafe accepted); `closure_env_safe_twin.zrl` accepted; the owned-capture tests (`closure_captures_owning_and_other`, `closure_mutates_owning_capture`, `closure_owned_capture`; reduced in `build/z88/c1.zrl`: a closure that owns a `Vec` and pushes to it) measured. `make test`, `make preflight-changed`, the rejection differential, `sh scripts/run_safety_matrix.sh`.
 
 - [ ] +safety +tests +AI-D Z-0094 B1.9a3 A call through a local bound to one known function uses that function's summary
-    > **Created:** 2026-11-06 **Found by:** Z-0088 (option 1, experiment A). **Depends:** Z-0093. **Before:** Z-0065. **Check-in:** stop for review after it. Accepts more: the rejection differential applies.
+    > **Created:** 2026-11-06. **Branch:** `provenance`. **Found by:** Z-0088 (option 1, experiment A). **Depends:** Z-0093. **Before:** Z-0065. **Check-in:** stop for review after it. Accepts more: the rejection differential applies.
 
     - **Now:** a closure or a `fn` item bound to a local and called in the same body (`let mut cl = || { *out = routed; }; cl();`, `let f_ptr: fn(..) = forward_fn_target; f_ptr(x)`) is an unknown call. Every closure and `fn`-value shape in the store grid is of this kind. After Z-0092, the unknown-call store rule still refuses the cells where the closure itself stores, since it must assume any frame-bound argument may go into any memory another reaches: `closure_capture_mut` 1708, `closure_call_mut` 2534 and `closure_owned_capture` 3300 safe twins (Z-0088, experiment B; Z-0092's grid run refuses the same set, `build/z92/grid/twin_rejections.txt`).
     - **Do:** before the passes, find each local assigned exactly one `FuncAddr` in the body (directly or by a plain copy of such a local; never through a `&mut`, a projection or two different functions); at a `CallPtr` through it, apply that function's summary with `os_call`, the callee value as `__env` (the last argument). Z-0088's version is in `build/z88/esrc_a/check_zir.zrl` (`z88_scan`, `z88_try_known`): a measurement aid, not a rule; rewrite it without the `static mut` state. A callee whose summary is not known yet (a recursive cycle) is handled as `os_call` handles it.
     - **Checks:** the store grid under `--provenance` (0 unsafe accepted, the 1490 cells of Z-0093 included; the closure destinations' twins counted by axis), and the 672 test programs (17 with warnings before Z-0092, 14 after it, as measured; `build/z92/measure.sh`). Probes: a local assigned two closures on two branches (stays unknown), a closure local passed by `&mut` to a callee that reassigns it, a closure called after the variable it captured was moved. `make test`, `make preflight-changed`, the rejection differential.
 
 - [ ] +safety +tests +AI-D Z-0096 A closure storing into a global, handed to a callee that calls it, is checked
-    > **Created:** 2026-11-06 **Found by:** Z-0092 (the store side of the rule's boundary). **Check-in:** stop for review after it. **After:** Z-0093, whose closure summary over `__env` gives the closure's store into a global an edge this task can carry through the callee. **Before:** Z-0012, which deletes `check_fn_value`.
+    > **Created:** 2026-11-06. **Branch:** `provenance`. **Found by:** Z-0092 (the store side of the rule's boundary). **Check-in:** stop for review after it. **After:** Z-0093, whose closure summary over `__env` gives the closure's store into a global an edge this task can carry through the callee. **Before:** Z-0012, which deletes `check_fn_value`.
 
     - **Now:** `bench/safety_matrix/probes/gap_64_closure_global_store_via_fn_param.zrl`: `run(|| { G = r as *i32; })` with `fn run(f: fn()) { f(); }` and `r = &x` compiles with and without `--provenance`, and the global keeps a dead frame's address (exit 77). The closure body stores `Env` (not frame-bound) into a global; the unknown call through `f` in `run` records edges only into what its arguments reach, never a global, so `run`'s summary has none and the call to `run` checks nothing. The direct call `cl()` is refused by the old rules ("callee stashes local stack pointer via indirect call"); a `fn` item storing into a global cannot become a value (`check_fn_value` in `src/verify.zrl`), which Z-0012 has to carry over.
     - **Route class:** a closure passed as an argument to a callee that calls it (`gap_52`), here with a global destination. Probe the siblings: a `static mut` reached through a captured reference, a closure kept in a struct field, two levels of callers.
 
 - [ ] +precision +tests +AI-D Z-0097 An edge into a `fn` argument's environment does not make a `fn` item a global destination
-    > **Created:** 2026-11-06 **Found by:** Z-0092 (its accept probes). **Depends:** Z-0092. **Before:** Z-0065: a higher-order function handed a local's address is common in user code. Accepts more: the rejection differential applies.
+    > **Created:** 2026-11-06. **Branch:** `provenance`. **Found by:** Z-0092 (its accept probes). **Depends:** Z-0092. **Before:** Z-0065: a higher-order function handed a local's address is common in user code. Accepts more: the rejection differential applies.
 
     - **Now:** an unknown call through a `fn` parameter `f` records store edges into `ParamContents(f)`, its environment (`os_unknown_call_effects`, the environment as argument K = ARGS.len). At a call that passes a `fn` item (`Static`, no environment), the edge's destination is the item's reach, `Static`, a global, so a frame address passed beside it is refused by the call store rule: `fn first(f: fn(&i32, &i32) -> &i32, a: &i32, b: &i32) -> &i32 { return f(a, b); }` called as `first(pick, &x, &y)` with locals, `walk(step, &x, n)`, `run(&m, &x)` with `m.f` a `fn` item (Z-0092's `build/z92/a_*.zrl`; the base compiler refuses them the same way). Inside the callee `os_unknown_arg` already reads a `Static` callee as adding no memory; the caller's edge mapping does not.
     - **Do:** decide whether an edge into the `ParamContents` of a `fn`-typed parameter maps, at the caller, to the environment of the value passed (`os_through` of its `O` without `Static`, as `os_unknown_arg` takes it) rather than to everything it reaches. A rule that removes destinations: the series rule's probes (a capturing closure passed in its place must still be refused, `gap_52`'s shapes), the store grid under `--provenance`, and `test_stdlib_iter.zrl`'s seven warnings read first to see whether they are this class.
     - **Found in Z-0092's review (2026-11-06):** the false global edge carries up through a summary. `fn apply<T>(f: fn(T) -> T, x: T) -> T { return f(x); }` and `fn via(p: &i32) -> &i32 { return apply::<&i32>(same, p); }`: `via`'s body is accepted, but its summary now stores `p` into a global (the edge into `ParamContents(f)` mapped to `same`, `Static`), so `main`'s `via(&x)` with a local is refused, "the callee stores an address of this frame into a global (call store rule)", one level above the `fn` item (`build/z92r/s_generic_hof.zrl`). A fix that maps the edge at the call must also keep it out of the caller's summary. The arena twins `f(&a, mk_vec, &mut v)` and `r(&a, mk_vec)` with a local arena are refused the same way (`build/z92r/s_param_vec.zrl`).
 
 - [ ] +safety +tests +AI-D Z-0087 B1.9c An integer popped from a collection carries no address
-    > **Created:** 2026-11-06 **Found by:** Z-0064 (root (f)). **Depends:** Z-0075. **Check-in:** stop for review after it.
+    > **Created:** 2026-11-06. **Branch:** `provenance`. **Found by:** Z-0064 (root (f)). **Depends:** Z-0075. **Check-in:** stop for review after it.
     > **Routed (2026-11-06, by Z-0075):** a rule, though only `src` shows the class (6 warnings): it adds a type fact (an integer holds no address), the cheapest of the rules to state, and the exemption for a primitive result exists already.
 
     - **Now:** `os_call` drops a body summary's `ParamContents` ties for a primitive result only, so `Vec<usize>.pop()` (`Option<usize>`) is tied to the `Vec`'s storage; the integer then carries `Frame(widths)` into whatever it is written into. In `src/fmt/doc.zrl` (`Doc::measure`) this gives all six `fmt/` warnings (`doc.zrl:111`, `:151`, `fmt.zrl:76`, `:122`, `:131`, the cascade through `render`, `file` and `format_source`).
@@ -416,7 +563,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **Do:** extend the exemption to a result type that holds no pointer at any depth (an `Option<usize>`, a struct of integers; `os_carries` is the place to check), and probe that a type holding a pointer anywhere (an `Option<&i32>`, a struct with a `[u8]` field) keeps its tie. It removes ties, so the rejection differential applies. Relates to the `Vec.pop` class Z-0064 recorded (a non-integer value popped and moved into a returned `Vec`, `git show 403a092:tests/language/memory/origins/own_contents_edge.zrl`), which this does not cover. `make test`, `make preflight-changed`.
 
 - [ ] +safety +tests +AI-D Z-0086 B1.9e A literal held by a value does not make what the value reaches a global destination
-    > **Created:** 2026-11-06 **Found by:** Z-0064 (root (e)). **Depends:** Z-0075. **Check-in:** stop for review after it.
+    > **Created:** 2026-11-06. **Branch:** `provenance`. **Found by:** Z-0064 (root (e)). **Depends:** Z-0075. **Check-in:** stop for review after it.
     > **Routed (2026-11-06, by Z-0075):** a rule. Z-0084's rule is deferred, so this one must cover the lowerer's literals without it: `exh_missing` writes literals into a `ByteVec` in `self.arena`, which the call rule names `Param(0)` (`*self`), so the `Static` lands in `*self` and not only in the arena.
 
     - **Now:** a local that holds `Static` (a string literal in one of its fields, or written into memory it reaches) makes every later store into what it reaches have `Static` among its targets, and the call store rule reads `Static` as a global. In the driver, `ZirLowerer::lower_function`'s summary has `store Static -> Param(0)` (a dozen lowering functions write a literal into `*self`, the first in lowering order `exh_missing`), so `Driver::run_body_passes_in_scratch`'s local `zir_low` holds `Static`; it is the first function in lowering order with a store into a global. That carries the last 8 of `src`'s warnings (`src/driver/module.zrl:666`, `:713`, `:1141`, `:1188`, `:1475`, `:1603` into a global; `:1362`, `:1386` outlives), and the class covers Z-0064's three `arena_raw` test programs (`test_stdlib_string_arena`, `accept_slice_receiver`, `test_empty_compile_and_tool_errors`).
@@ -425,7 +572,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **Do:** decide whether a `Static` origin reached through a value may be dropped from store targets (a literal is read-only, so storing through it needs `unsafe`), or whether the sites change. A rule removes origins, so the series rule applies, with probes of a `static mut` reached through a value (which must stay a global destination) and a literal beside a `&mut` in one struct. `make test`, `make preflight-changed`, the rejection differential.
 
 - [ ] +refactor +tests +AI-G Z-0089 B1.9f `exh_expand_or` pushes a fresh copy of each row it keeps
-    > **Created:** 2026-11-06 **Found by:** Z-0064 (root (d2)). **Routed by:** Z-0075, to a code change at the site; the rule is deferred (Z-0085 in `future.tm.md`). **Before:** Z-0065.
+    > **Created:** 2026-11-06. **Branch:** `provenance`. **Found by:** Z-0064 (root (d2)). **Routed by:** Z-0075, to a code change at the site; the rule is deferred (Z-0085 in `future.tm.md`). **Before:** Z-0065.
 
     - **Now:** `src/lower_zir/exhaust.zrl`, `ZirLowerer::exh_expand_or`: `if !is_or { out.push(row); }` pushes the row slice read out of `rows`. The new rules read a value copied out of a referenced `Vec` as an address into its buffer, and with the function's self-recursion (`return self.exh_expand_or(&out)`) that turns `exh_useful`'s summary into every parameter stored into every parameter and a global: 153 of `src/main.zrl`'s 167 "into a global" warnings under `--provenance=warn`.
     - **Do:** push a fresh copy of the row (`let copy = self.alloc_u32s(row.len);`, copy the elements, `out.push(copy);`), as the or-pattern branch a few lines above does. The rows are read-only pattern lists, so behaviour is unchanged; the cost is one scratch-arena allocation per kept row. A one-line comment says why the copy is there (the origin rules), without a task ID. Plain code: `src/` must build under the pinned stage1.
@@ -438,7 +585,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C6: `make test` and `make preflight-changed`, each `Total:` line quoted; the completion note says the fuzz record is stale for `src/`.
 
 - [ ] +tools +tests +AI-G Z-0090 B1.9g zbuild's manifest parsing gives no warning under `--provenance`
-    > **Created:** 2026-11-06 **Found by:** Z-0064 (root (d1)). **Routed by:** Z-0075, to code changes at zbuild's sites; the rule is deferred (Z-0084 in `future.tm.md`). **Before:** Z-0065.
+    > **Created:** 2026-11-06. **Branch:** `provenance`. **Found by:** Z-0064 (root (d1)). **Routed by:** Z-0075, to code changes at zbuild's sites; the rule is deferred (Z-0084 in `future.tm.md`). **Before:** Z-0065.
 
     - **Now:** `tools/zbuild` gives 25 warnings under `--provenance=warn` (18 and 4 call store rule, 2 return rule, 1 store rule), all in manifest parsing (`parse_manifest`, `parse_entry`, `write_manifest`, `load_manifest` in `tools/zbuild/src/manifest.zrl`). `parse_entry(&cols, arena)` takes the column `Vec` by reference, and because a `Vec` holds a raw arena pointer, the call rule names its result's arena storage by `&cols`'s address (`Frame(cols)`); what is read out of the result is then an address of this frame.
     - **Do:** change the sites so that no argument whose only tie to the arena is the `Vec`'s pointer names the result's storage. First try passing `cols.as_slice()` (a `[[u8]]`, which reaches no `ArenaHeader`) to `parse_entry`, then the sites the remaining warnings name. Keep the manifest format and behaviour unchanged. If a site cannot be changed without `unsafe`, stop and report: Z-0084's rule comes back instead.
@@ -451,7 +598,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C6: `make test` and `make preflight-changed`, each `Total:` line quoted; the completion note says the fuzz record is stale for `tools/zbuild/`.
 
 - [ ] +safety +decision +AI-D Z-0073 B1.8b Decide whether storing a raw pointer into a by-value owner's buffer, then dropping the owner, is refused
-    > **Created:** 2026-11-05 **Found by:** the review of Z-0071. **Before:** Z-0012. Decision first; the fix or the probe is the next step it names.
+    > **Created:** 2026-11-05. **Branch:** `provenance`. **Found by:** the review of Z-0071. **Before:** Z-0012. Decision first; the fix or the probe is the next step it names.
 
     - **The case:** `struct Buf { data: *mut u8 }` with `Drop` freeing a heap block; `fn keep(out: &mut *mut u8, b: Buf) { *out = b.data; }` and `fn f(out: &mut *mut u8) { let b = Buf.new(); keep(out, b); }` (`tests/language/memory/provenance/addr_edge_by_value_owner_refused.zrl` at `403a092`), and the twin storing `BothPtr { own_v: Vec::<i32>.new(), p: b.data }` (`build/z71r/c2.zrl`). Accepted by the old rules and by `--provenance` at `a1ea096`; the caller's pointer is left dangling once `keep` drops `b`. Only `403a092` refused the first form, through the edge kinds Z-0072 removes.
     - **Question:** the stored value is a raw pointer, dereferenced only in `unsafe`. Z-0063 decided that the new rules check a raw pointer's origins (`Raw` is exempt only as a value). Does that make this a hole (a `known_gap` probe now, a fix that tells a moved owner from an address read out of it without per-store kinds), or is a dangling raw pointer outside the guarantee (record it in `doc/spec/safety_model.md` and `doc/spec/unsafe_policy.md`, with a test showing the accept)?
@@ -460,7 +607,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **Two more sibling routes (found in Z-0076, 2026-11-06):** a frame address stored through the result of a `#[fresh]` function (`tests/language/memory/provenance/fresh_store_through_old_rule_refused.zrl`) or through a heap block from `zoril_allocator_alloc(null, ..)` (`heap_block_store_through_old_rule_refused.zrl`), the pointer then returned, or the block put into a global (`heap_block_into_global_old_rule_refused.zrl`): any destination of the pointer. Since Z-0076 the new rules accept all three: the result has no origins, so a store through it reaches nothing they follow, as with a raw pointer an owner holds. The old region rule refuses all three in every mode today. Decide them with the case above: if a dangling raw pointer is outside the guarantee, say so in `doc/spec/safety_model.md`; if not, the store through a raw pointer with no origins needs a target (the fresh storage of the local holding it, say) before Z-0012 removes the old rule.
 
 - [ ] +safety +tests +AI-D Z-0011 B3 Declarations are checked against the body: `#[borrows(..)]`, `#[stores(..)]`, the `&self` default
-    > **Created:** 2026-11-03 **Depends:** Z-0049. **Check-in:** stop for review after it.
+    > **Created:** 2026-11-03. **Branch:** `provenance`. **Depends:** Z-0049. **Check-in:** stop for review after it.
     > **Depends also (2026-11-05):** Z-0064 (its re-measurement comes first).
 
     - **Rule (Decision 1):** a declaration may list more than the body proves (a wider public contract), never less. For a function with a body the effective ties and stores are the union of what the body proves and any declaration (Z-0010 already sums them); a declaration that claims less than the body is a compile error, the narrowing rule of `CHANGELOG.md`'s pre-1.0 note. The `&self` elision default and the declarations apply as written to bodyless items (`extern`, trait signatures, `.zri` imports). Each of the tree's 82 `#[borrows()]` declarations (such as `Lexer.text_from`) is either proved unnecessary by Z-0010's `ParamAddr`/`ParamContents` summary and removed, or converted into an explicit, reviewed `unsafe` interior with a `// SAFETY:` comment, listed with its decision in the commit. **Stop and report** before changing a `pub` stdlib signature.
@@ -469,7 +616,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **Blind spot not covered by this check (from Z-0049's review, 2026-11-05):** a body that copies through a bare `extern` proves no store, so a declaration can never be "narrower than the body" there (Z-0060's `extend_from_slice` route). Add a rule here or in a task of its own: a safe function that passes a pointer derived from a parameter to an `extern` with no declared effect must declare its own `#[stores]`/`#[borrows]` (or the `extern` declares its effect). Probe it with Z-0060's reproducer with Z-0060's fix taken out.
 
 - [ ] +safety +tests +AI-D Z-0044 B0.1 A value stored into a local's field through a pointer to the local keeps its borrow
-    > **Created:** 2026-11-03 **Check-in:** stop for review after it. **Closes:** `gap_37_local_mutref_field_reset`, `gap_38_param_field_reset`, `gap_39_method_self_field_reset`, `gap_43_box_field_reset`.
+    > **Created:** 2026-11-03. **Branch:** `provenance`. **Check-in:** stop for review after it. **Closes:** `gap_37_local_mutref_field_reset`, `gap_38_param_field_reset`, `gap_39_method_self_field_reset`, `gap_43_box_field_reset`.
     > **Depends:** Z-0010, Z-0011.
 
     - **Scope (narrowed to intra-frame liveness, 2026-11-03):** the frame-escape siblings (`gap_40`–`gap_42` and `gap_45`) are handled by Z-0048/Z-0012's origin sets. This task fixes intra-frame `Arena::reset` / `free` / `@drop` liveness (`ActiveBorrow` in `src/check_zir.zrl`), where a slice written into a local struct's field or a `Box`'s contents through a local `&mut`, through a callee's `&mut` parameter, through `self` in a `&mut self` method, or through `*b` on a `Box` is skipped today (`place_writes_through_pointer`), letting `a.reset()` pass while the field is read afterwards.
@@ -479,7 +626,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **Verification:** `make test`, `make preflight-changed`, the rejection differential; `bench/fuzz/README.md` stays stale for `src/`. Stop for review.
 
 - [ ] +diagnostics +AI-G Z-0066 B3.9 Provenance diagnostics name the origin they found, once per site
-    > **Created:** 2026-11-05 **Found by:** Z-0049's review (correction 8). **Before:** Z-0065, which makes these messages users' errors.
+    > **Created:** 2026-11-05. **Branch:** `provenance`. **Found by:** Z-0049's review (correction 8). **Before:** Z-0065, which makes these messages users' errors.
 
     - **Now:** the return rule says "the returned value holds an address of this frame" also when the returned origins are only `Unknown`, and the call store rule often prints the same warning twice at one location: under `--provenance=warn`, `src/fmt/doc.zrl:111:21`, `src/driver/module.zrl:1338:13`, `tools/zbuild/src/build.zrl:580:17`, `tests/unit/test_empty_compile_and_tool_errors.zrl:65:5` (re-checked 2026-11-06 after Z-0092).
     - **Stale examples (2026-11-06):** the `Unknown`-only return was `fn mk3(n: u64) -> Box<H> { let p = @ptr_from_int<*u8>(n); return box H { p: p, n: n }; }`, now accepted (`@ptr_from_int` gives `Raw` since Z-0063), and the duplicate was `fn add(v: &mut Vec<Vec<i32>>) { v.push(Vec::<i32>.new()); }`, now accepted. Find a current `Unknown`-only return first: the sources left are a summary-less call (a `.zri` import with no summary) and an index the walk cannot type.
@@ -493,7 +640,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
       - C6: `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +safety +tests +AI-D Z-0065 B4a The new rules on by default, beside the old ones
-    > **Created:** 2026-11-05 **Split from:** Z-0012. **Depends:** Z-0064, Z-0011, Z-0044, Z-0066. **Check-in:** stop for review after it.
+    > **Created:** 2026-11-05. **Branch:** `provenance`. **Split from:** Z-0012. **Depends:** Z-0064, Z-0011, Z-0044, Z-0066. **Check-in:** stop for review after it.
     > **Ordering note:** this task only refuses more, and depends in substance only on Z-0064 (the tree must be clean); the maintainer may move it ahead of Z-0011 and Z-0044 to close the escape holes for users sooner.
     > **Depends also (2026-11-06, from Z-0064):** Z-0075, and Z-0084 to Z-0088 as Z-0075 routes them (a task it routes to "accepted refusal" or "code change" is done here instead).
     > **Depends also (2026-11-06, as Z-0075 routed them):** Z-0088, Z-0087, Z-0086 (rules), Z-0089, Z-0090 (code changes at the sites). Z-0084, Z-0085 and Z-0091 are deferred to `future.tm.md` and are not dependencies.
@@ -508,7 +655,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **Verification:** `make test`, `make preflight-changed` (the differential must show 0 newly accepted; list the newly refused programs), `sh scripts/check_store_grid.sh`, the self-hosting fixpoint. The fuzz record goes stale for `src/`. Stop for review.
 
 - [ ] +safety +tests +AI-D Z-0074 B4b List every program the old rules refuse and the new rules accept, and read each
-    > **Created:** 2026-11-05 **Found by:** the review of Z-0071. **Depends:** Z-0065. **Blocks:** Z-0012, which is the change that accepts them.
+    > **Created:** 2026-11-05. **Branch:** `provenance`. **Found by:** the review of Z-0071. **Depends:** Z-0065. **Blocks:** Z-0012, which is the change that accepts them.
 
     - **Why:** `leak_vec` (Z-0071) was refused by neither differential the series runs: the rejection differential compares two compilers in the default mode, and `build/rv/provdiff.sh` compares `--provenance` before and after a change over the existing probes. A reviewer found it by hand. Z-0012 deletes the old rules, so every program only they refuse is accepted after it; that list is not computed anywhere.
     - **Do:** run the new rules alone (a scratch compiler with the old rules' refusals off, as `check_reject_diff.sh` builds its base in a scratch worktree, or a developer flag if one is cheaper; say which) and the default compiler over the rejection differential's program set (69,122 at Z-0071, `tests/`, the safety probes, the store grid twins). List every program refused by the default and accepted by the new rules alone, and read each: a real escape gets a fix or a `known_gap` probe before Z-0012; a safe program is recorded as Z-0012's intended acceptance.
@@ -516,7 +663,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **Known members (from Z-0076, 2026-11-06):** `tests/language/memory/provenance/fresh_store_through_old_rule_refused.zrl`, `heap_block_store_through_old_rule_refused.zrl` and `heap_block_into_global_old_rule_refused.zrl` are refused by the old region rule only: a frame address stored through a `#[fresh]` result or a heap block, the pointer then returned or put into a global. Their expected diagnostic names the old rule, so they fail when it goes; Z-0073 decides what replaces it.
 
 - [ ] +safety +tests +AI-D Z-0012 B4 Make `--provenance` the default, delete the old classifiers, and fix what the measurement found
-    > **Created:** 2026-11-03 **Depends:** Z-0011, Z-0044. **Check-in:** stop for review after it. **Split here** if the tree needs more than a session of changes.
+    > **Created:** 2026-11-03. **Branch:** `provenance`. **Depends:** Z-0011, Z-0044. **Check-in:** stop for review after it. **Split here** if the tree needs more than a session of changes.
     > **Split (2026-11-05, from Z-0049's review):** turning the rules on by default beside the old ones is Z-0065 (it only refuses more); this task is now the half that accepts more: delete the old rules and `src/summary_pass.zrl`, with the rejection differential, and the docs and twin lists. The fixes of the measurement are Z-0060 to Z-0063, and the `unsafe fn` exemption item moved to Z-0063, which narrowed it to `Raw`. **Depends also:** Z-0065, Z-0063.
     > **Depends also (2026-11-05):** Z-0074 (the old-refuses, new-accepts list), Z-0073 (the raw-pointer decision), Z-0075 (the checkpoint).
 
@@ -527,7 +674,7 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **From Z-0092 (2026-11-06):** the old rules refuse making a `fn` item that stores into a global or another parameter into a value (`check_fn_value` in `src/verify.zrl`); the new rules have no counterpart, since a call through a `fn` value records no store into a global (design note §3, _Calls through a `fn` value_). Carry it over before deleting the old rules: Z-0096 is the closure half of the same route. **Depends also:** Z-0096.
 
 - [ ] +audit +safety +AI-G Z-0045 A reference to a local carrier passed through a `let`, an identity call or a phi is refused
-    > **Created:** 2026-11-03 **Depends:** Z-0012 (do not edit `src/summary_pass.zrl` before Z-0012 retires it; close with Z-0012). Over-rejection, not a hole; related to Z-0017.
+    > **Created:** 2026-11-03. **Branch:** `provenance`. **Depends:** Z-0012 (do not edit `src/summary_pass.zrl` before Z-0012 retires it; close with Z-0012). Over-rejection, not a hole; related to Z-0017.
 
     - **Now:** a safe program that hands a callee a reference to a local struct, and stores what the callee returns, is accepted when the reference is written in the call (`take_ref(&c)`) and refused when it first goes through a `let`, an identity function or an `if`. The callee returns the view the struct holds (`c.v`), not a pointer into the struct; the checker reads the result as a pointer into the caller's stack frame. Error: "region escape: returning a pointer to local stack storage via sret".
     - **In the grid:** all 3402 safe twins of the `ref_let`, `ref_identity` and `ref_phi` carriers (1134 each; Z-0041) are refused, and every twin of `ref_direct` is accepted. They are in `bench/fuzz/store_grid_twin_rejections.txt`: `grep -E '__ref_(let|identity|phi)__' bench/fuzz/store_grid_twin_rejections.txt`.
@@ -563,124 +710,9 @@ Open work, in execution order from top to bottom, in four groups. (1) The proven
     - **Finding (2026-11-03):** Z-0047's read-through rule (`os_through_plus` on reference arguments) already gives `got O={Param(1)} S={}` on all three forms (`tests/language/memory/origins/read_through_{ref,identity,phi}.zrl`), `src/verify.zrl` accepts them with zero errors, and the sole refusal (`src/summary_pass.zrl:716`, "region escape: returning a pointer to local stack storage via sret") comes from `InterprocSummaryPass`, which Z-0012 retires and deletes. Do not change `src/summary_pass.zrl` beforehand; close this task with Z-0012 once the 3402 twins leave `bench/fuzz/store_grid_twin_rejections.txt`, the `accept` probe is added, and the rejection differential is recorded, citing Z-0012's commit on `main`.
 
 - [ ] +audit +AI-D Z-0017 A3.5 Twelve safe store-grid twins are rejected
-    > **Created:** 2026-11-03 **Depends:** Z-0012 (do not debug `src/summary_pass.zrl` before Z-0012 deletes it). Over-rejection audit, not a hole.
+    > **Created:** 2026-11-03. **Branch:** `provenance`. **Depends:** Z-0012 (do not debug `src/summary_pass.zrl` before Z-0012 deletes it). Over-rejection audit, not a hole.
 
     - **Cells (before Z-0012):** `{ref_local,elem_ref}__{struct_field,tuple_slot,array_slot}__{closure,param_65}__call_struct_mut__frame_ends` (12 cells) plus 96 cells exposed by Z-0008 in `bench/fuzz/store_grid_twin_rejections.txt`, rejected today by `src/summary_pass.zrl` ("region escape: storing local stack pointer into caller memory"). Also note the sibling found in Z-0047's review: passing a local struct `RefHolder { r: &c }` by value to `take_holder(h)` retains `Frame(c)` (`os_reach_all`).
     - **Over-rejection from Z-0007 (found in its review, 2026-11-03):** liveness borrows are tracked per local, not per field, so `w.s = v.as_slice(); let x = w.s[0]; a.reset(); return x - 42 + w.t - 3;` is refused at `a.reset()` because `w` stays live for `w.t`.
     - **Do (after Z-0012):** inspect every twin still listed in `bench/fuzz/store_grid_twin_rejections.txt` once `summary_pass.zrl` is gone (`param_65` twins should be accepted via the overflow bit; `closure`/`fn`-value twins: Decision 3 is decided (Z-0088), so any still refused after Z-0092 to Z-0094 is a finding, not a bound by design). Fix any unintended over-rejection without reopening any probe, add an `accept` probe for any fixed class, and document any deliberate precision bound (such as field-insensitive borrows) in `KNOWN_ISSUES.md` §5. `make test`, `make preflight-changed`, the rejection differential.
     - **Done when (2026-11-06, the series' end criterion, recorded on Z-0012):** every safe twin still in `bench/fuzz/store_grid_twin_rejections.txt` (and the modular list) is in a class `KNOWN_ISSUES.md` §5 names, with its reason and a rewrite, and none is common in the tests. `closure`/`fn`-value twins follow Z-0088's decision, not the note above.
-
-- [ ] +safety +research +AI-D Z-0013 Review rounds: rotate reviewers over the compiler until the findings dwindle
-    > **Created:** 2026-11-03 **Standing task;** a round reads and probes only, so it can run beside anything except a change to the area it reviews.
-
-    - **A round:** one reviewer (a model or a prompt not used in the last round) takes one area - the type matcher and conversion sites, the borrow checker and its summaries, drop and move semantics, the stdlib's `unsafe` interiors against what safe code can reach, the FFI boundary, the runtime and `zilc` - probes what it suspects against `build/zoril`, and records each lead here as confirmed, refuted or unprobed, with its reproducer.
-    - **Checklist:** every site that puts a value into an expected type (`let`, call argument, return, struct field, enum constructor, array literal and repeat, closure capture, method receiver, `match` arm, pattern binding); every type-matching and conversion function at depth above zero; every cast and what it lets safe code build; every place a size or length is narrowed; every check skipped for a special case (unit, `never`, zero length, constant operand); borrows of `static mut` held across a call or an assignment; the FFI boundary; the stdlib's `unsafe` blocks.
-    - **Each confirmed hole** becomes a `known_gap` probe, a route class in `doc/spec/safety_model.md`, and a generator feature in `scripts/fuzz/gen.lua`; it is fixed by another session and fix-reviewed by a third before the next round. A fix states the rule it enforces in one sentence and defaults to the strict side for anything it cannot classify.
-    - **Stopping rule:** rounds continue while a round with a fresh reviewer confirms a new hole; stop after two consecutive rounds from different reviewers confirm none.
-    - **Generator debt (2026-11-05):** route classes added in the hardening series without a `scripts/fuzz/gen.lua` feature (Z-0055 noted one for `gap_47`/`gap_48`); before the fuzz renewal after Z-0012 (Z-0003), list each `known_gap` route class added since the last record and whether the generator covers it, and add the missing features. At least: closures capturing a reference to a struct holding `&mut` (`gap_47`, `gap_48`), a closure passed to a callee that calls it (`gap_52`), a cycle storing through a local (`gap_54`), a closure parameter forwarding a view (`gap_55`), an element copy through an `extern` (Z-0060), a closure storing into a global through a callee (`gap_64`), and an `unsafe fn` made into a `fn` value at each conversion site (`gap_65`).
-
-- [ ] +tools +AI-G Z-0014 `zilc` refuses text it does not recognise between declarations, and a file that is not ZIL
-    > **Created:** 2026-11-03
-
-    - **Now:** `zilc` exits 0 with no message on random bytes, and on `printf '\x01\x02 zz garbage\n'` it writes a stray global parsed out of the word `garbage`. `ZilParser.parse_module` (`tools/zilc/src/zil_parse.zrl`) dispatches on a declaration's first byte and skips any other byte, so text between declarations is dropped silently.
-    - **Do:** at top level, after trivia, accept only the declaration forms of `doc/spec/intermediate_language.md` and report anything else as `zilc: line N: expected a declaration, found '<token>'` with exit 1; before parsing, refuse a NUL byte or invalid UTF-8 with one line. Keep the first-error behaviour.
-    - **Checks:**
-      - C1: before the change, `printf '\x01\x02 zz garbage\n' > build/z14/g.zil; timeout 10 build/zilc build/z14/g.zil -o build/z14/g.ssa; echo $?` and the `.ssa` it writes; quote both (exit 0 and a stray global today).
-      - C2: one `tests/zilc/` case per refusal: a stray word between two functions, control bytes, a NUL byte, invalid UTF-8; each fails before the change (run the new tests against the old `build/zilc` and quote) and passes after.
-      - C3: each refusal's message is the one in **Do** (`zilc: line N: expected a declaration, found '<token>'`, or the one-line NUL/UTF-8 refusal), with exit 1; quote each.
-      - C4: every file in `corpus/zil/` still compiles and gives its expected exit (`./scripts/test.sh corpus/zil` or the scenario that runs them); quote its `Total:` line.
-      - C5: take the top-level check out (a scratch edit) and watch the stray-word case pass silently again; restore.
-      - C6: the `KNOWN_ISSUES.md` entry removed or updated; `make test` and `make preflight-changed`, each `Total:` line quoted; the completion note says the fuzz record is stale for `tools/zilc/`.
-
-- [ ] +diagnostics +AI-G Z-0015 `zoril` stops after a bounded number of errors, and says when a file does not look like Zoril source
-    > **Created:** 2026-11-03
-
-    - **Now:** 300 KB of random bytes named `junk.zrl` gives about 139,000 error lines (12 MB); 160 KB of prose about 33,000. `zbuild` passes the same output through. Reproduce: `head -c 300000 /dev/urandom > junk.zrl; ./build/zoril -I stdlib=stdlib --emit-zil -o o.zil junk.zrl 2>&1 | wc -l`.
-    - **Do:** count errors in `diag_start` (`src/diag.zrl`); past the limit (default 20) print one line naming `--error-limit N` (0 removes the limit) and exit 1. `zbuild --error-limit N` passes it to every `zoril -c`; both man pages and `--help` say so. Before lexing, refuse a NUL byte or invalid UTF-8 with one line; if the limit is reached before the first declaration, the stopping line says the file does not look like Zoril source. `src/diag.zrl` is in stage1's closure: use only what stage1 accepts (a `static mut` counter).
-    - **Checks:**
-      - C1: before the change, the reproducer in **Now**: the line count, quoted. And no existing error test expects more than 20 errors: `grep -c 'EXPECT:'` per file under `tests/`, the largest count quoted (if one is over 20, stop and report: the default changes).
-      - C2: a program with 25 type errors: 20 error lines, then the stopping line naming `--error-limit N`, exit 1; with `--error-limit 0`, all 25; with `--error-limit 3`, 3; quote each count.
-      - C3: a NUL byte, invalid UTF-8, and 160 KB of prose: one line each, the prose one saying the file does not look like Zoril source; the reproducer from **Now** prints at most 21 lines; quote each.
-      - C4: the same through `zbuild --error-limit N` in `scripts/test_zbuild_errors.sh`, passing.
-      - C5: `zoril --help`, `zbuild --help` and both man pages name `--error-limit` (`make man`, `sh scripts/test_man_pages.sh`).
-      - C6: `rm build/zoril && make` (stage1 builds `src/diag.zrl`) and `make`, no warning.
-      - C7: take the counter's check out (a scratch edit) and watch C2 fail; restore.
-      - C8: the `KNOWN_ISSUES.md` entry removed or updated; `make test` and `make preflight-changed`, each `Total:` line quoted; the fuzz record is stale for `src/`.
-
-- [ ] +tools +AI-G Z-0016 `zbuild` builds a program written in ZIL, and refuses any other input with one line
-    > **Created:** 2026-11-03
-
-    - **Now:** `zbuild 01_arithmetic.zil` (from `corpus/zil/`) parses the ZIL as Zoril and prints about thirty `expected declaration` errors; the manual pipeline (`zilc`, `qbe`, `as`, `ld` with the runtime) works and exits 30.
-    - **Do:** a root ending in `.zil` skips the module graph and the front end and runs `zilc`, `qbe`, `as` and the link with `zbuild`'s usual linker and runtime choice, honouring `-o` and the cache directory; `--checked` with a `.zil` root is refused with one line. A root ending in neither `.zrl` nor `.zil` is refused with one line naming both. Update `doc/man/zbuild.1.scd` (`make man`), `zbuild --help`, and "Starting from ZIL" in `doc/getting_started.md`.
-    - **Checks:**
-      - C1: before the change, `build/zbuild corpus/zil/01_arithmetic.zil -o build/z16/a; echo $?` and the first three error lines, quoted.
-      - C2: after, the same builds and `build/z16/a; echo $?` prints 30; every file in `corpus/zil/` gives its expected exit code (a loop in a new scenario, or in `scripts/test_user_paths.sh` with the installed `zbuild`); quote the loop's summary.
-      - C3: `-o` and the cache directory are honoured: the binary lands at the `-o` path, and a second build of the same `.zil` reuses the cache (the scenario checks the cache directory's contents).
-      - C4: `zbuild foo.txt` and `zbuild --checked x.zil`: one line each, exit nonzero; quote both.
-      - C5: take the `.zil` branch out (a scratch edit) and watch C2's scenario fail; restore.
-      - C6: `doc/man/zbuild.1.scd` (`make man`), `zbuild --help` and "Starting from ZIL" in `doc/getting_started.md` updated; `sh scripts/test_man_pages.sh` passes; the doc snippet scenario (`./scripts/test.sh --scenario getting-started`) passes.
-      - C7: the `KNOWN_ISSUES.md` entry removed or updated; `make test` and `make preflight-changed`, each `Total:` line quoted; the fuzz record is stale for `tools/zbuild/`.
-
-- [ ] +diagnostics +types +AI-G Z-0067 `v.push(Vec.new())` reports `unknown type 'T'` at a standard-library line under the user's file name
-    > **Created:** 2026-11-05 **Found by:** Z-0049's review (correction 9). Default mode; not a safety issue.
-
-    - **Now:** `import "vec.zrl"; use vec::Vec; fn main() -> i32 { let mut v: Vec<Vec<i32>> = Vec.new(); v.push(Vec.new()); return v.len() as i32 - 1; }` fails with `<file>.zrl:23:13: error: unknown type 'T'`: line 23 is `stdlib/vec.zrl`'s `impl<T> Vec<T>`, printed with the user's file name. `v.push(Vec::<i32>.new())` compiles, as does `let mut w: Vec<String> = Vec.new(); w.push(String.new());`.
-    - **Two defects:** (1) the element type of a generic constructor in argument position is not inferred from the parameter's type (`T` of `push` is known from `v`); (2) a diagnostic raised inside an instantiated generic carries the instance's line with the caller's file. Fix (2) in any case; fix (1) if inference from the expected argument type is in the spec (`doc/spec/`), or else make the message say that the type argument must be written, and fix the spec if it is silent.
-    - **Checks:**
-      - C1: what `doc/spec/` says about inferring a constructor's type arguments from the parameter it is passed to: the section and the sentence quoted, or "silent" with the sections searched. This decides (1): fix it if the spec says so; otherwise word the message so it says to write the type argument, and add the rule to the spec in the same commit.
-      - C2: the program in **Now** as a test: exit 0 after (1), or, if (1) is not fixed, an `// EXPECT:` with the new message naming the user's file and line.
-      - C3: a test where an error is raised inside a generic instance: the diagnostic names `stdlib/vec.zrl` (or the instance's file) and its line, not the caller's file with the instance's line; it fails before the change (run against the old compiler and quote).
-      - C4: `v.push(Vec::<i32>.new())` and the `String` form still compile (tests).
-      - C5: take the file fix out (a scratch edit) and watch C3 fail; restore.
-      - C6: `make test` and `make preflight-changed`, each `Total:` line quoted; the fuzz record is stale for `src/` if `src/` changed.
-
-- [ ] +modular +tools +AI-G Z-0079 A generic body using a type-argument builtin cannot be read back from its interface
-    > **Created:** 2026-11-05 **Found by:** Z-0078. Refuses more, never less: not a safety issue.
-
-    - **Now:** the interface printer writes `@ptr_from_int<*mut T>(n)` in a generic body as `@ptr_from_int::<*mut T>(n)`, which the parser refuses when it reads the `.zri` (`expected (, but found ::`). Whole-program builds it; zbuild does not. Reproducer: `plib.zrl` = `pub fn at<T>(n: u64) -> *mut T { return @ptr_from_int<*mut T>(n); }`, `pmain.zrl` = `import "plib.zrl"; fn main() -> i32 { let p = plib::at::<i32>(64 as u64); return (p as u64 - 64 as u64) as i32; }`; `build/zoril` accepts `pmain.zrl`, `build/zbuild -o p pmain.zrl` fails in the cache's `plib.zri`. The same for `@ptr_cast`, `@int_cast` and `@alloca` (each probed, 2026-11-05).
-    - **Do:** print a builtin's type argument as written (`@name<T>(..)`), or have the parser accept `::<` after a builtin; say which and why. A `tests/modular/iface_attrs/` fixture with one generic body per builtin, built whole-program and through zbuild. `make test`, `make preflight-changed`.
-    - **Settled (review, 2026-11-07):** the printer writes `@name<T>(..)`, as the source does; the parser stays as it is, so the language accepts no new spelling.
-    - **Checks:**
-      - C1: the reproducer in **Now**, before the change: `build/zbuild -o build/z79/p pmain.zrl` fails with `expected (, but found ::`; quote it.
-      - C2: after, it builds and `build/z79/p; echo $?` prints 0.
-      - C3: a `tests/modular/iface_attrs/` fixture with one generic body each for `@ptr_from_int`, `@ptr_cast`, `@int_cast` and `@alloca`, built whole-program and through zbuild with the same exit code (`sh scripts/test_interface_attrs.sh` passes; quote it).
-      - C4: the `.zri` written for the fixture contains `@ptr_from_int<` and no `@ptr_from_int::<` (`grep` on the cache's `.zri`; quote the line).
-      - C5: take the printer change out (a scratch edit) and watch C3 fail; restore.
-      - C6: `make test` and `make preflight-changed`, each `Total:` line quoted; the fuzz record is stale for `src/`.
-
-- [ ] +tests +tools +AI-G Z-0080 The mutation harness's two lists exist, or its header stops claiming them
-    > **Created:** 2026-11-05 **Found by:** Z-0078 (and its review).
-
-    - **Now:** `scripts/mutation-check.sh`'s header says `scripts/mutation_uncovered.list` holds the mutations it deliberately does not run (M106, M107, M85, M112) and `scripts/mutation_incremental.list` the ids run against the incremental scenario (`-c` / `.zri`). Neither file exists: `incremental_list_path` returns a missing file, `incremental_mutation` is always false, so no mutant is ever run against the incremental scenario, and nothing records the deliberately unrun ones. `git log --all` shows neither file was ever committed. A mutant of the interface printer (Z-0078's `#[fresh]` printing) is caught only by `scripts/test_interface_attrs.sh`, a gate the harness does not run.
-    - **Do:** find in git history whether the lists existed and were lost (`git log --all -- scripts/mutation_incremental.list`), then either restore them with their entries, or make the harness say plainly that it runs neither; and decide whether a mutant may name a gate (the interface gate) as its catcher. Add an interface-printer mutant (`if f.fresh {` -> `if false {` in `src/interface_print.zrl`) that the chosen route catches. `make test`, `sh scripts/test_mutation_check.sh`.
-    - **Not ready for `+AI-G` (review, 2026-11-07):** **Do** leaves two decisions: whether the harness runs an incremental list at all, and whether a gate (`scripts/test_interface_attrs.sh`) may be a mutant's catcher, which adds its run time to every surviving mutant's evaluation (the harness already runs `perf-gate`, `fmt-check` and `static-image` that way). An `+AI-D` session, or the maintainer, settles both here first, with the gate's run time measured; then this task gets numbered checks: the new mutant reported caught by the chosen route, and that route taken out and the mutant reported SURVIVED.
-
-- [ ] +bench +measurement +AI-G Z-0004 Measure how far the benchmark gate's measures move between cloud sessions
-    > **Created:** 2026-11-03
-    > **Session rule:** a new session records one sample only if asked to, so this task never starts a session.
-
-    - **Why:** `bench/cross_lang/thresholds.cfg` is not in the tree, so `scripts/bench_threshold_check.sh` records a baseline on its first run on a host. Every cloud session starts on a fresh VM, so there the gate compares a run with itself and cannot fail. Of its three measures, `runtime_ratio_vs_gcc_o2` is relative to gcc on the same host; `clean_throughput_loc_s` and `incremental_rebuild_ms` are absolute and depend on the VM.
-    - **Do:** in three to five separate cloud sessions, run `sh scripts/bench_cross_lang.sh --check-thresholds` on the same commit and record each measure, the CPU model (`/proc/cpuinfo`) and the load. Report the spread of each measure against the gate's 15% tolerance. Delete the files the run writes under `bench/`; commit nothing but this task's text.
-    - **Sample 1 (2026-11-03, commit `289bddb`):** `Intel(R) Xeon(R) Processor @ 2.30GHz`, 4 vCPUs, 1-minute load average 2.46 at the start (a `make test` had just finished, so the host was not quiet). `clean_throughput_loc_s` 10177 (the run's own spread 288..297 ms, +3.1%), `incremental_rebuild_ms` 22, `runtime_ratio_vs_gcc_o2` 4.182, `peak_rss_mb_per_kloc` 2.973; the run took 42 s. Earlier on this same VM, an unrelated preflight recorded `clean_throughput_loc_s` 10072, 1.0% below this sample. That is one VM twice, not a spread between sessions.
-    - **Sample 2 (2026-11-03, commit `289bddb`):** the same conversation, but on a freshly booted VM (booted 14:49 UTC, after the setup script changed), so not the VM of sample 1. `Intel(R) Xeon(R) Processor @ 2.30GHz`, 4 vCPUs, 1-minute load average 0.36 at the start. Run in a scratch worktree of `289bddb` whose `build/zoril` was built from that commit's compiler source and which rebuilt its own `zilc` and `zbuild`. `clean_throughput_loc_s` 9705 (the run's own spread 302..330 ms, +9.3%), `incremental_rebuild_ms` 20, `runtime_ratio_vs_gcc_o2` 4.095, `peak_rss_mb_per_kloc` 2.973; the run took 56 s. Against sample 1: clean -4.6%, incremental -9.1%, ratio -2.1%, RSS unchanged, all inside 15%. The bench outputs were deleted with the worktree.
-    - **Still to do:** one to three more samples, each from a new cloud session on this commit. This task stays open until they exist; two samples are not a spread.
-    - **Checks (for each new sample):**
-      - C1: the session is new: the VM's boot time (`uptime -s`) differs from every earlier sample's; quote it.
-      - C2: the commit is `289bddb`, in a scratch worktree whose `build/zoril`, `build/zilc` and `build/zbuild` were built from it (as sample 2 did); quote `git -C <worktree> rev-parse --short HEAD`.
-      - C3: the CPU model (`grep -m1 'model name' /proc/cpuinfo`), the vCPU count, and the 1-minute load average before the run; quote them.
-      - C4: `sh scripts/bench_cross_lang.sh --check-thresholds`: the four measures and the run's own spread line, quoted as samples 1 and 2 are.
-      - C5: `git status --short bench/` after deleting what the run wrote prints nothing.
-      - C6: once three or more samples exist: a table of each measure's minimum, maximum and spread against the 15% tolerance.
-
-- [ ] +bench +decision +AI-G Z-0005 Decide the benchmark gate's behaviour on a host without a committed baseline
-    > **Created:** 2026-11-03 **Depends:** Z-0004.
-
-    - **Options, from the measurement:** commit a baseline for the measures whose spread stays inside the tolerance; make the gate print a `[SKIP]` naming the reason for those that do not; and when no committed baseline exists, have the gate say so instead of recording one and passing.
-    - **Recommendation (2026-11-03, until Z-0004's spread data decides it):**
-        1. A host with no committed baseline gets a statement, not a pass. The gate stops recording a baseline on a first run and then printing "All performance thresholds within tolerance"; it prints `[SKIP] bench-thresholds: no committed baseline for <axis> (<reason>)` per axis and exits 0. Recording stays an explicit act (`sh scripts/bench_cross_lang.sh --record`).
-        2. Commit a baseline for `runtime_ratio_vs_gcc_o2` only (4.182 in Z-0004's sample 1): it is relative to gcc -O2 on the same host, so it moves with the compiler and not with the VM. It is committed once Z-0004's samples keep its spread inside the 15% tolerance; otherwise it gets the `[SKIP]` too.
-        3. `clean_throughput_loc_s` and `incremental_rebuild_ms` stay host-local. A host that has recorded its own baseline (a developer's machine) still compares against it; anywhere else they print `[SKIP]` naming "absolute measure, no baseline for this host".
-    - **Why:** on a fresh VM the present gate compares a run with itself, so it cannot fail, and it says "within tolerance" anyway. A committed absolute baseline would pass or fail with the VM's speed, which tests the VM. Z-0004's single sample says nothing yet about other VMs; rule 2 is the part its data can overturn.
-    - **Not done here:** the change to `scripts/bench_threshold_check.sh` and its tests. It needs a task of its own once Z-0004 has its samples.
-    - **Reopened (2026-11-03):** the decision depends on Z-0004's measurements, so the task stays open until they exist; the recommendation above is not a decision yet.
-    - **Tag (review, 2026-11-07):** a decision is `+AI-D` work (`AGENTS.md`, "Model tags"): this task is taken by an `+AI-D` session or the maintainer, whatever its title line says. The implementation it names under **Not done here** becomes an `+AI-G` task with numbered checks when it is written.
