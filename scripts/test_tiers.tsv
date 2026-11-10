@@ -138,6 +138,7 @@ scripts/test_ffi_export.sh	scripts_test_ffi_export	portability no-new-deps	-	-	-
 scripts/test_fuzz_jobs.sh	scripts_test_fuzz_jobs	portability no-new-deps	-	-	-	fuzz-jobs	-	script	fuzz worker job test selects fuzz-jobs scenario
 scripts/test_fuzz_mode_diff.sh	scripts_test_fuzz_mode_diff	portability no-new-deps	-	-	-	fuzz-mode-diff	-	script	fuzz mode differential test selects fuzz-mode-diff scenario
 scripts/test_fuzz_tools.sh	scripts_test_fuzz_tools	portability no-new-deps	-	-	-	fuzz-tools	-	script	fuzz tooling test selects fuzz-tools scenario
+scripts/test_fuzz_tools_git.sh	scripts_test_fuzz_tools_git	portability no-new-deps	-	-	-	fuzz-tools-git	-	script	fuzz tooling git test selects fuzz-tools-git scenario
 scripts/test_getting_started.sh	scripts_test_getting_started	portability no-new-deps	-	-	-	getting-started	-	script	getting started guide test selects getting-started scenario
 scripts/test_hosted.sh	scripts_test_hosted	portability no-new-deps	-	-	-	hosted	-	script	hosted runtime tests select hosted scenario
 scripts/test_incremental.sh	scripts_test_incremental	portability no-new-deps	-	-	-	incremental	-	script	incremental compilation test selects incremental scenario

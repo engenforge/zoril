@@ -126,10 +126,10 @@ group_scenarios() {
             ;;
         integration)
             echo incremental fuzz-jobs fuzz-mode-diff modular-mangling uncalled-method-emit runner-output readme-snippets doc-snippets getting-started struct-layout ffi-export ffi-callback zbuild-link module-names interface-attrs hosted platform-layer man-pages tool-versions md-links safety-comments-selftest no-new-deps-selftest comment-noise-selftest comment-census-selftest export-checks-selftest bench-contention bench-threshold-gate test-lock check-deps-selftest result-file scdoc-min stray-files-selftest
-            echo bench-step-failed zbuild-errors zbuild-diff user-paths qbe-arg-order qbe-fingerprint deps-matrix-interrupt tier-select
+            echo bench-step-failed zbuild-errors zbuild-diff user-paths qbe-arg-order qbe-fingerprint deps-matrix-interrupt tier-select fuzz-tools
             ;;
         git)
-            echo clean-tree test-changed build-info preflight-selftest reject-diff-selftest fuzz-tools
+            echo clean-tree test-changed build-info preflight-selftest reject-diff-selftest fuzz-tools-git
             ;;
         diagnostics) echo zilc-errors ;;
     esac
@@ -156,6 +156,7 @@ scenario_run() {
         fuzz-jobs)                  tr_run_scenario "$1" ./scripts/test_fuzz_jobs.sh --quiet ;;
         fuzz-mode-diff)             tr_run_scenario "$1" ./scripts/test_fuzz_mode_diff.sh ;;
         fuzz-tools)                 tr_run_scenario "$1" ./scripts/test_fuzz_tools.sh --quiet ;;
+        fuzz-tools-git)             tr_run_scenario "$1" ./scripts/test_fuzz_tools_git.sh --quiet ;;
         modular-mangling)           tr_run_scenario "$1" ./scripts/test_modular_mangling.sh ;;
         uncalled-method-emit)       tr_run_scenario "$1" ./scripts/test_uncalled_method_emit.sh ;;
         runner-output)              tr_run_scenario "$1" ./scripts/test_runner_output.sh ;;
