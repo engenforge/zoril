@@ -2798,9 +2798,7 @@ impl ZirLowerer {
             };
             match opt_sym {
                 Some(sym) => {
-                    if let SymbolKind.Global(_)
-                        | SymbolKind.Type(_)
-                        | SymbolKind.Primitive(_) = sym.kind {
+                    if self.sym_names_type(&sym) {
                         let resolved_ty = self.resolve_sym_type(&sym);
                         let pl = self.try_lower_enum_variant_member(
                             resolved_ty,
@@ -2814,18 +2812,16 @@ impl ZirLowerer {
                         let pl2 = self.try_lower_impl_constant(id, m.member, expected_ty, span);
                         if let Option.Some(pl_const) = pl2 { return pl_const; }
                         // `K.Nope` on a type: there is no value to take a field of.
-                        if self.sym_names_type(&sym) {
-                            self.report_prefix(span);
-                            eprint("no variant or associated constant `");
-                            eprint(self.intern_table.lookup(m.member));
-                            eprint("` in `");
-                            eprint(self.mono.type_display(resolved_ty));
-                            eprint("`\n");
-                            return Place {
-                                base: 0,
-                                projections: @slice(0 as *mut Projection, 0 as usize)
-                            };
-                        }
+                        self.report_prefix(span);
+                        eprint("no variant or associated constant `");
+                        eprint(self.intern_table.lookup(m.member));
+                        eprint("` in `");
+                        eprint(self.mono.type_display(resolved_ty));
+                        eprint("`\n");
+                        return Place {
+                            base: 0,
+                            projections: @slice(0 as *mut Projection, 0 as usize)
+                        };
                     }
                 },
                 None => {}
