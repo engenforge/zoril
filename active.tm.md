@@ -219,8 +219,9 @@ Standalone tasks developed and committed directly on `main`:
 3. Compiler quality & tools: Z-0013 (reviewer rotation), Z-0014 (`zilc` input validation), Z-0015 (`zoril` error bounds), Z-0016 (`zbuild` ZIL handling), Z-0067 (diagnostic source location), Z-0079 (generic interface roundtrip), Z-0080 (mutation list integrity).
 4. Benchmarks: Z-0004 (cloud session variance measurement), Z-0005 (baseline decision).
 
-- [ ] +safety +vecclone +AI-G Z-0171 V1 `Vec.resize` and `Vec.extend_from_slice` holes recorded as known gaps
+- [x] +safety +vecclone +AI-G Z-0171 V1 `Vec.resize` and `Vec.extend_from_slice` holes recorded as known gaps
     > **Created:** 2026-11-11. **Branch:** `vecclone`. Reclassified public under `SECURITY.md` (each needs the program to call the method on a particular element type).
+    > **Completed:** 2026-11-11 git:6a8650d
 
     - **Found (2026-11-10, probing `Vec.push`'s siblings; probed again 2026-11-11 on git:c2a3f0c):**
       - `resize` (and the `pub` `ensure_len` behind it, `stdlib/vec.zrl`) pads with zero bytes, which are not a value of every element type: `Vec::<&i32>` then `*v.get(0).unwrap()` read through a null reference (exit 139); `Vec::<fn() -> i32>` calls a null `fn` (exit 139); for `S { p: *mut u8 }` with a `Drop` writing through `p`, `v.resize(1); v.set(0, ..)` drops the zero `S` and writes through null (exit 139). A zero `[u8]` (null, length 0) is harmless. A `T: Copy` bound would not close it: `&i32` and `fn` are `Copy`.
@@ -230,6 +231,10 @@ Standalone tasks developed and committed directly on `main`:
       - C1: each probe run alone gives its unsafe outcome (`exit 139`, `139`, `139`, `2`); quote each.
       - C2: `sh scripts/run_safety_matrix.sh`: `Mismatches: 0`, the four reported as known gaps; `scripts/check_safety_model.sh` passes.
       - C3: `make test`, its `Total:` line quoted.
+    - **Completion (2026-11-11), git:6a8650d on `vecclone`:** the four probes, the Known gaps entries (route class: a `Vec` method making or duplicating a `T` with no clone), class (N) in `doc/SAFETY.md` §6, and the README probe count (497).
+      - C1: run alone before recording (`build/v1/`, `build/p34/`): the null reference and the null `fn` value `exit 139` each, the zero `S` dropped through its `&mut` field `exit 139`, `extend_from_slice` `exit 2`. As probes, the matrix matches each against its `// observed:` (`runtime_fault` x3, `exit 2`).
+      - C2: `sh scripts/run_safety_matrix.sh`: `All probes complete: 450/497 passed. Mismatches: 0`, the four printed as `[SKIP] ... (known gap: ...)`; `sh scripts/check_safety_model.sh`: `PASS: safety_model.md is self-consistent.`
+      - C3: `make test`: `Total: 3237 run, 3237 passed, 0 failed, 96 skipped (214.2s)` (eight more skips: the four gaps, whole-program and through zbuild). A first run failed only `clean-tree` on a stray `out.zil` in the repository root, written at 11:54 by another session compiling `build/rv/d.zrl` without `-o`; it was removed before the rerun.
 
 - [ ] +safety +vecclone +decision +AI-D Z-0172 V2 Decide how `Vec` clones an element
     > **Created:** 2026-11-11. **Branch:** `vecclone`. **After:** Z-0171.
@@ -242,6 +247,11 @@ Standalone tasks developed and committed directly on `main`:
       - Enforcement: an impl-level `T: Clone` bound is not checked today (Z-0175); confirm that per-instance resolution of `.clone()` refuses a `T` with no `Clone`.
       - Cost: `String` appends go through `extend_from_slice` on `u8`; measure the cost of a call per byte against `bench/` before choosing a bitwise fast path for `Copy` `T`.
     - **Checks:** each fact above with its probe (program and output) in this task; the decision in one paragraph with the rule it enforces.
+    - **Probed (2026-11-11, on `vecclone` at git:4d344e3's compiler; scratch `build/v2/`):**
+      - Stage1: settled, no re-pin. `struct W<T> { x: T } impl<T> W<T> { fn dup(self: &W<T>) -> T { return self.x.clone(); } }` with `impl Clone for u32` in the same file: `build/zoril-stage1 -I stdlib=stdlib --emit-zil` exits 0 with and without `impl<T: Clone>`, and its ZIL calls the impl from the instance (`f17: u32 ...W_Tu32::dup(..)` holds `let _t3 = u32::clone(_t2)`). The same body on a `T` with no `Clone` (`struct N { a: i32 }`) is refused by both (`build/zoril`: `error: no field 'clone' on 'N'`, located in the generic body, not at the call).
+      - Coverage: `Copy` is the only bound the compiler satisfies structurally (`src/resolve.zrl:761`, the `Copy` lookups in `src/mono.zrl`, `src/lower_zir/utils.zrl`, `src/driver/types.zrl`); `Clone` needs an impl, and the parser writes one for `#[derive(Clone)]`. So `&T`, `fn` pointers, tuples and arrays have no `Clone` today.
+      - Reach: `stdlib/string.zrl` appends bytes with `extend_from_slice` (3 calls), so `Vec<u8>` must find `Clone for u8` from there; that impl is in `clone.zrl`, which imports `vec.zrl` and `string.zrl`. The primitive impls move to `core.zrl`, beside the trait.
+      - Users outside `src/`: 12 calls in 10 files, all in `tests/stdlib/test_vec.zrl` (`resize` on integers) and safety probes. Probes 418 (`compile_reject`), 420 (`accept`) and gap_56 call `extend_from_slice` on `Vec<[u8]>`, which `impl<T: Clone> Clone for [T]` (`clone.zrl`, returns `*self` with `#[borrows()]`) covers. A direct `out.push(s.clone())` of a stack view `s` is still refused (`region escape: a pointer to local stack storage is written to memory that outlives this function`, `build/v2/c_slice_clone.zrl`), so the `#[borrows()]` does not launder the borrow there. The risk is the summary route: with a `clone` call between the slice element and the store, `extend_from_slice`'s summary must still tie `slice`'s elements to `self`. Z-0173 must show 418 and gap_56 still refused and 420 still accepted, whole-program and through zbuild.
 
 - [ ] +safety +vecclone +AI-D Z-0173 V3 `Vec.extend_from_slice` clones each element
     > **Created:** 2026-11-11. **Branch:** `vecclone`. **After:** Z-0172. **Check-in:** stop for review after it: a fix to a safety rule.
