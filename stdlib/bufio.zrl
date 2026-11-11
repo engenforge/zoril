@@ -35,7 +35,7 @@ impl<W: Write> BufWriter<W> {
     // Creates a new BufWriter wrapping inner with the specified buffer capacity.
     pub fn with_capacity(inner: W, cap: usize) -> BufWriter<W> {
         let mut buf = Vec::<u8>.with_capacity(cap);
-        buf.ensure_len(cap);
+        buf.resize(cap, 0 as u8);
         return BufWriter {
             inner: Option.Some(inner),
             buf: buf,
@@ -52,7 +52,7 @@ impl<W: Write> BufWriter<W> {
     // Creates a new BufWriter allocated in arena a with the specified buffer capacity.
     pub fn with_capacity_in(inner: W, a: &Arena, cap: usize) -> BufWriter<W> {
         let mut buf = Vec::<u8>.with_capacity_in(a, cap);
-        buf.ensure_len(cap);
+        buf.resize(cap, 0 as u8);
         return BufWriter {
             inner: Option.Some(inner),
             buf: buf,
@@ -233,7 +233,7 @@ impl<R> BufReader<R> {
     // Creates a new BufReader wrapping inner with the specified buffer capacity.
     pub fn with_capacity(inner: R, cap: usize) -> BufReader<R> {
         let mut buf = Vec::<u8>.with_capacity(cap);
-        buf.ensure_len(cap);
+        buf.resize(cap, 0 as u8);
         return BufReader {
             inner: inner,
             buf: buf,
@@ -250,7 +250,7 @@ impl<R> BufReader<R> {
     // Creates a new BufReader allocated in arena a with the specified buffer capacity.
     pub fn with_capacity_in(inner: R, a: &Arena, cap: usize) -> BufReader<R> {
         let mut buf = Vec::<u8>.with_capacity_in(a, cap);
-        buf.ensure_len(cap);
+        buf.resize(cap, 0 as u8);
         return BufReader {
             inner: inner,
             buf: buf,

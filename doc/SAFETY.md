@@ -202,13 +202,13 @@ Safe code is only as good as the `unsafe` code under it, so the project measures
 | Figure                           | Value  |
 | -------------------------------- | ------ |
 | stdlib modules                   | 30     |
-| stdlib lines                     | 6,293  |
-| stdlib `unsafe { }` blocks       | 172    |
+| stdlib lines                     | 6,281  |
+| stdlib `unsafe { }` blocks       | 170    |
 | stdlib modules with such a block | 23     |
-| stdlib `unsafe fn` declarations  | 63     |
-| of those, public                 | 59     |
+| stdlib `unsafe fn` declarations  | 64     |
+| of those, public                 | 60     |
 | compiler modules                 | 50     |
-| compiler lines                   | 47,054 |
+| compiler lines                   | 47,064 |
 | compiler `unsafe { }` blocks     | 838    |
 
 How each one is counted: every `.zrl` file under the directory, recursively; **lines** are physical lines (`wc -l`); **`unsafe { }` blocks** are occurrences of `unsafe` followed by `{` on the same line; **`unsafe fn` declarations** are lines that start with `unsafe fn` or `pub unsafe fn`. That is a different question from `scripts/marker_density.sh`, which counts raw-pointer dereference sites over non-comment lines (58 marker lines for `stdlib`, 264 for `src`).
@@ -250,8 +250,7 @@ The open classes:
 - **(K) Owners holding frame views, moved out:** a local `Vec` whose elements are views of a stack array is accepted when it is pushed into the caller's `Vec` ([`gap_59_pushed_vec_holding_frame_views.zrl`](../bench/safety_matrix/probes/gap_59_pushed_vec_holding_frame_views.zrl)), passed by value to a callee that pushes it ([`gap_60_vec_holding_frame_views_moved_to_pushing_callee.zrl`](../bench/safety_matrix/probes/gap_60_vec_holding_frame_views_moved_to_pushing_callee.zrl)), or wrapped in a struct first ([`gap_61_struct_wrapping_vec_of_frame_views_pushed.zrl`](../bench/safety_matrix/probes/gap_61_struct_wrapping_vec_of_frame_views_pushed.zrl)); and a `Vec` a callee builds around a view of a caller-local `Vec`'s buffer is accepted when the callee stores it into the caller's slot ([`gap_63_vec_built_around_param_view_in_callee.zrl`](../bench/safety_matrix/probes/gap_63_vec_built_around_param_view_in_callee.zrl)).
 - **(L) A generic instance made into a `fn` value:** `id::<i32>` written as a value rather than called is accepted but lowers to nothing, so `let f: fn(i32) -> i32 = id::<i32>;` leaves the value uninitialized and the call jumps through stack garbage ([`gap_66_generic_instance_as_fn_value_uninit.zrl`](../bench/safety_matrix/probes/gap_66_generic_instance_as_fn_value_uninit.zrl)).
 - **(M) An `extern` function made into a `fn` value:** a bare `extern` converts to a plain `fn` type with no `unsafe` block, so safe code calls C through the value while a direct call needs `unsafe`; a safe callee hands `memset` a forged pointer and the write faults ([`gap_67_extern_fn_as_fn_value.zrl`](../bench/safety_matrix/probes/gap_67_extern_fn_as_fn_value.zrl)).
-- **(N) A `Vec` method that makes an element without cloning it:** `Vec.resize` pads with zero bytes, so a `Vec<&i32>` holds a null reference ([`gap_73_vec_resize_zero_ref.zrl`](../bench/safety_matrix/probes/gap_73_vec_resize_zero_ref.zrl)), a `Vec<fn() -> i32>` a null `fn` value ([`gap_74_vec_resize_zero_fn.zrl`](../bench/safety_matrix/probes/gap_74_vec_resize_zero_fn.zrl)), and a type with a `Drop` a zero value that `set` drops ([`gap_75_vec_resize_zero_drop.zrl`](../bench/safety_matrix/probes/gap_75_vec_resize_zero_drop.zrl)).
-- **(O) A generic `Clone` impl that hides what it clones:** `Clone` for `Vec<T>` and `Option<T>` declares `#[borrows()]`, so a clone of a value holding views of a stack array holds no borrow and can be returned ([`gap_77_vec_clone_launders_frame_views.zrl`](../bench/safety_matrix/probes/gap_77_vec_clone_launders_frame_views.zrl), [`gap_78_option_clone_launders_frame_view.zrl`](../bench/safety_matrix/probes/gap_78_option_clone_launders_frame_view.zrl)); a direct slice clone, `clone_in` and a `#[derive(Clone)]` struct are refused.
+- **(N) A generic `Clone` impl that hides what it clones:** `Clone` for `Vec<T>` and `Option<T>` declares `#[borrows()]`, so a clone of a value holding views of a stack array holds no borrow and can be returned ([`gap_77_vec_clone_launders_frame_views.zrl`](../bench/safety_matrix/probes/gap_77_vec_clone_launders_frame_views.zrl), [`gap_78_option_clone_launders_frame_view.zrl`](../bench/safety_matrix/probes/gap_78_option_clone_launders_frame_view.zrl)); a direct slice clone, `clone_in` and a `#[derive(Clone)]` struct are refused.
 
 ---
 

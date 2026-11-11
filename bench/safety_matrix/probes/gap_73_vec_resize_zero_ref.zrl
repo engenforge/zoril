@@ -1,12 +1,13 @@
 // name: Vec.resize pads with zero bytes, a null reference read from safe code
-// expected: known_gap
-// gap: Vec.resize (through ensure_len) fills new slots with zero bytes, which are not a value of every element type: a Vec<&i32> grown by resize holds a null reference, and reading through it faults; a T: Copy bound would not close it, &i32 is Copy (Z-0171; fixed by Z-0174)
-// observed: runtime_fault
+// expected: compile_reject
+// zbuild: compile_reject (refused for the same message, at the interface's line of vec.zrl: KNOWN_ISSUES.md section 4, "An error inside an imported generic body names the interface's line under zbuild"; Z-0181)
+// Refused since Z-0174: resize clones its fill value into each new slot, and &i32 has no Clone (its clone resolves to i32's, a type mismatch in vec.zrl), so no slot is zero bytes. Z-0179 (every Copy type is Clone) would accept it with the value written.
 import "vec.zrl";
 use vec::Vec;
 fn main() -> i32 {
+    let x = 5;
     let mut v = Vec::<&i32>.new();
-    v.resize(1);
+    v.resize(1, &x);
     let r: &i32 = *v.get(0).unwrap();
-    return *r;
+    return *r - 5;
 }

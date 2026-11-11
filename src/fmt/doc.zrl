@@ -220,7 +220,7 @@ impl Doc {
     // For each DOC_GROUP command, the index of its DOC_END (others: 0).
     fn group_ends(self: &Doc, arena: *mut ArenaHeader) -> Vec<usize> {
         let mut ends = unsafe { Vec::<usize>.new_in_raw(arena) };
-        ends.resize(self.cmds.len());
+        ends.resize(self.cmds.len(), 0 as usize);
         let mut stack = unsafe { Vec::<usize>.new_in_raw(arena) };
         for i in 0 as usize..self.cmds.len() {
             let k = self.cmds.as_slice()[i].kind;

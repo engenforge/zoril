@@ -1348,7 +1348,9 @@ impl Monomorphizer {
     pub fn set_typedef_origin(self: &mut Monomorphizer, typedef_id: u32, decl_id: u32) {
         if typedef_id == 0 as u32 { return; }
         let idx = typedef_id as usize;
-        self.typedef_to_decl.ensure_len(idx + 1 as usize);
+        if self.typedef_to_decl.len() <= idx {
+            self.typedef_to_decl.resize(idx + 1 as usize, 0 as u32);
+        }
         self.typedef_to_decl.set(idx, decl_id);
     }
 

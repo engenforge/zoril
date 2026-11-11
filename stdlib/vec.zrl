@@ -219,49 +219,37 @@ impl<T> Vec<T> {
         return Option.Some(unsafe { &mut *((self.data as usize + index * sizeof(T)) as *mut T) });
     }
 
-    // Ensures the vector has at least min_len elements, growing if necessary.
-    pub fn ensure_len(self: &mut Vec<T>, min_len: usize) {
+    // Grows the vector to at least min_len elements, the new ones zero bytes.
+    // Zero bytes are not a value of every T (a reference, a fn value, a type
+    // whose Drop reads a field), so the caller writes each new element before
+    // anything reads or drops it; resize is the safe form.
+    pub unsafe fn ensure_len(self: &mut Vec<T>, min_len: usize) {
         if min_len <= self.len { return; }
-        if min_len > self.cap {
-            let mut new_cap = if self.cap == 0 as usize {
-                8 as usize
-            } else {
-                grow_cap(self.cap)
-            };
-            while new_cap < min_len {
-                new_cap = grow_cap(new_cap);
-            }
-            // SAFETY: `self.raw` is the arena this Vec allocates from (0 for the global heap)
-            // and `new_cap` is the checked capacity, so the block covers `new_cap` elements.
-            let new_data = unsafe {
-                zoril_allocator_alloc(self.raw, size_of_n(new_cap, sizeof(T)))
-            } as *mut T;
-            if self.data as usize != 0 as usize && self.len > 0 as usize {
-                // SAFETY: the old buffer holds `self.len` initialized elements and the new one
-                // was just allocated with room for them.
-                unsafe { memcpy(new_data as *mut u8, self.data as *u8, self.len * sizeof(T)); }
-            }
-            self.data = new_data;
-            self.cap = new_cap;
-        }
-        // The tail starting at `len` is inside the allocation: the branch above grew it to at
-        // least `min_len` elements. Building the pointer needs no marker (an integer cast to a
-        // raw pointer is safe); the `memset` below is what the length argument has to justify.
+        self.grow_to(min_len);
+        // grow_to made room for min_len elements, so the `min_len - len` zeroed past `len` are
+        // inside the allocation.
         let zero_start = (self.data as usize + self.len * sizeof(T)) as *mut u8;
-        let zero_bytes = size_of_n(min_len - self.len, sizeof(T));
-        // SAFETY: `zero_bytes` is the checked size of the `min_len - len` elements being zeroed,
-        // and `zero_start` is inside the allocation.
-        unsafe { memset(zero_start, 0, zero_bytes); }
+        memset(zero_start, 0, size_of_n(min_len - self.len, sizeof(T)));
         self.len = min_len;
     }
 
-    // Resizes the vector to new_len elements, padding with zero values if growing.
-    pub fn resize(self: &mut Vec<T>, new_len: usize) {
-        if new_len > self.len {
-            self.ensure_len(new_len);
-        } else {
+    // Resizes the vector to new_len elements, filling each new one with a clone of
+    // value; T must implement Clone. Shrinking keeps the first new_len.
+    pub fn resize(self: &mut Vec<T>, new_len: usize, value: T) {
+        if new_len <= self.len {
             self.len = new_len;
+            return;
         }
+        self.grow_to(new_len);
+        let dest = self.data as usize;
+        let mut i = self.len;
+        while i < new_len {
+            // SAFETY: grow_to made room for new_len elements, and the slot written is past len,
+            // so it holds no value to drop; each new element is a clone, never zero bytes.
+            unsafe { *((dest + i * sizeof(T)) as *mut T) = value.clone(); }
+            i = i + 1 as usize;
+        }
+        self.len = new_len;
     }
 
     // Replaces the element at index with val, panicking if out of bounds.

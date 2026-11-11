@@ -669,7 +669,15 @@ impl ILModule {
 pub const NO_DROP_FN: u32 = 999999;
 
 pub fn il_module_set_typedef(module: &mut ILModule, id: u32, def: ILTypeDef) {
-    module.typedefs.ensure_len(id as usize + 1 as usize);
+    // An id not yet given a definition holds an empty struct, as the zero-filled slot did.
+    while module.typedefs.len() <= id as usize {
+        module.typedefs.push(
+            ILTypeDef.Struct(ILStruct {
+                fields: @slice(0 as *mut ILField, 0 as usize),
+                is_copy_opt_out: false,
+            })
+        );
+    }
     module.typedefs.set(id as usize, def);
 }
 

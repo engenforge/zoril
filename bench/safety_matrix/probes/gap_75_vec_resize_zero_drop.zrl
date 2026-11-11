@@ -1,15 +1,16 @@
 // name: Vec.resize pads with zero bytes, and set drops the zero value
-// expected: known_gap
-// gap: Vec.resize fills new slots with zero bytes, and set drops the slot's old value before writing: for a type whose safe Drop writes through a &mut field, the zero value's drop writes through null (Z-0171; fixed by Z-0174)
-// observed: runtime_fault
+// expected: compile_reject
+// zbuild: compile_reject (refused for the same message, at the interface's line of vec.zrl: KNOWN_ISSUES.md section 4, "An error inside an imported generic body names the interface's line under zbuild"; Z-0181)
+// Refused since Z-0174: resize clones its fill value, and S (a &mut field) has no Clone, so no slot holds a zero S for set to drop (the accepted twin with a Clone is 423).
 import "vec.zrl";
 use vec::Vec;
 struct S { r: &mut i32 }
 impl Drop for S { fn drop(self: &mut S) { *self.r = 1; } }
 fn main() -> i32 {
     let mut n = 0;
+    let mut m = 0;
     let mut v = Vec::<S>.new();
-    v.resize(1);
+    v.resize(1, S { r: &mut m });
     v.set(0, S { r: &mut n });
     return n;
 }
