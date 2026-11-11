@@ -270,8 +270,15 @@ Standalone tasks developed and committed directly on `main`:
       - Stale record: `bench/fuzz/README.md` describes `src/` before this change.
     - **Awaiting review:** a reviewer who did not write the fix re-runs `gap_71` and `gap_72` against git:6e3497f and git:2c91ace, `./scripts/test.sh --filter 'err_try_|try_early_return'`, and the reject-diff against git:c94207d, and probes sibling shapes (e.g. a user `Option`-like enum whose `None` carries a payload, `&mut Result<i32, Guard>`, a function returning `&Result<i32, i64>`).
 
-- [ ] +tests +AI-G Z-0170 `?` inside a `defer` expression does not infinitely recurse in `emit_scope_cleanup`
+- [x] +tests +AI-G Z-0170 `?` inside a `defer` expression does not infinitely recurse in `emit_scope_cleanup`
     > **Created:** 2026-11-10 by Z-0167's review. **Branch:** `main`.
+    > **Completed:** 2026-11-11 git:4d344e3
+
+    - **Completion (2026-11-11):** the fix is git:c2a3f0c; git:4d344e3 updates the compiler line counts it moved (`doc/SAFETY.md` §5 `47,054`, `unsafe_policy.md` §5 `40,900`) and drops four redundant `unsafe` markers from `defer_inner_control_flow.zrl`, which the first run's `safety-figures` and `unsafe-scan` gates refused (`make test`: `Total: 3240 run, 3234 passed, 6 failed, 88 skipped (215.2s)`, all six those two gates). Runs on git:4d344e3:
+      - C1: as recorded under **Fixed**; the filter `in_defer|defer_` passes again on git:4d344e3 (`Total: 8 run, 8 passed, 0 failed, 0 skipped (0.1s)`).
+      - C2: as recorded under **Fixed** (`exit 139 after 10s` without the check).
+      - C3: `make test`: `Total: 3237 run, 3237 passed, 0 failed, 88 skipped (214.2s)`. `make preflight-changed`: exit 0, fixpoint `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, checked build `Total: 1172 run, 1172 passed, 0 failed, 0 skipped (49.8s)`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 8 newly refused, of 69133 programs against 215ff5352b8e666ff652b4e866ae0415fe731704`; the eight are `gap_68`, `gap_69`, `gap_71` and `gap_72` (Z-0167, Z-0168), each whole-program and through zbuild; none is Z-0170's.
+      - Stale record: `bench/fuzz/README.md` describes `src/` before this change.
 
     - **Found (2026-11-10, Z-0167 review, F5):** `defer inner()?;` in `fn outer() -> Result<i32, i64>` causes `build/zoril` to segfault (`exit 139`, stack overflow). `lower_try_expr` calls `self.emit_scope_cleanup(0 as usize, span, ...)`, and `emit_scope_cleanup` (`src/lower_zir/decl.zrl:381-392`) lowers `self.scope_defers[depth]` while `self.scope_defers[depth]` is still populated, so an early return inside a `defer` expression re-lowers the same `defer` infinitely.
     - **Do:** refuse `?` (and any early return) inside a `defer` expression with a located compile error, as `defer` runs during scope exit (`doc/spec/` updated to state the rule).
