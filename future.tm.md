@@ -284,3 +284,10 @@ Where Zoril has been tested, by operating system and architecture, recorded per 
 
     - **Now:** `Clone` needs an impl; `Copy` is the only bound satisfied structurally. So a `&T`, a `fn` pointer, a tuple or an array, all `Copy`, cannot call `.clone()`, satisfy `T: Clone`, or use `Vec.resize` / `Vec.extend_from_slice` once Z-0173 and Z-0174 make them clone (`gap_73` and `gap_74` are `compile_reject` for that reason).
     - **Do:** decide and implement Rust's rule: a structurally `Copy` type satisfies `Clone`, and its `.clone()` with no impl is the bitwise copy. A type-checker change: `src/` must build under the old rule and the new one, and `scripts/check_reject_diff.sh` lists every program newly accepted, each read for safety. Then `gap_73` and `gap_74` become `accept`.
+
+- [ ] +stdlib +tests +AI-G Z-0182 `Vec.resize` shrinking and `Vec.clear` drop the elements they remove
+    > **Created:** 2026-11-11 by Z-0174.
+
+    - **Now:** `resize(new_len, value)` with `new_len < len`, and `clear()`, only set `len`: the removed elements are never dropped. A leak, not a memory hole (nothing reads them again), but it breaks "drop exactly once" for a `T` with a `Drop`, as `truncate`/`clear` do in Rust.
+    - **Do:** drop each removed element, last first, before setting `len`; probe a `Drop` counter through both, and an arena-backed `Vec` (whose `free` is a no-op).
+    - **Checks:** C1 a run-time test counting one drop per removed element for both; C2 take the drop out and watch it count 0; C3 `make test`, its `Total:` quoted.
