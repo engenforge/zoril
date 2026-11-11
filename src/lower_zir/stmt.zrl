@@ -227,6 +227,10 @@ impl ZirLowerer {
             }
         }
 
+        if self.defer_depth > 0 as u32 {
+            self.report_error("cannot `return` inside `defer`", span);
+            return;
+        }
         ret_place = self.materialize_return(ret_place, span);
         self.emit_scope_cleanup(0 as usize, span, ret_place.base, true);
         self.terminate(ZirTerminator.Ret(ret_place));
@@ -364,10 +368,21 @@ impl ZirLowerer {
             );
             return;
         }
+        let entry = self.loop_stack[self.loop_stack.len() - 1 as usize];
+        if self.defer_depth > 0 as u32 && entry.scope_depth <= self.defer_scope_depth {
+            self.report_error(
+                if is_break {
+                    "cannot `break` out of `defer`"
+                } else {
+                    "cannot `continue` out of `defer`"
+                },
+                span
+            );
+            return;
+        }
         if is_break {
             self.loop_stack[self.loop_stack.len() - 1 as usize].has_break = true;
         }
-        let entry = self.loop_stack[self.loop_stack.len() - 1 as usize];
         self.emit_scope_cleanup(entry.scope_depth, span, 0 as u32, false);
         self.terminate(
             ZirTerminator.Jmp(if is_break { entry.exit_block } else { entry.cond_block })

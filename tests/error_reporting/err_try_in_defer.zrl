@@ -1,0 +1,21 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_try_in_defer.zrl:12:11: error: cannot use `?` inside `defer`
+// A `defer` runs while its scope exits, so an early return from it would lower the same
+// `defer` again on the way out.
+import "core.zrl";
+
+fn inner() -> Result<i32, i64> {
+    return Result.Err(5 as i64);
+}
+
+fn outer() -> Result<i32, i64> {
+    defer inner()?;
+    return Result.Ok(1);
+}
+
+fn main() -> i32 {
+    match outer() {
+        Ok(x) => { return x; },
+        Err(e) => { return e as i32; }
+    }
+}

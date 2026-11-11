@@ -75,6 +75,8 @@ pub struct ZirLowerer {
     // enclosing scope instead of joining them (which only or-pattern alternatives do).
     pub pattern_binds_fresh: bool,
     pub had_error: bool,
+    // Errors reported so far; a cleanup compares it around a `defer` to see whether that `defer` failed.
+    pub error_count: u32,
 
     pub locals: Vec<Local>,
     pub local_consumed: Vec<bool>,
@@ -110,6 +112,10 @@ pub struct ZirLowerer {
     pub is_void_main: bool,
     pub current_literal_comment: u32, // ambient: the AST-level literal comment for the statement currently being lowered, 0 if none
     pub unsafe_depth: u32,
+    // Nonzero while a scope's defers are being lowered; `defer_scope_depth` is the scope being
+    // exited, so a loop entered inside the `defer` (deeper) may still `break`.
+    pub defer_depth: u32,
+    pub defer_scope_depth: usize,
     // Path reported by `report_prefix`: the file of the function being lowered (the
     // `Resolver`'s is the entry file's, shared across every imported file). Empty means the
     // resolver's.
@@ -141,6 +147,7 @@ impl ZirLowerer {
             next_region_id: 1 as u32,
             pattern_binds_fresh: false,
             had_error: false,
+            error_count: 0 as u32,
             locals: unsafe { Vec::<Local>.new_in_raw(arena) },
             local_consumed: unsafe { Vec::<bool>.new_in_raw(arena) },
             local_drop_flag: unsafe { Vec::<u32>.new_in_raw(arena) },
@@ -163,6 +170,8 @@ impl ZirLowerer {
             is_void_main: false,
             current_literal_comment: 0 as u32,
             unsafe_depth: 0 as u32,
+            defer_depth: 0 as u32,
+            defer_scope_depth: 0 as usize,
             file_path: "",
             current_source_file: 0 as u32,
             compile_only: false,
@@ -172,6 +181,7 @@ impl ZirLowerer {
 
     pub fn report_prefix(self: &mut ZirLowerer, span: Span) {
         self.had_error = true;
+        self.error_count = self.error_count + 1 as u32;
         self.resolver.had_error = true;
         diag_start(
             if self.file_path.len > 0 as usize { self.file_path } else { self.resolver.file_path },
@@ -385,11 +395,26 @@ impl ZirLowerer {
                 let defers = &self.scope_defers[depth];
                 defers_copy.extend_from_slice(defers.as_slice());
             }
+            // A `defer` runs while its scope exits: an exit from inside it (`return`, `?`, or a
+            // `break`/`continue` past `depth`) would lower this cleanup again, without end, so the
+            // exits check `defer_depth` and refuse (surface_syntax.md §7.3).
+            let saved_defer_depth = self.defer_depth;
+            let saved_defer_scope = self.defer_scope_depth;
+            self.defer_depth = self.defer_depth + 1 as u32;
+            self.defer_scope_depth = depth;
             let mut j = defers_copy.len();
             while j > 0 as usize {
                 j = j - 1 as usize;
+                let errors_before = self.error_count;
                 self.lower_expr(defers_copy.as_slice()[j], 0 as u32);
+                // Every exit of the scope lowers its defers again; a refused one would repeat
+                // its diagnostic once per exit.
+                if self.error_count != errors_before {
+                    self.scope_defers[depth].clear();
+                }
             }
+            self.defer_depth = saved_defer_depth;
+            self.defer_scope_depth = saved_defer_scope;
 
             // 2. Emit drops for locals
             let mut locals_copy = unsafe { Vec::<u32>.new_in_raw(self.arena) };

@@ -2940,6 +2940,10 @@ impl ZirLowerer {
 
     fn lower_try_expr(self: &mut ZirLowerer, try_expr_id: ExprId, span: Span) -> Place {
         let val_place = self.lower_expr(try_expr_id, 0 as u32);
+        if self.defer_depth > 0 as u32 {
+            self.report_error("cannot use `?` inside `defer`", span);
+            return val_place;
+        }
         let enum_ty = self.get_place_type(&val_place);
         let success_v_idx = self.try_success_variant(enum_ty);
 
@@ -3145,6 +3149,10 @@ impl ZirLowerer {
                     projections: @slice(0 as *mut Projection, 0 as usize)
                 };
             }
+        }
+        if self.defer_depth > 0 as u32 {
+            self.report_error("cannot `return` inside `defer`", span);
+            return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
         }
         self.emit_scope_cleanup(0 as usize, span, ret_place.base, true);
         self.terminate(ZirTerminator.Ret(ret_place));

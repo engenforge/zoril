@@ -821,6 +821,8 @@ When a scope exits:
 1. All `defer` statements execute in reverse order of declaration (LIFO).
 1. All local variables are dropped in reverse order of declaration.
 
+Because a `defer` statement runs while its enclosing scope is already exiting, it may not leave that scope early with `return`, `?`, or a `break` or `continue` targeting a loop outside the `defer`.
+
 ### 7.4 Allocators
 
 `box expr` allocates on the global heap using a built-in allocator that manages memory directly via system calls (e.g., `mmap`/`munmap`).

@@ -1,0 +1,40 @@
+// expected exit 0
+// Only an exit from the `defer` itself is refused: a loop or a closure written inside a
+// `defer` keeps its own `break`, `continue`, `return` and `?`.
+import "core.zrl";
+
+static mut LOOP_COUNT: i32 = 0;
+static mut CLOSURE_VALUE: i32 = 0;
+
+fn inner() -> Result<i32, i64> { return Result.Ok(7); }
+
+fn loop_inside_defer() {
+    defer {
+        let mut i = 0;
+        while true {
+            i = i + 1;
+            if i == 2 { continue; }
+            if i > 4 { break; }
+        }
+        LOOP_COUNT = i;
+    };
+}
+
+fn closure_inside_defer() -> Result<i32, i64> {
+    defer {
+        let f = || -> Result<i32, i64> { let v = inner()?; return Result.Ok(v); };
+        match f() {
+            Ok(x) => { CLOSURE_VALUE = x; },
+            Err(_) => {}
+        }
+    };
+    return Result.Ok(1);
+}
+
+fn main() -> i32 {
+    loop_inside_defer();
+    if LOOP_COUNT != 5 { return 1; }
+    let _ = closure_inside_defer();
+    if CLOSURE_VALUE != 7 { return 2; }
+    return 0;
+}
