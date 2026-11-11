@@ -1,0 +1,22 @@
+// name: `?` on `&Result` returns a non-`Copy` error out of the borrow, dropping it twice
+// expected: known_gap
+// gap: `r?` on `r: &Result<i32, Guard>` returned `r` as a reference place in ZIR while codegen copied the `Result` out of the borrow into the return slot, hiding the move from the borrow checker; the `Guard` in `r` and its copy in the returned `Result` are both dropped (exit 2)
+// observed: exit 2
+import "core.zrl";
+static mut DROPS: i32 = 0;
+struct Guard { id: i64 }
+impl Drop for Guard {
+    fn drop(self: &mut Guard) { unsafe { DROPS = DROPS + 1; } }
+}
+fn dup(r: &Result<i32, Guard>) -> Result<i32, Guard> {
+    let v = r?;
+    return Result.Ok(v);
+}
+fn run() {
+    let r: Result<i32, Guard> = Result.Err(Guard { id: 99 as i64 });
+    let _r2 = dup(&r);
+}
+fn main() -> i32 {
+    run();
+    return unsafe { DROPS };
+}
