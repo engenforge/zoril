@@ -1,0 +1,18 @@
+// name: Vec.extend_from_slice copies a value with a Drop, which both Vecs then drop
+// expected: known_gap
+// gap: Vec.extend_from_slice writes each slice element into the new slot bitwise, with no bound on T, so a value with a Drop is owned by both Vecs; popping and dropping from each runs one value's drop twice (exit 2; a double free for an owning type) (Z-0171; fixed by Z-0173)
+// observed: exit 2
+import "vec.zrl";
+use vec::Vec;
+static mut DROPS: i32 = 0;
+struct S { id: i64 }
+impl Drop for S { fn drop(self: &mut S) { DROPS = DROPS + 1; } }
+fn main() -> i32 {
+    let mut w = Vec::<S>.new();
+    w.push(S { id: 1 });
+    let mut v = Vec::<S>.new();
+    v.extend_from_slice(w.as_slice());
+    match w.pop() { Option.Some(s) => { @drop(s); }, Option.None => {}, }
+    match v.pop() { Option.Some(s) => { @drop(s); }, Option.None => {}, }
+    return DROPS;
+}

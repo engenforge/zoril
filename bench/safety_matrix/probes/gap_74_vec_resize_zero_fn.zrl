@@ -1,0 +1,12 @@
+// name: Vec.resize pads with zero bytes, a null fn value called from safe code
+// expected: known_gap
+// gap: Vec.resize fills new slots with zero bytes, so a Vec<fn() -> i32> grown by resize holds a null fn value, and calling it jumps to address 0 (Z-0171; fixed by Z-0174)
+// observed: runtime_fault
+import "vec.zrl";
+use vec::Vec;
+fn main() -> i32 {
+    let mut v = Vec::<fn() -> i32>.new();
+    v.resize(1);
+    let f = *v.get(0).unwrap();
+    return f();
+}
