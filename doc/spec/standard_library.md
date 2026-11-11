@@ -283,7 +283,7 @@ pub trait Clone { fn clone(self: &Self) -> Self; }
 pub trait Copy {}
 ```
 
-`Copy` marks implicit bitwise duplication and is structural: a type is Copy exactly when it owns no `Drop` value, a `T: Copy` bound needs no impl, and `impl Copy for T` is rejected otherwise. `Clone` is explicit and deep: `clone.zrl` implements it for `bool`, every integer type, `Option<T: Clone>`, `Vec<T: Clone>` (element-wise, on the same allocator) and `String` (its own buffer). `#[derive(Clone)]` writes a struct's field-by-field impl; see the surface specification §8.5.
+`Copy` marks implicit bitwise duplication and is structural: a type is Copy exactly when it owns no `Drop` value, a `T: Copy` bound needs no impl, and `impl Copy for T` is rejected otherwise. `Clone` is explicit and deep: `core.zrl` implements it for `bool`, every integer type, `Option<T: Clone>` and slices `[T: Clone]` (the header: the elements are not duplicated), beside the trait, so a generic body in any module reaches them; `clone.zrl` implements it for `Vec<T: Clone>` (element-wise, on the same allocator) and `String` (its own buffer). `Vec.extend_from_slice` clones each element, so its `T` must implement `Clone` (a value with a `Drop` copied bitwise would be owned twice); `vec::extend_bytes` appends bytes in one copy. `#[derive(Clone)]` writes a struct's field-by-field impl; see the surface specification §8.5.
 
 ## 9. Collections (`stdlib/hashmap.zrl`)
 

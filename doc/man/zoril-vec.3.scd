@@ -37,6 +37,7 @@ impl<T> Vec<T> {
     pub fn free(self: &mut Vec<T>);
     pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]);
 }
+pub fn extend_bytes(v: &mut Vec<u8>, bytes: [u8]);
 ```
 
 # DESCRIPTION
@@ -212,7 +213,18 @@ pub fn free(self: &mut Vec<T>);
 pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]);
 ```
 
-	Appends all elements from a slice to the end of the vector.
+	Appends a clone of each element of slice to the end of the vector; T must
+	implement Clone. extend\_bytes appends bytes without a call per byte.
+	A clone of a view is the same view, but clone's #[borrows()] result hides that from
+	the body's summary, so the store is declared (probe 418 is accepted without it).
+
+*extend_bytes*
+```
+pub fn extend_bytes(v: &mut Vec<u8>, bytes: [u8]);
+```
+
+	Appends bytes to the end of v. A byte has no Drop and carries no address, so it
+	is copied in one block where extend\_from\_slice clones each element.
 
 # INTERNAL
 

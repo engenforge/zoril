@@ -385,42 +385,63 @@ impl<T> Vec<T> {
         self.anchor = Option.None;
     }
 
-    // Appends all elements from a slice to the end of the vector.
+    // Grows the buffer to hold at least min_cap elements, keeping the first len.
+    fn grow_to(self: &mut Vec<T>, min_cap: usize) {
+        if min_cap <= self.cap { return; }
+        let mut new_cap = if self.cap == 0 as usize {
+            8 as usize
+        } else {
+            grow_cap(self.cap)
+        };
+        while new_cap < min_cap {
+            new_cap = grow_cap(new_cap);
+        }
+        // SAFETY: `self.raw` is the arena this Vec allocates from (0 for the global heap)
+        // and `new_cap` is the checked capacity, so the block covers `new_cap` elements.
+        let new_data = unsafe {
+            zoril_allocator_alloc(self.raw, size_of_n(new_cap, sizeof(T)))
+        } as *mut T;
+        if self.data as usize != 0 as usize && self.len > 0 as usize {
+            // SAFETY: the old buffer holds `self.len` initialized elements and the new one
+            // was just allocated with room for them.
+            unsafe { memcpy(new_data as *mut u8, self.data as *u8, self.len * sizeof(T)); }
+        }
+        self.data = new_data;
+        self.cap = new_cap;
+    }
+
+    // Appends a clone of each element of slice to the end of the vector; T must
+    // implement Clone. extend_bytes appends bytes without a call per byte.
+    // A clone of a view is the same view, but `clone`'s `#[borrows()]` result hides that from
+    // the body's summary, so the store is declared (probe 418 is accepted without it).
+    #[stores(slice -> self)]
     pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]) {
         if slice.len == 0 as usize { return; }
         let target_len = self.len + slice.len;
-        if target_len > self.cap {
-            let mut new_cap = if self.cap == 0 as usize {
-                8 as usize
-            } else {
-                grow_cap(self.cap)
-            };
-            while new_cap < target_len {
-                new_cap = grow_cap(new_cap);
-            }
-            // SAFETY: `self.raw` is the arena this Vec allocates from (0 for the global heap)
-            // and `new_cap` is the checked capacity, so the block covers `new_cap` elements.
-            let new_data = unsafe {
-                zoril_allocator_alloc(self.raw, size_of_n(new_cap, sizeof(T)))
-            } as *mut T;
-            if self.data as usize != 0 as usize && self.len > 0 as usize {
-                // SAFETY: the old buffer holds `self.len` initialized elements and the new one
-                // was just allocated with room for them.
-                unsafe { memcpy(new_data as *mut u8, self.data as *u8, self.len * sizeof(T)); }
-            }
-            self.data = new_data;
-            self.cap = new_cap;
-        }
-        // Each element is written as a `T`, not copied with `memcpy`: a bare extern has no store
-        // effect, so the copy would hide from the call summary that the slice's elements (views,
-        // references) now live in `self` (gap_56_extern_copy_extend_from_slice).
+        self.grow_to(target_len);
+        // Each element is cloned, never copied bitwise: a bitwise copy of a value with a `Drop`
+        // leaves it owned by both `slice` and `self` (gap_76). It is written as a `T`, not with
+        // `memcpy`: a bare extern has no store effect, so the copy would hide from the call
+        // summary that the slice's elements (views, references) now live in `self` (gap_56).
         let dest = self.data as usize + self.len * sizeof(T);
         let mut i = 0 as usize;
         while i < slice.len {
-            // SAFETY: self.cap was ensured to be at least target_len, and slice contains slice.len valid elements.
-            unsafe { *((dest + i * sizeof(T)) as *mut T) = slice[i]; }
+            // SAFETY: grow_to made room for target_len elements, slice holds slice.len valid
+            // ones, and the slot written is past len, so it holds no value to drop.
+            unsafe { *((dest + i * sizeof(T)) as *mut T) = slice[i].clone(); }
             i = i + 1 as usize;
         }
         self.len = target_len;
     }
+}
+
+// Appends bytes to the end of v. A byte has no Drop and carries no address, so it
+// is copied in one block where extend_from_slice clones each element.
+pub fn extend_bytes(v: &mut Vec<u8>, bytes: [u8]) {
+    if bytes.len == 0 as usize { return; }
+    let target_len = v.len + bytes.len;
+    v.grow_to(target_len);
+    // SAFETY: grow_to made room for target_len bytes, and bytes holds bytes.len valid ones.
+    unsafe { memcpy((v.data as usize + v.len) as *mut u8, bytes.ptr, bytes.len); }
+    v.len = target_len;
 }

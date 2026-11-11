@@ -162,8 +162,8 @@ pub trait Eq {
 //
 // Explicit duplication. A clone owns its own copy of everything the original
 // owns (a cloned String gets its own buffer). Implementations for the primitive
-// types, Option, Vec and String are in clone.zrl; #[derive(Clone)] writes one
-// for a struct whose fields all implement Clone.
+// types, Option and slices are below; Vec and String's are in clone.zrl;
+// #[derive(Clone)] writes one for a struct whose fields all implement Clone.
 pub trait Clone {
     // Creates an explicit duplicate copy of the value.
     fn clone(self: &Self) -> Self;
@@ -176,6 +176,89 @@ pub trait Clone {
 // Drop, so a `T: Copy` bound needs no impl, and `impl Copy for T` is rejected
 // for a type that is not.
 pub trait Copy {}
+
+// The Clone impls of the types this module defines or the language builds in. They live beside
+// the trait so that a generic body in any module (Vec's clones) reaches them without importing
+// clone.zrl, which imports vec.zrl.
+
+impl Clone for bool {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &bool) -> bool { return *self; }
+}
+
+impl Clone for u8 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &u8) -> u8 { return *self; }
+}
+
+impl Clone for u16 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &u16) -> u16 { return *self; }
+}
+
+impl Clone for u32 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &u32) -> u32 { return *self; }
+}
+
+impl Clone for u64 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &u64) -> u64 { return *self; }
+}
+
+impl Clone for usize {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &usize) -> usize { return *self; }
+}
+
+impl Clone for i8 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &i8) -> i8 { return *self; }
+}
+
+impl Clone for i16 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &i16) -> i16 { return *self; }
+}
+
+impl Clone for i32 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &i32) -> i32 { return *self; }
+}
+
+impl Clone for i64 {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &i64) -> i64 { return *self; }
+}
+
+impl Clone for isize {
+    // Creates an explicit duplicate copy of the value.
+    fn clone(self: &isize) -> isize { return *self; }
+}
+
+impl<T: Clone> Clone for Option<T> {
+    // Creates an explicit duplicate copy of the value.
+    #[borrows()]
+    fn clone(self: &Option<T>) -> Option<T> {
+        // Matched through the reference: `T` may own storage, so `match *self` would move it out
+        // of the borrow. The ergonomic binding is `&T`, which `clone` copies.
+        return match self {
+            Some(v) => Option.Some(v.clone()),
+            None => Option.None,
+        };
+    }
+}
+
+// A slice value is a pointer and a length, so a clone is a copy of the header: the elements it
+// refers to are not duplicated. That is what lets `Vec<[u8]>.clone()` name a `Clone` element type,
+// and a `Vec` clone then duplicates its elements rather than sharing them.
+impl<T: Clone> Clone for [T] {
+    // Creates an explicit duplicate copy of the value.
+    #[borrows()]
+    fn clone(self: &[T]) -> [T] {
+        return *self;
+    }
+}
 
 // Trait for types that can be hashed into a 64-bit integer.
 pub trait Hash {

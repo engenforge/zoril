@@ -13,7 +13,7 @@ use io::{Error, Read, Write};
 use mem::Arena;
 use mem_raw::memcpy;
 use string::String;
-use vec::Vec;
+use vec::{Vec, extend_bytes};
 
 const DEFAULT_BUF_WRITER_CAPACITY: usize = 65536;
 const DEFAULT_BUF_READER_CAPACITY: usize = 8192;
@@ -361,7 +361,7 @@ impl<R: Read> BufReader<R> {
             let amt = if found { delim_idx + 1 as usize } else { available.len };
             // SAFETY: amt <= available.len, so amt bytes are inside available.
             let sub = unsafe { @slice(available.ptr as *u8, amt) };
-            out.extend_from_slice(sub);
+            extend_bytes(out, sub);
             self.consume(amt);
             total = total + amt;
             if found {

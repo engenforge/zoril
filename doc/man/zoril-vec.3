@@ -5,7 +5,7 @@
 .nh
 .ad l
 .\" Begin generated content:
-.TH "zoril\-vec" "3" "2026\-10\-27"
+.TH "zoril\-vec" "3" "2026\-11\-11"
 .PP
 .SH NAME
 .PP
@@ -45,6 +45,7 @@ impl<T> Vec<T> {
     pub fn free(self: &mut Vec<T>);
     pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]);
 }
+pub fn extend_bytes(v: &mut Vec<u8>, bytes: [u8]);
 .fi
 .RE
 .PP
@@ -312,7 +313,22 @@ pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]);
 .RE
 .PP
 .RS 4
-Appends all elements from a slice to the end of the vector.\&
+Appends a clone of each element of slice to the end of the vector; T must
+implement Clone.\& extend_bytes appends bytes without a call per byte.\&
+A clone of a view is the same view, but clone'\&s #[borrows()] result hides that from
+the body'\&s summary, so the store is declared (probe 418 is accepted without it).\&
+.PP
+.RE
+\fBextend_bytes\fR
+.nf
+.RS 4
+pub fn extend_bytes(v: &mut Vec<u8>, bytes: [u8]);
+.fi
+.RE
+.PP
+.RS 4
+Appends bytes to the end of v.\& A byte has no Drop and carries no address, so it
+is copied in one block where extend_from_slice clones each element.\&
 .PP
 .RE
 .SH INTERNAL

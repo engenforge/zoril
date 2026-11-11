@@ -1,7 +1,7 @@
 // name: Vec.extend_from_slice copies a value with a Drop, which both Vecs then drop
-// expected: known_gap
-// gap: Vec.extend_from_slice writes each slice element into the new slot bitwise, with no bound on T, so a value with a Drop is owned by both Vecs; popping and dropping from each runs one value's drop twice (exit 2; a double free for an owning type) (Z-0171; fixed by Z-0173)
-// observed: exit 2
+// expected: compile_reject
+// zbuild: compile_reject (refused for the same message, at the interface's line of vec.zrl: KNOWN_ISSUES.md section 4, "An error inside an imported generic body names the interface's line under zbuild"; Z-0181)
+// Refused since Z-0173: extend_from_slice clones each element, and S has no Clone, so no second owner of one value is made (the accepted twin with a Clone is 422).
 import "vec.zrl";
 use vec::Vec;
 static mut DROPS: i32 = 0;
