@@ -219,8 +219,9 @@ Standalone tasks developed and committed directly on `main`:
 3. Compiler quality & tools: Z-0013 (reviewer rotation), Z-0014 (`zilc` input validation), Z-0015 (`zoril` error bounds), Z-0016 (`zbuild` ZIL handling), Z-0067 (diagnostic source location), Z-0079 (generic interface roundtrip), Z-0080 (mutation list integrity).
 4. Benchmarks: Z-0004 (cloud session variance measurement), Z-0005 (baseline decision).
 
-- [ ] +safety +tests +AI-D Z-0167 `e?` returns a value of the function's return type, never `e` reinterpreted
+- [x] +safety +tests +AI-D Z-0167 `e?` returns a value of the function's return type, never `e` reinterpreted
     > **Created:** 2026-11-10. **Branch:** `main`. **Found by:** Z-0130 (a segfault in `proc::wait_any` written with `?`). **Check-in:** stop for review after it: a fix to a safety rule. **Before:** Z-0131 (the `testinfra` series continues once this is merged into `testinfra`).
+    > **Completed:** 2026-11-11 git:c94207d
 
     - **Found (2026-11-10):** `lower_try_expr` (`src/lower_zir/expr.zrl`) ended its error block with `Ret(val_place)`: the operand returned whole, whatever the function returns, and no checker looks at `Expr.Try`. Recorded in git:25e2147 as gap_68 (an error of another type reinterpreted: `Result<i32, Pair>` out of `Result<i32, [u8]>` gives a slice of length 42), gap_69 (`Option<i32>`'s `None` arrives as `Ok` of `Result<i32, i32>`, exit 7) and gap_70 (`Result<[i64; 8], i64>` into `Result<u8, i64>`: `blit ..., %v__sret_1, 72` into a 16-byte slot, segfault). Each was run against `build/fresh-bootstrap.gen3` (the compiler before the fix): exit 42, exit 7, exit 139.
     - **Route class:** the early return of `?`, a conversion site. Members probed: the error type differs (gap_68); `Option` into `Result` (gap_69); the same error type and a larger `Ok` (gap_70); a function that returns no enum (`Result<i32, i64>` in a function returning `i32`: refused today, but by an unrelated "region escape" error); an operand that is no enum (`5?`: refused by "invalid ZIL (a compiler bug)"); a reference operand of the return type (`r?` with `r: &Result<i32, i64>`: correct, exit 5); a user enum with `Ok`/`Err` variants into `Result` (correct only because the layouts coincide); a named local with a `Drop` error payload (`x?`: refused, "use of moved value"). The same-type case (`Result<i32, i64>` into `Result<i64, i64>`) was correct.
@@ -243,6 +244,87 @@ Standalone tasks developed and committed directly on `main`:
       - Stale record: `bench/fuzz/README.md` describes `src/` before this change (`scripts/check_fuzz_fresh.sh`).
     - **Awaiting review:** a reviewer who did not write the fix re-runs gap_68 to gap_70 against git:25e2147's compiler and git:c94207d's, `scripts/test.sh --filter 'err_try_|try_early_return'`, and the reject-diff, and probes further members of the route class (`?` on a `Box<Result<..>>` operand, nested `??`, `?` inside a `defer` or a loop body). Once closed, `main` is merged into `testinfra` and the `testinfra` `+AI-G` series resumes at Z-0131.
     - **Review (2026-11-10):** C1–C3, `sh scripts/run_safety_matrix.sh` (`All probes complete: 448/491 passed. Mismatches: 0`), `scripts/test.sh --filter 'err_try_|try_early_return'` (`Total: 7 run, 7 passed, 0 failed, 0 skipped (0.1s)`), and `gap_68`..`gap_70` against pre-fix (`exit 42`, `exit 7`, `exit 139`) and git:c94207d (compile-fail, compile-fail, `exit 0`) confirmed; nested `??` and `?` in a loop body pass. Kept open: probing the route class found five issues tracked in Z-0168 (enum shape, `&Result` borrow move check, `Box<Result>`), Z-0169 (`Drop` return type and `exclude_id` in `error_block`), and Z-0170 (`?` inside `defer` stack overflow).
+    - **Closed (2026-11-11), on the second review:** the issues the first review kept it open for are closed (Z-0168 git:2c91ace, Z-0169, Z-0170 git:c2a3f0c and git:4d344e3, all swept). The second reviewer, who wrote neither fix, re-ran C1–C3: `sh scripts/run_safety_matrix.sh` printed `All probes complete: 450/493 passed. Mismatches: 0`, and `./scripts/test.sh --filter 'err_try_|try_early_return'` printed `Total: 12 run, 12 passed, 0 failed, 0 skipped`; the pre-fix behaviour was confirmed with the git:c94207d-base compiler from `build/reject-diff-*/base`, because `build/fresh-bootstrap.gen3` had since been rebuilt. C4 as the author recorded it (gen3 at the time). C5 and C6 were not re-run by the reviewer; the author's results above stand, and `make test` (`Total: 3237 run, 3237 passed, 0 failed, 88 skipped (214.2s)`) and `make preflight-changed` (exit 0, `[PASS] reject-diff: 0 newly accepted ..., 8 newly refused, of 69133 programs`, gap_68/69/71/72) passed on git:4d344e3, which contains this fix. Two non-blocking findings of that review are Z-0177 and Z-0178.
+
+- [ ] +safety +vecclone +AI-G Z-0171 V1 `Vec.resize` and `Vec.extend_from_slice` holes recorded as known gaps
+    > **Created:** 2026-11-11. **Branch:** `vecclone`. Reclassified public under `SECURITY.md` (each needs the program to call the method on a particular element type).
+
+    - **Found (2026-11-10, probing `Vec.push`'s siblings; probed again 2026-11-11 on git:c2a3f0c):**
+      - `resize` (and the `pub` `ensure_len` behind it, `stdlib/vec.zrl`) pads with zero bytes, which are not a value of every element type: `Vec::<&i32>` then `*v.get(0).unwrap()` read through a null reference (exit 139); `Vec::<fn() -> i32>` calls a null `fn` (exit 139); for `S { p: *mut u8 }` with a `Drop` writing through `p`, `v.resize(1); v.set(0, ..)` drops the zero `S` and writes through null (exit 139). A zero `[u8]` (null, length 0) is harmless. A `T: Copy` bound would not close it: `&i32` and `fn` are `Copy`.
+      - `extend_from_slice` writes each `slice[i]` into the new slot as a bitwise copy, with no bound on `T`: for `S` with a `Drop`, popping and dropping from both `Vec`s runs one value's `drop` twice (exit 2).
+    - **Do:** four `known_gap` probes (`gap_73_vec_resize_zero_ref`, `gap_74_vec_resize_zero_fn`, `gap_75_vec_resize_zero_drop`, `gap_76_vec_extend_from_slice_double_drop`) with `// gap:` reasons, one Known gaps entry in `doc/spec/safety_model.md` (route class: a `Vec` method making or duplicating a `T` with no clone), and class (N) in `doc/SAFETY.md` §6.
+    - **Checks:**
+      - C1: each probe run alone gives its unsafe outcome (`exit 139`, `139`, `139`, `2`); quote each.
+      - C2: `sh scripts/run_safety_matrix.sh`: `Mismatches: 0`, the four reported as known gaps; `scripts/check_safety_model.sh` passes.
+      - C3: `make test`, its `Total:` line quoted.
+
+- [ ] +safety +vecclone +decision +AI-D Z-0172 V2 Decide how `Vec` clones an element
+    > **Created:** 2026-11-11. **Branch:** `vecclone`. **After:** Z-0171.
+
+    - **Direction (decided by the maintainer, 2026-11-11):** as Rust: `resize(new_len, value: T)` and `extend_from_slice(slice)` with `T: Clone`, cloning into every new slot. If stage1 cannot compile it, a re-pin is acceptable (the maintainer's approval, 2026-11-11).
+    - **Facts to settle, each by a probe:**
+      - Stage1: does `bootstrap/stage1`'s compiler accept a generic method of `Vec<T>` calling `val.clone()` on a `T`? Nothing in the `src/` closure does it today. Build a scratch closure module with `build/zoril-stage1`.
+      - Reach: the trait is in `core.zrl` but the integer, `bool` and `Option` impls are in `clone.zrl`, which imports `vec.zrl`; `vec.zrl` cannot import it back. Move the primitive impls to `core.zrl`, or another way.
+      - Coverage: which `Copy` types have no `Clone` (references, `fn` pointers, tuples, arrays, a `Copy` user struct without `#[derive(Clone)]`)? Rust's `Copy: Clone` would keep `extend_from_slice` on them accepted; decide whether a structurally `Copy` `T` clones bitwise without an impl, and where (type checker or mono).
+      - Enforcement: an impl-level `T: Clone` bound is not checked today (Z-0175); confirm that per-instance resolution of `.clone()` refuses a `T` with no `Clone`.
+      - Cost: `String` appends go through `extend_from_slice` on `u8`; measure the cost of a call per byte against `bench/` before choosing a bitwise fast path for `Copy` `T`.
+    - **Checks:** each fact above with its probe (program and output) in this task; the decision in one paragraph with the rule it enforces.
+
+- [ ] +safety +vecclone +AI-D Z-0173 V3 `Vec.extend_from_slice` clones each element
+    > **Created:** 2026-11-11. **Branch:** `vecclone`. **After:** Z-0172. **Check-in:** stop for review after it: a fix to a safety rule.
+
+    - **Do:** as Z-0172 decides; the gap_56 per-element write rule (`stdlib/vec.zrl`) stays. Flip `gap_76` to `accept` (one drop per `Vec`).
+    - **Checks:** C1 `gap_76` exits 0 with two drops for two values; C2 a `T` with no `Clone` is refused with a located diagnostic (`// EXPECT:`); C3 take the clone out and watch `gap_76` exit 2; C4 the reject differential against the series base, every newly refused program listed; C5 `make test`, `make preflight-changed`, `rm build/zoril && make` without a warning, each `Total:` quoted.
+
+- [ ] +safety +vecclone +AI-D Z-0174 V4 `Vec.resize(new_len, value)` clones its fill value, and `ensure_len` is not safe to call
+    > **Created:** 2026-11-11. **Branch:** `vecclone`. **After:** Z-0173. **Check-in:** stop for review after it: a fix to a safety rule.
+
+    - **Do:** `resize(new_len, value: T)` clones `value` into each new slot; `ensure_len` becomes `unsafe fn` (or private). Callers: `src/pair_map.zrl` (2), `src/fmt/doc.zrl`, `src/fmt/printer.zrl` (`resize`); `src/il_cfg.zrl`, `src/mono.zrl`, `stdlib/bufio.zrl` (4) (`ensure_len`): all integer or `u8` elements. `doc/spec/standard_library.md` and the man page say so. Flip `gap_73`..`gap_75` to `accept`.
+    - **Checks:** C1 the three probes exit 0; C2 calling `ensure_len` outside `unsafe` is refused; C3 take the clone out (zero fill again) and watch them fail; C4 the reject differential; C5 `make test`, `make preflight-changed`, `rm build/zoril && make` without a warning, each `Total:` quoted. Then file the leak: shrinking with `resize`, and `clear`, do not drop what they remove.
+
+- [ ] +safety +types +AI-D Z-0175 A bound on an impl block or a method's type parameter is checked
+    > **Created:** 2026-11-11. **Branch:** `main`. **After:** the `vecclone` series is merged (it may refuse programs the series' tests use).
+
+    - **Found (2026-11-11, git:c2a3f0c, scratch `build/p34/`):** `impl<T: Copy> W<T> { fn dup(self: &W<T>) -> i32 }` called on a `W<S>` with `S: Drop` compiles (`b_split_impl_drop.zrl`, exit 0), and so does `fn dup<U: Copy>(self: &W<T>, u: &U)` called with `&S` (`b_method_bound.zrl`). A free function's bound is checked, also through an unbounded generic caller (`b_fn_bound_drop.zrl`, `b_through_generic.zrl`: `error: type 'S' does not implement trait 'Copy'`).
+    - **Do:** check both at the call as a free function's bound is checked; probe trait impls (`impl<T: Clone> Clone for Vec<T>` on a `Vec` of a non-`Clone` `T`) beside them. The rejection differential lists every program newly refused.
+    - **Checks:** C1 the two programs above refused with the free function's diagnostic (`tests/error_reporting/`, `// EXPECT:`); C2 take the check out and watch them compile; C3 `scripts/check_reject_diff.sh` against the base, every newly refused program listed with its reason; C4 `make test`, `make preflight-changed`, each `Total:` quoted.
+
+- [ ] +safety +tests +AI-D Z-0176 A value bound by value out of an enum payload in a `match` is dropped exactly once
+    > **Created:** 2026-11-11. **Branch:** `main`. Reclassified public under `SECURITY.md` (it needs the program to take the shape).
+
+    - **Found (2026-11-09, git:6ad43a6, while working on Z-0162):** `match e { E.A(s) => { let n = 1; }, E.B => {}, }` moves the payload into `s`, and neither `s` nor `e` is dropped: the destructor never runs. A leak on its own, but it breaks "drop exactly once" (`doc/spec/safety_model.md`), and a guard that is never released (a lock, an fd, an `Arena` reset) can be a correctness hole. Reproducer (`S` counts its drops into `*p`; exits 0, should exit 1):
+
+    ```zoril
+    struct S { p: *mut u8 }
+    impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } } }
+    enum E { A(S), B }
+    fn main() -> i32 {
+        let mut flag = 0 as u8;
+        let fp = &mut flag as *mut u8;
+        {
+            let e = E.A(S { p: fp });
+            match e { E.A(s) => { let n = 1; }, E.B => {}, }
+        }
+        return flag as i32;
+    }
+    ```
+
+    - **Do, first:** probe the siblings on the current tree and count the drops each makes (0, 1 or 2): the payload used (`consume(s)`, one drop in `consume`), a `_` arm, a nested pattern, `if let`, a struct payload, a tuple payload. Record each count here; a 0 is a `known_gap` probe (with the Known gaps entry and a `doc/SAFETY.md` §6 class), a 2 a `known_gap` probe that also stops this task for the maintainer before the fix. Then fix in the same session only if it is one mechanism; otherwise split.
+    - **Checks:** C1 each sibling's drop count quoted; C2 the probes recorded and `sh scripts/run_safety_matrix.sh` `Mismatches: 0`; C3 `make test`, its `Total:` quoted.
+
+- [ ] +diagnostics +AI-G Z-0177 `?` on an enum with `Some` and a payload-carrying `None` reports one error
+    > **Created:** 2026-11-11 by Z-0168's second review. **Branch:** `main`.
+
+    - **Found:** `enum O { Some(i32), None(i64) }` and `x?` on an `O` is refused with ``error: `?` needs a `Result` or an `Option`, found `O` ``, then also `internal error: could not resolve the type of an operator operand`: a cascade from the refused `?`, not unsafe.
+    - **Do:** after `try_success_variant` refuses the operand, `lower_try_expr` returns a place the caller does not report on again (as the other refusals do).
+    - **Checks:** C1 a `tests/error_reporting/` test with that enum, its one `// EXPECT:` line, and no second error (the runner's diff shows none); C2 take the change out and watch the second line return; C3 `make test` and `make preflight-changed`, each `Total:` quoted.
+
+- [ ] +tests +AI-G Z-0178 `?` on a `&Result` in a function returning `&Result` has a regression test
+    > **Created:** 2026-11-11 by Z-0168's second review. **Branch:** `main`.
+
+    - **Found:** `fn g(r: &Result<i32, i64>) -> &Result<i32, i64> { r?; return r; }` is accepted and returns the right value (exit 7): `types_match` treats a reference and its pointee as matching, so `lower_try_early_return` returns `r` itself, which is the function's return type. Benign today: a `Copy` payload is returned correctly, and a non-`Copy` one is refused by the deref move check (Z-0168).
+    - **Do:** a run-time test of that function on an `Ok` and an `Err` (each payload read back by the caller), and a refusal test of the same shape with a non-`Copy` `Err` (`cannot move out of borrow`), so a later change to `types_match` that breaks either is caught.
+    - **Checks:** C1 both tests pass; C2 `make test`, its `Total:` quoted.
 
 - [ ] +safety +tests +AI-D Z-0101 An `extern` function made into a `fn` value needs `unsafe`
     > **Created:** 2026-11-06. **Branch:** `main`. **Found by:** Z-0095 (its structural twin). **Check-in:** stop for review after it: a fix to a safety rule. A hole in the default mode, reachable from safe code; beside Z-0095 and Z-0100.
