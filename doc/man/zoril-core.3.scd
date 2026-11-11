@@ -52,6 +52,45 @@ impl<T, E> Result<T, E> {
     pub fn map<U>(self: Result<T, E>, f: fn(T) -> U) -> Result<U, E>;
     pub fn map_err<F>(self: Result<T, E>, f: fn(E) -> F) -> Result<T, F>;
 }
+impl Clone for bool {
+    pub fn clone(self: &bool) -> bool;
+}
+impl Clone for u8 {
+    pub fn clone(self: &u8) -> u8;
+}
+impl Clone for u16 {
+    pub fn clone(self: &u16) -> u16;
+}
+impl Clone for u32 {
+    pub fn clone(self: &u32) -> u32;
+}
+impl Clone for u64 {
+    pub fn clone(self: &u64) -> u64;
+}
+impl Clone for usize {
+    pub fn clone(self: &usize) -> usize;
+}
+impl Clone for i8 {
+    pub fn clone(self: &i8) -> i8;
+}
+impl Clone for i16 {
+    pub fn clone(self: &i16) -> i16;
+}
+impl Clone for i32 {
+    pub fn clone(self: &i32) -> i32;
+}
+impl Clone for i64 {
+    pub fn clone(self: &i64) -> i64;
+}
+impl Clone for isize {
+    pub fn clone(self: &isize) -> isize;
+}
+impl<T: Clone> Clone for Option<T> {
+    pub fn clone(self: &Option<T>) -> Option<T>;
+}
+impl<T: Clone> Clone for [T] {
+    pub fn clone(self: &[T]) -> [T];
+}
 impl<T, E: ErrorMessage> Result<T, E> {
     pub fn expect(self: Result<T, E>, msg: [u8]) -> T;
 }
@@ -219,8 +258,8 @@ pub trait Clone {
 
 	Explicit duplication. A clone owns its own copy of everything the original
 	owns (a cloned String gets its own buffer). Implementations for the primitive
-	types, Option, Vec and String are in clone.zrl; #[derive(Clone)] writes one
-	for a struct whose fields all implement Clone.
+	types, Option and slices are below; Vec and String's are in clone.zrl;
+	#[derive(Clone)] writes one for a struct whose fields all implement Clone.
 
 *clone*
 ```
@@ -241,6 +280,97 @@ pub trait Copy {
 	structural: a type is Copy exactly when it owns no value that implements
 	Drop, so a T: Copy bound needs no impl, and impl Copy for T is rejected
 	for a type that is not.
+
+*clone*
+```
+pub fn clone(self: &bool) -> bool;
+```
+
+	Creates an explicit duplicate copy of the value.
+
+*clone*
+```
+pub fn clone(self: &u8) -> u8;
+```
+
+	Creates an explicit duplicate copy of the value.
+
+*clone*
+```
+pub fn clone(self: &u16) -> u16;
+```
+
+	Creates an explicit duplicate copy of the value.
+
+*clone*
+```
+pub fn clone(self: &u32) -> u32;
+```
+
+	Creates an explicit duplicate copy of the value.
+
+*clone*
+```
+pub fn clone(self: &u64) -> u64;
+```
+
+	Creates an explicit duplicate copy of the value.
+
+*clone*
+```
+pub fn clone(self: &usize) -> usize;
+```
+
+	Creates an explicit duplicate copy of the value.
+
+*clone*
+```
+pub fn clone(self: &i8) -> i8;
+```
+
+	Creates an explicit duplicate copy of the value.
+
+*clone*
+```
+pub fn clone(self: &i16) -> i16;
+```
+
+	Creates an explicit duplicate copy of the value.
+
+*clone*
+```
+pub fn clone(self: &i32) -> i32;
+```
+
+	Creates an explicit duplicate copy of the value.
+
+*clone*
+```
+pub fn clone(self: &i64) -> i64;
+```
+
+	Creates an explicit duplicate copy of the value.
+
+*clone*
+```
+pub fn clone(self: &isize) -> isize;
+```
+
+	Creates an explicit duplicate copy of the value.
+
+*clone*
+```
+pub fn clone(self: &Option<T>) -> Option<T>;
+```
+
+	Creates an explicit duplicate copy of the value.
+
+*clone*
+```
+pub fn clone(self: &[T]) -> [T];
+```
+
+	Creates an explicit duplicate copy of the value.
 
 *Hash*
 ```

@@ -1,0 +1,18 @@
+// name: Vec.extend_from_slice clones a value with a Drop, so each Vec drops its own
+// expected: accept
+// The accepted twin of gap_76: S implements Clone, so extend_from_slice puts a clone in the new slot and the two Vecs own two values, each dropped once (Z-0173).
+import "vec.zrl";
+use vec::Vec;
+static mut DROPS: i32 = 0;
+#[derive(Clone)]
+struct S { id: i64 }
+impl Drop for S { fn drop(self: &mut S) { DROPS = DROPS + 1; } }
+fn main() -> i32 {
+    let mut w = Vec::<S>.new();
+    w.push(S { id: 1 });
+    let mut v = Vec::<S>.new();
+    v.extend_from_slice(w.as_slice());
+    match w.pop() { Option.Some(s) => { @drop(s); }, Option.None => {}, }
+    match v.pop() { Option.Some(s) => { if s.id != 1 { return 1; } @drop(s); }, Option.None => { return 2; }, }
+    return DROPS - 2;
+}

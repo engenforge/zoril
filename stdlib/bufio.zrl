@@ -13,7 +13,7 @@ use io::{Error, Read, Write};
 use mem::Arena;
 use mem_raw::memcpy;
 use string::String;
-use vec::Vec;
+use vec::{Vec, extend_bytes};
 
 const DEFAULT_BUF_WRITER_CAPACITY: usize = 65536;
 const DEFAULT_BUF_READER_CAPACITY: usize = 8192;
@@ -35,7 +35,7 @@ impl<W: Write> BufWriter<W> {
     // Creates a new BufWriter wrapping inner with the specified buffer capacity.
     pub fn with_capacity(inner: W, cap: usize) -> BufWriter<W> {
         let mut buf = Vec::<u8>.with_capacity(cap);
-        buf.ensure_len(cap);
+        buf.resize(cap, 0 as u8);
         return BufWriter {
             inner: Option.Some(inner),
             buf: buf,
@@ -52,7 +52,7 @@ impl<W: Write> BufWriter<W> {
     // Creates a new BufWriter allocated in arena a with the specified buffer capacity.
     pub fn with_capacity_in(inner: W, a: &Arena, cap: usize) -> BufWriter<W> {
         let mut buf = Vec::<u8>.with_capacity_in(a, cap);
-        buf.ensure_len(cap);
+        buf.resize(cap, 0 as u8);
         return BufWriter {
             inner: Option.Some(inner),
             buf: buf,
@@ -233,7 +233,7 @@ impl<R> BufReader<R> {
     // Creates a new BufReader wrapping inner with the specified buffer capacity.
     pub fn with_capacity(inner: R, cap: usize) -> BufReader<R> {
         let mut buf = Vec::<u8>.with_capacity(cap);
-        buf.ensure_len(cap);
+        buf.resize(cap, 0 as u8);
         return BufReader {
             inner: inner,
             buf: buf,
@@ -250,7 +250,7 @@ impl<R> BufReader<R> {
     // Creates a new BufReader allocated in arena a with the specified buffer capacity.
     pub fn with_capacity_in(inner: R, a: &Arena, cap: usize) -> BufReader<R> {
         let mut buf = Vec::<u8>.with_capacity_in(a, cap);
-        buf.ensure_len(cap);
+        buf.resize(cap, 0 as u8);
         return BufReader {
             inner: inner,
             buf: buf,
@@ -361,7 +361,7 @@ impl<R: Read> BufReader<R> {
             let amt = if found { delim_idx + 1 as usize } else { available.len };
             // SAFETY: amt <= available.len, so amt bytes are inside available.
             let sub = unsafe { @slice(available.ptr as *u8, amt) };
-            out.extend_from_slice(sub);
+            extend_bytes(out, sub);
             self.consume(amt);
             total = total + amt;
             if found {

@@ -114,6 +114,12 @@ For functions containing tens of thousands of instructions in a single basic blo
 - **Why:** a generic body is checked where it is instantiated, and under `-c` the instantiating module reads the body from the interface, whose lines are not the source's: the warning would name the interface's line under the source's file name, so it is not given (`FnDecl.from_interface`). The module's own `-c` build does not instantiate the body. The declared contract is carried in the interface either way, so callers are checked against it.
 - **Workaround:** build the program whole-program once; a standard-library function never needs it (`scripts/test_interface_attrs.sh`).
 
+### An error inside an imported generic body names the interface's line under `zbuild`
+
+- **Symptom:** an error raised while instantiating another module's generic body (`Vec.extend_from_slice` on an element type with no `Clone`) names the right file and message under `zbuild`, but the line and column of the module's interface: `stdlib/vec.zrl:300:57` where a whole-program build says `stdlib/vec.zrl:431:60`.
+- **Why:** as above, the instantiating module reads the body from the interface, whose lines are not the source's; unlike the warning, the error is still given, so it carries the interface's position.
+- **Workaround:** the message is the same in both builds; build whole-program for the source line. `bench/safety_matrix/probes/gap_76_vec_extend_from_slice_double_drop.zrl` records the difference with a `// zbuild:` line.
+
 ---
 
 ## 5. Memory safety: what the compiler does not check

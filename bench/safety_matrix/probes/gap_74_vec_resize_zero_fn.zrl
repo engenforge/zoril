@@ -1,0 +1,13 @@
+// name: Vec.resize pads with zero bytes, a null fn value called from safe code
+// expected: compile_reject
+// zbuild: compile_reject (refused for the same message, at the interface's line of vec.zrl: KNOWN_ISSUES.md section 4, "An error inside an imported generic body names the interface's line under zbuild"; Z-0181)
+// Refused since Z-0174: resize clones its fill value, and a fn value has no Clone, so no slot is a null fn value. Z-0179 would accept it with the value written.
+import "vec.zrl";
+use vec::Vec;
+fn one() -> i32 { return 1; }
+fn main() -> i32 {
+    let mut v = Vec::<fn() -> i32>.new();
+    v.resize(1, one);
+    let f = *v.get(0).unwrap();
+    return f() - 1;
+}

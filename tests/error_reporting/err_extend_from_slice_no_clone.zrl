@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: error: no field 'clone' on 'S'
+// extend_from_slice clones each element, so an element type with no Clone is refused rather
+// than copied bitwise into a second owner.
+import "vec.zrl";
+use vec::Vec;
+struct S { id: i64 }
+impl Drop for S { fn drop(self: &mut S) {} }
+fn main() -> i32 {
+    let w = Vec::<S>.new();
+    let mut v = Vec::<S>.new();
+    v.extend_from_slice(w.as_slice());
+    return 0;
+}

@@ -1,0 +1,18 @@
+// name: Vec.extend_from_slice copies a value with a Drop, which both Vecs then drop
+// expected: compile_reject
+// zbuild: compile_reject (refused for the same message, at the interface's line of vec.zrl: KNOWN_ISSUES.md section 4, "An error inside an imported generic body names the interface's line under zbuild"; Z-0181)
+// Refused since Z-0173: extend_from_slice clones each element, and S has no Clone, so no second owner of one value is made (the accepted twin with a Clone is 422).
+import "vec.zrl";
+use vec::Vec;
+static mut DROPS: i32 = 0;
+struct S { id: i64 }
+impl Drop for S { fn drop(self: &mut S) { DROPS = DROPS + 1; } }
+fn main() -> i32 {
+    let mut w = Vec::<S>.new();
+    w.push(S { id: 1 });
+    let mut v = Vec::<S>.new();
+    v.extend_from_slice(w.as_slice());
+    match w.pop() { Option.Some(s) => { @drop(s); }, Option.None => {}, }
+    match v.pop() { Option.Some(s) => { @drop(s); }, Option.None => {}, }
+    return DROPS;
+}

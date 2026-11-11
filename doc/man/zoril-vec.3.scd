@@ -23,8 +23,7 @@ impl<T> Vec<T> {
     pub fn pop(self: &mut Vec<T>) -> Option<T>;
     pub fn get(self: &Vec<T>, index: usize) -> Option<&T>;
     pub fn get_mut(self: &mut Vec<T>, index: usize) -> Option<&mut T>;
-    pub fn ensure_len(self: &mut Vec<T>, min_len: usize);
-    pub fn resize(self: &mut Vec<T>, new_len: usize);
+    pub fn resize(self: &mut Vec<T>, new_len: usize, value: T);
     pub fn set(self: &mut Vec<T>, index: usize, val: T);
     pub fn len(self: &Vec<T>) -> usize;
     pub fn cap(self: &Vec<T>) -> usize;
@@ -37,6 +36,7 @@ impl<T> Vec<T> {
     pub fn free(self: &mut Vec<T>);
     pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]);
 }
+pub fn extend_bytes(v: &mut Vec<u8>, bytes: [u8]);
 ```
 
 # DESCRIPTION
@@ -120,19 +120,13 @@ pub fn get_mut(self: &mut Vec<T>, index: usize) -> Option<&mut T>;
 
 	Returns a mutable reference to the element at index, or None if out of bounds.
 
-*ensure_len*
-```
-pub fn ensure_len(self: &mut Vec<T>, min_len: usize);
-```
-
-	Ensures the vector has at least min\_len elements, growing if necessary.
-
 *resize*
 ```
-pub fn resize(self: &mut Vec<T>, new_len: usize);
+pub fn resize(self: &mut Vec<T>, new_len: usize, value: T);
 ```
 
-	Resizes the vector to new\_len elements, padding with zero values if growing.
+	Resizes the vector to new\_len elements, filling each new one with a clone of
+	value; T must implement Clone. Shrinking keeps the first new\_len.
 
 *set*
 ```
@@ -212,7 +206,18 @@ pub fn free(self: &mut Vec<T>);
 pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]);
 ```
 
-	Appends all elements from a slice to the end of the vector.
+	Appends a clone of each element of slice to the end of the vector; T must
+	implement Clone. extend\_bytes appends bytes without a call per byte.
+	A clone of a view is the same view, but clone's #[borrows()] result hides that from
+	the body's summary, so the store is declared (probe 418 is accepted without it).
+
+*extend_bytes*
+```
+pub fn extend_bytes(v: &mut Vec<u8>, bytes: [u8]);
+```
+
+	Appends bytes to the end of v. A byte has no Drop and carries no address, so it
+	is copied in one block where extend\_from\_slice clones each element.
 
 # INTERNAL
 
@@ -245,6 +250,16 @@ pub unsafe fn clone_in_raw(self: &Vec<T>, arena: *mut ArenaHeader) -> Vec<T>;
 	Clones a vector using a raw arena header.
 
 	Caller obligation: arena must be valid and initialized.
+
+*ensure_len*
+```
+pub unsafe fn ensure_len(self: &mut Vec<T>, min_len: usize);
+```
+
+	Grows the vector to at least min\_len elements, the new ones zero bytes.
+	Zero bytes are not a value of every T (a reference, a fn value, a type
+	whose Drop reads a field), so the caller writes each new element before
+	anything reads or drops it; resize is the safe form.
 
 *raw_arena*
 ```

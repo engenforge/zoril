@@ -10,7 +10,7 @@ use io::Write;
 use mem::Arena;
 use mem_raw::ArenaHeader;
 use str::Str;
-use vec::Vec;
+use vec::{Vec, extend_bytes};
 
 // Growable byte string buffer with dynamic reallocation support.
 pub struct String {
@@ -71,7 +71,7 @@ impl String {
 
     // Appends a byte slice to the string.
     pub fn push_str(self: &mut String, s: [u8]) {
-        self.vec.extend_from_slice(s);
+        extend_bytes(&mut self.vec, s);
     }
 
     // Formats an unsigned 64-bit integer as decimal digits and appends it to the string.
@@ -111,7 +111,7 @@ impl String {
         }
         // SAFETY: i is between 0 and 19 inclusive; 20 - i is length.
         let slice = unsafe { @slice(&buf[i] as *u8, 20 as usize - i) };
-        self.vec.extend_from_slice(slice);
+        extend_bytes(&mut self.vec, slice);
     }
 
     // Formats a signed 64-bit integer as decimal digits and appends it to the string.
@@ -162,7 +162,7 @@ impl String {
         }
         // SAFETY: i is between 0 and 15 inclusive; 16 - i is length.
         let slice = unsafe { @slice(&buf[i] as *u8, 16 as usize - i) };
-        self.vec.extend_from_slice(slice);
+        extend_bytes(&mut self.vec, slice);
     }
 
     // Returns a mutable reference to the underlying byte vector.

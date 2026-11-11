@@ -67,7 +67,7 @@ impl Printer {
     }
 
     fn match_brackets(self: &mut Printer) {
-        self.closes.resize(self.toks.len);
+        self.closes.resize(self.toks.len, 0 as u32);
         let mut stack = unsafe { Vec::<usize>.new_in_raw(self.arena) };
         for i in 0 as usize..self.toks.len {
             let k = self.toks[i].kind;

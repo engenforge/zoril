@@ -41,17 +41,18 @@ fn main() -> i32 {
         return 5;
     }
     let mut v_growth = unsafe { Vec::<i32>.new_in_raw(arena) };
-    v_growth.ensure_len(10);
+    v_growth.resize(10, 0);
     if v_growth.len() != 10 { return 10; }
     if v_growth[5] != 0 { return 11; }
     v_growth.set(5, 42);
     if v_growth[5] != 42 { return 12; }
-    v_growth.resize(20);
+    v_growth.resize(20, 7);
     if v_growth.len() != 20 { return 13; }
     if v_growth[5] != 42 { return 14; }
-    if v_growth[15] != 0 { return 15; }
-    v_growth.resize(5);
+    if v_growth[15] != 7 { return 15; }
+    v_growth.resize(5, 9);
     if v_growth.len() != 5 { return 16; }
+    if v_growth[4] != 0 { return 17; }
 
     return 0;
 }
