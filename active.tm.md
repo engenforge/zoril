@@ -219,23 +219,6 @@ Standalone tasks developed and committed directly on `main`:
 3. Compiler quality & tools: Z-0013 (reviewer rotation), Z-0014 (`zilc` input validation), Z-0015 (`zoril` error bounds), Z-0016 (`zbuild` ZIL handling), Z-0067 (diagnostic source location), Z-0079 (generic interface roundtrip), Z-0080 (mutation list integrity).
 4. Benchmarks: Z-0004 (cloud session variance measurement), Z-0005 (baseline decision).
 
-- [x] +safety +vecclone +AI-G Z-0171 V1 `Vec.resize` and `Vec.extend_from_slice` holes recorded as known gaps
-    > **Created:** 2026-11-11. **Branch:** `vecclone`. Reclassified public under `SECURITY.md` (each needs the program to call the method on a particular element type).
-    > **Completed:** 2026-11-11 git:6a8650d
-
-    - **Found (2026-11-10, probing `Vec.push`'s siblings; probed again 2026-11-11 on git:c2a3f0c):**
-      - `resize` (and the `pub` `ensure_len` behind it, `stdlib/vec.zrl`) pads with zero bytes, which are not a value of every element type: `Vec::<&i32>` then `*v.get(0).unwrap()` read through a null reference (exit 139); `Vec::<fn() -> i32>` calls a null `fn` (exit 139); for `S { p: *mut u8 }` with a `Drop` writing through `p`, `v.resize(1); v.set(0, ..)` drops the zero `S` and writes through null (exit 139). A zero `[u8]` (null, length 0) is harmless. A `T: Copy` bound would not close it: `&i32` and `fn` are `Copy`.
-      - `extend_from_slice` writes each `slice[i]` into the new slot as a bitwise copy, with no bound on `T`: for `S` with a `Drop`, popping and dropping from both `Vec`s runs one value's `drop` twice (exit 2).
-    - **Do:** four `known_gap` probes (`gap_73_vec_resize_zero_ref`, `gap_74_vec_resize_zero_fn`, `gap_75_vec_resize_zero_drop`, `gap_76_vec_extend_from_slice_double_drop`) with `// gap:` reasons, one Known gaps entry in `doc/spec/safety_model.md` (route class: a `Vec` method making or duplicating a `T` with no clone), and class (N) in `doc/SAFETY.md` §6.
-    - **Checks:**
-      - C1: each probe run alone gives its unsafe outcome (`exit 139`, `139`, `139`, `2`); quote each.
-      - C2: `sh scripts/run_safety_matrix.sh`: `Mismatches: 0`, the four reported as known gaps; `scripts/check_safety_model.sh` passes.
-      - C3: `make test`, its `Total:` line quoted.
-    - **Completion (2026-11-11), git:6a8650d on `vecclone`:** the four probes, the Known gaps entries (route class: a `Vec` method making or duplicating a `T` with no clone), class (N) in `doc/SAFETY.md` §6, and the README probe count (497).
-      - C1: run alone before recording (`build/v1/`, `build/p34/`): the null reference and the null `fn` value `exit 139` each, the zero `S` dropped through its `&mut` field `exit 139`, `extend_from_slice` `exit 2`. As probes, the matrix matches each against its `// observed:` (`runtime_fault` x3, `exit 2`).
-      - C2: `sh scripts/run_safety_matrix.sh`: `All probes complete: 450/497 passed. Mismatches: 0`, the four printed as `[SKIP] ... (known gap: ...)`; `sh scripts/check_safety_model.sh`: `PASS: safety_model.md is self-consistent.`
-      - C3: `make test`: `Total: 3237 run, 3237 passed, 0 failed, 96 skipped (214.2s)` (eight more skips: the four gaps, whole-program and through zbuild). A first run failed only `clean-tree` on a stray `out.zil` in the repository root, written at 11:54 by another session compiling `build/rv/d.zrl` without `-o`; it was removed before the rerun.
-
 - [ ] +safety +vecclone +decision +AI-D Z-0172 V2 Decide how `Vec` clones an element
     > **Created:** 2026-11-11. **Branch:** `vecclone`. **After:** Z-0171.
 
