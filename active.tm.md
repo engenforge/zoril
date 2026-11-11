@@ -219,6 +219,14 @@ Standalone tasks developed and committed directly on `main`:
 3. Compiler quality & tools: Z-0013 (reviewer rotation), Z-0014 (`zilc` input validation), Z-0015 (`zoril` error bounds), Z-0016 (`zbuild` ZIL handling), Z-0067 (diagnostic source location), Z-0079 (generic interface roundtrip), Z-0080 (mutation list integrity).
 4. Benchmarks: Z-0004 (cloud session variance measurement), Z-0005 (baseline decision).
 
+- [ ] +safety +tests +AI-D Z-0180 A generic `Clone` impl's result keeps the borrows of what it clones
+    > **Created:** 2026-11-11 by Z-0173. **Branch:** `main`. **Check-in:** stop for review after it: a fix to a safety rule.
+
+    - **Found (2026-11-11, on `vecclone`; also on its base's stdlib):** `impl<T: Clone> Clone for Vec<T>` and `impl<T: Clone> Clone for Option<T>` declare `#[borrows()]`, so a clone holds no borrow: `return v.clone();` of a local `Vec<[u8]>` holding a view of a stack array, and `return o.clone();` of `Some(s)`, are accepted and read the dead frame (gap_77, gap_78, recorded in git:e7b4d6c: `exit 7` where the frame held 42). Returning `v` itself is refused (`cannot return 'v' a reference into storage owned by this frame`), and so are `s.clone()` of a slice directly (`region escape`), `clone_in`, and a `#[derive(Clone)]` struct holding the view (`region escape: returning a pointer to local stack storage via sret`). The same attribute hid the store from `extend_from_slice`'s summary once it cloned each element (probe 418 accepted); Z-0173 declares `#[stores(slice -> self)]` there instead.
+    - **Route class:** a generic `#[borrows()]` impl whose result is built from a `T` that may be a view. Probe every generic `#[borrows()]` function in `stdlib/` (`rg -B3 '#\[borrows\(\)\]' stdlib`), not only `Clone`.
+    - **Do:** decide what the result of a generic `#[borrows()]` function holds when `T` carries a borrow (Rust: the lifetime inside `T` stays in the result), and implement it; or drop the attribute from these impls if the default rule refuses no correct program the tests hold (the differential says). Flip gap_77 and gap_78.
+    - **Checks:** C1 gap_77 and gap_78 `compile_reject`, and a `Vec<u8>` / `Option<i32>` clone returned from a function still accepted; C2 take the change out and watch them run (`exit 7`); C3 `scripts/check_reject_diff.sh` against the base, every newly refused program listed; C4 `make test`, `make preflight-changed`, each `Total:` quoted.
+
 - [ ] +safety +vecclone +AI-D Z-0173 V3 `Vec.extend_from_slice` clones each element
     > **Created:** 2026-11-11. **Branch:** `vecclone`. **After:** Z-0172. **Check-in:** stop for review after it: a fix to a safety rule.
 
