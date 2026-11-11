@@ -30,6 +30,8 @@ Active priority series to reduce verification runtimes. Order of execution:
 
 **Status (review, 2026-11-11, `testinfra` at git:5a05bbb):** of the order of execution above, step 1 is done except Z-0114's follow-up (its checks D1 to D7, then a review), and step 2 is done (Z-0144 to Z-0147, Z-0151 to Z-0153). Step 3 has Z-0130 done; Z-0136 is ready (no dependency); Z-0131 and Z-0133 wait for Z-0135, a `main` task with no commit yet, and through them Z-0138 to Z-0140. Step 4 has Z-0123 ready; Z-0113 follows it; Z-0109, Z-0110 and Z-0125 are written in `ztest` after Z-0138 (Z-0117, decision 6). "Starting at Z-0158" in **Priority** above is history: the next tasks are Z-0114's follow-up, Z-0136 and Z-0123. `testinfra` is 43 commits ahead of `main` and lacks 12 of its commits (`git log testinfra..main`: the `?` and `defer` lowering fixes, the vecclone series, the `SECURITY.md` rule in `AGENTS.md`); another merge is the maintainer's decision. Not pushed from this machine (`hom` unreachable): `testinfra` git:5a05bbb and the `tasks` commits after `hom/tasks`.
 
+**Order from here (review, 2026-11-11, agreed by the maintainer):** what the series has learned is that the work made cheaper pays on every run and cannot go stale (Z-0157 and Z-0158 took each side of the differential from 305 s to 127 s), while each mechanism that decides what not to run has had defects (the stamp: four fixes, then removed; the tiers: frozen; Z-0114's cache: R4). So: (1) Z-0114's follow-up (D1 to D7) and its review; (2) Z-0184, the measurement of the front end's remaining per-program cost, before any further cache; (3) Z-0136, then Z-0131 and Z-0132, which no longer wait for Z-0135 (their syscalls stay in `proc.zrl`, outside the `src/` closure), then Z-0137; (4) Z-0123, then Z-0113, decided with Z-0184's answer in hand; (5) Z-0133 and Z-0134, the two `rt/` check-ins, then Z-0138 to Z-0140; (6) Z-0109, Z-0110 and Z-0125 in `ztest`; Z-0107 last. `testinfra` merges into `main` at milestones, not only at the series' end: every branch pays for testing, and a fix made here (probe 422's hole) otherwise stays open on `main`. The first such merge takes the branch up to git:575dfe7; Z-0114's cache (git:5a05bbb) follows when its follow-up is reviewed.
+
 - [ ] +testinfra +tests +AI-G Z-0114 T10 The rejection differential caches each side's verdicts
     > **Created:** 2026-11-06. **Branch:** `testinfra`. **After:** Z-0105 (confirm the share). **Why first among the caches:** the session analysis puts the differential at 620 s of an 800 to 900 s `preflight-changed`, and an author and a reviewer run it against the same base.
 
@@ -103,11 +105,24 @@ Active priority series to reduce verification runtimes. Order of execution:
       - D6: `grep -n 'REJECT_DIFF_NO_CACHE' AGENTS.md` shows the new sentence; `sh scripts/check_portability.sh` passes.
       - D7: `make test`, `Total:` line quoted. Ends with **Awaiting review**: the reviewer reruns D2, D3 and D5, and checks that a completion note citing a cached run is visible from its `base verdicts: cache` line.
 
+- [ ] +testinfra +measurement +AI-D Z-0184 T15 Where the front end's per-program time goes once a program imports the stdlib
+    > **Created:** 2026-11-11 by the review of the series. **Branch:** `testinfra`. **Before:** Z-0113 (it decides with this answer). **Output:** the figures and a recommendation in this task's text; any implementation is a new task.
+
+    - **Why:** after Z-0157 to Z-0159 the differential still compiles 138,260 programs a run at about 13.6 ms of CPU each (Z-0114's table). Measured 2026-11-11 at git:5a05bbb, 200 runs each of `timeout 30 build/zoril -I stdlib=stdlib --emit-zil -o /dev/null <file>`, on a quiet host: `fn main() -> i32 { return 0; }` takes 2.17 ms a run, `bench/safety_matrix/probes/117_closure_stored_in_caller_vec.zrl` (which imports `vec.zrl`) takes 14.26 ms, and `timeout 30 /bin/true` alone takes 1.47 ms. So about 12 ms of each importing program, roughly 85%, is spent on the imported stdlib modules, on both sides of every differential and in every per-file test. Cutting that is paid back on every run and has no stale state, unlike a cache (Z-0114's R4).
+    - **Do:** (1) split the 12 ms by phase (reading and parsing, type checking, lowering, the checkers, emitting) for `vec.zrl` and for `mem.zrl` importers, using the compiler's own timing output if it has one, or a scratch build with timers recorded here as a patch. (2) Count how many of the grid's and the probes' programs import which stdlib modules. (3) Estimate, from (1) and (2), what each of these would save on a differential side (127 s on 16 threads, 230 s on 4 CPUs) and on `make test`: (a) one compiler process that loads the stdlib once and checks many programs (`--emit-zil` over a list, a verdict line a program); (b) more of Z-0159's laziness (skip checking or lowering stdlib items the program does not reach); (c) a parsed-stdlib image read back from disk (state what it would lose, as `tests/modular/iface_attrs/` asks of anything written out and read back). (4) For (a), say what state would leak from one program to the next (interned names, type tables, diagnostics, error counts) and how a differential would show that a batch verdict equals a single-process one: every program both ways, once.
+    - **Decide:** recommend one route or none, with its expected saving and its risk, for the maintainer. A route that changes which programs are accepted is out of scope.
+    - **Checks:**
+      - C1: the phase split, as a table, with the command and any timing patch recorded here.
+      - C2: the import counts, with the command.
+      - C3: the three estimates, each from the measured figures, not from reading the code.
+      - C4: no file under `src/`, `stdlib/` or `scripts/` is changed by this task (`git status --short` empty after the scratch edits are restored).
+
 - [ ] +stdlib +tests +AI-G Z-0131 Z1b `proc.zrl`: a child in a process group of its own, signalled as a group
     > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Depends:** Z-0135 (what stage1 builds wrong, since `stdlib/os/linux.zrl` is in the `src/` closure).
 
     - **Cross-branch dependency (2026-11-10):** Z-0135 is a `main` task. Start this one only once Z-0135's commit is on `testinfra` (`git merge-base --is-ancestor <sha> testinfra`); merging `main` into `testinfra` is the maintainer's decision.
     - **Review (2026-11-11), for the maintainer:** the dependency rests on `sys_setpgid` going into `stdlib/os/linux.zrl`, which is in the `src/` closure (`build/zoril --emit-deps src/main.zrl -I stdlib=stdlib -I src -I build/gen -o <file>` lists it). `stdlib/proc.zrl` is not in the closure and already makes its process syscalls itself (`@syscall(57)` fork, `@syscall(61, ...)` wait4, `@syscall(62, ...)` kill). Calling `setpgid` (109) and the group `kill` there the same way edits no closure module, and this task would no longer wait for Z-0135. The **Do** above is unchanged until the maintainer says which.
+    - **Decided (the maintainer, 2026-11-11):** `setpgid` (syscall 109) and the group `kill` are called in `stdlib/proc.zrl` with `@syscall`, as its fork, wait4 and kill already are; nothing goes into `stdlib/os/linux.zrl`. This replaces "`sys_setpgid` goes in `stdlib/os/linux.zrl`" in the **Do** below. The task then edits no module of the `src/` closure, so **Depends:** Z-0135 in the header and the **Cross-branch dependency** bullet above no longer apply: it can start. Added check C7: `git diff --stat` for the task names no file that `build/zoril --emit-deps src/main.zrl -I stdlib=stdlib -I src -I build/gen -o <file>` lists; with C7 holding, C5 (the build through stage1) still runs and shows the closure builds as before.
 
     - **Do:** a `Command` option that puts the child in a new process group (`setpgid(0, 0)` in the child between fork and exec), and a `Child` method that sends a signal to the whole group (`kill(-pgid, sig)`). `sys_setpgid` goes in `stdlib/os/linux.zrl`.
     - **Checks:**
@@ -135,6 +150,7 @@ Active priority series to reduce verification runtimes. Order of execution:
     > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Depends:** Z-0135. **Check-in:** it touches `rt/`.
 
     - **Cross-branch dependency (2026-11-10):** Z-0135 is a `main` task. Start this one only once Z-0135's commit is on `testinfra` (`git merge-base --is-ancestor <sha> testinfra`); merging `main` into `testinfra` is the maintainer's decision.
+    - **Review (2026-11-11), for the maintainer:** Z-0135's header gives "they edit closure modules" as the reason it comes before this task, but the **Do** below puts the new module outside the `src/` closure and edits `rt/runtime.s` (with its `bootstrap/stage1/rt/runtime.s` copy), which is not a closure module. If the handler adds symbols only and changes none that stage1 emits, this task may not need Z-0135 either; that is the maintainer's call, since the runtime is linked into the compiler stage1 builds. Until it is made, the dependency stands.
 
     - **Do:** in `rt/runtime.s`, a handler that sets a bit per signal number in a runtime word and returns (with the `sa_restorer` that Linux x86_64 `rt_sigaction` needs); nothing else runs in it. A stdlib module (new, outside the `src/` closure) with `watch(sig)` (install the handler), `ignore(sig)`, `default(sig)` and `take_pending() -> u64` (read and clear the bits atomically). `bootstrap/stage1/rt/runtime.s` stays a byte-identical copy of `rt/runtime.s` (the `runtimes` gate), and `rt/runtime.s` keeps every symbol the pinned stage1 can emit. State in `doc/spec/safety_model.md` what the module claims, if anything, with its test.
     - **Checks:** a test that watches SIGUSR1, sends it to itself, and reads it once from `take_pending` and not twice; a child that watches nothing still gets the default action. `scripts/run_safety_matrix.sh`. `make test`, `make preflight-changed`. Ends with **Awaiting review**.
@@ -227,6 +243,7 @@ Active priority series to reduce verification runtimes. Order of execution:
     - **Measure first:** is `build/zoril` byte-identical when built from the same commit in two checkouts (the stage1 path and the `build/zoril` path)? Is the test output deterministic across runs? The static-image and repro gates already check part of this. If the builds are not identical, the key uses the compiler's source hash and the test proves that the source hash determines the binary. Then implementation tasks: the per-file cache, the reviewer sampling, the gate cache.
     - **Order (Z-0103, 2026-11-06):** after the tiers (Z-0115) and the differential's caches (Z-0114), which take most of the saving with fewer inputs to declare. Its implementation goes in the runner, if Z-0117 decides on one. Its keys and verdicts are kept as plain files under `build/` (the series rule), so a `sh` script and a Zoril runner can read the same cache.
     - **Review (2026-11-06):** the header's **Before:** Z-0112, Z-0114 is stale: by the bullet above and Z-0112's own order bullet, this task follows Z-0114 and Z-0115, and Z-0112 precedes it. The **Measure first** bullet is Z-0123, done first; this task decides from its answers.
+    - **Order (review, 2026-11-11):** also after Z-0184. If the stdlib's share of each compile (about 85% of 14 ms) can be cut for every run, the saving left for a result cache shrinks, and this task weighs it against the record of the mechanisms that skip work (the stamp, the tiers, Z-0114's R4).
 
 - [ ] +testinfra +tests +AI-G Z-0109 T5 Run the serial parts in parallel, longest first
     > **Created:** 2026-11-06. **Branch:** `testinfra`. **Depends:** Z-0105.
@@ -284,6 +301,27 @@ Standalone tasks developed and committed directly on `main`:
 2. Bootstrap integrity: Z-0135 (stage1 closure module paths audit; runs before closure module edits in Z-0131/Z-0133).
 3. Compiler quality & tools: Z-0013 (reviewer rotation), Z-0014 (`zilc` input validation), Z-0015 (`zoril` error bounds), Z-0016 (`zbuild` ZIL handling), Z-0067 (diagnostic source location), Z-0079 (generic interface roundtrip), Z-0080 (mutation list integrity).
 4. Benchmarks: Z-0004 (cloud session variance measurement), Z-0005 (baseline decision).
+
+- [ ] +docs +AI-G Z-0185 `AGENTS.md`'s command for listing the `src/` closure runs as written
+    > **Created:** 2026-11-11 by the review of the `testinfra` series. **Branch:** `main`.
+
+    - **Why:** `AGENTS.md` ("The stage1 constraint") says to list the closure with `build/zoril --emit-deps src/main.zrl`. As written it fails: `src/ast.zrl:4:1: error: could not find imported file: core.zrl`, rc 1. The form that works is the one `scripts/test_incremental.sh` uses: `build/zoril --emit-deps src/main.zrl -I stdlib=stdlib -I src -I build/gen -o <file>` (rc 0; the file lists `stdlib/os/linux.zrl` and 14 other stdlib modules).
+    - **Do:** replace the command in `AGENTS.md` with the working one, wrapped in `timeout` as the file's own rule asks, and say that it needs a built tree (`build/gen/version.zrl`). Change the same command anywhere else `grep -rn 'emit-deps src/main.zrl' --include='*.md' .` finds it.
+    - **Checks:**
+      - C1: before, the command copied from `AGENTS.md` fails; quote its first line and rc.
+      - C2: after, the command copied from `AGENTS.md` exits 0 and `grep -c 'stdlib/' <file>` is above 0; quote both.
+      - C3: `grep -rn 'emit-deps src/main.zrl' --include='*.md' .` shows no occurrence without the `-I` options.
+      - C4: no take-out check: the change is documentation and C1 is its failing case. `make test`, `Total:` line quoted (the document gates read `AGENTS.md`).
+
+- [ ] +docs +AI-G Z-0186 `AGENTS.md`: a design that skips work names what a wrong skip hides, with a planted case, before it is implemented
+    > **Created:** 2026-11-11 by the review of the `testinfra` series; the rule is agreed by the maintainer. **Branch:** `main`.
+
+    - **Why:** Z-0114's cache was implemented from a settled design whose gap (a stale entry silently drops a line that does not block) was found only in review, by planting a stale entry (R4). The stamp (Z-0142, Z-0143, Z-0144, Z-0150, removed in Z-0154) and the tier selection went the same way. A planted case at design time costs minutes; a review round costs a full run of the suites.
+    - **Do:** in `AGENTS.md`, "Working on tasks", after the **Model tags** bullet, add the bullet: "**A mechanism that decides what not to run** (a cache, a stamp, a selector) is designed in an `+AI-D` task that names what a wrong skip would hide and from whom, and gives a planted case for each (a stale entry, an input the key misses, a record taken mid-run). Each planted case becomes a numbered check of the `+AI-G` task, with the safeguard taken out to show the check can fail. A gap the design accepts is written in the mechanism's own header comment." Change nothing else.
+    - **Checks:**
+      - C1: `grep -n 'decides what not to run' AGENTS.md` shows the bullet, once.
+      - C2: `git diff --stat` names `AGENTS.md` only.
+      - C3: no take-out check: the change is a rule in prose. `make test`, `Total:` line quoted.
 
 - [ ] +safety +tests +AI-D Z-0180 A generic `Clone` impl's result keeps the borrows of what it clones
     > **Created:** 2026-11-11 by Z-0173. **Branch:** `main`, after the `vecclone` series merges (its probes are git:e7b4d6c on `vecclone`). **Check-in:** stop for review after it: a fix to a safety rule.
