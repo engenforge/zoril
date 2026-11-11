@@ -4,7 +4,7 @@
 
 - [x] +safety +vecclone +AI-D Z-0174 V4 `Vec.resize(new_len, value)` clones its fill value, and `ensure_len` is not safe to call
     > **Created:** 2026-11-11. **Branch:** `vecclone`. **After:** Z-0173. **Check-in:** stop for review after it: a fix to a safety rule.
-    > **Completed:** 2026-11-11 git:ea007d4
+    > **Completed:** 2026-11-11 git:2ead9b4
 
     - **Completion (2026-11-11, second review):** closed by a reviewer who did not write the fix, on `vecclone` at git:ea007d4 (a separate session from the first review). Checks, by number:
       - C1: `sh scripts/run_safety_matrix.sh`: `All probes complete: 457/502 passed. Mismatches: 0` (first review); gap_73..75 are refused, probes 423 and 424 pass. Run against git:7848828's compiler with the probes as they were before the fix, each of gap_73, gap_74 and gap_75 built and run: `exit 139` (three times).
@@ -33,7 +33,7 @@
 
 - [x] +safety +vecclone +AI-D Z-0173 V3 `Vec.extend_from_slice` clones each element
     > **Created:** 2026-11-11. **Branch:** `vecclone`. **After:** Z-0172. **Check-in:** stop for review after it: a fix to a safety rule.
-    > **Completed:** 2026-11-11 git:7848828
+    > **Completed:** 2026-11-11 git:6ee21e6
 
     - **Completion (2026-11-11, second review):** closed by a reviewer who did not write the fix, on `vecclone` at git:7848828. Checks, by number:
       - C1: `sh scripts/run_safety_matrix.sh`: `All probes complete: 452/500 passed. Mismatches: 0`.
