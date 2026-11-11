@@ -220,7 +220,7 @@ Standalone tasks developed and committed directly on `main`:
 4. Benchmarks: Z-0004 (cloud session variance measurement), Z-0005 (baseline decision).
 
 - [ ] +safety +tests +AI-D Z-0180 A generic `Clone` impl's result keeps the borrows of what it clones
-    > **Created:** 2026-11-11 by Z-0173. **Branch:** `main`. **Check-in:** stop for review after it: a fix to a safety rule.
+    > **Created:** 2026-11-11 by Z-0173. **Branch:** `main`, after the `vecclone` series merges (its probes are git:e7b4d6c on `vecclone`). **Check-in:** stop for review after it: a fix to a safety rule.
 
     - **Found (2026-11-11, on `vecclone`; also on its base's stdlib):** `impl<T: Clone> Clone for Vec<T>` and `impl<T: Clone> Clone for Option<T>` declare `#[borrows()]`, so a clone holds no borrow: `return v.clone();` of a local `Vec<[u8]>` holding a view of a stack array, and `return o.clone();` of `Some(s)`, are accepted and read the dead frame (gap_77, gap_78, recorded in git:e7b4d6c: `exit 7` where the frame held 42). Returning `v` itself is refused (`cannot return 'v' a reference into storage owned by this frame`), and so are `s.clone()` of a slice directly (`region escape`), `clone_in`, and a `#[derive(Clone)]` struct holding the view (`region escape: returning a pointer to local stack storage via sret`). The same attribute hid the store from `extend_from_slice`'s summary once it cloned each element (probe 418 accepted); Z-0173 declares `#[stores(slice -> self)]` there instead.
     - **Route class:** a generic `#[borrows()]` impl whose result is built from a `T` that may be a view. Probe every generic `#[borrows()]` function in `stdlib/` (`rg -B3 '#\[borrows\(\)\]' stdlib`), not only `Clone`.
