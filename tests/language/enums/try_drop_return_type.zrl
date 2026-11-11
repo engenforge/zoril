@@ -1,0 +1,133 @@
+// expected exit 0
+// `e?` in a function whose return type needs `Drop` (in `Ok` or `Err`) scopes its error-block
+// temporaries to the error block, excludes the returned local from scope cleanup, and marks a
+// by-value operand consumed, so each `Guard` is dropped once and no uninitialized temporary leaks
+// onto the success branch (Z-0169).
+import "core.zrl";
+
+static mut DROPS: i32 = 0;
+
+struct Guard { id: i64 }
+impl Drop for Guard {
+    fn drop(self: &mut Guard) {
+        DROPS = DROPS + 1;
+    }
+}
+
+fn inner_copy(fail: bool) -> Result<i32, i64> {
+    if fail { return Result.Err(5 as i64); }
+    return Result.Ok(10);
+}
+
+fn inner_ok_drop(fail: bool) -> Result<Guard, i64> {
+    if fail { return Result.Err(6 as i64); }
+    return Result.Ok(Guard { id: 20 as i64 });
+}
+
+fn inner_err_drop(fail: bool) -> Result<[i64; 4], Guard> {
+    if fail { return Result.Err(Guard { id: 30 as i64 }); }
+    return Result.Ok([7 as i64; 4]);
+}
+
+fn prop_copy_into_ok_drop(fail: bool) -> Result<Guard, i64> {
+    let v = inner_copy(fail)?;
+    return Result.Ok(Guard { id: v as i64 });
+}
+
+fn prop_same_ok_drop(fail: bool) -> Result<Guard, i64> {
+    let v = inner_ok_drop(fail)?;
+    return Result.Ok(v);
+}
+
+fn prop_local_ok_drop(fail: bool) -> Result<Guard, i64> {
+    let x = inner_ok_drop(fail);
+    let v = x?;
+    return Result.Ok(v);
+}
+
+fn prop_err_drop_shrunk(fail: bool) -> Result<u8, Guard> {
+    let a = inner_err_drop(fail)?;
+    return Result.Ok(a[0] as u8);
+}
+
+fn prop_ok_drop_into_copy(fail: bool) -> Result<i32, i64> {
+    let g = inner_ok_drop(fail)?;
+    return Result.Ok(g.id as i32);
+}
+
+fn reset_drops() { DROPS = 0; }
+fn get_drops() -> i32 { return DROPS; }
+
+fn main() -> i32 {
+    reset_drops();
+    {
+        let r = prop_copy_into_ok_drop(true);
+        match &r { Ok(_) => { return 1; }, Err(e) => { if *e != 5 as i64 { return 2; } } }
+    }
+    if get_drops() != 0 { return 3; }
+
+    reset_drops();
+    {
+        let r = prop_copy_into_ok_drop(false);
+        match &r { Ok(g) => { if g.id != 10 as i64 { return 4; } }, Err(_) => { return 5; } }
+    }
+    if get_drops() != 1 { return 6; }
+
+    reset_drops();
+    {
+        let r = prop_same_ok_drop(true);
+        match &r { Ok(_) => { return 7; }, Err(e) => { if *e != 6 as i64 { return 8; } } }
+    }
+    if get_drops() != 0 { return 9; }
+
+    reset_drops();
+    {
+        let r = prop_same_ok_drop(false);
+        match &r { Ok(g) => { if g.id != 20 as i64 { return 10; } }, Err(_) => { return 11; } }
+    }
+    if get_drops() != 1 { return 12; }
+
+    reset_drops();
+    {
+        let r = prop_local_ok_drop(true);
+        match &r { Ok(_) => { return 13; }, Err(e) => { if *e != 6 as i64 { return 14; } } }
+    }
+    if get_drops() != 0 { return 15; }
+
+    reset_drops();
+    {
+        let r = prop_local_ok_drop(false);
+        match &r { Ok(g) => { if g.id != 20 as i64 { return 16; } }, Err(_) => { return 17; } }
+    }
+    if get_drops() != 1 { return 18; }
+
+    reset_drops();
+    {
+        let r = prop_err_drop_shrunk(true);
+        match &r { Ok(_) => { return 19; }, Err(g) => { if g.id != 30 as i64 { return 20; } } }
+    }
+    if get_drops() != 1 { return 21; }
+
+    reset_drops();
+    {
+        let r = prop_err_drop_shrunk(false);
+        match &r { Ok(v) => { if *v != 7 as u8 { return 22; } }, Err(_) => { return 23; } }
+    }
+    if get_drops() != 0 { return 24; }
+
+    reset_drops();
+    {
+        let r = prop_ok_drop_into_copy(true);
+        match &r { Ok(_) => { return 25; }, Err(e) => { if *e != 6 as i64 { return 26; } } }
+    }
+    if get_drops() != 0 { return 27; }
+
+    reset_drops();
+    {
+        let r = prop_ok_drop_into_copy(false);
+        match &r { Ok(v) => { if *v != 20 { return 28; } }, Err(_) => { return 29; } }
+    }
+    if get_drops() != 1 { return 30; }
+
+    return 0;
+}

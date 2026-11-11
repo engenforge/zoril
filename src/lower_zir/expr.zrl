@@ -2958,11 +2958,20 @@ impl ZirLowerer {
         self.terminate(ZirTerminator.Branch(cond_place, success_block, error_block));
 
         self.switch_to_block(error_block);
+        self.push_scope();
+        let is_ref = self.get_ref_inner_type(enum_ty) != 0 as u32;
+        if !is_ref {
+            self.consume_place_if_move(&val_place);
+        }
         let early = self.lower_try_early_return(val_place, enum_ty, success_v_idx, span);
-        self.emit_scope_cleanup(0 as usize, span, 0 as u32, true);
+        self.emit_scope_cleanup(0 as usize, span, early.base, true);
         self.terminate(ZirTerminator.Ret(early));
+        self.pop_scope(span);
 
         self.switch_to_block(success_block);
+        if !is_ref {
+            self.consume_place_if_move(&val_place);
+        }
         let payload_ty = self.get_variant_payload_type(enum_ty, success_v_idx);
         if payload_ty != 0 as u32 && payload_ty != 0xffffffff as u32 {
             let payload_ptr_ty = self.get_ptr_type(payload_ty);
@@ -2978,9 +2987,17 @@ impl ZirLowerer {
                 base: payload_tmp,
                 projections: @slice(0 as *mut Projection, 0 as usize)
             };
-            return self.append_deref(&payload_base);
+            let deref_place = self.append_deref(&payload_base);
+            if !is_ref && !self.is_copy_type(payload_ty) {
+                let val_tmp = self.define_local(0 as *mut Symbol, payload_ty, LOCAL_KIND_TMP);
+                self.emit(ZirStmt.Let(val_tmp, ZirRvalue.Use(deref_place), span));
+                return Place {
+                    base: val_tmp,
+                    projections: @slice(0 as *mut Projection, 0 as usize)
+                };
+            }
+            return deref_place;
         }
-        return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
         return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
     }
 
