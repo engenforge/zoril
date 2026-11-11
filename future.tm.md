@@ -278,3 +278,9 @@ Where Zoril has been tested, by operating system and architecture, recorded per 
 
     - **Do:** the release steps in `CONTRIBUTING.md` require a `make test` pass on each first-priority system (Alpine, Arch, Debian) at the release commit, and the matrix row for each, before the release is tagged. A system's failure blocks the release or is listed in `KNOWN_ISSUES.md` with its task.
     - **Verification:** `make test`; the checklist names the three systems and the page.
+
+- [ ] +types +AI-D Z-0179 Every `Copy` type is `Clone`, as in Rust
+    > **Created:** 2026-11-11 by Z-0172.
+
+    - **Now:** `Clone` needs an impl; `Copy` is the only bound satisfied structurally. So a `&T`, a `fn` pointer, a tuple or an array, all `Copy`, cannot call `.clone()`, satisfy `T: Clone`, or use `Vec.resize` / `Vec.extend_from_slice` once Z-0173 and Z-0174 make them clone (`gap_73` and `gap_74` are `compile_reject` for that reason).
+    - **Do:** decide and implement Rust's rule: a structurally `Copy` type satisfies `Clone`, and its `.clone()` with no impl is the bitwise copy. A type-checker change: `src/` must build under the old rule and the new one, and `scripts/check_reject_diff.sh` lists every program newly accepted, each read for safety. Then `gap_73` and `gap_74` become `accept`.
