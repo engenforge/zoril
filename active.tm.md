@@ -227,8 +227,20 @@ Standalone tasks developed and committed directly on `main`:
     - **Do:** decide what the result of a generic `#[borrows()]` function holds when `T` carries a borrow (Rust: the lifetime inside `T` stays in the result), and implement it; or drop the attribute from these impls if the default rule refuses no correct program the tests hold (the differential says). Flip gap_77 and gap_78.
     - **Checks:** C1 gap_77 and gap_78 `compile_reject`, and a `Vec<u8>` / `Option<i32>` clone returned from a function still accepted; C2 take the change out and watch them run (`exit 7`); C3 `scripts/check_reject_diff.sh` against the base, every newly refused program listed; C4 `make test`, `make preflight-changed`, each `Total:` quoted.
 
-- [ ] +safety +vecclone +AI-D Z-0173 V3 `Vec.extend_from_slice` clones each element
+- [x] +safety +vecclone +AI-D Z-0173 V3 `Vec.extend_from_slice` clones each element
     > **Created:** 2026-11-11. **Branch:** `vecclone`. **After:** Z-0172. **Check-in:** stop for review after it: a fix to a safety rule.
+    > **Completed:** 2026-11-11 git:7848828
+
+    - **Completion (2026-11-11, second review):** closed by a reviewer who did not write the fix, on `vecclone` at git:7848828. Checks, by number:
+      - C1: `sh scripts/run_safety_matrix.sh`: `All probes complete: 452/500 passed. Mismatches: 0`.
+      - C2: `tests/error_reporting/err_extend_from_slice_no_clone.zrl` passes (`./scripts/test.sh --filter 'extend_from_slice|extend_bytes|test_vec'`: `Total: 10 run, 10 passed, 0 failed, 0 skipped (0.2s)`).
+      - C3: with `slice[i].clone()` replaced by `slice[i]` in `stdlib/vec.zrl` (restored afterwards, tree clean): `err_extend_from_slice_no_clone` fails (`expected compile fail, but it compiled`) and the matrix gives `[FAIL] Vec.extend_from_slice copies a value with a Drop, which both Vecs then drop (exit (2); expected compile_reject)`, `All probes complete: 451/500 passed. Mismatches: 1`.
+      - C4: `make preflight-changed PREFLIGHT_BASE=e7b4d6c`: `[PASS] reject-diff: 2 newly accepted (none that must be refused, or all allowed), 2 newly refused, of 69140 programs against e7b4d6c4efc15ce8ca4e7d0431a79e70ca8ce178`. The counts equal the author's; the program names were not listed in the log, so they were not compared by name (the author's are probe 422 accepted and gap_76 refused, each whole-program and through zbuild).
+      - C5: `make test`: `Total: 3242 run, 3242 passed, 0 failed, 98 skipped (214.8s)`. `make preflight-changed` (same run as C4): exit 0, fixpoint `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, checked build `Total: 1173 run, 1173 passed, 0 failed, 0 skipped (50.5s)`. `build/zoril` was already up to date; `rm build/zoril && make` was not re-run by this reviewer (the fixpoint step builds a clean copy).
+      - Sibling probes (scratch): a `#[derive(Clone)]` struct and an `Option<[u8]>` holding views of the caller's frame, extended into a caller's `Vec`, are refused (`cannot store 'views' a reference into storage owned by this frame`); `String.push_str(&buf)` of a stack array, directly and through a `&mut String` parameter, is accepted and reads back `len 4` and the right bytes.
+      - Not re-run: the before/after comparison of `gap_76` and probe 422 against git:e7b4d6c's compiler (C3 shows the post-fix side; the pre-fix side is the author's).
+      - Stale record: `bench/fuzz/README.md` describes `stdlib/` before this change. The untracked `bench/` files the preflight wrote were deleted.
+      - The task's Branch is `vecclone`; it is not merged into `main` by this closure.
 
     - **Do:** as Z-0172 decides; the gap_56 per-element write rule (`stdlib/vec.zrl`) stays. Flip `gap_76` to `accept` (one drop per `Vec`).
     - **Checks:** C1 `gap_76` exits 0 with two drops for two values; C2 a `T` with no `Clone` is refused with a located diagnostic (`// EXPECT:`); C3 take the clone out and watch `gap_76` exit 2; C4 the reject differential against the series base, every newly refused program listed; C5 `make test`, `make preflight-changed`, `rm build/zoril && make` without a warning, each `Total:` quoted.
