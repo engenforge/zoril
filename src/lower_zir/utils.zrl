@@ -76,6 +76,54 @@ impl ZirLowerer {
         return Option.None;
     }
 
+    // The success variant index (`Ok` or `Some`) of a `?` operand, or `0xffffffff` when `ty_id`
+    // is neither a two-variant `Result`/`Option`-shaped enum nor a reference to one (`gap_71`).
+    pub fn try_success_variant(self: &mut ZirLowerer, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0xffffffff as u32; }
+        let p_ty = self.get_type_decl(ty_id);
+        let base_ty = match p_ty.def {
+            ILType.Ptr(inner) | ILType.PtrMut(inner) => inner,
+            _ => ty_id,
+        };
+        let p_base = self.get_type_decl(base_ty);
+        let mut user_id = 0xffffffff as u32;
+        match p_base.def {
+            ILType.User(u) => { user_id = u.id; },
+            _ => {},
+        }
+        if user_id == 0xffffffff as u32 { return 0xffffffff as u32; }
+        let p_def = &self.module.typedefs[user_id as usize];
+        if p_def.get_tag() != IL_TYPEDEF_ENUM { return 0xffffffff as u32; }
+        if p_def.get_Enum().variants.len != 2 as usize { return 0xffffffff as u32; }
+
+        let ok_name = self.intern_table.intern("Ok");
+        let err_name = self.intern_table.intern("Err");
+        if let Some(ok_idx) = self.get_variant_index(base_ty, ok_name) {
+            if self.get_variant_index(base_ty, err_name).is_some() {
+                return ok_idx;
+            }
+        }
+        let some_name = self.intern_table.intern("Some");
+        let none_name = self.intern_table.intern("None");
+        if let Some(some_idx) = self.get_variant_index(base_ty, some_name) {
+            if let Some(none_idx) = self.get_variant_index(base_ty, none_name) {
+                if self.get_variant_payload_type(base_ty, none_idx) == 0 as u32 {
+                    return some_idx;
+                }
+            }
+        }
+        return 0xffffffff as u32;
+    }
+
+    pub fn get_ref_inner_type(self: &ZirLowerer, ty_id: u32) -> u32 {
+        if ty_id == 0 as u32 { return 0 as u32; }
+        let p_ty = self.get_type_decl(ty_id);
+        match p_ty.def {
+            ILType.Ptr(inner) | ILType.PtrMut(inner) => { return inner; },
+            _ => { return 0 as u32; },
+        }
+    }
+
     pub fn get_variant_payload_type(self: &mut ZirLowerer, ty_id: u32, variant_idx: u32) -> u32 {
         if ty_id == 0 as u32 { return 0 as u32; }
         let p_ty = self.get_type_decl(ty_id);

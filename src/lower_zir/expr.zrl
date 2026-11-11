@@ -2941,16 +2941,7 @@ impl ZirLowerer {
     fn lower_try_expr(self: &mut ZirLowerer, try_expr_id: ExprId, span: Span) -> Place {
         let val_place = self.lower_expr(try_expr_id, 0 as u32);
         let enum_ty = self.get_place_type(&val_place);
-
-        let ok_name = self.intern_table.intern("Ok");
-        let some_name = self.intern_table.intern("Some");
-        let success_v_idx = match self.get_variant_index(enum_ty, ok_name) {
-            Some(idx) => idx,
-            None => match self.get_variant_index(enum_ty, some_name) {
-                Some(idx) => idx,
-                None => 0xffffffff as u32,
-            }
-        };
+        let success_v_idx = self.try_success_variant(enum_ty);
 
         let bool_ty = self.get_primitive_type(ILPrimitive.Bool);
         let cond_tmp = self.define_local(0 as *mut Symbol, bool_ty, LOCAL_KIND_TMP);
@@ -3015,15 +3006,12 @@ impl ZirLowerer {
             eprint("`\n");
             return val_place;
         }
-        if ret_ty != 0 as u32 && self.types_match(ret_ty, op_ty) {
-            return val_place;
-        }
-        let pointee = self.get_ptr_inner_type(op_ty);
+        let pointee = self.get_ref_inner_type(op_ty);
         if pointee != 0 as u32 {
-            // A fresh value would copy the payload out of a borrow; only the referenced value
-            // itself, of the return type, can be returned.
+            // Returning the referenced enum dereferences the borrow, so `check_zir` rejects a
+            // non-`Copy` payload (`gap_72`); building a value of another return type is refused.
             if ret_ty != 0 as u32 && self.types_match(ret_ty, pointee) {
-                return val_place;
+                return self.append_deref(&val_place);
             }
             self.report_prefix(span);
             eprint(
@@ -3031,15 +3019,23 @@ impl ZirLowerer {
             );
             eprint(self.mono.type_display(pointee));
             eprint("`, not `");
-            eprint(self.mono.type_display(ret_ty));
+            eprint(if ret_ty == 0 as u32 { "()" } else { self.mono.type_display(ret_ty) });
             eprint("`\n");
+            return val_place;
+        }
+        if ret_ty != 0 as u32 && self.types_match(ret_ty, op_ty) {
             return val_place;
         }
 
         let is_result = self.get_variant_index(op_ty, self.intern_table.intern("Ok")).is_some();
         let early_name = self.intern_table.intern(if is_result { "Err" } else { "None" });
         let src_idx = self.get_variant_index(op_ty, early_name);
-        let dst_idx = self.get_variant_index(ret_ty, early_name);
+        let dst_idx = if self.try_success_variant(ret_ty) != 0xffffffff as u32
+            && self.get_ref_inner_type(ret_ty) == 0 as u32 {
+            self.get_variant_index(ret_ty, early_name)
+        } else {
+            Option.None
+        };
         let mut fits = src_idx.is_some() && dst_idx.is_some();
         let mut src_payload = 0 as u32;
         if fits {

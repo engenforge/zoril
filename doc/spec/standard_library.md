@@ -235,11 +235,11 @@ A `Result` is handled by matching on it, propagating it with `?`, or unwrapping 
 
 `Result<T, E>` is an ordinary enum in `core.zrl`. The `?` operator on a `Result` returns its `Err` from the enclosing function early, and on an `Option` returns its `None`; otherwise `e?` is `e`'s success payload. The value returned is of the enclosing function's return type `R`, and there is no conversion between error types:
 
-- when `e` has type `R`, or is a reference to a value of type `R`, `e` itself is returned;
+- when `e` has type `R`, or is a reference to a value of type `R` (when `R` is `Copy`), that value is returned;
 - otherwise `e` must not be a reference, and `R` must have the variant `e` propagates (`Err`, or `None`) with the same payload type, so `Result<T, E>` propagates out of any `Result<U, E>` and `Option<T>` out of any `Option<U>`; a new value of type `R` holding `e`'s payload is returned;
 - any other `e?` is a compile error.
 
-The variants are found by name: an enum with an `Ok` variant is taken as a `Result` (propagating `Err`), and one with a `Some` variant as an `Option` (propagating `None`), so a user enum `enum R { Ok(i32), Err(E) }` propagates out of a `Result<U, E>`. `?` on a value of any other type is a compile error.
+The variants are found by name: a two-variant enum with `Ok` and `Err` variants is taken as a `Result` (propagating `Err`), and one with `Some` and a unit `None` variant as an `Option` (propagating `None`), so a user enum `enum R { Ok(i32), Err(E) }` propagates out of a `Result<U, E>`. `?` on a value of any other type is a compile error.
 
 `trait Error { fn message(self: &Self) -> [u8]; }` is the trait for error types, and `impl Error for [u8]` is provided: a byte slice message returns itself.
 

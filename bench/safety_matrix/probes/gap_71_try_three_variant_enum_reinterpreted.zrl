@@ -1,7 +1,6 @@
 // name: `?` on a three-variant enum with `Ok` and `Err` reinterprets the third variant as `Err`
-// expected: known_gap
-// gap: `e?` branches on `is_Ok` alone and reads the `Err` payload in the other arm without checking that `e`'s enum has only `Ok` and `Err`, so `Bad.Forge(Pair)` in a function returning `Result<i32, [u8]>` hands the caller a slice whose pointer and length are the `Pair`'s two integers; here the length 42 comes back
-// observed: exit 42
+// expected: compile_reject
+// Refused by the lowering of `?` (Z-0168): `Bad` has three variants, not the two of `Result` or `Option`. It used to branch on `is_Ok` alone and read the third variant's `Pair` payload as `Err([u8])`.
 import "core.zrl";
 struct Pair { a: i64, b: i64 }
 enum Bad { Forge(Pair), Ok(i32), Err([u8]) }

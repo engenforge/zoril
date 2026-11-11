@@ -1,7 +1,6 @@
 // name: `?` on `&Result` returns a non-`Copy` error out of the borrow, dropping it twice
-// expected: known_gap
-// gap: `r?` on `r: &Result<i32, Guard>` returned `r` as a reference place in ZIR while codegen copied the `Result` out of the borrow into the return slot, hiding the move from the borrow checker; the `Guard` in `r` and its copy in the returned `Result` are both dropped (exit 2)
-// observed: exit 2
+// expected: compile_reject
+// Refused by the borrow checker after `lower_try_early_return` dereferences the reference place on early return (Z-0168): returning `*r` of type `Result<i32, Guard>` moves a non-`Copy` value out of a borrow.
 import "core.zrl";
 static mut DROPS: i32 = 0;
 struct Guard { id: i64 }

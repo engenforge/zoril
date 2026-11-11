@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_try_ref_non_copy.zrl:6:1: error: cannot move out of borrow
+// `r?` on `&Result<T, E>` returns the referenced `Result` by value, which moves `*r` out of the
+// borrow when `E` is not `Copy` (probe gap_72).
+import "core.zrl";
+fn outer(r: &Result<i32, Box<i32>>) -> Result<i32, Box<i32>> { let v = r?; return Result.Ok(v); }
+fn main() -> i32 { return 0; }
