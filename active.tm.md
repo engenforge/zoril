@@ -1,13 +1,6 @@
 # Current Sprint
 
-Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-04, `AGENTS.md`).
-
-**How to read this file (the maintainer, 2026-11-12; Z-0188 moves these rules into `AGENTS.md`):**
-
-* **Order.** This file is one queue. Take the first open task in `## Now` whose **Depends:** tasks are all complete and whose model tag (`+AI-D`, `+AI-G`) fits the session, then switch to the branch it names. `## Next` continues the queue; the maintainer promotes from it, and from `future.tm.md`, where paused and unscheduled work is kept under headings by branch and topic.
-* **Position is the only statement of order.** **Depends:** in a task's header names hard blockers. Older tasks still carry `Before:`, `After:` and `Order` bullets, and the dated notes at the end of this file carry numbered lists; where one disagrees with the position, the position holds.
-* **Branch.** Each task line carries its branch as a context tag (`@main`, `@testinfra`, `@provenance`), the same as its **Branch:** line, so tasks of several branches share the queue.
-* **Placing a new task.** One that blocks an existing task goes immediately before the first task it blocks. A follow-up to the task in hand goes directly after it. A rule or documentation fix of under a session with no dependency goes at the top of `## Now`. Anything else goes into `future.tm.md`. Its header says why it is where it is (`**Placed:** before Z-0131, which it blocks`). An agent inserts and never moves an existing task; reordering, promoting and the priority flag (`(A)`, a task taken before the queue's order) are the maintainer's.
+Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
 ## Now
 
