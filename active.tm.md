@@ -303,6 +303,18 @@ Standalone tasks developed and committed directly on `main`:
 2. Bootstrap integrity: Z-0135 (stage1 closure module paths audit; runs before closure module edits in Z-0131/Z-0133).
 3. Compiler quality & tools: Z-0013 (reviewer rotation), Z-0014 (`zilc` input validation), Z-0015 (`zoril` error bounds), Z-0016 (`zbuild` ZIL handling), Z-0067 (diagnostic source location), Z-0079 (generic interface roundtrip), Z-0080 (mutation list integrity).
 4. Benchmarks: Z-0004 (cloud session variance measurement), Z-0005 (baseline decision).
+5. Rules and dependencies (2026-11-12): since 2026-11-11 Z-0135 no longer gates Z-0131 (its syscalls stay in `proc.zrl`, outside the closure); whether it gates Z-0133 is an open question on that task. `AGENTS.md` rules from the series review, which every branch reads: Z-0187 (milestone merges), Z-0185 (the closure command), Z-0186 (a planted case in the design of anything that skips work). They are `main` tasks because `AGENTS.md` changes stand alone; `testinfra` gets them by its next merge from `main`.
+
+- [ ] +docs +AI-G Z-0187 `AGENTS.md`: a series branch merges into `main` at each reviewed milestone, not only at its end
+    > **Created:** 2026-11-12 by the review of the `testinfra` series; the rule is agreed by the maintainer, who asked for the first such merge (git:906265f). **Branch:** `main`.
+
+    - **Why:** "Code branches" says a series branch "merges when its series is reviewed". Held to the end of a long series, that keeps its finished work from every other branch: `main` and `provenance` paid for the slower differential and the bash-bound harness while `testinfra` had neither, and the fix for probe 422's hole, made on `testinfra`, stayed open on `main` until git:906265f. It also lets the branches drift: that merge's conflicts were recorded figures both sides had changed (line, `unsafe` and probe counts, seven corpus ZIL hashes).
+    - **Do:** in `AGENTS.md`, "Working on tasks", replace in the **Code branches** bullet "and merges when its series is reviewed" with "and merges into `main` at each milestone: when a numbered step of its series is done and reviewed, and at once when it closes a hole `main` still has", and add after that sentence: "A task still awaiting review stays on the branch. The merge is the maintainer's decision; its conflicts in recorded figures (`README.md`, `doc/SAFETY.md`, `doc/spec/unsafe_policy.md`, `corpus/zrl_whole_program_zil.sha256`) are resolved by recomputing them from the merged tree (`scripts/check_safety_figures.sh`, with `--density --print`; `scripts/check_safety_model.sh`; `UPDATE_GOLDEN=1` in `scripts/test_incremental.sh`), never by taking a side, and `make test` and `make preflight-changed PREFLIGHT_BASE=<main before the merge>` run on the merge commit. After it the branch is rebuilt on the new `main`." Change nothing else.
+    - **Next milestones for `testinfra` (the sprint notes' order):** Z-0114's cache (git:cb6f3e4) once its follow-up is reviewed; then `ztest` running the plan (Z-0137); then `ztest` as the default (Z-0138); then the pool retired (Z-0140).
+    - **Checks:**
+      - C1: `grep -n 'at each milestone' AGENTS.md` shows the bullet, once, and `grep -c 'merges when its series is reviewed' AGENTS.md` prints `0`.
+      - C2: `git diff --stat` names `AGENTS.md` only.
+      - C3: no take-out check: the change is a rule in prose. `make test`, `Total:` line quoted.
 
 - [ ] +docs +AI-G Z-0185 `AGENTS.md`'s command for listing the `src/` closure runs as written
     > **Created:** 2026-11-11 by the review of the `testinfra` series. **Branch:** `main`.
@@ -407,6 +419,8 @@ Standalone tasks developed and committed directly on `main`:
 
 - [ ] +bootstrap +audit +AI-D Z-0135 Z0 stage1 accepts modules in the `src/` closure and builds some of their paths wrong
     > **Created:** 2026-11-07 by Z-0117's measurement. **Branch:** `main`. **Before:** Z-0131, Z-0133 (they edit closure modules).
+
+    - **Review (2026-11-11/12):** the header's **Before:** Z-0131 no longer holds: by the maintainer's decision on Z-0131 its syscalls go into `stdlib/proc.zrl`, which is outside the `src/` closure, so that task and Z-0132 start without this one. Whether Z-0133 needs it is asked on Z-0133. This task keeps its own reason: an edit to `src/` that reaches one of the paths stage1 builds wrong.
 
     - **Found (Z-0117, git:e932d51):** built by `build/zoril-stage1` and `build/zilc-stage1` (the `build/zilc-boot` pipeline, linked with `build/runtime.o` or `build/runtime-stage1.o`), `tests/stdlib/test_stdlib_fd.zrl` and `tests/stdlib/test_stdlib_io_result.zrl` segfault in `mem_raw.zrl`'s `zoril_allocator_alloc` (from `test_pipe_large_buffer`) and `arena_free` (from `Arena::drop` in `test_command_redirect_stdout`); built by `build/zoril` they exit 0. Separately, stage1 refuses a program in which two modules each define a private function of the same name (reproduction in Z-0117: `cannot access private function: helper`), which `build/zoril` accepts.
     - **Why it matters:** the stage1 constraint in `AGENTS.md` says the closure "may use only what the pinned stage1 accepts". Accepting is not enough if stage1 builds an accepted function wrong. The self-hosting fixpoint covers only what `src/` reaches; an edit to `src/` that starts reaching one of these paths would get a generation-1 compiler built wrong, found (if at all) only by the fixpoint differing.
