@@ -208,9 +208,9 @@
 
 - [x] +stdlib +tests +AI-G Z-0130 Z1a `proc.zrl`: wait for whichever child ends first, with or without blocking
     > **Created:** 2026-11-07 by Z-0117. **Branch:** `testinfra`. **Before:** Z-0137.
-    > **Completed:** 2026-11-10 git:575dfe7
+    > **Completed:** 2026-11-10 git:3bfec60
 
-    - **Completion note (2026-11-10):** `proc::wait_any(children: [mut Child]) -> Result<usize, Error>` blocks until an unreaped child in the slice ends and returns its index; `proc::try_wait_any` is the `WNOHANG` form and returns none when nothing has ended. Both reap with `wait4(-1)` and keep the status on the `Child` (a private `status: Option<ExitStatus>`); `Child::wait` returns it without calling `wait4`, and a plain `wait` caches its result too. With no unreaped child in the slice, or when `wait4(-1)` reaps a pid that is not in it, the result is ECHILD. Checks, all against `575dfe7`:
+    - **Completion note (2026-11-10):** `proc::wait_any(children: [mut Child]) -> Result<usize, Error>` blocks until an unreaped child in the slice ends and returns its index; `proc::try_wait_any` is the `WNOHANG` form and returns none when nothing has ended. Both reap with `wait4(-1)` and keep the status on the `Child` (a private `status: Option<ExitStatus>`); `Child::wait` returns it without calling `wait4`, and a plain `wait` caches its result too. With no unreaped child in the slice, or when `wait4(-1)` reaps a pid that is not in it, the result is ECHILD. Checks, all against `3bfec60`:
       - C1: `scripts/test.sh --filter test_stdlib_proc` prints `[PASS] tests/stdlib/test_stdlib_proc_wait_any.zrl (816ms)` and `Total: 3 run, 3 passed, 0 failed, 0 skipped (0.9s)`; the test starts the 0.2 s and 1 s sleepers in both orders and exits 0 only if the shorter one is returned first each time, with a successful status.
       - C2: the same test polls `try_wait_any` (none first, then index 0 within a 5 s bound).
       - C3: the same test calls `Child::wait` on the reaped child and fails if it takes over 100 ms.
@@ -233,7 +233,7 @@
 
 - [x] +testinfra +tests +portability +AI-G Z-0145 T7b `make test` with only the user's tools, as a gate
     > **Created:** 2026-11-07 by the maintainer's portability rule. **Branch:** `testinfra`. **Depends:** Z-0144.
-    > **Completed:** 2026-11-10 git:33fffd1
+    > **Completed:** 2026-11-10 git:62dc3fc
 
     - **Split (2026-11-07):** the bash ports are Z-0146 and Z-0147, which this task also depends on. It keeps the gate and the `check_deps.sh` change.
     - **Do:** drop `bash` from `scripts/check_deps.sh`'s `test` profile if nothing else on the `make test` path needs it (`scripts/fuzz_safe.sh` is the fuzzer's: contributor role). Add a gate to `make preflight` (it needs git to export the tree): extract `git archive HEAD` outside the checkout, put on `PATH` only the user role's tools (`AGENTS.md`, Portability; the shim `scripts/test_dep_matrix.sh` builds), then `make` and `make test`. It passes when `make test` passes and every skip names a missing tool; it lists the skips. Bring `scripts/check_deps.sh`'s profiles, `doc/developer_guide.md` §1 and the exceptions list in `AGENTS.md` into line with what the gate shows.
@@ -254,7 +254,7 @@
 
 - [x] +testinfra +tests +portability +AI-G Z-0147 T7d `check_safety_model.sh` without bash
     > **Created:** 2026-11-07, split from Z-0145. **Branch:** `testinfra`. **Before:** Z-0145.
-    > **Completed:** 2026-11-10 git:b1bc937
+    > **Completed:** 2026-11-10 git:578fa80
 
     - **Why:** the `safety-model` gate, in `make test` and in every doc tier, runs `scripts/check_safety_model.sh`: 930 lines of bash, with about 32 lines a text search marks bash-only. At that size the portability rule (`AGENTS.md`: logic longer than a short script goes into a Zoril tool) applies.
     - **Do:** first record here what it checks (each rule, and the file it reads), then port it to POSIX `sh` and awk, kept as close to the original as the shell allows. If the port needs much more than the original, stop, record why, and propose a Zoril tool under `tools/` instead, as a task of its own. Its banned-phrase list and every message it prints stay as they are, since tasks and agents grep for them.
@@ -307,7 +307,7 @@
 
 - [x] +testinfra +tests +portability +AI-G Z-0146 T7c `check_md_links.sh` and the stage0-c suite scripts in POSIX `sh`
     > **Created:** 2026-11-07, split from Z-0145. **Branch:** `testinfra`. **Before:** Z-0145.
-    > **Completed:** 2026-11-10 git:113209a
+    > **Completed:** 2026-11-10 git:c29d500
 
     - **Why:** `make test` runs these `#!/bin/bash` scripts: `scripts/check_md_links.sh` (89 lines, the `md-links` scenario) and, through the `stage0c-*` gates, `bootstrap/stage0-c/scripts/test_functional.sh` (168), `test_corpus.sh` (135), `test_docs.sh` (142), `test_error_locations.sh` (140), `test_wrapper.sh` (116), `check-all.sh` (126) and `verify_test_failure.sh` (69). A text search for bash-only constructs (`[[`, arrays, `(( ))`, `${x//a/b}`, `<( )`, `$'...'`, `&>`) hits all but `verify_test_failure.sh`; no strict POSIX shell was on the review host, so none was run under one. `scripts/test_check_no_new_deps.sh` matches a bash-shebang search only because it writes one as a fixture; `scripts/fuzz_safe.sh` is the fuzzer's (contributor role).
     - **The maintainer (2026-11-07):** the stage0-c freeze covers the compiler, not its test scripts; they may be ported when the `stage0c-*` gates report the same counts before and after (`AGENTS.md`, "The seeds are frozen").
