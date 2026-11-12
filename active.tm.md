@@ -11,7 +11,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 ## Now
 
-- [ ] +docs +tests +AI-G @main Source comments do not cite task IDs: a rule in AGENTS.md, the existing ones removed, and a comment-noise check id:q0ses
+- [x] +docs +tests +AI-G @main Source comments do not cite task IDs: a rule in AGENTS.md, the existing ones removed, and a comment-noise check id:q0ses
 
     > **Created:** 2026-11-12
     > **Asked by:** the maintainer
@@ -32,6 +32,18 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: the gate's new rule: a scratch `.zrl` under `src/` with `// fixes Z-0001` makes `sh scripts/check_comment_noise.sh` fail with kind `task-id`; with `id:k7q2x` likewise; with the rule taken out (a scratch edit) it passes; quote all three; remove the scratch file.
       - C5: `sh scripts/check_comment_noise.sh` passes on the tree (no `src/` mention exists); `sh scripts/test_check_comment_noise.sh` passes, extended with the `task-id` case.
       - C6: `sh scripts/run_safety_matrix.sh` and `make test`, `Total:` line quoted; `make test-changed` is not enough because the probes change.
+
+    > **Completed:** 2026-11-12 git:756298c
+
+    - **Done on `main`, answers by number:**
+      - C1: before, 16 lines (the task's count). After, `grep -rnE 'Z-[0-9]{4}' scripts tests | grep -v scripts/comment_budget.tsv | wc -l` prints `0`. (The new test's expected-output string was first written as a literal and showed as one line; it is now built with `printf`, as the input already was.)
+      - C2: `grep -lE 'Z-[0-9]{4}' bench/safety_matrix/probes/*.zrl | wc -l` prints `21` (was 34); `... | grep -vcE '^// (gap|zbuild):'` prints `0`; the marker lines left number 21 (17 `// gap:`, 4 `// zbuild:`), listed below.
+      - C3: every changed line outside the three gate files is a comment, except the `AGENTS.md` **Never** bullet, which is the rule (task step 1). In `check_comment_noise.sh` and `test_check_comment_noise.sh` the non-comment changes are the new rule, its three test cases, the pass message and the case count (25 to 28).
+      - C4: with `// Fixed for Z-0128.` and with `// Fixed for id:k7q2x.` under a scratch `src/`, `test_check_comment_noise.sh` expects `task-id: Z-0128` and `task-id: id:k7q2x` and passes; with the rule block removed, those two cases failed (run before the commit) and the rest passed; the `pid:12345` / `id: u32` case passes with the rule in place.
+      - C5: `sh scripts/check_comment_noise.sh`: `[PASS] comment-noise: 136 files carry no scaffolding, step narration, task ID or stale path reference`; `sh scripts/test_check_comment_noise.sh`: `[PASS] check_comment_noise.sh behaves as specified (28 cases)`.
+      - C6: `sh scripts/run_safety_matrix.sh`: `All probes complete: 459/505 passed. Mismatches: 0`. `make test` (before the last edit, which only rewrites one expected-output string in `test_check_comment_noise.sh`, rerun on its own above): `Total: 3263 run, 3263 passed, 0 failed, 94 skipped (113.6s)`.
+    - **Marker lines left for the maintainer** (`grep -hE 'Z-[0-9]{4}' bench/safety_matrix/probes/*.zrl | grep -E '^// (gap|zbuild):'`): 17 `// gap:` and 4 `// zbuild:` lines in the probes. `AGENTS.md` makes them load-bearing, so they were not reworded.
+    - **Not done here:** the `testinfra` commit 784a650 adds Z-0114 mentions in `scripts/check_reject_diff.sh` and `scripts/test_reject_diff.sh`; they are removed on that branch when it is rebased, with `tm remap` for the changed shas.
 
 - [ ] +docs +AI-G @main Z-0187 `AGENTS.md`: a series branch merges into `main` at each reviewed milestone, not only at its end
     > **Created:** 2026-11-12 by the review of the `testinfra` series; the rule is agreed by the maintainer, who asked for the first such merge (git:906265f). **Branch:** `main`.
