@@ -42,8 +42,38 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: with `// Fixed for Z-0128.` and with `// Fixed for id:k7q2x.` under a scratch `src/`, `test_check_comment_noise.sh` expects `task-id: Z-0128` and `task-id: id:k7q2x` and passes; with the rule block removed, those two cases failed (run before the commit) and the rest passed; the `pid:12345` / `id: u32` case passes with the rule in place.
       - C5: `sh scripts/check_comment_noise.sh`: `[PASS] comment-noise: 136 files carry no scaffolding, step narration, task ID or stale path reference`; `sh scripts/test_check_comment_noise.sh`: `[PASS] check_comment_noise.sh behaves as specified (28 cases)`.
       - C6: `sh scripts/run_safety_matrix.sh`: `All probes complete: 459/505 passed. Mismatches: 0`. `make test` (before the last edit, which only rewrites one expected-output string in `test_check_comment_noise.sh`, rerun on its own above): `Total: 3263 run, 3263 passed, 0 failed, 94 skipped (113.6s)`.
-    - **Marker lines left for the maintainer** (`grep -hE 'Z-[0-9]{4}' bench/safety_matrix/probes/*.zrl | grep -E '^// (gap|zbuild):'`): 17 `// gap:` and 4 `// zbuild:` lines in the probes. `AGENTS.md` makes them load-bearing, so they were not reworded.
-    - **Not done here:** the `testinfra` commit 784a650 adds Z-0114 mentions in `scripts/check_reject_diff.sh` and `scripts/test_reject_diff.sh`; they are removed on that branch when it is rebased, with `tm remap` for the changed shas.
+    - **Marker lines left for the maintainer** (`grep -hE 'Z-[0-9]{4}' bench/safety_matrix/probes/*.zrl | grep -E '^// (gap|zbuild):'`): 17 `// gap:` and 4 `// zbuild:` lines in the probes. `AGENTS.md` makes them load-bearing, so they were not reworded here; follow-up id:yws9j.
+    - **Not done here:** the `testinfra` commit 784a650 adds Z-0114 mentions in `scripts/check_reject_diff.sh` and `scripts/test_reject_diff.sh`; they are removed by the follow-up id:zcdvm, with `tm remap` for the changed shas.
+
+- [ ] +docs +AI-G @testinfra Strip the task IDs the cache commit added to source comments (follow-up to id:q0ses) id:zcdvm
+
+    > **Created:** 2026-11-12
+    > **Branch:** `testinfra`
+    > **Depends:** id:q0ses
+
+    - **Why:** id:q0ses removed task IDs from comments on `main`. The cache commit git:784a650 on `testinfra` was written before that and adds mentions of Z-0114 in `scripts/check_reject_diff.sh` and `scripts/test_reject_diff.sh`; merging it as is would put the rule's own gate (which reads only `.zrl`) out of step with `AGENTS.md`.
+    - **Do:** `git switch testinfra`; list them with `git diff main...testinfra -U0 | grep -E '^\+.*Z-[0-9]{4}'`; reword each comment to say why in words, keeping the reason it gives; touch no code line. Fold the change into 784a650 (`git rebase -i` is unavailable: `git commit --fixup` then `git rebase --autosquash` with `GIT_SEQUENCE_EDITOR=true`), and run `tm remap` for every sha the rebase changed (`tm check-shas` lists the citations; a rewritten branch needs a forced update when published, which is the maintainer's).
+    - **Checks:**
+      - C1: before and after, the `git diff` grep above; after prints nothing, and `grep -rnE 'Z-[0-9]{4}' scripts tests | grep -v comment_budget.tsv | wc -l` prints `0` on the branch.
+      - C2: nothing but comments changed: `git diff <old-tip> <new-tip> -U0 | grep '^[-+]' | grep -vE '^(---|\+\+\+)' | grep -vE '^[-+] *(//|#)'` prints nothing; old and new tips are kept on a local backup branch until published.
+      - C3: `sh scripts/test_reject_diff.sh` passes; `make test-changed` quoted (the change is comments only, so no `make test`).
+      - C4: `tm check-shas` before and after: the count of unreachable citations does not rise (109 of 297 on 2026-11-12).
+
+- [ ] +docs +AI-G @main Probe marker lines do not cite task IDs: reword the 17 `// gap:` and 4 `// zbuild:` reasons in words id:yws9j
+
+    > **Created:** 2026-11-12, asked by the maintainer
+    > **Branch:** `main`
+    > **Depends:** id:q0ses
+
+    - **Why:** id:q0ses left these 21 lines in `bench/safety_matrix/probes/*.zrl` because `AGENTS.md` makes marker lines load-bearing. The maintainer asks to bring them in line. Their IDs point at task files a source tarball lacks, and a counted `Z-NNNN` changes form in id:z0189; a reason written in words needs no migration.
+    - **Implications (checked 2026-11-12):** (1) no tool reads an ID in these lines. `run_safety_matrix.sh` prints a `// gap:` line as the `[SKIP] ... (known gap: <reason>)` text, so the 46 skip lines of `make test` change wording; for `// zbuild:` it strips the `(<reason>)` and reads the outcome word only (`check_safety_model.sh` accepts `<outcome> (<reason>)`). `check_safety_model.sh` compares the list of `known_gap` probes with the Known gaps table, not the reason text. (2) The reasons often use the ID as a name for a mechanism ("closed by Z-0010's body summary", "Z-0059's fixpoint"); a bare deletion loses that, so each is reworded to name the mechanism ("closed under `--provenance` by the body summary"). (3) `doc/spec/safety_model.md` and `doc/SAFETY.md` cite IDs too (docs, not source comments, so out of scope); where they quote a reason verbatim, the two are updated together. (4) The marker rule in `AGENTS.md` stays as it is: only the ID inside the reason changes, never the `// gap:` / `// zbuild:` prefix, the outcome word or the `(...)` shape. (5) Not replaced by `id:zNNNN`: that would trade one reference to absent files for another.
+    - **Do:** list with `grep -nE 'Z-[0-9]{4}' bench/safety_matrix/probes/*.zrl`; reword the ID out of each reason, keeping the rest; touch nothing else. Check the docs for a verbatim copy of each reworded reason (`grep -rn '<first words>' doc README.md`) and update it in the same commit.
+    - **Checks:**
+      - C1: before, `grep -hE 'Z-[0-9]{4}' bench/safety_matrix/probes/*.zrl | wc -l` prints `21`; after, `0`.
+      - C2: only the reason text changed: for each file `git diff -U0 | grep '^[-+]' | grep -vE '^(---|\+\+\+)'` shows paired `// gap:` / `// zbuild:` lines only, and the prefix, outcome word and `(` shape of each are unchanged (`diff <(old | sed 's/ .*//') <(new | ...)` or an equivalent over the first word).
+      - C3: `sh scripts/run_safety_matrix.sh` prints the same `Mismatches: 0` and the same `[SKIP]` count (46 known gaps); `sh scripts/check_safety_model.sh` passes.
+      - C4: `make test`, `Total:` line quoted (the skip text changed, the counts must not).
+      - C5: the `comment-noise` marker exemption (`scripts/check_comment_noise.sh`) is kept; a marker line is still not scanned.
 
 - [ ] +docs +AI-G @main Z-0187 `AGENTS.md`: a series branch merges into `main` at each reviewed milestone, not only at its end
     > **Created:** 2026-11-12 by the review of the `testinfra` series; the rule is agreed by the maintainer, who asked for the first such merge (git:906265f). **Branch:** `main`.
