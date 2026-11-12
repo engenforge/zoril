@@ -28,23 +28,17 @@ esac
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$_self")/.." && pwd)}"
 
 . "$(dirname "$_self")/lib/portability.sh"
+. "$(dirname "$_self")/lib/tree_files.sh"
 
-is_git() {
-    git_checkout_usable "$REPO_ROOT"
-}
-
-# Untracked paths, one per line, with git's own quoting kept so that two snapshots compare
-# byte for byte. --no-renames keeps a rename from changing how its paths are listed. The status
-# of `git status` itself is checked first, so a failure is never read as "no untracked paths"
-# (an empty snapshot, which would make every untracked file look new).
+# Files in the tree, one per line (build/ and hidden directories pruned).
 snapshot() {
-    _raw="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all --no-renames 2>/dev/null)" || return 1
-    printf '%s\n' "$_raw" | sed -n 's/^?? //p' | LC_ALL=C sort
+    [ -d "$REPO_ROOT" ] || return 1
+    tree_files "$REPO_ROOT"
 }
 
 record() {
     _out="$1"
-    is_git || return 2
+    [ -d "$REPO_ROOT" ] || return 2
     snapshot > "$_out.tmp" || { rm -f "$_out.tmp"; return 2; }
     mv -f "$_out.tmp" "$_out"
 }
@@ -52,7 +46,7 @@ record() {
 compare() {
     _start="$1"
     [ -f "$_start" ] || return 2
-    is_git || return 2
+    [ -d "$REPO_ROOT" ] || return 2
     _now="$(mktemp "${TMPDIR:-/tmp}/stray_files.XXXXXX")" || return 2
     if ! snapshot > "$_now"; then rm -f "$_now"; return 2; fi
     comm -13 "$_start" "$_now"
@@ -64,13 +58,6 @@ compare() {
 selftest() {
     _tmp="$(mktemp -d "${TMPDIR:-/tmp}/stray_files_selftest.XXXXXX")" || return 1
     trap 'rm -rf "$_tmp"' EXIT INT TERM
-    GIT_CONFIG_GLOBAL=/dev/null; export GIT_CONFIG_GLOBAL
-    GIT_CONFIG_SYSTEM=/dev/null; export GIT_CONFIG_SYSTEM
-    GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_NOSYSTEM
-    unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
-    for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p'); do
-        unset "$_v"
-    done
     _repo="$_tmp/repo"
     _n=0
 
@@ -80,17 +67,8 @@ selftest() {
         return 1
     }
 
-    git init -q "$_repo" 2>/dev/null || { echo "[SKIP] check_stray_files: git not available"; rm -rf "$_tmp"; return 0; }
-    git -C "$_repo" config user.email "test@example.com" 2>/dev/null
-    git -C "$_repo" config user.name "Test" 2>/dev/null
-    git -C "$_repo" config commit.gpgsign false 2>/dev/null
-    git -C "$_repo" config tag.gpgsign false 2>/dev/null
-    git -C "$_repo" config core.hooksPath /dev/null 2>/dev/null
     mkdir -p "$_repo/src" "$_repo/build"
-    printf 'build/\n' > "$_repo/.gitignore"
     printf '// main\n' > "$_repo/src/main.zrl"
-    git -C "$_repo" add . >/dev/null 2>&1
-    git -C "$_repo" -c commit.gpgsign=false commit -q -m initial >/dev/null 2>&1
 
     _run() {
         REPO_ROOT="$_repo" "$_self" "$@"
@@ -98,7 +76,7 @@ selftest() {
 
     # 1. A run that writes nothing new is clean.
     if ! _run --record "$_tmp/start" >/dev/null; then
-        _fail "--record failed in a git checkout" || return 1
+        _fail "--record failed in scratch directory" || return 1
     fi
     _out="$(_run --compare "$_tmp/start")"
     [ -z "$_out" ] || _fail "an unchanged tree was reported as stray: $_out" || return 1
@@ -134,10 +112,9 @@ selftest() {
     [ -z "$_out" ] || _fail "tree not clean after removing the planted file: $_out" || return 1
     _pass
 
-    # 6. Outside a git checkout the recorder declines instead of guessing.
-    mkdir -p "$_tmp/plain"
-    if REPO_ROOT="$_tmp/plain" "$_self" --record "$_tmp/start3" >/dev/null 2>&1; then
-        _fail "a directory that is not a git checkout was recorded" || return 1
+    # 6. A nonexistent directory declines.
+    if REPO_ROOT="$_tmp/nonexistent" "$_self" --record "$_tmp/start3" >/dev/null 2>&1; then
+        _fail "a nonexistent directory was recorded" || return 1
     fi
     _pass
 
@@ -168,7 +145,7 @@ case "${1:-}" in
         _added="$(compare "$2")"
         _rc=$?
         if [ $_rc -eq 2 ]; then
-            echo "check_stray_files: cannot compare against '$2' (missing file, or not a git checkout)" >&2
+            echo "check_stray_files: cannot compare against '$2' (missing file, or invalid directory)" >&2
             exit 2
         fi
         [ -n "$_added" ] || exit 0

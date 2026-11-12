@@ -91,6 +91,9 @@ TIMEOUT_DUR ?= 30s
 KILL_DUR ?= 2s
 ##var QUIET Set to empty string to disable quiet mode (e.g. QUIET=)
 QUIET ?= --quiet
+##var BASE Base commit to compare changed files against in test-changed (default: preflight_base)
+BASE ?= $(PREFLIGHT_BASE)
+TEST_RUNNER ?= ./scripts/test.sh
 
 GATE = TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) ./scripts/test.sh $(QUIET) --gate
 
@@ -383,6 +386,9 @@ mutation-check: ## Break the compiler on purpose; require the suite to notice
 selfhost-check: ## Full gate: self-hosting fixpoint
 	@./scripts/selfhost-check.sh
 
+user-tools: $(TARGET) $(ZILC) build/zbuild build/runtime.o ## Full gate: make test with only user tools (export + checkout run)
+	@./scripts/check_user_tools.sh
+
 selfhost-confirm: $(TARGET) $(ZILC) build/zbuild ## Rebuild zoril, zilc and zbuild with themselves; keep the self-built ones if they differ from build/'s
 	@./scripts/selfhost_finalize.sh --force
 
@@ -393,13 +399,34 @@ repro-check: ## Gate: bootstrap from scratch twice and require identical results
 # rules -- the fresh-checkout path -- plus the self-hosting fixpoint) in the BACKGROUND,
 # beside mutation-check, and WAIT for it before the bench step: the bench thresholds refuse a
 # loaded host, so nothing else may still be running when they start.
-preflight: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/runtime_hosted.o ## Full pre-merge gate: selfhost + mutation + bench thresholds
+preflight: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/runtime_hosted.o user-tools ## Full pre-merge gate: selfhost + mutation + bench thresholds
 	@./scripts/preflight.sh
 
 preflight-changed: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/runtime_hosted.o ## Fast pre-merge gate: selfhost + mutations of changed files
 	@./scripts/preflight.sh --changed
 
 ##@ Testing
+TEST_GATE_DEPS ?= $(RT_HOST) build/runtime_hosted.o $(STAGE0_C_DIR)/build/zoril-c.release stage0c-build tools/zman/build/zman
+TEST_CHANGED_DEPS ?= $(TEST_GATE_DEPS) $(TARGET) $(ZILC) build/zbuild
+test-changed: $(TEST_CHANGED_DEPS) ## Run tests scoped to changed files (BASE=<commit>, default: preflight_base)
+	@./scripts/check_deps.sh test
+	@if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		echo "test-changed: not inside a git checkout, running all tests"; \
+		TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) $(TEST_RUNNER) $(QUIET) --gates; \
+	else \
+		. scripts/lib/preflight_base.sh; \
+		if [ -n "$(BASE)" ]; then \
+			PREFLIGHT_BASE="$(BASE)"; \
+		fi; \
+		if ! preflight_base; then \
+			echo "[FAIL] test-changed: no base to check the change against: $$PF_BASE_ERR" >&2; \
+			exit 1; \
+		fi; \
+		echo "test-changed: base $$PF_BASE ($$PF_BASE_WHY)"; \
+		args=$$( (git diff --name-only --no-renames "$$PF_BASE" 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null) | sort -u | ./scripts/select_test_tier.sh ) || exit $$?; \
+		TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) $(TEST_RUNNER) $(QUIET) $$args; \
+	fi
+
 test-checked: $(TARGET) $(ZILC) build/runtime.o ## Run the tests, corpus, apps and safety probes under `zoril --checked`
 	@./scripts/test_checked.sh
 
@@ -415,10 +442,10 @@ test-docs: $(TARGET) $(ZILC) $(RT_HOST) ## Compile the Zoril code blocks in the 
 test-getting-started: $(TARGET) $(ZILC) $(RT_HOST) build/zbuild build/runtime_hosted.o ## Test code snippets and walkthrough commands in doc/getting_started.md
 	@./scripts/test_getting_started.sh
 
-TEST_GATE_DEPS = $(RT_HOST) build/runtime_hosted.o $(STAGE0_C_DIR)/build/zoril-c.release stage0c-build
-test: $(if $(T),,$(TEST_GATE_DEPS)) $(TARGET) $(ZILC) build/zbuild ## Run tests (TSUITE=all|..., T=<pattern> for verbose matching tests)
+TEST_DEPS ?= $(if $(T),,$(TEST_GATE_DEPS)) $(TARGET) $(ZILC) build/zbuild
+test: $(TEST_DEPS) ## Run tests (TSUITE=all|..., T=<pattern> for verbose matching tests)
 	@./scripts/check_deps.sh test
-	@TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) ./scripts/test.sh $(if $(T),--verbose --filter '$(T)' tests corpus,$(QUIET) --suite '$(TSUITE)')
+	@TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) $(TEST_RUNNER) $(if $(T),--verbose --filter '$(T)' tests corpus,$(QUIET) --suite '$(TSUITE)')
 
 deps-matrix: $(TARGET) $(ZILC) build/zbuild ## Run the tool dependency matrix (optional, configurable, required tools)
 	@./scripts/test_dep_matrix.sh $(FILTER)
@@ -530,7 +557,7 @@ clean: ## Remove build artifacts
 	-@rm -rf bootstrap/*/framework/lowered/ bootstrap/*/relowered/ bootstrap/*/build/ 2>/dev/null
 
 # `make help` lists only these; `make help-all` lists every documented target and variable.
-HELP_COMMON := all install uninstall clean help-all test test-fast test-checked test-docs \
+HELP_COMMON := all install uninstall clean help-all test test-changed test-fast test-checked test-docs \
 	preflight-changed preflight PREFIX DESTDIR SYSTEM_ZORIL TSUITE T
 
 help: HELP_ONLY = $(HELP_COMMON)
@@ -609,7 +636,7 @@ help help-all:
 		} \
 	' $(MAKEFILE_LIST)
 
-.PHONY: $(GATES) all test test-fast stage0c-build install install-files uninstall clean help help-all dist dist-bin dist-check \
-        selfhost-check selfhost-confirm selfhost-build-check repro-check mutation-check \
+.PHONY: $(GATES) all test test-changed test-fast stage0c-build install install-files uninstall clean help help-all dist dist-bin dist-check \
+        selfhost-check selfhost-confirm selfhost-build-check repro-check mutation-check user-tools \
         stage0c-suites fuzz-short fuzz fuzz-release fuzz-calibrate preflight preflight-changed \
         md-fmt test-readme test-docs test-getting-started zbuild test-versions man test-man

@@ -21,7 +21,7 @@ SECURITY_FLAGS = -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
 QUIET ?= 0
 export QUIET
 
-GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_HASH ?= unknown
 BUILD_DATE := $(shell if [ -n "$$SOURCE_DATE_EPOCH" ]; then LC_ALL=C date -u -d "@$$SOURCE_DATE_EPOCH" '+%B %Y' 2>/dev/null || LC_ALL=C date -u -r "$$SOURCE_DATE_EPOCH" '+%B %Y' 2>/dev/null || date '+%B %Y'; else date '+%B %Y'; fi)
 VERSION_SH := $(wildcard ../scripts/version.sh ../../scripts/version.sh)
 VERSION_STR := $(shell if [ -n "$(VERSION_SH)" ]; then sh $(firstword $(VERSION_SH)) $$(dirname $$(dirname $(firstword $(VERSION_SH)))) 2>/dev/null; else echo "0.1.0-alpha"; fi)

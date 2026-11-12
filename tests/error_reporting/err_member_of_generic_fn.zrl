@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: error: no field 'B' on 'fn(u8) -> E'
+
+enum E { A, B }
+
+fn pick<T>(x: u8) -> E {
+    return E.A;
+}
+
+fn main() -> i32 {
+    let _e = pick.B;
+    return 0;
+}

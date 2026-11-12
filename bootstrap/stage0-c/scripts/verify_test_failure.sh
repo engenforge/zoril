@@ -1,11 +1,11 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # scripts/verify_test_failure.sh
 # Verifies that our test infrastructure correctly detects and reports failures.
 # This prevents "silent masking" of ASan/UBSan/Valgrind or logic errors.
 
 set -e
 
-REPO_ROOT=$(git rev-parse --show-toplevel)
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$REPO_ROOT/scripts"
 TEST_WRAPPER="$SCRIPTS_DIR/test_wrapper.sh"
 TEMP_DIR=$(mktemp -d)

@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: cannot cast integer to type parameter: type parameters may be reference types
+// A stdlib function stays unlowered until reached; its name must not hide the parameter.
+import "core0.zrl";
+fn mk<is_digit>(n: u64) -> is_digit { return n as is_digit; }
+fn main() -> i32 { let r: &i32 = mk::<&i32>(8 as u64); return *r; }

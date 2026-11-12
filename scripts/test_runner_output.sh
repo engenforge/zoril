@@ -22,10 +22,8 @@ cd "$(dirname "$0")/.." || exit 2
 export TR_WORK=build/tests-runner-output TR_QUIET=0 TR_VERBOSE=0 TR_FAIL_FAST=0 TR_FILTER= TR_RESULTS=
 FIXTURES="tests/runner/fixtures/tests --gate fixture-good --gate fixture-fails
           --gate fixture-bad-format --gate fixture-silent-failure --gate fixture-empty"
-# 13 fixture items, plus the run's own "stray-files" item, which needs git: with git hidden from
-# PATH (opts_hidden), or absent on the host, it is reported as [SKIP] instead of [PASS].
+# 13 fixture items, plus the run's own "stray-files" item (which needs no git).
 EXPECTED_TOTAL="Total: 14 run, 7 passed, 7 failed, 2 skipped"
-EXPECTED_TOTAL_NO_GIT="Total: 13 run, 6 passed, 7 failed, 3 skipped"
 
 errors=0
 fail() { echo "[FAIL] $1"; errors=$((errors + 1)); }
@@ -34,9 +32,6 @@ check_mode() {
     mode="$1"
     out="$TR_WORK/output.$mode"
     expected="$EXPECTED_TOTAL"
-    # git is optional; without it on the host the stray-files item skips in every mode, which is the
-    # total opts_hidden pins with git explicitly hidden.
-    git_checkout_usable . || expected="$EXPECTED_TOTAL_NO_GIT"
     mkdir -p "$TR_WORK"
     case "$mode" in
         quiet)   ./scripts/test.sh --quiet $FIXTURES > "$out" 2>&1 ;;
@@ -45,7 +40,6 @@ check_mode() {
         opts_hidden)
             shim="$TR_WORK/shim_opts"
             path_without "$shim" git timeout setsid valgrind dprint rustc
-            expected="$EXPECTED_TOTAL_NO_GIT"
             PATH="$shim" ./scripts/test.sh $FIXTURES > "$out" 2>&1
             ;;
     esac
@@ -90,6 +84,18 @@ $(echo "$bad" | head -n 5 | sed 's/^/       /')"
                 END { printf "%d %d %d %d", r, p, f, s }' "$out")
     [ "$sums" = "$run $passed $failed $skipped" ] || fail "$mode: suite lines sum to $sums, Total says $run $passed $failed $skipped"
 
+    # Every run writes timings.tsv with format: seconds<TAB>kind<TAB>name
+    timings="$TR_WORK/timings.tsv"
+    [ -s "$timings" ] || fail "$mode: timings.tsv was not written or is empty"
+    bad_timings=$(awk -F'\t' '
+        NF != 3 { printf "line %d: expected 3 tab-separated fields, got %d: %s\n", NR, NF, $0; next }
+        $1 !~ /^[0-9]+(\.[0-9]+)?$/ { printf "line %d: invalid seconds \"%s\": %s\n", NR, $1, $0; next }
+        $2 !~ /^(gate|group|test|scenario)$/ { printf "line %d: invalid kind \"%s\": %s\n", NR, $2, $0; next }
+        $3 == "" { printf "line %d: empty name: %s\n", NR, $0; next }
+    ' "$timings")
+    [ -z "$bad_timings" ] || fail "$mode: lines in timings.tsv outside format:
+$(echo "$bad_timings" | head -n 5 | sed 's/^/       /')"
+
 }
 
 for mode in quiet default verbose opts_hidden; do
@@ -101,4 +107,20 @@ for mode in quiet default verbose opts_hidden; do
         echo "       output: $TR_WORK/output.$mode"
     fi
 done
+
+# A scenario that exits 77 is reported as [SKIP] with the reason from its last [SKIP] line, and
+# is not counted as run; one that prints [SKIP] and exits 0 would be counted as passed.
+skip_out=$(
+    TR_WORK="$TR_WORK/skip-exit"; mkdir -p "$TR_WORK"
+    . scripts/lib/test_runner.sh
+    TR_RUN=0; TR_PASSED=0; TR_FAILED=0; TR_SKIPPED=0
+    tr_run_logged scenario skip-probe "$TR_WORK/skip.log" sh -c 'echo "[SKIP] needs a probe tool"; exit 77'
+    echo "counts: $TR_RUN run $TR_PASSED passed $TR_FAILED failed $TR_SKIPPED skipped"
+)
+if printf '%s\n' "$skip_out" | grep -q '^\[SKIP\] scenario: skip-probe (needs a probe tool)' \
+    && printf '%s\n' "$skip_out" | grep -qx 'counts: 0 run 0 passed 0 failed 1 skipped'; then
+    echo "[PASS] a scenario exiting 77 is reported as skipped, with its reason"
+else
+    fail "a scenario exiting 77 was not reported as skipped: $skip_out"
+fi
 [ $errors -eq 0 ]

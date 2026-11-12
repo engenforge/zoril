@@ -23,8 +23,15 @@
 #     `still open`, naming the row and pointing at `make fuzz-calibrate`. A third item pins the behaviour
 #     that existed: a marked program faulting with its hole switched off is a finding, not the hole.
 #
-# Usage: check_fuzz_record.sh        (no arguments; prints [PASS]/[FAIL]/[SKIP] per item)
+# Usage: check_fuzz_record.sh [--release]   (prints [PASS]/[FAIL]/[SKIP] per item)
 set -u
+
+CHECK_RELEASE=0
+for arg in "$@"; do
+    case "$arg" in
+        --release) CHECK_RELEASE=1 ;;
+    esac
+done
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$REPO_ROOT/scripts/lib/portability.sh" 2>/dev/null || true
@@ -146,7 +153,8 @@ esac
 
 # ── a run that records must say which compiler it ran ──────────────────────────────────────────────────
 # `--release` (and `--record-findings`) refuse a binary built from another commit or a modified tree, and
-# the refusal names both hashes. The binaries here are scripts that only answer `--version`.
+# the refusal names both hashes. Run only when --release is passed (release verification).
+if [ "$CHECK_RELEASE" -eq 1 ]; then
 head_hash=unknown
 git_checkout_usable "$REPO_ROOT" && head_hash=$(git -C "$REPO_ROOT" rev-parse --short=8 HEAD 2>/dev/null || echo unknown)
 if ! command -v git >/dev/null 2>&1 || [ "$head_hash" = "unknown" ]; then
@@ -338,6 +346,7 @@ else
     else
         echo "[PASS] $RECORD is unchanged by it"
     fi
+fi
 fi
 
 if [ "$fail" -ne 0 ]; then

@@ -1,0 +1,10 @@
+// name: Generic null-cast hole through a type parameter named like an unreached stdlib function
+// expected: compile_reject
+import "core0.zrl";
+fn mk<is_digit>(n: u64) -> is_digit {
+    return n as is_digit;
+}
+fn main() -> i32 {
+    let r: &i32 = mk::<&i32>(8 as u64);
+    return *r;
+}

@@ -180,7 +180,7 @@ An `extern` declaration is the unsafe contract. The compiler checks the shape of
 
 ### 5.1 The safety matrix
 
-The repository keeps 503 probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes), each recording its expectation in its first lines: **364 `compile_reject`**, **74 `accept`**, **8 `runtime_trap`**, **11 `runtime_fault`**, and **46 `known_gap`**. `scripts/run_safety_matrix.sh` runs all of them and fails when an observation differs from the recorded expectation; `make test` gates it (`safety-matrix`) together with `safety-model`, which keeps [`doc/spec/safety_model.md`](spec/safety_model.md) and the probes consistent in both directions.
+The repository keeps 505 probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes), each recording its expectation in its first lines: **366 `compile_reject`**, **74 `accept`**, **8 `runtime_trap`**, **11 `runtime_fault`**, and **46 `known_gap`**. `scripts/run_safety_matrix.sh` runs all of them and fails when an observation differs from the recorded expectation; `make test` gates it (`safety-matrix`) together with `safety-model`, which keeps [`doc/spec/safety_model.md`](spec/safety_model.md) and the probes consistent in both directions.
 
 Each matrix row carries an evidence level: **6 rows at `routes`**, **72 at `example`**, and **0 at `fuzzed`** or `argued`. `example` means the cited probes fire the mechanism on the shapes they name; `routes` means every route the row lists is named by a cited `compile_reject` probe (`scripts/check_route_coverage.sh`); `fuzzed` adds generated programs for the row's routes, and `argued` adds an argument that the invariant holds for every route. The levels are defined in [`safety_model.md`](spec/safety_model.md) and validated by `scripts/check_safety_model.sh`.
 
@@ -202,13 +202,13 @@ Safe code is only as good as the `unsafe` code under it, so the project measures
 | Figure                           | Value  |
 | -------------------------------- | ------ |
 | stdlib modules                   | 30     |
-| stdlib lines                     | 6,281  |
-| stdlib `unsafe { }` blocks       | 170    |
+| stdlib lines                     | 6,351  |
+| stdlib `unsafe { }` blocks       | 172    |
 | stdlib modules with such a block | 23     |
 | stdlib `unsafe fn` declarations  | 64     |
 | of those, public                 | 60     |
 | compiler modules                 | 50     |
-| compiler lines                   | 47,064 |
+| compiler lines                   | 47,100 |
 | compiler `unsafe { }` blocks     | 838    |
 
 How each one is counted: every `.zrl` file under the directory, recursively; **lines** are physical lines (`wc -l`); **`unsafe { }` blocks** are occurrences of `unsafe` followed by `{` on the same line; **`unsafe fn` declarations** are lines that start with `unsafe fn` or `pub unsafe fn`. That is a different question from `scripts/marker_density.sh`, which counts raw-pointer dereference sites over non-comment lines (58 marker lines for `stdlib`, 264 for `src`).

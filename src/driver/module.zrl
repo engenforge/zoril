@@ -252,7 +252,7 @@ impl Driver {
             let p_decl: Decl = self.resolver.ast.decls[i];
             match p_decl {
                 Decl.Fn(f) => {
-                    if f.type_params.len == 0 as usize {
+                    if f.type_params.len == 0 as usize && !self.lowers_on_demand(&f) {
                         let func_id = self.mono.instantiate_function(
                             i as u32,
                             @slice(0 as *mut u32, 0 as usize)
@@ -275,6 +275,22 @@ impl Driver {
         if !self.compile_only && !self.had_error {
             self.check_uncalled_methods();
         }
+    }
+
+    // An imported stdlib function is lowered when lowered code first names it (a call or a function
+    // value resolves its `SymbolKind.Global` through `instantiate_function`), not up front: a
+    // program's verdict depends only on the stdlib bodies it reaches, which are still lowered and
+    // checked, and the unreached ones were most of a small program's compile time. The root
+    // module and every other import are lowered in full, so an error in a function nothing calls is
+    // still reported there; `--lower-all` lowers the stdlib in full too, which is how its own gate
+    // checks every body. A `-c` build reads its imports from interfaces and has no such bodies.
+    fn lowers_on_demand(self: &Driver, f: &FnDecl) -> bool {
+        return !self.lower_all
+            && !self.compile_only
+            && f.source_is_stdlib
+            && f.source_file != self.target_source_file
+            && f.body != 0 as ExprId
+            && !f.is_export;
     }
 
     // Checks every non-generic method body the program declares, whether or not anything calls it:
@@ -331,7 +347,9 @@ impl Driver {
             // default_of set) and is checked here like any other: it is a body of this program, and
             // whether it type-checks can depend on the impl's Self (a field it names).
             for m in imp.methods {
-                if m.type_params.len == 0 as usize && m.body != 0 as ExprId {
+                if m.type_params.len == 0 as usize
+                    && m.body != 0 as ExprId
+                    && !self.lowers_on_demand(m) {
                     self.mono.instantiate_method(m, no_args, type_name, m.name, &imp, base_ty);
                 }
             }
@@ -694,6 +712,10 @@ impl Driver {
         let needs_env = self.needs_env_ptr(f.is_extern, name);
         let params = self.il_params(f, ret_ty, is_sret, needs_env);
         let il_func_id = self.declare_function(f, name, ret_ty, params);
+        // The flag exports a Drop impl's `drop` (another TU's drop glue calls it), not what its
+        // body is first to call: a private callee lowered from here keeps its own linkage.
+        let saved_drop_impl = self.lowering_drop_impl;
+        self.lowering_drop_impl = false;
         if f.is_export {
             self.check_unique_export(f, name, il_func_id);
         }
@@ -721,6 +743,7 @@ impl Driver {
                 is_void_main
             );
         }
+        self.lowering_drop_impl = saved_drop_impl;
         self.current_fn_name = saved_fn_name;
         self.file_path = saved_file_path;
         if saved_fn_name != 0 as u32 { self.set_ice_context(saved_fn_name); }
@@ -1298,9 +1321,6 @@ impl Driver {
             if i < type_args.len {
                 self.resolver.define(type_params[i].name, SymbolKind.Type(type_args[i]), false);
             }
-        }
-        if self_name != 0 as u32 {
-            self.resolver.define(self_name, SymbolKind.Type(self_ty), false);
         }
         let self_id = self.intern_table.intern("Self");
         self.resolver.define(self_id, SymbolKind.Type(self_ty), false);

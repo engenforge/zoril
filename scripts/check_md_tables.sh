@@ -163,7 +163,10 @@ while [ $# -gt 0 ]; do
 done
 
 cd "$(dirname "$0")/.." || exit 2
-[ -n "$files" ] || files=$(git ls-files '*.md' | grep -v -e '^doc/tasks/completed\.tm\.md$' -e '^bench/safety_matrix/matrix\.md$')
+if [ -z "$files" ]; then
+    . scripts/lib/tree_files.sh
+    files=$(tree_files . | grep '\.md$' | grep -v -e '^doc/tasks/completed\.tm\.md$' -e '^bench/safety_matrix/matrix\.md$')
+fi
 
 bad=0
 for f in $files; do

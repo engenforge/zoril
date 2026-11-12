@@ -53,6 +53,8 @@ set -e
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 . "$REPO/scripts/env.sh"
+. "$REPO/scripts/lib/tree_files.sh"
+. "$REPO/scripts/lib/fuzz_fresh.sh"
 
 ONLY="$1"
 ROW=""
@@ -64,6 +66,9 @@ if [ "$ONLY" = "--row" ]; then
         echo "usage: mutation-check.sh --row <row-name-fragment>" >&2
         exit 2
     fi
+elif [ "$ONLY" = "--changed" ] && [ -n "${MUTATION_CHANGED:-}" ]; then
+    CHANGED="$MUTATION_CHANGED"
+    CHANGED_DESC="explicit file list"
 elif [ "$ONLY" = "--changed" ] && [ -n "${MUTATION_BASE:-}" ]; then
     # The base preflight chose (scripts/lib/preflight_base.sh): `git diff BASE` compares it with the
     # working tree, so committed and uncommitted changes since the base are both covered.
@@ -236,8 +241,28 @@ case "$STAGE" in
 esac
 MUTATION_CACHE="${MUTATION_CACHE:-build/mutation_cache}"
 
+MUTATION_SUITE_PATHS=""
+if [ -n "${MUTATION_SUITE:-}" ]; then
+    if [ ! -e "$MUTATION_SUITE" ]; then
+        echo "$MUTATION_SUITE does not exist" >&2
+        exit 2
+    fi
+    while IFS= read -r _p || [ -n "$_p" ]; do
+        _p=$(printf '%s' "$_p" | sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//')
+        if [ -z "$_p" ]; then
+            continue
+        fi
+        if [ ! -e "$_p" ]; then
+            echo "$MUTATION_SUITE: $_p does not exist" >&2
+            exit 2
+        fi
+        MUTATION_SUITE_PATHS="${MUTATION_SUITE_PATHS}${MUTATION_SUITE_PATHS:+ }$_p"
+    done < "$MUTATION_SUITE"
+fi
+
 current_toolchain_stamp() {
-    _commit=$(git rev-parse HEAD 2>/dev/null || ./scripts/version.sh 2>/dev/null || echo "no-commit")
+    _src_hash=$(fuzz_tree_code_hash "$REPO" src 2>/dev/null || echo "no-src")
+    _stdlib_hash=$(fuzz_tree_code_hash "$REPO" stdlib 2>/dev/null || echo "no-stdlib")
     _hashes=""
     for _b in build/zoril build/zilc build/runtime.o; do
         if [ -f "$_b" ]; then
@@ -245,7 +270,7 @@ current_toolchain_stamp() {
             _hashes="${_hashes}:${_h}"
         fi
     done
-    printf '%s%s' "$_commit" "$_hashes"
+    printf '%s:%s%s' "$_src_hash" "$_stdlib_hash" "$_hashes"
 }
 
 CUR_STAMP=$(current_toolchain_stamp)
@@ -269,7 +294,40 @@ printf '%s\n' "$CUR_STAMP" > "$STAGE/stamp"
 GOOD="$STAGE/zoril-good"
 cp build/zoril "$GOOD"
 
+_ncpus=$(nproc_count 2>/dev/null || echo 1)
+[ "${_ncpus:-0}" -lt 1 ] && _ncpus=1
+
+# Each mutant build is a whole self-compile (~0.7 GB peak): started all at once, 74 of them
+# exhausted a 32 GB machine. Build in batches of MUTATION_JOBS, by default one per CPU and
+# per GB of available memory.
+if [ -z "${MUTATION_JOBS:-}" ]; then
+    if [ -f /proc/meminfo ]; then
+        avail_gb=$(awk '/MemAvailable/ { print int($2 / 1048576) }' /proc/meminfo)
+    else
+        avail_gb=""
+    fi
+    MUTATION_JOBS="$_ncpus"
+    if [ -n "$avail_gb" ] && [ "${avail_gb:-0}" -lt "$MUTATION_JOBS" ]; then
+        MUTATION_JOBS=$avail_gb
+    fi
+    [ "$MUTATION_JOBS" -lt 1 ] && MUTATION_JOBS=1
+fi
+
+_eval_jobs="${MUTATION_EVAL_JOBS:-2}"
+if [ "$_eval_jobs" -gt "$MUTATION_JOBS" ]; then
+    _eval_jobs="$MUTATION_JOBS"
+fi
+[ "$_eval_jobs" -lt 1 ] && _eval_jobs=1
+
 MUTATION_TIMEOUT="${MUTATION_TIMEOUT:-20}"
+if [ -z "${MUTATION_TEST_JOBS:-}" ]; then
+    _test_jobs=$(( _ncpus / _eval_jobs ))
+    [ "$_test_jobs" -lt 1 ] && _test_jobs=1
+    if [ "$_test_jobs" -gt 6 ]; then
+        _test_jobs=6
+    fi
+    MUTATION_TEST_JOBS="$_test_jobs"
+fi
 
 # suite_failures COMPILER WORKDIR [MUTANT_ID] — find the first failing test of the mutant.
 # If a previous catching test was cached in $MUTATION_CACHE/MUTANT_ID, it runs that test
@@ -303,7 +361,7 @@ suite_failures() {
             fi
         fi
         if [ -n "${ROW_TEST_PATHS:-}" ]; then
-            if ! TR_JOBS="${MUTATION_TEST_JOBS:-6}" TR_TIMEOUT="$MUTATION_TIMEOUT" \
+            if ! TR_JOBS="$MUTATION_TEST_JOBS" TR_TIMEOUT="$MUTATION_TIMEOUT" \
                 ZORIL_CC="$_cc" ZORIL_STDLIB="$_stdlib" TR_WORK="$_work/tests" \
                 ./scripts/test.sh --quiet $ROW_TEST_PATHS >> "$_work/suite.log" 2>&1; then
                 echo "the row's tests" > "$_work/fails"
@@ -332,7 +390,7 @@ suite_failures() {
                 return 0
             fi
         elif [ -f "$_cached" ]; then
-            _test_jobs=${MUTATION_TEST_JOBS:-6}
+            _test_jobs="$MUTATION_TEST_JOBS"
             TR_JOBS="$_test_jobs" TR_TIMEOUT="$MUTATION_TIMEOUT" ZORIL_CC="$_cc" ZORIL_STDLIB="$_stdlib" TR_WORK="$_work/tests" \
                 ./scripts/test.sh --quiet --results "$_work/results" "$_cached" > "$_work/suite.log" 2>&1 || true
             _fail=$(awk -F'\t' '$1 == "FAIL" { print $2; exit }' "$_work/results" 2>/dev/null)
@@ -345,9 +403,14 @@ suite_failures() {
 
     # Run per-file tests with --fail-fast and short per-test timeout.
     rm -f "$_work/results"
-    _test_jobs=${MUTATION_TEST_JOBS:-6}
-    TR_JOBS="$_test_jobs" TR_TIMEOUT="$MUTATION_TIMEOUT" ZORIL_CC="$_cc" ZORIL_STDLIB="$_stdlib" TR_WORK="$_work/tests" \
-        ./scripts/test.sh --quiet --fail-fast --results "$_work/results" tests corpus > "$_work/suite.log" 2>&1 || true
+    _test_jobs="$MUTATION_TEST_JOBS"
+    if [ -n "$MUTATION_SUITE_PATHS" ]; then
+        TR_JOBS="$_test_jobs" TR_TIMEOUT="$MUTATION_TIMEOUT" ZORIL_CC="$_cc" ZORIL_STDLIB="$_stdlib" TR_WORK="$_work/tests" \
+            ./scripts/test.sh --quiet --fail-fast --results "$_work/results" $MUTATION_SUITE_PATHS > "$_work/suite.log" 2>&1 || true
+    else
+        TR_JOBS="$_test_jobs" TR_TIMEOUT="$MUTATION_TIMEOUT" ZORIL_CC="$_cc" ZORIL_STDLIB="$_stdlib" TR_WORK="$_work/tests" \
+            ./scripts/test.sh --quiet --fail-fast --results "$_work/results" tests corpus > "$_work/suite.log" 2>&1 || true
+    fi
     _first_fail=$(awk -F'\t' '$1 == "FAIL" { print $2; exit }' "$_work/results" 2>/dev/null)
     if [ -n "$_first_fail" ]; then
         # Re-verify the single failing test in isolation to guard against transient fork/scheduler flakes.
@@ -555,21 +618,34 @@ fi
 if [ "$ONLY" = "--changed" ] && [ -n "$CHANGED_DESC" ]; then
     printf 'Targeting %d mutation(s) in files changed in %s.\n' "$selected" "$CHANGED_DESC"
 fi
-# Each mutant build is a whole self-compile (~0.7 GB peak): started all at once, 74 of them
-# exhausted a 32 GB machine. Build in batches of MUTATION_JOBS, by default one per CPU and
-# per GB of available memory.
-if [ -z "$MUTATION_JOBS" ]; then
-    if [ -f /proc/meminfo ]; then
-        avail_gb=$(awk '/MemAvailable/ { print int($2 / 1048576) }' /proc/meminfo)
-    else
-        avail_gb=""
+launched=0
+while IFS='@' read -r id _a file _b find _c repl _d desc; do
+    wanted "$id" "$file" || continue
+    build_mutant "$id" "$file" "$find" "$repl" &
+    launched=$((launched + 1))
+    [ $((launched % MUTATION_JOBS)) -eq 0 ] && wait
+done < "$STAGE/list"
+wait
+
+total_wanted=0
+total_built=0
+total_build_failed=0
+while IFS='@' read -r id _a file _b find _c repl _d desc; do
+    wanted "$id" "$file" || continue
+    total_wanted=$((total_wanted + 1))
+    st=$(cat "$STAGE/$id/status" 2>/dev/null || true)
+    if [ "$st" = "BUILT" ]; then
+        total_built=$((total_built + 1))
+    elif [ "$st" = "BUILD-FAILED" ]; then
+        total_build_failed=$((total_build_failed + 1))
     fi
-    MUTATION_JOBS=$(nproc_count)
-    if [ -n "$avail_gb" ] && [ "${avail_gb:-0}" -lt "$MUTATION_JOBS" ]; then
-        MUTATION_JOBS=$avail_gb
-    fi
-    [ "$MUTATION_JOBS" -lt 1 ] && MUTATION_JOBS=1
+done < "$STAGE/list"
+
+if [ "$total_wanted" -gt 0 ] && [ "$total_built" -eq 0 ] && [ "$total_build_failed" -gt 0 ]; then
+    printf '\nERROR: the mutation stage is stale or broken (every mutant failed to build).\n' >&2
+    exit 2
 fi
+
 # Baseline failing set, so a mutation is judged by what it ADDS.
 suite_failures "$GOOD" "$STAGE/baseline" ""
 baseline_fails=$(wc -l < "$STAGE/baseline/fails")
@@ -579,15 +655,6 @@ if [ "$baseline_fails" -gt 0 ]; then
     cat "$STAGE/baseline/fails"
     exit 1
 fi
-
-launched=0
-while IFS='@' read -r id _a file _b find _c repl _d desc; do
-    wanted "$id" "$file" || continue
-    build_mutant "$id" "$file" "$find" "$repl" &
-    launched=$((launched + 1))
-    [ $((launched % MUTATION_JOBS)) -eq 0 ] && wait
-done < "$STAGE/list"
-wait
 
 evaluate_mutant() {
     _id="$1"
@@ -609,25 +676,6 @@ evaluate_mutant() {
     fi
     printf '%s' "$_new" > "$_d/caught_by"
 }
-
-total_wanted=0
-total_built=0
-total_build_failed=0
-while IFS='@' read -r id _a file _b find _c repl _d desc; do
-    wanted "$id" "$file" || continue
-    total_wanted=$((total_wanted + 1))
-    st=$(cat "$STAGE/$id/status" 2>/dev/null || true)
-    if [ "$st" = "BUILT" ]; then
-        total_built=$((total_built + 1))
-    elif [ "$st" = "BUILD-FAILED" ]; then
-        total_build_failed=$((total_build_failed + 1))
-    fi
-done < "$STAGE/list"
-
-if [ "$total_wanted" -gt 0 ] && [ "$total_built" -eq 0 ] && [ "$total_build_failed" -gt 0 ]; then
-    printf '\nERROR: the mutation stage is stale or broken (every mutant failed to build).\n' >&2
-    exit 2
-fi
 
 eval_launched=0
 _eval_jobs="${MUTATION_EVAL_JOBS:-2}"

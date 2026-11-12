@@ -143,11 +143,16 @@ impl ZirLowerer {
         let mut decl_id = match sym.kind {
             SymbolKind.Type(ty) => { return (ty, 0 as u32); },
             SymbolKind.Global(d) => d,
+            _ => 0 as u32,
+        };
+        // A function, constant or static is `Global` too (a function until it is lowered).
+        match self.resolver.ast.decls[decl_id as usize] {
+            Decl.Struct(_) | Decl.Enum(_) | Decl.TypeAlias(_) => {},
             _ => {
                 self.report_error_with_symbol("not a struct: ", s.struct_name, span);
                 return (0 as u32, 0 as u32);
             },
-        };
+        }
         if let Decl.TypeAlias(ta) = self.resolver.ast.decls[decl_id as usize] {
             let target = self.resolver.resolve_type(ta.target);
             if target != 0 as u32 {
@@ -2793,9 +2798,7 @@ impl ZirLowerer {
             };
             match opt_sym {
                 Some(sym) => {
-                    if let SymbolKind.Global(_)
-                        | SymbolKind.Type(_)
-                        | SymbolKind.Primitive(_) = sym.kind {
+                    if self.sym_names_type(&sym) {
                         let resolved_ty = self.resolve_sym_type(&sym);
                         let pl = self.try_lower_enum_variant_member(
                             resolved_ty,
@@ -2809,18 +2812,16 @@ impl ZirLowerer {
                         let pl2 = self.try_lower_impl_constant(id, m.member, expected_ty, span);
                         if let Option.Some(pl_const) = pl2 { return pl_const; }
                         // `K.Nope` on a type: there is no value to take a field of.
-                        if self.sym_names_type(&sym) {
-                            self.report_prefix(span);
-                            eprint("no variant or associated constant `");
-                            eprint(self.intern_table.lookup(m.member));
-                            eprint("` in `");
-                            eprint(self.mono.type_display(resolved_ty));
-                            eprint("`\n");
-                            return Place {
-                                base: 0,
-                                projections: @slice(0 as *mut Projection, 0 as usize)
-                            };
-                        }
+                        self.report_prefix(span);
+                        eprint("no variant or associated constant `");
+                        eprint(self.intern_table.lookup(m.member));
+                        eprint("` in `");
+                        eprint(self.mono.type_display(resolved_ty));
+                        eprint("`\n");
+                        return Place {
+                            base: 0,
+                            projections: @slice(0 as *mut Projection, 0 as usize)
+                        };
                     }
                 },
                 None => {}

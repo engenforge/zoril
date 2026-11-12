@@ -15,6 +15,7 @@ Signaled(i32),
 }
 pub struct Child {
 pub pid: i64,
+/* private fields */
 }
 pub struct Command {
 pub program: [u8],
@@ -40,6 +41,8 @@ impl Command {
     pub fn spawn(self: &Command) -> Result<Child, Error>;
     pub fn status(self: &Command) -> Result<ExitStatus, Error>;
 }
+pub fn wait_any(children: [mut Child]) -> Result<usize, Error>;
+pub fn try_wait_any(children: [mut Child]) -> Result<Option<usize>, Error>;
 pub fn spawn_simple(program: [u8], a: &Arena) -> Result<Child, Error>;
 pub fn run_simple(program: [u8], a: &Arena) -> Result<ExitStatus, Error>;
 ```
@@ -88,10 +91,27 @@ pub fn unix_signal(self: &ExitStatus) -> Option<i32>;
 ```
 pub struct Child {
 pub pid: i64,
+/* private fields */
 }
 ```
 
 	Handle representing a running or completed child process.
+
+*wait_any*
+```
+pub fn wait_any(children: [mut Child]) -> Result<usize, Error>;
+```
+
+	Blocks until one of the unreaped children in children ends, and returns its index. That call
+	reaps it: the status is kept on the Child, and its wait returns it without calling wait4.
+	Children that were already reaped are skipped; with none left the result is an error (ECHILD).
+
+*try_wait_any*
+```
+pub fn try_wait_any(children: [mut Child]) -> Result<Option<usize>, Error>;
+```
+
+	As wait\_any, but returns none at once when no child has ended yet.
 
 *wait*
 ```

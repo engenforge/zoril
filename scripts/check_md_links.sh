@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # scripts/check_md_links.sh <tree> — fail on relative Markdown links that do not resolve.
 #
 # Checks inline links, images and reference definitions in every *.md under <tree>:

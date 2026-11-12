@@ -23,6 +23,9 @@ cd "$REPO_ROOT" || exit 2
 ZORIL_CC="$REPO_ROOT/scripts/zoril-checked.sh"
 export ZORIL_CC
 
+TR_WORK=build/tests-checked
+export TR_WORK
+
 if [ ! -x "$REPO_ROOT/build/zoril" ] || [ ! -x "$REPO_ROOT/build/zilc" ]; then
     echo "[FAIL] checked: build/zoril and build/zilc must be built first (run make)" >&2
     exit 1
