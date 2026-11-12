@@ -13,7 +13,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 - [ ] +docs +tests +AI-G @main Source comments do not cite task IDs: a rule in AGENTS.md, the existing ones removed, and a comment-noise check id:q0ses
 
-    > **Created:** 2026-11-12, asked by the maintainer.
+    > **Created:** 2026-11-12
+    > **Asked by:** the maintainer
     > **Branch:** `main`
     > **Placed:** top of `## Now`: a rule and a small cleanup with no dependency (the queue's placing rule).
     > **Context:** a source comment that cites a task ID (`(Z-0128)`) points at a file that is not in a source tarball, and the identifier changes form in Z-0189.
