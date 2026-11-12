@@ -11,6 +11,27 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 ## Now
 
+- [ ] +docs +tests +AI-G @main Source comments do not cite task IDs: a rule in AGENTS.md, the existing ones removed, and a comment-noise check id:q0ses
+
+    > **Created:** 2026-11-12, asked by the maintainer.
+    > **Branch:** `main`
+    > **Placed:** top of `## Now`: a rule and a small cleanup with no dependency (the queue's placing rule).
+    > **Context:** a source comment that cites a task ID (`(Z-0128)`) points at a file that is not in a source tarball, and the identifier changes form in Z-0189.
+
+    - **Why:** `AGENTS.md` ("Source comments") says comments state why, and "history belongs in git and the task files". A task ID is history; the `Task:` trailer of the commit already links a line to its task. Counted 2026-11-12 on `main`: `src/`, `stdlib/`, `tools/` and `rt/` have none; `scripts/` has 18 occurrences in 8 files, `tests/` 2, and the safety probes 43 in 34 files. Of the probes' lines: 17 are `// gap:` lines and 4 are `// zbuild:` lines, which `AGENTS.md` makes load-bearing ("never delete, move or reword"), and 17 are plain prose lines.
+    - **Do:**
+      1. `AGENTS.md`, "Source comments": add to **Never**: "a task ID (`Z-0128`, `id:k7q2x`) in a comment: say why in words; the commit's `Task:` line links the change to its task". `KNOWN_ISSUES.md` and the docs are not source comments and may cite a task.
+      2. Remove the ID from every comment in `scripts/` and `tests/` (including the header of `scripts/test_tiers.tsv`), keeping the reason the comment gives, and from the 17 plain prose lines of the probes. Reword nothing else.
+      3. Leave the 17 `// gap:` lines and 4 `// zbuild:` lines of the probes as they are, and list them in the completion note for the maintainer: closing a hole flips them anyway, and rewording a marker line is the maintainer's call.
+      4. `scripts/check_comment_noise.sh` gains a rule for what it reads (`.zrl` under `src`, `stdlib`, `corpus`, `tools`, `apps`): a whole-line `//` comment containing `Z-` and four digits, or `id:` and four or more lowercase letters or digits, is a finding (`task-id`). It does not read `scripts/`, `tests/` or the probes, and the header comment says so.
+    - **Checks:**
+      - C1: before, `grep -rnE 'Z-[0-9]{4}' scripts tests --include='*' | grep -v 'scripts/comment_budget.tsv'` lists 16 lines; quote the count. After, it prints nothing.
+      - C2: before, `grep -lE 'Z-[0-9]{4}' bench/safety_matrix/probes/*.zrl | wc -l` is 34 with 43 occurrences; after, the occurrences left are exactly the 21 marker lines: `grep -hE 'Z-[0-9]{4}' bench/safety_matrix/probes/*.zrl | grep -vcE '^// (gap|zbuild):'` prints 0.
+      - C3: nothing but comments changed: for each changed file, `git diff -U0 <file> | grep '^[-+]' | grep -vE '^(---|\+\+\+)' | grep -vE '^[-+] *(//|#)'` prints nothing, and `git diff --stat` shows deletions and insertions of comment text only.
+      - C4: the gate's new rule: a scratch `.zrl` under `src/` with `// fixes Z-0001` makes `sh scripts/check_comment_noise.sh` fail with kind `task-id`; with `id:k7q2x` likewise; with the rule taken out (a scratch edit) it passes; quote all three; remove the scratch file.
+      - C5: `sh scripts/check_comment_noise.sh` passes on the tree (no `src/` mention exists); `sh scripts/test_check_comment_noise.sh` passes, extended with the `task-id` case.
+      - C6: `sh scripts/run_safety_matrix.sh` and `make test`, `Total:` line quoted; `make test-changed` is not enough because the probes change.
+
 - [ ] +docs +AI-G @main Z-0187 `AGENTS.md`: a series branch merges into `main` at each reviewed milestone, not only at its end
     > **Created:** 2026-11-12 by the review of the `testinfra` series; the rule is agreed by the maintainer, who asked for the first such merge (git:906265f). **Branch:** `main`.
 
