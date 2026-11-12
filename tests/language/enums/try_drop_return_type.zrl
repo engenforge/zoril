@@ -2,7 +2,7 @@
 // `e?` in a function whose return type needs `Drop` (in `Ok` or `Err`) scopes its error-block
 // temporaries to the error block, excludes the returned local from scope cleanup, and marks a
 // by-value operand consumed, so each `Guard` is dropped once and no uninitialized temporary leaks
-// onto the success branch (Z-0169).
+// onto the success branch.
 import "core.zrl";
 
 static mut DROPS: i32 = 0;

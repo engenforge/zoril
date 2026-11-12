@@ -110,7 +110,7 @@ Every gate that runs only the repository's own `build/zoril`, whole-program, in 
 
 Comments state why, never what: an invariant, a memory-ownership rule, an ABI or hardware constraint, a grammar production above a parser, a spec section reference, or the reason a naive alternative was rejected. Anything else is deleted or replaced by a better name.
 
-- **Never**: narration, restatement of the next line, commented-out code, scaffolding (`TODO`, `FIXME`), a docblock on an obvious private function, or a bug claim no reproduction backs.
+- **Never**: narration, restatement of the next line, commented-out code, scaffolding (`TODO`, `FIXME`), a docblock on an obvious private function, a task ID (`Z-NNNN`, `id:k7q2x`: say why in words, since a source tarball has no task files and the commit's `Task:` line already links the change to its task), or a bug claim no reproduction backs.
 - **Short, but not artificially so**: 2-4 lines of rationale are normal in a lowering pass; history belongs in git and the task files.
 - **Marker lines are load-bearing; never delete, move or reword one**: `// SAFETY:` (`scripts/check_safety_comments.sh`), `// exhaustive:` (`scripts/check_exhaustive.sh`), `// expected:`/`// gap:` in the safety probes, the test directives above, and the corpus `// --- id:` banners.
 - **`stdlib/` comment blocks are the man pages** (`tools/zman`, `make man-gen`): a module's first paragraph is its summary, and an item without a comment is an error. Run `make man-gen` and `scripts/test_man_pages.sh` after changing one.

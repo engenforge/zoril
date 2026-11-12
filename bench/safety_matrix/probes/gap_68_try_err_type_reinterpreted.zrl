@@ -1,6 +1,6 @@
 // name: `?` returns an error of another type, reinterpreted as the function's
 // expected: compile_reject
-// Refused by the lowering of `?` (Z-0167): `Result<i32, [u8]>` has no `Err` of the operand's error type `Pair`. It used to return the operand whole, so the caller read the `Pair` as a slice of length 42.
+// Refused by the lowering of `?`: `Result<i32, [u8]>` has no `Err` of the operand's error type `Pair`. It used to return the operand whole, so the caller read the `Pair` as a slice of length 42.
 import "core.zrl";
 struct Pair { a: i64, b: i64 }
 fn inner() -> Result<i32, Pair> { return Result.Err(Pair { a: 4096 as i64, b: 42 as i64 }); }

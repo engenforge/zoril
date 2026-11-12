@@ -17,6 +17,12 @@
 # `Here we`, `Now we`, `First,`, `Then,`, `Next,`, `Finally,`), so decorating a line cannot dodge
 # the rule.
 #
+# Rule 1b - task identifiers. A whole-line comment that cites a task (`Z-NNNN`, `id:k7q2x`) names a
+# record a source tarball does not carry, in a form that changes (Z-numbers become `id:` words);
+# the commit's `Task:` line is what links a change to its task. Like every rule here it reads only
+# the Zoril source this gate scans, not `scripts/`, `tests/` or the safety probes, so a citation
+# there is caught by review, and the probes' `// gap:` and `// zbuild:` marker lines are exempt.
+#
 # Rule 2 - stale path reference. A path-shaped token in a comment (`dir/file.ext`) must name a file
 # the tree carries: it resolves against the repository root, or against the source root of the
 # citing file (`src/` for `src/**`, `tools/<name>/src/` for a tool, `stdlib/`, `corpus/zrl/`),
@@ -129,6 +135,11 @@ findings() {
                     printf "%s\t%d\t%s\t%s\n", file, FNR, "step-narration", text
                 } else if (text ~ /(rest of the implementation|omitted for brevity|left as an exercise)/) {
                     printf "%s\t%d\t%s\t%s\n", file, FNR, "scaffolding", text
+                }
+                if (match(body, /(^|[^A-Za-z0-9_])(Z-[0-9][0-9][0-9][0-9]|id:[0-9a-z][0-9a-z][0-9a-z][0-9a-z]+)([^0-9A-Za-z]|$)/)) {
+                    tid = substr(body, RSTART, RLENGTH)
+                    gsub(/^[^A-Za-z0-9_]|[^0-9A-Za-z]$/, "", tid)
+                    printf "%s\t%d\t%s\t%s\n", file, FNR, "task-id", tid
                 }
                 # A path token may be split across two comment lines, which no single-line regex
                 # can see: carry a line ending in `/` into the first word of the next line.
@@ -262,7 +273,7 @@ if [ "$bad" -gt 0 ]; then
     echo "[FAIL] comment-noise: $bad comment(s) in $files files break the policy (AGENTS.md, Source Comments)"
     exit 1
 fi
-echo "[PASS] comment-noise: $files files carry no scaffolding, step narration or stale path reference"
+echo "[PASS] comment-noise: $files files carry no scaffolding, step narration, task ID or stale path reference"
 
 # Rule 3: the volume ratchet. Kept in the gate so one command covers the whole policy's
 # mechanical half. Only this tree has a budget: a fixture directory is the selftest's, which

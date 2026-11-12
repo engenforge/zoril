@@ -64,7 +64,7 @@ if [ "$changed" -eq 1 ]; then
     echo "preflight-changed: base $PF_BASE ($PF_BASE_WHY)"
 
     # A --changed run skips only when every changed file matches a doc-only tier row;
-    # a script or test edit still runs the preflight steps that verify it (Z-0129).
+    # a script or test edit still runs the preflight steps that verify it.
     pf_flags=$( (git diff --name-only --no-renames "$PF_BASE" 2>/dev/null || true; git ls-files --others --exclude-standard 2>/dev/null || true) | sort -u | ./scripts/select_test_tier.sh --flags )
     if [ "$pf_flags" = "doc" ]; then
         echo "[SKIP] preflight-changed: only documentation changed since $PF_BASE ($PF_BASE_WHY)"

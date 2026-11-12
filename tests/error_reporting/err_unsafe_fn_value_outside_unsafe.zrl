@@ -10,7 +10,7 @@
 
 // A call through a `fn` value is never marked, so an `unsafe fn` becomes one only inside `unsafe`
 // (unsafe_policy.md §1): a `let`, an argument, a struct field, an assignment, a method, a return,
-// a closure's return and an `unsafe extern` declaration. Each site was accepted before Z-0095, and
+// a closure's return and an `unsafe extern` declaration. Each site was accepted before an `unsafe fn` value needed `unsafe`, and
 // safe code then called the function (gap_65).
 unsafe fn rd(p: *i32) -> i32 { return *p; }
 unsafe extern fn memset(p: *mut u8, c: i32, n: usize) -> *mut u8;

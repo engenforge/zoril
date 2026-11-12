@@ -90,7 +90,7 @@ MAKE_CMD="${REJECT_DIFF_MAKE:-make}"
 
 # A scratch tree of COMMIT with a compiler built from its source, seeded with the working tree's. When
 # the change adds a rule the base source breaks, the working tree's compiler refuses to build the base
-# (Z-0007's refused main's src/), so the seeded build fails; the tree's compiler is then built the way a
+# (a rule added since once refused main's src/), so the seeded build fails; the tree's compiler is then built the way a
 # fresh checkout builds it - through stage1, from COMMIT's own source - and the seed is not needed.
 build_tree() { # build_tree COMMIT DIR
     git -C "$REPO_ROOT" worktree add -q --detach "$2" "$1" || { echo "check_reject_diff: cannot check out $1" >&2; exit 2; }

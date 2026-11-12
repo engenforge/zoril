@@ -1,6 +1,6 @@
 // name: Vec.resize fills the caller's Vec with a view of this frame
 // expected: compile_reject
-// resize stores clones of its value into self, and a clone of a view is the same view, so filling the caller's Vec<[u8]> with a view of a stack array is refused, as extend_from_slice's twin (418) is. resize's own summary records the store (extend_from_slice needs #[stores], resize does not: Z-0174).
+// resize stores clones of its value into self, and a clone of a view is the same view, so filling the caller's Vec<[u8]> with a view of a stack array is refused, as extend_from_slice's twin (418) is. resize's own summary records the store (extend_from_slice needs #[stores], resize does not).
 import "vec.zrl";
 use vec::Vec;
 fn fill(out: &mut Vec<[u8]>) {

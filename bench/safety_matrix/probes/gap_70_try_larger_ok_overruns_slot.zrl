@@ -1,6 +1,6 @@
 // name: `?` on a `Result` larger than the function's return type writes past the return slot
 // expected: accept
-// Accepted and correct since Z-0167: the early return builds a `Result<u8, i64>` holding the `Err` payload, where it used to copy the 72-byte operand into the 16-byte return slot and fault.
+// Accepted and correct now that the lowering of `?` is fixed: the early return builds a `Result<u8, i64>` holding the `Err` payload, where it used to copy the 72-byte operand into the 16-byte return slot and fault.
 import "core.zrl";
 fn inner() -> Result<[i64; 8], i64> { return Result.Err(5 as i64); }
 fn outer() -> Result<u8, i64> {

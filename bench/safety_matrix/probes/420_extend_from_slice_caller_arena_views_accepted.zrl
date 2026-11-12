@@ -1,6 +1,6 @@
 // name: Views of a caller's arena appended to the caller's Vec
 // expected: accept
-// The accepted twin of gap_56 and 418 with reference-carrying elements: views of a Vec in the caller's arena outlive this frame, so copying them into the caller's Vec<[u8]> with extend_from_slice is legal (Z-0060).
+// The accepted twin of gap_56 and 418 with reference-carrying elements: views of a Vec in the caller's arena outlive this frame, so copying them into the caller's Vec<[u8]> with extend_from_slice is legal.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

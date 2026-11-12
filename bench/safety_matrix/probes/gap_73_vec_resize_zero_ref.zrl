@@ -1,7 +1,7 @@
 // name: Vec.resize pads with zero bytes, a null reference read from safe code
 // expected: compile_reject
 // zbuild: compile_reject (refused for the same message, at the interface's line of vec.zrl: KNOWN_ISSUES.md section 4, "An error inside an imported generic body names the interface's line under zbuild"; Z-0181)
-// Refused since Z-0174: resize clones its fill value into each new slot, and &i32 has no Clone (its clone resolves to i32's, a type mismatch in vec.zrl), so no slot is zero bytes. Z-0179 (every Copy type is Clone) would accept it with the value written.
+// Refused now that resize clones its fill value: resize clones its fill value into each new slot, and &i32 has no Clone (its clone resolves to i32's, a type mismatch in vec.zrl), so no slot is zero bytes. A change making every Copy type Clone would accept it with the value written.
 import "vec.zrl";
 use vec::Vec;
 fn main() -> i32 {

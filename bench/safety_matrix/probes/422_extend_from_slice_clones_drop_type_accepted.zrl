@@ -1,6 +1,6 @@
 // name: Vec.extend_from_slice clones a value with a Drop, so each Vec drops its own
 // expected: accept
-// The accepted twin of gap_76: S implements Clone, so extend_from_slice puts a clone in the new slot and the two Vecs own two values, each dropped once (Z-0173).
+// The accepted twin of gap_76: S implements Clone, so extend_from_slice puts a clone in the new slot and the two Vecs own two values, each dropped once.
 import "vec.zrl";
 use vec::Vec;
 static mut DROPS: i32 = 0;

@@ -40,7 +40,7 @@ tmp="$(mktemp -d)"
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT INT TERM
 
-# Scratch timing and log paths so nested preflight runs do not touch default files (Z-0119)
+# Scratch timing and log paths so nested preflight runs do not touch default files
 scratch_timings="$tmp/preflight_scratch_timings.tsv"
 scratch_log="$tmp/preflight_scratch.log"
 export PREFLIGHT_TIMINGS="$scratch_timings"
@@ -133,7 +133,7 @@ status=0
 fail() { echo "[FAIL] preflight-selftest: $1" >&2; status=1; }
 pass() { echo "[PASS] preflight-selftest: $1"; }
 
-# Record default timings and log file state before cases run (Z-0126, Z-0128)
+# Record default timings and log file state before cases run
 timings_existed_before=0
 timings_hash_before=""
 if [ -f build/preflight-timings.tsv ]; then
@@ -355,7 +355,7 @@ chmod +x "$tmp/stub_fail_reject_diff.sh"
 # scratch_base PATH: print a commit of HEAD's tree with PATH replaced by a one-line file, a base that
 # differs from this tree in PATH alone. It is made with a git configuration of its own: under the
 # caller's, `commit-tree` needs an identity and honours commit.gpgsign, and a commit that could not
-# be made left the base empty, so the differential compared the tree with itself (Z-0098).
+# be made left the base empty, so the differential compared the tree with itself.
 scratch_base() {
     _idx="$tmp/scratch_base_idx"
     rm -f "$_idx"
@@ -399,7 +399,7 @@ else
 fi
 
 # Case 11b: a stdlib/-only change runs the rejection differential (a stdlib function's summary
-# changes what the checkers refuse, Z-0069).
+# changes what the checkers refuse).
 if stdlib_only_base=$(scratch_base stdlib/test_preflight_dummy.zrl 2>"$tmp/scratch_base.err") && [ -n "$stdlib_only_base" ]; then
     rc=0
     out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
@@ -637,7 +637,7 @@ else
     fail "cannot make a base commit for case 19: $(cat "$tmp/scratch_base.err")"
 fi
 
-# Case 16: nested runs do not touch default timings or log files (Z-0119, Z-0126, Z-0128)
+# Case 16: nested runs do not touch default timings or log files
 if [ "$timings_existed_before" -eq 1 ]; then
     if [ -f build/preflight-timings.tsv ]; then
         timings_hash_after=$(sha256_of build/preflight-timings.tsv 2>/dev/null | awk '{print $1}')

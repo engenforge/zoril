@@ -1,6 +1,6 @@
 // name: Frame views copied out of a local Vec by extend_from_slice
 // expected: compile_reject
-// The Vec-source sibling of gap_56: views of fill's stack array, pushed into a local Vec and copied into the caller's Vec with extend_from_slice(views.as_slice()), are refused now that extend_from_slice writes each element as a T rather than through memcpy (Z-0060).
+// The Vec-source sibling of gap_56: views of fill's stack array, pushed into a local Vec and copied into the caller's Vec with extend_from_slice(views.as_slice()), are refused now that extend_from_slice writes each element as a T rather than through memcpy.
 import "vec.zrl";
 use vec::Vec;
 fn fill(out: &mut Vec<[u8]>) {

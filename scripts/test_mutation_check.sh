@@ -163,7 +163,7 @@ else
 fi
 
 # A run following an early-exiting run with a surviving mutant resets result files and does not
-# falsely report stale survivors (Z-0069).
+# falsely report stale survivors.
 stale_surv_stage="$WORK/stale_surv_stage"
 rm -rf "$stale_surv_stage"
 mkdir -p "$stale_surv_stage"

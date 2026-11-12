@@ -1,6 +1,6 @@
 // name: Vec.resize clones its fill value, so each slot and the value are dropped once
 // expected: accept
-// The accepted twin of gap_75: S implements Clone, so resize(2, v) writes two clones and drops v, set drops the clone it replaces, and the two popped values are dropped: four values, four drops (Z-0174).
+// The accepted twin of gap_75: S implements Clone, so resize(2, v) writes two clones and drops v, set drops the clone it replaces, and the two popped values are dropped: four values, four drops.
 import "vec.zrl";
 use vec::Vec;
 static mut DROPS: i32 = 0;

@@ -1,6 +1,6 @@
 // name: `?` on a three-variant enum with `Ok` and `Err` reinterprets the third variant as `Err`
 // expected: compile_reject
-// Refused by the lowering of `?` (Z-0168): `Bad` has three variants, not the two of `Result` or `Option`. It used to branch on `is_Ok` alone and read the third variant's `Pair` payload as `Err([u8])`.
+// Refused by the lowering of `?`: `Bad` has three variants, not the two of `Result` or `Option`. It used to branch on `is_Ok` alone and read the third variant's `Pair` payload as `Err([u8])`.
 import "core.zrl";
 struct Pair { a: i64, b: i64 }
 enum Bad { Forge(Pair), Ok(i32), Err([u8]) }

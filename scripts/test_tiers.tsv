@@ -1,4 +1,4 @@
-# Zoril Test Tier Mapping Table (SPEC-TASKMARK / Z-0115)
+# Zoril Test Tier Mapping Table
 # Plain TSV schema: pattern<TAB>tier<TAB>gates<TAB>exclude_gates<TAB>groups<TAB>exclude_groups<TAB>scenarios<TAB>exclude_scenarios<TAB>flags<TAB>description
 # Rule: Positive lists only for doc tiers and individual test files. All other tiers are "everything except X" with rationale.
 # Union semantics: every matching row applies; an unlisted path matches the default fallback '*' (runs everything).
