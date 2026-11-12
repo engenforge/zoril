@@ -59,7 +59,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `sh scripts/test_reject_diff.sh` passes; `make test-changed` quoted (the change is comments only, so no `make test`).
       - C4: `tm check-shas` before and after: the count of unreachable citations does not rise (109 of 297 on 2026-11-12).
 
-- [ ] +docs +AI-G @main Probe marker lines do not cite task IDs: reword the 17 `// gap:` and 4 `// zbuild:` reasons in words id:yws9j
+- [x] +docs +AI-G @main Probe marker lines do not cite task IDs: reword the 17 `// gap:` and 4 `// zbuild:` reasons in words id:yws9j
 
     > **Created:** 2026-11-12, asked by the maintainer
     > **Branch:** `main`
@@ -74,6 +74,16 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `sh scripts/run_safety_matrix.sh` prints the same `Mismatches: 0` and the same `[SKIP]` count (46 known gaps); `sh scripts/check_safety_model.sh` passes.
       - C4: `make test`, `Total:` line quoted (the skip text changed, the counts must not).
       - C5: the `comment-noise` marker exemption (`scripts/check_comment_noise.sh`) is kept; a marker line is still not scanned.
+
+    > **Completed:** 2026-11-12 git:55d5e92
+
+    - **Done on `main`, answers by number:**
+      - C1: `grep -hE 'Z-[0-9]{4}' bench/safety_matrix/probes/*.zrl | wc -l` was 21 before (the task's count) and prints `0` after.
+      - C2: `git diff -U0` before the commit showed 21 `-// ` and 21 `+// ` lines and no other changed line; `awk '{print $2}'` over each side gives `17 gap:` and `4 zbuild:` on both, so the prefixes are unchanged, and every `zbuild:` line keeps its `compile_reject (...)` shape.
+      - C3: `sh scripts/run_safety_matrix.sh`: `All probes complete: 459/505 passed. Mismatches: 0` (unchanged); `sh scripts/check_safety_model.sh`: `PASS: safety_model.md is self-consistent.`; the `[SKIP]` total is the 94 of C4.
+      - C4: `make test`: `Total: 3263 run, 3263 passed, 0 failed, 94 skipped (114.3s)`, the same counts as before the change.
+      - C5: `sh scripts/check_comment_noise.sh`: `[PASS] comment-noise: 136 files carry no scaffolding, step narration, task ID or stale path reference`; `scripts/check_comment_noise.sh` was not edited.
+    - **Docs:** no doc quotes a reworded reason verbatim (searched `doc`, `README.md` and `KNOWN_ISSUES.md` for the first 60 characters of each old reason: no match), so none changed. Where a reason used an ID as a name, it now names the mechanism ("its fixpoint over the cycle", "the body summary", "a summary built from the origin sets"); the two `(found in ...)` citations and the `Z-0181` trailer were dropped.
 
 - [ ] +docs +AI-G @main Z-0187 `AGENTS.md`: a series branch merges into `main` at each reviewed milestone, not only at its end
     > **Created:** 2026-11-12 by the review of the `testinfra` series; the rule is agreed by the maintainer, who asked for the first such merge (git:906265f). **Branch:** `main`.
