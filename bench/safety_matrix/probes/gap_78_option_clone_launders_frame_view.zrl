@@ -1,6 +1,6 @@
 // name: Option.clone of an Option holding a view of this frame is returned
 // expected: known_gap
-// gap: impl<T: Clone> Clone for Option<T> declares #[borrows()], so the clone of Some(s), s a view of a stack array, holds no borrow; returning it is accepted and the caller reads the dead frame (found in Z-0173; Z-0180)
+// gap: impl<T: Clone> Clone for Option<T> declares #[borrows()], so the clone of Some(s), s a view of a stack array, holds no borrow; returning it is accepted and the caller reads the dead frame
 // observed: exit 7
 import "core.zrl";
 import "clone.zrl";

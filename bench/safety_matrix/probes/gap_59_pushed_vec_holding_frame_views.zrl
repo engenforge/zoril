@@ -1,6 +1,6 @@
 // name: A local Vec holding views of this frame is pushed into the caller's Vec
 // expected: known_gap
-// gap: out.push(w) with w a local Vec<[i32]> holding a view of the stack array buf: the old rules see w as an owner moved out and not the frame views it holds, so the store into the caller's Vec<Vec<[i32]>> is accepted; refused under --provenance by the call store rule (Z-0062)
+// gap: out.push(w) with w a local Vec<[i32]> holding a view of the stack array buf: the old rules see w as an owner moved out and not the frame views it holds, so the store into the caller's Vec<Vec<[i32]>> is accepted; refused under --provenance by the call store rule
 // observed: exit 77
 import "vec.zrl";
 use vec::Vec;

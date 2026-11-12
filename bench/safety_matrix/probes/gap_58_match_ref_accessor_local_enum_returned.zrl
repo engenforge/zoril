@@ -1,6 +1,6 @@
 // name: An accessor matching through its reference parameter returns into a caller's local enum
 // expected: known_gap
-// gap: return pick(&e) with fn pick(r: &E) -> &P { return match r { E.A(x) => x, .. }; }: the old summary does not tie pick's result to r, because it does not read a binding of a match on r as derived from r, so the caller's return of a pointer into its local e is accepted; refused under --provenance by the return rule (Z-0061)
+// gap: return pick(&e) with fn pick(r: &E) -> &P { return match r { E.A(x) => x, .. }; }: the old summary does not tie pick's result to r, because it does not read a binding of a match on r as derived from r, so the caller's return of a pointer into its local e is accepted; refused under --provenance by the return rule
 // observed: exit 77
 struct P { a: i32 }
 enum E { A(P), B(i32) }

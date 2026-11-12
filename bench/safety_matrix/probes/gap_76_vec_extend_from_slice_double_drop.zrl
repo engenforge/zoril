@@ -1,6 +1,6 @@
 // name: Vec.extend_from_slice copies a value with a Drop, which both Vecs then drop
 // expected: compile_reject
-// zbuild: compile_reject (refused for the same message, at the interface's line of vec.zrl: KNOWN_ISSUES.md section 4, "An error inside an imported generic body names the interface's line under zbuild"; Z-0181)
+// zbuild: compile_reject (refused for the same message, at the interface's line of vec.zrl: KNOWN_ISSUES.md section 4, "An error inside an imported generic body names the interface's line under zbuild")
 // Refused now that extend_from_slice clones: extend_from_slice clones each element, and S has no Clone, so no second owner of one value is made (the accepted twin with a Clone is 422).
 import "vec.zrl";
 use vec::Vec;
