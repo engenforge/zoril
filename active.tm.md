@@ -280,12 +280,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Decide:** an error, a warning, or no change; and whether the cap of 100 stays.
     - **Decided (the maintainer, 2026-11-13):** an internal compiler error. Reaching the cap stops the compile with an ICE that names the function, rather than reporting from a state that may not be a fixed point. The cap stays at 100 (in id:mrzb3's census of `src/`, the most passes any function took without reaching the cap was 29; after id:5a7eh no function in `src/` reaches the cap). Moved from `future.tm.md` to `## Now` on the maintainer's decision; the implementation is the task after this one, with its check-in after it.
 
-- [ ] +testinfra +safety +AI-G @testinfra Z3d The ZIR verifier stops with an internal compiler error when its fixed point reaches the pass cap id:wx5w6
+- [x] +testinfra +safety +AI-G @testinfra Z3d The ZIR verifier stops with an internal compiler error when its fixed point reaches the pass cap id:wx5w6
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decision in id:wptpf, settled by the reviewing session for an `+AI-G` session
     > **Branch:** `testinfra`
     > **Depends:** id:wptpf
     > **Placed:** directly after id:wptpf, which decided it. Check-in id:ed5ta follows it.
+    > **Completed:** 2026-11-13 git:633186e
 
     - **Why:** `verify_function` (`src/check_zir.zrl`) ends its fixed-point loop after 100 passes even if the states are still changing, and then reports from them. A borrow or move fact that only a later pass would reach goes unchecked, silently. The maintainer decided (id:wptpf) that reaching the cap is an internal compiler error naming the function.
     - **Do (`src/check_zir.zrl` and `doc/spec/zir.md` only; `src/` is in the stage1 closure, so use only what the file already uses):**
@@ -302,6 +303,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `REJECT_DIFF_NO_CACHE=1 make preflight-changed`. Quote the `reject-diff: base verdicts: fresh (no cache)` line and the result. Any program that reaches the cap shows as newly refused. It must report `0 newly accepted` and `0 newly refused`; if not, stop and record the programs here.
       - C7: `scripts/check_comment_noise.sh` passes, and `scripts/check_fuzz_fresh.sh` reports `bench/fuzz/README.md` stale (`src/` changed); quote both.
     - Ends with the commit, an **Awaiting review:** bullet naming C1, C2 and C6, and `tm done`. Check-in id:ed5ta reviews it.
+    - **Completion (generalist, 2026-11-13, git:633186e; code in git:f82ebb5):** in `verify_function`, after the fixed-point loop and before the reporting pass, `if changed` builds the message ``ZirVerifier: the fixed point of `NAME` did not converge within the pass cap`` with a `ByteVec` and calls `ICE`, with a why-comment; it tests `changed`, not `iter`. `doc/spec/zir.md` §7.4 gained the sentence on the 100-pass cap. The compiler line and `unsafe { }` block counts moved (47,137 lines, 839 blocks; 1,912 of 40,959 lines in `src/`), re-recorded in `doc/SAFETY.md` and `doc/spec/unsafe_policy.md` in git:633186e, a commit of its own.
+      - C1: cap lowered to 3 (scratch): ``internal compiler error: ZirVerifier: the fixed point of `with_continue` did not converge within the pass cap``, `note: while compiling `with_continue` (build/mrzb3/bis3.zrl)`, `rc=134`. (`make` also stopped on the ICE while building `zilc`, as expected with that cap.)
+      - C2: cap still 3, ICE condition disabled (`changed && iter > 1000`; a `let _ =` variant did not compile, so `build/zoril` was rebuilt through stage1): no ICE, `rc=0`. Cap and ICE restored, `make`; `git diff` showed only `src/check_zir.zrl` and `doc/spec/zir.md`.
+      - C3: cap 100: `bis3.zrl` `rc=0`, `src/main.zrl` `rc=0`, nothing printed.
+      - C4: `sh scripts/run_safety_matrix.sh`: `All probes complete: 459/505 passed. Mismatches: 0`.
+      - C5: `make test` after the last code and figures edit and the reviewer's task-text fix (771a6f1 on `tasks`): `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (119.9s)`. (The run before it, with the three task-text lines unfixed, failed those 3 `safety-model` items; the reviewer expected 3276 run, the tree gives 3274, no failures.)
+      - C6: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` at git:633186e (log `build/wx5w6-preflight.log`), rc 0: `All mutations caught.`, `reject-diff: base verdicts: fresh (no cache); base front end 110 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69145 programs against 0e9a75236830ceb636752ab522e1b61a6e3e1c47`, `Total: 1195 run, 1195 passed, 0 failed, 0 skipped (44.5s)`. Not rerun after the reviewer's task-text fix, per the reviewer: only task text changed. Host-specific `bench/` files deleted.
+      - C7: `scripts/check_comment_noise.sh`: `[PASS] comment-noise: 137 files carry no scaffolding ...`, `[PASS] comment-census: 136 file(s) within budget`; `scripts/check_fuzz_fresh.sh`: `STALE - the short-session record describes other code than the working tree: src ...`, so `bench/fuzz/README.md` is stale.
+    - **Awaiting review:** re-run C1 and C2 (the ICE with the cap lowered, and the take-out) and C6's differential with `REJECT_DIFF_NO_CACHE=1`.
 
 - [ ] +testinfra +safety +review +AI-D @testinfra @checkin Review of Z3d (an ICE when the verifier's fixed point reaches its pass cap) id:ed5ta
     > **Created:** 2026-11-13
