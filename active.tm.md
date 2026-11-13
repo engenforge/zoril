@@ -202,12 +202,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - The fix is id:5a7eh, placed after this task, with its check-in id:83cp1. The cap itself is silent: a loop that really did not converge would report from states that are not a fixed point. That is a question for the maintainer, parked as id:wptpf in `future.tm.md`.
       - C4: `git status --short` printed only `?? .claude/` (outside the tracked tree). The scratch worktree `build/mrzb3/wt` is removed; its patches and compilers stay under `build/mrzb3/`.
 
-- [ ] +testinfra +safety +AI-G @testinfra Z3c The ZIR verifier compares enum-payload aliases as a set, so a loop with a continue in a match arm reaches its fixed point id:5a7eh
+- [x] +testinfra +safety +AI-G @testinfra Z3c The ZIR verifier compares enum-payload aliases as a set, so a loop with a continue in a match arm reaches its fixed point id:5a7eh
     > **Created:** 2026-11-13
     > **Context:** the cause found by id:mrzb3, settled by the reviewing session for an `+AI-G` session
     > **Branch:** `testinfra`
     > **Depends:** id:mrzb3
     > **Placed:** directly after id:mrzb3, whose follow-up it is. Check-in id:83cp1 follows it.
+    > **Completed:** 2026-11-13 git:e5e0976
 
     - **Why:** id:mrzb3 found that `states_equal` (`src/check_zir.zrl`) compares the state's `enum_aliases` list by position. The list's order comes from which predecessor the merge visited first, not from anything the state says. So a loop whose back edges carry the same aliases in different orders (a `continue` in a match arm) never compares equal, and `verify_function`'s fixed-point loop runs to its cap of 100 passes. Measured: `BufWriter::flush` takes 8.2 ms to verify per instance against 0.66 ms, `read_to_end_sized_raw` 3.8 ms against 0.31 ms, and 3 functions of the compiler's own source reach the cap. Every duplicate alias in the tree repeats its local's source (id:mrzb3, "Order and verdicts"), so no verdict is expected to change.
     - **Do (one mechanism, in `src/check_zir.zrl` only; `src/` is in the stage1 closure, so use only constructs the file already uses):**
@@ -223,6 +224,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `scripts/check_comment_noise.sh` passes (the new comment fits `src/check_zir.zrl`'s budget, or its row is re-recorded as `AGENTS.md` says, with the reason in the commit message).
       - C7: the completion note says that `bench/fuzz/README.md` is now stale, since `src/` changed (`scripts/check_fuzz_fresh.sh`'s output).
     - Ends with the commit, an **Awaiting review:** bullet naming C2's take-out and C5's differential, and `tm done`. Check-in id:83cp1 reviews it.
+    - **Completion (generalist, 2026-11-13, git:e5e0976, figures in git:3a0402b):** `alias_lists_equal` (private method before `states_equal`, with the why-comment) compares the two lists as sets, each entry of one found in the other by `local_id` and `places_equal` of `source`, no length check; `states_equal` calls it in place of the length check and positional loop. Nothing else in `states_equal` changed. The run changed the compiler line count, so `doc/SAFETY.md` §5 (47,127) and `doc/spec/unsafe_policy.md` (40,952) are re-recorded in git:3a0402b.
+      - C1: 20 compiles of `tests/stdlib/test_stdlib_bufio.zrl` on `taskset -c 5`: 147 ms each before, 84 ms after (63 ms saved). `build/mrzb3/bis3.zrl`: 7 ms before, 5 ms after.
+      - C2: scratch `VERIFY-CAP` lines. With the fix: `src/main.zrl` 0, `bis3.zrl` 0, `test_stdlib_bufio.zrl` 0. Positional loop put back: 3, 1, 9. Scratch lines removed, fix restored, `make`; `git diff` shows only `src/check_zir.zrl` (and no `VERIFY`).
+      - C3: `sh scripts/run_safety_matrix.sh`: `All probes complete: 459/505 passed. Mismatches: 0`.
+      - C4: `make test` after the last edit (log `build/5a7eh-test.log`): `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (119.1s)`. The first run after the code commit had two `safety-figures` failures (compiler lines 47,100 vs 47,127; the unsafe_policy line count), fixed in git:3a0402b.
+      - C5: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (log `build/5a7eh-preflight.log`; base is the merge base with `main`, git:0e9a752): rc 0, `All mutations caught.`, `reject-diff: base verdicts: fresh (no cache); base front end 110 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69145 programs against 0e9a75236830ceb636752ab522e1b61a6e3e1c47`, `Total: 1195 run, 1195 passed, 0 failed, 0 skipped (44.6s)`. Host-specific `bench/` files deleted.
+      - C6: `scripts/check_comment_noise.sh`: `[PASS] comment-noise: 137 files carry no scaffolding ...`, `[PASS] comment-census: 136 file(s) within budget`.
+      - C7: `scripts/check_fuzz_fresh.sh`: `STALE - the short-session record describes other code than the working tree: src ...`; `bench/fuzz/README.md` is stale since `src/` changed.
+    - **Awaiting review:** re-run C2's take-out (positional loop back, expect 3, 1, 9 caps) and C5's differential with `REJECT_DIFF_NO_CACHE=1`.
 
 - [ ] +testinfra +safety +review +AI-D @testinfra @checkin Review of Z3c (enum-payload aliases compared as a set in the verifier's fixed point) id:83cp1
     > **Created:** 2026-11-13
