@@ -825,12 +825,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `grep -c proc.zrl build/closure.txt` prints `0`.
       - C6: `make man-gen` wrote `doc/man/zoril-proc.3`; `[PASS] man-pages: all pages build cleanly and match tools and stdlib`. The formatter reflowed the new syscall line, so the figures were recomputed after it: `doc/SAFETY.md` §5.3 (stdlib lines 6,704 to 6,706 after the earlier 6,677; unsafe blocks 186), `unsafe_policy.md` (186 blocks, 526 of 4,828 lines, 10.89%); `check_safety_figures.sh --all` passes. After the last edit: `make test`: `Total: 3272 run, 3272 passed, 0 failed, 94 skipped (118.8s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: rc 0, `reject-diff: base verdicts: fresh (no cache); base front end 131 s`, `0 newly accepted ... 0 newly refused, of 69145 programs`, `Total: 1194 run, 1194 passed, 0 failed, 0 skipped (45.2s)`. The fuzz record (`bench/fuzz/README.md`) is stale: `stdlib/` and `tools/` changed. Host-specific `bench/` files the run wrote were deleted.
 
-- [ ] +testinfra +stdlib +AI-G @testinfra Z1g `wait_any` and `try_wait_any` reap only the children they are given id:ppvzh
+- [x] +testinfra +stdlib +AI-G @testinfra Z1g `wait_any` and `try_wait_any` reap only the children they are given id:ppvzh
     > **Created:** 2026-11-13
     > **Context:** found at check-in id:0f0vv (finding 2), settled by the reviewer for an `+AI-G` session; id:q8rsf left it out of scope
     > **Branch:** `testinfra`
     > **Depends:** id:0f0vv
     > **Placed:** after id:trx5h, in the batch that fixes what check-in id:0f0vv found
+    > **Completed:** 2026-11-13 git:3d9e208
 
     - **Why:** `reap_any` (`stdlib/proc.zrl`), behind `wait_any` and `try_wait_any`, calls `wait4(-1)`, which reaps any child of the process. If the child it reaps is not in the slice, the call returns ECHILD and the status is lost. That child's own `Child` handle then never learns it was reaped, so its `status` stays unset and id:q8rsf's guard cannot stop a later `kill` from signalling a pid that may be reused. Also, `tools/ztest`'s `run_one` reads an error from `try_wait_any` as "the item ended". The pool of id:z0138 holds its items in one slice, but `ztest` also starts the planner and the stray-files scripts with `wait()`, and a library user may mix the two.
     - **Do (`stdlib/proc.zrl`):**
@@ -846,6 +847,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `tests/stdlib/test_stdlib_proc_wait_any.zrl`, `test_proc_kill_reaped.zrl` and `test_proc_new_group.zrl` pass. `sh scripts/test_runner_output.sh --both` passes, since `ztest` uses `try_wait_any`.
       - C4: `grep -c proc.zrl build/closure.txt` prints `0`.
       - C5: `make man-gen` and `sh scripts/test_man_pages.sh`; the recorded figures in the same commit. Then `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, each `Total:` line quoted. The completion note says the fuzz record is stale.
+    - **Completion (generalist, 2026-11-13, git:3d9e208):** `reap_any` is replaced by `reap_listed` (wait4 by pid with WNOHANG over the unreaped children of the slice). `try_wait_any` is `reap_listed`; `wait_any` runs it, then blocks on `waitid(P_ALL, 0, ..., WEXITED | WNOWAIT)`, runs it again, and returns ECHILD if only a child outside the slice ended. No loop is needed: the second pass catches any slice child that ended. Doc comments and `doc/spec/standard_library.md` §4.4 say that other children are left to their own handles.
+      - C1: `./scripts/test.sh --verbose tests/stdlib/test_proc_wait_any_own.zrl`: `[PASS] tests/stdlib/test_proc_wait_any_own.zrl (1135ms)`, `exit code: 0`.
+      - C2: take-out (`wait4(-1)` in `reap_listed`): `[FAIL] tests/stdlib/test_proc_wait_any_own.zrl (wrong exit code)`, `exit code: 2`; restored.
+      - C3: `test_stdlib_proc_wait_any`, `test_proc_kill_reaped`, `test_proc_new_group` each `Total: 2 run, 2 passed, 0 failed`; `sh scripts/test_runner_output.sh --both` last line `[PASS] opts_hidden output follows the grammar and its counts agree (build/ztest)` (after `make ztest`).
+      - C4: `grep -c proc.zrl build/closure.txt` prints `0`.
+      - C5: `make man-gen` wrote `doc/man/zoril-proc.3`; `[PASS] man-pages: all pages build cleanly and match tools and stdlib`. Figures: `doc/SAFETY.md` §5.3 stdlib lines 6,733 and unsafe blocks 188; `unsafe_policy.md` 188 blocks, 532 of 4,849 lines, 10.97%; `check_safety_figures.sh --all` shows no FAIL. After the last edit: `make test`: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (119.2s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: rc 0, `reject-diff: base verdicts: fresh (no cache); base front end 111 s`, `0 newly accepted ... 0 newly refused, of 69145 programs`, `Total: 1195 run, 1195 passed, 0 failed, 0 skipped (44.9s)`. The fuzz record is stale (`stdlib/` changed). Host-specific `bench/` files were deleted.
+      - One behaviour to review: an already-ended unreaped child outside the slice makes `wait_any` return ECHILD at once even while a slice child still runs (the task's rule); a caller mixing handles must `wait()` such children first.
 
 - [ ] +testinfra +stdlib +AI-G @testinfra Z1h A `Command` inherits the parent's environment by default; zbuild clears it where it relied on the empty one id:dcxxy
     > **Created:** 2026-11-13
