@@ -113,7 +113,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `grep -c proc.zrl build/closure.txt` prints `0`.
       - C5: `make test`: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (120.8s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: rc 0, `0 newly accepted ... 0 newly refused, of 69145 programs`, `Total: 1195 run, 1195 passed, 0 failed, 0 skipped (44.8s)`. The fuzz record is stale (`stdlib/` changed). Host-specific `bench/` files deleted.
 
-- [ ] +testinfra +review +AI-D @testinfra @checkin Review of the Z2b6, Z2b7, Z2b8 and Z1i batch (EXPECT read from the compiler's output, two more malformed shapes, one header reader, the ECHILD rule in words) id:zmcty
+- [x] +testinfra +review +AI-D @testinfra @checkin Review of the Z2b6, Z2b7, Z2b8 and Z1i batch (EXPECT read from the compiler's output, two more malformed shapes, one header reader, the ECHILD rule in words) id:zmcty
     > **Created:** 2026-11-13
     > **Context:** placed by the reviewer at check-in id:drcga
     > **Branch:** `testinfra`
@@ -124,12 +124,53 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       1. Re-run each take-out: id:r85jb C2, id:haf6g C2, id:f6tfj C3, id:rvn2w C2.
       2. Rerun the header survey, and write three malformed headers of the reviewer's own. Run each through `test.sh`, `test.sh --verbose`, `build/ztest` and the `zbuild-diff` worker, and check that all four agree.
       3. Record the findings here as numbered bullets, add follow-up tasks, then `tm validate` and `tm done` this task.
+    - **Findings (the reviewer, 2026-11-13, `testinfra` at git:09824a9; scratch files under `build/zmcty/`, every scratch edit restored, `git status --short scripts stdlib tests` empty after):**
+      1. The four commits (git:4ea969c, git:4075934, git:681e1ab, git:09824a9) match their tasks' **Do**, and each completion note answers every check.
+      2. Take-outs rerun. id:r85jb C2 (`_tr_missing_expect` back on `$_log`): `[FAIL] expect_in_cmdline: expected ... (diagnostic missing)`, got `[PASS] ...`. id:haf6g C2 (the four new `bad()` calls taken out): `[FAIL] expect_and_exit` and `[FAIL] expect_and_success` (each got `diagnostic missing`), `[FAIL] skip_empty` (got `wrong exit code`), and no other `[FAIL]`. id:f6tfj C3, with a planted copy of `b_exit_then_expect.zrl` (below) as `tests/stdlib/zz_rev_b.zrl`: with the worker's `malformed` branch made `malformed) ;;`, `[PASS] zbuild-diff: 592 of 595 programs agree ...`; restored, `DIFF tests/stdlib/zz_rev_b.zrl malformed header, line 2: // EXPECT: x`.
+      3. id:rvn2w C2 as written does not isolate the new case, as its note says. The new case (exits 10 to 14) has the older case's shape (5 to 8), plus a second ECHILD in a row. A take-out aimed at that: `wait_any` returns ECHILD once, then waits on its own slice (a `static mut` flag, and a `reap_listed` loop in place of the final `return`). `./scripts/test.sh --verbose tests/stdlib/test_proc_wait_any_own.zrl`: `[FAIL] ... (wrong exit code)`, `exit code: 11`. The older case still passed, and the new case caught it. Restored: `[PASS] tests/stdlib/test_proc_wait_any_own.zrl (3140ms)`.
+      4. Headers of the reviewer's own, through `tr_expectations` and then, as planted copies under `tests/stdlib/`, through `./scripts/test.sh`, `./scripts/test.sh --verbose`, `build/ztest` and `sh scripts/test_zbuild_diff.sh`. All four agree on every file. `// expected exit 3` / `// EXPECT: x` / `// expected compile fail`: malformed at line 2 in all four. `// @skip:` with a tab after it: malformed at line 1 in all four. `//expected exit 3` with no space after `//` reads as `run`, exit 3, which is what it says. **Not caught (finding):** `// EXPECT: ` with nothing after it is accepted with no text. Beside `expected compile fail` it checks no diagnostic (`[PASS]` in all four); alone, on a program that returns 0, the file becomes a plain `run` test (`[PASS]`), though its header names a diagnostic. **Not caught (finding):** a directive after the header (`fn main() -> i32 { return 3; }` then `// expected exit 3`) is ignored, since the reader stops at the first line of code, and the file runs as `exit 0`. Neither shape is in the tree. The survey, over the 1,215 `*.zrl` of `tests/` and `corpus/` that are not `*_lib.zrl`, found no `// EXPECT:` with empty text and no line matching `^[ \t]*//[ \t]*(expected (exit|compile)|EXPECT:|@skip:|flags:|link:)` after a header. Both are id:vmg4z, below.
+      5. Note, not a task: id:rvn2w's C5 quotes the differential's verdict line but not its `reject-diff: base verdicts: fresh (no cache)` line, as `AGENTS.md` asks. The run's log was not kept under `build/`. The change is a doc comment and a test, so no verdict could move. A cited preflight keeps its log (`> build/<task>/preflight.log 2>&1`) so that the line can be quoted.
+      6. Batch outcome: nothing blocks. The next batch is id:vmg4z, ending at check-in id:at0d6. id:mrzb3 and id:z0123 (`+AI-D`, the reviewer's) follow it.
+
+    > **Completed:** 2026-11-13 git:09824a9
+
+- [ ] +testinfra +tests +AI-G @testinfra Z2b9 The header grammar refuses an empty `// EXPECT:` text and a directive line after the header id:vmg4z
+    > **Created:** 2026-11-13
+    > **Context:** found at check-in id:zmcty (finding 4), settled by the reviewer for an `+AI-G` session
+    > **Branch:** `testinfra`
+    > **Depends:** id:zmcty
+    > **Placed:** directly after check-in id:zmcty, which found it
+
+    - **Why:** two header shapes still make a test mean something other than it says (id:zmcty finding 4). `// EXPECT: ` with no text checks no diagnostic, and alone it turns the file into a plain `run` test. A directive after the first line of code is ignored, so the file runs with the default expectation. Neither is in the tree, so no test changes kind. The four readers (`test.sh`, `--verbose`, `ztest`, `zbuild-diff`, and also `test_interface_attrs.sh`) all use `tr_expectations`, so one edit covers them.
+    - **Do (`scripts/lib/test_runner.sh`, the awk in `tr_expectations`, POSIX awk):**
+      1. An `// EXPECT: ` line whose text, after the prefix, is empty or only blanks is malformed (`bad()`), at that line.
+      2. The reader no longer stops at the first line that is neither blank nor a comment. It marks the header as ended there and reads on. After the header, a line matching `^[ \t]*\/\/[ \t]*(expected (exit|compile)|EXPECT:|@skip:|flags:|link:)` is malformed, at that line. No other line after the header is read as a directive, so a body comment such as `// expected output: none` is still allowed. Update the comment above the awk to say that directives after the header are refused, not ignored.
+      3. `scripts/test_test_headers.sh` gains the malformed cases `expect_empty` (line 1 `// EXPECT: `, line 2 `// expected compile fail`, a program that fails to compile), `expect_empty_alone` (line 1 `// EXPECT: `, `fn main() -> i32 { return 0; }`) and `directive_after_code` (line 1 `fn main() -> i32 { return 3; }`, line 2 `// expected exit 3`), each expected as `[FAIL] ... (malformed header, line N: ...)` with N 1, 1 and 2. It also gains a control `body_comment` (line 1 `// expected exit 0`, then `fn main() -> i32 {`, `    // expected output: none`, `    return 0;`, `}`), which passes.
+    - **Checks:**
+      - C1: `sh scripts/test_test_headers.sh`: quote the four new lines and the last line.
+      - C2: take-out. Remove step 1's rule and step 2's after-header rule (a scratch edit) and watch the three malformed cases fail; quote them, then restore.
+      - C3: the survey, as id:haf6g C3 did it (`tr_expectations` over every `*.zrl` of `tests/` and `corpus/` that is not a `*_lib.zrl`): only `tests/runner/fixtures/tests/bad_header.zrl` is malformed; quote the output.
+      - C4: `sh scripts/test_zbuild_diff.sh` prints the same `[PASS] zbuild-diff: 591 of 594 ...` line as before the edit, and `sh scripts/test_interface_attrs.sh` passes; quote both.
+      - C5: scripts only, so no `make preflight-changed`. `make test` after the last edit; quote its `Total:` line, which has the same counts as before plus the new cases.
+
+- [ ] +testinfra +review +AI-D @testinfra @checkin Review of Z2b9 (an empty EXPECT and a directive after the header are malformed) id:at0d6
+    > **Created:** 2026-11-13
+    > **Context:** placed by the reviewer at check-in id:zmcty
+    > **Branch:** `testinfra`
+    > **Depends:** id:vmg4z
+    > **Placed:** directly after the task it reviews. id:mrzb3, the first task after it, depends on it.
+
+    - **Review:**
+      1. Re-run id:vmg4z C2's take-out.
+      2. Run the five reviewer headers in `build/zmcty/h/` (if they are gone, those in id:zmcty finding 4) through the four readers: `a_empty_expect` and `e_empty_expect_alone` are now malformed at line 1, `d_directive_after_code` at line 2, and the others are unchanged.
+      3. Write two headers of the reviewer's own that are near the after-header rule's edge (a directive-like comment inside a string literal, or one indented in a block), and check how they are read.
+      4. Record the findings here, add follow-ups, `tm validate`, `tm done`.
 
 - [ ] +testinfra +diagnosis +AI-D @testinfra Z3b Why the ZIR verifier spends about 2 ms on a `continue` from a match arm inside a loop id:mrzb3
     > **Created:** 2026-11-13
     > **Context:** found by id:z0184
     > **Branch:** `testinfra`
-    > **Depends:** id:0f0vv
+    > **Depends:** id:0f0vv, id:at0d6
 
     - **Why:** id:z0184's scratch timers (its **Measured** bullets) put the cost in `ZirVerifier.verify` (`src/driver/module.zrl`, `run_body_passes_in_scratch`): `fn with_continue` 2.2 ms, `fn without_continue` 0.18 ms, the same loop written two ways (`build/z184/bis3.zrl`, also in id:z0184's text). A `continue` in a plain `if` costs nothing measurable. id:87kcw removes the shape from `io.zrl`, but any user program with it pays the same, and `stdlib/bufio.zrl` (lines 124, 178, 319, 396) and `stdlib/file.zrl` (174) have `continue`s still to classify.
     - **Do:** find which check inside `ZirVerifier.verify` takes the time on this CFG shape (timers around each of its passes, as id:z0184's patch does for the driver's), and why: an iteration count, a per-block copy, a revisit per back edge. Record the cause, a reproducer and the figure here. A fix is a new task. A fix that would change which programs are accepted is out of scope here and goes to the maintainer.
