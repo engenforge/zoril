@@ -87,9 +87,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `sh scripts/check_comment_noise.sh`: `[PASS] comment-noise: 136 files carry no scaffolding, step narration, task ID or stale path reference`; `scripts/check_comment_noise.sh` was not edited.
     - **Docs:** no doc quotes a reworded reason verbatim (searched `doc`, `README.md` and `KNOWN_ISSUES.md` for the first 60 characters of each old reason: no match), so none changed. Where a reason used an ID as a name, it now names the mechanism ("its fixpoint over the cycle", "the body summary", "a summary built from the origin sets"); the two `(found in ...)` citations and the `Z-0181` trailer were dropped.
 
-- [ ] +docs +AI-G @main Z-0187 `AGENTS.md`: a series branch merges into `main` at each reviewed milestone, not only at its end
+- [x] +docs +AI-G @main Z-0187 `AGENTS.md`: a series branch merges into `main` at each reviewed milestone, not only at its end
     > **Created:** 2026-11-12 by the review of the `testinfra` series; the rule is agreed by the maintainer, who asked for the first such merge (git:906265f). **Branch:** `main`.
+    > **Completed:** 2026-11-13 git:8bc8e8e
 
+    - **Done on `main` (git:8bc8e8e), answers by number:**
+      - C1: `grep -c 'at each milestone' AGENTS.md` prints `1`; `grep -c 'merges when its series is reviewed' AGENTS.md` prints `0`.
+      - C2: `git diff --stat` before the commit: `1 file changed, 1 insertion(+), 1 deletion(-)`, `AGENTS.md`.
+      - C3: no take-out check (prose rule). `make test`: `Total: 3263 run, 3263 passed, 0 failed, 94 skipped (112.1s)`, run after the last of the four `AGENTS.md` edits (git:8bc8e8e, git:8071e6a, git:5054108, git:3f29457).
+      - C4: `grep -c 'squashed where that makes' AGENTS.md` prints `1`, inside the **Code branches** bullet; `grep -c 'rebased or squashed' AGENTS.md` prints `1` (the completion-note rule), and the two agree: the note's sha is updated after a squash.
     - **Why:** "Code branches" says a series branch "merges when its series is reviewed". Held to the end of a long series, that keeps its finished work from every other branch: `main` and `provenance` paid for the slower differential and the bash-bound harness while `testinfra` had neither, and the fix for probe 422's hole, made on `testinfra`, stayed open on `main` until git:906265f. It also lets the branches drift: that merge's conflicts were recorded figures both sides had changed (line, `unsafe` and probe counts, seven corpus ZIL hashes).
     - **Do:** in `AGENTS.md`, "Working on tasks", replace in the **Code branches** bullet "and merges when its series is reviewed" with "and merges into `main` at each milestone: when a numbered step of its series is done and reviewed, and at once when it closes a hole `main` still has", and add after that sentence: "A task still awaiting review stays on the branch. The merge is the maintainer's decision; its conflicts in recorded figures (`README.md`, `doc/SAFETY.md`, `doc/spec/unsafe_policy.md`, `corpus/zrl_whole_program_zil.sha256`) are resolved by recomputing them from the merged tree (`scripts/check_safety_figures.sh`, with `--density --print`; `scripts/check_safety_model.sh`; `UPDATE_GOLDEN=1` in `scripts/test_incremental.sh`), never by taking a side, and `make test` and `make preflight-changed PREFLIGHT_BASE=<main before the merge>` run on the merge commit. After it the branch is rebuilt on the new `main`." Change nothing else.
     - **Added (the maintainer, 2026-11-12): squash on the way in.** The same edit adds, after the sentences above: "Before the merge, commits on the branch are squashed where that makes `main`'s history shorter and clearer: several commits of one task that are steps of one change (one per file, a fix to the commit before it) become one commit, whose message keeps each `Task:` line. Commits of different tasks are not joined, and a commit a later task's notes rely on to tell two changes apart stays its own. A squash changes no content: the rewritten branch's tree equals the old tip's (`git rev-parse <new>^{tree}` and `<old>^{tree}` print the same), the old tip is kept on a local branch until the merge is published, and every sha the task files cite is changed to its new one in a task commit that lists the pairs. Rewrite from the first squashed commit only, so earlier shas stay; a branch already published then needs a forced update, which is the maintainer's." Precedent: the vecclone series, and git:906265f, where seven per-script commits of Z-0146 became git:c29d500 and five shas changed (the pairs are in the sprint notes).
@@ -100,9 +106,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: no take-out check: the change is a rule in prose. `make test`, `Total:` line quoted.
       - C4: `grep -n 'squashed where that makes' AGENTS.md` shows the sentence, once, inside the **Code branches** bullet, and the bullet still names the completion note's rule for a rebased or squashed commit (`grep -n 'rebased or squashed' AGENTS.md`) without contradicting it.
 
-- [ ] +docs +AI-G @main Z-0188 `AGENTS.md`: the order of work is the order of `active.tm.md`, and a new task is placed by rule
+- [x] +docs +AI-G @main Z-0188 `AGENTS.md`: the order of work is the order of `active.tm.md`, and a new task is placed by rule
     > **Created:** 2026-11-12, asked by the maintainer. **Branch:** `main`. **Placed:** in `## Now` after Z-0187, as a rule every session reads.
+    > **Completed:** 2026-11-13 git:8071e6a
 
+    - **Done on `main` (git:8071e6a) and `tasks`, answers by number:**
+      - C1: `grep -c 'Placing a new task' AGENTS.md` prints `1`; the commit changes `AGENTS.md` only.
+      - C2: after the block at the top of `active.tm.md` became a pointer: `[PASS] active.tm.md conforms to SPEC-TASKMARK-05.` (and the same for `completed.tm.md` and `future.tm.md`).
+      - C3: an `awk` over `active.tm.md` comparing each open task line's `@` tag with the first `**Branch:**` value in its payload (`awk '/^- \[ \]/{task=$0; match($0," @[a-z0-9]+ "); tag=substr($0,RSTART+2,RLENGTH-3); seen=0; next} /^- \[/{task=""} task!="" && !seen && match($0,/\*\*Branch:\*\* *`?[a-z0-9]+/) { b=substr($0,RSTART,RLENGTH); sub(/.*\*\* *`?/,"",b); if (b!=tag) print "MISMATCH " tag " vs " b; seen=1 }' active.tm.md`) prints nothing.
+      - C4: no take-out check (prose rule). `make test`: `Total: 3263 run, 3263 passed, 0 failed, 94 skipped (112.1s)`. I wrote the priority-flag bullet without a section number: the task cited SPEC-TASKMARK-04 §4.3.1, which I did not re-verify against the 05 text.
     - **Why:** the order of work was written in three places (a numbered list in the sprint header, `Before:`/`After:`/`Order` bullets on tasks, and section headings by branch), which disagreed, and the branch headings kept a small `main` task that should go first below every `testinfra` task. On 2026-11-12 `active.tm.md` became one queue (`## Now`, then `## Next`), with the reading and placing rules at its top. This task moves those rules into `AGENTS.md`, where agents look for them.
     - **Do:** in `AGENTS.md`, "Working on tasks", add after the opening paragraph the bullets below, and in the same edit shorten the block at the top of `doc/tasks/active.tm.md` to a pointer to them (a task commit). Change nothing else.
       - "**The queue.** `active.tm.md` is one ordered list: `## Now` (about ten tasks, ready or made ready by the tasks above them) and `## Next` (later, in order). Work that is paused or not scheduled is in `future.tm.md`. A session takes the first open task in `## Now` whose **Depends:** tasks are all complete and whose model tag fits it, and switches to the branch the task names. Position is the only statement of order; **Depends:** in a task's header names hard blockers only, and no task carries `Before:`, `After:` or an order bullet (where an older task still does and it disagrees with the position, the position holds)."
@@ -115,9 +127,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: for every open task in `active.tm.md`, the `@` tag on its line equals its **Branch:** line: a one-line `awk` over the file prints nothing; quote the command.
       - C4: no take-out check: the change is a rule in prose. `make test`, `Total:` line quoted.
 
-- [ ] +docs +AI-G @main Z-0185 `AGENTS.md`'s command for listing the `src/` closure runs as written
+- [x] +docs +AI-G @main Z-0185 `AGENTS.md`'s command for listing the `src/` closure runs as written
     > **Created:** 2026-11-11 by the review of the `testinfra` series. **Branch:** `main`.
+    > **Completed:** 2026-11-13 git:5054108
 
+    - **Done on `main` (git:5054108), answers by number:**
+      - C1: before, `build/zoril --emit-deps src/main.zrl` printed `src/ast.zrl:4:1: error: could not find imported file: core.zrl` and exited `rc=1`.
+      - C2: after, the command copied from `AGENTS.md` (`timeout -k 5s 30s build/zoril --emit-deps src/main.zrl -I stdlib=stdlib -I src -I build/gen -o build/closure.txt`) exits `rc=0`, and `grep -c 'stdlib/' build/closure.txt` prints `277` (lines, not modules).
+      - C3: `grep -rn 'emit-deps src/main.zrl' --include='*.md' .` outside the task files shows `AGENTS.md` (fixed) and `KNOWN_ISSUES.md:36`, whose form `-I stdlib=stdlib -I build/gen --emit-deps src/main.zrl` carries `-I` options and exits 0 (run), so it was left.
+      - C4: no take-out check (C1 is the failing case). `make test`: `Total: 3263 run, 3263 passed, 0 failed, 94 skipped (112.1s)`.
     - **Why:** `AGENTS.md` ("The stage1 constraint") says to list the closure with `build/zoril --emit-deps src/main.zrl`. As written it fails: `src/ast.zrl:4:1: error: could not find imported file: core.zrl`, rc 1. The form that works is the one `scripts/test_incremental.sh` uses: `build/zoril --emit-deps src/main.zrl -I stdlib=stdlib -I src -I build/gen -o <file>` (rc 0; the file lists `stdlib/os/linux.zrl` and 14 other stdlib modules).
     - **Do:** replace the command in `AGENTS.md` with the working one, wrapped in `timeout` as the file's own rule asks, and say that it needs a built tree (`build/gen/version.zrl`). Change the same command anywhere else `grep -rn 'emit-deps src/main.zrl' --include='*.md' .` finds it.
     - **Checks:**
@@ -126,9 +144,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `grep -rn 'emit-deps src/main.zrl' --include='*.md' .` shows no occurrence without the `-I` options.
       - C4: no take-out check: the change is documentation and C1 is its failing case. `make test`, `Total:` line quoted (the document gates read `AGENTS.md`).
 
-- [ ] +docs +AI-G @main Z-0186 `AGENTS.md`: a design that skips work names what a wrong skip hides, with a planted case, before it is implemented
+- [x] +docs +AI-G @main Z-0186 `AGENTS.md`: a design that skips work names what a wrong skip hides, with a planted case, before it is implemented
     > **Created:** 2026-11-11 by the review of the `testinfra` series; the rule is agreed by the maintainer. **Branch:** `main`.
+    > **Completed:** 2026-11-13 git:3f29457
 
+    - **Done on `main` (git:3f29457), answers by number:**
+      - C1: `grep -c 'decides what not to run' AGENTS.md` prints `1`.
+      - C2: the commit changes `AGENTS.md` only (`git show --stat`).
+      - C3: no take-out check (prose rule). `make test`: `Total: 3263 run, 3263 passed, 0 failed, 94 skipped (112.1s)`.
     - **Why:** Z-0114's cache was implemented from a settled design whose gap (a stale entry silently drops a line that does not block) was found only in review, by planting a stale entry (R4). The stamp (Z-0142, Z-0143, Z-0144, Z-0150, removed in Z-0154) and the tier selection went the same way. A planted case at design time costs minutes; a review round costs a full run of the suites.
     - **Do:** in `AGENTS.md`, "Working on tasks", after the **Model tags** bullet, add the bullet: "**A mechanism that decides what not to run** (a cache, a stamp, a selector) is designed in an `+AI-D` task that names what a wrong skip would hide and from whom, and gives a planted case for each (a stale entry, an input the key misses, a record taken mid-run). Each planted case becomes a numbered check of the `+AI-G` task, with the safeguard taken out to show the check can fail. A gap the design accepts is written in the mechanism's own header comment." Change nothing else.
     - **Checks:**
