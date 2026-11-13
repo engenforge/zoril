@@ -201,6 +201,7 @@ fn run_one(
 // its exit code, or 127 when it could not be started.
 fn run_script(a: &Arena, script: [u8], first: [u8], second: [u8], out_path: [u8]) -> i32 {
     let mut cmd = Command.new("/bin/sh", a);
+    inherit_env(&mut cmd);
     cmd.arg(script);
     cmd.arg(first);
     if second.len > 0 as usize { cmd.arg(second); }
@@ -223,6 +224,12 @@ fn run_script(a: &Arena, script: [u8], first: [u8], second: [u8], out_path: [u8]
     let code = st.ok().unwrap().code();
     if code.is_none() { return 1; }
     return code.unwrap();
+}
+
+// A command with no `env_*` call gets an empty environment, and the scripts need ours (PATH, the
+// TR_* settings): removing a name no one sets keeps the parent's environment unchanged.
+fn inherit_env(cmd: &mut Command) {
+    cmd.env_remove("ZTEST_UNSET_NAME");
 }
 
 fn text_is(s: [u8], t: [u8]) -> bool {
@@ -251,6 +258,7 @@ fn main() -> i32 {
     // The plan: test.sh's own answer to its own options.
     let plan_path = cat2(&arena, work, "/ztest.plan");
     let mut planned = Command.new("/bin/sh", &arena);
+    inherit_env(&mut planned);
     planned.arg("scripts/test.sh");
     planned.arg("--print-plan");
     let mut ai = 1 as usize;

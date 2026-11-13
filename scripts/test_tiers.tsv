@@ -34,6 +34,7 @@ rt/*	runtime	ALL	mutation-self-test:canary-only stage0c-fixed-bugs:c-compiler-te
 tools/zilc/*	tools_zilc	ALL	mutation-self-test:canary-only stage0c-fixed-bugs:c-compiler-tests stage0c-unit:c-compiler-tests stage0c-corpus:c-compiler-corpus stage0c-docs:c-compiler-docs stage0c-error-locations:c-compiler-locations stage0c-minimal:c-compiler-build	ALL	-	ALL	-	compiled	zilc is in every test pipeline selecting all groups and safety-matrix
 tools/zbuild/*	tools_zbuild	ALL	mutation-self-test:canary-only stage0c-fixed-bugs:c-compiler-tests stage0c-unit:c-compiler-tests stage0c-corpus:c-compiler-corpus stage0c-docs:c-compiler-docs stage0c-error-locations:c-compiler-locations stage0c-minimal:c-compiler-build	ALL	-	ALL	-	compiled	build tool drives compiler and links modules selecting integration and matrix
 tools/zman/*	tools_zman	fmt-check no-warnings portability	-	stdlib	-	clean-tree man-pages	-	compiled	man page extractor tool selects stdlib group and man-pages scenario
+tools/ztest/*	tools_ztest	fmt-check no-warnings portability no-new-deps comment-noise	-	-	-	runner-output	-	compiled	the test run's dispatcher selects the runner-output scenario, which holds it to the same output as test.sh
 
 # --- Bootstrap anchor compilers ---
 bootstrap/stage0-c/*	stage0c	stage0c-fixed-bugs stage0c-unit stage0c-corpus stage0c-docs stage0c-error-locations stage0c-functional stage0c-minimal portability	-	-	-	-	-	compiled	frozen C bootstrap anchor selects all stage0c verification gates

@@ -93,7 +93,9 @@ KILL_DUR ?= 2s
 QUIET ?= --quiet
 ##var BASE Base commit to compare changed files against in test-changed (default: preflight_base)
 BASE ?= $(PREFLIGHT_BASE)
-TEST_RUNNER ?= ./scripts/test.sh
+##var RUNNER Test runner: test.sh (default) or ztest
+RUNNER ?= test.sh
+TEST_RUNNER ?= $(if $(filter ztest,$(RUNNER)),build/ztest,./scripts/test.sh)
 
 GATE = TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) ./scripts/test.sh $(QUIET) --gate
 
@@ -249,7 +251,7 @@ build/ztest: $(ZTEST_SRCS) build/runtime.o | $(TARGET) $(ZILC)
 	@./scripts/build_zrl.sh build/ztest tools/ztest/src/main.zrl \
 		-I stdlib=stdlib -I tools/ztest/src --compiler $(TARGET)
 
-ztest: build/ztest ## Build ztest, the test run's dispatcher (not yet part of make test)
+ztest: build/ztest ## Build ztest, the test run's dispatcher (make test RUNNER=ztest uses it)
 
 # ── Version module ────────────────────────────────────────────────────────────
 build/gen/version.zrl: FORCE | deps-build
@@ -422,7 +424,7 @@ preflight-changed: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/runtime_
 
 ##@ Testing
 TEST_GATE_DEPS ?= $(RT_HOST) build/runtime_hosted.o $(STAGE0_C_DIR)/build/zoril-c.release stage0c-build tools/zman/build/zman
-TEST_CHANGED_DEPS ?= $(TEST_GATE_DEPS) $(TARGET) $(ZILC) build/zbuild
+TEST_CHANGED_DEPS ?= $(TEST_GATE_DEPS) $(TARGET) $(ZILC) build/zbuild build/ztest
 test-changed: $(TEST_CHANGED_DEPS) ## Run tests scoped to changed files (BASE=<commit>, default: preflight_base)
 	@./scripts/check_deps.sh test
 	@if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
@@ -457,7 +459,7 @@ test-docs: $(TARGET) $(ZILC) $(RT_HOST) ## Compile the Zoril code blocks in the 
 test-getting-started: $(TARGET) $(ZILC) $(RT_HOST) build/zbuild build/runtime_hosted.o ## Test code snippets and walkthrough commands in doc/getting_started.md
 	@./scripts/test_getting_started.sh
 
-TEST_DEPS ?= $(if $(T),,$(TEST_GATE_DEPS)) $(TARGET) $(ZILC) build/zbuild
+TEST_DEPS ?= $(if $(T),,$(TEST_GATE_DEPS)) $(TARGET) $(ZILC) build/zbuild build/ztest
 test: $(TEST_DEPS) ## Run tests (TSUITE=all|..., T=<pattern> for verbose matching tests)
 	@./scripts/check_deps.sh test
 	@TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) $(TEST_RUNNER) $(if $(T),--verbose --filter '$(T)' tests corpus,$(QUIET) --suite '$(TSUITE)')
