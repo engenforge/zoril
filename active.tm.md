@@ -908,12 +908,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `make -n` on the up-to-date tree shows no `ztest` line for any target since it is built; by the Makefile, `test-checked` now lists it and `test-fast` does not need it (smoke list has no scenario).
       - C4: `make test`: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (120.4s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: rc 0, `Total: 1195 run, 1195 passed, 0 failed, 0 skipped (46.3s)`.
 
-- [ ] +testinfra +review +AI-D @testinfra @checkin Review of the Z2b3, Z2b4, Z1g, Z1h and Z2b5 batch (header grammar, the timed-out group, reaping, the inherited environment, preflight builds ztest) id:drcga
+- [x] +testinfra +review +AI-D @testinfra @checkin Review of the Z2b3, Z2b4, Z1g, Z1h and Z2b5 batch (header grammar, the timed-out group, reaping, the inherited environment, preflight builds ztest) id:drcga
     > **Created:** 2026-11-13
     > **Context:** placed by the reviewer at check-in id:0f0vv
     > **Branch:** `testinfra`
     > **Depends:** id:bekxx, id:trx5h, id:ppvzh, id:dcxxy, id:s6mg6
     > **Placed:** directly after the batch it reviews
+    > **Completed:** 2026-11-13 git:0e9a752
 
     - **Review:**
       1. Re-run each take-out: id:bekxx C3, id:trx5h C3, id:ppvzh C2, id:dcxxy C3.
@@ -922,6 +923,31 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       4. id:dcxxy: `ztest` with `env -i PATH=/usr/bin:/bin build/ztest --gate fixture-good`; it gives what `test.sh` gives.
       5. id:dcxxy: re-run its C4 wrapper probe, and check that every `Command.new_raw` in `tools/zbuild/src/` is followed by `env_clear()` (none was missed and none added since).
       6. Record the findings here as numbered bullets, add follow-up tasks, then `tm validate` and `tm done` this task. Then start id:9nnvq, the merge of milestone Z2b, which is next.
+    - **Reviewed (the reviewer, 2026-11-13), commits git:3ad3176, git:9969904, git:3d9e208, git:6a00117, git:0e9a752.** The batch does what each task says. Every take-out fails as recorded, and nothing found blocks the merge. Scratch files were under `build/drcga/` and the scratch gate under `tests/runner/fixtures/gates/` was deleted; the tree is clean.
+      - **Review 1, the take-outs, re-run:**
+        - id:bekxx C3 (`if [ -n "$T_MALFORMED" ]` made `if false`): `sh scripts/test_test_headers.sh` printed 12 `[FAIL]` lines; restored, `[PASS] test headers: every malformed case failed, every control passed`.
+        - id:trx5h C3 (the last `kill_group(9)` only if `has_exited` is not true; `make ztest`): `TR_WORK=build/drcga/zt TR_ITEM_TIMEOUT=3 timeout 60 build/ztest --gate fixture-scratch-term` printed `[FAIL] fixture-scratch-term (no result within 3s; its process group was ended)`, and `ps -eo pid,comm,args | awk '$2=="sleep" && $4==611' | wc -l` printed `1`. Restored and rebuilt: same `[FAIL]` line, count `0` (it was `0` before the run). This is check-in id:0f0vv's finding-3 probe, now closed. The generalist's correction of the task's `ps` field numbers is right.
+        - id:ppvzh C2 (`wait4(-1)` in `reap_listed`): `[FAIL] tests/stdlib/test_proc_wait_any_own.zrl (wrong exit code)`; restored, `[PASS] ... (1141ms)`.
+        - id:dcxxy C3, the test half (condition back to `self.env_touched`): `[FAIL] tests/stdlib/test_proc_cwd_env.zrl (wrong exit code)`, `exit code: 45`; restored, `[PASS]`. The `test_runner_output.sh` half was not re-run: the generalist recorded it hanging for 8 minutes, and the test half and review 4 cover the same condition. Its case g checks for a `PATH=` line rather than the first `/proc/self/environ` entry; that is equivalent here, since every run of the suite has `PATH` set, and it is simpler.
+        - id:s6mg6 C2: the generalist's substitute (`build/ztest` removed, `test_runner_output.sh --both` fails with `not an executable file`) shows the dependency the prerequisite supplies. Reading the Makefile diff confirms the three targets. `TEST_DEPS` and `TEST_CHANGED_DEPS` already list `build/ztest`. Accepted.
+      - **Review 2, the headers.** The survey (`tr_expectations` over every non-`_lib` `*.zrl` of `tests/` and `corpus/`) finds two malformed headers. One is the fixture. The other is `tests/incremental/error_unresolvable_import.zrl` (`// expected compile fail: unresolvable import`), which only `scripts/test_incremental.sh` compiles and which no per-file group runs, so nothing fails today (id:haf6g rewrites it). No directive-like line appears after a header. My own headers, run through `./scripts/test.sh --verbose`:
+        - `// expected exit 3\r` (CRLF): malformed.
+        - `   // EXPECT: x` (indented): malformed.
+        - `// expected exit 3 // note`: malformed.
+        - `//<TAB>expected exit 3` and `// expected exit 0003`: pass, read as 3.
+        - `// expected compile success` twice: passes. Harmless.
+        - `// Expected compile fail` on a program that compiles: passes as a run test. The grammar's directives are lower case, and the tree has `// Expected: ...` prose in headers (`tests/bootstrap/repro_zorilc_bitwise_not_integers.zrl:4`), so this stays prose. Accepted, not a task.
+        - **Finding 1**, `// EXPECT: x` with `// expected exit 3`: passes; the exit is never checked, since an `EXPECT` without `compile fail` is a warning test, which only compiles. And `// @skip:` with no reason: the test runs instead of being skipped. Follow-up id:haf6g.
+        - **Finding 2**, older than the batch: the first probe passed only because `x` is in its path. With `--verbose`, `_tr_missing_expect` greps the log, which holds the compile command line. `// EXPECT: --emit-zil` on a clean program: `[FAIL] ... (diagnostic missing)` without `--verbose`, `[PASS]` with it. One header in the tree has this shape, `tests/modular/iface_attrs/private_trait.zrl` (`EXPECT: private`), in no per-file group. Follow-up id:r85jb.
+        - **Finding 3:** `scripts/test_zbuild_diff.sh`'s worker and `scripts/test_interface_attrs.sh` read headers with their own copies of the old lax reader. Follow-up id:f6tfj.
+      - **Review 3, `has_exited` and `wait_any`** (a scratch test, `build/drcga/p/stopped.zrl`, `exit code: 0`):
+        - A `sleep 30` stopped with SIGSTOP: `has_exited` is `Ok(false)` after 200 ms, and `try_wait_any` is `Ok(None)`. After SIGCONT and SIGKILL, `wait` gives signal 9. `WSTOPPED` is not in the flags, so a stop is not an end.
+        - `/bin/true` outside the slice, ended, and `sleep 1` inside: `wait_any` is an error twice in a row. After the outside child's own `wait()`, `wait_any` blocks and returns the inside child.
+        - **Finding 4:** that is the rule id:ppvzh specified, but the doc comment and `standard_library.md` §4.4 say "when such a child ends first", which leaves out the zombie that ended before the call and the repeat on every call. Follow-up id:rvn2w (the words and a test case). id:z0138 gains note (6): the pool polls with `try_wait_any`, never `wait_any`.
+      - **Review 4:** `env -i PATH=/usr/bin:/bin build/ztest --gate fixture-good` and the same with `./scripts/test.sh`: the outputs, with timings removed, are identical (`Total: 3 run, 3 passed, 0 failed, 1 skipped`).
+      - **Review 5:** `rg -n -A3 'Command.new_raw' tools/zbuild/src/` shows all seven spawns (`graph.zrl:165`, `build.zrl:121`, `136`, `143`, `151`, `398`, `tools.zrl:150`), each followed by `env_clear()`. Nothing else in `tools/zbuild/src/` builds a `Command`. The wrapper probe: `FOO_ZB_PROBE=1 build/zbuild --qbe <wrapper> ... m.zrl` built and ran a one-line program; the wrapper logged 6 environment lines, and `grep -c FOO_ZB_PROBE` printed `0`.
+      - **Also checked:** `git merge-tree --write-tree main testinfra` gives a tree with no conflict, and `git log testinfra..main` is empty, so the merge would be a fast-forward of 14 commits (id:9nnvq). The generalist's `sed -i` slips touched no behaviour (the diffs were read).
+      - **Plan:** follow-ups id:r85jb, id:haf6g, id:f6tfj and id:rvn2w, all `+AI-G`, then check-in id:zmcty. They are placed after id:9nnvq, the merge, since none is a hole of what the merge brings. Finding 2 is on `main` already. The maintainer may move them ahead of the merge.
 
 - [ ] +testinfra +merge +AI-D @testinfra Merge `testinfra` into `main` at milestone Z2b: `ztest` runs the plan, and `proc.zrl` groups, environments and reaping id:9nnvq
     > **Created:** 2026-11-13
@@ -943,6 +969,99 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       3. `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` on the `testinfra` tip being merged; quote each `Total:` line.
       4. Ask the maintainer. After the merge, on the merge commit: `make test`, and `make preflight-changed PREFLIGHT_BASE=<main before the merge>`, each `Total:` line quoted. Then `testinfra` is rebuilt on the new `main`, and a sprint note records the merge, as the 2026-11-12 note does.
     - **An earlier merge is possible.** `testinfra` at git:6122499 already passes `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (id:z0137's C7). If the maintainer wants Z2b on `main` before the fixes, the same steps apply to that commit, and the fixes follow at Z2c (id:ehcd2).
+
+- [ ] +testinfra +tests +AI-G @testinfra Z2b6 A test's `// EXPECT:` text is matched against the compiler's output only, not the command line `--verbose` logs id:r85jb
+    > **Created:** 2026-11-13
+    > **Context:** found at check-in id:drcga (finding 2), settled by the reviewer for an `+AI-G` session; older than the batch it was found in
+    > **Branch:** `testinfra`
+    > **Depends:** id:drcga
+    > **Placed:** after id:9nnvq, first of the batch that fixes what check-in id:drcga found. It is not a hole of the batch under review, so it does not hold up the merge; the maintainer may move it ahead of the merge.
+
+    - **Why:** with `--verbose`, `tr_run_file` (`scripts/lib/test_runner.sh`) writes the compile command (`$ ./build/zoril ... FILE`) into `$_log`, and `_tr_missing_expect` greps `$_log`. So an `EXPECT` substring that occurs in the command line (the file's path, an include root, `--emit-zil`) is found there, and a test that fails without `--verbose` passes with it. The review's probe, a program that compiles cleanly with the header `// EXPECT: --emit-zil`: `./scripts/test.sh build/drcga/h2/w.zrl` gives `[FAIL] ... (diagnostic missing)`, and `./scripts/test.sh --verbose` on the same file gives `[PASS]`. In the tree, `tests/modular/iface_attrs/private_trait.zrl` (`// EXPECT: private`, a path that holds `private_trait`) is the one header whose text is in its own command line. That directory is in no per-file group, so no recorded result changes. `_tr_diagnostics` has the same fault: for a path under `tests/error_reporting/` it picks the command line as an `error` line.
+    - **Do (`scripts/lib/test_runner.sh`, POSIX `sh`):**
+      1. In `tr_run_file`, the compile step's output goes to `$_dir/compile.out` (truncated first, and created empty for a `.zil` test that is not compiled), and is then appended to `$_log`, so the verbose output keeps its order: command, then its output.
+      2. `_tr_missing_expect` and `_tr_diagnostics` read `$_dir/compile.out`, not `$_log`. Every caller of the two is in a branch that follows the compile step (`compile_fail`, `warning`, `compile failed`), so nothing they need is in another file.
+      3. `scripts/test_test_headers.sh` gains the review's case, through its `check` function (a well-formed header whose test must fail): `expect_in_cmdline`, the header `// EXPECT: --emit-zil` on `fn main() -> i32 { return 0; }`, whose line is `[FAIL] $P/expect_in_cmdline.zrl (diagnostic missing)`. The scenario already runs `test.sh --verbose`, so it covers the route.
+    - **Checks:**
+      - C1: `sh scripts/test_test_headers.sh`: quote the `expect_in_cmdline` line and the last line.
+      - C2: take-out. Point `_tr_missing_expect` back at `$_log` (a scratch edit) and watch C1's case fail; quote it, then restore.
+      - C3: `./scripts/test.sh --verbose tests/error_reporting/` and the same without `--verbose` give the same `Total:` line; quote both.
+      - C4: `sh scripts/test_runner_output.sh --both` passes; quote its last line for each runner (`ztest` runs each file through `test.sh --item`).
+      - C5: scripts only, so no `make preflight-changed`. `make test` after the last edit; quote its `Total:` line.
+
+- [ ] +testinfra +tests +AI-G @testinfra Z2b7 The header grammar refuses `expected exit` beside a warning test's `EXPECT`, and an `@skip:` with no reason id:haf6g
+    > **Created:** 2026-11-13
+    > **Context:** found at check-in id:drcga (finding 1), settled by the reviewer for an `+AI-G` session
+    > **Branch:** `testinfra`
+    > **Depends:** id:drcga
+    > **Placed:** after id:r85jb, in the batch that fixes what check-in id:drcga found
+
+    - **Why:** two header shapes that id:bekxx's grammar accepts still make a test mean something other than it says. The review's probes (`./scripts/test.sh --verbose` on scratch files):
+      - `// EXPECT: x` then `// expected exit 3` on a program that returns 3: `[PASS]`. An `EXPECT` without `expected compile fail` makes the test a warning test, which only compiles, so the `expected exit` is never checked. The pass came through id:r85jb's fault, the `x` in the file's path, but without that fault the exit is still dropped.
+      - `// @skip:` with nothing after it, on a program that returns 3: `[FAIL] ... (wrong exit code)`. The empty reason leaves `skip` empty, so the test runs instead of being skipped.
+      - Neither shape is in the tree today (the review's survey of the headers of `tests/` and `corpus/`), so no test changes kind.
+    - **Do (`scripts/lib/test_runner.sh`, the awk in `tr_expectations`):**
+      1. A header with an `// EXPECT:` line and an `expected exit` line, and no `expected compile fail`, is malformed; the offending line is the second of the pair. So is one with an `// EXPECT:` line and `expected compile success` (a warning test does not assemble, so `compile success` would be dropped the same way). The survey found neither in the tree.
+      2. `// @skip:` followed by nothing but blanks is malformed.
+      3. `tests/incremental/error_unresolvable_import.zrl`'s first line, `// expected compile fail: unresolvable import`, is one the grammar refuses. That file is compiled only by `scripts/test_incremental.sh`, which reads no header, so this does not fail today, but it reads as a directive. Rewrite it as `// expected compile fail` followed by `// An import of a module that does not exist.` Then `scripts/test_incremental.sh` and its `[PASS] unresolvable import failed with located diagnostic` line are unchanged.
+      4. `scripts/test_test_headers.sh` gains the malformed cases `expect_and_exit` (line 2), `expect_and_success` (line 2) and `skip_empty` (line 1), and a control `expect_with_fail`: `// expected compile fail` + `// EXPECT: ` + a diagnostic on a program that fails to compile, which still passes.
+    - **Checks:**
+      - C1: `sh scripts/test_test_headers.sh`: quote the four new lines and the last line.
+      - C2: take-out. Remove step 1's and step 2's rules (a scratch edit) and watch the three malformed cases fail; quote them, then restore.
+      - C3: the survey: `. scripts/lib/test_runner.sh` and `tr_expectations` over every `*.zrl` of `tests/` and `corpus/` that is not a `*_lib.zrl`. Only `tests/runner/fixtures/tests/bad_header.zrl` is malformed; quote the command's output.
+      - C4: `sh scripts/test_incremental.sh --quiet` passes; quote its last line.
+      - C5: scripts and one test comment only, so no `make preflight-changed`. `make test` after the last edit; quote its `Total:` line.
+
+- [ ] +testinfra +tests +AI-G @testinfra Z2b8 zbuild-diff and the interface-attribute check read test headers with the runner's reader id:f6tfj
+    > **Created:** 2026-11-13
+    > **Context:** found at check-in id:drcga (finding 3), settled by the reviewer for an `+AI-G` session
+    > **Branch:** `testinfra`
+    > **Depends:** id:drcga
+    > **Placed:** after id:haf6g, in the batch that fixes what check-in id:drcga found; after it so both readers take id:haf6g's grammar at once
+
+    - **Why:** id:bekxx gave the per-file runner one header grammar, read from the header only. Two other scripts that decide how to build and judge the same test files keep their own readers, which are the old lax ones. `scripts/test_zbuild_diff.sh`'s generated `worker.sh` matches `expected compile fail`, `expected exit N` and the rest anywhere in the file and ignores what it does not recognise. `scripts/test_interface_attrs.sh` uses `grep -q '^// expected compile fail'` and a `sed` for `expected exit`. So a header that the runner reads one way can be read another way by these two, and `AGENTS.md` ("Two implementations of one thing are tested against each other") means these gates must judge a test as its header says.
+    - **Do (POSIX `sh`):**
+      1. `scripts/test_zbuild_diff.sh`, `worker.sh`: replace the `awk` header reader with `. scripts/lib/test_runner.sh` (once, after `portability.sh`) and `tr_expectations "$f"` per file. The mapping: `T_KIND` `skip`, `compile_fail`, `compile_success` and `warning` are left out as today (`continue`); `run` uses `T_EXIT`, `T_FLAGS` and `T_LINK`; `malformed` prints `DIFF $f malformed header, line $T_MALFORMED`, so the gate fails on it as the runner does. Check that sourcing the library in the worker defines nothing the worker uses under another meaning (its variables are `T_*`, `TR_*` and `_tr*`).
+      2. `scripts/test_interface_attrs.sh`: the same, for `expect_fail` (`T_KIND` is `compile_fail`) and `want` (`T_EXIT`); a malformed header is a `fail`.
+      3. The scripts' header comments say they read headers with `tr_expectations`.
+    - **Checks:**
+      - C1: before the edit, `grep -c 'expected compile fail' scripts/test_zbuild_diff.sh scripts/test_interface_attrs.sh` (quote it); after, `rg -n 'tr_expectations' scripts/test_zbuild_diff.sh scripts/test_interface_attrs.sh` shows one call in each.
+      - C2: the `zbuild-diff` gate's `OK`/`DIFF`/`SKIP` counts before and after the edit are equal (from `build/gates/zbuild-diff.log` of two `make test` runs, or `sh scripts/test_zbuild_diff.sh` twice); quote both.
+      - C3: planted case. Copy a runnable test that `zbuild-diff` builds to a scratch name under `tests/` with its first line changed to `// expected exit banana`, run `sh scripts/test_zbuild_diff.sh`, and watch it report `DIFF <file> malformed header, line 1: // expected exit banana`; then delete the copy. Take-out: with step 1's `malformed` branch removed (a scratch edit), the same run reports the copy as `OK`; restore.
+      - C4: `sh scripts/test_interface_attrs.sh` passes; quote its last line.
+      - C5: scripts only, so no `make preflight-changed`. `make test` after the last edit; quote its `Total:` line.
+
+- [ ] +testinfra +stdlib +docs +AI-G @testinfra Z1i `wait_any`'s doc and spec line say when it returns ECHILD for a child it was not given id:rvn2w
+    > **Created:** 2026-11-13
+    > **Context:** found at check-in id:drcga (finding 4), settled by the reviewer for an `+AI-G` session
+    > **Branch:** `testinfra`
+    > **Depends:** id:drcga
+    > **Placed:** after id:f6tfj, in the batch that fixes what check-in id:drcga found
+
+    - **Why:** after id:ppvzh, `wait_any`'s doc comment (`stdlib/proc.zrl`) and `doc/spec/standard_library.md` §4.4 say it returns ECHILD when a child it was not given "ends first". The review's probe shows more: while any child outside the slice has ended and is not reaped, `wait_any` returns ECHILD at once, even if that child ended before the call and a child in the slice is still running, and it does so on every call until that child's own handle waits for it. After that `wait_any` blocks for the slice as it should. (`try_wait_any` is not affected: it waits by pid.) The behaviour is the one id:ppvzh specified, so only the words change; an ambiguity in `doc/spec/` is a bug (`AGENTS.md`).
+    - **Do:**
+      1. `stdlib/proc.zrl`, `wait_any`'s comment: replace its last sentence with: "A child the call was not given is never reaped. While one of those has ended and is not yet reaped, the result is ECHILD, at once and on every call, even if a child in `children` is still running; wait for it with its own handle first. `try_wait_any` waits for each given child by pid, and is not affected."
+      2. `doc/spec/standard_library.md` §4.4, the `wait_any` line: the same rule in one sentence, in place of "and `wait_any` returns ECHILD when such a child ends first".
+      3. `make man-gen` (the man page follows the comment).
+      4. The review's probe becomes a test: add to `tests/stdlib/test_proc_wait_any_own.zrl`, after its existing cases, a case where B (`/bin/true`, not in the slice) has ended (wait for `Z` as the file already does) while A (`sleep 1`, in the slice) still runs. `wait_any([A])` is an error twice in a row; after `b.wait()`, `wait_any([A])` returns A's index.
+    - **Checks:**
+      - C1: `./scripts/test.sh --verbose tests/stdlib/test_proc_wait_any_own.zrl`: `exit code: 0`; quote it.
+      - C2: take-out. In a scratch edit make `wait_any` loop back to `waitid` instead of returning ECHILD after the second pass (it then spins, so run C1 under `timeout 10`); watch the new case fail or time out, quote it, restore.
+      - C3: `make man-gen` and `sh scripts/test_man_pages.sh` pass; `scripts/check_safety_figures.sh --all` shows no FAIL (re-record the figures in the same commit if a comment line moved one).
+      - C4: `grep -c proc.zrl build/closure.txt` prints `0`.
+      - C5: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, each `Total:` line quoted. The completion note says the fuzz record is stale.
+
+- [ ] +testinfra +review +AI-D @testinfra @checkin Review of the Z2b6, Z2b7, Z2b8 and Z1i batch (EXPECT read from the compiler's output, two more malformed shapes, one header reader, the ECHILD rule in words) id:zmcty
+    > **Created:** 2026-11-13
+    > **Context:** placed by the reviewer at check-in id:drcga
+    > **Branch:** `testinfra`
+    > **Depends:** id:r85jb, id:haf6g, id:f6tfj, id:rvn2w
+    > **Placed:** directly after the batch it reviews
+
+    - **Review:**
+      1. Re-run each take-out: id:r85jb C2, id:haf6g C2, id:f6tfj C3, id:rvn2w C2.
+      2. Rerun the header survey, and write three malformed headers of the reviewer's own. Run each through `test.sh`, `test.sh --verbose`, `build/ztest` and the `zbuild-diff` worker, and check that all four agree.
+      3. Record the findings here as numbered bullets, add follow-up tasks, then `tm validate` and `tm done` this task.
 
 - [ ] +testinfra +diagnosis +AI-D @testinfra Z3b Why the ZIR verifier spends about 2 ms on a `continue` from a match arm inside a loop id:mrzb3
     > **Created:** 2026-11-13
@@ -1036,6 +1155,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - (3) The per-item timeout and its `[FAIL]` line stay as id:655rf made them.
       - (4) The Makefile's name for the old runner is `RUNNER=test.sh`, as id:z0137 made it, not `RUNNER=sh`.
       - (5) C6's before-figures for `test.sh`, at `testinfra` git:6122499: `Total: 3269 run, 3269 passed, 0 failed, 94 skipped (207.8s)` on `taskset -c 0-3` (with `TR_JOBS=4 MUTATION_JOBS=4`), about 115 s on all 16 threads, and 465 s for the serial `ztest`.
+      - (6) Added at check-in id:drcga: the pool polls with `try_wait_any` (or `has_exited`), never `wait_any`. `wait_any` returns ECHILD on every call while any other child of the process (the planner, the stray-files script) has ended and is not reaped, even with pool items still running (id:rvn2w); `try_wait_any` waits by pid and is not affected.
     - **Checks:**
       - C1: full runs of both runners with `--results`; `sort` and `diff` of the two files prints nothing; quote both `Total:` lines.
       - C2: a scenario that starts `make test RUNNER=ztest` in the background, sends it SIGINT after 20 s, and then finds no process left whose command line names `build/zoril`, `build/zilc`, `qbe` or a test file (`ps -eo pid,args`); exit status 130; quote it.
