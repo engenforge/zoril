@@ -434,12 +434,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: the fuzz record `bench/fuzz/README.md` is stale (`stdlib/io.zrl` changed); `scripts/check_fuzz_fresh.sh` reports it.
       - Recorded figures that followed the two shorter functions, in the same commit: `doc/SAFETY.md` §5 stdlib lines 6,351 to 6,349; `doc/spec/unsafe_policy.md` stdlib density 10.81% to 10.82% and `4,551` to `4,549` lines; six `corpus/zrl_whole_program_zil.sha256` hashes (`UPDATE_GOLDEN=1 sh scripts/test_incremental.sh`, which then printed `PASS: all incremental compilation tests passed.`). Before them, `make test` had the `safety-figures` (3) and `incremental` failures; after, only the md-check one.
 
-- [ ] +testinfra +refactor +AI-G @testinfra id:z0136 Z2a The test plan as data: gates, group paths and scenarios in one file both runners read
+- [x] +testinfra +refactor +AI-G @testinfra id:z0136 Z2a The test plan as data: gates, group paths and scenarios in one file both runners read
     > **Created:** 2026-11-07
     > **Context:** by id:z0117.
     > **Branch:** `testinfra`
     > **Before:** id:z0137.
     > **Related:** id:z0115 (its selector reads the same names).
+    > **Completed:** 2026-11-13 git:8ca9d0d
 
     - **Now:** the plan lives in `case` blocks in `scripts/test.sh`: `GATES_ALL` and each gate's command, `group_paths`, `group_scenarios` and each scenario's command.
     - **Do:** move them to a plain TSV file under `scripts/` (kind, name, group, command), which `scripts/test.sh` reads instead of its `case` blocks; the order of the file is the display order. A refactor: the output of `make test` is unchanged.
@@ -450,6 +451,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: a row with a typo in the plan file (an unknown kind, a missing command) makes `scripts/test.sh` exit 2 naming the file and line, not run without that item; quote it.
       - C5: `sh scripts/test_runner_output.sh`, `sh scripts/test_tier_select.sh`, `sh scripts/test_mutation_check.sh` (it reads the gate order) pass.
       - C6: `make test`, `Total:` line quoted.
+
+    - **Done on `testinfra` (git:8ca9d0d), answers by number:**
+      - C1: before: `Total: 3260 run, 3259 passed, 1 failed, 94 skipped (109.4s)`; after: `Total: 3260 run, 3259 passed, 1 failed, 94 skipped (111.5s)`. The one failure in both is `md-check` on the id:z0184 table (see C6). The two `--results` files (`before1.results`, `after1.results`, each 1197 lines) are identical sorted (`diff` prints nothing) and unsorted (`cmp` silent). Both runs wrote to the same file name over two runs, so I took the last 1197 lines of each.
+      - C2: the plan as the old case blocks gave it, dumped by sourcing `group_title`, `group_paths`, `group_scenarios`, `scenario_run` and `gate_command` from `git show HEAD:scripts/test.sh` (`build/z136/dump_old.sh`) and from the new file (`dump_new.sh`): 102 lines (34 gates, 2 extra gates, 7 groups with their roots, every scenario with its command), `diff plan_before.txt plan_after.txt` prints nothing. `./scripts/test.sh --list-gates | diff - gates_before.txt` and `--list-groups | diff - groups_before.txt` print nothing. There is no scenario listing option; I added none.
+      - C3: `grep -E '^  ' <log> | awk '{print $1}'` over the two runs (42 count lines each), `diff` prints nothing.
+      - C4: each on a scratch edit of `scripts/test_plan.tsv`, `./scripts/test.sh --list-gates` exits 2 and prints no list: `test.sh: scripts/test_plan.tsv:16: unknown kind "gates" (gate, extra-gate, paths or scenario)`; `:17: empty command`; `:18: expected 4 tab-separated columns (kind, name, group, command), found 3`; `:76: unknown group "nosuch"`; `:77: duplicate scenario "hosted" (first at line 76)`. The file was restored (`git diff` empty).
+      - C5: `sh scripts/test_runner_output.sh`: `[PASS] a scenario exiting 77 is reported as skipped, with its reason`; `sh scripts/test_tier_select.sh`: `test_tier_select: all checks passed` (it parsed `group_scenarios` out of `test.sh` with `sed`, so it now reads the `scenario` rows; `scripts/test_tiers.tsv` gains a row for `scripts/test_plan.tsv` selecting everything, as for `scripts/test.sh`); `sh scripts/test_mutation_check.sh`: `[PASS] a run following a surviving mutant passes without reporting stale survivors`.
+      - C6: `make test`: `Total: 3260 run, 3259 passed, 1 failed, 94 skipped (114.0s)`; the failure is `md-check: doc/tasks/active.tm.md:388: table is 141 characters wide (limit 140, 10 rows)`, from the id:z0184 table, unchanged by this task and present before it. `make test` runs a scripts-only change, so no `make preflight-changed`.
+    - **Found:** (1) `stage0c-corpus` and `stage0c-error-locations` failed `exited 2 without reporting a failing item` in two of five runs, with `mv: cannot stat 'build/zoril-c.tmp'` / `make: *** [Makefile:122: build/zoril-c] Error 1`: two stage0c gates run `make` at once and both rebuild `build/zoril-c`. It is not caused by this change (the first `before` run failed the same way); it is a race in `bootstrap/stage0-c/Makefile`'s `build/zoril-c` rule. Not fixed here. (2) A run after a commit fails `incremental`, `tool-versions` and `route-coverage` until `make` rebuilds the toolchain, because the version stamp carries the commit and the dirty flag.
 
 - [ ] +stdlib +tests +AI-G @testinfra id:z0131 Z1b `proc.zrl`: a child in a process group of its own, signalled as a group
     > **Created:** 2026-11-07

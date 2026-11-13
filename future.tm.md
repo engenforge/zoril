@@ -219,6 +219,14 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Do:** from id:z0105's pipeline split, estimate the fixed cost per test (process spawns, stdlib parsing and lowering, link) and its total. Prototype on 50 run tests from one directory: (a) merged into one file of functions called from one `main`, (b) one compiler process for many inputs, if that mode is cheap to add. Report the time saved against what is lost: which test failed, independent `expected exit`, crash isolation. Record which kinds can never merge (`expected compile fail`, `EXPECT:`, `flags:`, `link:`). A decision, then an implementation task, follows only if the saving is large.
     - **Deferred by id:z0103 (2026-11-06):** a per-file test takes about 34 ms through the whole pipeline (`scripts/test.sh --verbose tests/functional/structs/stack_bloat_baseline.zrl`), so the 1283 of them are about 4 s of a 230 s run on 16 cores; merging them could save at most that, at the cost of failure isolation. Reopen it only if id:z0105's 4-job profile shows the per-file groups as a large share of CPU time.
 
+- [ ] +testinfra +diagnosis +AI-D @testinfra Two stage0c gates race on `build/zoril-c` in `make test` (`mv: cannot stat build/zoril-c.tmp`) id:nf1fv
+    > **Created:** 2026-11-13
+    > **Context:** found while doing id:z0136, which it did not cause.
+    > **Placed:** future file, under Evidence and tooling: not blocking, and not a one-session fix until the cause is known.
+
+    - **Seen:** `./scripts/test.sh --gates` failed `stage0c-corpus` (and once `stage0c-error-locations`) with `exited 2 without reporting a failing item`, in two of five runs on one host. `build/gates/stage0c-corpus.log` ends `mv: cannot stat 'build/zoril-c.tmp': No such file or directory` and `make: *** [Makefile:122: build/zoril-c] Error 1`. Both gates run `make -C bootstrap/stage0-c test_*` at once, and both can decide `build/zoril-c` needs rebuilding.
+    - **Next:** read `bootstrap/stage0-c/Makefile` around line 122 and find whether the rule writes `build/zoril-c.tmp` under one name for every make; a rebuilt-once step before the gates start (or a per-process temporary name) would end it. The stage0 compiler is frozen except for a blocking bug, but the freeze covers the compiler, not its Makefile; ask the maintainer if a change there is needed.
+
 ## Types, diagnostics and the standard library
 
 - [ ] +generics +types id:z0032 G1 `impl<T: Copy> Source<T> for S` fails to bind `T` when it appears only in the trait's arguments
