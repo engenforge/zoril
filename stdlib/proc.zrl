@@ -163,8 +163,12 @@ impl Child {
         return self.unix_kill(9);
     }
 
-    // Sends the Unix signal number sig to the child process.
+    // Sends the Unix signal number sig to the child process. After the child is reaped this fails
+    // with ESRCH and signals nothing, since its pid may belong to another process by then.
     pub fn unix_kill(self: &mut Child, sig: i32) -> Result<(), Error> {
+        if self.status.is_some() {
+            return Result.Err(Error.from_linux_errno(3));
+        }
         // SAFETY: kill(62) takes no pointer, only the pid of the child this handle owns.
         let res = unsafe { @syscall(62, self.pid as u64, sig as u64) } as i64;
         if res < 0 {
@@ -176,8 +180,13 @@ impl Child {
     // Sends the Unix signal number sig to every process in the child's process group, which holds
     // the child and whatever it started. Fails with EINVAL, signalling nothing, for a child that
     // was not started with `set_new_group`, and for a group id of 0 or 1: kill(0) would signal the
-    // caller's own group and kill(-1) every process the user may signal.
+    // caller's own group and kill(-1) every process the user may signal. After the child is reaped
+    // this fails with ESRCH and signals nothing, so a group is signalled before `wait` to end what
+    // the child left running.
     pub fn kill_group(self: &mut Child, sig: i32) -> Result<(), Error> {
+        if self.status.is_some() {
+            return Result.Err(Error.from_linux_errno(3));
+        }
         if !self.own_group || self.pid <= 1 as i64 {
             return Result.Err(Error.from_linux_errno(22));
         }

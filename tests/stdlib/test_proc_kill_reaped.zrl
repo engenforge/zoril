@@ -1,0 +1,259 @@
+// [PASS] a child that was reaped is not signalled: unix_kill, kill and kill_group fail with ESRCH
+// expected exit 0
+//
+// Once `wait`, `wait_any` or `try_wait_any` has reaped a child its pid may belong to another
+// process, so the signal methods refuse. The grouped child's grandchild (a sleep whose pid the shell
+// writes under /tmp) must still be running after the refused `kill_group`. Reads /proc/<pid>/stat,
+// which a host without /proc lacks: the test then says so and passes without running.
+import "core.zrl";
+import "mem_raw.zrl";
+import "proc.zrl";
+import "io.zrl";
+import "vec.zrl";
+use io::{eprint, Error};
+use mem_raw::{ArenaHeader, arena_init};
+use proc::{Command, Child, wait_any, try_wait_any};
+use vec::Vec;
+
+fn now_ms() -> i64 {
+    // SAFETY: clock_gettime(228) of CLOCK_MONOTONIC (1) writes two i64 into the slot above.
+    let ts = unsafe { @alloca<[i64; 2]>(1) };
+    let _ = unsafe { @syscall(228, 1 as u64, ts as u64) };
+    return ts[0 as usize] * 1000 + ts[1 as usize] / 1000000;
+}
+
+fn sleep_ms(ms: i64) {
+    // SAFETY: nanosleep(35) reads the two i64 of the slot written just below.
+    let ts = unsafe { @alloca<[i64; 2]>(1) };
+    ts[0 as usize] = ms / 1000;
+    ts[1 as usize] = (ms % 1000) * 1000000;
+    let _ = unsafe { @syscall(35, ts as u64, 0 as u64) };
+}
+
+fn put(p: *mut u8, at: usize, c: u8) {
+    // SAFETY: every caller passes a 512-byte buffer and keeps `at` below that.
+    unsafe { *((p as usize + at) as *mut u8) = c; }
+}
+
+fn get(p: *mut u8, at: usize) -> u8 {
+    // SAFETY: as `put`, for a byte that was written or read into the buffer.
+    return unsafe { *((p as usize + at) as *mut u8) };
+}
+
+// Writes "/proc/<pid>/stat" and its NUL at the start of buf.
+fn proc_stat_path(buf: *mut u8, pid: i64) {
+    let head = "/proc/";
+    let mut n = 0 as usize;
+    while n < 6 as usize {
+        put(buf, n, head[n]);
+        n = n + 1 as usize;
+    }
+    let mut digits = 1 as usize;
+    let mut t = pid / 10;
+    while t > 0 {
+        digits = digits + 1 as usize;
+        t = t / 10;
+    }
+    let mut v = pid;
+    let mut k = digits;
+    while k > 0 as usize {
+        put(buf, n + k - 1 as usize, (48 + (v % 10)) as u8);
+        v = v / 10;
+        k = k - 1 as usize;
+    }
+    n = n + digits;
+    let tail = "/stat";
+    let mut m = 0 as usize;
+    while m < 5 as usize {
+        put(buf, n + m, tail[m]);
+        m = m + 1 as usize;
+    }
+    put(buf, n + 5 as usize, 0 as u8);
+}
+
+// One field of /proc/<pid>/stat: which = 0 is the state letter (as its character code), which = 1
+// the process group id. -1 when the process has no /proc entry.
+fn stat_field(pid: i64, which: i32) -> i64 {
+    // SAFETY: a 512-byte slot, used first for the path and then as the read buffer.
+    let buf = unsafe { @alloca<[u8; 512]>(1) };
+    let p = buf as *mut u8;
+    proc_stat_path(p, pid);
+    // SAFETY: open(2) O_RDONLY on the NUL-terminated path just written into `p`.
+    let fd = unsafe { @syscall(2, p as u64, 0 as u64, 0 as u64) } as i64;
+    if fd < 0 {
+        return -1 as i64;
+    }
+    // SAFETY: read(0) fills at most 511 bytes of the 512-byte slot.
+    let n = unsafe { @syscall(0, fd as u64, p as u64, 511 as u64) } as i64;
+    // SAFETY: close(3) of the descriptor opened above.
+    let _ = unsafe { @syscall(3, fd as u64) };
+    if n <= 0 {
+        return -1 as i64;
+    }
+    // The command name is parenthesised and may hold anything, so the fields start after the
+    // last ')'.
+    let mut r = (n - 1) as usize;
+    while r > 0 as usize && get(p, r) != 41 as u8 {
+        r = r - 1 as usize;
+    }
+    let mut i = r + 2 as usize;
+    if which == 0 {
+        return get(p, i) as i64;
+    }
+    // Skip "S ", read ppid, skip the space, read pgrp.
+    i = i + 2 as usize;
+    while (i as i64) < n && get(p, i) != 32 as u8 {
+        i = i + 1 as usize;
+    }
+    i = i + 1 as usize;
+    let mut pg = 0 as i64;
+    while (i as i64) < n && get(p, i) >= 48 as u8 && get(p, i) <= 57 as u8 {
+        pg = pg * 10 + (get(p, i) as i64 - 48);
+        i = i + 1 as usize;
+    }
+    return pg;
+}
+
+// True once the process is gone or only a zombie that has not been reaped (a container's pid 1
+// need not reap), within five seconds.
+fn gone(pid: i64) -> bool {
+    let t0 = now_ms();
+    while now_ms() - t0 < 5000 {
+        let st = stat_field(pid, 0);
+        if st < 0 || st == 90 || st == 88 {
+            return true;
+        }
+        sleep_ms(20);
+    }
+    return false;
+}
+
+fn running(pid: i64) -> bool {
+    let st = stat_field(pid, 0);
+    return st >= 0 && st != 90 && st != 88;
+}
+
+fn unlink_file(path: [u8]) {
+    // SAFETY: unlink(87) of a NUL-terminated literal path.
+    let _ = unsafe { @syscall(87, path.ptr as u64, 0 as u64) };
+}
+
+// The pid the shell wrote to PATH, polled for up to five seconds; 0 if none appeared.
+fn read_pid_file(path: [u8]) -> i64 {
+    let t0 = now_ms();
+    while now_ms() - t0 < 5000 {
+        // SAFETY: a 64-byte slot to read the file into.
+        let buf = unsafe { @alloca<[u8; 64]>(1) };
+        let p = buf as *mut u8;
+        // SAFETY: open(2) O_RDONLY on a NUL-terminated literal path.
+        let fd = unsafe { @syscall(2, path.ptr as u64, 0 as u64, 0 as u64) } as i64;
+        if fd >= 0 {
+            // SAFETY: read(0) fills at most 63 bytes of the slot.
+            let n = unsafe { @syscall(0, fd as u64, p as u64, 63 as u64) } as i64;
+            // SAFETY: close(3) of the descriptor opened above.
+            let _ = unsafe { @syscall(3, fd as u64) };
+            let mut v = 0 as i64;
+            let mut i = 0 as usize;
+            while (i as i64) < n && get(p, i) >= 48 as u8 && get(p, i) <= 57 as u8 {
+                v = v * 10 + (get(p, i) as i64 - 48);
+                i = i + 1 as usize;
+            }
+            if v > 0 && (i as i64) < n {
+                return v;
+            }
+        }
+        sleep_ms(20);
+    }
+    return 0 as i64;
+}
+
+fn kill_pid(pid: i64) {
+    // SAFETY: kill(62) of SIGKILL on a pid the test started.
+    let _ = unsafe { @syscall(62, pid as u64, 9 as u64) };
+}
+
+fn spawn_sh(arena: *mut ArenaHeader, script: [u8], grouped: bool) -> Child {
+    let mut cmd = unsafe { Command.new_raw("/bin/sh", arena) };
+    cmd.arg("-c");
+    cmd.arg(script);
+    if grouped {
+        cmd.set_new_group();
+    }
+    return cmd.spawn().ok().unwrap();
+}
+
+// C1: a reaped group leader's group is not signalled.
+fn reaped_group(arena: *mut ArenaHeader) -> i32 {
+    unlink_file("/tmp/zoril_proc_kill_reaped.pid\0");
+    let mut kid = spawn_sh(arena, "sleep 30 & echo $! > /tmp/zoril_proc_kill_reaped.pid", true);
+    let gpid = read_pid_file("/tmp/zoril_proc_kill_reaped.pid\0");
+    if gpid == 0 as i64 {
+        kill_pid(kid.pid);
+        return 1;
+    }
+    if kid.wait().is_err() {
+        kill_pid(gpid);
+        return 2;
+    }
+    let r = kid.kill_group(15);
+    sleep_ms(200);
+    let alive = running(gpid);
+    kill_pid(gpid);
+    let ended = gone(gpid);
+    if r.is_ok() || r.err().unwrap().linux_errno() != 3 { return 3; }
+    if !alive { return 4; }
+    if !ended { return 5; }
+    return 0;
+}
+
+fn is_esrch(r: Result<(), Error>) -> bool {
+    return r.is_err() && r.err().unwrap().linux_errno() == 3;
+}
+
+// C2: reaped by `wait_any` and by `try_wait_any`, `unix_kill` and `kill` fail with ESRCH.
+fn reaped_ungrouped(arena: *mut ArenaHeader) -> i32 {
+    let mut kids = unsafe { Vec::<Child>.new_in_raw(arena) };
+    kids.push(spawn_sh(arena, "exit 0", false));
+    let w = wait_any(kids.as_mut_slice());
+    if w.is_err() { return 1; }
+    // The kernel answers ESRCH for a pid that is gone, so the handle is pointed at a live process
+    // to stand in for a reused pid: only the refusal in the method keeps that process alive.
+    let mut victim = spawn_sh(arena, "sleep 30", false);
+    kids.get_mut(0 as usize).unwrap().pid = victim.pid;
+    if !is_esrch(kids.get_mut(0 as usize).unwrap().unix_kill(15)) { kill_pid(victim.pid); return 2; }
+    if !is_esrch(kids.get_mut(0 as usize).unwrap().kill()) { kill_pid(victim.pid); return 3; }
+    sleep_ms(200);
+    let alive = running(victim.pid);
+    kill_pid(victim.pid);
+    let _ = victim.wait();
+    if !alive { return 7; }
+
+    let mut more = unsafe { Vec::<Child>.new_in_raw(arena) };
+    more.push(spawn_sh(arena, "exit 0", false));
+    let t0 = now_ms();
+    let mut got = false;
+    while !got && now_ms() - t0 < 5000 {
+        let r = try_wait_any(more.as_mut_slice());
+        if r.is_err() { return 4; }
+        got = r.ok().unwrap().is_some();
+        if !got { sleep_ms(20); }
+    }
+    if !got { return 5; }
+    if !is_esrch(more.get_mut(0 as usize).unwrap().unix_kill(15)) { return 6; }
+    return 0;
+}
+
+fn main() -> i32 {
+    // SAFETY: getpid(39) takes no arguments.
+    let me = unsafe { @syscall(39) } as i64;
+    if stat_field(me, 0) < 0 {
+        eprint("test_proc_kill_reaped: skipped, /proc is not available\n");
+        return 0;
+    }
+    let arena = unsafe { arena_init(4194304) } as *mut ArenaHeader;
+    let a = reaped_group(arena);
+    if a != 0 { return 10 + a; }
+    let b = reaped_ungrouped(arena);
+    if b != 0 { return 20 + b; }
+    return 0;
+}
