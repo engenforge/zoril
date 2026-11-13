@@ -87,64 +87,91 @@ fn wait_for_pid(pid: i64) -> Result<ExitStatus, Error> {
     return Result.Ok(decode_status(*wstatus_ptr));
 }
 
-// Reaps whichever unreaped child in `children` ends first and records its status on that `Child`;
-// returns its index, or none when `nohang` is set and none has ended. wait4(-1) reaps any child of
-// the process, so a child outside `children` that ends first would lose its status: that is
-// reported as ECHILD, and callers pass every child they have spawned.
-fn reap_any(children: [mut Child], nohang: bool) -> Result<Option<usize>, Error> {
+// Reaps the first unreaped child in `children` that has ended, by pid with WNOHANG, and records its
+// status on that `Child`; returns its index, or none when none has ended. Only the given children
+// are waited for: wait4(-1) would reap one that is not in `children`, whose own handle would never
+// learn it was reaped. With no unreaped child the result is an error (ECHILD).
+fn reap_listed(children: [mut Child]) -> Result<Option<usize>, Error> {
     let mut pending = false;
-    let mut k = 0 as usize;
-    while k < children.len {
-        if children[k].status.is_none() {
+    // SAFETY: one uninitialized `i32` slot in this frame, which wait4 fills before anything
+    // reads it.
+    let wstatus_ptr = unsafe { @alloca<i32>(1) };
+    let mut i = 0 as usize;
+    while i < children.len {
+        if children[i].status.is_none() {
             pending = true;
+            let mut r = -4 as i64;
+            while r == -4 as i64 {
+                *wstatus_ptr = 0;
+                // SAFETY: wait4(61) with WNOHANG writes the status of the child `children[i].pid`
+                // through `wstatus_ptr`, the slot allocated just above.
+                r = unsafe {
+                    @syscall(61, children[i].pid as u64, wstatus_ptr as u64, 1 as u64, 0 as u64)
+                } as i64;
+            }
+            if r < 0 {
+                return Result.Err(Error.from_linux_errno((0 as i64 - r) as i32));
+            }
+            if r > 0 {
+                children[i].status = Option.Some(decode_status(*wstatus_ptr));
+                return Result.Ok(Option.Some(i));
+            }
         }
-        k = k + 1;
+        i = i + 1 as usize;
     }
     if !pending {
         return Result.Err(Error.from_linux_errno(10));
     }
-    let options = if nohang { 1 as u64 } else { 0 as u64 };
-    // SAFETY: one uninitialized `i32` slot in this frame, which wait4 fills before anything
-    // reads it.
-    let wstatus_ptr = unsafe { @alloca<i32>(1) };
-    let mut r = -4 as i64;
-    while r == -4 as i64 {
-        *wstatus_ptr = 0;
-        // SAFETY: wait4(61) with pid -1 writes the status of whichever child ended through
-        // `wstatus_ptr`, the slot allocated just above.
-        r = unsafe { @syscall(61, -1 as i64 as u64, wstatus_ptr as u64, options, 0 as u64) } as i64;
-    }
-    if r < 0 {
-        return Result.Err(Error.from_linux_errno((0 as i64 - r) as i32));
-    }
-    if r == 0 {
-        return Result.Ok(Option.None);
-    }
-    let mut i = 0 as usize;
-    while i < children.len {
-        if children[i].pid == r && children[i].status.is_none() {
-            children[i].status = Option.Some(decode_status(*wstatus_ptr));
-            return Result.Ok(Option.Some(i));
-        }
-        i = i + 1;
-    }
-    return Result.Err(Error.from_linux_errno(10));
+    return Result.Ok(Option.None);
 }
 
 // Blocks until one of the unreaped children in `children` ends, and returns its index. That call
 // reaps it: the status is kept on the `Child`, and its `wait` returns it without calling wait4.
 // Children that were already reaped are skipped; with none left the result is an error (ECHILD).
+// A child the call was not given is never reaped: when one of those ends first the result is
+// ECHILD, and the child is left for its own handle to wait for.
 pub fn wait_any(children: [mut Child]) -> Result<usize, Error> {
-    let r = reap_any(children, false);
-    if r.is_err() {
-        return Result.Err(r.err().unwrap());
+    let first = reap_listed(children);
+    if first.is_err() {
+        return Result.Err(first.err().unwrap());
     }
-    return Result.Ok(r.ok().unwrap().unwrap());
+    let got = first.ok().unwrap();
+    if got.is_some() {
+        return Result.Ok(got.unwrap());
+    }
+    // SAFETY: 32 `i32` slots (a 128-byte siginfo_t) in this frame, zeroed below before
+    // waitid fills them; nothing reads them.
+    let info = unsafe { @alloca<[i32; 32]>(1) };
+    let mut r = -4 as i64;
+    while r == -4 as i64 {
+        let mut k = 0 as usize;
+        while k < 32 as usize {
+            info[k] = 0;
+            k = k + 1 as usize;
+        }
+        // SAFETY: waitid(247) with P_ALL (0), WEXITED|WNOWAIT blocks until a child has ended
+        // and reaps nothing; it writes a siginfo_t through `info`, the slot allocated above.
+        r = unsafe {
+            @syscall(247, 0 as u64, 0 as u64, info as u64, 16777220 as u64, 0 as u64)
+        } as i64;
+    }
+    if r < 0 {
+        return Result.Err(Error.from_linux_errno((0 as i64 - r) as i32));
+    }
+    let second = reap_listed(children);
+    if second.is_err() {
+        return Result.Err(second.err().unwrap());
+    }
+    let found = second.ok().unwrap();
+    if found.is_some() {
+        return Result.Ok(found.unwrap());
+    }
+    return Result.Err(Error.from_linux_errno(10));
 }
 
 // As `wait_any`, but returns none at once when no child has ended yet.
 pub fn try_wait_any(children: [mut Child]) -> Result<Option<usize>, Error> {
-    return reap_any(children, true);
+    return reap_listed(children);
 }
 
 impl Child {
