@@ -256,6 +256,13 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Reproducers:** a private `fn priv_gen<T>` used from another module (whole-program: "it is private"; `zbuild`: "the module defines no 'priv_gen'"); a private generic method called from another module (whole-program: "cannot access private method"; `zbuild`: "no field 'priv_m' on 'S'").
     - **Cause:** `is_private_signature_fn` and `method_is_written` (`src/interface_print.zrl`) skip generic items. **Direction:** write unreferenced private generic functions and methods into the `.zri` as bodiless signatures, and check the resolver rejects calling them before instantiation; then narrow the `KNOWN_ISSUES.md` §4 entry.
 
+- [ ] +stdlib +docs `proc.zrl`: say what a command given both `set_envp` and an `env_*` call passes to the child id:w8vmg
+    > **Created:** 2026-11-13
+    > **Context:** found at check-in id:mxt3d, reviewing id:z0132.
+    > **Placed:** future file: a comment, not blocking anything.
+
+    - **Seen:** `Command.spawn` (`stdlib/proc.zrl`) uses the environment `build_envp` builds whenever an `env_*` method ran, and then ignores the array `set_envp` set; neither doc comment says so. **Do:** say it in `env_set`'s and `set_envp`'s comments (or make `set_envp` clear the `env_*` state, which is a behaviour change to decide first), `make man-gen`, `sh scripts/test_man_pages.sh`.
+
 ## Decisions and hygiene
 
 - [ ] +safety +decision +AI-D id:z0102 Whether `unsafe fn` gets a `fn` type of its own, callable only in `unsafe`
