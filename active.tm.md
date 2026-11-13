@@ -341,7 +341,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - Stale record: no `src/`, `stdlib/`, `tools/` or `rt/` change, so `bench/fuzz/README.md` is unaffected. The preflight's untracked `bench/` files were deleted.
     - **Awaiting review:** the reviewer reruns D2, D3 and D5 (`sh scripts/test_reject_diff.sh`, then the two scratch edits), checks that a completion note citing a cached run is visible from its `base verdicts: cache` line, and decides whether D4's changed expectation (the merge base with `main` no longer yields `2 newly refused`; 4 newly accepted and 12 newly refused against 215ff53) needs a look at those 16 lines.
 
-- [ ] +testinfra +review +AI-D @testinfra @checkin Review of z0189, the AGENTS.md check-in rule and z0114's follow-up (D1 to D7) id:1d7s2
+- [x] +testinfra +review +AI-D @testinfra @checkin Review of z0189, the AGENTS.md check-in rule and z0114's follow-up (D1 to D7) id:1d7s2
     > **Created:** 2026-11-13
     > **Context:** placed by the reviewer at check-in id:rcdde, asked by the maintainer
     > **Branch:** `testinfra`
@@ -354,6 +354,18 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       2. id:955fk (git:5cf24c6): the reviewer wrote it at the maintainer's request, so the maintainer reviews it here, or a session that did not write it does. Check that the `AGENTS.md` diff matches the task's **Do** and that `tm validate` still passes from the repository root.
       3. id:z0114's follow-up, on `testinfra`: re-run D2, D3 and D5 (`sh scripts/test_reject_diff.sh`). Change a key input of the reviewer's own choosing and see a miss. Check that a completion note citing a cached run shows it on its `base verdicts: cache` line. Decide whether the cache commit and the follow-up are the `testinfra` milestone that `AGENTS.md` ("Code branches") merges into `main`, and say so to the maintainer.
       4. Record each finding here as a numbered bullet, add any follow-up tasks (`tm add --after`), then `tm validate` and `tm done` this task.
+    - **Decided (the maintainer, 2026-11-13):** the work of a reviewing session, `+AI-D` or `+AI-G`, needs no review by another session; the maintainer is asked only where a decision is unclear or has large implications. So item 2 needs no outside review, and is answered by the checks below.
+    - **Findings (the reviewer, 2026-11-13):**
+      1. id:z0189 holds. C1: `cat doc/tasks/*.tm.md | grep -oE 'Z-[0-9]{4}' | wc -l` prints `1`, the quoted `Z-0148` inside id:z0189's own C7 note, and `id:z[0-9]{4}` is 191 distinct and 2,024 mentions. The 4 fewer than the note's 2,028 are the identifiers git:0c913e3 and C2 took out of three titles. `grep -oE 'Z-[0-9]{4}' doc/private/*.md` prints nothing. C2: `tm id`: `Nothing to stamp: every pending task has an identifier.` C3: `tm validate doc/tasks/*.tm.md`: `[PASS]` for all three files. C4: `grep -v '^    > ' | sort` of each file at git:33056f2 and at git:0a740e3: `diff` is empty for `future.tm.md` and `completed.tm.md`; for `active.tm.md` it shows only the two check-in titles git:0c913e3 renamed, in between. C5 and C6, on a scratch copy with every open task but id:z0109 closed: `tm next` names `[z0109] ... id:z0109 T5 ...` (its **Depends:** id:z0105 is completed); with the completed task renamed to `id:z0105x`: `tm: [z0109] depends on id:z0105, which names no task` and `tm: no task is ready`. This check-in now comes up through `tm next` because its **Depends:** are complete, not because an identifier names no task.
+      2. id:955fk (git:5cf24c6): its completion note answers C1 to C5. From the repository root, `tm validate` prints `[PASS]` for all three files.
+      3. id:z0114's follow-up (git:bc504fd) matches its **Do**. `sh scripts/test_reject_diff.sh`: `[PASS] reject-diff-selftest: ...`. D2: `run 1: fresh, stored as cache 7af3c7cb49c3`, runs 2 to 5 `cache 7af3c7cb49c3, 36 rerun fresh, sample seed 1`, `run 6: fresh, stored as cache 7af3c7cb49c3`. D3, with `CACHE_MAX_HITS=99999` (scratch, restored): `[FAIL] reject-diff-selftest: run 6 of the hit limit was not a fresh store: cache 7af3c7cb49c3, ...`. D5, with case 7's `keyed "run_front.sh"` (after the variant script is written) replaced by `fail "planted"` (scratch, restored): `[FAIL] reject-diff-selftest: planted`, and `ls scripts/.check_reject_diff_variant.sh` reports no such file. Key inputs of the reviewer's choosing, added to case 7 in a scratch copy: renaming a file in the probes tree with its content unchanged (`mylib_x/lib.zrl` to `lib2.zrl`) and adding a stdlib file that copies an existing one each gave a miss (`fresh, stored as cache 158945ff5e82` and `bb27ede68f0a`), so paths are in the key as well as content. After the restores, `git status --short scripts` prints nothing.
+      4. A cited cached run is visible: id:z0114's own C8 note quotes `reject-diff: base verdicts: cache 2b6048a477c6, ...` (written before the rule), and every run prints the `base verdicts:` line before its verdict line.
+      5. D4's changed expectation needs no look at the 16 lines. `git diff --stat $(git merge-base main testinfra) testinfra -- src stdlib tools rt` prints nothing, so `testinfra` changes no compiler input against `main`. The 4 newly accepted and 12 newly refused programs against 215ff53 are the reviewed changes on `main` since then, and the run passed.
+      6. Milestone, for the maintainer: `git log main..testinfra` holds only git:2f2b26f and git:bc504fd, id:z0114's cache and its follow-up, now reviewed. `git merge-tree --write-tree main testinfra` merges with no conflict. The reviewer recommends merging `testinfra` into `main` now ("Code branches"); the merge is the maintainer's.
+      7. Not a task: the hit count is read with `[ "$(cat hits)" -ge 4 ]`, which on a non-numeric file prints a shell error and keeps the entry. The file is written through a temporary name and `mv`, so no killed run leaves it partial.
+    - **Plan edits:** id:z0131 and id:z0132 are settled for an `+AI-G` session. Each now lists in **Checks:** the C7 that its review bullet asked for, id:z0132 gains a take-out check (C8), and id:z0131's group signal refuses a group id of 0 or 1 (C8). The next check-in, id:mxt3d, follows the batch id:z0136, id:z0131, id:z0132, id:z0137, and id:z0123 depends on it. id:z0184 (`+AI-D`) comes next and is the reviewer's.
+
+    > **Completed:** 2026-11-13 git:bc504fd
 
 - [ ] +testinfra +measurement +AI-D @testinfra id:z0184 T15 Where the front end's per-program time goes once a program imports the stdlib
     > **Created:** 2026-11-11
@@ -407,6 +419,9 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: take `setpgid` out (a scratch edit) and watch C1 fail; quote it; restore.
       - C5: build through stage1 (`rm build/zoril && make`) and then `make`, both without a warning; quote the last line of each.
       - C6: `make man-gen` and `sh scripts/test_man_pages.sh` pass; `make test` and `make preflight-changed`, each `Total:` line quoted.
+    - **Settled at check-in id:1d7s2 (the reviewer, 2026-11-13), for an `+AI-G` session:** (1) The **Decided** bullet stands over the **Do**: `setpgid` (109) is called with `@syscall` in `stdlib/proc.zrl`, and `stdlib/os/linux.zrl` is not edited. (2) The group-signal method returns an error, and calls no `kill`, when the group id it would signal is 0 or 1: `kill(0, sig)` signals the caller's own group and `kill(-1, sig)` signals every process the user may signal. It is reachable only if a child was not started in a group of its own, so the method also returns an error for a child started without the new-group option. (3) Two checks are added:
+      - C7: `git diff --stat` for the task names no file that `build/zoril --emit-deps src/main.zrl -I stdlib=stdlib -I src -I build/gen -o <file>` lists; quote both.
+      - C8: the group-signal method on a child started without the new-group option returns an error and signals nothing (the child is still running afterwards, then the test kills it by pid); quote the test's output.
 
 - [ ] +stdlib +tests +AI-G @testinfra id:z0132 Z1c `proc.zrl`: a child's working directory and environment, set without `unsafe`
     > **Created:** 2026-11-07
@@ -423,6 +438,9 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: a name or value with an interior NUL is refused before fork, as for arguments.
       - C5: `grep -rn 'set_envp' stdlib tools tests` shows no caller left that needs `unsafe` for this.
       - C6: `make man-gen` and `sh scripts/test_man_pages.sh` pass; `make test` and `make preflight-changed`, each `Total:` line quoted.
+    - **Settled at check-in id:1d7s2 (the reviewer, 2026-11-13), for an `+AI-G` session:** the **Review** bullet's route stands: `chdir` (80) is called with `@syscall` in `stdlib/proc.zrl` and no closure module is edited. `set_envp` stays, still `unsafe`, for callers that build their own `envp`; C5 checks only that no caller needs it for what these methods now do. Two checks are added:
+      - C7: `git diff --stat` for the task names no file that `build/zoril --emit-deps src/main.zrl -I stdlib=stdlib -I src -I build/gen -o <file>` lists; quote both.
+      - C8: take the `chdir` call out (a scratch edit) and watch C1 fail; quote it; restore.
 
 - [ ] +testinfra +tests +AI-G @testinfra id:z0137 Z2b `ztest` runs the plan one item at a time, with today's output
     > **Created:** 2026-11-07
@@ -441,10 +459,24 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `touch src/main.zrl` and `make build/ztest`: it does not rebuild (it is built on its own inputs only); quote `make`'s output.
       - C7: `make test` and `make preflight-changed`, each `Total:` line quoted.
 
+- [ ] +testinfra +review +AI-D @testinfra @checkin Review of the Z2a, Z1b, Z1c and Z2b batch (the test plan as data, process groups, a child's directory and environment, ztest one item at a time) id:mxt3d
+    > **Created:** 2026-11-13
+    > **Context:** placed by the reviewer at check-in id:1d7s2
+    > **Branch:** `testinfra`
+    > **Depends:** id:z0136, id:z0131, id:z0132, id:z0137
+    > **Placed:** directly after the batch it reviews. id:z0123, the first task after it, depends on it.
+
+    - **Review:**
+      1. For each task of the batch, re-run its take-out check (id:z0136 C4, id:z0131 C4, id:z0132 C8, id:z0137 C4) and confirm the **Awaiting review:** bullet's reruns.
+      2. id:z0131: probe the group-signal method's refusals (C8, and a group id of 0 or 1) and check that no path reaches `kill` with a non-negative or `-1` target. id:z0131 and id:z0132: C7 holds, so the stage1 constraint is not touched.
+      3. id:z0136 and id:z0137: the two runners' results files and their `[FAIL]` lines for the planted fixtures agree (id:z0137 C2, C3).
+      4. Record each finding here as a numbered bullet, add any follow-up tasks (`tm add --after`), place the next `@checkin`, then `tm validate` and `tm done` this task.
+
 - [ ] +testinfra +measurement +AI-D @testinfra id:z0123 T9a Is a build and a test result the same from the same inputs?
     > **Created:** 2026-11-06
     > **Context:** split from id:z0113 by the review.
     > **Branch:** `testinfra`
+    > **Depends:** id:mxt3d
     > **Before:** id:z0113.
 
     - **Do:** id:z0113's **Measure first** bullet: is `build/zoril` byte-identical when built from one commit in two checkouts (through stage1 and through `build/zoril`)? Do two `make test` runs on one tree give the same `--results` and the same output digests per item (list every item that differs, and why)? Record the commands and the answers here, and in id:z0113.
