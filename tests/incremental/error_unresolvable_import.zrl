@@ -1,4 +1,5 @@
-// expected compile fail: unresolvable import
+// expected compile fail
+// An import of a module that does not exist.
 import "non_existent_module_xyz123.zrl";
 
 pub fn dummy() -> i32 {

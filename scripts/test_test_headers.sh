@@ -55,9 +55,14 @@ bad skip_hides_nothing 2 '// expected exit banana' "// @skip: not today\n// expe
 # A well-formed header whose text is only in the command line --verbose logs must still fail.
 check expect_in_cmdline "[FAIL] $P/expect_in_cmdline.zrl (diagnostic missing)" "// EXPECT: --emit-zil\n$MAIN"
 
+bad expect_and_exit 2 '// expected exit 3' "// EXPECT: x\n// expected exit 3\n$MAIN3"
+bad expect_and_success 2 '// expected compile success' "// EXPECT: x\n// expected compile success\n$MAIN"
+bad skip_empty 1 '// @skip:' "// @skip:\n$MAIN3"
+
 good exit_ok "// expected exit 3\n$MAIN3"
 good exit_code_ok "// expected exit code: 0\n$MAIN"
 good compile_fail_expect "// expected compile fail\n// EXPECT: expected\nfn main() -> i32 { return 0 }\n"
+good expect_with_fail "// expected compile fail\n// EXPECT: expected\nfn main() -> i32 { return 0 }\n"
 good prose "// expecting a slice\n$MAIN"
 good header_only "$MAIN// expected compile fail\n"
 

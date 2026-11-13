@@ -141,7 +141,9 @@ tr_expectations() {
         function q(v) { gsub(/\047/, "\047\\\047\047", v); return "\047" v "\047" }
         # Directives live in the header: the lines up to the first that is neither blank nor a
         # comment. A header line that starts like a directive but is not exactly one of the
-        # forms is malformed, and so is a header whose directives contradict each other.
+        # forms is malformed, and so is a header whose directives contradict each other. An EXPECT
+        # line without `expected compile fail` makes a warning test, which only compiles, so an
+        # exit code or `compile success` beside it would be dropped.
         function bad(why) { if (mal == "") mal = FNR ": " $0 }
         !/^[ \t]*(\/\/.*)?$/ { exit }
         {
@@ -149,15 +151,15 @@ tr_expectations() {
             if (match(body, /^[ \t]*\/\/[ \t]*/)) body = substr(body, RLENGTH + 1)
         }
         body !~ /^(expected |EXPECT|flags|link|@skip)/ { next }
-        /^[ \t]*\/\/[ \t]*@skip:/ { if (skip == "") { v = $0; sub(/^[ \t]*\/\/[ \t]*@skip:[ \t]*/, "", v); skip = v }; next }
-        /^\/\/ EXPECT: / { v = $0; sub(/^\/\/ EXPECT: /, "", v); expect = expect (expect == "" ? "" : "\n") v; next }
+        /^[ \t]*\/\/[ \t]*@skip:/ { v = $0; sub(/^[ \t]*\/\/[ \t]*@skip:[ \t]*/, "", v); if (v == "") bad(); if (skip == "") skip = v; next }
+        /^\/\/ EXPECT: / { if (nexit || csucc) bad(); nexpect++; v = $0; sub(/^\/\/ EXPECT: /, "", v); expect = expect (expect == "" ? "" : "\n") v; next }
         /^\/\/ flags: / { if (nflags++) bad(); v = $0; sub(/^\/\/ flags: /, "", v); flags = v; next }
         /^\/\/ link: / { v = $0; sub(/^\/\/ link: /, "", v); link = link v " "; next }
         /^[ \t]*\/\/[ \t]*expected compile fail[ \t]*$/ { if (csucc || nexit) bad(); cfail = 1; next }
-        /^[ \t]*\/\/[ \t]*expected compile success[ \t]*$/ { if (cfail || nexit) bad(); csucc = 1; next }
+        /^[ \t]*\/\/[ \t]*expected compile success[ \t]*$/ { if (cfail || nexit || nexpect) bad(); csucc = 1; next }
         /^[ \t]*\/\/[ \t]*expected exit( code:)? [0-9]+[ \t]*$/ {
             v = $0; sub(/[ \t]*$/, "", v); sub(/.* /, "", v)
-            if (nexit++ || cfail || csucc || v + 0 > 255) bad()
+            if (nexit++ || cfail || csucc || nexpect || v + 0 > 255) bad()
             ex = v; next
         }
         { bad() }
