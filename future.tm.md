@@ -227,6 +227,17 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Seen:** `./scripts/test.sh --gates` failed `stage0c-corpus` (and once `stage0c-error-locations`) with `exited 2 without reporting a failing item`, in two of five runs on one host. `build/gates/stage0c-corpus.log` ends `mv: cannot stat 'build/zoril-c.tmp': No such file or directory` and `make: *** [Makefile:122: build/zoril-c] Error 1`. Both gates run `make -C bootstrap/stage0-c test_*` at once, and both can decide `build/zoril-c` needs rebuilding.
     - **Next:** read `bootstrap/stage0-c/Makefile` around line 122 and find whether the rule writes `build/zoril-c.tmp` under one name for every make; a rebuilt-once step before the gates start (or a per-process temporary name) would end it. The stage0 compiler is frozen except for a blocking bug, but the freeze covers the compiler, not its Makefile; ask the maintainer if a change there is needed.
 
+- [ ] +testinfra +portability +AI-G @testinfra The fuzz scenarios' skip line names `lua` and `timeout`, but the `fuzz` profile they test also needs `bash` id:043c1
+    > **Created:** 2026-11-13
+    > **Context:** found at check-in id:0f0vv while checking the dependency lists
+    > **Branch:** `testinfra`
+
+    - **Why:** `scripts/test_fuzz_jobs.sh`, `test_fuzz_mode_diff.sh` and `test_fuzz_tools.sh` skip when `scripts/check_deps.sh --required-only fuzz` fails, and print `[SKIP] <name>: fuzz dependencies (lua, timeout) not satisfied`. The `fuzz` profile also requires `bash`, for `scripts/fuzz_safe.sh`, so on a host with Lua and `timeout` but no `bash` the line names neither the tool that is missing nor the reason. `AGENTS.md` (Portability) says a skip names the missing tool.
+    - **Do:** print the names `check_deps.sh` reports as missing (its `--required-only` output, or a `--missing` mode if it has none) in each of the three skip lines.
+    - **Checks:**
+      - C1: with a `PATH` shim that leaves out `bash` only (`path_without` from `scripts/lib/path_shim.sh`), each scenario prints a `[SKIP]` line naming `bash`; quote the three.
+      - C2: `make test`; quote its `Total:` line.
+
 ## Types, diagnostics and the standard library
 
 - [ ] +generics +types id:z0032 G1 `impl<T: Copy> Source<T> for S` fails to bind `T` when it appears only in the trait's arguments

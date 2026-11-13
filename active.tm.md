@@ -671,13 +671,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Not started: more than one session (a generalist, 2026-11-13).** `tools/ztest` does not exist (`ls tools` lists `zbuild zilc zman`; no commit touches `tools/ztest`), so this task writes a whole test runner in Zoril, not an addition to one. Measured against `scripts/test.sh` and `scripts/lib/test_runner.sh` as they are after id:z0136: the options and `TR_*` variables to honour (about 20); the per-file pipeline (header parsing for `expected exit`, `compile fail`, `EXPECT`, `flags`, `link`, `@skip`, then compile, `zilc`, `qbe`, `as`, `ld`, run with a timeout); the gate runner that classifies `[PASS]`/`[FAIL]`/`[SKIP]` lines and the malformed-line and no-result cases; the scenario runner and exit-77 skips; `--results`, `timings.tsv`, the per-item logs and the stray-files check; the Makefile rule and `RUNNER=`; the planted fixtures and `test_runner_output.sh` taking a runner; and byte-identical output with `test.sh` in each. Its own checks C1 to C7 each need a full run of both runners. AGENTS.md says to split a task that needs more than one session before starting it, and splitting and re-tagging are the reviewer's. Suggested split, for the check-in: (a) the skeleton and the plan reader, option parsing and a gate item, with the gate fixtures; (b) the scenario item and the output contract (`--results`, `timings.tsv`, logs, summary lines); (c) the per-file item, but only through `scripts/lib/test_runner.sh` as the task says (the in-process pipeline is id:z0139); (d) the Makefile rule, `RUNNER=ztest`, and `test_runner_output.sh` taking a runner. id:z0138 and id:z0139 depend on whichever of these ends the list.
     - **Split at check-in id:mxt3d (the reviewer, 2026-11-13), finding 6.** id:pnx9h adds `test.sh --print-plan` and `--item`, and id:655rf adds `ztest`, which runs that plan one item at a time with the same output, `--results`, `timings.tsv`, `--fail-fast`, stray-files and a per-item timeout, plus the `Makefile` rule on its own inputs (this task's old C4 and C6 are its C7 and C2). This task is what is left. Where this bullet and the **Do** or **Checks** above disagree, this bullet holds.
       - **Do:** (1) Planted per-file fixtures under `tests/runner/fixtures/tests/`: `crashes.zrl` (a null dereference; `// expected exit 0`), `hangs.zrl` (`while true {}`; `// expected exit 0`) and `bad_header.zrl` (`// expected exit banana`). The gate that exits 0 after printing a failure exists: `tests/runner/fixtures/gates/fails.sh` together with `silent_failure.sh`. (2) `scripts/test_runner_output.sh` runs every mode against `RUNNER` (default `./scripts/test.sh`), passes `--timeout 2` so `hangs.zrl` costs 2 s, and its `EXPECTED_TOTAL` follows the three new fixtures. This changes a test's expected result on purpose, as this task asks. (3) The `runner-output` row of `scripts/test_plan.tsv` runs the script twice, once with `RUNNER=build/ztest`, so every `make test` checks both runners (id:z0117 decision 2). A scenario row is split on blanks with no `eval`, so give the script a `--both` option for this rather than an environment assignment in the row. (4) `Makefile`: `build/ztest` joins `TEST_DEPS` and `TEST_CHANGED_DEPS`, and `RUNNER=ztest` sets `TEST_RUNNER = build/ztest`; the default stays `./scripts/test.sh`.
-    > **Created:** 2026-11-13
-    > **Context:** found by id:z0137 while adding `tests/runner/fixtures/tests/bad_header.zrl`
-    > **Branch:** `testinfra`
-    > **Placed:** directly after id:z0137, the task it was found in (as that task asks)
-
-    - **Why:** `tests/runner/fixtures/tests/bad_header.zrl` has the header `// expected exit banana`. `./scripts/test.sh --verbose tests/runner/fixtures/tests/bad_header.zrl` prints `[PASS] tests/runner/fixtures/tests/bad_header.zrl (35ms)` and `exit code: 0`: the header is not recognised as an exit code, so the test runs with the default expectation of 0. A test whose author mistyped the number (`expected exit 1O`) would be checked against 0 and could pass for the wrong reason. id:z0137 gives the fixture the result it gets today (a pass) and counts it in `scripts/test_runner_output.sh`'s `EXPECTED_TOTAL`; when this task makes the runner report the header, the fixture's expected result and that total change with it.
-    - **Do:** decide what a header with a non-numeric `expected exit` value should be (a `[FAIL]` naming the file and the header text is the likely answer), check `tr_expectations` in `scripts/lib/test_runner.sh` for the other headers that take a value (`flags`, `link`, `EXPECT`) for the same hole, and write the fix as `+AI-G` tasks. The runner is `scripts/lib/test_runner.sh`; id:z0139's in-process pipeline must make the same decision.
       - **If `bad_header.zrl` passes** under `test.sh`, the per-file pipeline is not reporting a malformed header. Record it in this task, add a task for it with `tm add --after z0137`, give the fixture the result it gets today, and say so in the completion note. Do not change `scripts/lib/test_runner.sh` here.
       - **Checks C1, C2, C3, C5 and C7 above stand.** C3 runs on the three new fixtures together with `fails.sh` and `silent_failure.sh`. **C4 is replaced:** in a scratch edit, make `ztest` count an item whose `.st` reports a failure as passed, and watch `RUNNER=build/ztest sh scripts/test_runner_output.sh` fail. Quote it, then restore. This shows the oracle catches a runner that hides a failure. **C6 is replaced:** `make test RUNNER=ztest` runs to its `Total:` line, and the full runs' `norm`ed outputs (id:655rf's `sed`) agree with C2's. Quote the `diff`.
 
@@ -692,14 +685,32 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - **Found while doing this:** (1) `bad_header.zrl` passes under `test.sh`, so it is counted as a pass in `EXPECTED_TOTAL` (`Total: 17 run, 8 passed, 9 failed, 2 skipped`) and id:qqp5s was added after this task. (2) With `timeout` off `PATH` (the `opts_hidden` mode) nothing bounds a run, so that mode leaves `hangs.zrl` out with `TR_EXCLUDE` and expects 16 run, 8 passed, 8 failed. (3) A bug in id:655rf's `ztest`, fixed in this commit: a `Command` with no `env_*` call gets an empty environment, so the `--print-plan` child and the stray-file scripts lost `TR_EXCLUDE`, a changed `PATH` and the rest; `inherit_env` fixes it. id:655rf's comparisons did not see it because they set no such variable. (4) A row for `tools/ztest/*` in `scripts/test_tiers.tsv` selects the `runner-output` scenario and the compile-time gates instead of the run-everything default.
       - **Awaiting review:** id:0f0vv item 4: each planted fixture from both runners, the `bad_header.zrl` outcome, and the environment fix.
 
-- [ ] +testinfra +tests +AI-D @testinfra The per-file runner accepts a malformed `// expected exit` header: `expected exit banana` runs and passes id:qqp5s
+- [x] +testinfra +tests +AI-D @testinfra The per-file runner accepts a malformed `// expected exit` header: `expected exit banana` runs and passes id:qqp5s
+    > **Created:** 2026-11-13
+    > **Context:** found by id:z0137 while adding `tests/runner/fixtures/tests/bad_header.zrl`
+    > **Branch:** `testinfra`
+    > **Placed:** directly after id:z0137, the task it was found in (as that task asks)
+    > **Completed:** 2026-11-13 git:6122499
 
-- [ ] +testinfra +review +AI-D @testinfra @checkin Review of the Z1f, Z2b1, Z2b2 and Z2b batch (signals after a reap, the plan and one item from test.sh, ztest one item at a time) id:0f0vv
+    - **Why:** `tests/runner/fixtures/tests/bad_header.zrl` has the header `// expected exit banana`. `./scripts/test.sh --verbose tests/runner/fixtures/tests/bad_header.zrl` prints `[PASS] tests/runner/fixtures/tests/bad_header.zrl (35ms)` and `exit code: 0`: the header is not recognised as an exit code, so the test runs with the default expectation of 0. A test whose author mistyped the number (`expected exit 1O`) would be checked against 0 and could pass for the wrong reason. id:z0137 gives the fixture the result it gets today (a pass) and counts it in `scripts/test_runner_output.sh`'s `EXPECTED_TOTAL`; when this task makes the runner report the header, the fixture's expected result and that total change with it.
+    - **Do:** decide what a header with a non-numeric `expected exit` value should be (a `[FAIL]` naming the file and the header text is the likely answer), check `tr_expectations` in `scripts/lib/test_runner.sh` for the other headers that take a value (`flags`, `link`, `EXPECT`) for the same hole, and write the fix as `+AI-G` tasks. The runner is `scripts/lib/test_runner.sh`; id:z0139's in-process pipeline must make the same decision.
+    - **Decided (the reviewer, 2026-11-13):** a malformed header is a `[FAIL]` that names the file, the line number and the line's text, and the test is not compiled. The hole is wider than `expected exit`. `tr_expectations` matches every directive anywhere in the file, takes the first `expected exit [0-9]+` match even with text after it, and silently ignores near-misses of every directive (`//EXPECT: x`, `// flags:-O`, `// expected exitt 3`). The fix reads directives from the header only, with one grammar. Its forms, conflicts and planted cases are written out in id:bekxx (`+AI-G`, the first task after check-in id:0f0vv). id:z0139 gets the same grammar for the in-process pipeline.
+    - **The survey that makes the grammar safe** (`tr_discover tests corpus`: 1,122 per-file tests):
+      - **Placement:** no directive appears after the header (the first line that is neither blank nor a `//` comment).
+      - **Near-misses:** the only header lines that start like a directive but are not one are two prose lines, `tests/error_reporting/warn_redundant_cast.zrl:6` (`// expects. ...`) and `tests/language/other/array_to_slice_coerce.zrl:2` (`// expecting slice parameters ...`). Neither is a directive under id:bekxx's rule.
+      - **Exit values:** forms used are `expected exit N` 226 times and `expected exit code: N` 114 times, plus the fixture's `banana`. No value is above 255, and none has text after it.
+      - **Conflicts and compile lines:** no file has two `expected exit` lines, two `flags:` lines, or conflicting kinds. All 492 `compile fail` and 8 `compile success` lines end there.
+      - **Untouched:** 275 tests carry no directive and run expecting exit 0, as today.
+      - **The commands**, run from the repository root: `sh -c '. scripts/lib/test_runner.sh; tr_discover tests corpus' > build/rv/files.txt`, then an `awk` over those files. Its rules: `FNR==1 { inhdr=1 }`; `inhdr && !/^[ \t]*(\/\/.*)?$/ { inhdr=0 }`; and a line is printed when it is a known form outside the header, or starts like a directive inside the header but matches no known form. It printed only the two prose lines.
+    - **Completion (the reviewer, 2026-11-13):** a decision only; no file outside the task files changed. The `git:` is the `testinfra` tip the survey ran on. The fix is id:bekxx. The fixture `tests/runner/fixtures/tests/bad_header.zrl` keeps its passing result until id:bekxx flips it, together with `scripts/test_runner_output.sh`'s totals.
+
+- [x] +testinfra +review +AI-D @testinfra @checkin Review of the Z1f, Z2b1, Z2b2 and Z2b batch (signals after a reap, the plan and one item from test.sh, ztest one item at a time) id:0f0vv
     > **Created:** 2026-11-13
     > **Context:** placed by the reviewer at check-in id:mxt3d
     > **Branch:** `testinfra`
     > **Depends:** id:q8rsf, id:pnx9h, id:655rf, id:z0137
     > **Placed:** directly after the batch it reviews. id:mrzb3, the first task after it, depends on it.
+    > **Completed:** 2026-11-13 git:fdefff0
 
     - **Review:**
       1. Re-run each take-out check: id:q8rsf C3, id:pnx9h C6, id:655rf C7, id:z0137's replaced C4.
@@ -707,6 +718,186 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       3. id:pnx9h and id:655rf: re-run id:655rf C3 in `--verbose` mode, and id:z0137 C2 (both runners' full-run results files). Run `build/ztest` from a source tarball (`make dist-check` and `scripts/dist_user_paths.sh`) and with stdin from `/dev/null`, as `AGENTS.md`'s "Test the path the user takes" asks.
       4. id:z0137: each planted fixture's `[FAIL]` line from both runners (C3), and the `bad_header.zrl` outcome.
       5. Record the findings here as numbered bullets, add follow-up tasks, place the next `@checkin` (after id:z0138 if the batch ends there), then `tm validate` and `tm done` this task.
+    - **Findings (the reviewer, 2026-11-13, `testinfra` at git:6122499):**
+      - (1) **Take-outs re-run; all four fail as they should.**
+        - id:q8rsf C3: see item 2.
+        - id:pnx9h C6: with `&& [ "$print_plan" -eq 0 ]` added to the `TR_EXCLUDE` test (applied in place, then `git checkout scripts/test.sh`), `TR_EXCLUDE=tests/runner/fixtures/tests/pass.zrl sh scripts/test.sh --print-plan tests/runner/fixtures/tests` lists `pass.zrl`. The committed script leaves it out.
+        - id:655rf C7: a scratch `build/rv/ztest-za` with both `kill_group` calls replaced by `let _ = 0;`, on the gate `sleep 622 & wait`, ran into the outer `timeout 20` (rc 124). `build/ztest` printed `[FAIL] fixture-scratch-hang (no result within 3s; its process group was ended)` and left no `sleep 622`.
+        - id:z0137's replaced C4: a scratch `build/rv/ztest-zb` that counts failures as passes. `RUNNER_UNDER_TEST=build/rv/ztest-zb sh scripts/test_runner_output.sh` printed `[FAIL] quiet: exit status 0, expected 1 (there are failing fixtures)` and `[FAIL] quiet: Total: 17 run, 17 passed, 0 failed, 2 skipped (2.7s), expected Total: 17 run, 8 passed, 9 failed, 2 skipped`.
+      - (2) **id:q8rsf holds after each of the three reaping calls.** The probe `build/rv/reap_probe.zrl` (not committed) starts a grouped `sleep 30` as a stand-in for a reused pid. For each of `wait`, `wait_any` and `try_wait_any` it reaps a grouped `/bin/true`, then points the reaped handle's `pid` at the stand-in and calls `unix_kill(0)`, `kill_group(0)` and `kill()`. It printed `mode 0: unix_kill 3 kill_group 3 kill 3` and the same for modes 1 and 2, rc 0, and the stand-in was still alive (signal 0 to it succeeded).
+        - Built against a copy of `stdlib/` with both guards removed, mode 0 printed `unix_kill 0 kill_group 0 kill 0` (the stand-in was signalled, and `kill()` killed it) and the probe returned 2.
+        - Reading `reap_any`: it calls `wait4(-1)`. A child that is not in the slice is reaped, its status is lost, and the call returns ECHILD; that child's own handle keeps `status` unset, so id:q8rsf's guard cannot protect it. `ztest`'s `run_one` reads that ECHILD as "the item ended". Fix: id:ppvzh.
+      - (3) **`ztest`'s timeout does not reach a group member that ignores SIGTERM** (reproduced). The scratch gate `( trap "" TERM; exec sleep 611 ) &` / `wait`, with `TR_ITEM_TIMEOUT=3`, printed `[FAIL] fixture-scratch-term (no result within 3s; its process group was ended)`. The `sleep 611` was still running afterwards in the item's group: `ps` showed it with pgid 6188. The shell dies from SIGTERM and is reaped during the 5 s grace period, so `kill_group(9)` is never sent, and after id:q8rsf it could not be. Fix: id:trx5h (`has_exited`, which does not reap, then `kill_group(9)` before `wait`). id:z0138's pool needs the same order (its new bullet).
+      - (4) **A `Command` with no `env_*` call starts with an empty environment.** This is documented, and it caused id:655rf's bug. `ztest`'s fix, `env_remove("ZTEST_UNSET_NAME")`, works but reads as a trick. id:dcxxy adds `env_inherit`. Whether to inherit by default is left to the maintainer, with a recommendation (id:dcxxy).
+      - (5) **Output, `--verbose` and stdin from `/dev/null`.** Both runners were run over id:655rf C3's arguments with `--verbose`, `TR_TIMEOUT=2` and stdin from `/dev/null`: rc 1 for both, and both printed `Total: 17 run, 8 passed, 9 failed, 2 skipped`. After `norm`, the one difference is a shell's message about `crashes.zrl`'s segfault, which names `/home/.../scripts/lib/portability.sh` under `test.sh` and `scripts/lib/portability.sh` under `ztest`, with a different pid. id:z0137 C3 noted the same; it is a detail line, not a verdict.
+      - (6) **The `bad_header.zrl` outcome:** the fixture passes under both runners, as id:z0137 recorded. id:qqp5s decided it (done: a malformed header fails, read from the header only), and id:bekxx is the fix.
+      - (7) **Code read** (id:pnx9h, id:655rf, id:z0137): no other finding that needs a task.
+        - `--item` with an unknown KIND writes no `.out`, so `ztest` reports "the worker left no result". That is right.
+        - `--print-plan` and the dispatcher both append to `--results` and never truncate it, so the runners agree.
+        - `ztest` keeps one 1 GiB arena for the whole run (reserved, and written only as used). That is acceptable for a serial runner. id:z0138's pool, which runs for as long, should not grow without bound per item; it is left to that task's review (id:bfhmm).
+        - The `tools/ztest/*` row in `scripts/test_tiers.tsv` selects `runner-output` and the compile-time gates, which is what a change to the runner needs.
+      - (8) **`dist-check`:** `make dist-check` passed (rc 0, 433 s). Its `scripts/dist_user_paths.sh` runs `make test` in the unpacked source tarball, with no git and inside another repository. That `make test` now builds `build/ztest` and runs `runner-output --both`, so `ztest` builds and runs from the tarball. The full `ztest` run from a tarball is item 9.
+      - (9) **A full `ztest` run from a source tarball** (id:z0137 C2's comparison). The setup: `make dist` at git:fdefff0, then the archive unpacked under `build/rv/tar/`, with a `git` first on `PATH` that logs its arguments and exits 1, and stdin from `/dev/null`.
+        - `make` (rc 0, 66 s), then `make test TEST_RUNNER='build/ztest --results .../b.results'`: `Total: 3269 run, 3269 passed, 0 failed, 94 skipped (487.6s)`. The git log stayed empty.
+        - `test.sh`'s results came from the 4-CPU run of item 11: `Total: 3269 run, 3269 passed, 0 failed, 94 skipped (207.8s)`.
+        - `diff <(sort a.results) <(sort b.results)` prints nothing; there are 1,200 lines each.
+      - (10) **`make preflight-changed` does not build `build/ztest`**, which its checked suite now runs through `runner-output --both`. In a fresh worktree (`make`, then `preflight-changed`) it fails with `FAIL: the runner build/ztest is not an executable file (run: make ztest)` and `[FAIL] checked: the test suite does not pass under --checked`, rc 2. id:z0137's own run passed only because `make test` had built `build/ztest` first. Fix: id:s6mg6, added to the batch.
+      - (11) **Measured, at the maintainer's request:** `make test` on 4 CPUs, and `preflight-changed` with a checker file changed, on 16 threads and on 4 CPUs. The figures and commands are in the sprint notes' **Speed so far**: 207.8 s against 437.6 s, 483 s against 823 s, and 591 s.
+      - (12) **Documentation, at the maintainer's request** (git:fdefff0):
+        - `README.md` and `doc/dependencies.md` no longer say `make test` needs `bash`, which since id:z0146 only the fuzzer needs (`make user-tools` runs `make test` without it). They name `flock`, `mkfifo` and `xargs -P`, and `README.md`'s time is about 2 minutes, not 3.
+        - `doc/developer_guide.md` §1 says the same, and §2 describes the plan, the two runners and `TR_ITEM_TIMEOUT`.
+        - `AGENTS.md` names `scripts/test_plan.tsv` instead of `group_paths`, and `make test RUNNER=ztest`.
+        - `doc/spec/standard_library.md` §4.4 covers `set_current_dir`, the `env_*` methods, `set_new_group`, `kill_group`, `wait_any` and `try_wait_any`, and the ESRCH after a reap.
+        - id:z0140 also updates `README.md` and `doc/dependencies.md` when the pool goes, and merge id:356sn checks every list again.
+        - Found while checking: the fuzz scenarios' skip line names `lua` and `timeout` but not `bash` (id:043c1, in the future file).
+        - Run on that commit's tree before committing: `make test-changed BASE=HEAD` (everything, as `AGENTS.md` changed): `Total: 3269 run, 3269 passed, 0 failed, 94 skipped (117.6s)`.
+      - (13) **Plan:**
+        - id:qqp5s is decided and closed by this check-in's session.
+        - The next batch is id:bekxx, id:trx5h, id:ppvzh, id:dcxxy and id:s6mg6, then check-in id:drcga, then id:9nnvq, the merge of milestone Z2b.
+        - At the maintainer's request, merge points follow each later milestone's check-in: id:ehcd2 after check-in id:bfhmm (Z2c, `ztest` the default), and id:356sn after check-in id:jhcdc (Z2e, the pool retired). id:z0139 gets check-in id:ayytb.
+        - Notes added to id:z0138 (the pool ends a group before reaping, and the before-figures), id:z0139 (the header grammar) and id:z0140 (two more dependency lists).
+        - id:mrzb3 keeps its place, after the merge.
+
+- [ ] +testinfra +tests +AI-G @testinfra Z2b3 A malformed test header fails: the per-file runner reads one header grammar, from the header only id:bekxx
+    > **Created:** 2026-11-13
+    > **Context:** decided by id:qqp5s, settled by the reviewer for an `+AI-G` session
+    > **Branch:** `testinfra`
+    > **Depends:** id:0f0vv
+    > **Placed:** first task of the batch after check-in id:0f0vv, the fix id:qqp5s asks for
+
+    - **Why:** id:qqp5s. `tr_expectations` (`scripts/lib/test_runner.sh`) matches each directive anywhere in the file and ignores what it does not recognise. So `// expected exit banana`, `// expected exit 1O` or `//EXPECT: x` leave the test at the default (run, expect exit 0), and it can pass for the wrong reason. A `// expected compile fail` in a later comment would also change the test's kind.
+    - **Do (`scripts/lib/test_runner.sh`, POSIX `sh` and POSIX awk; still one awk pass per file):**
+      1. Directives are read from the header only: the lines from the top of the file to the first line that is neither blank nor a `//` comment. id:qqp5s checked the 1,122 per-file tests of `tests/` and `corpus/`: no directive appears after the header, so no test changes kind.
+      2. In the header, a line is a directive when, after `//` and any blanks, it starts with `expected `, `EXPECT`, `flags`, `link` or `@skip`. It must then be exactly one of these forms, with nothing after it but blanks where no TEXT follows: `// expected exit N` or `// expected exit code: N`, where N is a decimal from 0 to 255; `// expected compile fail` or `// expected compile success`; `// EXPECT: TEXT`, `// flags: TEXT` or `// link: TEXT`; `// @skip: TEXT` (leading blanks allowed, as today). Anything else is malformed. So is a header with two `expected exit` lines, two `flags:` lines, both `compile fail` and `compile success`, or either of those together with `expected exit`. Prose such as `// expects ...` or `// expecting ...` is not a directive; the two such lines in the tree are `tests/error_reporting/warn_redundant_cast.zrl:6` and `tests/language/other/array_to_slice_coerce.zrl:2`.
+      3. A malformed header sets `T_KIND=malformed`, with the first offending line's number and text as written (for a conflict, the second line of the pair). `tr_run_file` then prints `[FAIL] FILE (malformed header, line N: TEXT)`, counts one run and one failure, and compiles nothing. `@skip` does not hide a malformed header.
+      4. `tests/runner/fixtures/tests/bad_header.zrl` now fails. `scripts/test_runner_output.sh`'s expected totals follow: 17 run, 7 passed, 10 failed, 2 skipped, and 16 run, 7 passed, 9 failed in the `opts_hidden` mode. This changes a test's expected result on purpose, as id:qqp5s decided.
+      5. A new scenario, `scripts/test_test_headers.sh` (a `scenario` row of `scripts/test_plan.tsv`, group `integration`), writes its cases under `build/test-headers/` and runs `./scripts/test.sh --verbose` on them with `TR_WORK=build/test-headers/work`. Each of these malformed cases must give its `[FAIL] ... (malformed header, line N: ...)` line: `// expected exit banana`, `// expected exit 1O`, `// expected exit 256`, `// expected exit 3 4`, `// expected exitt 3`, `//EXPECT: x`, `// flags:-O`, two `expected exit` lines, and `expected exit 0` with `expected compile fail`. Each of these controls must pass: `// expected exit 3` on a program that returns 3, `// expected exit code: 0`, `// expected compile fail` with an `// EXPECT:` line, a prose line `// expecting a slice`, and a file whose first code line is followed by `// expected compile fail` (header-only reading, so it runs and passes).
+      6. Check that `scripts/test_tiers.tsv` selects the new scenario for a change to `scripts/lib/test_runner.sh` or the scenario itself, and add the row if it does not.
+    - **Checks:**
+      - C1: `./scripts/test.sh --verbose tests/runner/fixtures/tests/bad_header.zrl` prints `[FAIL] tests/runner/fixtures/tests/bad_header.zrl (malformed header, line 1: // expected exit banana)`, and `build/ztest` prints the same line for the same argument; quote both.
+      - C2: `sh scripts/test_test_headers.sh`: quote each case's line and the last line (`[PASS] ...`).
+      - C3: take-out. In a scratch edit, make the malformed branch fall through to today's default; watch C2 fail and name the cases. Quote it, then restore.
+      - C4: `sh scripts/test_runner_output.sh --both` passes with the new totals; quote its last line for each runner.
+      - C5: `make test TEST_RUNNER='./scripts/test.sh --results build/bekxx/before.results'` before the edit and `.../after.results` after it. `diff <(sort before) <(sort after)` shows only the new scenario's line (the fixtures are in no group); quote both `Total:` lines.
+      - C6: scripts only, so no `make preflight-changed` (as in id:z0136). `make test` after the last edit; quote its `Total:` line.
+
+- [ ] +testinfra +tests +AI-G @testinfra Z2b4 `ztest` ends the whole process group of an item that timed out, before it reaps the item id:trx5h
+    > **Created:** 2026-11-13
+    > **Context:** found at check-in id:0f0vv (finding 3), settled by the reviewer for an `+AI-G` session
+    > **Branch:** `testinfra`
+    > **Depends:** id:0f0vv
+    > **Placed:** after id:bekxx, in the batch that fixes what check-in id:0f0vv found
+
+    - **Why:** an item that runs past `TR_ITEM_TIMEOUT` gets `kill_group(15)`, then up to 5 s of `try_wait_any`, and `kill_group(9)` only if the item's shell has not been reaped by then. When the shell dies from SIGTERM but something in its group ignores SIGTERM, the shell is reaped in that window and `run_one` returns. Since id:q8rsf, `kill_group` also refuses after a reap, so the group can no longer be reached. The review's probe:
+      - The gate `#!/bin/sh` / `( trap "" TERM; exec sleep 611 ) &` / `wait`, run with `TR_ITEM_TIMEOUT=3 build/ztest --gate fixture-scratch-term`, printed `[FAIL] fixture-scratch-term (no result within 3s; its process group was ended)`.
+      - Afterwards `ps -eo pid,pgid,comm,args | awk '$3=="sleep" && $5==611'` still listed the `sleep 611`, in the item's group.
+      - The header comment's claim was false for that item. id:z0138's pool (fail-fast, SIGINT, SIGTERM) needs the same order.
+    - **Do:**
+      1. `stdlib/proc.zrl`: `pub fn has_exited(self: &mut Child) -> Result<bool, Error>`. It returns true once the child has ended, without reaping it. With `status` already set, it returns `Ok(true)` with no syscall. Otherwise it calls `waitid(P_PID, pid, &info, WEXITED | WNOHANG | WNOWAIT)`: syscall 247; `P_PID` 1, `WEXITED` 4, `WNOHANG` 1, `WNOWAIT` 0x01000000. `info` is a 128-byte `siginfo_t`, zeroed first; the child has ended when `si_pid`, the `i32` at byte offset 16, is not 0. EINTR (-4) is retried, as in `reap_any`, and any other error is returned. Its doc comment says why it exists: a child that has ended but is not reaped keeps its pid and its group id, so `kill_group` between `has_exited` and `wait` still reaches what it left in its group. A `// SAFETY:` line goes on the syscall, as on the others in the file.
+      2. `tools/ztest/src/main.zrl`, `run_one`: poll with `has_exited` every 20 ms instead of `try_wait_any`, and on a normal end reap with `wait()` (what an item leaves running after a normal end is not changed here). On the timeout: `kill_group(15)`, then poll `has_exited` for up to 5 s, then `kill_group(9)` whether the child has ended or not (it is not reaped, so its group id is still its own), then `wait()`. An error from `has_exited` or `wait` sends `kill_group(9)`, reaps with `wait()`, and counts the item as "the worker left no result". The `Vec<Child>` of one goes.
+    - **Checks:**
+      - C1: a new test, `tests/stdlib/test_proc_has_exited.zrl`, using a grouped `sleep 30`:
+        - `has_exited` is `Ok(false)` while it runs.
+        - After `kill_group(9)`, it becomes `Ok(true)` within 1 s, and the pid's `/proc/<pid>/stat` state is `Z` (not reaped).
+        - `wait()` then returns signal 9, and `has_exited` is `Ok(true)` after it.
+        - Quote `./scripts/test.sh --verbose tests/stdlib/test_proc_has_exited.zrl` (`exit code: 0`).
+      - C2: the review's probe, with the scratch gate above (never committed). `TR_WORK=build/trx5h/w TR_ITEM_TIMEOUT=3 timeout 60 build/ztest --gate fixture-scratch-term` prints the `[FAIL]` line. Then `ps -eo comm,args | awk '$1=="sleep" && $2==611' | wc -l` prints `0`; before the change it prints `1`. Do not clean up with `pkill -f 'sleep 611'`: it matches the shell running the command and kills it. Kill by pid from `ps` instead, then delete the gate.
+      - C3: take-out. Put back "`kill_group(9)` only if not yet ended" (a scratch edit), watch C2 print `1`, quote it, restore.
+      - C4: id:655rf C7's case (`sleep 600 & wait`) still ends with nothing left; quote the count.
+      - C5: `grep -c proc.zrl build/closure.txt` prints `0` (the `--emit-deps` line in `AGENTS.md`).
+      - C6: `make man-gen` and `sh scripts/test_man_pages.sh`; the recorded figures `scripts/check_safety_figures.sh` asks for, in the same commit. Then `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, each `Total:` line quoted. The completion note says the fuzz record is stale.
+
+- [ ] +testinfra +stdlib +AI-G @testinfra Z1g `wait_any` and `try_wait_any` reap only the children they are given id:ppvzh
+    > **Created:** 2026-11-13
+    > **Context:** found at check-in id:0f0vv (finding 2), settled by the reviewer for an `+AI-G` session; id:q8rsf left it out of scope
+    > **Branch:** `testinfra`
+    > **Depends:** id:0f0vv
+    > **Placed:** after id:trx5h, in the batch that fixes what check-in id:0f0vv found
+
+    - **Why:** `reap_any` (`stdlib/proc.zrl`), behind `wait_any` and `try_wait_any`, calls `wait4(-1)`, which reaps any child of the process. If the child it reaps is not in the slice, the call returns ECHILD and the status is lost. That child's own `Child` handle then never learns it was reaped, so its `status` stays unset and id:q8rsf's guard cannot stop a later `kill` from signalling a pid that may be reused. Also, `tools/ztest`'s `run_one` reads an error from `try_wait_any` as "the item ended". The pool of id:z0138 holds its items in one slice, but `ztest` also starts the planner and the stray-files scripts with `wait()`, and a library user may mix the two.
+    - **Do (`stdlib/proc.zrl`):**
+      1. `try_wait_any`: for each child of the slice with no `status`, `wait4(pid, &st, WNOHANG)`. A result above 0 records the status and returns that index. 0 moves on to the next child. An error is returned. If none has ended, return `Ok(None)`. With no unreaped child, return ECHILD as today.
+      2. `wait_any`: loop. `waitid(P_ALL, 0, &info, WEXITED | WNOWAIT)` (syscall 247; `P_ALL` 0, `WEXITED` 4, `WNOWAIT` 0x01000000) blocks until some child can be waited for, and reaps nothing. Then run step 1's pass over the slice, and return the index if it found one. If not, the waiting child is not in the slice: return `Err(ECHILD)` without reaping it. EINTR is retried.
+      3. The doc comments of both say that a child the call was not given is left for its own handle to wait for. `doc/spec/standard_library.md` §4.4 says the same in its `wait_any` line.
+    - **Checks:**
+      - C1: a new test, `tests/stdlib/test_proc_wait_any_own.zrl`, with two children: A, `sleep 1`, in the slice, and B, `/bin/true`, not in it. Wait until `/proc/<B>/stat` shows `Z`.
+        - `try_wait_any([A])` returns `Ok(None)` while A runs, and B's handle `wait()` then returns exit 0: B was not taken.
+        - With a fresh B, `wait_any([A])` returns ECHILD at once. B's `wait()` then returns its status, and a second `wait_any([A])` returns A's index once A ends.
+        - Quote `./scripts/test.sh --verbose tests/stdlib/test_proc_wait_any_own.zrl`.
+      - C2: take-out. Put `wait4(-1)` back in a scratch edit and watch C1 fail; quote the `[FAIL]` line, then restore.
+      - C3: `tests/stdlib/test_stdlib_proc_wait_any.zrl`, `test_proc_kill_reaped.zrl` and `test_proc_new_group.zrl` pass. `sh scripts/test_runner_output.sh --both` passes, since `ztest` uses `try_wait_any`.
+      - C4: `grep -c proc.zrl build/closure.txt` prints `0`.
+      - C5: `make man-gen` and `sh scripts/test_man_pages.sh`; the recorded figures in the same commit. Then `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, each `Total:` line quoted. The completion note says the fuzz record is stale.
+
+- [ ] +testinfra +stdlib +AI-G @testinfra Z1h `Command.env_inherit`: a child that keeps the parent's environment says so id:dcxxy
+    > **Created:** 2026-11-13
+    > **Context:** found by id:z0137 (its **Found** item 3), settled by the reviewer at check-in id:0f0vv for an `+AI-G` session
+    > **Branch:** `testinfra`
+    > **Depends:** id:0f0vv
+    > **Placed:** after id:ppvzh, in the batch that fixes what check-in id:0f0vv found
+
+    - **Why:** a `Command` with no `env_*` call starts its child with an empty environment, as id:z0132 made it (`env_set`'s doc comment says so). So `ztest` asks for the parent's environment by removing a name nobody sets (`inherit_env`, `env_remove("ZTEST_UNSET_NAME")`, in `tools/ztest/src/main.zrl`). That works, but it reads as a trick, and the next user of `Command` will meet the empty environment the way id:655rf did: as a bug that no comparison showed.
+    - **Do:**
+      1. `stdlib/proc.zrl`: `pub fn env_inherit(self: &mut Command)`. It sets `env_touched`, so the child gets the parent's environment with whatever `env_set` and `env_remove` change. It does not undo `env_clear`. Its doc comment says when it is needed: a command with no `env_*` call starts with an empty environment.
+      2. `tools/ztest/src/main.zrl`: remove `inherit_env`, and call `env_inherit()` where it was called. Also call it in `run_one`, before its `env_set`s, so that every command says where its environment comes from.
+      3. `doc/spec/standard_library.md` §4.4: a line for `env_inherit` beside the `env_*` lines.
+    - **Not changed here, the maintainer's call:** whether a `Command` with no `env_*` call should inherit the parent's environment by default, as most process libraries do. That would change what every existing caller's children see (`zbuild`'s tool runs, the tests), so it is a decision of its own. The reviewer recommends inheriting by default, with `env_clear` for an empty environment.
+    - **Checks:**
+      - C1: a new test, `tests/stdlib/test_proc_env_inherit.zrl`. It takes the first `NAME=VALUE` entry of its own `/proc/self/environ` and runs `/bin/sh -c 'printf %s "$NAME"'` with `NAME` substituted, stdout to a pipe or a file under `/tmp`. With `env_inherit()`, the child prints VALUE. With no `env_*` call, it prints nothing, which is the documented empty environment. Quote `./scripts/test.sh --verbose tests/stdlib/test_proc_env_inherit.zrl`.
+      - C2: `grep -c 'ZTEST_UNSET_NAME' tools/ztest/src/main.zrl` prints `0`.
+      - C3: take-out. Leave `env_inherit`'s body empty (a scratch edit). Watch C1 fail, and `sh scripts/test_runner_output.sh --both` fail in its `opts_hidden` mode, which needs `TR_EXCLUDE` to reach the planner. Quote both, then restore.
+      - C4: `grep -c proc.zrl build/closure.txt` prints `0`.
+      - C5: `make man-gen` and `sh scripts/test_man_pages.sh`; the recorded figures in the same commit. Then `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, each `Total:` line quoted. The completion note says the fuzz record is stale.
+
+- [ ] +testinfra +tests +AI-G @testinfra Z2b5 `make preflight-changed` builds `build/ztest`, which its checked suite runs id:s6mg6
+    > **Created:** 2026-11-13
+    > **Context:** found at check-in id:0f0vv (finding 10), settled by the reviewer for an `+AI-G` session
+    > **Branch:** `testinfra`
+    > **Depends:** id:0f0vv
+    > **Placed:** after id:dcxxy, in the batch that fixes what check-in id:0f0vv found
+
+    - **Why:** since id:z0137, the `runner-output` row runs `scripts/test_runner_output.sh --both`, which needs `build/ztest`. `make test` builds it (`TEST_DEPS`), but `make preflight-changed` does not. Its checked suite (`build/tests-checked`) therefore fails in a tree where `make test` has not run first. In a fresh worktree at git:6122499 plus one comment in `src/check_zir.zrl`, `make && REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=6122499` gave `FAIL: the runner build/ztest is not an executable file (run: make ztest)`, then `[FAIL] checked: the test suite does not pass under --checked`, rc 2. The id:z0137 runs passed only because `build/ztest` was already built.
+    - **Do:** `Makefile`: add `build/ztest` to the prerequisites of `preflight-changed` and `preflight`, beside `build/zbuild`. Check whether `scripts/preflight.sh`'s clean-tree copy also runs the checked suite: if it does, it builds `build/ztest` there too, or else says why it does not need to. Also check `test-fast` and `test-checked`: if their item sets include `runner-output`, add `build/ztest` to their prerequisites.
+    - **Checks:**
+      - C1: the case above. In a scratch worktree (`git worktree add --detach build/z5/wt testinfra`), run `make`, then `make preflight-changed PREFLIGHT_BASE=HEAD~1` after a one-line comment commit to a `stdlib/` module that is not in the `src/` closure. It builds `build/ztest` (quote the `Building ztest` line), and the checked suite's `runner-output` passes. Quote the `Total:` lines. Remove the worktree afterwards (`git worktree remove --force`).
+      - C2: take-out. Without the new prerequisite, C1's run fails with the `not an executable file` line; quote it.
+      - C3: `make -n test-checked` and `make -n test-fast` show `build/ztest` when their sets include `runner-output`; say which do.
+      - C4: a `Makefile`-only change. `make test` and `make preflight-changed`, each `Total:` line quoted.
+
+- [ ] +testinfra +review +AI-D @testinfra @checkin Review of the Z2b3, Z2b4, Z1g, Z1h and Z2b5 batch (header grammar, the timed-out group, reaping, the inherited environment, preflight builds ztest) id:drcga
+    > **Created:** 2026-11-13
+    > **Context:** placed by the reviewer at check-in id:0f0vv
+    > **Branch:** `testinfra`
+    > **Depends:** id:bekxx, id:trx5h, id:ppvzh, id:dcxxy, id:s6mg6
+    > **Placed:** directly after the batch it reviews
+
+    - **Review:**
+      1. Re-run each take-out: id:bekxx C3, id:trx5h C3, id:ppvzh C2, id:dcxxy C3.
+      2. id:bekxx: rerun id:qqp5s's survey of the headers on the tree as it is then: no directive after a header, and no header the new grammar refuses apart from the fixture. Write three malformed headers of the reviewer's own.
+      3. id:trx5h and id:ppvzh: rerun the review's probe from check-in id:0f0vv finding 3. Probe `has_exited` on a child that was stopped (SIGSTOP), not ended: without `WSTOPPED` it must stay false. Probe `wait_any` with a waiting child outside the slice while one inside is still running.
+      4. id:dcxxy: `ztest` with `env -i PATH=/usr/bin:/bin build/ztest --gate fixture-good`; it gives what `test.sh` gives.
+      5. Record the findings here as numbered bullets, add follow-up tasks, then `tm validate` and `tm done` this task. Then start id:9nnvq, the merge of milestone Z2b, which is next.
+
+- [ ] +testinfra +merge +AI-D @testinfra Merge `testinfra` into `main` at milestone Z2b: `ztest` runs the plan, and `proc.zrl` groups, environments and reaping id:9nnvq
+    > **Created:** 2026-11-13
+    > **Context:** placed by the reviewer at check-in id:0f0vv, at the maintainer's request for merge points (the rule is `AGENTS.md`, "Code branches", from id:z0187)
+    > **Branch:** `testinfra` into `main`
+    > **Depends:** id:drcga
+    > **Placed:** directly after check-in id:drcga, the review that ends milestone Z2b
+
+    - **Why:** Z2b, `ztest` running the plan, is a numbered step of the series. Check-in id:0f0vv reviewed it, and check-in id:drcga reviews the fixes for what that review found. `main` would gain:
+      - the plan as data (id:z0136), and the faster `io.zrl` (id:87kcw, 27% less front end per grid program);
+      - `proc.zrl`'s process groups, working directory and environment (id:z0131, id:z0132, id:dcxxy);
+      - signals refused after a reap (id:q8rsf), reaping only the children given (id:ppvzh), and `has_exited` (id:trx5h);
+      - the header grammar (id:bekxx);
+      - `test.sh --print-plan` and `--item` (id:pnx9h), and `make test RUNNER=ztest` (id:655rf, id:z0137).
+      - The default runner stays `test.sh`, so `make test` on `main` behaves as it does today. id:z0187's list of milestones names this one: "then `ztest` running the plan (id:z0137)".
+    - **The merge is the maintainer's.** A reviewing session prepares it, then stops and asks:
+      1. `git log --oneline main..testinfra`: list the commits and the squash candidates, by the rule in "Code branches": steps of one change within one task, never across tasks. Today, from git:a38be8d to git:6122499, each commit is a different task, so nothing is squashed unless the batch adds fix-up commits.
+      2. `git merge-tree --write-tree main testinfra`: either no conflict, or the conflicting paths. Recorded figures are recomputed from the merged tree, never taken from one side.
+      3. `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` on the `testinfra` tip being merged; quote each `Total:` line.
+      4. Ask the maintainer. After the merge, on the merge commit: `make test`, and `make preflight-changed PREFLIGHT_BASE=<main before the merge>`, each `Total:` line quoted. Then `testinfra` is rebuilt on the new `main`, and a sprint note records the merge, as the 2026-11-12 note does.
+    - **An earlier merge is possible.** `testinfra` at git:6122499 already passes `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (id:z0137's C7). If the maintainer wants Z2b on `main` before the fixes, the same steps apply to that commit, and the fixes follow at Z2c (id:ehcd2).
 
 - [ ] +testinfra +diagnosis +AI-D @testinfra Z3b Why the ZIR verifier spends about 2 ms on a `continue` from a match arm inside a loop id:mrzb3
     > **Created:** 2026-11-13
@@ -794,6 +985,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Depends:** id:z0131, id:z0133, id:z0137
 
     - **Do:** a pool of `--jobs` items (default `nproc_count`'s answer, passed in by the Makefile), each in its own process group (id:z0131), started slowest first from the last `timings.tsv`, printed in plan order as each finishes; fail-fast stops new items and kills the running groups; `SIGINT`/`SIGTERM` (id:z0133) kills every group and exits 130; a work-directory lock as `test.sh`'s (`fsys.zrl` `acquire_file_lock`). `make test` uses `ztest` by default; `RUNNER=sh` keeps `test.sh`.
+    - **Added at check-in id:0f0vv (the reviewer, 2026-11-13):**
+      - (1) The pool ends a group before it reaps the group's leader. It polls with `has_exited` (id:trx5h) and sends `kill_group` before `wait` on a timeout, on fail-fast and on SIGINT or SIGTERM. Otherwise, a member that ignores SIGTERM outlives its shell, which is the review's finding 3.
+      - (2) The running items are one slice for `try_wait_any`, which after id:ppvzh reaps only what it is given. An error from it is not an ended item.
+      - (3) The per-item timeout and its `[FAIL]` line stay as id:655rf made them.
+      - (4) The Makefile's name for the old runner is `RUNNER=test.sh`, as id:z0137 made it, not `RUNNER=sh`.
+      - (5) C6's before-figures for `test.sh`, at `testinfra` git:6122499: `Total: 3269 run, 3269 passed, 0 failed, 94 skipped (207.8s)` on `taskset -c 0-3` (with `TR_JOBS=4 MUTATION_JOBS=4`), about 115 s on all 16 threads, and 465 s for the serial `ztest`.
     - **Checks:**
       - C1: full runs of both runners with `--results`; `sort` and `diff` of the two files prints nothing; quote both `Total:` lines.
       - C2: a scenario that starts `make test RUNNER=ztest` in the background, sends it SIGINT after 20 s, and then finds no process left whose command line names `build/zoril`, `build/zilc`, `qbe` or a test file (`ps -eo pid,args`); exit status 130; quote it.
@@ -804,6 +1001,30 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C7: take the process-group kill out (a scratch edit) and watch C2 fail; restore.
       - C8: `make test` and `make preflight-changed`, each `Total:` line quoted.
 
+- [ ] +testinfra +review +AI-D @testinfra @checkin Review of Z2c (`ztest` runs N items at once and is the default) id:bfhmm
+    > **Created:** 2026-11-13
+    > **Context:** placed by the reviewer at check-in id:0f0vv
+    > **Branch:** `testinfra`
+    > **Depends:** id:z0138
+    > **Placed:** directly after id:z0138, the task it reviews
+
+    - **Review:**
+      1. Re-run id:z0138 C2, C3, C5 and C7, the signal, fail-fast and take-out checks.
+      2. Probe a SIGINT that arrives while the plan is being read and while an item's output is being printed. Probe an item that leaves a process running after it ends normally. Probe a pool child reaped by a `wait()` elsewhere (id:ppvzh).
+      3. Re-run C1, the results of both runners. Record C6's four wall times in the sprint notes' **Speed so far**.
+      4. Run `build/ztest` from a source tarball (`make dist-check`) and with stdin from `/dev/null`.
+      5. Record the findings here as numbered bullets, add follow-up tasks, then `tm validate` and `tm done` this task. id:ehcd2, the merge of milestone Z2c, is next.
+
+- [ ] +testinfra +merge +AI-D @testinfra Merge `testinfra` into `main` at milestone Z2c: `ztest` is the default runner id:ehcd2
+    > **Created:** 2026-11-13
+    > **Context:** placed by the reviewer at check-in id:0f0vv, at the maintainer's request for merge points
+    > **Branch:** `testinfra` into `main`
+    > **Depends:** id:bfhmm
+    > **Placed:** directly after check-in id:bfhmm, the review of milestone Z2c
+
+    - **Why:** Z2c makes `ztest`, which runs items in parallel, the default runner for every `make test`, with `RUNNER=sh` keeping `test.sh`. From then on every branch runs its tests through the Zoril runner, so `main` should have it as soon as it is reviewed: a runner that differs between branches makes their results hard to compare. id:z0187's list names this milestone: "then `ztest` as the default (id:z0138)".
+    - **The merge is the maintainer's.** Prepare it with id:9nnvq's steps 1 to 4. On the merge commit, also run `make test RUNNER=sh` and quote its `Total:` line, so both runners are shown passing on `main`. The cloud VM figure in `AGENTS.md` ("Cloud sessions") is re-measured or marked as measured before the change.
+
 - [ ] +testinfra +tests +AI-G @testinfra id:z0139 Z2d The per-file pipeline in `ztest`, compared file by file with the `sh` one
     > **Created:** 2026-11-07
     > **Context:** by id:z0117.
@@ -811,6 +1032,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Depends:** id:z0138
 
     - **Do:** `ztest` reads each test's header directives (`// expected exit`, `// expected compile fail`, `// EXPECT:`, `// expected compile success`, `// flags:`, `// link:`, `// @skip:`) and runs zoril, zilc, qbe, as, ld and the program itself, with `ZORIL_CC` and the other tool variables honoured, instead of starting `sh` per file. The `sh` pipeline stays as the fallback.
+    - **Added at check-in id:0f0vv (the reviewer, 2026-11-13):** id:bekxx's header grammar is the specification for the in-process pipeline: the same forms, conflicts and `[FAIL] FILE (malformed header, line N: TEXT)` line. The cases of `scripts/test_test_headers.sh` join C2, run through both pipelines.
     - **Checks:**
       - C1: the comparison mode runs both pipelines on every per-file test of `tests/` and `corpus/` and fails on any difference in verdict or detail lines; quote its summary (files compared, differences: 0).
       - C2: one planted fixture per header directive (`// expected exit`, `// expected compile fail`, `// EXPECT:`, `// expected compile success`, `// flags:`, `// link:`, `// @skip:`) whose expectation is wrong: both pipelines report it the same way; quote each pair.
@@ -818,6 +1040,19 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `sh scripts/test_mutation_check.sh` passes (it runs the suite with mutant compilers).
       - C5: the per-file groups' wall time before and after, on all CPUs and with `taskset -c 0-3`; record the figures.
       - C6: `make test` and `make preflight-changed`, each `Total:` line quoted.
+
+- [ ] +testinfra +review +AI-D @testinfra @checkin Review of Z2d (the per-file pipeline in `ztest`) id:ayytb
+    > **Created:** 2026-11-13
+    > **Context:** placed by the reviewer at check-in id:0f0vv
+    > **Branch:** `testinfra`
+    > **Depends:** id:z0139
+    > **Placed:** directly after id:z0139, the task it reviews
+
+    - **Review:**
+      1. Re-run id:z0139 C1 (the file-by-file comparison) and C2 (planted fixtures), including id:bekxx's malformed headers: the two pipelines must refuse the same headers with the same `[FAIL]` line.
+      2. Probe the tool variables of C3 with a wrapper that fails, not one that only logs.
+      3. Record C5's figures in the sprint notes' **Speed so far**.
+      4. Record the findings here as numbered bullets, add follow-up tasks, then `tm validate` and `tm done` this task.
 
 - [ ] +testinfra +portability +tests +AI-G @testinfra id:z0140 Z2e Retire `test.sh`'s pool: no `flock`, `mkfifo`, `setsid`, `xargs -P` or `read -t` on the test path
     > **Created:** 2026-11-07
@@ -827,6 +1062,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Depends note:** a release cycle of `ztest` as the default with no disagreement.
 
     - **Do:** remove the pool, the dispatcher and their dependency checks from `scripts/test.sh`, keeping `scripts/lib/test_runner.sh` and a serial fallback over `tests/smoke.list` (`make test-fallback`), which `make test` runs, saying so, when `build/ztest` cannot be built. Remove `flock`, `mkfifo` and `setsid` from `scripts/check_deps.sh`'s `test` set. Update `AGENTS.md` "Running tests" and `doc/developer_guide.md`.
+    - **Added at check-in id:0f0vv (the reviewer, 2026-11-13):** two more dependency lists name the pool's tools: `README.md` (the note under "Build Commands", and the `make test` line) and `doc/dependencies.md`. This task updates them with the others, and C4 checks them too. id:356sn, the merge after check-in id:jhcdc, checks them again.
     - **Portability rule (the maintainer, 2026-11-07):** this task removes the pool's entries from the exceptions list in `AGENTS.md` (Portability) and `doc/developer_guide.md` §1, and id:z0145's gate then runs `make test` without `flock`, `mkfifo` and `setsid` on `PATH`. The reason for the series is recorded there: the harness reaches macOS and Windows through Zoril tools, not through more `sh`.
     - **Checks:**
       - C1: `grep -n 'flock\|mkfifo\|setsid\|xargs -P\|read -t' scripts/test.sh scripts/lib/test_runner.sh` prints nothing; quote it.
@@ -834,6 +1070,33 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: with `build/ztest` made unbuildable (a scratch syntax error in `tools/ztest/`), `make test` says it is falling back and runs `tests/smoke.list` serially; quote the line that says so and the `Total:` line; restore.
       - C4: `sh scripts/check_deps.sh test` no longer names `flock`, `mkfifo` or `setsid`; the exceptions list in `AGENTS.md` (Portability) and `doc/developer_guide.md` §1 no longer names the pool.
       - C5: `scripts/check_portability.sh` passes; `make test` and `make preflight-changed`, each `Total:` line quoted.
+
+- [ ] +testinfra +review +AI-D @testinfra @checkin Review of Z2e (the pool retired) id:jhcdc
+    > **Created:** 2026-11-13
+    > **Context:** placed by the reviewer at check-in id:0f0vv
+    > **Branch:** `testinfra`
+    > **Depends:** id:z0140
+    > **Placed:** directly after id:z0140, the task it reviews
+
+    - **Review:**
+      1. Re-run id:z0140 C2 and C3: the shim without `flock`, `mkfifo` and `setsid`, and the fallback.
+      2. Run `make user-tools` and `make dist-check`.
+      3. `grep -rn 'flock\|mkfifo\|setsid\|xargs' README.md doc/dependencies.md doc/developer_guide.md AGENTS.md scripts/check_deps.sh`: each line left names a use outside `make test`.
+      4. Record the findings here as numbered bullets, add follow-up tasks, then `tm validate` and `tm done` this task. id:356sn, the merge of milestone Z2e, is next.
+
+- [ ] +testinfra +merge +AI-D @testinfra Merge `testinfra` into `main` at milestone Z2e: the test path needs no `flock`, `mkfifo`, `setsid` or `xargs -P` id:356sn
+    > **Created:** 2026-11-13
+    > **Context:** placed by the reviewer at check-in id:0f0vv, at the maintainer's request for merge points
+    > **Branch:** `testinfra` into `main`
+    > **Depends:** id:jhcdc
+    > **Placed:** directly after check-in id:jhcdc, the review of milestone Z2e
+
+    - **Why:** Z2e is the portability milestone the `ztest` series was written for (id:z0117). After it, a user's `make test` needs nothing beyond the user role's tools (`AGENTS.md`, Portability): no `flock`, `mkfifo`, `setsid` or `xargs -P`. Before the merge, check that every list of what `make test` needs says so:
+      - the exceptions list in `AGENTS.md` (Portability), and `doc/developer_guide.md` §1;
+      - `README.md` (the note under "Build Commands" and the `make test` line), and `doc/dependencies.md`;
+      - `scripts/check_deps.sh`'s `test` profile.
+      - Also check that `make user-tools` (`scripts/check_user_tools.sh`) runs `make test` with those tools off `PATH`. id:z0187's list names this milestone: "then the pool retired (id:z0140)".
+    - **The merge is the maintainer's.** Prepare it with id:9nnvq's steps 1 to 4, plus `make user-tools` on the tip being merged, its `[PASS]` lines quoted.
 
 - [ ] +testinfra +tests +AI-G @testinfra id:z0109 T5 Run the serial parts in parallel, longest first
     > **Created:** 2026-11-06
@@ -928,3 +1191,21 @@ Active priority series to reduce verification runtimes. Order of execution:
 **Order from here (review, 2026-11-11, agreed by the maintainer):** what the series has learned is that the work made cheaper pays on every run and cannot go stale (id:z0157 and id:z0158 took each side of the differential from 305 s to 127 s), while each mechanism that decides what not to run has had defects (the stamp: four fixes, then removed; the tiers: frozen; id:z0114's cache: R4). So: (1) id:z0114's follow-up (D1 to D7) and its review; (2) id:z0184, the measurement of the front end's remaining per-program cost, before any further cache; (3) id:z0136, then id:z0131 and id:z0132, which no longer wait for id:z0135 (their syscalls stay in `proc.zrl`, outside the `src/` closure), then id:z0137; (4) id:z0123, then id:z0113, decided with id:z0184's answer in hand; (5) id:z0133 and id:z0134, the two `rt/` check-ins, then id:z0138 to id:z0140; (6) id:z0109, id:z0110 and id:z0125 in `ztest`; id:z0107 last. `testinfra` merges into `main` at milestones, not only at the series' end: every branch pays for testing, and a fix made here (probe 422's hole) otherwise stays open on `main`. The first such merge takes the branch up to git:3bfec60; id:z0114's cache (git:acc583d) follows when its follow-up is reviewed.
 
 **`testinfra` merged into `main`, first part (2026-11-12, asked by the maintainer):** git:906265f on `main` merges the branch up to git:3bfec60 (id:z0104 to id:z0161 as far as they are done, id:z0144 to id:z0147, id:z0151 to id:z0153, id:z0130). The seven per-script stage0-c `#!/bin/sh` commits of id:z0146 are squashed into git:c29d500, and the three commits after them were replayed, so five shas changed: `113209a` to `c29d500`, `b1bc937` to `578fa80`, `33fffd1` to `62dc3fc`, `575dfe7` to `3bfec60`, and id:z0114's cache `5a05bbb` to `cb6f3e4`; the task files now cite the new ones, and the tree at git:3bfec60 is identical to the old tip's (`git rev-parse 3bfec60^{tree}` equals the old `575dfe7^{tree}`). The old history is kept at the local branch `testinfra-pre-squash`. Conflicts were in recorded figures only (line, `unsafe` and probe counts in `README.md`, `doc/SAFETY.md` and `doc/spec/unsafe_policy.md`; seven corpus ZIL hashes that changed on both sides) and were recomputed from the merged tree. Checked on git:906265f: `make test`: `Total: 3263 run, 3263 passed, 0 failed, 94 skipped (115.8s)`; `make preflight-changed PREFLIGHT_BASE=cc932fe`: rc 0, `All mutations caught.`, `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, `Total: 1189 run, 1189 passed, 0 failed, 0 skipped (44.7s)`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 2 newly refused, of 69145 programs against cc932fe0d83ae102a2eff77757582c6b3a0cd074` (probe 422, whole-program and zbuild: the hole this merge closes on `main`). `testinfra` is now `main` plus git:acc583d, so the **Status** paragraph's "43 commits ahead" and "lacks 12" are history, and so is the note under **What `make preflight-changed` measures** that every run reports `2 newly refused`: against the new `main` it reports none. `hom/testinfra` still holds the old history: publishing the branch needs a forced update, which is the maintainer's.
+
+**Speed so far (review, 2026-11-13, at the maintainer's request; `testinfra` at git:6122499; AMD Ryzen 7 3700X, 16 threads; "4 CPUs" is `taskset -c 0-3` with `TR_JOBS=4 MUTATION_JOBS=4`):** before is id:z0120's profile (2026-11-07, git:fa097e0's era) unless named.
+
+| What                                         | Before            | Now                                   |
+| -------------------------------------------- | ----------------- | ------------------------------------- |
+| `make test`, 16 threads                      | 230–238 s         | 114.6–117.6 s (about 2×)              |
+| `make test`, 4 CPUs                          | 437.6 s           | 207.8 s (2.1×)                        |
+| `mutation-self-test`, 4 CPUs                 | 358.7 s           | 118.6 s (id:z0156)                    |
+| `preflight-changed`, a checker file changed  | 823 s             | 483 s, 16 threads (1.7×)              |
+| the same, 4 CPUs                             | not measured      | 591 s                                 |
+| its rejection differential                   | 625 s             | 252 s, 16 threads; 403 s, 4 CPUs      |
+| `make test-changed`, a doc-only change       | the whole suite   | about 15 s (id:z0115, id:z0141)       |
+
+**Commands:** `taskset -c 0-3 make test TR_JOBS=4 MUTATION_JOBS=4`: `Total: 3269 run, 3269 passed, 0 failed, 94 skipped (207.8s)`. The preflight runs are id:z0120's method: a scratch worktree (`build/rv/wt`) at git:6122499 with one comment line committed in `src/check_zir.zrl`, then `make`, then `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=6122499` (and on 4 CPUs). Wall: 483 s and 591 s. `build/preflight-timings.tsv` on 4 CPUs: `reject-diff` 403, `mutation` 98, `selfhost` 98 (alongside mutation), `checked` 89, `calibrate` 1. The differential: `base verdicts: fresh (no cache); base front end 113 s` (185 s on 4 CPUs), `[PASS] reject-diff: 0 newly accepted ..., 0 newly refused, of 69145 programs`. Both runs exited 2, with two failures that do not change the times. `safety-figures` failed because the scratch comment adds a compiler line. `runner-output` failed in the checked suite because `preflight-changed` does not build `build/ztest`: check-in id:0f0vv finding 10, fixed by id:s6mg6. Every step still ran.
+
+**Not comparable one-to-one:** `make test` ran 3,415 items then and 3,269 now; the tiers moved some items. 25 mutations targeted `check_zir.zrl` here; the number of z0120's run is not recorded.
+
+**Expected from the rest of the series:** little more wall time from the runner itself. Z2c to Z2e (id:z0138 to id:z0140) are about portability, and should match `test.sh`'s times. id:z0139 saves about 10 ms of dispatch per per-file test (id:z0105), a few seconds a run. The rest is unmeasured: id:z0109 (scheduling and the preflight steps side by side), id:mrzb3 (the verifier's cost on `continue` in a match arm; the `stdlib` case is already taken by id:87kcw), id:z0113 (a result cache, undecided), and id:z0184's routes (a), about 28% of the differential's front end, and (c), under 17%, both to be re-measured. A cache hit for the differential's base side (id:z0114) saves 32–34% of a rerun on an unchanged base; the runs above were uncached.
