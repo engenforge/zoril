@@ -855,12 +855,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `make man-gen` wrote `doc/man/zoril-proc.3`; `[PASS] man-pages: all pages build cleanly and match tools and stdlib`. Figures: `doc/SAFETY.md` §5.3 stdlib lines 6,733 and unsafe blocks 188; `unsafe_policy.md` 188 blocks, 532 of 4,849 lines, 10.97%; `check_safety_figures.sh --all` shows no FAIL. After the last edit: `make test`: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (119.2s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: rc 0, `reject-diff: base verdicts: fresh (no cache); base front end 111 s`, `0 newly accepted ... 0 newly refused, of 69145 programs`, `Total: 1195 run, 1195 passed, 0 failed, 0 skipped (44.9s)`. The fuzz record is stale (`stdlib/` changed). Host-specific `bench/` files were deleted.
       - One behaviour to review: an already-ended unreaped child outside the slice makes `wait_any` return ECHILD at once even while a slice child still runs (the task's rule); a caller mixing handles must `wait()` such children first.
 
-- [ ] +testinfra +stdlib +AI-G @testinfra Z1h A `Command` inherits the parent's environment by default; zbuild clears it where it relied on the empty one id:dcxxy
+- [x] +testinfra +stdlib +AI-G @testinfra Z1h A `Command` inherits the parent's environment by default; zbuild clears it where it relied on the empty one id:dcxxy
     > **Created:** 2026-11-13
     > **Context:** found by id:z0137 (its **Found** item 3), settled by the reviewer at check-in id:0f0vv for an `+AI-G` session; the default decided by the maintainer on 2026-11-13
     > **Branch:** `testinfra`
     > **Depends:** id:0f0vv
     > **Placed:** after id:ppvzh, in the batch that fixes what check-in id:0f0vv found
+    > **Completed:** 2026-11-13 git:6a00117
 
     - **Why:** a `Command` with no `env_*` call starts its child with an empty environment, as id:z0132 made it (`env_set`'s doc comment says so). So `ztest` asks for the parent's environment by removing a name nobody sets (`inherit_env`, `env_remove("ZTEST_UNSET_NAME")`, in `tools/ztest/src/main.zrl`). That works, but it reads as a trick, and the next user of `Command` will meet the empty environment the way id:655rf did: as a bug that no comparison showed.
     - **Decided (the maintainer, 2026-11-13):** a `Command` with no `env_*` call and no `set_envp` inherits the parent's environment, as most process libraries do. `env_clear()` gives an empty one. No `env_inherit` method is added: inheriting is the default. This replaces the reviewer's first plan for this task (an explicit `env_inherit`, the default left alone).
