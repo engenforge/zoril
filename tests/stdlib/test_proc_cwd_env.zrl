@@ -2,7 +2,7 @@
 // expected exit 0
 //
 // `set_current_dir` is a chdir in the child before execve, and `env_set`, `env_remove` and
-// `env_clear` build the child's environment from the parent's. Each check runs `sh` or `env` with
+// `env_clear` build the child's environment from the parent's, and a command with none of them inherits it. Each check runs `sh` or `env` with
 // its stdout in a file under /tmp and reads the file back.
 import "core.zrl";
 import "mem_raw.zrl";
@@ -175,6 +175,12 @@ fn env_ops(arena: *mut ArenaHeader, buf: *mut u8) -> i32 {
     f.env_clear();
     let nf = capture(&mut f, buf);
     if nf != 0 as i64 { return 14; }
+
+    // No `env_*` call: the parent's environment, which holds PATH.
+    let mut g = unsafe { Command.new_raw("/usr/bin/env", arena) };
+    let ng = capture(&mut g, buf);
+    if ng <= 0 as i64 { return 15; }
+    if !has_var(text(buf, ng), "PATH=", "\nPATH=") { return 16; }
     return 0;
 }
 

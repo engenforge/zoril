@@ -267,8 +267,8 @@ pub struct Command {
     new_group: bool,
     cwd: [u8],
     has_cwd: bool,
-    // Once any `env_*` method has run, the child's environment is built at `spawn` from the
-    // parent's (unless `env_clear` ran) with these changes applied: `env_names[i]` is set to
+    // The child's environment is built at `spawn` from the parent's (unless `env_clear` ran) with
+    // these changes applied, unless `set_envp` supplied one: `env_names[i]` is set to
     // `env_values[i]`, and each name in `env_removed` is dropped from the inherited part. The
     // three lists never share a name.
     env_names: Vec<[u8]>,
@@ -402,8 +402,8 @@ fn keep_entry(cmd: &Command, base: [u8], start: usize, end: usize) -> bool {
         && !entry_named_in(base, start, end, &cmd.env_names);
 }
 
-// The NULL-terminated `envp` array for a command whose environment was changed by an `env_*`
-// method, in the command's arena: the parent's entries that stay, then `NAME=value` for each
+// The NULL-terminated `envp` array for a command that did not use `set_envp`, in the command's
+// arena: the parent's entries that stay, then `NAME=value` for each
 // variable set. EINVAL for a name or value that could not be one entry.
 fn build_envp(cmd: &Command) -> Result<**u8, Error> {
     let names = cmd.env_names.as_slice();
@@ -592,9 +592,9 @@ impl Command {
         self.has_cwd = true;
     }
 
-    // Sets the environment variable name to value in the child. After any `env_*` call the child
-    // gets the parent's environment with the changes applied (`env_clear` starts from an empty
-    // one); with none it gets an empty environment unless `set_envp` was used. `spawn` fails with
+    // Sets the environment variable name to value in the child. The child gets the parent's
+    // environment with the changes applied (`env_clear` starts from an empty one), unless
+    // `set_envp` was used. `spawn` fails with
     // EINVAL for a name that is empty or holds '=' or NUL, and for a value that holds NUL.
     #[stores(name -> self, value -> self)]
     pub fn env_set(self: &mut Command, name: [u8], value: [u8]) {
@@ -627,6 +627,7 @@ impl Command {
     }
 
     // Gives the child an empty environment, discarding the parent's and every `env_set` so far.
+    // Without it a command inherits the parent's environment.
     pub fn env_clear(self: &mut Command) {
         self.env_touched = true;
         self.env_cleared = true;
@@ -635,7 +636,9 @@ impl Command {
         self.env_removed.clear();
     }
 
-    // Spawns the configured command as an asynchronous child process.
+    // Spawns the configured command as an asynchronous child process. The child's environment is
+    // read from /proc/self/environ unless `set_envp` supplied one, so the spawn fails where that
+    // cannot be read.
     pub fn spawn(self: &Command) -> Result<Child, Error> {
         if has_interior_nul(self.program) {
             return Result.Err(Error.from_linux_errno(22));
@@ -652,9 +655,9 @@ impl Command {
             return Result.Err(Error.from_linux_errno(22));
         }
         // Built before the pipe and the fork, so a bad name or an unreadable parent environment
-        // leaves nothing to clean up.
+        // leaves nothing to clean up. Only `set_envp` replaces the inherited environment.
         let mut built_envp = self.envp;
-        if self.env_touched {
+        if self.env_touched || built_envp as usize == 0 {
             let built = build_envp(self);
             if built.is_err() {
                 return Result.Err(built.err().unwrap());
@@ -710,15 +713,7 @@ impl Command {
         let prog_cstr = unsafe { to_cstr(self.program, self.arena) };
 
         // Marshal envp
-        let actual_envp = if built_envp as usize != 0 {
-            built_envp
-        } else {
-            // SAFETY: one uninitialized slot for the empty environment's NULL terminator, which
-            // the next line writes before execve reads it.
-            let empty_env = unsafe { @alloca<[*u8; 1]>(1) };
-            empty_env[0 as usize] = 0 as *u8;
-            empty_env as **u8
-        };
+        let actual_envp = built_envp;
 
         // SAFETY: fork(57) takes no arguments.
         let pid = unsafe { @syscall(57) } as i64;

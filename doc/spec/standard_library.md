@@ -188,7 +188,7 @@ Process spawning and management in `proc.zrl` use `Command` and `Child`, with fa
 - `cmd.arg(arg)`: Appends an argument.
 - `cmd.set_stdin(fd)` / `cmd.set_stdout(fd)` / `cmd.set_stderr(fd)`: Configures stream redirection with typed `Fd` handles.
 - `cmd.set_current_dir(dir)`: The child's working directory, entered just before the program is started, so a relative program path is looked up from it; `spawn` fails with the `chdir` error if the directory cannot be entered.
-- `cmd.env_set(name, value)` / `cmd.env_remove(name)` / `cmd.env_clear()`: The child's environment. Once any of them is called, the child gets the parent's environment with the changes applied (`env_clear` starts from an empty one instead). A command with none of them starts with an empty environment.
+- `cmd.env_set(name, value)` / `cmd.env_remove(name)` / `cmd.env_clear()`: The child's environment. A command inherits the parent's environment, with the changes applied; `env_clear` starts from an empty one instead. `set_envp` supplies one outright.
 - `cmd.set_new_group()`: The child starts in a process group of its own, whose id is its pid, so `child.kill_group(sig)` reaches it and whatever it started.
 - `cmd.spawn() -> Result<Child, io::Error>`: Spawns the process.
 - `cmd.status() -> Result<ExitStatus, io::Error>`: Runs and waits for termination.

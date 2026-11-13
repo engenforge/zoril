@@ -237,9 +237,9 @@ pub fn set_current_dir(self: &mut Command, dir: [u8]);
 pub fn env_set(self: &mut Command, name: [u8], value: [u8]);
 ```
 
-	Sets the environment variable name to value in the child. After any env\_\* call the child
-	gets the parent's environment with the changes applied (env\_clear starts from an empty
-	one); with none it gets an empty environment unless set\_envp was used. spawn fails with
+	Sets the environment variable name to value in the child. The child gets the parent's
+	environment with the changes applied (env\_clear starts from an empty one), unless
+	set\_envp was used. spawn fails with
 	EINVAL for a name that is empty or holds '=' or NUL, and for a value that holds NUL.
 
 *env_remove*
@@ -255,13 +255,16 @@ pub fn env_clear(self: &mut Command);
 ```
 
 	Gives the child an empty environment, discarding the parent's and every env\_set so far.
+	Without it a command inherits the parent's environment.
 
 *spawn*
 ```
 pub fn spawn(self: &Command) -> Result<Child, Error>;
 ```
 
-	Spawns the configured command as an asynchronous child process.
+	Spawns the configured command as an asynchronous child process. The child's environment is
+	read from /proc/self/environ unless set\_envp supplied one, so the spawn fails where that
+	cannot be read.
 
 *status*
 ```

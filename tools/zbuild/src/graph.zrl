@@ -163,6 +163,9 @@ pub fn discover_graph(ctx: &BuildCtx, entry: [u8], abs_entry: [u8], g: &mut Grap
 
     let deps_file = join_path(ctx.tmp_dir, "deps.txt", arena);
     let mut cmd = unsafe { Command.new_raw(ctx.tools.compiler, arena) };
+    // A build must not depend on the caller's environment, which a command inherits by default;
+    // every tool zbuild runs starts with an empty one.
+    cmd.env_clear();
     cmd.arg("--emit-deps");
     cmd.arg(abs_entry);
     push_compiler_paths(&mut cmd, ctx);

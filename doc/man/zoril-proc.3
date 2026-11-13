@@ -329,9 +329,9 @@ pub fn env_set(self: &mut Command, name: [u8], value: [u8]);
 .RE
 .PP
 .RS 4
-Sets the environment variable name to value in the child.\& After any env_* call the child
-gets the parent'\&s environment with the changes applied (env_clear starts from an empty
-one); with none it gets an empty environment unless set_envp was used.\& spawn fails with
+Sets the environment variable name to value in the child.\& The child gets the parent'\&s
+environment with the changes applied (env_clear starts from an empty one), unless
+set_envp was used.\& spawn fails with
 EINVAL for a name that is empty or holds '\&='\& or NUL, and for a value that holds NUL.\&
 .PP
 .RE
@@ -355,6 +355,7 @@ pub fn env_clear(self: &mut Command);
 .PP
 .RS 4
 Gives the child an empty environment, discarding the parent'\&s and every env_set so far.\&
+Without it a command inherits the parent'\&s environment.\&
 .PP
 .RE
 \fBspawn\fR
@@ -365,7 +366,9 @@ pub fn spawn(self: &Command) \-> Result<Child, Error>;
 .RE
 .PP
 .RS 4
-Spawns the configured command as an asynchronous child process.\&
+Spawns the configured command as an asynchronous child process.\& The child'\&s environment is
+read from /proc/self/environ unless set_envp supplied one, so the spawn fails where that
+cannot be read.\&
 .PP
 .RE
 \fBstatus\fR
