@@ -409,10 +409,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
     > **Completed:** 2026-11-13 git:acc583d
 
-- [ ] +stdlib +perf +AI-G @testinfra Z3a `io.zrl`: `write_all` and `write_all_fd` retry an interrupted write without a `continue` in a match arm id:87kcw
+- [x] +stdlib +perf +AI-G @testinfra Z3a `io.zrl`: `write_all` and `write_all_fd` retry an interrupted write without a `continue` in a match arm id:87kcw
     > **Created:** 2026-11-13
     > **Context:** found by id:z0184, settled by the reviewer for an `+AI-G` session
     > **Branch:** `testinfra`
+    > **Completed:** 2026-11-13 git:a38be8d
 
     - **Why:** id:z0184 found that the ZIR verifier spends about 2.2 ms on a loop whose match arm ends in `continue`, against 0.18 ms for the same loop without it. `io::write_all`, which `eprint` and the trap paths reach, and `io::write_all_fd` both end their `Err` arm that way. On 283 grid programs drawn at random, rewriting the two arms took the mean front-end run from 10.75 ms to 7.87 ms, with the verdict unchanged on every one.
     - **Do:** in `stdlib/io.zrl`, in both `write_all_fd` and `write_all`, replace the `Err(e)` arm's `if e.errno == 4 { // EINTR` / `continue;` / `}` / `return Result.Err(e);` with `if e.errno != 4 { // EINTR is retried` / `return Result.Err(e);` / `}`. Change nothing else. **Settled, so no judgement is left:** the two forms are equivalent. `continue` jumps to the loop's condition, and falling out of the arm reaches the end of the loop body, where nothing follows the `match`, and then the condition, with `total` unchanged in both. `stdlib/io.zrl` is in the `src/` closure, and the new form uses nothing the pinned stage1 does not already accept elsewhere (`if`, `!=`, `return`).
@@ -423,6 +424,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: quote `reject-diff: base verdicts: fresh (no cache)`, the verdict line (expected `0 newly accepted ..., 0 newly refused`) and the `Total:` line.
       - C5: `make test`, `Total:` line quoted. `make man-gen` and `sh scripts/test_man_pages.sh` pass (no comment block changes, but `io.zrl` is a man page source).
       - C6: the fuzz record is stale (a `stdlib/` change): say so in the completion note, as `AGENTS.md` asks.
+
+    - **Done on `testinfra` (git:a38be8d), answers by number:**
+      - C1: over the first 50 lines of `build/z184/sample.txt`, children's `times` (user, sys) three runs each, same `build/zoril` (script `build/z184/cpu.sh`): before `0.654+0.111`, `0.649+0.115`, `0.646+0.117` (about 0.765 s); after both arms rewritten `0.419+0.137`, `0.407+0.141`, `0.418+0.126` (about 0.55 s), 28% lower.
+      - C2: `write_all`'s arm put back as it was, `write_all_fd` rewritten: `0.647+0.128`, `0.657+0.116`, `0.664+0.116` (about 0.775 s), within 2% of the before figure. Restored afterwards (`git diff` shows both arms rewritten).
+      - C3: `rm build/zoril && make`: `Built: the toolchain is up to date in build/ (zoril, zilc, zbuild; zoril 0.1.0-alpha-110-gc907824-dirty). Next: make test`; then `make`: `Up to date: build/zoril, build/zilc and build/zbuild (...)`; `make 2>&1 | grep -c 'warning:'` prints `0`.
+      - C4: `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=HEAD~1 PREFLIGHT_REJECT_BASE=HEAD~1`: `reject-diff: base verdicts: fresh (no cache); base front end 129 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69145 programs against HEAD~1`, `Total: 1189 run, 1189 passed, 0 failed, 0 skipped (43.4s)`, rc 0.
+      - C5: `make test`: `Total: 3260 run, 3259 passed, 1 failed, 94 skipped (111.5s)`. The one failure is `md-check: doc/tasks/active.tm.md:388: table is 141 characters wide (limit 140, 10 rows)`, the id:z0184 measurement table added in a task commit, not by this change (it also failed on the merge commit c907824). `make man-gen`: `zman: wrote 30 module pages`; `sh scripts/test_man_pages.sh`: `[PASS] man-pages: all pages build cleanly and match tools and stdlib`.
+      - C6: the fuzz record `bench/fuzz/README.md` is stale (`stdlib/io.zrl` changed); `scripts/check_fuzz_fresh.sh` reports it.
+      - Recorded figures that followed the two shorter functions, in the same commit: `doc/SAFETY.md` §5 stdlib lines 6,351 to 6,349; `doc/spec/unsafe_policy.md` stdlib density 10.81% to 10.82% and `4,551` to `4,549` lines; six `corpus/zrl_whole_program_zil.sha256` hashes (`UPDATE_GOLDEN=1 sh scripts/test_incremental.sh`, which then printed `PASS: all incremental compilation tests passed.`). Before them, `make test` had the `safety-figures` (3) and `incremental` failures; after, only the md-check one.
 
 - [ ] +testinfra +refactor +AI-G @testinfra id:z0136 Z2a The test plan as data: gates, group paths and scenarios in one file both runners read
     > **Created:** 2026-11-07
