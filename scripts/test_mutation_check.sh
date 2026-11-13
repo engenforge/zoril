@@ -22,7 +22,7 @@
 #
 # A harness that cannot produce either verdict fails here. Cost: four mutant builds and evaluations
 # run in parallel, about a minute and a half on 16 cores - which is why this gate is last in
-# scripts/test.sh's GATES_ALL, whose order is the display order.
+# scripts/test_plan.tsv, whose row order is the display order.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 

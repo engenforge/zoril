@@ -22,6 +22,7 @@ doc/*.md	docs	safety-model safety-figures comment-noise md-check binary-sizes	-	
 # --- Core infrastructure and build files (select everything) ---
 scripts/lib/*	core_infra	ALL	-	ALL	-	ALL	-	script	shared script libraries affect test runner and tooling selecting all checks
 scripts/test.sh	core_infra	ALL	-	ALL	-	ALL	-	script	test runner dispatcher script selects all checks
+scripts/test_plan.tsv	core_infra	ALL	-	ALL	-	ALL	-	script	the plan of gates, group paths and scenarios the runner reads selects all checks
 scripts/lib/test_runner.sh	core_infra	ALL	-	ALL	-	ALL	-	script	test runner execution library selects all checks
 Makefile	core_infra	ALL	-	ALL	-	ALL	-	compiled	top-level makefile defines all build and test targets selecting everything
 config.mk	core_infra	ALL	-	ALL	-	ALL	-	compiled	toolchain configuration defines compiler and linker paths selecting everything

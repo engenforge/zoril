@@ -124,7 +124,7 @@ done
 
 . scripts/lib/test_runner.sh 2>/dev/null || true
 . scripts/lib/layout.sh 2>/dev/null || true
-all_scenarios=$(sed -n '/^group_scenarios()/,/^}/p' scripts/test.sh | grep -E '^[[:space:]]*echo' | sed 's/echo//' | tr '\n' ' ')
+all_scenarios=$(awk -F'\t' '$1 == "scenario" { print $2 }' scripts/test_plan.tsv | tr '\n' ' ')
 
 missing_scenarios=""
 for sc in $all_scenarios; do
