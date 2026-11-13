@@ -791,12 +791,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test` after the last edit: `Total: 3270 run, 3270 passed, 0 failed, 94 skipped (117.9s)`; `make test-changed BASE=HEAD`: `Total: 3270 run, 3270 passed, 0 failed, 94 skipped (118.4s)`. Scripts only; no `make preflight-changed`.
       - The cases I added beyond the task's list: `skip_hides_nothing`, `flags_twice`, `fail_and_success` (all conflicts or `@skip` ordering of rule 2/3). A one-line comment in `test_runner.sh`'s header was edited with `sed -i` (a slip against AGENTS.md; the diff is the one word `malformed`).
 
-- [ ] +testinfra +tests +AI-G @testinfra Z2b4 `ztest` ends the whole process group of an item that timed out, before it reaps the item id:trx5h
+- [x] +testinfra +tests +AI-G @testinfra Z2b4 `ztest` ends the whole process group of an item that timed out, before it reaps the item id:trx5h
     > **Created:** 2026-11-13
     > **Context:** found at check-in id:0f0vv (finding 3), settled by the reviewer for an `+AI-G` session
     > **Branch:** `testinfra`
     > **Depends:** id:0f0vv
     > **Placed:** after id:bekxx, in the batch that fixes what check-in id:0f0vv found
+    > **Completed:** 2026-11-13 git:9969904
 
     - **Why:** an item that runs past `TR_ITEM_TIMEOUT` gets `kill_group(15)`, then up to 5 s of `try_wait_any`, and `kill_group(9)` only if the item's shell has not been reaped by then. When the shell dies from SIGTERM but something in its group ignores SIGTERM, the shell is reaped in that window and `run_one` returns. Since id:q8rsf, `kill_group` also refuses after a reap, so the group can no longer be reached. The review's probe:
       - The gate `#!/bin/sh` / `( trap "" TERM; exec sleep 611 ) &` / `wait`, run with `TR_ITEM_TIMEOUT=3 build/ztest --gate fixture-scratch-term`, printed `[FAIL] fixture-scratch-term (no result within 3s; its process group was ended)`.
@@ -816,6 +817,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: id:655rf C7's case (`sleep 600 & wait`) still ends with nothing left; quote the count.
       - C5: `grep -c proc.zrl build/closure.txt` prints `0` (the `--emit-deps` line in `AGENTS.md`).
       - C6: `make man-gen` and `sh scripts/test_man_pages.sh`; the recorded figures `scripts/check_safety_figures.sh` asks for, in the same commit. Then `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, each `Total:` line quoted. The completion note says the fuzz record is stale.
+    - **Completion (generalist, 2026-11-13, git:9969904):** `Child.has_exited` added to `stdlib/proc.zrl`; `ztest`'s `run_one` polls it, and on a timeout sends `kill_group(15)`, polls up to 5 s, sends `kill_group(9)` unconditionally, then `wait()`; the `Vec<Child>` is gone.
+      - C1: `./scripts/test.sh --verbose tests/stdlib/test_proc_has_exited.zrl`: `[PASS] ... exit code: 0`.
+      - C2: the task's `ps` command cannot match (`-eo comm,args` puts `611` in `$3`, not `$2`), so the count used `ps -eo pid,comm,args | awk '$2=="sleep" && $4==611'`. With the scratch gate: `[FAIL] fixture-scratch-term (no result within 3s; its process group was ended)` and count `0` (start count was 0). Scratch gates deleted. The sleep ignores SIGTERM, so leftovers were cleared with `kill -9`.
+      - C3: take-out (`kill_group(9)` only if `has_exited` is still false): same `[FAIL]` line, count `1`; restored.
+      - C4: scratch gate `sleep 600 & wait`: `[FAIL] fixture-scratch-hang (no result within 3s; its process group was ended)`, 0 `sleep 600` left.
+      - C5: `grep -c proc.zrl build/closure.txt` prints `0`.
+      - C6: `make man-gen` wrote `doc/man/zoril-proc.3`; `[PASS] man-pages: all pages build cleanly and match tools and stdlib`. The formatter reflowed the new syscall line, so the figures were recomputed after it: `doc/SAFETY.md` §5.3 (stdlib lines 6,704 to 6,706 after the earlier 6,677; unsafe blocks 186), `unsafe_policy.md` (186 blocks, 526 of 4,828 lines, 10.89%); `check_safety_figures.sh --all` passes. After the last edit: `make test`: `Total: 3272 run, 3272 passed, 0 failed, 94 skipped (118.8s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: rc 0, `reject-diff: base verdicts: fresh (no cache); base front end 131 s`, `0 newly accepted ... 0 newly refused, of 69145 programs`, `Total: 1194 run, 1194 passed, 0 failed, 0 skipped (45.2s)`. The fuzz record (`bench/fuzz/README.md`) is stale: `stdlib/` and `tools/` changed. Host-specific `bench/` files the run wrote were deleted.
 
 - [ ] +testinfra +stdlib +AI-G @testinfra Z1g `wait_any` and `try_wait_any` reap only the children they are given id:ppvzh
     > **Created:** 2026-11-13
