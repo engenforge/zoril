@@ -325,15 +325,6 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
 
     - `bootstrap/stage0-c/lib/rt/runtime.s` and `sys_linux_x86_64.s` lack the section, so on a linker that defaults to an executable stack (binutils 2.42 on Ubuntu 24.04) the programs `zoril-c` links itself warn and get one. Only stage0-c's own test programs link them; stage1 is linked with `bootstrap/stage1/rt/runtime.s`, which has the section. Take this up if the warning ever fails a stage0-c suite.
 
-- [ ] +testinfra +safety +decision +AI-D Should the ZIR verifier's fixed-point loop fail, rather than report silently, when it reaches its pass cap id:wptpf
-    > **Created:** 2026-11-13
-    > **Context:** found by id:mrzb3
-    > **Asked of:** the maintainer. It changes what the checker does on a program it cannot finish analysing.
-
-    - **Why:** `verify_function` (`src/check_zir.zrl`) stops its fixed-point loop after 100 passes whether or not it has converged, and then runs the reporting pass from the states it has. id:mrzb3 found 3 functions in the compiler's own source and the stdlib's `BufWriter::flush` and `read_to_end_sized_raw` reaching the cap. In every one, the states differed only in the order of a list (id:5a7eh fixes that), so no verdict was wrong. But a loop that really did not converge would be checked from states that are not a fixed point, and a borrow or move fact reached only on a later pass would go unchecked, silently.
-    - **Recommendation (the reviewing session's):** after id:5a7eh, nothing in the tree reaches the cap. Make reaching it an internal compiler error naming the function, so a non-converging case is seen rather than checked from a partial state. Measure first that no program in `tests/`, `corpus/`, the safety probes or the store grid reaches the cap (id:5a7eh's C2 scratch lines). The alternative is a warning, or leaving it as it is.
-    - **Decide:** an error, a warning, or no change; and whether the cap of 100 stays.
-
 ## Compatibility matrix
 
 Where Zoril has been tested, by operating system and architecture, recorded per release. **First priority:** Alpine Linux, Arch Linux and Debian (stable): between them they cover musl and glibc, and a `/bin/sh` that is BusyBox `ash`, `bash` and `dash`. **Second priority:** other systems (Ubuntu, Fedora, the BSDs once a port exists, other architectures once the runtime supports them), in an order revised as ports are prioritised. Today the runtime targets `x86_64` Linux only, so the architecture column has one value.

@@ -269,6 +269,53 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - **Output digests: 5 of 3,116 files differ.** After each run, `sha256` of every `*.log`, `compile.out`, `output.log` and test binary under `build/gates/` and `build/tests/` written during it (`build/z123/digest.<n>`). The same 3,116 files both times. All 1,124 `compile.out` files and all 618 test binaries are identical. The 5 that differ, each re-run twice more on its own (`build/z123/rep/`) to confirm the cause: (1) and (2) `scenarios/user-paths.log` and `scenarios/zbuild-errors.log`: only the elapsed seconds in the `[PASS]` line (`in 2 s` against `in 1 s`). (3) `scenarios/test-lock.log`: only the pid in the shell's `Killed` line, which the scenario provokes on purpose. (4) `tests+language+memory+checked_build_poisoned_pointer_faults.zrl/output.log`: only the pid in the shell's `Segmentation fault` line, a fault the test expects. (5) `corpus+zil+15_io_syscall.zil/output.log`: **the program's own output differs**. It writes 4,008 bytes of memory past its 11-byte string, including an address, so its bytes change with each run. It passes because the test checks only the exit code. This is id:1kaye in `future.tm.md`.
       - **For id:z0113:** a cache that stores verdicts would have served the same verdict for every item in these two runs. One that compares output digests would have to drop elapsed times and pids from scenario and fault logs (or not digest those logs), and could not digest `15_io_syscall.zil`'s output until id:1kaye is fixed. A key may use the compiler binaries' digests or the source commit: on this host they determine each other. Not measured: a second host or toolchain (the release hashes are host-specific, `doc/reproducible_builds.md`), a run under load, and `make preflight-changed`'s items (the differential's verdicts, the mutations).
 
+- [x] +testinfra +safety +decision +AI-D Should the ZIR verifier's fixed-point loop fail, rather than report silently, when it reaches its pass cap id:wptpf
+    > **Created:** 2026-11-13
+    > **Context:** found by id:mrzb3
+    > **Asked of:** the maintainer. It changes what the checker does on a program it cannot finish analysing.
+    > **Completed:** 2026-11-13
+
+    - **Why:** `verify_function` (`src/check_zir.zrl`) stops its fixed-point loop after 100 passes whether or not it has converged, and then runs the reporting pass from the states it has. id:mrzb3 found 3 functions in the compiler's own source and the stdlib's `BufWriter::flush` and `read_to_end_sized_raw` reaching the cap. In every one, the states differed only in the order of a list (id:5a7eh fixes that), so no verdict was wrong. But a loop that really did not converge would be checked from states that are not a fixed point, and a borrow or move fact reached only on a later pass would go unchecked, silently.
+    - **Recommendation (the reviewing session's):** after id:5a7eh, nothing in the tree reaches the cap. Make reaching it an internal compiler error naming the function, so a non-converging case is seen rather than checked from a partial state. Measure first that no program in `tests/`, `corpus/`, the safety probes or the store grid reaches the cap (id:5a7eh's C2 scratch lines). The alternative is a warning, or leaving it as it is.
+    - **Decide:** an error, a warning, or no change; and whether the cap of 100 stays.
+    - **Decided (the maintainer, 2026-11-13):** an internal compiler error. Reaching the cap stops the compile with an ICE that names the function, rather than reporting from a state that may not be a fixed point. The cap stays at 100 (in id:mrzb3's census of `src/`, the most passes any function took without reaching the cap was 29; after id:5a7eh no function in `src/` reaches the cap). Moved from `future.tm.md` to `## Now` on the maintainer's decision; the implementation is the task after this one, with its check-in after it.
+
+- [ ] +testinfra +safety +AI-G @testinfra Z3d The ZIR verifier stops with an internal compiler error when its fixed point reaches the pass cap id:wx5w6
+    > **Created:** 2026-11-13
+    > **Context:** the maintainer's decision in id:wptpf, settled by the reviewing session for an `+AI-G` session
+    > **Branch:** `testinfra`
+    > **Depends:** id:wptpf
+    > **Placed:** directly after id:wptpf, which decided it. Check-in id:ed5ta follows it.
+
+    - **Why:** `verify_function` (`src/check_zir.zrl`) ends its fixed-point loop after 100 passes even if the states are still changing, and then reports from them. A borrow or move fact that only a later pass would reach goes unchecked, silently. The maintainer decided (id:wptpf) that reaching the cap is an internal compiler error naming the function.
+    - **Do (`src/check_zir.zrl` and `doc/spec/zir.md` only; `src/` is in the stage1 closure, so use only what the file already uses):**
+      1. In `verify_function`, directly after the `while changed && iter < 100 as usize { ... }` loop and before `// Then once more from the fixed point, reporting.`, add: if `changed` is still true (the loop stopped at the cap, not at a fixed point), build the message with a `ByteVec` as the file already does (`let mut msg = unsafe { ByteVec.new_raw(self.arena) };`, `push_slice`): ``ZirVerifier: the fixed point of `NAME` did not converge within the pass cap``, with `NAME` from `self.intern_table.lookup((*func).name)`, and call `ICE(msg.as_slice())`. Do not test `iter == 100`: a loop whose last allowed pass reached the fixed point is fine.
+      2. A 1-2 line comment above it, saying why: the reporting pass is only sound from a fixed point.
+      3. `doc/spec/zir.md` §7.4 ("Fixed-Point Computation"): add one sentence after the list saying that the verifier allows at most 100 passes and that reaching the cap without a fixed point is an internal compiler error, not a diagnostic.
+      4. If `make test`'s `safety-figures` gate fails on the compiler line counts, re-record them as git:3a0402b did, in a commit of its own.
+    - **Checks:**
+      - C1 (the ICE fires): a scratch edit lowers the cap from `100` to `3` in the loop condition only, then `make`. `timeout -k 5s 30s build/zoril -I stdlib=stdlib --emit-zil -o /dev/null build/mrzb3/bis3.zrl; echo rc=$?` prints ``internal compiler error: ZirVerifier: the fixed point of `...` did not converge within the pass cap``, then the `note: while compiling ...` line and `rc=134`. Quote the three lines.
+      - C2 (take-out): with the cap still at 3, remove step 1's `ICE` call, `make`, rerun C1's command: no internal compiler error and `rc=0`. Quote it. Then restore the cap to 100 and the `ICE`, `make`, and check that `git diff` shows only the task's change.
+      - C3: with the cap at 100, C1's command prints nothing and `rc=0`, and `timeout -k 5s 120s build/zoril --emit-zil -o /dev/null src/main.zrl -I stdlib=stdlib -I src -I build/gen; echo rc=$?` prints `rc=0`.
+      - C4: `sh scripts/run_safety_matrix.sh`; quote its last line (id:5a7eh: `459/505 passed. Mismatches: 0`).
+      - C5: `make test` after the last edit; quote its `Total:` line (`Total: 3274 run, 3274 passed, 0 failed, 94 skipped` at git:3a0402b). An `ICE` on any test is a failure: stop and record the file here.
+      - C6: `REJECT_DIFF_NO_CACHE=1 make preflight-changed`. Quote the `reject-diff: base verdicts: fresh (no cache)` line and the result. Any program that reaches the cap shows as newly refused. It must report `0 newly accepted` and `0 newly refused`; if not, stop and record the programs here.
+      - C7: `scripts/check_comment_noise.sh` passes, and `scripts/check_fuzz_fresh.sh` reports `bench/fuzz/README.md` stale (`src/` changed); quote both.
+    - Ends with the commit, an **Awaiting review:** bullet naming C1, C2 and C6, and `tm done`. Check-in id:ed5ta reviews it.
+
+- [ ] +testinfra +safety +review +AI-D @testinfra @checkin Review of Z3d (an ICE when the verifier's fixed point reaches its pass cap) id:ed5ta
+    > **Created:** 2026-11-13
+    > **Context:** placed by the reviewing session with id:wx5w6
+    > **Branch:** `testinfra`
+    > **Depends:** id:wx5w6
+    > **Placed:** directly after the task it reviews.
+
+    - **Review:**
+      1. Re-run id:wx5w6 C1 and C2 (the ICE with the cap lowered, and the take-out), and C6's differential with `REJECT_DIFF_NO_CACHE=1` against the change's parent.
+      2. Check that the ICE is conditioned on `changed`, not on the pass count, with a scratch cap at which a function converges on exactly its last allowed pass (from id:mrzb3's counts: `with_continue` converges in 7 passes after id:5a7eh, so a cap of 7 must not ICE and a cap of 6 must).
+      3. Check that the ICE reaches the user the same way through `zbuild` (a separate build of `bis3.zrl` with the scratch cap), and that `scripts/test.sh` reports it as `ICE: compiler crashed`.
+      4. Record the findings here, add follow-ups, `tm validate`, `tm done`.
+
 ## Next
 
 - [ ] +testinfra +decision +AI-D @testinfra id:z0113 T9 One verification record for the author and the reviewer: a result cache keyed by inputs
