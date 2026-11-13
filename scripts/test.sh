@@ -11,6 +11,8 @@
 #   scripts/test.sh [options] PATH...          only these test files or directories
 #   scripts/test.sh [options] --smoke          the smoke suite, tests/smoke.list (make test-fast)
 #   scripts/test.sh --group-of PATH            print the group whose paths hold PATH (exit 1: none)
+#   scripts/test.sh [options] --print-plan     print the options and items a run would use, for another runner
+#   scripts/test.sh --item KIND NAME PREFIX    run one item of that plan, for another runner
 #
 # Groups: language, types, memory, stdlib, diagnostics, integration (--list-groups).
 # Gates: the repository checks make test runs first (--list-gates).
@@ -220,6 +222,30 @@ gate_run() {
 }
 
 # ------------------------------------------------------------------ worker
+# run_item KIND NAME PREFIX — run one item: its report goes to PREFIX.out, its timing to
+# PREFIX.time, and its counts are left in TR_RUN, TR_PASSED, TR_FAILED and TR_SKIPPED.
+run_item() {
+    TR_RESULTS=""
+    _item_start_s=$(date +%s)
+    tr_clock; _item_start_ms=$TR_NOW
+    case "$1" in
+        file)     tr_run_file "$2" > "$3.out" 2>&1 ;;
+        scenario) scenario_run "$2" > "$3.out" 2>&1 ;;
+        gate)     gate_run "$2" > "$3.out" 2>&1 ;;
+    esac
+    tr_clock; _item_ms=$(( TR_NOW - _item_start_ms ))
+    case "$1" in
+        gate)
+            _dur_s=$(( $(date +%s) - _item_start_s ))
+            printf '%d\t%d\n' "$_dur_s" "$_item_ms" > "$3.time"
+            ;;
+        *)
+            _dur_sec=$(printf '%d.%03d' $(( _item_ms / 1000 )) $(( _item_ms % 1000 )))
+            printf '%s\t%d\n' "$_dur_sec" "$_item_ms" > "$3.time"
+            ;;
+    esac
+}
+
 # scripts/test.sh --worker INDEX KIND NAME: run one item for the pool below. Its report
 # goes to $ITEMS/INDEX.out, its counts to $ITEMS/INDEX.st, then INDEX to the FIFO.
 if [ "$1" = "--worker" ]; then
@@ -246,31 +272,23 @@ if [ "$1" = "--worker" ]; then
     if [ -e "$ITEMS/stop" ]; then
         write_status STOPPED
     else
-        TR_RESULTS=""
-        _item_start_s=$(date +%s)
-        tr_clock; _item_start_ms=$TR_NOW
-        case "$kind" in
-            file)     tr_run_file "$name" > "$ITEMS/$idx.out" 2>&1 ;;
-            scenario) scenario_run "$name" > "$ITEMS/$idx.out" 2>&1 ;;
-            gate)     gate_run "$name" > "$ITEMS/$idx.out" 2>&1 ;;
-        esac
-        tr_clock; _item_ms=$(( TR_NOW - _item_start_ms ))
-        case "$kind" in
-            gate)
-                _dur_s=$(( $(date +%s) - _item_start_s ))
-                printf '%d\t%d\n' "$_dur_s" "$_item_ms" > "$ITEMS/$idx.time"
-                ;;
-            *)
-                _dur_sec=$(printf '%d.%03d' $(( _item_ms / 1000 )) $(( _item_ms % 1000 )))
-                printf '%s\t%d\n' "$_dur_sec" "$_item_ms" > "$ITEMS/$idx.time"
-                ;;
-        esac
+        run_item "$kind" "$name" "$ITEMS/$idx"
         # Every item reports the same four counts: run passed failed skipped.
         write_status "$TR_RUN $TR_PASSED $TR_FAILED $TR_SKIPPED"
         [ "$TR_FAILED" -gt 0 ] && [ "$TR_FAIL_FAST" -eq 1 ] && : > "$ITEMS/stop"
     fi
     dispatcher_alive || exit 0
     echo "$idx" > "$ITEMS/done.fifo"
+    exit 0
+fi
+
+# scripts/test.sh --item KIND NAME PREFIX: run one item as a worker does, for another runner. It
+# writes PREFIX.out, PREFIX.time and PREFIX.st (the four counts) and takes its settings from the
+# environment, never from options.
+if [ "$1" = "--item" ]; then
+    [ "$#" -eq 4 ] || { echo "test.sh: --item takes KIND NAME PREFIX" >&2; exit 2; }
+    run_item "$2" "$3" "$4"
+    printf '%s\n' "$TR_RUN $TR_PASSED $TR_FAILED $TR_SKIPPED" > "$4.st.tmp" && mv -f "$4.st.tmp" "$4.st"
     exit 0
 fi
 
@@ -302,6 +320,7 @@ paths=""
 scenarios=""
 label="Selected tests"
 suite_incremental=0
+print_plan=0
 while [ "$#" -gt 0 ]; do
     tr_parse_flag "$1" "$2"; n=$?
     if [ $n -gt 0 ]; then shift $n; continue; fi
@@ -350,6 +369,7 @@ while [ "$#" -gt 0 ]; do
             [ -n "$_sc_grp" ] || { echo "test.sh: unknown scenario '$_sc'" >&2; exit 2; }
             scenarios="$scenarios $_sc"; shift 2 ;;
         --gates) gates="$GATES_ALL"; shift ;;
+        --print-plan) print_plan=1; shift ;;
         --gate)
             [ -n "$(gate_command "$2")" ] || { echo "test.sh: unknown gate '$2'" >&2; exit 2; }
             gates="$gates $2"; shift 2 ;;
@@ -408,6 +428,7 @@ case "$gates" in
 esac
 ./scripts/check_deps.sh --required-only $_deps_profiles || exit $?
 
+if [ "$print_plan" -eq 0 ]; then
 exec 9>> "$TR_WORK/.lock" || { echo "test.sh: cannot open $TR_WORK/.lock" >&2; exit 2; }
 if ! command -v flock >/dev/null 2>&1; then
     echo "test.sh: flock is required but not found in PATH" >&2
@@ -441,6 +462,7 @@ printf '%s\n' "$$" > "$TR_WORK/.lock"
 # work in progress from failing the run, and ignored paths (build/) never enter the comparison.
 stray_start="$TR_WORK/stray.start"
 ./scripts/check_stray_files.sh --record "$stray_start" 2>/dev/null || stray_start=""
+fi
 
 if [ ! -f "$TR_RUNTIME" ]; then
     case "$TR_RUNTIME" in */*) mkdir -p "${TR_RUNTIME%/*}" ;; esac
@@ -457,11 +479,13 @@ filtered() {
 PLAN=$(mktemp)
 claimed=$(mktemp)
 ITEMS="$TR_WORK/items"
-rm -rf "$ITEMS" && mkdir -p "$ITEMS"
 TIMINGS_FILE="${TR_TIMINGS:-$TR_WORK/timings.tsv}"
 unset TR_TIMINGS
-mkdir -p "$(dirname "$TIMINGS_FILE")"
-: > "$TIMINGS_FILE"
+if [ "$print_plan" -eq 0 ]; then
+    rm -rf "$ITEMS" && mkdir -p "$ITEMS"
+    mkdir -p "$(dirname "$TIMINGS_FILE")"
+    : > "$TIMINGS_FILE"
+fi
 cleanup() { rm -f "$PLAN" "$claimed"; }
 trap 'cleanup; _tr_sig_handler' INT TERM
 trap cleanup EXIT
@@ -546,6 +570,35 @@ suite_title() {
         *)      _title=$(group_title "$1"); echo "${_title:-$1}" ;;
     esac
 }
+
+# claim_lines — the [FAIL] lines for a test in two groups or in none, one per line.
+claim_lines() {
+    dups=$(grep -v '^$' "$claimed" | sort | uniq -d)
+    lost=$(tr_discover tests corpus | grep -vxF -f "$claimed")
+    for f in $dups; do echo "[FAIL] $f (in more than one group)"; done
+    for f in $lost; do echo "[FAIL] $f (in no group; add it to a paths row of scripts/test_plan.tsv)"; done
+}
+
+# --print-plan: what a run with these options would do, as tab-separated rows. The claim rows are
+# computed before the run, so a test file the run itself writes under tests/ is not among them.
+if [ "$print_plan" -eq 1 ]; then
+    printf 'plan\t1\n'
+    printf 'option\tquiet\t%s\n' "$TR_QUIET"
+    printf 'option\tverbose\t%s\n' "$TR_VERBOSE"
+    printf 'option\tfail_fast\t%s\n' "$TR_FAIL_FAST"
+    printf 'option\ttimeout\t%s\n' "$TR_TIMEOUT"
+    printf 'option\tresults\t%s\n' "$TR_RESULTS"
+    printf 'option\ttimings\t%s\n' "$TIMINGS_FILE"
+    printf 'option\twork\t%s\n' "$TR_WORK"
+    printf 'option\tfull_run\t%s\n' "$full_run"
+    while read -r _s _k _n; do
+        printf 'item\t%s\t%s\t%s\t%s\n' "$_s" "$_k" "$_n" "$(suite_title "$_s")"
+    done < "$PLAN"
+    if [ "$full_run" -eq 1 ]; then
+        claim_lines | while IFS= read -r _l; do printf 'claim\t%s\n' "$_l"; done
+    fi
+    exit 0
+fi
 
 # ------------------------------------------------------------------ run
 # Workers finish in any order; results print in plan order as soon as every earlier
@@ -708,10 +761,12 @@ fi
 
 # Every test must belong to exactly one group, or the full run silently skips it.
 if [ $full_run -eq 1 ] && [ $stopped -eq 0 ]; then
-    dups=$(grep -v '^$' "$claimed" | sort | uniq -d)
-    lost=$(tr_discover tests corpus | grep -vxF -f "$claimed")
-    for f in $dups; do echo "[FAIL] $f (in more than one group)"; tot_run=$((tot_run + 1)); tot_failed=$((tot_failed + 1)); done
-    for f in $lost; do echo "[FAIL] $f (in no group; add it to a paths row of scripts/test_plan.tsv)"; tot_run=$((tot_run + 1)); tot_failed=$((tot_failed + 1)); done
+    _claims=$(claim_lines)
+    if [ -n "$_claims" ]; then
+        printf '%s\n' "$_claims"
+        _nclaims=$(printf '%s\n' "$_claims" | wc -l)
+        tot_run=$((tot_run + _nclaims)); tot_failed=$((tot_failed + _nclaims))
+    fi
 fi
 
 # Nothing this run wrote may stay outside build/: the next `git add -A` would commit it, and a
