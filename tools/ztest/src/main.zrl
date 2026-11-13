@@ -25,7 +25,7 @@ use file::{append_file, read_file, write_file};
 use fsys::{env_var, make_dir_all, unlink_path};
 use io::{File, eprint, print};
 use mem::Arena;
-use proc::{Child, Command, try_wait_any};
+use proc::Command;
 use string::String;
 use time::{monotonic_ns, sleep_ns};
 use vec::Vec;
@@ -170,30 +170,38 @@ fn run_one(
     cmd.env_set("TR_TIMEOUT", timeout);
     cmd.env_set("TR_WORK", work);
     cmd.set_new_group();
-    let mut kids = Vec::<Child>.new_in(a);
-    match cmd.spawn() {
-        Ok(c) => { kids.push(c); },
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
         Err(_) => { return 2; },
-    }
+    };
     let deadline = monotonic_ns() + limit_s * 1000000000;
     loop {
-        let r = try_wait_any(kids.as_mut_slice());
-        if r.is_err() { return 0; }
-        if r.ok().unwrap().is_some() { return 0; }
+        let r = child.has_exited();
+        if r.is_err() {
+            let _ = child.kill_group(9);
+            let _ = child.wait();
+            return 0;
+        }
+        if r.ok().unwrap() {
+            let _ = child.wait();
+            return 0;
+        }
         if monotonic_ns() >= deadline { break; }
         sleep_ns(20000000);
     }
-    let _ = kids.get_mut(0 as usize).unwrap().kill_group(15);
+    // The group is ended before the shell is reaped: a reaped child's group can no longer be
+    // signalled, and something in the group may ignore SIGTERM after the shell has died from it.
+    let _ = child.kill_group(15);
     let grace = monotonic_ns() + 5000000000;
     loop {
-        let r = try_wait_any(kids.as_mut_slice());
-        if r.is_err() { return 1; }
-        if r.ok().unwrap().is_some() { return 1; }
+        let r = child.has_exited();
+        if r.is_err() { break; }
+        if r.ok().unwrap() { break; }
         if monotonic_ns() >= grace { break; }
         sleep_ns(20000000);
     }
-    let _ = kids.get_mut(0 as usize).unwrap().kill_group(9);
-    let _ = kids.get_mut(0 as usize).unwrap().wait();
+    let _ = child.kill_group(9);
+    let _ = child.wait();
     return 1;
 }
 

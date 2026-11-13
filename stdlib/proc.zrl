@@ -158,6 +158,35 @@ impl Child {
         return Result.Ok(st);
     }
 
+    // True once the child has ended, without reaping it. A child that has ended but is not reaped
+    // keeps its pid and its group id, so `kill_group` between `has_exited` and `wait` still
+    // reaches whatever it left running in its group; after `wait` it cannot.
+    pub fn has_exited(self: &mut Child) -> Result<bool, Error> {
+        if self.status.is_some() {
+            return Result.Ok(true);
+        }
+        // SAFETY: 32 `i32` slots (a 128-byte siginfo_t) in this frame, zeroed below before
+        // waitid reads or fills them.
+        let info = unsafe { @alloca<[i32; 32]>(1) };
+        let mut r = -4 as i64;
+        while r == -4 as i64 {
+            let mut k = 0 as usize;
+            while k < 32 as usize {
+                info[k] = 0;
+                k = k + 1 as usize;
+            }
+            // SAFETY: waitid(247) with P_PID (1), WEXITED|WNOHANG|WNOWAIT writes a siginfo_t
+            // through `info`, the 128-byte slot allocated just above; the pid is this handle's.
+            r = unsafe {
+                @syscall(247, 1 as u64, self.pid as u64, info as u64, 16777221 as u64, 0 as u64)
+            } as i64;
+        }
+        if r < 0 {
+            return Result.Err(Error.from_linux_errno((0 as i64 - r) as i32));
+        }
+        return Result.Ok(info[4 as usize] != 0);
+    }
+
     // Forcibly terminates the child process (SIGKILL on the Unixes).
     pub fn kill(self: &mut Child) -> Result<(), Error> {
         return self.unix_kill(9);

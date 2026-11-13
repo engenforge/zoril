@@ -29,6 +29,7 @@ impl ExitStatus {
 }
 impl Child {
     pub fn wait(self: &mut Child) -> Result<ExitStatus, Error>;
+    pub fn has_exited(self: &mut Child) -> Result<bool, Error>;
     pub fn kill(self: &mut Child) -> Result<(), Error>;
     pub fn unix_kill(self: &mut Child, sig: i32) -> Result<(), Error>;
     pub fn kill_group(self: &mut Child, sig: i32) -> Result<(), Error>;
@@ -125,6 +126,15 @@ pub fn wait(self: &mut Child) -> Result<ExitStatus, Error>;
 ```
 
 	Waits for the child process to complete and returns its exit status.
+
+*has_exited*
+```
+pub fn has_exited(self: &mut Child) -> Result<bool, Error>;
+```
+
+	True once the child has ended, without reaping it. A child that has ended but is not reaped
+	keeps its pid and its group id, so kill\_group between has\_exited and wait still
+	reaches whatever it left running in its group; after wait it cannot.
 
 *kill*
 ```
