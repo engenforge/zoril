@@ -236,6 +236,21 @@ build/zbuild: $(TARGET) $(ZBUILD_SRCS) $(ZILC) build/runtime.o build/gen/version
 
 zbuild: build/zbuild ## Build the zbuild incremental driver
 
+# The stdlib modules tools/ztest/src/main.zrl imports, directly or through another module, as
+# `--emit-deps` lists them. The compiler and zilc are order-only prerequisites: a change to src/
+# does not rebuild the runner, which only starts scripts.
+ZTEST_SRCS := $(wildcard tools/ztest/src/*.zrl) $(addprefix stdlib/, args.zrl core.zrl core0.zrl file.zrl \
+	fmt.zrl fsys.zrl io.zrl mem.zrl mem_raw.zrl os/linux.zrl os/unix.zrl proc.zrl str.zrl string.zrl \
+	sys.zrl time.zrl vec.zrl)
+
+build/ztest: $(ZTEST_SRCS) build/runtime.o | $(TARGET) $(ZILC)
+	@mkdir -p build
+	@echo "Building ztest using $(TARGET)..."
+	@./scripts/build_zrl.sh build/ztest tools/ztest/src/main.zrl \
+		-I stdlib=stdlib -I tools/ztest/src --compiler $(TARGET)
+
+ztest: build/ztest ## Build ztest, the test run's dispatcher (not yet part of make test)
+
 # ── Version module ────────────────────────────────────────────────────────────
 build/gen/version.zrl: FORCE | deps-build
 	@mkdir -p build/gen
@@ -639,4 +654,4 @@ help help-all:
 .PHONY: $(GATES) all test test-changed test-fast stage0c-build install install-files uninstall clean help help-all dist dist-bin dist-check \
         selfhost-check selfhost-confirm selfhost-build-check repro-check mutation-check user-tools \
         stage0c-suites fuzz-short fuzz fuzz-release fuzz-calibrate preflight preflight-changed \
-        md-fmt test-readme test-docs test-getting-started zbuild test-versions man test-man
+        md-fmt test-readme test-docs test-getting-started zbuild ztest test-versions man test-man
