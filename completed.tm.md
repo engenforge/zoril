@@ -2,6 +2,35 @@
 
 ## 2026-11
 
+- [x] +testinfra +merge +AI-D @testinfra Merge `testinfra` into `main` at milestone Z2b: `ztest` runs the plan, and `proc.zrl` groups, environments and reaping id:9nnvq
+    > **Created:** 2026-11-13
+    > **Context:** placed by the reviewer at check-in id:0f0vv, at the maintainer's request for merge points (the rule is `AGENTS.md`, "Code branches", from id:z0187)
+    > **Branch:** `testinfra` into `main`
+    > **Depends:** id:drcga
+    > **Placed:** directly after check-in id:drcga, the review that ends milestone Z2b
+    > **Completed:** 2026-11-13 git:0e9a752
+
+    - **Why:** Z2b, `ztest` running the plan, is a numbered step of the series. Check-in id:0f0vv reviewed it, and check-in id:drcga reviews the fixes for what that review found. `main` would gain:
+      - the plan as data (id:z0136), and the faster `io.zrl` (id:87kcw, 27% less front end per grid program);
+      - `proc.zrl`'s process groups, working directory and environment (id:z0131, id:z0132, id:dcxxy);
+      - signals refused after a reap (id:q8rsf), reaping only the children given (id:ppvzh), and `has_exited` (id:trx5h);
+      - the header grammar (id:bekxx);
+      - `test.sh --print-plan` and `--item` (id:pnx9h), and `make test RUNNER=ztest` (id:655rf, id:z0137).
+      - The default runner stays `test.sh`, so `make test` on `main` behaves as it does today. id:z0187's list of milestones names this one: "then `ztest` running the plan (id:z0137)".
+    - **The merge is the maintainer's.** A reviewing session prepares it, then stops and asks:
+      1. `git log --oneline main..testinfra`: list the commits and the squash candidates, by the rule in "Code branches": steps of one change within one task, never across tasks. Today, from git:a38be8d to git:6122499, each commit is a different task, so nothing is squashed unless the batch adds fix-up commits.
+      2. `git merge-tree --write-tree main testinfra`: either no conflict, or the conflicting paths. Recorded figures are recomputed from the merged tree, never taken from one side.
+      3. `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` on the `testinfra` tip being merged; quote each `Total:` line.
+      4. Ask the maintainer. After the merge, on the merge commit: `make test`, and `make preflight-changed PREFLIGHT_BASE=<main before the merge>`, each `Total:` line quoted. Then `testinfra` is rebuilt on the new `main`, and a sprint note records the merge, as the 2026-11-12 note does.
+    - **An earlier merge is possible.** `testinfra` at git:6122499 already passes `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (id:z0137's C7). If the maintainer wants Z2b on `main` before the fixes, the same steps apply to that commit, and the fixes follow at Z2c (id:ehcd2).
+    - **Prepared (the reviewer, 2026-11-13), after check-in id:drcga; waiting for the maintainer.**
+      1. `git log --oneline main..testinfra`: 14 commits, git:a38be8d to git:0e9a752. Each belongs to a different task (id:87kcw, id:z0136, id:z0131, id:z0132, id:q8rsf, id:pnx9h, id:655rf, id:z0137, id:0f0vv (git:fdefff0, the review's docs commit), id:bekxx, id:trx5h, id:ppvzh, id:dcxxy, id:s6mg6). The batch added no fix-up commits, so there is nothing to squash.
+      2. `git log --oneline testinfra..main` is empty, and `git merge-tree --write-tree main testinfra` printed one tree id with no conflict. The merge is a fast-forward of `main` to git:0e9a752, so no recorded figure needs recomputing.
+      3. The runs on the tip, git:0e9a752, made after its last edit (id:s6mg6's C4): `make test`: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (120.4s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: rc 0, `Total: 1195 run, 1195 passed, 0 failed, 0 skipped (46.3s)`. After a fast-forward the merge commit is that same commit, so step 4's runs are these.
+      4. The fuzz record (`bench/fuzz/README.md`) is stale on that tip (`stdlib/` and `tools/` changed in id:trx5h, id:ppvzh, id:dcxxy). `main` would carry the stale record; this is said, not fixed, as in the earlier merges.
+      5. Asked the maintainer: fast-forward `main` to git:0e9a752 now, or first take the follow-ups of check-in id:drcga (id:r85jb, id:haf6g, id:f6tfj, id:rvn2w, then check-in id:zmcty). They are placed after this task, so until this task is done `tm next` offers nothing to a general-purpose session.
+    - **Merged (the maintainer, 2026-11-13):** `main` fast-forwarded from git:c907824 to git:0e9a752; `git rev-parse main testinfra` prints the same sha twice, so `testinfra` needs no rebuild. Step 4's runs on that commit: `make test`: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (120.4s)` (id:s6mg6's C4, made on this commit after its last edit). `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=c907824`: rc 0, `No mutation targets a changed file (14 commit(s) and the working tree since c907824).`, `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, `reject-diff: base verdicts: fresh (no cache); base front end 132 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69145 programs against c9078246fabe77042603b14ec860a1238e3093a5`, `Total: 1195 run, 1195 passed, 0 failed, 0 skipped (46.3s)`. The host-specific `bench/` files it wrote were deleted. The sprint note is at the end of this file. Publishing `main` and `testinfra` is the maintainer's.
+
 - [x] +docs +AI-G @main id:z0187 `AGENTS.md`: a series branch merges into `main` at each reviewed milestone, not only at its end
     > **Created:** 2026-11-12
     > **Context:** by the review of the `testinfra` series; the rule is agreed by the maintainer, who asked for the first such merge (git:906265f).
