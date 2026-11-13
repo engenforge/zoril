@@ -567,6 +567,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `grep -n 'status.is_some' stdlib/proc.zrl` lists the two new checks beside the existing one in `wait`.
       - C5: `grep -rn 'unix_kill\|kill_group\|\.kill()' stdlib tools tests src | grep -v '^stdlib/proc.zrl'`: for each caller, say whether it can run after a reap. None may, or the task stops and reports it.
       - C6: `git diff --stat` names no file of the `src/` closure (`timeout -k 5s 30s build/zoril --emit-deps src/main.zrl -I stdlib=stdlib -I src -I build/gen -o build/closure.txt`; `grep -c proc.zrl build/closure.txt` prints `0`).
+      - C7: `make man-gen`, then `sh scripts/test_man_pages.sh` passes (the `doc/man/zoril-proc.3` files go in the commit). Then `make test`, and `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, each `Total:` line quoted. The recorded figures that follow (`scripts/check_safety_figures.sh`) go in the same commit, and the completion note says the fuzz record is stale.
 
     - **Completion (the generalist, 2026-11-13, `testinfra` git:3c510fa):**
       - C1: `./scripts/test.sh --verbose tests/stdlib/test_proc_kill_reaped.zrl` gives `exit code: 0`, `Total: 2 run, 2 passed, 0 failed, 0 skipped (0.7s)`. After `wait`, `kill_group(15)` returns errno 3 and the grandchild is still running 200 ms later, then is killed by pid and seen gone.
@@ -578,7 +579,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C7: `make man-gen` then `sh scripts/test_man_pages.sh`: `[PASS] man-pages: all pages build cleanly and match tools and stdlib`; `doc/man/zoril-proc.3` and `.scd` are in the commit. `safety-figures` failed on the first runs (`§5 says stdlib lines is 6,668; the tree has 6677`); `doc/SAFETY.md` §5.3 (6,668 to 6,677) and `doc/spec/unsafe_policy.md` (4,801 to 4,807 lines, 10.87% to 10.86%) are updated in the commit, and `scripts/check_safety_figures.sh` then printed `all 9 §5 figure(s) match the tree`. After the last edit: `make test`: `Total: 3269 run, 3269 passed, 0 failed, 94 skipped (116.2s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: exit 0, `reject-diff: base verdicts: fresh (no cache)`, `0 newly accepted ... 0 newly refused, of 69145 programs`, `Total: 1192 run, 1192 passed, 0 failed, 0 skipped (44.4s)` for the checked build; no mutation targets a changed file.
       - The fuzz record (`bench/fuzz/README.md`) is stale, as `stdlib/` changed.
       - **Awaiting review:** id:0f0vv item 2: probe both methods after each of the three reaping calls.
-      - C7: `make man-gen`, then `sh scripts/test_man_pages.sh` passes (the `doc/man/zoril-proc.3` files go in the commit). Then `make test`, and `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, each `Total:` line quoted. The recorded figures that follow (`scripts/check_safety_figures.sh`) go in the same commit, and the completion note says the fuzz record is stale.
 
 - [ ] +testinfra +refactor +AI-G @testinfra Z2b1 `test.sh --print-plan` and `--item`: the plan and one item, for a second runner id:pnx9h
     > **Created:** 2026-11-13
