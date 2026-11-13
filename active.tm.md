@@ -30,12 +30,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `sh scripts/test_runner_output.sh --both` last line `[PASS] opts_hidden output follows the grammar and its counts agree (build/ztest)`; `sh scripts/test_runner_output.sh` last line `[PASS] a scenario exiting 77 is reported as skipped, with its reason`; no `[FAIL]`.
       - C5: `make test` after the last edit: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (119.6s)`. Scripts only; no `make preflight-changed`.
 
-- [ ] +testinfra +tests +AI-G @testinfra Z2b7 The header grammar refuses `expected exit` beside a warning test's `EXPECT`, and an `@skip:` with no reason id:haf6g
+- [x] +testinfra +tests +AI-G @testinfra Z2b7 The header grammar refuses `expected exit` beside a warning test's `EXPECT`, and an `@skip:` with no reason id:haf6g
     > **Created:** 2026-11-13
     > **Context:** found at check-in id:drcga (finding 1), settled by the reviewer for an `+AI-G` session
     > **Branch:** `testinfra`
     > **Depends:** id:drcga
     > **Placed:** after id:r85jb, in the batch that fixes what check-in id:drcga found
+    > **Completed:** 2026-11-13 git:4075934
 
     - **Why:** two header shapes that id:bekxx's grammar accepts still make a test mean something other than it says. The review's probes (`./scripts/test.sh --verbose` on scratch files):
       - `// EXPECT: x` then `// expected exit 3` on a program that returns 3: `[PASS]`. An `EXPECT` without `expected compile fail` makes the test a warning test, which only compiles, so the `expected exit` is never checked. The pass came through id:r85jb's fault, the `x` in the file's path, but without that fault the exit is still dropped.
@@ -52,6 +53,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: the survey: `. scripts/lib/test_runner.sh` and `tr_expectations` over every `*.zrl` of `tests/` and `corpus/` that is not a `*_lib.zrl`. Only `tests/runner/fixtures/tests/bad_header.zrl` is malformed; quote the command's output.
       - C4: `sh scripts/test_incremental.sh --quiet` passes; quote its last line.
       - C5: scripts and one test comment only, so no `make preflight-changed`. `make test` after the last edit; quote its `Total:` line.
+    - **Completion (generalist, 2026-11-13, git:4075934):** in `tr_expectations`' awk: an `// EXPECT:` line after `expected exit` or `compile success`, or an `expected exit` / `compile success` line after an `EXPECT` (with no `compile fail` before), is malformed at the second line of the pair; an empty `// @skip:` is malformed. `tests/incremental/error_unresolvable_import.zrl` now starts `// expected compile fail` then `// An import of a module that does not exist.`.
+      - C1: `sh scripts/test_test_headers.sh`: `[PASS] expect_and_exit: [FAIL] ... (malformed header, line 2: // expected exit 3)`, `[PASS] expect_and_success: [FAIL] ... (malformed header, line 2: // expected compile success)`, `[PASS] skip_empty: [FAIL] ... (malformed header, line 1: // @skip:)`, `[PASS] expect_with_fail: [PASS] build/test-headers/cases/expect_with_fail.zrl`; last line `[PASS] test headers: every malformed case failed, every control passed`.
+      - C2: take-out of the three rules: `[FAIL] expect_and_exit`, `[FAIL] expect_and_success`, `[FAIL] skip_empty`, and only those; restored.
+      - C3: the survey (`tr_expectations` over every `*.zrl` of `tests/` and `corpus/` except `*_lib.zrl`, in `build/bekxx/survey.sh`) printed only `tests/runner/fixtures/tests/bad_header.zrl: 1: // expected exit banana`.
+      - C4: `sh scripts/test_incremental.sh --quiet`: `PASS: all incremental compilation tests passed.`, with the `unresolvable import` line unchanged in the run.
+      - C5: `make test` after the last edit: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (119.6s)`. No `make preflight-changed` (scripts and a test comment).
 
 - [ ] +testinfra +tests +AI-G @testinfra Z2b8 zbuild-diff and the interface-attribute check read test headers with the runner's reader id:f6tfj
     > **Created:** 2026-11-13
