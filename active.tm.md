@@ -86,12 +86,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `sh scripts/test_interface_attrs.sh` last line `[PASS] interface-attrs: attributes, visibility and unsafe survive a .zri; ... diagnosed as whole-program does`.
       - C5: `make test` after the last edit: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (119.9s)`. No `make preflight-changed` (scripts only).
 
-- [ ] +testinfra +stdlib +docs +AI-G @testinfra Z1i `wait_any`'s doc and spec line say when it returns ECHILD for a child it was not given id:rvn2w
+- [x] +testinfra +stdlib +docs +AI-G @testinfra Z1i `wait_any`'s doc and spec line say when it returns ECHILD for a child it was not given id:rvn2w
     > **Created:** 2026-11-13
     > **Context:** found at check-in id:drcga (finding 4), settled by the reviewer for an `+AI-G` session
     > **Branch:** `testinfra`
     > **Depends:** id:drcga
     > **Placed:** after id:f6tfj, in the batch that fixes what check-in id:drcga found
+    > **Completed:** 2026-11-13 git:09824a9
 
     - **Why:** after id:ppvzh, `wait_any`'s doc comment (`stdlib/proc.zrl`) and `doc/spec/standard_library.md` §4.4 say it returns ECHILD when a child it was not given "ends first". The review's probe shows more: while any child outside the slice has ended and is not reaped, `wait_any` returns ECHILD at once, even if that child ended before the call and a child in the slice is still running, and it does so on every call until that child's own handle waits for it. After that `wait_any` blocks for the slice as it should. (`try_wait_any` is not affected: it waits by pid.) The behaviour is the one id:ppvzh specified, so only the words change; an ambiguity in `doc/spec/` is a bug (`AGENTS.md`).
     - **Do:**
@@ -105,6 +106,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `make man-gen` and `sh scripts/test_man_pages.sh` pass; `scripts/check_safety_figures.sh --all` shows no FAIL (re-record the figures in the same commit if a comment line moved one).
       - C4: `grep -c proc.zrl build/closure.txt` prints `0`.
       - C5: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, each `Total:` line quoted. The completion note says the fuzz record is stale.
+    - **Completion (generalist, 2026-11-13, git:09824a9):** the doc comment of `wait_any` and `doc/spec/standard_library.md` §4.4 now say it, in the reviewer's words; the man page follows; `tests/stdlib/test_proc_wait_any_own.zrl` has the new case (a zombie B outside the slice, `sleep 2` A inside: `wait_any` errors with ECHILD twice, then returns index 0 after `b.wait()`).
+      - C1: `timeout 60 ./scripts/test.sh --verbose tests/stdlib/test_proc_wait_any_own.zrl`: `[PASS] tests/stdlib/test_proc_wait_any_own.zrl (3142ms)`, `exit code: 0`.
+      - C2: take-out (`wait_any` ends in `return wait_any(children);`): `[FAIL] tests/stdlib/test_proc_wait_any_own.zrl (wrong exit code) (423ms)`, `exit code: 139` (the recursion overflows the stack, which the older ECHILD case also hits first, so this shows the test fails, not that the new case alone does); restored.
+      - C3: `make man-gen` wrote `doc/man/zoril-proc.3`; `[PASS] man-pages: all pages build cleanly and match tools and stdlib`; the comment added two lines, so `doc/SAFETY.md` §5.3 stdlib lines are 6,730 (the density row is unchanged, comment lines not counted); `check_safety_figures.sh --all` shows no FAIL.
+      - C4: `grep -c proc.zrl build/closure.txt` prints `0`.
+      - C5: `make test`: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (120.8s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: rc 0, `0 newly accepted ... 0 newly refused, of 69145 programs`, `Total: 1195 run, 1195 passed, 0 failed, 0 skipped (44.8s)`. The fuzz record is stale (`stdlib/` changed). Host-specific `bench/` files deleted.
 
 - [ ] +testinfra +review +AI-D @testinfra @checkin Review of the Z2b6, Z2b7, Z2b8 and Z1i batch (EXPECT read from the compiler's output, two more malformed shapes, one header reader, the ECHILD rule in words) id:zmcty
     > **Created:** 2026-11-13
