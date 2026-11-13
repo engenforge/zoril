@@ -112,8 +112,10 @@ pub fn wait_any(children: [mut Child]) -> Result<usize, Error>;
 	Blocks until one of the unreaped children in children ends, and returns its index. That call
 	reaps it: the status is kept on the Child, and its wait returns it without calling wait4.
 	Children that were already reaped are skipped; with none left the result is an error (ECHILD).
-	A child the call was not given is never reaped: when one of those ends first the result is
-	ECHILD, and the child is left for its own handle to wait for.
+	A child the call was not given is never reaped. While one of those has ended and is not yet
+	reaped, the result is ECHILD, at once and on every call, even if a child in children is still
+	running; wait for it with its own handle first. try\_wait\_any waits for each given child by pid,
+	and is not affected.
 
 *try_wait_any*
 ```

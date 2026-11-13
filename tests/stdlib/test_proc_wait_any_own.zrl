@@ -139,5 +139,20 @@ fn main() -> i32 {
     if w2.is_err() || w2.ok().unwrap() != 0 as usize { return 8; }
     let a = slice.get_mut(0 as usize).unwrap().wait();
     if a.is_err() || a.ok().unwrap().code().unwrap() != 0 { return 9; }
+
+    // An ended child outside the slice makes every wait_any an error, even with a slice child still
+    // running, until that child's own handle has waited for it.
+    let mut slice2 = unsafe { Vec::<Child>.new_in_raw(arena) };
+    slice2.push(spawn_sh(arena, "sleep 2"));
+    let mut b3 = spawn_sh(arena, "exit 0");
+    if !zombie(b3.pid) { return 10; }
+    let e1 = wait_any(slice2.as_mut_slice());
+    if e1.is_ok() || e1.err().unwrap().linux_errno() != 10 { return 11; }
+    let e2 = wait_any(slice2.as_mut_slice());
+    if e2.is_ok() || e2.err().unwrap().linux_errno() != 10 { return 12; }
+    let b3s = b3.wait();
+    if b3s.is_err() { return 13; }
+    let e3 = wait_any(slice2.as_mut_slice());
+    if e3.is_err() || e3.ok().unwrap() != 0 as usize { return 14; }
     return 0;
 }
