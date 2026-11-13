@@ -3702,6 +3702,41 @@ impl ZirVerifier {
         return res;
     }
 
+    // The alias list's order follows which predecessor a merge visited first, not anything the
+    // state says. A positional comparison keeps a loop whose back edges carry the same aliases in
+    // different orders from reaching its fixed point, so compare as sets.
+    fn alias_lists_equal(
+        self: &ZirVerifier,
+        a: &Vec<EnumPayloadAlias>,
+        b: &Vec<EnumPayloadAlias>
+    ) -> bool {
+        let mut i = 0 as usize;
+        while i < a.len() {
+            let mut found = false;
+            let mut j = 0 as usize;
+            while j < b.len() && !found {
+                found = a[i].local_id == b[j].local_id
+                    && self.places_equal(&a[i].source, &b[j].source);
+                j = j + 1 as usize;
+            }
+            if !found { return false; }
+            i = i + 1 as usize;
+        }
+        let mut j = 0 as usize;
+        while j < b.len() {
+            let mut found = false;
+            let mut i2 = 0 as usize;
+            while i2 < a.len() && !found {
+                found = a[i2].local_id == b[j].local_id
+                    && self.places_equal(&a[i2].source, &b[j].source);
+                i2 = i2 + 1 as usize;
+            }
+            if !found { return false; }
+            j = j + 1 as usize;
+        }
+        return true;
+    }
+
     fn states_equal(
         self: &ZirVerifier,
         s1: *mut ZirAnalysisState,
@@ -3743,15 +3778,7 @@ impl ZirVerifier {
             }
             i = i + 1 as usize;
         }
-        if a.enum_aliases.len() != b.enum_aliases.len() { return false; }
-        let mut ei = 0 as usize;
-        while ei < a.enum_aliases.len() {
-            if a.enum_aliases[ei].local_id != b.enum_aliases[ei].local_id
-                || !self.places_equal(&a.enum_aliases[ei].source, &b.enum_aliases[ei].source) {
-                return false;
-            }
-            ei = ei + 1 as usize;
-        }
+        if !self.alias_lists_equal(&a.enum_aliases, &b.enum_aliases) { return false; }
         if a.mark_infos.len() != b.mark_infos.len() { return false; }
         let mut mi = 0 as usize;
         while mi < a.mark_infos.len() {
