@@ -6,12 +6,13 @@
 #   1. emits lib's interface and requires each attribute and each visibility to be written;
 #   2. builds the programs beside it with zbuild (the library arrives as an interface) and with the
 #      whole-program compiler, and requires the same outcome from both: the header's, `expected exit`
-#      or `expected compile fail`;
+#      or `expected compile fail`, read with the runner's own reader, `tr_expectations`;
 #   3. requires a warning-free build of a program that imports `vec` (a warning here once came from
 #      the interface's copy of `Vec::push` having lost its #[stores]), and the rejection of
 #      safety probe 194 (`Vec::clone_in`'s result borrows its arena), under zbuild.
 cd "$(dirname "$0")/.." || exit 2
 . scripts/env.sh
+. scripts/lib/test_runner.sh
 ZORIL=${ZORIL_BIN:-./build/zoril}
 ZBUILD=${ZBUILD_BIN:-./build/zbuild}
 src=tests/modular/iface_attrs
@@ -49,7 +50,9 @@ grep -q '^#\[must_use\]$' "$dir/lib.zri" && grep -A1 '^#\[must_use\]$' "$dir/lib
 for prog in "$src"/accept_*.zrl "$src"/reject_*.zrl "$src"/private_*.zrl; do
     [ -f "$prog" ] || continue
     name=$(basename "$prog" .zrl)
-    expect_fail=0; grep -q '^// expected compile fail' "$prog" && expect_fail=1
+    tr_expectations "$prog"
+    [ "$T_KIND" != malformed ] || fail "$name: malformed header, line $T_MALFORMED"
+    expect_fail=0; [ "$T_KIND" = compile_fail ] && expect_fail=1
     if run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib --emit-zil -o "$dir/$name.zil" "$prog" > "$dir/$name.whole.log" 2>&1; then
         [ "$expect_fail" -eq 0 ] || fail "$name: the whole-program build accepted it" "$dir/$name.whole.log"
     else
@@ -60,9 +63,9 @@ for prog in "$src"/accept_*.zrl "$src"/reject_*.zrl "$src"/private_*.zrl; do
             fail "$name: zbuild warns where the whole-program build does not" "$dir/$name.zb.log"
         fi
         [ "$expect_fail" -eq 0 ] || fail "$name: zbuild accepted it" "$dir/$name.zb.log"
-        want=$(sed -n 's|^// expected exit \([0-9]*\).*|\1|p' "$prog" | head -1)
+        want=$T_EXIT
         "$dir/$name.bin"; rc=$?
-        [ "$rc" -eq "${want:-0}" ] || fail "$name: zbuild's program exited $rc, expected ${want:-0}"
+        [ "$rc" -eq "$want" ] || fail "$name: zbuild's program exited $rc, expected $want"
     else
         [ "$expect_fail" -eq 1 ] || fail "$name: zbuild rejected it" "$dir/$name.zb.log"
     fi
