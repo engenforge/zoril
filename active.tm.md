@@ -313,18 +313,27 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C7: `scripts/check_comment_noise.sh`: `[PASS] comment-noise: 137 files carry no scaffolding ...`, `[PASS] comment-census: 136 file(s) within budget`; `scripts/check_fuzz_fresh.sh`: `STALE - the short-session record describes other code than the working tree: src ...`, so `bench/fuzz/README.md` is stale.
     - **Awaiting review:** re-run C1 and C2 (the ICE with the cap lowered, and the take-out) and C6's differential with `REJECT_DIFF_NO_CACHE=1`.
 
-- [ ] +testinfra +safety +review +AI-D @testinfra @checkin Review of Z3d (an ICE when the verifier's fixed point reaches its pass cap) id:ed5ta
+- [x] +testinfra +safety +review +AI-D @testinfra @checkin Review of Z3d (an ICE when the verifier's fixed point reaches its pass cap) id:ed5ta
     > **Created:** 2026-11-13
     > **Context:** placed by the reviewing session with id:wx5w6
     > **Branch:** `testinfra`
     > **Depends:** id:wx5w6
     > **Placed:** directly after the task it reviews.
+    > **Completed:** 2026-11-13 git:633186e
 
     - **Review:**
       1. Re-run id:wx5w6 C1 and C2 (the ICE with the cap lowered, and the take-out), and C6's differential with `REJECT_DIFF_NO_CACHE=1` against the change's parent.
       2. Check that the ICE is conditioned on `changed`, not on the pass count, with a scratch cap at which a function converges on exactly its last allowed pass (from id:mrzb3's counts: `with_continue` converges in 7 passes after id:5a7eh, so a cap of 7 must not ICE and a cap of 6 must).
       3. Check that the ICE reaches the user the same way through `zbuild` (a separate build of `bis3.zrl` with the scratch cap), and that `scripts/test.sh` reports it as `ICE: compiler crashed`.
       4. Record the findings here, add follow-ups, `tm validate`, `tm done`.
+    - **Findings (reviewing session, 2026-11-13, on git:f82ebb5 and git:633186e):**
+      1. The code commit is the task's mechanism: the ICE is conditioned on `changed` after the loop, not on the pass count. The message names the function, and the driver's existing note adds `while compiling ... (FILE)`. The comment says why, and `doc/spec/zir.md` §7.4 gains the sentence. git:633186e only re-records the compiler line and `unsafe { }` block counts.
+      2. Scratch compilers, from a worktree at git:633186e (`build/ed5ta/wt`, now removed). The clean build there was byte-identical to the main tree's `build/zoril` (`78b38e7bfe360199`), then one compiler for each change of the cap (`build/ed5ta/zoril_cap*`, each with a distinct hash). The review's first scratch build without the ICE was stale: `make` skipped it because the copied `build/zoril` was newer than the edited source. The build was redone with a `touch` and its hash checked. Results on `build/ed5ta/bis3.zrl` (a copy of `build/z184/bis3.zrl`): cap 3 `rc=134`, `internal compiler error: ZirVerifier: the fixed point of `with_continue` did not converge within the pass cap`, then `note: while compiling `with_continue` (build/ed5ta/bis3.zrl)`. Cap 3 without the `ICE` call (the take-out) `rc=0`, silent. Cap 100 `rc=0`.
+      3. Last-pass boundary. After id:5a7eh, `with_continue` converges in **6** passes (`VERIFY-ITERS with_continue 6` from check-in id:83cp1's counter build), not the 7 this task's review step 2 said; the 7 was the reviewing session's error. Cap 6, where the fixed point is reached on the last allowed pass, gives `rc=0` with no ICE. Cap 5 gives `rc=134` and the ICE. So the condition is right at the edge.
+      4. The user's paths, with the cap-5 compiler. `ZORIL_CC=build/ed5ta/zoril_cap5 ./scripts/test.sh build/ed5ta/bis3.zrl` printed `[FAIL] build/ed5ta/bis3.zrl (ICE: compiler crashed)` and the three ICE lines as detail. `zbuild --compiler build/ed5ta/zoril_cap5` gave `rc=134` with the ICE, on `write_all_TN6Stdout` (`stdlib/io.zrl`), since a separate build verifies the stdlib module first and that function also needs more than 5 passes.
+      5. Differential against the change's parent: `REJECT_DIFF_NO_CACHE=1 sh scripts/check_reject_diff.sh 3a0402b` (log `build/ed5ta/rejdiff.log`, rc 0): `reject-diff: base verdicts: fresh (no cache); base front end 110 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69145 programs against 3a0402b`. No program in the store grid or the probes reaches the cap.
+      6. `make test`'s count. The completion note's `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (119.9s)` is right. The reviewing session's message had expected 3276, which was wrong: the earlier red run counted two more items because the `safety-model` gate printed three `[FAIL]` lines where its pass prints one.
+      7. Outcome: nothing blocks. No follow-up task; nothing moved, re-tagged or re-prioritised. `bench/fuzz/README.md` stays stale since `src/` changed. The batch Z3b to Z3d (id:mrzb3, id:5a7eh, id:wx5w6) is ready for the next milestone merge of `testinfra`, which is the maintainer's.
 
 ## Next
 
