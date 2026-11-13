@@ -134,12 +134,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
     > **Completed:** 2026-11-13 git:09824a9
 
-- [ ] +testinfra +tests +AI-G @testinfra Z2b9 The header grammar refuses an empty `// EXPECT:` text and a directive line after the header id:vmg4z
+- [x] +testinfra +tests +AI-G @testinfra Z2b9 The header grammar refuses an empty `// EXPECT:` text and a directive line after the header id:vmg4z
     > **Created:** 2026-11-13
     > **Context:** found at check-in id:zmcty (finding 4), settled by the reviewer for an `+AI-G` session
     > **Branch:** `testinfra`
     > **Depends:** id:zmcty
     > **Placed:** directly after check-in id:zmcty, which found it
+    > **Completed:** 2026-11-13 git:ff6e64b
 
     - **Why:** two header shapes still make a test mean something other than it says (id:zmcty finding 4). `// EXPECT: ` with no text checks no diagnostic, and alone it turns the file into a plain `run` test. A directive after the first line of code is ignored, so the file runs with the default expectation. Neither is in the tree, so no test changes kind. The four readers (`test.sh`, `--verbose`, `ztest`, `zbuild-diff`, and also `test_interface_attrs.sh`) all use `tr_expectations`, so one edit covers them.
     - **Do (`scripts/lib/test_runner.sh`, the awk in `tr_expectations`, POSIX awk):**
@@ -152,6 +153,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: the survey, as id:haf6g C3 did it (`tr_expectations` over every `*.zrl` of `tests/` and `corpus/` that is not a `*_lib.zrl`): only `tests/runner/fixtures/tests/bad_header.zrl` is malformed; quote the output.
       - C4: `sh scripts/test_zbuild_diff.sh` prints the same `[PASS] zbuild-diff: 591 of 594 ...` line as before the edit, and `sh scripts/test_interface_attrs.sh` passes; quote both.
       - C5: scripts only, so no `make preflight-changed`. `make test` after the last edit; quote its `Total:` line, which has the same counts as before plus the new cases.
+    - **Completion (generalist, 2026-11-13, git:ff6e64b):** in `tr_expectations`' awk, an `// EXPECT: ` line with empty or blank text is malformed at that line, and the reader no longer exits at the first line of code: it marks the header ended and reads on, treating a line matching `^[ \t]*//[ \t]*(expected (exit|compile)|EXPECT:|@skip:|flags:|link:)` as malformed. `scripts/test_test_headers.sh` has `expect_empty`, `expect_empty_alone`, `directive_after_code` and the control `body_comment`. One change beyond the task text: the existing control `header_only` (code, then `// expected compile fail`) asserted that a directive after code is ignored, the behaviour this task removes, so it is deleted; `directive_after_code` covers that shape now.
+      - C1: `sh scripts/test_test_headers.sh`: `[PASS] expect_empty: [FAIL] ... (malformed header, line 1: // EXPECT: )`, `[PASS] expect_empty_alone: [FAIL] ... (malformed header, line 1: // EXPECT: )`, `[PASS] directive_after_code: [FAIL] ... (malformed header, line 2: // expected exit 3)`, `[PASS] body_comment: [PASS] build/test-headers/cases/body_comment.zrl`; last line `[PASS] test headers: every malformed case failed, every control passed`.
+      - C2: take-out of both rules: `[FAIL] expect_empty` (got `[PASS]`), `[FAIL] expect_empty_alone` (got `[PASS]`), `[FAIL] directive_after_code` (got `wrong exit code`), and only those; restored.
+      - C3: the survey printed only `tests/runner/fixtures/tests/bad_header.zrl: 1: // expected exit banana`.
+      - C4: `sh scripts/test_zbuild_diff.sh`: `[PASS] zbuild-diff: 591 of 594 programs agree between the whole-program build and the installed zbuild (1 skipped, 2 allowed to differ) in 13 s`; `sh scripts/test_interface_attrs.sh` last line `[PASS] interface-attrs: attributes, visibility and unsafe survive a .zri; ...`.
+      - C5: `make test` after the last edit: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (121.0s)` (the new cases are inside the existing headers scenario). Scripts only; no `make preflight-changed`.
 
 - [ ] +testinfra +review +AI-D @testinfra @checkin Review of Z2b9 (an empty EXPECT and a directive after the header are malformed) id:at0d6
     > **Created:** 2026-11-13
