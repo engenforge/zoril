@@ -143,16 +143,22 @@ tr_expectations() {
         # comment. A header line that starts like a directive but is not exactly one of the
         # forms is malformed, and so is a header whose directives contradict each other. An EXPECT
         # line without `expected compile fail` makes a warning test, which only compiles, so an
-        # exit code or `compile success` beside it would be dropped.
+        # exit code or `compile success` beside it would be dropped. The reader goes on past the
+        # header, and a directive after it is malformed, not ignored: it would otherwise leave the
+        # test at the default expectation.
         function bad(why) { if (mal == "") mal = FNR ": " $0 }
-        !/^[ \t]*(\/\/.*)?$/ { exit }
+        !/^[ \t]*(\/\/.*)?$/ { ended = 1 }
+        ended {
+            if ($0 ~ /^[ \t]*\/\/[ \t]*(expected (exit|compile)|EXPECT:|@skip:|flags:|link:)/) bad()
+            next
+        }
         {
             body = $0
             if (match(body, /^[ \t]*\/\/[ \t]*/)) body = substr(body, RLENGTH + 1)
         }
         body !~ /^(expected |EXPECT|flags|link|@skip)/ { next }
         /^[ \t]*\/\/[ \t]*@skip:/ { v = $0; sub(/^[ \t]*\/\/[ \t]*@skip:[ \t]*/, "", v); if (v == "") bad(); if (skip == "") skip = v; next }
-        /^\/\/ EXPECT: / { if (nexit || csucc) bad(); nexpect++; v = $0; sub(/^\/\/ EXPECT: /, "", v); expect = expect (expect == "" ? "" : "\n") v; next }
+        /^\/\/ EXPECT: / { if (nexit || csucc) bad(); nexpect++; v = $0; sub(/^\/\/ EXPECT: /, "", v); if (v ~ /^[ \t]*$/) bad(); expect = expect (expect == "" ? "" : "\n") v; next }
         /^\/\/ flags: / { if (nflags++) bad(); v = $0; sub(/^\/\/ flags: /, "", v); flags = v; next }
         /^\/\/ link: / { v = $0; sub(/^\/\/ link: /, "", v); link = link v " "; next }
         /^[ \t]*\/\/[ \t]*expected compile fail[ \t]*$/ { if (csucc || nexit) bad(); cfail = 1; next }

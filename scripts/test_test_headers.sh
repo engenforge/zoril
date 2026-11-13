@@ -59,12 +59,16 @@ bad expect_and_exit 2 '// expected exit 3' "// EXPECT: x\n// expected exit 3\n$M
 bad expect_and_success 2 '// expected compile success' "// EXPECT: x\n// expected compile success\n$MAIN"
 bad skip_empty 1 '// @skip:' "// @skip:\n$MAIN3"
 
+bad expect_empty 1 '// EXPECT: ' "// EXPECT: \n// expected compile fail\nfn main() -> i32 { return 0 }\n"
+bad expect_empty_alone 1 '// EXPECT: ' "// EXPECT: \n$MAIN"
+bad directive_after_code 2 '// expected exit 3' "$MAIN3// expected exit 3\n"
+
+good body_comment "// expected exit 0\nfn main() -> i32 {\n    // expected output: none\n    return 0;\n}\n"
 good exit_ok "// expected exit 3\n$MAIN3"
 good exit_code_ok "// expected exit code: 0\n$MAIN"
 good compile_fail_expect "// expected compile fail\n// EXPECT: expected\nfn main() -> i32 { return 0 }\n"
 good expect_with_fail "// expected compile fail\n// EXPECT: expected\nfn main() -> i32 { return 0 }\n"
 good prose "// expecting a slice\n$MAIN"
-good header_only "$MAIN// expected compile fail\n"
 
 [ "$errors" -eq 0 ] || exit 1
 echo "[PASS] test headers: every malformed case failed, every control passed"
