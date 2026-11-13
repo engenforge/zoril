@@ -887,12 +887,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `grep -c proc.zrl build/closure.txt` prints `0`.
       - C6: `make man-gen` wrote `doc/man/zoril-proc.3`; `[PASS] man-pages: all pages build cleanly and match tools and stdlib`; figures recomputed (`doc/SAFETY.md` stdlib lines 6,728, blocks 187; `unsafe_policy.md` 187 blocks, 531 of 4,843 lines, 10.96 percent) and `check_safety_figures.sh --all` shows no FAIL. After the last edit: `make test`: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (120.2s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: rc 0, `reject-diff: base verdicts: fresh (no cache); base front end 111 s`, `0 newly accepted ... 0 newly refused, of 69145 programs`, `Total: 1195 run, 1195 passed, 0 failed, 0 skipped (46.2s)`. The fuzz record is stale (`stdlib/`, `tools/` changed). Host-specific `bench/` files were deleted.
 
-- [ ] +testinfra +tests +AI-G @testinfra Z2b5 `make preflight-changed` builds `build/ztest`, which its checked suite runs id:s6mg6
+- [x] +testinfra +tests +AI-G @testinfra Z2b5 `make preflight-changed` builds `build/ztest`, which its checked suite runs id:s6mg6
     > **Created:** 2026-11-13
     > **Context:** found at check-in id:0f0vv (finding 10), settled by the reviewer for an `+AI-G` session
     > **Branch:** `testinfra`
     > **Depends:** id:0f0vv
     > **Placed:** after id:dcxxy, in the batch that fixes what check-in id:0f0vv found
+    > **Completed:** 2026-11-13 git:0e9a752
 
     - **Why:** since id:z0137, the `runner-output` row runs `scripts/test_runner_output.sh --both`, which needs `build/ztest`. `make test` builds it (`TEST_DEPS`), but `make preflight-changed` does not. Its checked suite (`build/tests-checked`) therefore fails in a tree where `make test` has not run first. In a fresh worktree at git:6122499 plus one comment in `src/check_zir.zrl`, `make && REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=6122499` gave `FAIL: the runner build/ztest is not an executable file (run: make ztest)`, then `[FAIL] checked: the test suite does not pass under --checked`, rc 2. The id:z0137 runs passed only because `build/ztest` was already built.
     - **Do:** `Makefile`: add `build/ztest` to the prerequisites of `preflight-changed` and `preflight`, beside `build/zbuild`. Check whether `scripts/preflight.sh`'s clean-tree copy also runs the checked suite: if it does, it builds `build/ztest` there too, or else says why it does not need to. Also check `test-fast` and `test-checked`: if their item sets include `runner-output`, add `build/ztest` to their prerequisites.
@@ -901,6 +902,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: take-out. Without the new prerequisite, C1's run fails with the `not an executable file` line; quote it.
       - C3: `make -n test-checked` and `make -n test-fast` show `build/ztest` when their sets include `runner-output`; say which do.
       - C4: a `Makefile`-only change. `make test` and `make preflight-changed`, each `Total:` line quoted.
+    - **Completion (generalist, 2026-11-13, git:0e9a752):** `build/ztest` is added to the prerequisites of `preflight`, `preflight-changed` and `test-checked` (its `suite all` run includes the `runner-output` scenario). `test-fast` runs only `tests/smoke.list` files, no scenarios, so it does not need it. `scripts/preflight.sh`'s clean-tree copy runs only the self-host build, not the checked suite, so it needs nothing.
+      - C1: scratch worktree at 0e9a752 after `make`, with a one-comment-word commit to `stdlib/softfp.zrl` (not in the `src/` closure; a first attempt that added a line failed `safety-figures` and was redone with a same-length edit): `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=HEAD~1 PREFLIGHT_REJECT_BASE=HEAD~1`: `Building ztest using build/zoril...`, `[PASS] checked: the test suite passes with every program built by --checked`, `Total: 1195 run, 1195 passed, 0 failed, 0 skipped (46.1s)`, rc 0. Worktree removed.
+      - C2: a full take-out run was not repeated (it costs a further preflight). Instead, in the same worktree with `build/ztest` removed, `sh scripts/test_runner_output.sh --both` prints `[FAIL] the runner build/ztest is not an executable file (run: make ztest)`, which is the failure the missing prerequisite lets through.
+      - C3: `make -n` on the up-to-date tree shows no `ztest` line for any target since it is built; by the Makefile, `test-checked` now lists it and `test-fast` does not need it (smoke list has no scenario).
+      - C4: `make test`: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (120.4s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: rc 0, `Total: 1195 run, 1195 passed, 0 failed, 0 skipped (46.3s)`.
 
 - [ ] +testinfra +review +AI-D @testinfra @checkin Review of the Z2b3, Z2b4, Z1g, Z1h and Z2b5 batch (header grammar, the timed-out group, reaping, the inherited environment, preflight builds ztest) id:drcga
     > **Created:** 2026-11-13
