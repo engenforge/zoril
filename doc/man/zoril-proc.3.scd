@@ -40,6 +40,10 @@ impl Command {
     pub fn set_stdout(self: &mut Command, fd: Fd);
     pub fn set_stderr(self: &mut Command, fd: Fd);
     pub fn set_new_group(self: &mut Command);
+    pub fn set_current_dir(self: &mut Command, dir: [u8]);
+    pub fn env_set(self: &mut Command, name: [u8], value: [u8]);
+    pub fn env_remove(self: &mut Command, name: [u8]);
+    pub fn env_clear(self: &mut Command);
     pub fn spawn(self: &Command) -> Result<Child, Error>;
     pub fn status(self: &Command) -> Result<ExitStatus, Error>;
 }
@@ -203,6 +207,39 @@ pub fn set_new_group(self: &mut Command);
 	Starts the child in a process group of its own (setpgid(0, 0) before execve), so
 	Child.kill\_group can signal it together with everything it starts. spawn returns only
 	after the child has exec'd, so the group exists by then.
+
+*set_current_dir*
+```
+pub fn set_current_dir(self: &mut Command, dir: [u8]);
+```
+
+	Runs the child in the directory dir: chdir in the child just before execve, so a relative
+	program path is looked up from dir, and a directory that cannot be entered makes spawn
+	fail with the chdir error.
+
+*env_set*
+```
+pub fn env_set(self: &mut Command, name: [u8], value: [u8]);
+```
+
+	Sets the environment variable name to value in the child. After any env\_\* call the child
+	gets the parent's environment with the changes applied (env\_clear starts from an empty
+	one); with none it gets an empty environment unless set\_envp was used. spawn fails with
+	EINVAL for a name that is empty or holds '=' or NUL, and for a value that holds NUL.
+
+*env_remove*
+```
+pub fn env_remove(self: &mut Command, name: [u8]);
+```
+
+	Removes the environment variable name from the child's environment.
+
+*env_clear*
+```
+pub fn env_clear(self: &mut Command);
+```
+
+	Gives the child an empty environment, discarding the parent's and every env\_set so far.
 
 *spawn*
 ```

@@ -1,0 +1,224 @@
+// [PASS] a child's working directory and environment are set through Command methods, with no unsafe
+// expected exit 0
+//
+// `set_current_dir` is a chdir in the child before execve, and `env_set`, `env_remove` and
+// `env_clear` build the child's environment from the parent's. Each check runs `sh` or `env` with
+// its stdout in a file under /tmp and reads the file back.
+import "core.zrl";
+import "mem_raw.zrl";
+import "proc.zrl";
+import "io.zrl";
+use io::Fd;
+use mem_raw::{ArenaHeader, arena_init};
+use proc::Command;
+
+const CAP: usize = 8192;
+
+fn open_scratch(path: [u8]) -> i32 {
+    // SAFETY: open(2) O_RDWR|O_CREAT|O_TRUNC, mode 0644, on a NUL-terminated literal path; the
+    // descriptor is this test's.
+    return unsafe {
+        @syscall(2, path.ptr as u64, 2 as u64 | 64 as u64 | 512 as u64, 420 as u64)
+    } as i32;
+}
+
+fn close_fd(fd: i32) {
+    // SAFETY: close(3) of a descriptor this test opened.
+    let _ = unsafe { @syscall(3, fd as u64) };
+}
+
+fn make_dir(path: [u8]) {
+    // SAFETY: mkdir(83) on a NUL-terminated literal path. An existing directory is fine.
+    let _ = unsafe { @syscall(83, path.ptr as u64, 493 as u64) };
+}
+
+fn contains(hay: [u8], needle: [u8]) -> bool {
+    if needle.len == 0 as usize || hay.len < needle.len { return false; }
+    let limit = hay.len - needle.len;
+    let mut i = 0 as usize;
+    while i <= limit {
+        let mut k = 0 as usize;
+        while k < needle.len && hay[i + k] == needle[k] { k = k + 1; }
+        if k == needle.len { return true; }
+        i = i + 1 as usize;
+    }
+    return false;
+}
+
+fn same(a: [u8], b: [u8]) -> bool {
+    return a.len == b.len && contains(a, b) || a.len == 0 as usize && b.len == 0 as usize;
+}
+
+// True when `env` output has a line that starts with PREFIX ("PATH="), not one that merely ends
+// with it (LD_LIBRARY_PATH=).
+fn has_var(out: [u8], prefix: [u8], line_prefix: [u8]) -> bool {
+    if out.len >= prefix.len {
+        let mut k = 0 as usize;
+        while k < prefix.len && out[k] == prefix[k] { k = k + 1; }
+        if k == prefix.len { return true; }
+    }
+    return contains(out, line_prefix);
+}
+
+// Runs CMD with its stdout in a scratch file and returns what it wrote into BUF's first bytes;
+// -1 when the spawn or the child failed.
+fn capture(cmd: &mut Command, buf: *mut u8) -> i64 {
+    let path = "/tmp/zoril_proc_cwd_env.out\0";
+    let fd = open_scratch(path);
+    if fd < 0 { return -1 as i64; }
+    // SAFETY: `fd` is the open descriptor just returned, which stays open until `capture` closes it.
+    cmd.set_stdout(unsafe { Fd.from_unix_raw(fd) });
+    let res = cmd.status();
+    if res.is_err() || !res.ok().unwrap().is_success() {
+        close_fd(fd);
+        return -1 as i64;
+    }
+    // SAFETY: lseek(8) to offset 0 of the descriptor opened above.
+    let _ = unsafe { @syscall(8, fd as u64, 0 as u64, 0 as u64) };
+    let mut total = 0 as usize;
+    while total < CAP {
+        // SAFETY: the read fills at most `CAP - total` bytes at `buf + total`, inside the caller's
+        // CAP-byte array.
+        let n = unsafe {
+            @syscall(0, fd as u64, (buf as u64) + total as u64, (CAP - total) as u64)
+        } as i64;
+        if n <= 0 { break; }
+        total = total + n as usize;
+    }
+    close_fd(fd);
+    return total as i64;
+}
+
+fn text(buf: *mut u8, n: i64) -> [u8] {
+    // SAFETY: `n` bytes were just read into the caller's array.
+    return unsafe { @slice(buf, n as usize) };
+}
+
+// C1: pwd prints the directory the child was started in.
+fn cwd_is_set(arena: *mut ArenaHeader, buf: *mut u8) -> i32 {
+    make_dir("/tmp/zoril_proc_cwd_env_dir\0");
+    let mut cmd = unsafe { Command.new_raw("/bin/sh", arena) };
+    cmd.arg("-c");
+    cmd.arg("pwd");
+    cmd.set_current_dir("/tmp/zoril_proc_cwd_env_dir");
+    let n = capture(&mut cmd, buf);
+    if n < 0 { return 1; }
+    if !contains(text(buf, n), "/tmp/zoril_proc_cwd_env_dir\n") { return 2; }
+    return 0;
+}
+
+// C2: a directory that does not exist fails the spawn with ENOENT, and no child is left.
+fn cwd_missing(arena: *mut ArenaHeader) -> i32 {
+    let mut cmd = unsafe { Command.new_raw("/bin/sh", arena) };
+    cmd.arg("-c");
+    cmd.arg("exit 0");
+    cmd.set_current_dir("/tmp/zoril_proc_cwd_env_no_such_dir");
+    let r = cmd.spawn();
+    if r.is_ok() { return 1; }
+    if r.err().unwrap().linux_errno() != 2 { return 2; }
+    // SAFETY: wait4(61) with WNOHANG (1) on any child, null status: ECHILD (-10) means the failed
+    // spawn left no child behind, and the child it forked was reaped.
+    let left = unsafe { @syscall(61, -1 as i64 as u64, 0 as u64, 1 as u64, 0 as u64) } as i64;
+    if left != -10 as i64 { return 3; }
+    return 0;
+}
+
+// C3, one test per operation, each on `/usr/bin/env`, which prints the whole environment.
+fn env_ops(arena: *mut ArenaHeader, buf: *mut u8) -> i32 {
+    // A variable set, with the parent's environment inherited: PATH is the parent's.
+    let mut a = unsafe { Command.new_raw("/usr/bin/env", arena) };
+    a.env_set("ZORIL_A", "1");
+    let na = capture(&mut a, buf);
+    if na < 0 { return 1; }
+    if !contains(text(buf, na), "ZORIL_A=1\n") { return 2; }
+    if !has_var(text(buf, na), "PATH=", "\nPATH=") { return 3; }
+
+    // A value holding '=' is kept whole.
+    let mut b = unsafe { Command.new_raw("/usr/bin/env", arena) };
+    b.env_set("ZORIL_B", "x=y");
+    let nb = capture(&mut b, buf);
+    if nb < 0 { return 4; }
+    if !contains(text(buf, nb), "ZORIL_B=x=y\n") { return 5; }
+
+    // A variable the parent has, removed; a second set of the same name replaces the first.
+    let mut c = unsafe { Command.new_raw("/usr/bin/env", arena) };
+    c.env_remove("PATH");
+    c.env_set("ZORIL_C", "1");
+    c.env_set("ZORIL_C", "2");
+    let nc = capture(&mut c, buf);
+    if nc < 0 { return 6; }
+    if has_var(text(buf, nc), "PATH=", "\nPATH=") { return 7; }
+    if !contains(text(buf, nc), "ZORIL_C=2\n") || contains(text(buf, nc), "ZORIL_C=1") { return 8; }
+
+    // A variable set and then removed is not there; one removed and then set is.
+    let mut d = unsafe { Command.new_raw("/usr/bin/env", arena) };
+    d.env_set("ZORIL_D", "1");
+    d.env_remove("ZORIL_D");
+    d.env_remove("ZORIL_E");
+    d.env_set("ZORIL_E", "5");
+    let nd = capture(&mut d, buf);
+    if nd < 0 { return 9; }
+    if contains(text(buf, nd), "ZORIL_D") { return 10; }
+    if !contains(text(buf, nd), "ZORIL_E=5\n") { return 11; }
+
+    // The environment cleared: nothing but what is set afterwards.
+    let mut e = unsafe { Command.new_raw("/usr/bin/env", arena) };
+    e.env_set("ZORIL_F", "gone");
+    e.env_clear();
+    e.env_set("ZORIL_G", "1");
+    let ne = capture(&mut e, buf);
+    if ne < 0 { return 12; }
+    if !same(text(buf, ne), "ZORIL_G=1\n") { return 13; }
+
+    // Cleared and nothing set: an empty environment.
+    let mut f = unsafe { Command.new_raw("/usr/bin/env", arena) };
+    f.env_clear();
+    let nf = capture(&mut f, buf);
+    if nf != 0 as i64 { return 14; }
+    return 0;
+}
+
+// C4: a name or value with an interior NUL, and a name that is empty or holds '=', are refused
+// before the fork.
+fn refused(arena: *mut ArenaHeader) -> i32 {
+    let mut a = unsafe { Command.new_raw("/bin/sh", arena) };
+    a.env_set("ZO\0RIL", "1");
+    let ra = a.spawn();
+    if ra.is_ok() || ra.err().unwrap().linux_errno() != 22 { return 1; }
+
+    let mut b = unsafe { Command.new_raw("/bin/sh", arena) };
+    b.env_set("ZORIL", "1\0x");
+    let rb = b.spawn();
+    if rb.is_ok() || rb.err().unwrap().linux_errno() != 22 { return 2; }
+
+    let mut c = unsafe { Command.new_raw("/bin/sh", arena) };
+    c.env_set("ZO=RIL", "1");
+    let rc = c.spawn();
+    if rc.is_ok() || rc.err().unwrap().linux_errno() != 22 { return 3; }
+
+    let mut d = unsafe { Command.new_raw("/bin/sh", arena) };
+    d.env_set("", "1");
+    let rd = d.spawn();
+    if rd.is_ok() || rd.err().unwrap().linux_errno() != 22 { return 4; }
+
+    let mut e = unsafe { Command.new_raw("/bin/sh", arena) };
+    e.set_current_dir("/tmp\0x");
+    let re = e.spawn();
+    if re.is_ok() || re.err().unwrap().linux_errno() != 22 { return 5; }
+    return 0;
+}
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(4194304) } as *mut ArenaHeader;
+    // SAFETY: an uninitialized CAP-byte array in main's frame, filled by `capture` before it is read.
+    let buf = unsafe { @alloca<[u8; 8192]>(1) } as *mut u8;
+    let a = cwd_is_set(arena, buf);
+    if a != 0 { return 10 + a; }
+    let b = cwd_missing(arena);
+    if b != 0 { return 20 + b; }
+    let c = env_ops(arena, buf);
+    if c != 0 { return 30 + c; }
+    let d = refused(arena);
+    if d != 0 { return 60 + d; }
+    return 0;
+}

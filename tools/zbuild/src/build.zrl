@@ -18,7 +18,7 @@ use fsys::{env_var_raw, exe_dir_raw, list_dir_raw, realtime_ns, rename_path_raw,
 use graph::{Graph, deps_of, push_compiler_paths};
 use io::{eprint, exit, print};
 use manifest::{Entry, Manifest, empty_manifest, find_entry, parse_manifest, serialize_manifest};
-use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+use mem_raw::ArenaHeader;
 use module_path::{bytes_lt, encode_module_key, iface_relative_path, make_absolute};
 use proc::{Command, ExitStatus};
 use string::String;
@@ -400,16 +400,8 @@ pub fn link_program(ctx: &BuildCtx, g: &Graph, results: &Vec<ModResult>) -> i32 
             Some(v) => v,
             None => "/usr/bin:/bin",
         };
-        let mut entry = unsafe { String.new_in_raw(arena) };
-        entry.push_str("PATH=");
-        entry.push_str(path_value);
-        entry.push_u8(0 as u8);
-        let envp = unsafe { zoril_allocator_alloc(arena, 16 as u64) } as *mut *u8;
-        unsafe {
-            *envp = entry.as_slice().ptr;
-            *((envp as usize + 8) as *mut *u8) = 0 as *u8;
-            cmd.set_envp(envp as **u8);
-        }
+        cmd.env_clear();
+        cmd.env_set("PATH", path_value);
     }
     cmd.arg("-o");
     cmd.arg(tmp_out);
