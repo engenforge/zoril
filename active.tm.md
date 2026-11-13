@@ -759,12 +759,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
         - Notes added to id:z0138 (the pool ends a group before reaping, and the before-figures), id:z0139 (the header grammar) and id:z0140 (two more dependency lists).
         - id:mrzb3 keeps its place, after the merge.
 
-- [ ] +testinfra +tests +AI-G @testinfra Z2b3 A malformed test header fails: the per-file runner reads one header grammar, from the header only id:bekxx
+- [x] +testinfra +tests +AI-G @testinfra Z2b3 A malformed test header fails: the per-file runner reads one header grammar, from the header only id:bekxx
     > **Created:** 2026-11-13
     > **Context:** decided by id:qqp5s, settled by the reviewer for an `+AI-G` session
     > **Branch:** `testinfra`
     > **Depends:** id:0f0vv
     > **Placed:** first task of the batch after check-in id:0f0vv, the fix id:qqp5s asks for
+    > **Completed:** 2026-11-13 git:3ad3176
 
     - **Why:** id:qqp5s. `tr_expectations` (`scripts/lib/test_runner.sh`) matches each directive anywhere in the file and ignores what it does not recognise. So `// expected exit banana`, `// expected exit 1O` or `//EXPECT: x` leave the test at the default (run, expect exit 0), and it can pass for the wrong reason. A `// expected compile fail` in a later comment would also change the test's kind.
     - **Do (`scripts/lib/test_runner.sh`, POSIX `sh` and POSIX awk; still one awk pass per file):**
@@ -781,6 +782,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `sh scripts/test_runner_output.sh --both` passes with the new totals; quote its last line for each runner.
       - C5: `make test TEST_RUNNER='./scripts/test.sh --results build/bekxx/before.results'` before the edit and `.../after.results` after it. `diff <(sort before) <(sort after)` shows only the new scenario's line (the fixtures are in no group); quote both `Total:` lines.
       - C6: scripts only, so no `make preflight-changed` (as in id:z0136). `make test` after the last edit; quote its `Total:` line.
+    - **Completion (generalist, 2026-11-13, git:3ad3176):** `tr_expectations` reads the header only with one grammar; a malformed header is `[FAIL] FILE (malformed header, line N: TEXT)`, run and failure counted, nothing compiled. New scenario `scripts/test_test_headers.sh` (plan row `test-headers`, group `integration`; tiers row added, and `scripts/lib/test_runner.sh` already selects ALL). `test_runner_output.sh`'s totals are now 17/7/10/2 and 16/7/9/2.
+      - C1: `./scripts/test.sh --verbose tests/runner/fixtures/tests/bad_header.zrl` and `build/ztest --verbose` (same argument) both print `[FAIL] tests/runner/fixtures/tests/bad_header.zrl (malformed header, line 1: // expected exit banana) (2ms)` (`(3ms)` for ztest).
+      - C2: `sh scripts/test_test_headers.sh`: 12 malformed cases, e.g. `[PASS] exit_word: [FAIL] build/test-headers/cases/exit_word.zrl (malformed header, line 1: // expected exit banana)`, `exit_twice` (line 2), `exit_and_fail` (line 2: `// expected compile fail`); 5 controls, e.g. `[PASS] header_only: [PASS] build/test-headers/cases/header_only.zrl`; last line `[PASS] test headers: every malformed case failed, every control passed`.
+      - C3: with the `T_MALFORMED` branch replaced by `if false`, the scenario printed 12 `[FAIL]` lines, one for each malformed case (`exit_word` ... `skip_hides_nothing`); restored (`cp`), scenario passes again.
+      - C4: `sh scripts/test_runner_output.sh --both`: last line `[PASS] opts_hidden output follows the grammar and its counts agree (build/ztest)`; for test.sh `sh scripts/test_runner_output.sh` last line `[PASS] a scenario exiting 77 is reported as skipped, with its reason`.
+      - C5: before (clean tree, `build/bekxx/before.results`): `Total: 3269 run, 3269 passed, 0 failed, 94 skipped (117.1s)`; after: `Total: 3270 run, 3270 passed, 0 failed, 94 skipped (117.9s)`. `sort -u` diff shows only `> PASS test-headers` (the before file also held an earlier aborted run's `FAIL runner-output`, appended since results files are never truncated; that run was polluted by the new untracked script and discarded).
+      - C6: `make test` after the last edit: `Total: 3270 run, 3270 passed, 0 failed, 94 skipped (117.9s)`; `make test-changed BASE=HEAD`: `Total: 3270 run, 3270 passed, 0 failed, 94 skipped (118.4s)`. Scripts only; no `make preflight-changed`.
+      - The cases I added beyond the task's list: `skip_hides_nothing`, `flags_twice`, `fail_and_success` (all conflicts or `@skip` ordering of rule 2/3). A one-line comment in `test_runner.sh`'s header was edited with `sed -i` (a slip against AGENTS.md; the diff is the one word `malformed`).
 
 - [ ] +testinfra +tests +AI-G @testinfra Z2b4 `ztest` ends the whole process group of an item that timed out, before it reaps the item id:trx5h
     > **Created:** 2026-11-13
