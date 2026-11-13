@@ -1782,6 +1782,16 @@ impl ZirVerifier {
             iter = iter + 1 as usize;
         }
 
+        // The reporting pass below is sound only from a fixed point; a borrow or move fact
+        // that a later pass would reach must not go unchecked, so a stop at the cap is a bug.
+        if changed {
+            let mut msg = unsafe { ByteVec.new_raw(self.arena) };
+            msg.push_slice("ZirVerifier: the fixed point of `");
+            msg.push_slice(self.intern_table.lookup((*func).name));
+            msg.push_slice("` did not converge within the pass cap");
+            ICE(msg.as_slice());
+        }
+
         // Then once more from the fixed point, reporting.
         self.reporting_enabled = true;
         for bk in 0 as usize..blocks_len { self.run_block(func, bk, block_entry_states[bk]); }
