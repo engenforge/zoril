@@ -160,18 +160,25 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `sh scripts/test_zbuild_diff.sh`: `[PASS] zbuild-diff: 591 of 594 programs agree between the whole-program build and the installed zbuild (1 skipped, 2 allowed to differ) in 13 s`; `sh scripts/test_interface_attrs.sh` last line `[PASS] interface-attrs: attributes, visibility and unsafe survive a .zri; ...`.
       - C5: `make test` after the last edit: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (121.0s)` (the new cases are inside the existing headers scenario). Scripts only; no `make preflight-changed`.
 
-- [ ] +testinfra +review +AI-D @testinfra @checkin Review of Z2b9 (an empty EXPECT and a directive after the header are malformed) id:at0d6
+- [x] +testinfra +review +AI-D @testinfra @checkin Review of Z2b9 (an empty EXPECT and a directive after the header are malformed) id:at0d6
     > **Created:** 2026-11-13
     > **Context:** placed by the reviewer at check-in id:zmcty
     > **Branch:** `testinfra`
     > **Depends:** id:vmg4z
     > **Placed:** directly after the task it reviews. id:mrzb3, the first task after it, depends on it.
+    > **Completed:** 2026-11-13 git:ff6e64b
 
     - **Review:**
       1. Re-run id:vmg4z C2's take-out.
       2. Run the five reviewer headers in `build/zmcty/h/` (if they are gone, those in id:zmcty finding 4) through the four readers: `a_empty_expect` and `e_empty_expect_alone` are now malformed at line 1, `d_directive_after_code` at line 2, and the others are unchanged.
       3. Write two headers of the reviewer's own that are near the after-header rule's edge (a directive-like comment inside a string literal, or one indented in a block), and check how they are read.
       4. Record the findings here, add follow-ups, `tm validate`, `tm done`.
+    - **Findings (reviewing session, 2026-11-13, on git:ff6e64b):**
+      1. The commit does what the task says, in `tr_expectations` only, and the deleted control `header_only` asserted the behaviour the task removes (a directive after code is ignored); `directive_after_code` covers that shape. Accepted. `build/ztest` reads no header itself: it runs each item through `scripts/test.sh --item`, so the one reader covers it.
+      2. Review 1, C2's take-out re-run (both rules replaced by no-ops in a scratch copy, then `git checkout scripts/lib/test_runner.sh`): `sh scripts/test_test_headers.sh` printed exactly three failures, `[FAIL] expect_empty: ... got: [PASS] ...`, `[FAIL] expect_empty_alone: ... got: [PASS] ...`, `[FAIL] directive_after_code: ... got: [FAIL] ... (wrong exit code)`. Restored: `[PASS] test headers: every malformed case failed, every control passed`; `git status --short` clean.
+      3. Review 2 and 3, headers through `tr_expectations` and, planted under `tests/stdlib/zz_at0d6/` (removed after), through `./scripts/test.sh`, `--verbose`, `build/ztest` and `sh scripts/test_zbuild_diff.sh`. All four agree on every file. `a_empty_expect` and `e_empty_expect_alone`: malformed at line 1; `d_directive_after_code`: line 2. Unchanged: `b_exit_then_expect` malformed at line 2, `c_skip_tab` at line 1, `f_two_exit_forms` at line 2, `g_nospace` runs as exit 3. The reviewer's own (`build/at0d6/h/`): a directive indented in a block (`i_indented_in_block`) is malformed at line 3; one inside a string literal that spans lines (`j_in_string`; such a literal compiles) is malformed at line 3 too. That is a false refusal, but a loud one naming the line, never a wrong pass, and no file in the tree has it: accepted. `// expected compile failure` after code is malformed (the rule matches the prefix `expected compile`). A directive as a trailing comment on a code line (`l_trailing`) is ignored, as it should be. **Not caught:** a near-miss directive word, in the header or after it (`// Expected exit 4`, `// expect exit 4`), is read as prose, so the file runs at its other expectation. This was so before the change, and no file in the tree has it (case-insensitive survey over the 1,215 files: only `bad_header.zrl`). Parked as id:sryd4 in `future.tm.md`, with its rule to settle.
+      4. Cost: the reader now reads every file to its end. `tr_expectations` over the 1,215 files took 3 s before the change and 4 s after (about 1 ms a file, on a `make test` of about 121 s). Accepted.
+      5. Batch outcome: nothing blocks. No task was added to `active.tm.md`, and none was moved, re-tagged or re-prioritised. id:mrzb3 (`+AI-D`) is next.
 
 - [ ] +testinfra +diagnosis +AI-D @testinfra Z3b Why the ZIR verifier spends about 2 ms on a `continue` from a match arm inside a loop id:mrzb3
     > **Created:** 2026-11-13
