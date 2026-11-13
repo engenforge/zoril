@@ -163,6 +163,7 @@ scripts/test_safety_matrix_cross_module.sh	scripts_test_safety_matrix_cross_modu
 scripts/test_scdoc_min.sh	scripts_test_scdoc_min	portability no-new-deps	-	-	-	scdoc-min	-	script	scdoc compatibility test selects scdoc-min scenario
 scripts/test_sha256_differential.sh	scripts_test_sha256_differential	portability no-new-deps	-	-	-	sha256-differential	-	script	sha256 differential test selects sha256-differential scenario
 scripts/test_struct_layout.sh	scripts_test_struct_layout	portability no-new-deps	-	-	-	struct-layout	-	script	struct layout calculation test selects struct-layout scenario
+scripts/test_test_headers.sh	scripts_test_test_headers	portability no-new-deps	-	-	-	test-headers	-	script	test header grammar test selects test-headers scenario
 scripts/test_test_lock.sh	scripts_test_test_lock	portability no-new-deps	-	-	-	test-lock	-	script	concurrency lock test selects test-lock scenario
 scripts/test_tool_versions.sh	scripts_test_tool_versions	portability no-new-deps	-	-	-	tool-versions	-	script	tool version parser test selects tool-versions scenario
 scripts/test_uncalled_method_emit.sh	scripts_test_uncalled_method_emit	portability no-new-deps	-	-	-	uncalled-method-emit	-	script	uncalled method codegen test selects uncalled-method-emit scenario

@@ -64,6 +64,7 @@ scenario	fuzz-mode-diff	integration	./scripts/test_fuzz_mode_diff.sh
 scenario	modular-mangling	integration	./scripts/test_modular_mangling.sh
 scenario	uncalled-method-emit	integration	./scripts/test_uncalled_method_emit.sh
 scenario	runner-output	integration	./scripts/test_runner_output.sh --both
+scenario	test-headers	integration	./scripts/test_test_headers.sh
 scenario	readme-snippets	integration	./scripts/test_readme_snippets.sh
 scenario	doc-snippets	integration	./scripts/test_doc_snippets.sh
 scenario	getting-started	integration	./scripts/test_getting_started.sh

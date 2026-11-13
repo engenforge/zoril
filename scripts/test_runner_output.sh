@@ -39,12 +39,10 @@ export TR_WORK=build/tests-runner-output TR_QUIET=0 TR_VERBOSE=0 TR_FAIL_FAST=0 
 FIXTURES="tests/runner/fixtures/tests --gate fixture-good --gate fixture-fails
           --gate fixture-bad-format --gate fixture-silent-failure --gate fixture-empty"
 # 16 fixture items, plus the run's own "stray-files" item (which needs no git). hangs.zrl ends at
-# the 2-second timeout. bad_header.zrl passes today: the per-file pipeline does not reject a
-# header such as `expected exit banana`, it only fails to find an expected exit and runs the
-# default of 0.
+# the 2-second timeout. bad_header.zrl fails: its header, `expected exit banana`, is malformed.
 # With `timeout` off PATH (opts_hidden) nothing limits a run, so hangs.zrl is left out there.
-EXPECTED_TOTAL="Total: 17 run, 8 passed, 9 failed, 2 skipped"
-EXPECTED_TOTAL_NO_TIMEOUT="Total: 16 run, 8 passed, 8 failed, 2 skipped"
+EXPECTED_TOTAL="Total: 17 run, 7 passed, 10 failed, 2 skipped"
+EXPECTED_TOTAL_NO_TIMEOUT="Total: 16 run, 7 passed, 9 failed, 2 skipped"
 UNDER_TEST_LABEL=
 [ "$RUNNER_UNDER_TEST" = ./scripts/test.sh ] || UNDER_TEST_LABEL=" ($RUNNER_UNDER_TEST)"
 

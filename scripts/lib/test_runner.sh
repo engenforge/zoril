@@ -6,7 +6,7 @@
 #   is_timeout_exit CODE      true for timeout/kill exit codes
 #   tr_now_ms                 milliseconds since the epoch
 #   tr_report STATUS NAME DETAIL MS [OUTPUT_FILE]   one result line
-#   tr_expectations FILE      sets T_KIND (run|compile_success|compile_fail|warning|skip),
+#   tr_expectations FILE      sets T_KIND (run|compile_success|compile_fail|warning|skip|malformed),
 #                             T_EXIT, T_EXPECT (diagnostic substrings, one per line), T_SKIP, T_LINK,
 #                             T_FLAGS
 #   tr_run_file FILE          compile, link and run one test per its header
@@ -139,18 +139,34 @@ tr_expectations() {
     # toolchain, dominate the cost of a test.
     eval "$(awk '
         function q(v) { gsub(/\047/, "\047\\\047\047", v); return "\047" v "\047" }
-        skip == "" && /^[ \t]*\/\/[ \t]*@skip:/ { v = $0; sub(/^[ \t]*\/\/[ \t]*@skip:[ \t]*/, "", v); skip = v }
-        /^\/\/ EXPECT: / { v = $0; sub(/^\/\/ EXPECT: /, "", v); expect = expect (expect == "" ? "" : "\n") v }
-        flags == "" && /^\/\/ flags: / { v = $0; sub(/^\/\/ flags: /, "", v); flags = v }
-        /^\/\/ link: / { v = $0; sub(/^\/\/ link: /, "", v); link = link v " " }
-        /expected compile fail/ { cfail = 1 }
-        /expected compile success/ { csucc = 1 }
-        ex == "" && match($0, /expected exit( code:)? [0-9]+/) { v = substr($0, RSTART, RLENGTH); sub(/.* /, "", v); ex = v }
+        # Directives live in the header: the lines up to the first that is neither blank nor a
+        # comment. A header line that starts like a directive but is not exactly one of the
+        # forms is malformed, and so is a header whose directives contradict each other.
+        function bad(why) { if (mal == "") mal = FNR ": " $0 }
+        !/^[ \t]*(\/\/.*)?$/ { exit }
+        {
+            body = $0
+            if (match(body, /^[ \t]*\/\/[ \t]*/)) body = substr(body, RLENGTH + 1)
+        }
+        body !~ /^(expected |EXPECT|flags|link|@skip)/ { next }
+        /^[ \t]*\/\/[ \t]*@skip:/ { if (skip == "") { v = $0; sub(/^[ \t]*\/\/[ \t]*@skip:[ \t]*/, "", v); skip = v }; next }
+        /^\/\/ EXPECT: / { v = $0; sub(/^\/\/ EXPECT: /, "", v); expect = expect (expect == "" ? "" : "\n") v; next }
+        /^\/\/ flags: / { if (nflags++) bad(); v = $0; sub(/^\/\/ flags: /, "", v); flags = v; next }
+        /^\/\/ link: / { v = $0; sub(/^\/\/ link: /, "", v); link = link v " "; next }
+        /^[ \t]*\/\/[ \t]*expected compile fail[ \t]*$/ { if (csucc || nexit) bad(); cfail = 1; next }
+        /^[ \t]*\/\/[ \t]*expected compile success[ \t]*$/ { if (cfail || nexit) bad(); csucc = 1; next }
+        /^[ \t]*\/\/[ \t]*expected exit( code:)? [0-9]+[ \t]*$/ {
+            v = $0; sub(/[ \t]*$/, "", v); sub(/.* /, "", v)
+            if (nexit++ || cfail || csucc || v + 0 > 255) bad()
+            ex = v; next
+        }
+        { bad() }
         END {
-            printf "T_SKIP=%s T_EXPECT=%s T_FLAGS=%s T_LINK=%s ", q(skip), q(expect), q(flags), q(link)
+            printf "T_SKIP=%s T_EXPECT=%s T_FLAGS=%s T_LINK=%s T_MALFORMED=%s ", q(skip), q(expect), q(flags), q(link), q(mal)
             printf "_cfail=%d _csucc=%d T_EXIT=%d\n", cfail, csucc, ex + 0
         }' "$1" 2>/dev/null)"
-    if [ -n "$T_SKIP" ]; then T_KIND=skip
+    if [ -n "$T_MALFORMED" ]; then T_KIND=malformed
+    elif [ -n "$T_SKIP" ]; then T_KIND=skip
     elif [ "$_cfail" -eq 1 ]; then T_KIND=compile_fail
     elif [ -n "$T_EXPECT" ]; then
         # A diagnostic that is not an error: the file must compile and report it.
@@ -213,6 +229,10 @@ tr_run_file() {
     mkdir -p "$_dir"
     _log="$_dir/output.log"
     : > "$_log"
+    if [ "$T_KIND" = malformed ]; then
+        _tr_done FAIL "malformed header, line $T_MALFORMED"
+        return 0
+    fi
     _why=""
     _bin="$_dir/test"
 
