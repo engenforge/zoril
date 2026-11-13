@@ -60,12 +60,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `sh scripts/test_incremental.sh --quiet`: `PASS: all incremental compilation tests passed.`, with the `unresolvable import` line unchanged in the run.
       - C5: `make test` after the last edit: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (119.6s)`. No `make preflight-changed` (scripts and a test comment).
 
-- [ ] +testinfra +tests +AI-G @testinfra Z2b8 zbuild-diff and the interface-attribute check read test headers with the runner's reader id:f6tfj
+- [x] +testinfra +tests +AI-G @testinfra Z2b8 zbuild-diff and the interface-attribute check read test headers with the runner's reader id:f6tfj
     > **Created:** 2026-11-13
     > **Context:** found at check-in id:drcga (finding 3), settled by the reviewer for an `+AI-G` session
     > **Branch:** `testinfra`
     > **Depends:** id:drcga
     > **Placed:** after id:haf6g, in the batch that fixes what check-in id:drcga found; after it so both readers take id:haf6g's grammar at once
+    > **Completed:** 2026-11-13 git:681e1ab
 
     - **Why:** id:bekxx gave the per-file runner one header grammar, read from the header only. Two other scripts that decide how to build and judge the same test files keep their own readers, which are the old lax ones. `scripts/test_zbuild_diff.sh`'s generated `worker.sh` matches `expected compile fail`, `expected exit N` and the rest anywhere in the file and ignores what it does not recognise. `scripts/test_interface_attrs.sh` uses `grep -q '^// expected compile fail'` and a `sed` for `expected exit`. So a header that the runner reads one way can be read another way by these two, and `AGENTS.md` ("Two implementations of one thing are tested against each other") means these gates must judge a test as its header says.
     - **Do (POSIX `sh`):**
@@ -78,6 +79,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: planted case. Copy a runnable test that `zbuild-diff` builds to a scratch name under `tests/` with its first line changed to `// expected exit banana`, run `sh scripts/test_zbuild_diff.sh`, and watch it report `DIFF <file> malformed header, line 1: // expected exit banana`; then delete the copy. Take-out: with step 1's `malformed` branch removed (a scratch edit), the same run reports the copy as `OK`; restore.
       - C4: `sh scripts/test_interface_attrs.sh` passes; quote its last line.
       - C5: scripts only, so no `make preflight-changed`. `make test` after the last edit; quote its `Total:` line.
+    - **Completion (generalist, 2026-11-13, git:681e1ab):** `worker.sh` of `scripts/test_zbuild_diff.sh` sources `scripts/lib/test_runner.sh` and calls `tr_expectations`: `malformed` prints `DIFF $f malformed header, line N: TEXT`, `run` takes `T_EXIT`, `T_FLAGS`, `T_LINK`, every other kind is left out as before. `scripts/test_interface_attrs.sh` does the same (`expect_fail` is `T_KIND = compile_fail`, `want` is `T_EXIT`, malformed is a `fail`). Both header comments say so.
+      - C1: before, `grep -c 'expected compile fail'` gave `scripts/test_interface_attrs.sh:2` and `scripts/test_zbuild_diff.sh:1`. After, `rg -n tr_expectations` shows the call at `test_zbuild_diff.sh:54` and `test_interface_attrs.sh:53` (each file also names it in its header comment).
+      - C2: `sh scripts/test_zbuild_diff.sh` before and after: `[PASS] zbuild-diff: 591 of 594 programs agree between the whole-program build and the installed zbuild (1 skipped, 2 allowed to differ) in 11 s` both times.
+      - C3: planted copy `tests/stdlib/zz_planted.zrl` (a runnable test with first line `// expected exit banana`): `[FAIL] zbuild-diff: 1 program(s) differ ...` and `DIFF tests/stdlib/zz_planted.zrl malformed header, line 1: // expected exit banana`. Take-out (`malformed) ;;`): `[PASS] zbuild-diff: 592 of 595 programs agree ...`, the copy counted as OK. Restored, copy deleted.
+      - C4: `sh scripts/test_interface_attrs.sh` last line `[PASS] interface-attrs: attributes, visibility and unsafe survive a .zri; ... diagnosed as whole-program does`.
+      - C5: `make test` after the last edit: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (119.9s)`. No `make preflight-changed` (scripts only).
 
 - [ ] +testinfra +stdlib +docs +AI-G @testinfra Z1i `wait_any`'s doc and spec line say when it returns ECHILD for a child it was not given id:rvn2w
     > **Created:** 2026-11-13
