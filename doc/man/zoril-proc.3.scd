@@ -31,6 +31,7 @@ impl Child {
     pub fn wait(self: &mut Child) -> Result<ExitStatus, Error>;
     pub fn kill(self: &mut Child) -> Result<(), Error>;
     pub fn unix_kill(self: &mut Child, sig: i32) -> Result<(), Error>;
+    pub fn kill_group(self: &mut Child, sig: i32) -> Result<(), Error>;
 }
 impl Command {
     pub fn new(program: [u8], a: &Arena) -> Command;
@@ -38,6 +39,7 @@ impl Command {
     pub fn set_stdin(self: &mut Command, fd: Fd);
     pub fn set_stdout(self: &mut Command, fd: Fd);
     pub fn set_stderr(self: &mut Command, fd: Fd);
+    pub fn set_new_group(self: &mut Command);
     pub fn spawn(self: &Command) -> Result<Child, Error>;
     pub fn status(self: &Command) -> Result<ExitStatus, Error>;
 }
@@ -134,6 +136,16 @@ pub fn unix_kill(self: &mut Child, sig: i32) -> Result<(), Error>;
 
 	Sends the Unix signal number sig to the child process.
 
+*kill_group*
+```
+pub fn kill_group(self: &mut Child, sig: i32) -> Result<(), Error>;
+```
+
+	Sends the Unix signal number sig to every process in the child's process group, which holds
+	the child and whatever it started. Fails with EINVAL, signalling nothing, for a child that
+	was not started with set\_new\_group, and for a group id of 0 or 1: kill(0) would signal the
+	caller's own group and kill(-1) every process the user may signal.
+
 *Command*
 ```
 pub struct Command {
@@ -182,6 +194,15 @@ pub fn set_stderr(self: &mut Command, fd: Fd);
 ```
 
 	Redirects child standard error to write to file descriptor fd.
+
+*set_new_group*
+```
+pub fn set_new_group(self: &mut Command);
+```
+
+	Starts the child in a process group of its own (setpgid(0, 0) before execve), so
+	Child.kill\_group can signal it together with everything it starts. spawn returns only
+	after the child has exec'd, so the group exists by then.
 
 *spawn*
 ```

@@ -53,6 +53,9 @@ pub struct Child {
     // Set once the child has been reaped, by `wait` or by `wait_any`: the pid may be reused after
     // that, so a later `wait` must not wait4 it again.
     status: Option<ExitStatus>,
+    // True when `spawn` put the child in a process group of its own, whose id is `pid`: only then
+    // is `kill_group` allowed to signal `-pid`.
+    own_group: bool,
 }
 
 fn decode_status(st: i32) -> ExitStatus {
@@ -167,6 +170,22 @@ impl Child {
         }
         return Result.Ok(());
     }
+
+    // Sends the Unix signal number sig to every process in the child's process group, which holds
+    // the child and whatever it started. Fails with EINVAL, signalling nothing, for a child that
+    // was not started with `set_new_group`, and for a group id of 0 or 1: kill(0) would signal the
+    // caller's own group and kill(-1) every process the user may signal.
+    pub fn kill_group(self: &mut Child, sig: i32) -> Result<(), Error> {
+        if !self.own_group || self.pid <= 1 as i64 {
+            return Result.Err(Error.from_linux_errno(22));
+        }
+        // SAFETY: kill(62) takes no pointer, only the negated pid of the group this child leads.
+        let res = unsafe { @syscall(62, (0 as i64 - self.pid) as u64, sig as u64) } as i64;
+        if res < 0 {
+            return Result.Err(Error.from_linux_errno((0 as i64 - res) as i32));
+        }
+        return Result.Ok(());
+    }
 }
 
 // Process builder configuring program path, arguments, environment, and I/O redirection.
@@ -178,6 +197,7 @@ pub struct Command {
     stdin_fd: Fd,
     stdout_fd: Fd,
     stderr_fd: Fd,
+    new_group: bool,
 }
 
 // Always copies: returning `s.ptr` for an already-terminated slice made the result look like it
@@ -251,6 +271,7 @@ impl Command {
             stdin_fd: Fd.from_unix_raw(-1),
             stdout_fd: Fd.from_unix_raw(-1),
             stderr_fd: Fd.from_unix_raw(-1),
+            new_group: false,
         };
     }
 
@@ -281,6 +302,13 @@ impl Command {
     // Redirects child standard error to write to file descriptor fd.
     pub fn set_stderr(self: &mut Command, fd: Fd) {
         self.stderr_fd = fd;
+    }
+
+    // Starts the child in a process group of its own (setpgid(0, 0) before execve), so
+    // `Child.kill_group` can signal it together with everything it starts. `spawn` returns only
+    // after the child has exec'd, so the group exists by then.
+    pub fn set_new_group(self: &mut Command) {
+        self.new_group = true;
     }
 
     // Spawns the configured command as an asynchronous child process.
@@ -381,6 +409,13 @@ impl Command {
                 // SAFETY: close(3) of the original slot, now that the copy >= 3 holds it.
                 let _ = unsafe { @syscall(3, old_wfd as u64) };
                 cur_wfd = new_wfd as i32;
+            }
+
+            if self.new_group {
+                // SAFETY: setpgid(109) with pid 0 and pgid 0 takes no pointer: the calling child
+                // becomes the leader of a new group named after itself.
+                let rc = unsafe { @syscall(109, 0 as u64, 0 as u64) } as i64;
+                if rc < 0 { child_fail(cur_wfd, (0 as i64 - rc) as i32); }
             }
 
             let mut cur_in = self.stdin_fd.unix_raw();
@@ -504,7 +539,7 @@ impl Command {
             return Result.Err(Error.from_linux_errno(errno_val));
         }
 
-        return Result.Ok(Child { pid: pid, status: Option.None });
+        return Result.Ok(Child { pid: pid, status: Option.None, own_group: self.new_group });
     }
 
     // Spawns the command and waits for completion, returning the process exit status.
