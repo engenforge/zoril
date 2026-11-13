@@ -207,12 +207,13 @@ _tr_done() {
 # log does not contain; fails when every one is there.
 _tr_missing_expect() {
     printf '%s\n' "$T_EXPECT" | while IFS= read -r _want; do
-        grep -Fq -- "$_want" "$_log" || { printf '%s\n' "$_want"; exit 0; }
+        grep -Fq -- "$_want" "$_dir/compile.out" || { printf '%s\n' "$_want"; exit 0; }
     done | grep .
 }
 
-# _tr_diagnostics — the compiler's error and warning lines from the current log.
-_tr_diagnostics() { grep -E 'error|warning' "$_log" | head -n 3; }
+# _tr_diagnostics — the compiler's error and warning lines from the current test. They are read
+# from the compiler's own output, not $_log, where --verbose also writes the command line.
+_tr_diagnostics() { grep -E 'error|warning' "$_dir/compile.out" | head -n 3; }
 
 # tr_run_file FILE — run one test; reports exactly one result line.
 tr_run_file() {
@@ -237,11 +238,12 @@ tr_run_file() {
     _bin="$_dir/test"
 
     case "$_file" in
-        *.zil) cp "$_file" "$_dir/test.zil"; _compiled=0 ;;
+        *.zil) cp "$_file" "$_dir/test.zil"; : > "$_dir/compile.out"; _compiled=0 ;;
         *)
             [ "$TR_VERBOSE" -eq 1 ] && echo "\$ $ZORIL_CC $TR_INCLUDES -I $(dirname "$_file") --emit-zil -o $_dir/test.zil $T_FLAGS $_file" >> "$_log"
-            run_timed "$ZORIL_CC" $TR_INCLUDES -I "$(dirname "$_file")" --emit-zil -o "$_dir/test.zil" $T_FLAGS "$_file" >> "$_log" 2>&1
+            run_timed "$ZORIL_CC" $TR_INCLUDES -I "$(dirname "$_file")" --emit-zil -o "$_dir/test.zil" $T_FLAGS "$_file" > "$_dir/compile.out" 2>&1
             _compiled=$?
+            cat "$_dir/compile.out" >> "$_log"
             [ $_compiled -eq 130 ] && exit 130
             ;;
     esac
