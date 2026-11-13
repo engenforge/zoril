@@ -416,10 +416,10 @@ repro-check: ## Gate: bootstrap from scratch twice and require identical results
 # rules -- the fresh-checkout path -- plus the self-hosting fixpoint) in the BACKGROUND,
 # beside mutation-check, and WAIT for it before the bench step: the bench thresholds refuse a
 # loaded host, so nothing else may still be running when they start.
-preflight: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/runtime_hosted.o user-tools ## Full pre-merge gate: selfhost + mutation + bench thresholds
+preflight: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/ztest build/runtime_hosted.o user-tools ## Full pre-merge gate: selfhost + mutation + bench thresholds
 	@./scripts/preflight.sh
 
-preflight-changed: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/runtime_hosted.o ## Fast pre-merge gate: selfhost + mutations of changed files
+preflight-changed: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/ztest build/runtime_hosted.o ## Fast pre-merge gate: selfhost + mutations of changed files
 	@./scripts/preflight.sh --changed
 
 ##@ Testing
@@ -444,7 +444,7 @@ test-changed: $(TEST_CHANGED_DEPS) ## Run tests scoped to changed files (BASE=<c
 		TIMEOUT_SECS=$(TIMEOUT_DUR) KILL_DUR=$(KILL_DUR) $(TEST_RUNNER) $(QUIET) $$args; \
 	fi
 
-test-checked: $(TARGET) $(ZILC) build/runtime.o ## Run the tests, corpus, apps and safety probes under `zoril --checked`
+test-checked: $(TARGET) $(ZILC) build/runtime.o build/ztest ## Run the tests, corpus, apps and safety probes under `zoril --checked`
 	@./scripts/test_checked.sh
 
 test-fast: $(TARGET) $(ZILC) build/runtime.o ## Smoke tests while editing (tests/smoke.list)
