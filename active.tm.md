@@ -159,7 +159,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: `git diff --stat` names `AGENTS.md` only.
       - C3: no take-out check: the change is a rule in prose. `make test`, `Total:` line quoted.
 
-- [x] +docs +review +AI-D @main @checkin Check-in: review of zcdvm, z0187, z0188, z0185 and z0186 id:rcdde
+- [x] +docs +review +AI-D @main @checkin Review of zcdvm, z0187, z0188, z0185 and z0186 id:rcdde
     > **Created:** 2026-11-13
     > **Branch:** `main`
     > **Depends:** id:zcdvm
@@ -303,7 +303,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - D7: `make test`, `Total:` line quoted. Ends with **Awaiting review**: the reviewer reruns D2, D3 and D5, and checks that a completion note citing a cached run is visible from its `base verdicts: cache` line.
     - **Check-in (the reviewer at id:rcdde, 2026-11-13):** the review that D7 ends with is now the task check-in id:1d7s2, directly below. Under the rule id:955fk adds to `AGENTS.md`, the session that does D1 to D7 writes the **Awaiting review:** bullet, completes this task with `tm done`, and stops when `tm next` shows id:1d7s2. It does not leave the checkbox open.
 
-- [ ] +testinfra +review +AI-D @testinfra @checkin Check-in: review of z0189, the AGENTS.md check-in rule and z0114's follow-up (D1 to D7) id:1d7s2
+- [ ] +testinfra +review +AI-D @testinfra @checkin Review of z0189, the AGENTS.md check-in rule and z0114's follow-up (D1 to D7) id:1d7s2
     > **Created:** 2026-11-13
     > **Context:** placed by the reviewer at check-in id:rcdde, asked by the maintainer
     > **Branch:** `testinfra`
