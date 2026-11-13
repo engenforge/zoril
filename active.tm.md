@@ -234,18 +234,25 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C7: `scripts/check_fuzz_fresh.sh`: `STALE - the short-session record describes other code than the working tree: src ...`; `bench/fuzz/README.md` is stale since `src/` changed.
     - **Awaiting review:** re-run C2's take-out (positional loop back, expect 3, 1, 9 caps) and C5's differential with `REJECT_DIFF_NO_CACHE=1`.
 
-- [ ] +testinfra +safety +review +AI-D @testinfra @checkin Review of Z3c (enum-payload aliases compared as a set in the verifier's fixed point) id:83cp1
+- [x] +testinfra +safety +review +AI-D @testinfra @checkin Review of Z3c (enum-payload aliases compared as a set in the verifier's fixed point) id:83cp1
     > **Created:** 2026-11-13
     > **Context:** placed by the reviewing session with id:5a7eh
     > **Branch:** `testinfra`
     > **Depends:** id:5a7eh
     > **Placed:** directly after the task it reviews.
+    > **Completed:** 2026-11-13 git:3a0402b
 
     - **Review:**
       1. Re-run id:5a7eh C2's take-out, and C5's differential with `REJECT_DIFF_NO_CACHE=1`, quoting its `fresh (no cache)` line.
       2. Probe the sibling routes: a `continue` in a match arm of a `for` loop, one in a nested match, a `break` in a match arm, and two `continue`s from two arms. Use the C2 scratch lines to check that each reaches its fixed point in fewer than 100 passes, and that a program that moves out of an enum payload inside such a loop is still refused (write one that the base refuses).
       3. Check that the comment states why, and that `states_equal`'s other comparisons are unchanged.
       4. Record the findings here, add follow-ups, `tm validate`, `tm done`.
+    - **Findings (reviewing session, 2026-11-13, on git:e5e0976 and git:3a0402b):**
+      1. The code commit is the task's one mechanism. `alias_lists_equal` checks containment both ways, by `local_id` and `places_equal`, with no length check. `states_equal` calls it in place of the positional loop, and its ownership, `maybe_live`, borrow and mark comparisons are unchanged. The comment says why. git:3a0402b re-records two line-count figures that the edit moved: `sh scripts/check_safety_figures.sh` and `--density` both print `[PASS]` on the tree.
+      2. Take-out, re-run in a scratch worktree (`build/83cp1/wt`, now removed) with C2's `VERIFY-CAP` line and a per-function `VERIFY-ITERS` line (`build/83cp1/counter.patch`). With the fix (`build/83cp1/zoril_fix`): `src=0 bis3=0 bufio=0`. With e5e0976's hunk reversed (`build/83cp1/zoril_pos`): `src=3 bis3=1 bufio=9`.
+      3. Differential against the change's parent, not the merge base: `REJECT_DIFF_NO_CACHE=1 sh scripts/check_reject_diff.sh ff6e64b` (log `build/83cp1/rejdiff.log`, rc 0): `reject-diff: base verdicts: fresh (no cache); base front end 111 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69145 programs against ff6e64b`.
+      4. Sibling routes (`build/83cp1/p/`, passes of `f` or `take`, positional against fix). All reach their fixed point well under the cap, and the same programs compile under both. `continue` in a match arm of a `for` loop (`s1`): 8 against 6. In a nested match (`s2`): 9 against 7. `break` in a match arm (`s3`): 7 against 6. Two `continue`s from two arms (`s4`): 6 against 5. A move out of an enum payload behind a `&E` parameter, in a `while` loop whose arms `continue` (`s5`), is refused by both with the same `8:17: error: cannot move out of borrow`, in 5 passes. A second refusal probe (`s6`, a payload moved while the enum is borrowed) did not reach the checker: both sides refuse it with a type error, because a match on a place binds the payload by reference. So `s5` is the refusal probe this review relies on, and the differential's 69,145 programs are the wider check.
+      5. Outcome: nothing blocks. No follow-up task was added; id:wptpf (whether reaching the cap should be an error) stays in `future.tm.md` for the maintainer. No task was moved, re-tagged or re-prioritised. `bench/fuzz/README.md` is stale since `src/` changed (id:5a7eh C7), as for every `src/` change until the next fuzz record. id:z0123 (`+AI-D`) is next.
 
 - [ ] +testinfra +measurement +AI-D @testinfra id:z0123 T9a Is a build and a test result the same from the same inputs?
     > **Created:** 2026-11-06
