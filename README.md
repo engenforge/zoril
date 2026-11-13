@@ -187,14 +187,14 @@ You can verify build dependencies on your machine before the first build by runn
 
 Package names for these tools on common distributions are in [Dependencies](doc/dependencies.md).
 
-_(Note: Running `make test` additionally requires `bash`, `flock` and `mkfifo` (standard in `util-linux` and `coreutils` on Linux) to coordinate the parallel test runner. Optional tools such as `lua` 5.3 or newer (used for multi-module incremental benchmarks and fuzzers), `rustc`, `zig`, or `hare` are skipped automatically when not installed; see the [Developer Guide](doc/developer_guide.md).)_
+_(Note: Running `make test` additionally requires `flock`, `mkfifo` and an `xargs` that takes `-P` (in `util-linux`, `coreutils` and `findutils` on Linux; BusyBox has all three) for its parallel test runner, until `tools/ztest`, the runner written in Zoril, replaces it. Optional tools such as `lua` 5.3 or newer (used for multi-module incremental benchmarks and fuzzers), `rustc`, `zig`, or `hare` are skipped automatically when not installed; see the [Developer Guide](doc/developer_guide.md).)_
 
 **Build Commands:**
 
 ```sh
 # (Durations measured on a reference 8-core AMD Ryzen 7 3700X; times will vary by system)
 make            # builds stage0-c, stage1, build/zoril, zilc, zbuild and the runtimes (~1 min)
-make test       # standard verification suite (~3 mins; requires bash, flock and mkfifo)
+make test       # standard verification suite (~2 mins; requires flock, mkfifo and xargs -P)
 sudo make install # install toolchain to /usr/local (see Installation below)
 ```
 

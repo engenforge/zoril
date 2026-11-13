@@ -187,10 +187,14 @@ Process spawning and management in `proc.zrl` use `Command` and `Child`, with fa
 - `Command::new(program, &arena)`: Builds a command tied to an arena.
 - `cmd.arg(arg)`: Appends an argument.
 - `cmd.set_stdin(fd)` / `cmd.set_stdout(fd)` / `cmd.set_stderr(fd)`: Configures stream redirection with typed `Fd` handles.
+- `cmd.set_current_dir(dir)`: The child's working directory, entered just before the program is started, so a relative program path is looked up from it; `spawn` fails with the `chdir` error if the directory cannot be entered.
+- `cmd.env_set(name, value)` / `cmd.env_remove(name)` / `cmd.env_clear()`: The child's environment. Once any of them is called, the child gets the parent's environment with the changes applied (`env_clear` starts from an empty one instead). A command with none of them starts with an empty environment.
+- `cmd.set_new_group()`: The child starts in a process group of its own, whose id is its pid, so `child.kill_group(sig)` reaches it and whatever it started.
 - `cmd.spawn() -> Result<Child, io::Error>`: Spawns the process.
 - `cmd.status() -> Result<ExitStatus, io::Error>`: Runs and waits for termination.
 - `child.wait() -> Result<ExitStatus, io::Error>`: Waits for child completion.
-- `child.kill() -> Result<(), io::Error>`: Forcibly terminates the child. `child.unix_kill(sig)` sends a Unix signal number; `ExitStatus.unix_signal()` reports one. The raw process syscalls (`sys_fork`, `sys_execve`, `sys_wait4`, `sys_kill`, `sys_pipe2`, `sys_dup2`, `sys_fstat`) are Linux-only and live in `stdlib/os/linux.zrl`.
+- `wait_any(children) -> Result<usize, io::Error>` / `try_wait_any(children) -> Result<Option<usize>, io::Error>`: Wait for whichever unreaped child of the slice ends first and return its index; `try_wait_any` returns none at once when none has ended.
+- `child.kill() -> Result<(), io::Error>`: Forcibly terminates the child. `child.unix_kill(sig)` sends a Unix signal number; `ExitStatus.unix_signal()` reports one. `child.kill_group(sig)` signals the child's whole process group, and fails with EINVAL, signalling nothing, for a child not started with `set_new_group`. Once a child is reaped (by `wait`, `wait_any` or `try_wait_any`), all three fail with ESRCH and signal nothing, because its pid may belong to another process by then. The raw process syscalls (`sys_fork`, `sys_execve`, `sys_wait4`, `sys_kill`, `sys_pipe2`, `sys_dup2`, `sys_fstat`) are Linux-only and live in `stdlib/os/linux.zrl`.
 - `exit(code: i32) -> never`: Terminates the process via the `exit` syscall (60).
 
 Filesystem and lock operations in `fsys.zrl`:
