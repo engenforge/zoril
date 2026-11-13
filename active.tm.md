@@ -367,7 +367,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
     > **Completed:** 2026-11-13 git:bc504fd
 
-- [ ] +testinfra +measurement +AI-D @testinfra id:z0184 T15 Where the front end's per-program time goes once a program imports the stdlib
+- [x] +testinfra +measurement +AI-D @testinfra id:z0184 T15 Where the front end's per-program time goes once a program imports the stdlib
     > **Created:** 2026-11-11
     > **Context:** by the review of the series.
     > **Branch:** `testinfra`
@@ -383,6 +383,46 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: the import counts, with the command.
       - C3: the three estimates, each from the measured figures, not from reading the code.
       - C4: no file under `src/`, `stdlib/` or `scripts/` is changed by this task (`git status --short` empty after the scratch edits are restored).
+    - **Measured (`+AI-D`, 2026-11-13, `testinfra` at git:bc504fd, AMD Ryzen 7 3700X, load about 1.2, each run pinned with `taskset -c 5`).** `perf` cannot open events in this container (`Failure to open any events for recording.`, also with `task-clock:u`), so there are two scratch tools instead, both under `build/z184/` and not committed. (1) `stamp.c` (`cc -O2`): it forks the command N times with stderr on a pipe and prints the microseconds from fork to each stderr line and to exit; `-v` makes the compiler print `PROGRESS: <phase>` at each phase. (2) A scratch worktree (`git worktree add --detach build/z184/wt HEAD`) whose `src/driver/module.zrl` is patched: in `lower_fn_in_module`, `if saved_fn_name == 0 as u32 { progress_name("Lowering function: ", ...) }` becomes an unconditional `progress_name("LBEGIN ", self.intern_table.lookup(name));`, and `progress_name("LEND ", self.intern_table.lookup(name));` goes before its `return il_func_id;`. In `run_body_passes_in_scratch`, `progress_name("LBEGIN ", "@<pass>")` and `progress_name("LEND ", "@<pass>")` go around `zir_low.lower_function` (`@ast_to_zir`), `check_zir::compute_ret_storage_zir` (`@ret_storage`), `zir_ver.verify()` (`@zir_verify`) and `zir_to_zil.lower()` (`@zir_to_zil`). An awk script (`build/z184/passtime.awk`) turns the stamped lines into self time per pass and per function and pass. The patched compiler is slower (14.4 ms against 10.7 ms mean over the sample) because of the marker writes, so its figures are used for shares, and the savings below are measured with the unpatched `build/zoril`.
+    - **C1, the phase split** (ms, median of 101 runs of `stamp 101 /usr/bin/timeout 30 build/zoril [-v] -I stdlib=stdlib --emit-zil -o /dev/null <file>`; "start" is fork to the first `PROGRESS` line, "verify+emit" runs to exit under `-v`, "total" is the run without `-v`):
+      | imports | program | start | parse | resolve | lower | verify+emit | total |
+      | --- | --- | --- | --- | --- | --- | --- | --- |
+      | none | `fn main() -> i32 { return 0; }` | 1.1 | 0.0 | 0.1 | 0.1 | 0.2 | 1.4 |
+      | none | grid `closure_local__array_slot__closure__call_mut__drop.unsafe` | 1.0 | 0.1 | 0.1 | 0.4 | 0.5 | 1.8 |
+      | vec | grid `closure_local__array_slot__closure__closure_owned_capture__drop.unsafe` | 1.0 | 3.2 | 0.2 | 1.1 | 1.0 | 6.0 |
+      | mem | grid `closure_local__array_slot__closure__call_mut__drop.twin` | 0.9 | 2.2 | 0.2 | 0.9 | 0.8 | 4.5 |
+      | mem, vec | grid `arena_vec__arena_struct_bundle__closure__call_mut__arena_reset.twin` | 1.1 | 2.9 | 0.2 | 8.1 | 2.8 | 14.1 |
+      | mem, vec | the same cell, `.unsafe` | 1.1 | 2.9 | 0.2 | 8.3 | 2.1 | 13.6 |
+      | string | grid `string__array_slot__closure__call_mut__drop.unsafe` (refused in lowering) | 1.0 | 4.0 | 0.3 | 8.0 (to exit) | | 12.9 |
+      | mem, string | the same cell, `.twin` | 1.0 | 4.0 | 0.3 | 1.0 | 0.8 | 6.5 |
+      | vec | probe `324_reborrow_push_len` | 1.1 | 2.8 | 0.2 | 7.7 | 2.3 | 13.3 |
+      | vec | probe `117_closure_stored_in_caller_vec` | 1.1 | 2.8 | 0.2 | 7.7 | 1.5 | 12.5 |
+      The large "lower" figures are not the cost of importing a module: the `vec` and `mem` cells lower in about 1 ms. Inside lowering, for probe 324 (21 runs of the patched compiler): `write_all_TN2Fd` 2.3 ms and `write_all_TN6Stderr` 1.6 ms of `@zir_verify`, against 0.2 ms or less for every other (function, pass) pair. Over 283 grid programs drawn at random (`awk 'BEGIN{srand(184)} rand() < 300/68640'` over the grid index, one run each), the mean per program by pass is `@zir_verify` 3.4 ms (2.5 ms of it the two `write_all` instances), `@ast_to_zir` 1.3, `@zir_to_zil` 0.9, `@ret_storage` 0.6, parsing 1.8, the verifying phase 0.8, resolving 0.2, and 188 of the 283 lower `write_all` (through `eprint` and the trap paths). **Cause, bisected:** in user functions over `io::write`, a copy of `write_all_fd`'s body costs `@zir_verify` 2.5 ms, the same loop without the inner `continue` and early returns 0.23 ms, a `continue` in a plain `if` inside a loop nothing measurable, a `continue` from a match arm inside a loop 0.7 to 1.9 ms, and the full body with the `Err` arm written as `if e.errno != 4 { return Result.Err(e); }` 0.18 ms against 2.2 ms with the `continue` (`build/z184/bis3.zrl`: the two functions `with_continue` and `without_continue`, each the body of `io::write_all_fd` with its `Err` arm written one way). Being generic costs nothing: a program calling `write_all_fd` and one calling `write_all` on an `Fd` spend 2.5 ms and 2.7 ms on it.
+    - **C2, the import counts:** `lua scripts/fuzz/store_grid.lua --generate-all build/z184/grid`, then an awk pass over each file's `import` lines (`build/z184/index.tsv`). Of the grid's 68,640 programs (34,320 `.unsafe`, 34,320 `.twin`): mem and vec 29,746; vec 8,530; mem 6,862; none 6,862; string 5,640; mem and string 5,640; mem, vec and core 1,818; vec and string 600; mem, vec and string 600; vec and core 570; mem and core 470; core 470; string and core 376; mem, string and core 376; vec, string and core 40; all four 40. Of the 506 files in `bench/safety_matrix/probes/` (`find . -name '*.zrl'`), the 505 top-level probes (the other is `mylib_fake_mem/mem.zrl`): none 302; mem and vec 98 (94, and 4 importing them in the other order); vec 53; core 13; mem, vec and core 7; string 5; others 2 or 3 each.
+    - **C3, the estimates** (sample mean 10.75 ms a program without `-v`, the unpatched compiler; a differential side is 127 s on 16 threads and 230 s on 4 CPUs, id:z0114):
+      - (a) One process checking many programs saves, per program, the start (about 1.0 ms, of which `timeout 30 /bin/true` is 1.47 ms by id:z0184's **Why**), the stdlib parse (1.8 ms mean) and the resolve (0.2 ms): about 3 ms, 28%, so about 36 s and 64 s a side. It does not save lowering or verifying the stdlib functions a program reaches unless instances are kept from one program to the next, which is the state that leaks.
+      - (b) More laziness: what the sample lowers is what it reaches (`write_all` through `eprint` and the trap paths), so there is no measured saving from skipping unreached items. Not estimated further.
+      - (c) A parsed-stdlib image saves at most the 1.8 ms parse, less the read-back, which is not measured: under 17%, about 21 s and 39 s a side. It would lose the source text and spans that diagnostics print, unless they are written out as well, and it is a cache keyed on the stdlib, with the stale-entry risk id:z0114's R4 showed.
+      - (d) Found while measuring, and measured: rewriting the two `Err` arms in `stdlib/io.zrl` (scratch copy `build/z184/stdlib_e`, run with `-I stdlib=build/z184/stdlib_e` and the unchanged `build/zoril`) takes the sample from 10.75 ms to 7.87 ms a program, 27%, about 34 s and 62 s a side, with the same exit status on all 283 programs (`build/z184/verd.diff` is empty). It changes no checker and adds no state.
+    - **C4:** `git status --short src stdlib scripts` in the repository prints nothing; every patch was in `build/z184/wt` or `build/z184/stdlib_e`.
+    - **Decided (the reviewer, 2026-11-13):** do (d) first, as id:87kcw (`+AI-G`, at the front of the next batch). It is the largest measured saving, it changes no checker, and it adds no state that could leak or go stale. Then find why the verifier is slow on this shape, as id:mrzb3 (`+AI-D`, after check-in id:mxt3d): every user program with a `continue` in a match arm pays the same cost, and fixing it in the verifier is a checker change that needs the rejection differential. (a) and (c) are not pursued now. (a) needs a single-process mode whose batch verdicts must be shown equal to single runs over all 69,145 programs, and (c) is a stale-state cache for a smaller saving. Re-measure both after id:87kcw and id:mrzb3, since each saving is a share of what is left. This answers id:z0113's question on the front end's fixed cost: the cost is per program, in the verifier, and it is not a cost of importing a module.
+
+    > **Completed:** 2026-11-13 git:bc504fd
+
+- [ ] +stdlib +perf +AI-G @testinfra Z3a `io.zrl`: `write_all` and `write_all_fd` retry an interrupted write without a `continue` in a match arm id:87kcw
+    > **Created:** 2026-11-13
+    > **Context:** found by id:z0184, settled by the reviewer for an `+AI-G` session
+    > **Branch:** `testinfra`
+
+    - **Why:** id:z0184 found that the ZIR verifier spends about 2.2 ms on a loop whose match arm ends in `continue`, against 0.18 ms for the same loop without it. `io::write_all`, which `eprint` and the trap paths reach, and `io::write_all_fd` both end their `Err` arm that way. On 283 grid programs drawn at random, rewriting the two arms took the mean front-end run from 10.75 ms to 7.87 ms, with the verdict unchanged on every one.
+    - **Do:** in `stdlib/io.zrl`, in both `write_all_fd` and `write_all`, replace the `Err(e)` arm's `if e.errno == 4 { // EINTR` / `continue;` / `}` / `return Result.Err(e);` with `if e.errno != 4 { // EINTR is retried` / `return Result.Err(e);` / `}`. Change nothing else. **Settled, so no judgement is left:** the two forms are equivalent. `continue` jumps to the loop's condition, and falling out of the arm reaches the end of the loop body, where nothing follows the `match`, and then the condition, with `total` unchanged in both. `stdlib/io.zrl` is in the `src/` closure, and the new form uses nothing the pinned stage1 does not already accept elsewhere (`if`, `!=`, `return`).
+    - **Checks:**
+      - C1: before-figure. Over the first 50 lines of `build/z184/sample.txt` (if it is gone, any 50 files from `lua scripts/fuzz/store_grid.lua --generate-all <dir>`), sum the CPU of `timeout 30 build/zoril -I stdlib=stdlib --emit-zil -o /dev/null <file>` with the shell's `times` before and after the edit, with the same `build/zoril` (the edited `stdlib/io.zrl` is read through `-I stdlib=`; rebuild only after C2). Quote both sums; the after sum is at least 15% lower.
+      - C2: a take-out: put `write_all`'s arm back as it was (leave `write_all_fd`'s rewritten) and watch C1's sum come back to within 5% of the before figure, since most programs reach only `write_all`; quote it; restore.
+      - C3: build through stage1 (`rm build/zoril && make`) and then `make`, both without a warning; quote the last line of each.
+      - C4: `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: quote `reject-diff: base verdicts: fresh (no cache)`, the verdict line (expected `0 newly accepted ..., 0 newly refused`) and the `Total:` line.
+      - C5: `make test`, `Total:` line quoted. `make man-gen` and `sh scripts/test_man_pages.sh` pass (no comment block changes, but `io.zrl` is a man page source).
+      - C6: the fuzz record is stale (a `stdlib/` change): say so in the completion note, as `AGENTS.md` asks.
 
 - [ ] +testinfra +refactor +AI-G @testinfra id:z0136 Z2a The test plan as data: gates, group paths and scenarios in one file both runners read
     > **Created:** 2026-11-07
@@ -463,14 +503,27 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-13
     > **Context:** placed by the reviewer at check-in id:1d7s2
     > **Branch:** `testinfra`
-    > **Depends:** id:z0136, id:z0131, id:z0132, id:z0137
+    > **Depends:** id:87kcw, id:z0136, id:z0131, id:z0132, id:z0137
     > **Placed:** directly after the batch it reviews. id:z0123, the first task after it, depends on it.
 
     - **Review:**
-      1. For each task of the batch, re-run its take-out check (id:z0136 C4, id:z0131 C4, id:z0132 C8, id:z0137 C4) and confirm the **Awaiting review:** bullet's reruns.
+      1. For each task of the batch, re-run its take-out check (id:87kcw C2, id:z0136 C4, id:z0131 C4, id:z0132 C8, id:z0137 C4) and confirm the **Awaiting review:** bullet's reruns.
       2. id:z0131: probe the group-signal method's refusals (C8, and a group id of 0 or 1) and check that no path reaches `kill` with a non-negative or `-1` target. id:z0131 and id:z0132: C7 holds, so the stage1 constraint is not touched.
       3. id:z0136 and id:z0137: the two runners' results files and their `[FAIL]` lines for the planted fixtures agree (id:z0137 C2, C3).
       4. Record each finding here as a numbered bullet, add any follow-up tasks (`tm add --after`), place the next `@checkin`, then `tm validate` and `tm done` this task.
+
+- [ ] +testinfra +diagnosis +AI-D @testinfra Z3b Why the ZIR verifier spends about 2 ms on a `continue` from a match arm inside a loop id:mrzb3
+    > **Created:** 2026-11-13
+    > **Context:** found by id:z0184
+    > **Branch:** `testinfra`
+
+    - **Why:** id:z0184's scratch timers (its **Measured** bullets) put the cost in `ZirVerifier.verify` (`src/driver/module.zrl`, `run_body_passes_in_scratch`): `fn with_continue` 2.2 ms, `fn without_continue` 0.18 ms, the same loop written two ways (`build/z184/bis3.zrl`, also in id:z0184's text). A `continue` in a plain `if` costs nothing measurable. id:87kcw removes the shape from `io.zrl`, but any user program with it pays the same, and `stdlib/bufio.zrl` (lines 124, 178, 319, 396) and `stdlib/file.zrl` (174) have `continue`s still to classify.
+    - **Do:** find which check inside `ZirVerifier.verify` takes the time on this CFG shape (timers around each of its passes, as id:z0184's patch does for the driver's), and why: an iteration count, a per-block copy, a revisit per back edge. Record the cause, a reproducer and the figure here. A fix is a new task. A fix that would change which programs are accepted is out of scope here and goes to the maintainer.
+    - **Checks:**
+      - C1: the per-pass split of `verify` for `with_continue` and `without_continue`, with the patch recorded here.
+      - C2: the cause, shown by a measurement (for example, an iteration count that grows with the shape), not by reading the code.
+      - C3: the five `continue` sites in `bufio.zrl` and `file.zrl`, each with its verifier time.
+      - C4: no file under `src/`, `stdlib/` or `scripts/` is changed (`git status --short` empty).
 
 - [ ] +testinfra +measurement +AI-D @testinfra id:z0123 T9a Is a build and a test result the same from the same inputs?
     > **Created:** 2026-11-06
