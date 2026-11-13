@@ -332,6 +332,19 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
 
     - `bootstrap/stage0-c/lib/rt/runtime.s` and `sys_linux_x86_64.s` lack the section, so on a linker that defaults to an executable stack (binutils 2.42 on Ubuntu 24.04) the programs `zoril-c` links itself warn and get one. Only stage0-c's own test programs link them; stage1 is linked with `bootstrap/stage1/rt/runtime.s`, which has the section. Take this up if the warning ever fails a stage0-c suite.
 
+- [ ] +zil +safety +decision +AI-D Is ZIL a memory-safe language: a full safety checker in zilc, or ZIL stated to be unchecked like assembly id:ahd1c
+    > **Created:** 2026-11-13
+    > **Context:** id:1kaye, decision 4. The maintainer is weighing it; a full checker appeals only if it takes work off the compiler's checker, not if it duplicates it.
+    > **Asked of:** the maintainer. It changes what the project claims.
+
+    - **What ZIL carries today (measured 2026-11-13, `build/zoril --emit-zil` of `tests/stdlib/test_stdlib_bufio.zrl`, 30,483 lines):** 888 `move` and 255 `drop`, but no `borrow`, `borrow_mut`, `end_borrow`, `region_cast` or `bounds_check`. Of the region names, 18,337 are `'local` and 15 are `'s`. The spec's §6 describes a verifier over borrows, regions and dominating bounds checks. The compiler's checks of those happen on ZIR (`src/check_zir.zrl`, 5,381 lines), and the ZIL it emits no longer says what was borrowed or for how long. `src/verify.zrl` (2,645 lines) checks the little that ZIL still shows: stack-address escapes and constant arena sizes. zilc runs only the type check (`src/il_typecheck.zrl`), until id:egsdq (ZL5).
+    - **The options:**
+      - **(A) ZIL is unchecked, like assembly.** State it in `doc/spec/intermediate_language.md` and `doc/spec/safety_model.md`: the safety claims cover programs compiled from Zoril source, and hand-written ZIL is checked for types and by the ZIL verifier (after ZL5), not for memory safety. Cost: a few paragraphs. No second checker.
+      - **(B) A second, full checker in zilc**, beside `check_zir`. The front end would have to emit the borrows and regions ZIL drops today, and the two checkers would have to be tested against each other on every program (AGENTS.md: two implementations of one thing). This is the redundant pair the maintainer does not want.
+      - **(C) One checker, moved down to ZIL.** The front end emits a rich ZIL (borrows, regions, bounds checks, as §6 describes), and the one checker runs on ZIL, in both the compiler and zilc. `check_zir` retires. This is the only option that takes work off the compiler. Against it: ZIL is SSA over addresses, where ZIR has named places and field paths. The checker would have to rebuild what lowering threw away. Its precision would likely drop (more false refusals) or its analysis grow, its diagnostics would name temporaries instead of the user's variables, and the provenance series' rules (`future.tm.md`, the `provenance` section) are written against ZIR. It is a re-architecture of the proven checker, a series longer than provenance.
+    - **The reviewing session's recommendation:** (A) now, written as part of the ZIL series; revisit (C) only if ZIL is to become a target for front ends other than Zoril's, and then after the provenance series. (B) not at all.
+    - **Decide:** (A), (B) or (C), and for (C), its order against the provenance series.
+
 ## Compatibility matrix
 
 Where Zoril has been tested, by operating system and architecture, recorded per release. **First priority:** Alpine Linux, Arch Linux and Debian (stable): between them they cover musl and glibc, and a `/bin/sh` that is BusyBox `ash`, `bash` and `dash`. **Second priority:** other systems (Ubuntu, Fedora, the BSDs once a port exists, other architectures once the runtime supports them), in an order revised as ports are prioritised. Today the runtime targets `x86_64` Linux only, so the architecture column has one value.
