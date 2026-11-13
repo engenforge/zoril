@@ -4,12 +4,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 ## Now
 
-- [ ] +testinfra +tests +AI-G @testinfra Z2b6 A test's `// EXPECT:` text is matched against the compiler's output only, not the command line `--verbose` logs id:r85jb
+- [x] +testinfra +tests +AI-G @testinfra Z2b6 A test's `// EXPECT:` text is matched against the compiler's output only, not the command line `--verbose` logs id:r85jb
     > **Created:** 2026-11-13
     > **Context:** found at check-in id:drcga (finding 2), settled by the reviewer for an `+AI-G` session; older than the batch it was found in
     > **Branch:** `testinfra`
     > **Depends:** id:drcga
     > **Placed:** after id:9nnvq, first of the batch that fixes what check-in id:drcga found. It is not a hole of the batch under review, so it does not hold up the merge; the maintainer may move it ahead of the merge.
+    > **Completed:** 2026-11-13 git:4ea969c
 
     - **Why:** with `--verbose`, `tr_run_file` (`scripts/lib/test_runner.sh`) writes the compile command (`$ ./build/zoril ... FILE`) into `$_log`, and `_tr_missing_expect` greps `$_log`. So an `EXPECT` substring that occurs in the command line (the file's path, an include root, `--emit-zil`) is found there, and a test that fails without `--verbose` passes with it. The review's probe, a program that compiles cleanly with the header `// EXPECT: --emit-zil`: `./scripts/test.sh build/drcga/h2/w.zrl` gives `[FAIL] ... (diagnostic missing)`, and `./scripts/test.sh --verbose` on the same file gives `[PASS]`. In the tree, `tests/modular/iface_attrs/private_trait.zrl` (`// EXPECT: private`, a path that holds `private_trait`) is the one header whose text is in its own command line. That directory is in no per-file group, so no recorded result changes. `_tr_diagnostics` has the same fault: for a path under `tests/error_reporting/` it picks the command line as an `error` line.
     - **Do (`scripts/lib/test_runner.sh`, POSIX `sh`):**
@@ -22,6 +23,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `./scripts/test.sh --verbose tests/error_reporting/` and the same without `--verbose` give the same `Total:` line; quote both.
       - C4: `sh scripts/test_runner_output.sh --both` passes; quote its last line for each runner (`ztest` runs each file through `test.sh --item`).
       - C5: scripts only, so no `make preflight-changed`. `make test` after the last edit; quote its `Total:` line.
+    - **Completion (generalist, 2026-11-13, git:4ea969c):** `tr_run_file` writes the compiler's output to `$_dir/compile.out` (empty for a `.zil` test) and appends it to `$_log` after the command; `_tr_missing_expect` and `_tr_diagnostics` read `compile.out`. `scripts/test_test_headers.sh` has the case `expect_in_cmdline`.
+      - C1: `sh scripts/test_test_headers.sh`: `[PASS] expect_in_cmdline: [FAIL] build/test-headers/cases/expect_in_cmdline.zrl (diagnostic missing)`; last line `[PASS] test headers: every malformed case failed, every control passed`.
+      - C2: take-out (`_tr_missing_expect` back on `$_log`): `[FAIL] expect_in_cmdline: expected ..., got: [PASS] build/test-headers/cases/expect_in_cmdline.zrl (14ms)`; restored.
+      - C3: `./scripts/test.sh --verbose tests/error_reporting/` and the same without `--verbose` both print `Total: 458 run, 458 passed, 0 failed, 0 skipped (2.0s)`.
+      - C4: `sh scripts/test_runner_output.sh --both` last line `[PASS] opts_hidden output follows the grammar and its counts agree (build/ztest)`; `sh scripts/test_runner_output.sh` last line `[PASS] a scenario exiting 77 is reported as skipped, with its reason`; no `[FAIL]`.
+      - C5: `make test` after the last edit: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (119.6s)`. Scripts only; no `make preflight-changed`.
 
 - [ ] +testinfra +tests +AI-G @testinfra Z2b7 The header grammar refuses `expected exit` beside a warning test's `EXPECT`, and an `@skip:` with no reason id:haf6g
     > **Created:** 2026-11-13
