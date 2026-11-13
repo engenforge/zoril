@@ -63,7 +63,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 - [x] +docs +AI-G @main Probe marker lines do not cite task IDs: reword the 17 `// gap:` and 4 `// zbuild:` reasons in words id:yws9j
 
-    > **Created:** 2026-11-12, asked by the maintainer
+    > **Created:** 2026-11-12
+    > **Context:** asked by the maintainer
     > **Branch:** `main`
     > **Depends:** id:q0ses
 
@@ -88,7 +89,9 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Docs:** no doc quotes a reworded reason verbatim (searched `doc`, `README.md` and `KNOWN_ISSUES.md` for the first 60 characters of each old reason: no match), so none changed. Where a reason used an ID as a name, it now names the mechanism ("its fixpoint over the cycle", "the body summary", "a summary built from the origin sets"); the two `(found in ...)` citations and the `id:z0181` trailer were dropped.
 
 - [x] +docs +AI-G @main id:z0187 `AGENTS.md`: a series branch merges into `main` at each reviewed milestone, not only at its end
-    > **Created:** 2026-11-12 by the review of the `testinfra` series; the rule is agreed by the maintainer, who asked for the first such merge (git:906265f). **Branch:** `main`.
+    > **Created:** 2026-11-12
+    > **Context:** by the review of the `testinfra` series; the rule is agreed by the maintainer, who asked for the first such merge (git:906265f).
+    > **Branch:** `main`
     > **Completed:** 2026-11-13 git:8bc8e8e
 
     - **Done on `main` (git:8bc8e8e), answers by number:**
@@ -107,7 +110,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `grep -n 'squashed where that makes' AGENTS.md` shows the sentence, once, inside the **Code branches** bullet, and the bullet still names the completion note's rule for a rebased or squashed commit (`grep -n 'rebased or squashed' AGENTS.md`) without contradicting it.
 
 - [x] +docs +AI-G @main id:z0188 `AGENTS.md`: the order of work is the order of `active.tm.md`, and a new task is placed by rule
-    > **Created:** 2026-11-12, asked by the maintainer. **Branch:** `main`. **Placed:** in `## Now` after id:z0187, as a rule every session reads.
+    > **Created:** 2026-11-12
+    > **Context:** asked by the maintainer.
+    > **Branch:** `main`
+    > **Placed:** in `## Now` after id:z0187, as a rule every session reads.
     > **Completed:** 2026-11-13 git:8071e6a
 
     - **Done on `main` (git:8071e6a) and `tasks`, answers by number:**
@@ -128,7 +134,9 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: no take-out check: the change is a rule in prose. `make test`, `Total:` line quoted.
 
 - [x] +docs +AI-G @main id:z0185 `AGENTS.md`'s command for listing the `src/` closure runs as written
-    > **Created:** 2026-11-11 by the review of the `testinfra` series. **Branch:** `main`.
+    > **Created:** 2026-11-11
+    > **Context:** by the review of the `testinfra` series.
+    > **Branch:** `main`
     > **Completed:** 2026-11-13 git:5054108
 
     - **Done on `main` (git:5054108), answers by number:**
@@ -145,7 +153,9 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: no take-out check: the change is documentation and C1 is its failing case. `make test`, `Total:` line quoted (the document gates read `AGENTS.md`).
 
 - [x] +docs +AI-G @main id:z0186 `AGENTS.md`: a design that skips work names what a wrong skip hides, with a planted case, before it is implemented
-    > **Created:** 2026-11-11 by the review of the `testinfra` series; the rule is agreed by the maintainer. **Branch:** `main`.
+    > **Created:** 2026-11-11
+    > **Context:** by the review of the `testinfra` series; the rule is agreed by the maintainer.
+    > **Branch:** `main`
     > **Completed:** 2026-11-13 git:3f29457
 
     - **Done on `main` (git:3f29457), answers by number:**
@@ -175,7 +185,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Workflow findings, recorded as tasks:** (1) `tm next` cannot see a `Z-NNNN` task's identifier or its **Depends:**, so no check-in can be chained to one: id:z0189 moves into `## Now`, ahead of the next batch. (2) `AGENTS.md`'s **Check-ins** rule leaves the work task open and has no `@checkin` task, so a session following `tm next` would be offered the same task again. This is id:955fk, placed after id:z0189 (done at the maintainer's request in this session; git:5cf24c6). The batch after it ends at check-in id:1d7s2, placed after id:z0114. id:z0184, the first task after that check-in, now depends on it.
 
 - [ ] +docs +tasks +AI-G @main id:z0189 Task identifiers take Taskmark's `id:` form: a counted number becomes `id:z` plus its four digits, and each header field gets a line of its own
-    > **Created:** 2026-11-12, asked by the maintainer. **Branch:** `main` (for `AGENTS.md`; the task files change on `tasks`). **Placed:** in `future.tm.md`: it waits for a `tm` release and two answers from the maintainer.
+    > **Created:** 2026-11-12
+    > **Context:** asked by the maintainer.
+    > **Branch:** `main`
+    > **Branch note:** (for `AGENTS.md`; the task files change on `tasks`).
+    > **Placed:** in `future.tm.md`: it waits for a `tm` release and two answers from the maintainer.
 
     - **Why:** the draft of the next Taskmark spec (§4.3.3, §4.4.2, §5.1) defines a task identifier as a word `id:` plus four or more lowercase letters and digits, a `Depends` field that lists such identifiers, and `tm next`, which takes the first pending task whose dependencies are complete. Zoril's `Z-NNNN` does not match, so none of it would see Zoril's tasks. The draft also makes one labeled field per `>` line the rule; Zoril's headers put several on one line, so `Branch` and `Depends` are not fields today and `Created` is not a date (counted 2026-11-12: 174 of 188 tasks have such a line, and 178 a `Created` that is not a bare date).
     - **Decided (the maintainer, 2026-11-12):** the identifier is derived, not drawn: a counted number becomes `id:z` plus its four digits (`Z-` and the digits become `id:z` and the digits). The draft allows a hand-chosen identifier; the old number stays readable in it, and the 203 commits that carry `Task: Z-NNNN`, which cannot change, map to the new form by rule.
@@ -230,7 +244,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `make test-changed BASE=3f29457`, run on the final text before the commit, selected the full suite: `Total: 3263 run, 3263 passed, 0 failed, 94 skipped (113.7s)`.
 
 - [ ] +testinfra +tests +AI-G @testinfra id:z0114 T10 The rejection differential caches each side's verdicts
-    > **Created:** 2026-11-06. **Branch:** `testinfra`. **After:** id:z0105 (confirm the share). **Why first among the caches:** the session analysis puts the differential at 620 s of an 800 to 900 s `preflight-changed`, and an author and a reviewer run it against the same base.
+    > **Created:** 2026-11-06
+    > **Branch:** `testinfra`
+    > **After:** id:z0105 (confirm the share).
+    > **Why first among the caches:** the session analysis puts the differential at 620 s of an 800 to 900 s `preflight-changed`, and an author and a reviewer run it against the same base.
 
     - **Do:** `scripts/check_reject_diff.sh` builds the base compiler in a scratch worktree on every run, then runs both sides over about 69,000 programs (the store grid from `scripts/fuzz/store_grid.lua` and the safety probes). Each side's verdict on a program depends only on that side's compiler, zbuild and stdlib, and on the program. Cache under `build/reject-diff-cache/`: the base compiler, keyed by the base commit and the toolchain fingerprint, and each side's front-end verdict file, keyed by a hash of its `zoril` and `zbuild` binaries and stdlib, and of the program set (the generator script and the probe directory). A second run on the same base and the same tree does only the comparison. A run after a `src/` edit reruns only the change side.
     - **Checks:** `scripts/test_reject_diff.sh` gains a case where a cached run and an uncached run print the same report. Take the cache's invalidation out (change a probe) and watch the test fail. Time a cold run and a warm run and record both here. `make test`, `make preflight-changed`.
@@ -318,7 +335,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       4. Record each finding here as a numbered bullet, add any follow-up tasks (`tm add --after`), then `tm validate` and `tm done` this task.
 
 - [ ] +testinfra +measurement +AI-D @testinfra id:z0184 T15 Where the front end's per-program time goes once a program imports the stdlib
-    > **Created:** 2026-11-11 by the review of the series. **Branch:** `testinfra`. **Before:** id:z0113 (it decides with this answer). **Output:** the figures and a recommendation in this task's text; any implementation is a new task.
+    > **Created:** 2026-11-11
+    > **Context:** by the review of the series.
+    > **Branch:** `testinfra`
+    > **Before:** id:z0113 (it decides with this answer).
+    > **Output:** the figures and a recommendation in this task's text; any implementation is a new task.
     > **Depends:** id:1d7s2
 
     - **Why:** after id:z0157 to id:z0159 the differential still compiles 138,260 programs a run at about 13.6 ms of CPU each (id:z0114's table). Measured 2026-11-11 at git:2f2b26f, 200 runs each of `timeout 30 build/zoril -I stdlib=stdlib --emit-zil -o /dev/null <file>`, on a quiet host: `fn main() -> i32 { return 0; }` takes 2.17 ms a run, `bench/safety_matrix/probes/117_closure_stored_in_caller_vec.zrl` (which imports `vec.zrl`) takes 14.26 ms, and `timeout 30 /bin/true` alone takes 1.47 ms. So about 12 ms of each importing program, roughly 85%, is spent on the imported stdlib modules, on both sides of every differential and in every per-file test. Cutting that is paid back on every run and has no stale state, unlike a cache (id:z0114's R4).
@@ -331,7 +352,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: no file under `src/`, `stdlib/` or `scripts/` is changed by this task (`git status --short` empty after the scratch edits are restored).
 
 - [ ] +testinfra +refactor +AI-G @testinfra id:z0136 Z2a The test plan as data: gates, group paths and scenarios in one file both runners read
-    > **Created:** 2026-11-07 by id:z0117. **Branch:** `testinfra`. **Before:** id:z0137. **Related:** id:z0115 (its selector reads the same names).
+    > **Created:** 2026-11-07
+    > **Context:** by id:z0117.
+    > **Branch:** `testinfra`
+    > **Before:** id:z0137.
+    > **Related:** id:z0115 (its selector reads the same names).
 
     - **Now:** the plan lives in `case` blocks in `scripts/test.sh`: `GATES_ALL` and each gate's command, `group_paths`, `group_scenarios` and each scenario's command.
     - **Do:** move them to a plain TSV file under `scripts/` (kind, name, group, command), which `scripts/test.sh` reads instead of its `case` blocks; the order of the file is the display order. A refactor: the output of `make test` is unchanged.
@@ -344,7 +369,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test`, `Total:` line quoted.
 
 - [ ] +stdlib +tests +AI-G @testinfra id:z0131 Z1b `proc.zrl`: a child in a process group of its own, signalled as a group
-    > **Created:** 2026-11-07 by id:z0117. **Branch:** `testinfra`. **Depends:** none (id:z0135 until 2026-11-11; see **Decided** below).
+    > **Created:** 2026-11-07
+    > **Context:** by id:z0117.
+    > **Branch:** `testinfra`
+    > **Depends note:** none (id:z0135 until 2026-11-11; see **Decided** below).
 
     - **Cross-branch dependency (2026-11-10):** id:z0135 is a `main` task. Start this one only once id:z0135's commit is on `testinfra` (`git merge-base --is-ancestor <sha> testinfra`); merging `main` into `testinfra` is the maintainer's decision.
     - **Review (2026-11-11), for the maintainer:** the dependency rests on `sys_setpgid` going into `stdlib/os/linux.zrl`, which is in the `src/` closure (`build/zoril --emit-deps src/main.zrl -I stdlib=stdlib -I src -I build/gen -o <file>` lists it). `stdlib/proc.zrl` is not in the closure and already makes its process syscalls itself (`@syscall(57)` fork, `@syscall(61, ...)` wait4, `@syscall(62, ...)` kill). Calling `setpgid` (109) and the group `kill` there the same way edits no closure module, and this task would no longer wait for id:z0135. The **Do** above is unchanged until the maintainer says which.
@@ -360,7 +388,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make man-gen` and `sh scripts/test_man_pages.sh` pass; `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +stdlib +tests +AI-G @testinfra id:z0132 Z1c `proc.zrl`: a child's working directory and environment, set without `unsafe`
-    > **Created:** 2026-11-07 by id:z0117. **Branch:** `testinfra`. **Before:** id:z0137.
+    > **Created:** 2026-11-07
+    > **Context:** by id:z0117.
+    > **Branch:** `testinfra`
+    > **Before:** id:z0137.
 
     - **Review (2026-11-11): not blocked by id:z0135, if it stays out of the closure.** `stdlib/os/linux.zrl` has no `sys_chdir`, and adding one there would edit a module in the `src/` closure (id:z0135's reason for coming before id:z0131). `stdlib/proc.zrl` is outside the closure and makes its own syscalls with `@syscall`; `chdir` (80) in the child goes there the same way, and the `envp` is built in the command's arena, so this task edits no closure module. Check to add as C7: `git diff --stat` for the task names no file listed by `build/zoril --emit-deps src/main.zrl -I stdlib=stdlib -I src -I build/gen -o <file>`.
     - **Do:** `Command` methods to set the child's working directory (`chdir` in the child before exec; a failure reaches the parent through the existing errno pipe) and to set, remove or clear environment variables, built into an `envp` in the command's arena, so callers no longer need `unsafe set_envp`. Interior NULs are refused as for arguments.
@@ -373,7 +404,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make man-gen` and `sh scripts/test_man_pages.sh` pass; `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +testinfra +tests +AI-G @testinfra id:z0137 Z2b `ztest` runs the plan one item at a time, with today's output
-    > **Created:** 2026-11-07 by id:z0117. **Branch:** `testinfra`. **Depends:** id:z0130, id:z0132, id:z0136.
+    > **Created:** 2026-11-07
+    > **Context:** by id:z0117.
+    > **Branch:** `testinfra`
+    > **Depends:** id:z0130, id:z0132, id:z0136
 
     - **Do:** `tools/ztest` reads the plan file (id:z0136) and the options `scripts/test.sh` takes (`--quiet`, `--verbose`, `--filter`, `--fail-fast`, `--timeout`, `--results`, `--suite`, `--gate`, paths, and the `TR_*` variables it reads), runs each item through `sh` as `test.sh`'s worker does (gates, scenarios, and a per-file test through `scripts/lib/test_runner.sh`), one at a time, with its own per-item timeout, and writes the output contract, `build/gates/<name>.log`, `build/tests/scenarios/<name>.log` and `timings.tsv`. The Makefile builds `build/ztest` on its own inputs only (id:z0117 decision 2). `make test RUNNER=ztest` uses it; the default stays `test.sh`.
     - **Planted fixtures:** a test that fails, one that crashes, one that hangs past its timeout, one with a malformed header, and a gate that exits 0 having printed a failure; each reported as it is, by both runners, in every `make test`.
@@ -387,14 +421,20 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C7: `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +testinfra +measurement +AI-D @testinfra id:z0123 T9a Is a build and a test result the same from the same inputs?
-    > **Created:** 2026-11-06, split from id:z0113 by the review. **Branch:** `testinfra`. **Before:** id:z0113.
+    > **Created:** 2026-11-06
+    > **Context:** split from id:z0113 by the review.
+    > **Branch:** `testinfra`
+    > **Before:** id:z0113.
 
     - **Do:** id:z0113's **Measure first** bullet: is `build/zoril` byte-identical when built from one commit in two checkouts (through stage1 and through `build/zoril`)? Do two `make test` runs on one tree give the same `--results` and the same output digests per item (list every item that differs, and why)? Record the commands and the answers here, and in id:z0113.
 
 ## Next
 
 - [ ] +testinfra +decision +AI-D @testinfra id:z0113 T9 One verification record for the author and the reviewer: a result cache keyed by inputs
-    > **Created:** 2026-11-06. **Branch:** `testinfra`. **Asked by:** the maintainer. **Before:** id:z0112 (the review rule it changes), id:z0114.
+    > **Created:** 2026-11-06
+    > **Branch:** `testinfra`
+    > **Asked by:** the maintainer.
+    > **Before:** id:z0112 (the review rule it changes), id:z0114.
 
     - **The stamp's record (the maintainer, 2026-11-07):** a cache keyed by inputs decides what not to run, as the unchanged-tree stamp did. The stamp needed four fixes (id:z0142, id:z0143, id:z0144, id:z0150) and was removed (id:z0154), because a defect in it reports a pass for code that was not tested. Before recommending a cache, say what in its design keeps it from failing the same ways (a key that misses an input, a record taken at the wrong moment, a lookup that depends on git), and how a reviewer sees a wrong hit.
 
@@ -408,7 +448,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Order (review, 2026-11-11):** also after id:z0184. If the stdlib's share of each compile (about 85% of 14 ms) can be cut for every run, the saving left for a result cache shrinks, and this task weighs it against the record of the mechanisms that skip work (the stamp, the tiers, id:z0114's R4).
 
 - [ ] +bootstrap +audit +AI-D @main id:z0135 Z0 stage1 accepts modules in the `src/` closure and builds some of their paths wrong
-    > **Created:** 2026-11-07 by id:z0117's measurement. **Branch:** `main`. **Before:** id:z0131, id:z0133 (they edit closure modules).
+    > **Created:** 2026-11-07
+    > **Context:** by id:z0117's measurement.
+    > **Branch:** `main`
+    > **Before:** id:z0131, id:z0133 (they edit closure modules).
 
     - **Review (2026-11-11/12):** the header's **Before:** id:z0131 no longer holds: by the maintainer's decision on id:z0131 its syscalls go into `stdlib/proc.zrl`, which is outside the `src/` closure, so that task and id:z0132 start without this one. Whether id:z0133 needs it is asked on id:z0133. This task keeps its own reason: an edit to `src/` that reaches one of the paths stage1 builds wrong.
 
@@ -419,7 +462,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Filed (2026-11-07):** both issues are in `KNOWN_ISSUES.md` §1 (the two `stage1` entries), the crash with its cause marked unknown. When this task names the cause, replace that sentence with it, and add the rule it proposes to the entry's **Workaround**.
 
 - [ ] +safety +stdlib +tests +AI-D @testinfra id:z0133 Z1d Signals: the runtime records which arrived, and a stdlib module reads it
-    > **Created:** 2026-11-07 by id:z0117. **Branch:** `testinfra`. **Depends:** id:z0135. **Check-in:** it touches `rt/`.
+    > **Created:** 2026-11-07
+    > **Context:** by id:z0117.
+    > **Branch:** `testinfra`
+    > **Depends:** id:z0135
+    > **Check-in:** it touches `rt/`.
 
     - **Cross-branch dependency (2026-11-10):** id:z0135 is a `main` task. Start this one only once id:z0135's commit is on `testinfra` (`git merge-base --is-ancestor <sha> testinfra`); merging `main` into `testinfra` is the maintainer's decision.
     - **Review (2026-11-11), for the maintainer:** id:z0135's header gives "they edit closure modules" as the reason it comes before this task, but the **Do** below puts the new module outside the `src/` closure and edits `rt/runtime.s` (with its `bootstrap/stage1/rt/runtime.s` copy), which is not a closure module. If the handler adds symbols only and changes none that stage1 emits, this task may not need id:z0135 either; that is the maintainer's call, since the runtime is linked into the compiler stage1 builds. Until it is made, the dependency stands.
@@ -428,13 +475,20 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Checks:** a test that watches SIGUSR1, sends it to itself, and reads it once from `take_pending` and not twice; a child that watches nothing still gets the default action. `scripts/run_safety_matrix.sh`. `make test`, `make preflight-changed`. Ends with **Awaiting review**.
 
 - [ ] +stdlib +portability +tests +AI-D @testinfra id:z0134 Z1e The environment read from the startup stack, not `/proc/self/environ`
-    > **Created:** 2026-11-07 by id:z0117 (decision 5). **Branch:** `testinfra`. **Before:** id:z0140. **Check-in:** it touches `rt/`.
+    > **Created:** 2026-11-07
+    > **Context:** by id:z0117 (decision 5).
+    > **Branch:** `testinfra`
+    > **Before:** id:z0140.
+    > **Check-in:** it touches `rt/`.
 
     - **Do:** `_start` in `rt/runtime.s` records `envp` beside argc and argv (the hosted entry likewise); `getenv` in `stdlib/fsys.zrl` reads it instead of `/proc/self/environ`, so it works where `/proc` is absent. `fsys.zrl` is in the `src/` closure: build through stage1 too. `bootstrap/stage1/rt/runtime.s` stays a copy.
     - **Checks:** a test whose parent sets one variable, sets another to the empty string and leaves a third unset, and that `getenv` returns the value, the empty value and none for them. Where `unshare` can mount a namespace without `/proc`, the same test passes there (skip, saying why, where it cannot). `make test`, `make preflight-changed`. Ends with **Awaiting review**.
 
 - [ ] +testinfra +tests +AI-G @testinfra id:z0138 Z2c `ztest` runs N items at once and becomes the default
-    > **Created:** 2026-11-07 by id:z0117. **Branch:** `testinfra`. **Depends:** id:z0131, id:z0133, id:z0137.
+    > **Created:** 2026-11-07
+    > **Context:** by id:z0117.
+    > **Branch:** `testinfra`
+    > **Depends:** id:z0131, id:z0133, id:z0137
 
     - **Do:** a pool of `--jobs` items (default `nproc_count`'s answer, passed in by the Makefile), each in its own process group (id:z0131), started slowest first from the last `timings.tsv`, printed in plan order as each finishes; fail-fast stops new items and kills the running groups; `SIGINT`/`SIGTERM` (id:z0133) kills every group and exits 130; a work-directory lock as `test.sh`'s (`fsys.zrl` `acquire_file_lock`). `make test` uses `ztest` by default; `RUNNER=sh` keeps `test.sh`.
     - **Checks:**
@@ -448,7 +502,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C8: `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +testinfra +tests +AI-G @testinfra id:z0139 Z2d The per-file pipeline in `ztest`, compared file by file with the `sh` one
-    > **Created:** 2026-11-07 by id:z0117. **Branch:** `testinfra`. **Depends:** id:z0138.
+    > **Created:** 2026-11-07
+    > **Context:** by id:z0117.
+    > **Branch:** `testinfra`
+    > **Depends:** id:z0138
 
     - **Do:** `ztest` reads each test's header directives (`// expected exit`, `// expected compile fail`, `// EXPECT:`, `// expected compile success`, `// flags:`, `// link:`, `// @skip:`) and runs zoril, zilc, qbe, as, ld and the program itself, with `ZORIL_CC` and the other tool variables honoured, instead of starting `sh` per file. The `sh` pipeline stays as the fallback.
     - **Checks:**
@@ -460,7 +517,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +testinfra +portability +tests +AI-G @testinfra id:z0140 Z2e Retire `test.sh`'s pool: no `flock`, `mkfifo`, `setsid`, `xargs -P` or `read -t` on the test path
-    > **Created:** 2026-11-07 by id:z0117. **Branch:** `testinfra`. **Depends:** id:z0138, id:z0139, id:z0134, and a release cycle of `ztest` as the default with no disagreement.
+    > **Created:** 2026-11-07
+    > **Context:** by id:z0117.
+    > **Branch:** `testinfra`
+    > **Depends:** id:z0138, id:z0139, id:z0134
+    > **Depends note:** a release cycle of `ztest` as the default with no disagreement.
 
     - **Do:** remove the pool, the dispatcher and their dependency checks from `scripts/test.sh`, keeping `scripts/lib/test_runner.sh` and a serial fallback over `tests/smoke.list` (`make test-fallback`), which `make test` runs, saying so, when `build/ztest` cannot be built. Remove `flock`, `mkfifo` and `setsid` from `scripts/check_deps.sh`'s `test` set. Update `AGENTS.md` "Running tests" and `doc/developer_guide.md`.
     - **Portability rule (the maintainer, 2026-11-07):** this task removes the pool's entries from the exceptions list in `AGENTS.md` (Portability) and `doc/developer_guide.md` §1, and id:z0145's gate then runs `make test` without `flock`, `mkfifo` and `setsid` on `PATH`. The reason for the series is recorded there: the harness reaches macOS and Windows through Zoril tools, not through more `sh`.
@@ -472,7 +533,9 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `scripts/check_portability.sh` passes; `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 - [ ] +testinfra +tests +AI-G @testinfra id:z0109 T5 Run the serial parts in parallel, longest first
-    > **Created:** 2026-11-06. **Branch:** `testinfra`. **Depends:** id:z0105.
+    > **Created:** 2026-11-06
+    > **Branch:** `testinfra`
+    > **Depends:** id:z0105
 
     - **Do:** from the profile, schedule items longest first using the last `timings.tsv`, keeping the display order. Run the stage0c `make` targets with `-j`. Run the preflight steps that share nothing at the same time; the bench step keeps its quiet-host rule. (The reject differential's caches are id:z0114.) Measure before and after on 16 cores and on 4.
     - **Narrowed by id:z0103 (2026-11-06):** the pool already dispatches the non-file items from the slow end of the plan first (F1), so longest-first saves little on 16 cores. What is left: the stage0c `make` targets with `-j`, and the preflight steps side by side. Any change to the pool itself waits for id:z0117 (the series' dependency rule).
@@ -487,7 +550,9 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test`, `make preflight-changed` and `make preflight`, each `Total:` line quoted.
 
 - [ ] +testinfra +tests +AI-G @testinfra id:z0110 T6 Test progress: what is running, a heartbeat, and grouped fast items
-    > **Created:** 2026-11-06. **Branch:** `testinfra`. **Asked by:** the maintainer.
+    > **Created:** 2026-11-06
+    > **Branch:** `testinfra`
+    > **Asked by:** the maintainer.
 
     - **Now:** a gate's lines appear only when it ends, and results print in plan order, so one slow item looks like a hang. This is worst on a slow host.
     - **Do:** on a terminal, print a line when a slow item starts (one that took over a few seconds last time, from `timings.tsv`, or any gate). Refresh one status line at least every 10 s: items done of total, the slowest still running and its elapsed time. Fold items that finish quickly into their group's count line. Off a terminal (a log, `make test 2>&1 | grep`), keep today's line-oriented output byte for byte, apart from optional start lines that the grep patterns in `AGENTS.md` ignore. POSIX `sh` only, no `tput` dependency beyond a plain `\r`. `scripts/test_runner_output.sh` covers both modes. `make test`.
@@ -502,7 +567,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test`, `Total:` line quoted.
 
 - [ ] +testinfra +tests +AI-G @testinfra id:z0125 T14 `make retest-failed` reruns only the items that failed last time
-    > **Created:** 2026-11-06 by the review (id:z0103 listed it in its brainstorm, but neither ranked nor dropped it). **Branch:** `testinfra`. **After:** id:z0117 (written in the runner that stays).
+    > **Created:** 2026-11-06
+    > **Context:** by the review (id:z0103 listed it in its brainstorm, but neither ranked nor dropped it).
+    > **Branch:** `testinfra`
+    > **After:** id:z0117 (written in the runner that stays).
 
     - **Do:** read the last `--results` file, rerun its `FAIL` items (files by path, gates and scenarios by name) with fail-fast off, and print the usual contract. With no results file, or none failed, say so and exit 0.
     - **Settled (review, 2026-11-07):** the rerun writes its own results to `retest.results` beside the file it read and never overwrites that file, so a second `make retest-failed` reruns the same items.
@@ -515,7 +583,9 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test`, `Total:` line quoted.
 
 - [ ] +testinfra +audit +AI-D @testinfra id:z0107 T3 Find redundant and obsolete tests
-    > **Created:** 2026-11-06. **Branch:** `testinfra`. **Depends:** id:z0105.
+    > **Created:** 2026-11-06
+    > **Branch:** `testinfra`
+    > **Depends:** id:z0105
 
     - **Do:** list candidates, removing nothing yet. Look for: per-file tests whose normalised ZIL or diagnostic output equals another's; `stage0c-*` items that duplicate `make -C bootstrap/stage0-c` targets run elsewhere; tests of features or bugs whose code is gone (search each test's subject in `src/`); gates whose check another gate already makes. Also list the tests that only one person can say are needed, for the maintainer. Each candidate gets its evidence and what would be lost. Removals are a separate task, with `make test` totals before and after.
     - **Narrowed by id:z0103 (2026-11-06):** per-file tests cost about 34 ms each (F2), so duplicates among them save seconds. Look first at the gates, the 48 scenarios and the seven `stage0c-*` gates (about 400 items), whose times id:z0105 records. Per-file duplicates are still listed, but for clarity, not for time.
