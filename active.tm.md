@@ -4,6 +4,27 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 ## Now
 
+- [ ] +docs +AI-G @main `AGENTS.md`: the queue is one ordered list, with no `## Now` and `## Next` headings id:m9hjt
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** at the top of the queue: a rule fix of under a session with no dependency.
+
+    - **Why (the maintainer, 2026-11-14):** the split between `## Now` (about ten tasks) and `## Next` was a cut by count. It says nothing position does not already say, and promoting a task from `## Next` became a step that blocked sessions. The queue becomes one list in `active.tm.md` ("scheduled, in this order"); `future.tm.md` keeps work that is paused or not scheduled. Who may reorder or promote is unchanged.
+    - **Do, in `AGENTS.md` on `main` (one commit):**
+      1. "The queue." bullet: replace `` `active.tm.md` is one ordered list: `## Now` (about ten tasks, ready or made ready by the tasks above them) and `## Next` (later, in order). `` with `` `active.tm.md` is one ordered list, top to bottom, under no headings but **Sprint notes** at its end. ``, and `` the first open task in `## Now` whose `` with `` the first open task whose ``.
+      2. "Placing a new task." bullet: `` goes at the top of `## Now` `` becomes `` goes at the top of `active.tm.md` ``, and `` promoting from `## Next` or `future.tm.md` `` becomes `` promoting from `future.tm.md` ``.
+      3. Nothing else: `rg -n 'Now|Next' AGENTS.md CONTRIBUTING.md doc/` afterwards names no queue heading.
+    - **Do, on the `tasks` branch (a task commit of its own, after the code commit):** delete the `## Now` and `## Next` lines of `active.tm.md` and the blank line after each; move no task.
+    - **Checks:** C1 `rg -n '## Now|## Next' AGENTS.md CONTRIBUTING.md doc/developer_guide.md` prints nothing, and `grep -c '^## ' doc/tasks/active.tm.md` prints `1` (Sprint notes). C2 `tm validate doc/tasks/*.tm.md` passes and `tm next` shows the same task before and after the heading deletion (quote both). C3 `git -C doc/tasks show --stat HEAD` changes only `active.tm.md`, with deletions only. C4 doc tier: `make test-changed BASE=HEAD~1`, its `Total:` quoted (no compiled code changes).
+
+- [ ] +docs +review +AI-D @main @checkin Review of the one-list queue rule in `AGENTS.md` id:kgv5s
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Depends:** id:m9hjt
+    > **Placed:** after id:m9hjt, the batch it reviews.
+
+    - **Review:** re-run id:m9hjt C1 to C3; read the two `AGENTS.md` bullets whole for a sentence that still assumes two headings.
+
 ## Next
 
 - [ ] +bootstrap +audit +AI-D @main id:z0135 Z0 stage1 accepts modules in the `src/` closure and builds some of their paths wrong
@@ -19,6 +40,389 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Do:** reduce each crash to a minimal program against stage1 (`AGENTS.md`: before blaming a seed compiler, reproduce against it), and name what stage1 does differently (a language rule that changed since the pin, such as a drop or layout rule, or a stage1 bug). Find whether any function `src/` reaches today takes the same route (`--emit-deps`, and the generation-1 compiler run over the stdlib tests). Then propose, for the maintainer: a rule added to the stage1 constraint and `doc/bootstrap/two_stage.md` (for example "no two modules in the closure share a private name", and the construct stage1 builds wrong), and whether a check can enforce it (build the closure modules' own tests through stage1 in a gate). Fixing stage1 itself is a re-pin or a recorded backport, the maintainer's decision: stop and ask.
     - **Checks:** the minimal reproductions recorded here, each run against stage1 and `build/zoril`.
     - **Filed (2026-11-07):** both issues are in `KNOWN_ISSUES.md` §1 (the two `stage1` entries), the crash with its cause marked unknown. When this task names the cause, replace that sentence with it, and add the rule it proposes to the entry's **Workaround**.
+
+- [ ] +safety +tests +AI-D @main id:z0183 A struct holding a frame view is not pushed into the caller's `Vec`
+    > **Created:** 2026-11-11
+    > **Context:** by id:z0174's review.
+    > **Branch:** `main`
+    > **Check-in:** stop for review after it: a fix to a safety rule. Public by SECURITY.md's rule: the program has to take this shape (a public report, a `known_gap` probe).
+
+    - **Found:** `out.push(H { s: s })` with `struct H { s: [u8] }` and `s` a view of a stack array of the callee is accepted, and the caller reads the dead frame (`bench/safety_matrix/probes/gap_79_struct_holding_frame_view_pushed.zrl`, `exit 77` where the frame held 42; recorded in git:cc612fe on `main`). The bare view, `out.push(s)` into a `Vec<[u8]>`, is refused (`region escape: a pointer to local stack storage is written to memory that outlives this function`). A `let h = H { s: s }; out.push(h);`, `resize(2, H { s: &buf })` and `extend_from_slice` of such a struct take the same route (probed on `vecclone` at git:ea007d4; `push` is independent of the `vecclone` series). `Option.Some(s)` pushed into a `Vec<Option<[u8]>>` also compiles (not read back).
+    - **Route class:** a struct whose field is a frame view, moved into memory that outlives the frame; beside `gap_59`..`gap_61` and `gap_63` (class (K), owners holding frame views), which hold the views in a `Vec`.
+    - **Do:** find why the push's store rule sees the bare slice and not the struct carrying it (`build/zoril -v` on `gap_79`, then the summary pass for a struct literal argument), and make the struct's field views count as the stored region; decide the same for an `Option`/enum payload (probe `Option.Some(s)` read back first). Flip `gap_79` to `compile_reject`, remove its Known gaps entry and its sentence in `doc/SAFETY.md` §6 (K); keep `gap_61`'s record as it is unless the fix reaches it.
+    - **Checks:** C1 `gap_79` is `compile_reject` and `sh scripts/run_safety_matrix.sh` passes; C2 error tests under `tests/error_reporting/` for the struct push, the `let h` form, `resize` and `extend_from_slice` of the struct, and the enum payload if it is a hole, each with `// EXPECT:`; C3 take the fix out and watch them fail; C4 `scripts/check_reject_diff.sh` against the commit before the fix, every newly refused program listed with its reason, none newly accepted; C5 a program that pushes a struct holding a view of a caller-owned or arena buffer is still accepted; C6 `make test`, `make preflight-changed`, `rm build/zoril && make` without a warning, each `Total:` quoted.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md`, with the five other open soundness holes on `main`, ahead of the provenance and ZIL series: each is a program `main` accepts and should refuse (or a drop it skips), one session-sized fix. Order among them: the reads of a dead frame first (id:z0183, id:z0180), then the `fn`-value faults (id:z0100, id:z0101), then the skipped drop (id:z0176) and the unchecked bound (id:z0175). Any "after the `vecclone` series merges" note above is met: the series is on `main`, with gap_76 to gap_79 in `bench/safety_matrix/probes/`.
+
+- [ ] +safety +tests +AI-D @main id:z0180 A generic `Clone` impl's result keeps the borrows of what it clones
+    > **Created:** 2026-11-11
+    > **Context:** by id:z0173.
+    > **Branch:** `main`
+    > **Branch note:** after the `vecclone` series merges (its probes are git:e7b4d6c on `vecclone`).
+    > **Check-in:** stop for review after it: a fix to a safety rule.
+
+    - **Found (2026-11-11, on `vecclone`; also on its base's stdlib):** `impl<T: Clone> Clone for Vec<T>` and `impl<T: Clone> Clone for Option<T>` declare `#[borrows()]`, so a clone holds no borrow: `return v.clone();` of a local `Vec<[u8]>` holding a view of a stack array, and `return o.clone();` of `Some(s)`, are accepted and read the dead frame (gap_77, gap_78, recorded in git:e7b4d6c: `exit 7` where the frame held 42). Returning `v` itself is refused (`cannot return 'v' a reference into storage owned by this frame`), and so are `s.clone()` of a slice directly (`region escape`), `clone_in`, and a `#[derive(Clone)]` struct holding the view (`region escape: returning a pointer to local stack storage via sret`). The same attribute hid the store from `extend_from_slice`'s summary once it cloned each element (probe 418 accepted); id:z0173 declares `#[stores(slice -> self)]` there instead.
+    - **Route class:** a generic `#[borrows()]` impl whose result is built from a `T` that may be a view. Probe every generic `#[borrows()]` function in `stdlib/` (`rg -B3 '#\[borrows\(\)\]' stdlib`), not only `Clone`.
+    - **Do:** decide what the result of a generic `#[borrows()]` function holds when `T` carries a borrow (Rust: the lifetime inside `T` stays in the result), and implement it; or drop the attribute from these impls if the default rule refuses no correct program the tests hold (the differential says). Flip gap_77 and gap_78.
+    - **Checks:** C1 gap_77 and gap_78 `compile_reject`, and a `Vec<u8>` / `Option<i32>` clone returned from a function still accepted; C2 take the change out and watch them run (`exit 7`); C3 `scripts/check_reject_diff.sh` against the base, every newly refused program listed; C4 `make test`, `make preflight-changed`, each `Total:` quoted.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md`, with the five other open soundness holes on `main`, ahead of the provenance and ZIL series: each is a program `main` accepts and should refuse (or a drop it skips), one session-sized fix. Order among them: the reads of a dead frame first (id:z0183, id:z0180), then the `fn`-value faults (id:z0100, id:z0101), then the skipped drop (id:z0176) and the unchecked bound (id:z0175). Any "after the `vecclone` series merges" note above is met: the series is on `main`, with gap_76 to gap_79 in `bench/safety_matrix/probes/`.
+
+- [ ] +safety +tests +AI-D @main id:z0100 A generic instance made into a `fn` value is lowered, not dropped
+    > **Created:** 2026-11-06
+    > **Branch:** `main`
+    > **Found by:** id:z0092's review (a sibling-route probe crashed).
+    > **Check-in:** stop for review after it: a fix to a safety rule. Independent of the provenance series; a hole in the default mode, reachable from safe code, so it goes beside id:z0095.
+
+    - **Now:** a generic function's instance named with type arguments and not called (`id::<i32>` with `fn id<T>(x: T) -> T`) type-checks as a `fn` value, but lowering emits nothing for it. `let f: fn(i32) -> i32 = id::<i32>; return f(3) - 3;` allocates `f`'s slot and never writes it (the ZIL has `alloc` and then the `call_ptr`, with no store between them), so the call jumps through stack garbage and faults (`bench/safety_matrix/probes/gap_66_generic_instance_as_fn_value_uninit.zrl`, exit 139). By site (`build/z92r/r_*.zrl`, `c3.zrl`, `c5.zrl`): a `let` with a `fn` type and a struct field (`H { f: id::<i32> }`) fault; an assignment (`f = id::<i32>;`) is dropped and `f` keeps its earlier closure (exit 43 where 3 was expected); an argument (`call(id::<i32>)`) gives "invalid ZIL (a compiler bug): an instruction names an operand that no value defines"; `return id::<i32>;` gives "control reaches end of non-void function without a return value"; `let f = id::<i32>;` gives "Failed to resolve callee". A non-generic `fn` item, a method value (`S::get`) and a generic instance chosen by the expected type are not this class: the last is refused, "unknown type `T`", at `let f: fn(i32) -> i32 = id;`.
+    - **Do:** find where a turbofish path is lowered only as a callee (`build/zoril -v` on `gap_66`, then the lowering of a path expression with type arguments) and lower it as the instance's `FuncAddr` at every value site, through `ZirLowerer.fn_value` so id:z0095's check applies (a generic `unsafe fn` named with turbofish, `unsafe fn id<T>(p: T) -> T` as `id::<*i32>`, is accepted outside `unsafe` today only because the value is dropped: `build/z95r/b2.zrl`, from id:z0095's review), or refuse it in the type checker with a diagnostic if instantiating is out of scope; decide which and say why. Probe every site above, a generic method (`B.id::<i32>`, refused today: "type arguments are only accepted on a call or a struct literal here"), and the instance passed to a generic higher-order function. Flip `gap_66` to `accept` (exit 0) or `compile_reject`, and remove its Known gaps entry and the `doc/SAFETY.md` §6 class (L) (lettered (M) until id:z0095 closed the first (L)). `make test`, `make preflight-changed`, `sh scripts/run_safety_matrix.sh`.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md`, with the five other open soundness holes on `main`, ahead of the provenance and ZIL series: each is a program `main` accepts and should refuse (or a drop it skips), one session-sized fix. Order among them: the reads of a dead frame first (id:z0183, id:z0180), then the `fn`-value faults (id:z0100, id:z0101), then the skipped drop (id:z0176) and the unchecked bound (id:z0175). Any "after the `vecclone` series merges" note above is met: the series is on `main`, with gap_76 to gap_79 in `bench/safety_matrix/probes/`.
+
+- [ ] +safety +tests +AI-D @main id:z0101 An `extern` function made into a `fn` value needs `unsafe`
+    > **Created:** 2026-11-06
+    > **Branch:** `main`
+    > **Found by:** id:z0095 (its structural twin).
+    > **Check-in:** stop for review after it: a fix to a safety rule. A hole in the default mode, reachable from safe code; beside id:z0095 and id:z0100.
+
+    - **Now:** a bare `extern` declaration (`extern fn memset(p: *mut u8, c: i32, n: usize) -> *mut u8;`) named as a value converts to a plain `fn` type with no `unsafe`, and a call through the value is never marked, so safe code calls C with a forged pointer and faults (`bench/safety_matrix/probes/gap_67_extern_fn_as_fn_value.zrl`; `build/z95/x_extern_call.zrl`, exit 139). A direct call is refused ("call to extern function requires unsafe block"); id:z0095's check in `ZirLowerer.fn_value` does not reach it: a bare `extern` is not `is_unsafe` (an `unsafe extern fn` is, and is refused since id:z0095's review).
+    - **Decide, then do:** refuse the conversion outside `unsafe` as id:z0095 does (one condition in `fn_value`), or refuse it everywhere: a plain `fn` value is called with the Zoril convention, two words and an environment argument, and an `extern` is a C symbol, which `extern "C" fn(..)` (the C function pointer, its call already `unsafe`) is the type for. Probe every conversion site, an exported (`is_export`) function, and an `extern` with `#[borrows]`/`#[stores]`; flip `gap_67` with its Known gaps entry and the `doc/SAFETY.md` §6 class (M) removed. `make test`, `make preflight-changed`, `sh scripts/run_safety_matrix.sh`.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md`, with the five other open soundness holes on `main`, ahead of the provenance and ZIL series: each is a program `main` accepts and should refuse (or a drop it skips), one session-sized fix. Order among them: the reads of a dead frame first (id:z0183, id:z0180), then the `fn`-value faults (id:z0100, id:z0101), then the skipped drop (id:z0176) and the unchecked bound (id:z0175). Any "after the `vecclone` series merges" note above is met: the series is on `main`, with gap_76 to gap_79 in `bench/safety_matrix/probes/`.
+
+- [ ] +safety +tests +AI-D @main id:z0176 A value bound by value out of an enum payload in a `match` is dropped exactly once
+    > **Created:** 2026-11-11
+    > **Branch:** `main`
+    > **Branch note:** Reclassified public under `SECURITY.md` (it needs the program to take the shape).
+
+    - **Found (2026-11-09, git:6ad43a6, while working on id:z0162):** `match e { E.A(s) => { let n = 1; }, E.B => {}, }` moves the payload into `s`, and neither `s` nor `e` is dropped: the destructor never runs. A leak on its own, but it breaks "drop exactly once" (`doc/spec/safety_model.md`), and a guard that is never released (a lock, an fd, an `Arena` reset) can be a correctness hole. Reproducer (`S` counts its drops into `*p`; exits 0, should exit 1):
+
+    ```zoril
+    struct S { p: *mut u8 }
+    impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } } }
+    enum E { A(S), B }
+    fn main() -> i32 {
+        let mut flag = 0 as u8;
+        let fp = &mut flag as *mut u8;
+        {
+            let e = E.A(S { p: fp });
+            match e { E.A(s) => { let n = 1; }, E.B => {}, }
+        }
+        return flag as i32;
+    }
+    ```
+
+    - **Do, first:** probe the siblings on the current tree and count the drops each makes (0, 1 or 2): the payload used (`consume(s)`, one drop in `consume`), a `_` arm, a nested pattern, `if let`, a struct payload, a tuple payload. Record each count here; a 0 is a `known_gap` probe (with the Known gaps entry and a `doc/SAFETY.md` §6 class), a 2 a `known_gap` probe that also stops this task for the maintainer before the fix. Then fix in the same session only if it is one mechanism; otherwise split.
+    - **Checks:** C1 each sibling's drop count quoted; C2 the probes recorded and `sh scripts/run_safety_matrix.sh` `Mismatches: 0`; C3 `make test`, its `Total:` quoted.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md`, with the five other open soundness holes on `main`, ahead of the provenance and ZIL series: each is a program `main` accepts and should refuse (or a drop it skips), one session-sized fix. Order among them: the reads of a dead frame first (id:z0183, id:z0180), then the `fn`-value faults (id:z0100, id:z0101), then the skipped drop (id:z0176) and the unchecked bound (id:z0175). Any "after the `vecclone` series merges" note above is met: the series is on `main`, with gap_76 to gap_79 in `bench/safety_matrix/probes/`.
+
+- [ ] +safety +types +AI-D @main id:z0175 A bound on an impl block or a method's type parameter is checked
+    > **Created:** 2026-11-11
+    > **Branch:** `main`
+    > **After:** the `vecclone` series is merged (it may refuse programs the series' tests use).
+
+    - **Found (2026-11-11, git:fc55a0a, scratch `build/p34/`):** `impl<T: Copy> W<T> { fn dup(self: &W<T>) -> i32 }` called on a `W<S>` with `S: Drop` compiles (`b_split_impl_drop.zrl`, exit 0), and so does `fn dup<U: Copy>(self: &W<T>, u: &U)` called with `&S` (`b_method_bound.zrl`). A free function's bound is checked, also through an unbounded generic caller (`b_fn_bound_drop.zrl`, `b_through_generic.zrl`: `error: type 'S' does not implement trait 'Copy'`).
+    - **Do:** check both at the call as a free function's bound is checked; probe trait impls (`impl<T: Clone> Clone for Vec<T>` on a `Vec` of a non-`Clone` `T`) beside them. The rejection differential lists every program newly refused.
+    - **Diagnostic (2026-11-11, id:z0173):** with the bound unchecked, `Vec.extend_from_slice` on a `T` with no `Clone` is refused only inside `vec.zrl` (`stdlib/vec.zrl:431:60: error: no field 'clone' on 'S'`). Once `impl<T: Clone>` bounds are checked at the call, move `extend_from_slice` and `resize` into such an impl so the user sees `type 'S' does not implement trait 'Clone'` at their call, and update `tests/error_reporting/err_extend_from_slice_no_clone.zrl`'s EXPECT.
+    - **Checks:** C1 the two programs above refused with the free function's diagnostic (`tests/error_reporting/`, `// EXPECT:`); C2 take the check out and watch them compile; C3 `scripts/check_reject_diff.sh` against the base, every newly refused program listed with its reason; C4 `make test`, `make preflight-changed`, each `Total:` quoted.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md`, with the five other open soundness holes on `main`, ahead of the provenance and ZIL series: each is a program `main` accepts and should refuse (or a drop it skips), one session-sized fix. Order among them: the reads of a dead frame first (id:z0183, id:z0180), then the `fn`-value faults (id:z0100, id:z0101), then the skipped drop (id:z0176) and the unchecked bound (id:z0175). Any "after the `vecclone` series merges" note above is met: the series is on `main`, with gap_76 to gap_79 in `bench/safety_matrix/probes/`.
+
+- [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
+    > **Created:** 2026-11-06
+    > **Branch:** `provenance`
+    > **Found by:** id:z0088 (why experiment A was unsound).
+    > **Depends:** id:z0088
+    > **After:** id:z0092.
+    > **Before:** id:z0094, id:z0065.
+    > **Check-in:** stop for review after it. **Split here** if the design note and the implementation take more than a session: the design (§3 text and probes) first.
+
+    - **Now:** inside a closure body every capture is read as the `Env` flag (`out O={Env}`), which `os_note_edges` turns into an `Unknown` value stored into a global: `|| { *out = routed; }` has the summary `store Unknown -> global`. An owned capture (moved into the environment) is also marked as storage of the body's own frame (`os_stmt`, "an owned capture's storage dies with the closure"), so a view of it cannot leave the body, but a store *into* it is a store into this frame and records no summary edge. A caller applying such a summary sees no store at all: id:z0088's experiment A did, and accepted 1490 unsafe grid cells (all `closure_owned_capture`, e.g. `arena_vec__arena_struct_bundle__direct__closure_owned_capture__frame_ends`, where the closure owns `h` and stores the view `routed` into it).
+    - **Do:** summarise a closure body over its `__env` parameter (the last one, `lower_rv_call_ptr`): a capture is what `__env` reaches (`ParamContents(env)`); a store into a capture is an edge into it; an owned capture is storage the environment owns, so a store into it is an edge into `ParamContents(env)`, while a view of it that leaves the body (returned, stored outside the environment) is still refused. State it in the design note §3 (_Closure environments_), with the routes: by-reference and by-value captures, an owned capture, a nested closure, a closure capturing another closure, and `move` of the environment.
+    - **Checks:** the store grid's 1490 cells refused by the body's own rules, not by the unknown-call rule (run the grid with id:z0094's pre-scan applied on top, as id:z0088 built it in `build/z88/esrc_ab`, and count 0 unsafe accepted); `closure_env_safe_twin.zrl` accepted; the owned-capture tests (`closure_captures_owning_and_other`, `closure_mutates_owning_capture`, `closure_owned_capture`; reduced in `build/z88/c1.zrl`: a closure that owns a `Vec` and pushes to it) measured. `make test`, `make preflight-changed`, the rejection differential, `sh scripts/run_safety_matrix.sh`.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +safety +tests +AI-D @provenance id:z0094 B1.9a3 A call through a local bound to one known function uses that function's summary
+    > **Created:** 2026-11-06
+    > **Branch:** `provenance`
+    > **Found by:** id:z0088 (option 1, experiment A).
+    > **Depends:** id:z0093
+    > **Before:** id:z0065.
+    > **Check-in:** stop for review after it. Accepts more: the rejection differential applies.
+
+    - **Now:** a closure or a `fn` item bound to a local and called in the same body (`let mut cl = || { *out = routed; }; cl();`, `let f_ptr: fn(..) = forward_fn_target; f_ptr(x)`) is an unknown call. Every closure and `fn`-value shape in the store grid is of this kind. After id:z0092, the unknown-call store rule still refuses the cells where the closure itself stores, since it must assume any frame-bound argument may go into any memory another reaches: `closure_capture_mut` 1708, `closure_call_mut` 2534 and `closure_owned_capture` 3300 safe twins (id:z0088, experiment B; id:z0092's grid run refuses the same set, `build/z92/grid/twin_rejections.txt`).
+    - **Do:** before the passes, find each local assigned exactly one `FuncAddr` in the body (directly or by a plain copy of such a local; never through a `&mut`, a projection or two different functions); at a `CallPtr` through it, apply that function's summary with `os_call`, the callee value as `__env` (the last argument). id:z0088's version is in `build/z88/esrc_a/check_zir.zrl` (`z88_scan`, `z88_try_known`): a measurement aid, not a rule; rewrite it without the `static mut` state. A callee whose summary is not known yet (a recursive cycle) is handled as `os_call` handles it.
+    - **Checks:** the store grid under `--provenance` (0 unsafe accepted, the 1490 cells of id:z0093 included; the closure destinations' twins counted by axis), and the 672 test programs (17 with warnings before id:z0092, 14 after it, as measured; `build/z92/measure.sh`). Probes: a local assigned two closures on two branches (stays unknown), a closure local passed by `&mut` to a callee that reassigns it, a closure called after the variable it captured was moved. `make test`, `make preflight-changed`, the rejection differential.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +safety +tests +AI-D @provenance id:z0096 A closure storing into a global, handed to a callee that calls it, is checked
+    > **Created:** 2026-11-06
+    > **Branch:** `provenance`
+    > **Found by:** id:z0092 (the store side of the rule's boundary).
+    > **Check-in:** stop for review after it.
+    > **After:** id:z0093, whose closure summary over `__env` gives the closure's store into a global an edge this task can carry through the callee.
+    > **Before:** id:z0012, which deletes `check_fn_value`.
+
+    - **Now:** `bench/safety_matrix/probes/gap_64_closure_global_store_via_fn_param.zrl`: `run(|| { G = r as *i32; })` with `fn run(f: fn()) { f(); }` and `r = &x` compiles with and without `--provenance`, and the global keeps a dead frame's address (exit 77). The closure body stores `Env` (not frame-bound) into a global; the unknown call through `f` in `run` records edges only into what its arguments reach, never a global, so `run`'s summary has none and the call to `run` checks nothing. The direct call `cl()` is refused by the old rules ("callee stashes local stack pointer via indirect call"); a `fn` item storing into a global cannot become a value (`check_fn_value` in `src/verify.zrl`), which id:z0012 has to carry over.
+    - **Route class:** a closure passed as an argument to a callee that calls it (`gap_52`), here with a global destination. Probe the siblings: a `static mut` reached through a captured reference, a closure kept in a struct field, two levels of callers.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +precision +tests +AI-D @provenance id:z0097 An edge into a `fn` argument's environment does not make a `fn` item a global destination
+    > **Created:** 2026-11-06
+    > **Branch:** `provenance`
+    > **Found by:** id:z0092 (its accept probes).
+    > **Depends:** id:z0092
+    > **Before:** id:z0065: a higher-order function handed a local's address is common in user code. Accepts more: the rejection differential applies.
+
+    - **Now:** an unknown call through a `fn` parameter `f` records store edges into `ParamContents(f)`, its environment (`os_unknown_call_effects`, the environment as argument K = ARGS.len). At a call that passes a `fn` item (`Static`, no environment), the edge's destination is the item's reach, `Static`, a global, so a frame address passed beside it is refused by the call store rule: `fn first(f: fn(&i32, &i32) -> &i32, a: &i32, b: &i32) -> &i32 { return f(a, b); }` called as `first(pick, &x, &y)` with locals, `walk(step, &x, n)`, `run(&m, &x)` with `m.f` a `fn` item (id:z0092's `build/z92/a_*.zrl`; the base compiler refuses them the same way). Inside the callee `os_unknown_arg` already reads a `Static` callee as adding no memory; the caller's edge mapping does not.
+    - **Do:** decide whether an edge into the `ParamContents` of a `fn`-typed parameter maps, at the caller, to the environment of the value passed (`os_through` of its `O` without `Static`, as `os_unknown_arg` takes it) rather than to everything it reaches. A rule that removes destinations: the series rule's probes (a capturing closure passed in its place must still be refused, `gap_52`'s shapes), the store grid under `--provenance`, and `test_stdlib_iter.zrl`'s seven warnings read first to see whether they are this class.
+    - **Found in id:z0092's review (2026-11-06):** the false global edge carries up through a summary. `fn apply<T>(f: fn(T) -> T, x: T) -> T { return f(x); }` and `fn via(p: &i32) -> &i32 { return apply::<&i32>(same, p); }`: `via`'s body is accepted, but its summary now stores `p` into a global (the edge into `ParamContents(f)` mapped to `same`, `Static`), so `main`'s `via(&x)` with a local is refused, "the callee stores an address of this frame into a global (call store rule)", one level above the `fn` item (`build/z92r/s_generic_hof.zrl`). A fix that maps the edge at the call must also keep it out of the caller's summary. The arena twins `f(&a, mk_vec, &mut v)` and `r(&a, mk_vec)` with a local arena are refused the same way (`build/z92r/s_param_vec.zrl`).
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +safety +tests +AI-D @provenance id:z0087 B1.9c An integer popped from a collection carries no address
+    > **Created:** 2026-11-06
+    > **Branch:** `provenance`
+    > **Found by:** id:z0064 (root (f)).
+    > **Depends:** id:z0075
+    > **Check-in:** stop for review after it.
+    > **Routed (2026-11-06, by id:z0075):** a rule, though only `src` shows the class (6 warnings): it adds a type fact (an integer holds no address), the cheapest of the rules to state, and the exemption for a primitive result exists already.
+
+    - **Now:** `os_call` drops a body summary's `ParamContents` ties for a primitive result only, so `Vec<usize>.pop()` (`Option<usize>`) is tied to the `Vec`'s storage; the integer then carries `Frame(widths)` into whatever it is written into. In `src/fmt/doc.zrl` (`Doc::measure`) this gives all six `fmt/` warnings (`doc.zrl:111`, `:151`, `fmt.zrl:76`, `:122`, `:131`, the cascade through `render`, `file` and `format_source`).
+    - **Reduction** (`build/z64/t/f1.zrl`; builds, exits 0, accepted by default; two warnings at the `set` under `--provenance=warn`, id:z0066's duplicate; twin `let w = widths.as_slice()[0];` gives none):
+
+    ```zoril
+    import "vec.zrl";
+    use vec::Vec;
+
+    struct Cmd { text: [u8], width: usize }
+
+    #[borrows()]
+    fn at0(cmds: &Vec<Cmd>) -> Cmd { let r = cmds.as_slice()[0]; return Cmd { text: r.text, width: r.width }; }
+
+    fn measure(cmds: &mut Vec<Cmd>) {
+        let mut widths = Vec::<usize>.new();
+        widths.push(3 as usize);
+        let w = match widths.pop() { Option.Some(x) => x, Option.None => 0 as usize };
+        let mut c = at0(cmds);
+        c.width = w;
+        cmds.set(0 as usize, c);
+    }
+
+    fn main() -> i32 {
+        let mut cmds: Vec<Cmd> = Vec.new();
+        cmds.push(Cmd { text: "ab", width: 0 as usize });
+        measure(&mut cmds);
+        return cmds.as_slice()[0].width as i32 - 3;
+    }
+    ```
+
+    - **Measured alone (id:z0064, a copy of `src/` on top of the earlier experiments, both pops in `Doc::measure` replaced by an index read and a discarded pop):** 14 to 8, every `fmt/` warning gone.
+    - **Do:** extend the exemption to a result type that holds no pointer at any depth (an `Option<usize>`, a struct of integers; `os_carries` is the place to check), and probe that a type holding a pointer anywhere (an `Option<&i32>`, a struct with a `[u8]` field) keeps its tie. It removes ties, so the rejection differential applies. Relates to the `Vec.pop` class id:z0064 recorded (a non-integer value popped and moved into a returned `Vec`, `git show 403a092:tests/language/memory/origins/own_contents_edge.zrl`), which this does not cover. `make test`, `make preflight-changed`.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +safety +tests +AI-D @provenance id:z0086 B1.9e A literal held by a value does not make what the value reaches a global destination
+    > **Created:** 2026-11-06
+    > **Branch:** `provenance`
+    > **Found by:** id:z0064 (root (e)).
+    > **Depends:** id:z0075
+    > **Check-in:** stop for review after it.
+    > **Routed (2026-11-06, by id:z0075):** a rule. id:z0084's rule is deferred, so this one must cover the lowerer's literals without it: `exh_missing` writes literals into a `ByteVec` in `self.arena`, which the call rule names `Param(0)` (`*self`), so the `Static` lands in `*self` and not only in the arena.
+
+    - **Now:** a local that holds `Static` (a string literal in one of its fields, or written into memory it reaches) makes every later store into what it reaches have `Static` among its targets, and the call store rule reads `Static` as a global. In the driver, `ZirLowerer::lower_function`'s summary has `store Static -> Param(0)` (a dozen lowering functions write a literal into `*self`, the first in lowering order `exh_missing`), so `Driver::run_body_passes_in_scratch`'s local `zir_low` holds `Static`; it is the first function in lowering order with a store into a global. That carries the last 8 of `src`'s warnings (`src/driver/module.zrl:666`, `:713`, `:1141`, `:1188`, `:1475`, `:1603` into a global; `:1362`, `:1386` outlives), and the class covers id:z0064's three `arena_raw` test programs (`test_stdlib_string_arena`, `accept_slice_receiver`, `test_empty_compile_and_tool_errors`).
+    - **Reduction** (`build/z64/t/e3.zrl`; builds, exits 0, accepted by default; "into a global" at the call in `main` under `--provenance=warn`; twin with `name: s` gives no warning): `struct W { name: [u8], items: &mut Vec<[u8]> }`, `impl W { fn add(self: &mut W, s: [u8]) { self.items.push(s); } }`, `fn inner(out: &mut Vec<[u8]>, s: [u8]) { let mut w = W { name: "lit", items: out }; w.add(s); }`, and `main` calls `inner(&mut v, &data)` with a local array `data` and a `Vec<[u8]>` `v`, returning `v[0][1] as i32 - 2`.
+    - **Not yet measured alone:** replacing `ZirLowerer.new`'s `file_path: ""` changes none of the 8 (the other sites still write literals), and id:z0084's experiment alone does not remove them either. Find each site's route first (`--emit-origins` with the target-file filter in `src/driver/module.zrl` removed, as id:z0064's debug compiler did).
+    - **Do:** decide whether a `Static` origin reached through a value may be dropped from store targets (a literal is read-only, so storing through it needs `unsafe`), or whether the sites change. A rule removes origins, so the series rule applies, with probes of a `static mut` reached through a value (which must stay a global destination) and a literal beside a `&mut` in one struct. `make test`, `make preflight-changed`, the rejection differential.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +refactor +tests +AI-G @provenance id:z0089 B1.9f `exh_expand_or` pushes a fresh copy of each row it keeps
+    > **Created:** 2026-11-06
+    > **Branch:** `provenance`
+    > **Found by:** id:z0064 (root (d2)).
+    > **Routed by:** id:z0075, to a code change at the site; the rule is deferred (id:z0085 in `future.tm.md`).
+    > **Before:** id:z0065.
+
+    - **Now:** `src/lower_zir/exhaust.zrl`, `ZirLowerer::exh_expand_or`: `if !is_or { out.push(row); }` pushes the row slice read out of `rows`. The new rules read a value copied out of a referenced `Vec` as an address into its buffer, and with the function's self-recursion (`return self.exh_expand_or(&out)`) that turns `exh_useful`'s summary into every parameter stored into every parameter and a global: 153 of `src/main.zrl`'s 167 "into a global" warnings under `--provenance=warn`.
+    - **Do:** push a fresh copy of the row (`let copy = self.alloc_u32s(row.len);`, copy the elements, `out.push(copy);`), as the or-pattern branch a few lines above does. The rows are read-only pattern lists, so behaviour is unchanged; the cost is one scratch-arena allocation per kept row. A one-line comment says why the copy is there (the origin rules), without a task ID. Plain code: `src/` must build under the pinned stage1.
+    - **Checks:** (`W` below is `timeout -k 5 180 build/zoril -I stdlib=stdlib -I src -I build/gen --provenance=warn --emit-zil -o /dev/null src/main.zrl 2>&1`.)
+      - C1: before the change, `W | grep -c 'warning: provenance'` and `W | grep -c 'into a global'`; quote both (expected 195 and 167; if they differ, record the figures and go on, the change is what is measured).
+      - C2: after the change and `make`, the same two counts; quote both (expected 185 and 14). A drop smaller than 10 and 150 means the copy is not at the site the warnings name: stop and report.
+      - C3: the copy is the only change: `git diff --stat` names only `src/lower_zir/exhaust.zrl`, and its diff is the copy loop and the one comment.
+      - C4: `rm build/zoril && make` (the build through stage1) and `make` again, neither with a warning; quote the last line of each.
+      - C5: `./scripts/test.sh --filter 'exhaust|unreachable' tests` passes; quote its `Total:` line.
+      - C6: `make test` and `make preflight-changed`, each `Total:` line quoted; the completion note says the fuzz record is stale for `src/`.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +tools +tests +AI-G @provenance id:z0090 B1.9g zbuild's manifest parsing gives no warning under `--provenance`
+    > **Created:** 2026-11-06
+    > **Branch:** `provenance`
+    > **Found by:** id:z0064 (root (d1)).
+    > **Routed by:** id:z0075, to code changes at zbuild's sites; the rule is deferred (id:z0084 in `future.tm.md`).
+    > **Before:** id:z0065.
+
+    - **Now:** `tools/zbuild` gives 25 warnings under `--provenance=warn` (18 and 4 call store rule, 2 return rule, 1 store rule), all in manifest parsing (`parse_manifest`, `parse_entry`, `write_manifest`, `load_manifest` in `tools/zbuild/src/manifest.zrl`). `parse_entry(&cols, arena)` takes the column `Vec` by reference, and because a `Vec` holds a raw arena pointer, the call rule names its result's arena storage by `&cols`'s address (`Frame(cols)`); what is read out of the result is then an address of this frame.
+    - **Do:** change the sites so that no argument whose only tie to the arena is the `Vec`'s pointer names the result's storage. First try passing `cols.as_slice()` (a `[[u8]]`, which reaches no `ArenaHeader`) to `parse_entry`, then the sites the remaining warnings name. Keep the manifest format and behaviour unchanged. If a site cannot be changed without `unsafe`, stop and report: id:z0084's rule comes back instead.
+    - **Checks:** (`W` below is `timeout -k 5 180 build/zoril -I stdlib=stdlib -I tools/zbuild/src -I src -I build/gen --provenance=warn --emit-zil -o /dev/null tools/zbuild/src/main.zrl 2>&1`.)
+      - C1: before the change, `W | grep 'warning: provenance'`: the count and each line's location, quoted (expected 25).
+      - C2: after each site's change, `W | grep -c 'warning: provenance'`, recorded per site; at the end 0. A site that needs `unsafe` to reach 0: stop and report, as **Do** says.
+      - C3: `git diff | grep '^+.*unsafe'` prints nothing.
+      - C4: the manifest is unchanged: build `tests/integration` or the `zbuild-link` scenario's project with the old and the new `build/zbuild`, and `cmp` the two manifest files it writes; quote the result.
+      - C5: `./scripts/test.sh --gate zbuild-diff --gate safety-matrix-zbuild --scenario zbuild-errors --scenario zbuild-link` passes; quote it.
+      - C6: `make test` and `make preflight-changed`, each `Total:` line quoted; the completion note says the fuzz record is stale for `tools/zbuild/`.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +safety +decision +AI-D @provenance id:z0073 B1.8b Decide whether storing a raw pointer into a by-value owner's buffer, then dropping the owner, is refused
+    > **Created:** 2026-11-05
+    > **Branch:** `provenance`
+    > **Found by:** the review of id:z0071.
+    > **Before:** id:z0012. Decision first; the fix or the probe is the next step it names.
+
+    - **The case:** `struct Buf { data: *mut u8 }` with `Drop` freeing a heap block; `fn keep(out: &mut *mut u8, b: Buf) { *out = b.data; }` and `fn f(out: &mut *mut u8) { let b = Buf.new(); keep(out, b); }` (`tests/language/memory/provenance/addr_edge_by_value_owner_refused.zrl` at `403a092`), and the twin storing `BothPtr { own_v: Vec::<i32>.new(), p: b.data }` (`build/z71r/c2.zrl`). Accepted by the old rules and by `--provenance` at `a1ea096`; the caller's pointer is left dangling once `keep` drops `b`. Only `403a092` refused the first form, through the edge kinds id:z0072 removes.
+    - **Question:** the stored value is a raw pointer, dereferenced only in `unsafe`. id:z0063 decided that the new rules check a raw pointer's origins (`Raw` is exempt only as a value). Does that make this a hole (a `known_gap` probe now, a fix that tells a moved owner from an address read out of it without per-store kinds), or is a dangling raw pointer outside the guarantee (record it in `doc/spec/safety_model.md` and `doc/spec/unsafe_policy.md`, with a test showing the accept)?
+    - **Removed in `403a092` (id:z0072), until this is decided:** the test's full text is in `git show 403a092:tests/language/memory/provenance/addr_edge_by_value_owner_refused.zrl`; at `403a092` it compiles under `--provenance` and in the default mode.
+    - **A sibling route (found in id:z0076, 2026-11-05):** an owner holding a raw pointer to memory outside the frame, whose safe method stores an argument through it (`put(self: &mut G, r: &i32) { unsafe { *self.p = r; } }` called with `&x`), is accepted in both modes: the destination reach does not follow a `*mut` an owner holds (`os_type_has` answers no for `RawPtrMut(x)` under `OS_Q_HANDLE`). Program in id:z0076's text (`build/z76/cx.zrl`). Decide it with this case: a raw pointer's target is the `unsafe` author's claim, or the call rule follows it.
+    - **Two more sibling routes (found in id:z0076, 2026-11-06):** a frame address stored through the result of a `#[fresh]` function (`tests/language/memory/provenance/fresh_store_through_old_rule_refused.zrl`) or through a heap block from `zoril_allocator_alloc(null, ..)` (`heap_block_store_through_old_rule_refused.zrl`), the pointer then returned, or the block put into a global (`heap_block_into_global_old_rule_refused.zrl`): any destination of the pointer. Since id:z0076 the new rules accept all three: the result has no origins, so a store through it reaches nothing they follow, as with a raw pointer an owner holds. The old region rule refuses all three in every mode today. Decide them with the case above: if a dangling raw pointer is outside the guarantee, say so in `doc/spec/safety_model.md`; if not, the store through a raw pointer with no origins needs a target (the fresh storage of the local holding it, say) before id:z0012 removes the old rule.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +safety +tests +AI-D @provenance id:z0011 B3 Declarations are checked against the body: `#[borrows(..)]`, `#[stores(..)]`, the `&self` default
+    > **Created:** 2026-11-03
+    > **Branch:** `provenance`
+    > **Depends:** id:z0049
+    > **Check-in:** stop for review after it.
+    > **Depends also (2026-11-05):** id:z0064 (its re-measurement comes first).
+
+    - **Rule (Decision 1):** a declaration may list more than the body proves (a wider public contract), never less. For a function with a body the effective ties and stores are the union of what the body proves and any declaration (id:z0010 already sums them); a declaration that claims less than the body is a compile error, the narrowing rule of `CHANGELOG.md`'s pre-1.0 note. The `&self` elision default and the declarations apply as written to bodyless items (`extern`, trait signatures, `.zri` imports). Each of the tree's 82 `#[borrows()]` declarations (such as `Lexer.text_from`) is either proved unnecessary by id:z0010's `ParamAddr`/`ParamContents` summary and removed, or converted into an explicit, reviewed `unsafe` interior with a `// SAFETY:` comment, listed with its decision in the commit. **Stop and report** before changing a `pub` stdlib signature.
+    - **Test expectation note:** `tests/error_reporting/err_stores_attribute_false.zrl` currently expects a wider `#[stores]` contract than the body performs to fail; under the wider-contract rule that test changes (stop and document the test change per `AGENTS.md`).
+    - **Probes:** an unannotated `&self` method passing a parameter's borrow through, the same through a trait, and safe-code `#[borrows()]` laundering (`gap_30_borrows_attribute_launder` stays rejected; `gap_44_borrows_attr_reset` is rejected once checked declarations refuse the narrowing `#[borrows()]` (it is accepted, exit 77, under `--provenance` at `c323b0e`: a reset hole, not an escape, so the store rules do not see it)); accepted: a `&self` method returning a view of `self` and a wider `#[borrows]`/`#[stores]` public contract. `make test`, `make preflight-changed`. Stop for review.
+    - **Blind spot not covered by this check (from id:z0049's review, 2026-11-05):** a body that copies through a bare `extern` proves no store, so a declaration can never be "narrower than the body" there (id:z0060's `extend_from_slice` route). Add a rule here or in a task of its own: a safe function that passes a pointer derived from a parameter to an `extern` with no declared effect must declare its own `#[stores]`/`#[borrows]` (or the `extern` declares its effect). Probe it with id:z0060's reproducer with id:z0060's fix taken out.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +safety +tests +AI-D @provenance id:z0044 B0.1 A value stored into a local's field through a pointer to the local keeps its borrow
+    > **Created:** 2026-11-03
+    > **Branch:** `provenance`
+    > **Check-in:** stop for review after it.
+    > **Closes:** `gap_37_local_mutref_field_reset`, `gap_38_param_field_reset`, `gap_39_method_self_field_reset`, `gap_43_box_field_reset`.
+    > **Depends:** id:z0010, id:z0011
+
+    - **Scope (narrowed to intra-frame liveness, 2026-11-03):** the frame-escape siblings (`gap_40`–`gap_42` and `gap_45`) are handled by id:z0048/id:z0012's origin sets. This task fixes intra-frame `Arena::reset` / `free` / `@drop` liveness (`ActiveBorrow` in `src/check_zir.zrl`), where a slice written into a local struct's field or a `Box`'s contents through a local `&mut`, through a callee's `&mut` parameter, through `self` in a `&mut self` method, or through `*b` on a `Box` is skipped today (`place_writes_through_pointer`), letting `a.reset()` pass while the field is read afterwards.
+    - **Do:** carry the stored value's borrows to the local (or `Box` local) the pointer refers to: for a local `&mut` or `Box` deref, through the pointer's borrow/ownership of that local; for a callee, through id:z0010's pairwise `i -> j` store summary (`#[stores(..)]` checked in id:z0011). Probe the sibling routes: a `&mut` held in a struct field, a reborrow, a closure capturing `&mut w` across `a.reset()`, and a trait method; also verify `gap_44_borrows_attr_reset` is rejected once checked `#[borrows()]` is active.
+    - **Found by id:z0047 (pre-existing over-rejection):** `fn f(view: [i32]) -> i32 { let mut w = ...; let r = &mut w; r.s = view; ... }` called with stack `f(&data)` is refused today by `src/summary_pass.zrl`; confirm id:z0012's retirement of `summary_pass.zrl` removes that refusal without reopening any reset hole.
+    - **Probes:** `gap_37`, `gap_38`, `gap_39` and `gap_43` flip to `compile_reject`, with an accepted twin for each (the field is read before `a.reset()`). Check the over-rejection recorded on id:z0017 does not grow.
+    - **Verification:** `make test`, `make preflight-changed`, the rejection differential; `bench/fuzz/README.md` stays stale for `src/`. Stop for review.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +diagnostics +AI-G @provenance id:z0066 B3.9 Provenance diagnostics name the origin they found, once per site
+    > **Created:** 2026-11-05
+    > **Branch:** `provenance`
+    > **Found by:** id:z0049's review (correction 8).
+    > **Before:** id:z0065, which makes these messages users' errors.
+
+    - **Now:** the return rule says "the returned value holds an address of this frame" also when the returned origins are only `Unknown`, and the call store rule often prints the same warning twice at one location: under `--provenance=warn`, `src/fmt/doc.zrl:111:21`, `src/driver/module.zrl:1338:13`, `tools/zbuild/src/build.zrl:580:17`, `tests/unit/test_empty_compile_and_tool_errors.zrl:65:5` (re-checked 2026-11-06 after id:z0092).
+    - **Stale examples (2026-11-06):** the `Unknown`-only return was `fn mk3(n: u64) -> Box<H> { let p = @ptr_from_int<*u8>(n); return box H { p: p, n: n }; }`, now accepted (`@ptr_from_int` gives `Raw` since id:z0063), and the duplicate was `fn add(v: &mut Vec<Vec<i32>>) { v.push(Vec::<i32>.new()); }`, now accepted. Find a current `Unknown`-only return first: the sources left are a summary-less call (a `.zri` import with no summary) and an index the walk cannot type.
+    - **Do:** word each rule's message by the origin that triggered it (`Frame`: an address of this frame; `Unknown`: an address the compiler cannot trace), and print one diagnostic per site and rule. Update the `EXPECT:` lines of the provenance tests that change, and say so in the commit message.
+    - **Checks:**
+      - C1: a current `Unknown`-only return, as a program under 15 lines, recorded in this task with the message it gets today (quoted). If none is found in the session, stop and report what was tried: the wording change waits for one.
+      - C2: one test per wording (`Frame`, `Unknown`), each with an `// EXPECT:` line for its new message, under `tests/language/memory/provenance/`; both pass.
+      - C3: under `--provenance=warn`, each of the four sites in **Now** prints one diagnostic per rule: for each, `grep -c '<file>:<line>:<col>'` on the compiler's output is 1 (or 0 if the site is now accepted); quote the four counts.
+      - C4: a test with two different rules at one site prints both (one each), so the de-duplication is per rule, not per site.
+      - C5: every `EXPECT:` line changed, listed in the commit message (`git diff --stat -- tests` matches the list).
+      - C6: `make test` and `make preflight-changed`, each `Total:` line quoted.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +safety +tests +AI-D @provenance id:z0065 B4a The new rules on by default, beside the old ones
+    > **Created:** 2026-11-05
+    > **Branch:** `provenance`
+    > **Split from:** id:z0012.
+    > **Depends:** id:z0064, id:z0011, id:z0044, id:z0066
+    > **Check-in:** stop for review after it.
+    > **Ordering note:** this task only refuses more, and depends in substance only on id:z0064 (the tree must be clean); the maintainer may move it ahead of id:z0011 and id:z0044 to close the escape holes for users sooner.
+    > **Depends also (2026-11-06, from id:z0064):** id:z0075, and id:z0084 to id:z0088 as id:z0075 routes them (a task it routes to "accepted refusal" or "code change" is done here instead).
+    > **Depends also (2026-11-06, as id:z0075 routed them):** id:z0088, id:z0087, id:z0086 (rules), id:z0089, id:z0090 (code changes at the sites). id:z0084, id:z0085 and id:z0091 are deferred to `future.tm.md` and are not dependencies.
+    > **Depends also (2026-11-06, as id:z0088 decided):** id:z0092, id:z0093, id:z0094.
+    > **Depends also (2026-11-06, from id:z0092):** id:z0097 (an over-refusal of higher-order calls). id:z0095 and id:z0096 are holes in both modes, not dependencies.
+
+    - **Do:** make the rules of `--provenance` run by default **in addition to** the old rules (nothing is deleted here; the old rules still run). Keep `--provenance=warn` as a developer option or retire it; decide and record. Resolve whatever the default build of `src/`, `stdlib/`, `tools/` and `tests/` now refuses, per id:z0064's classification (a real escape: fix the code; an over-rejection: it should already have its own task done).
+    - **Code changes id:z0064 left here (2026-11-06):** `Driver::lower_fn_body` pushes `OsPending { zir: zir_func }` into `self.os_pending` (`src/driver/module.zrl`, 2 warnings): `zir_func`'s slices are tied to the local `zir_low` though they live in the driver's scratch arena; change the code or route it to id:z0084's rule. `Driver::set_ice_context` stores an arena-built note into a global through `set_ice_note`'s `#[stores(note -> static)]` (`src/driver/module.zrl:864`): a true store, safe only because the arena lives as long as the program, and no warning of its own once the other roots are gone; if the default build refuses it, an explicit `unsafe` with a `// SAFETY:` comment naming that invariant, not a rule.
+    - **Probes:** every `known_gap` probe the new rules refuse flips to `compile_reject` (at id:z0059: all escape gaps except the liveness ones `gap_37`, `gap_38`, `gap_39`, `gap_43`, `gap_44`; since id:z0060 also `gap_56`, since id:z0061 `gap_57` and `gap_58`, since id:z0062 `gap_59` to `gap_62`, since id:z0072 `gap_63`; re-check each), with its Known gaps entry in `doc/spec/safety_model.md` and line in `doc/SAFETY.md` §6 removed. Accept probes newly refused: none allowed without a task.
+    - **Store grid:** re-record `bench/fuzz/store_grid_expected_failures.txt` and `store_grid_twin_rejections.txt` (and the modular pair) under the new default; list in the completion note every twin newly refused, by axis.
+    - **Accepted refusal (id:z0075, 2026-11-06):** the 18 safe twins refused because an assignment to a local's field keeps the field's old origins (`{ref_local,elem_ref}__{struct_field,tuple_slot,array_slot}__{same_param,store_param_65}__{deref_out,field_out}__frame_ends`) stay refused: add a `KNOWN_ISSUES.md` §5 entry with the reduced program from id:z0091 (`future.tm.md`), the fix that would remove it, and how to rewrite: give the field its final value when the local is built (`let carrier_tup = (src_val, 10);` in place of `(&seed, 10)` then `carrier_tup.0 = src_val;`: no warning, checked on id:z0064's compiler). Any other twin newly refused here needs a task, per the rule above.
+    - **Verification:** `make test`, `make preflight-changed` (the differential must show 0 newly accepted; list the newly refused programs), `sh scripts/check_store_grid.sh`, the self-hosting fixpoint. The fuzz record goes stale for `src/`. Stop for review.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +safety +tests +AI-D @provenance id:z0074 B4b List every program the old rules refuse and the new rules accept, and read each
+    > **Created:** 2026-11-05
+    > **Branch:** `provenance`
+    > **Found by:** the review of id:z0071.
+    > **Depends:** id:z0065
+    > **Blocks:** id:z0012, which is the change that accepts them.
+
+    - **Why:** `leak_vec` (id:z0071) was refused by neither differential the series runs: the rejection differential compares two compilers in the default mode, and `build/rv/provdiff.sh` compares `--provenance` before and after a change over the existing probes. A reviewer found it by hand. id:z0012 deletes the old rules, so every program only they refuse is accepted after it; that list is not computed anywhere.
+    - **Do:** run the new rules alone (a scratch compiler with the old rules' refusals off, as `check_reject_diff.sh` builds its base in a scratch worktree, or a developer flag if one is cheaper; say which) and the default compiler over the rejection differential's program set (69,122 at id:z0071, `tests/`, the safety probes, the store grid twins). List every program refused by the default and accepted by the new rules alone, and read each: a real escape gets a fix or a `known_gap` probe before id:z0012; a safe program is recorded as id:z0012's intended acceptance.
+    - **Make it a gate** if it is cheap enough: id:z0012's completion note then lists the same set, empty of unsafe programs.
+    - **Known members (from id:z0076, 2026-11-06):** `tests/language/memory/provenance/fresh_store_through_old_rule_refused.zrl`, `heap_block_store_through_old_rule_refused.zrl` and `heap_block_into_global_old_rule_refused.zrl` are refused by the old region rule only: a frame address stored through a `#[fresh]` result or a heap block, the pointer then returned or put into a global. Their expected diagnostic names the old rule, so they fail when it goes; id:z0073 decides what replaces it.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +safety +tests +AI-D @provenance id:z0012 B4 Make `--provenance` the default, delete the old classifiers, and fix what the measurement found
+    > **Created:** 2026-11-03
+    > **Branch:** `provenance`
+    > **Depends:** id:z0011, id:z0044
+    > **Check-in:** stop for review after it. **Split here** if the tree needs more than a session of changes.
+    > **Split (2026-11-05, from id:z0049's review):** turning the rules on by default beside the old ones is id:z0065 (it only refuses more); this task is now the half that accepts more: delete the old rules and `src/summary_pass.zrl`, with the rejection differential, and the docs and twin lists. The fixes of the measurement are id:z0060 to id:z0063, and the `unsafe fn` exemption item moved to id:z0063, which narrowed it to `Raw`.
+    > **Depends also:** id:z0065, id:z0063.
+    > **Depends also (2026-11-05):** id:z0074 (the old-refuses, new-accepts list), id:z0073 (the raw-pointer decision), id:z0075 (the checkpoint).
+
+    - **Do:** make the new rules the default and remove `--provenance`; resolve every warn-mode rejection recorded in id:z0049 and id:z0011 (a real escape: fix the code; a common over-rejection: apply the decided fix; a leak through a by-value collection parameter: change the code); then delete `local_storage_external`, `local_is_external_target`, `rvalue_is_external_target`, `place_outlives_frame`, `rvalue_storage_external`, `storage_walk_zir`'s mask logic, `note_call_stores_zir`, the depth limits, `is_collection_type_name`, the same-parameter filters, and `src/summary_pass.zrl` (keeping `src/verify.zrl`'s stack-address check as an add-only second net).
+    - **Flip probes and twin lists (including id:z0045's):** flip all closed `known_gap` probes (`gap_07`, `gap_11`, `gap_13`, `gap_16`, `gap_18`, `gap_21`, `gap_23`, `gap_26`, `gap_27`, `gap_28`, `gap_29`, `gap_32`, `gap_33`, `gap_36`, `gap_40`, `gap_41`, `gap_42`, `gap_44`, `gap_45`, `gap_47`, `gap_48`, `gap_49`, `gap_50`, `gap_51`, `gap_52`, `gap_53`, `gap_54`, `gap_55`) to `compile_reject` and remove their Known gaps entries in `doc/spec/safety_model.md` and `doc/SAFETY.md` §6. Fold in id:z0045: remove the 3402 `ref_{let,identity,phi}` twins (and any id:z0017 twins newly accepted when `summary_pass.zrl` is retired) from `bench/fuzz/store_grid_twin_rejections.txt`, flip `read_through_{ref,identity,phi}.zrl` from `expected compile fail` to running tests, add an `accept` probe for `id:z0045` and a regression test returning `s.as_slice()` from `String.with_capacity(a, cap)` (`a: &Arena`). Because retiring `summary_pass.zrl` and `local_storage_external` accepts more safe programs, run `scripts/check_reject_diff.sh <base>` and list every newly accepted program class in the completion note (none may be unsafe). Update `doc/SAFETY.md` §2.3 and §5–§6, `doc/spec/surface_syntax.md` (`#[borrows]`/`#[stores]`), `README.md`, `KNOWN_ISSUES.md` and `bench/fuzz/store_grid_expected_failures.txt`.
+    - **End criterion of the series (the maintainer, 2026-11-06, at id:z0075):** zero unsafe programs accepted is the hard requirement (the grid, the safety probes, the rejection differential). Zero safe programs refused is not reachable by any checker that accepts no unsafe one; the target is that no remaining refusal is common in user code (the tests as its stand-in), each is a documented class in `KNOWN_ISSUES.md` §5 with a reason and a rewrite (id:z0017 audits them), and its diagnostic says what was found (id:z0066).
+    - **Done when:** every unsafe store-grid cell (whole-program and modular) is rejected, no `known_gap` probe of this family remains, the self-hosting fixpoint holds, and `make test` and `make preflight` pass. Stop for review, then close id:z0045 (citing this commit on `main`) and start id:z0017 and id:z0013 (and renew the fuzz record per id:z0003).
+    - **From id:z0092 (2026-11-06):** the old rules refuse making a `fn` item that stores into a global or another parameter into a value (`check_fn_value` in `src/verify.zrl`); the new rules have no counterpart, since a call through a `fn` value records no store into a global (design note §3, _Calls through a `fn` value_). Carry it over before deleting the old rules: id:z0096 is the closure half of the same route. **Depends also:** id:z0096.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +audit +safety +AI-G @provenance id:z0045 A reference to a local carrier passed through a `let`, an identity call or a phi is refused
+    > **Created:** 2026-11-03
+    > **Branch:** `provenance`
+    > **Depends:** id:z0012
+    > **Depends note:** (do not edit `src/summary_pass.zrl` before id:z0012 retires it; close with id:z0012). Over-rejection, not a hole; related to id:z0017.
+
+    - **Now:** a safe program that hands a callee a reference to a local struct, and stores what the callee returns, is accepted when the reference is written in the call (`take_ref(&c)`) and refused when it first goes through a `let`, an identity function or an `if`. The callee returns the view the struct holds (`c.v`), not a pointer into the struct; the checker reads the result as a pointer into the caller's stack frame. Error: "region escape: returning a pointer to local stack storage via sret".
+    - **In the grid:** all 3402 safe twins of the `ref_let`, `ref_identity` and `ref_phi` carriers (1134 each; id:z0041) are refused, and every twin of `ref_direct` is accepted. They are in `bench/fuzz/store_grid_twin_rejections.txt`: `grep -E '__ref_(let|identity|phi)__' bench/fuzz/store_grid_twin_rejections.txt`.
+    - **Reproducer** (checked on the compiler of this commit, and the compiler before id:z0007 refuses it too, so it is not caused by that change). With `let r = &c;` and `take_ref(r)` in `f`, it is refused; with `take_ref(&c)` and no `let`, it is accepted, builds with `scripts/build_zrl.sh`, and exits 0:
+
+    ```zoril
+    struct Carrier { v: [i32] }
+    fn take_ref(c: &Carrier) -> [i32] { return c.v; }
+
+    fn f(out: &mut [i32], view: [i32]) {
+        let c = Carrier { v: view };
+        let r = &c;
+        *out = take_ref(r);
+    }
+
+    fn main() -> i32 {
+        let data = [42, 0];
+        let mut dest: [i32] = @slice(0 as *i32, 0);
+        f(&mut dest, &data);
+        return dest[0] - 42;
+    }
+    ```
+
+    - **Same refusal, other forms:** `take_ref(id_ref(&c))` with `fn id_ref(c: &Carrier) -> &Carrier { return c; }`, and `let r = if pick() > 0 { &a } else { &b }; take_ref(r)` with two carriers `a` and `b` and `fn pick() -> i32 { return 1; }`.
+    - **Do:** find where a reference that passed through a `let`, a call or a join stops being read as "the reference to `c`" and becomes "a pointer into `c`'s storage", so that the callee's result is tied to the whole frame. Fix it so `take_ref` is tied to what `c.v` points at, not to `c`. This makes the checker accept more, so run the rejection differential (`scripts/check_reject_diff.sh <base>`) and list every program the base rejects and the change accepts; none of the store grid's unsafe cells may become accepted. Move the three carriers' twins out of the twin record in the same commit, and add one of the forms above as an `accept` probe.
+    - **Checks:** (this task makes a checker accept more and closes with id:z0012, so its review is `+AI-D`, as for every `+safety` check-in.)
+      - C1: the three forms above (`let`, identity call, `if` join), each built with `scripts/build_zrl.sh` and run: exit 0; quote each.
+      - C2: `grep -cE '__ref_(let|identity|phi)__' bench/fuzz/store_grid_twin_rejections.txt` is 0 after the change (3402 before); quote both.
+      - C3: `sh scripts/check_store_grid.sh`: no unsafe cell accepted; quote its summary.
+      - C4: the rejection differential (`scripts/check_reject_diff.sh <base>`): every program the base rejects and the change accepts, listed in the completion note with its reason; none unsafe.
+      - C5: the `accept` probe under `bench/safety_matrix/probes/`, and `sh scripts/run_safety_matrix.sh` passing; quote its summary.
+      - C6: `make test` and `make preflight-changed`, each `Total:` line quoted, citing id:z0012's commit on `main`.
+    - **Finding (2026-11-03):** id:z0047's read-through rule (`os_through_plus` on reference arguments) already gives `got O={Param(1)} S={}` on all three forms (`tests/language/memory/origins/read_through_{ref,identity,phi}.zrl`), `src/verify.zrl` accepts them with zero errors, and the sole refusal (`src/summary_pass.zrl:716`, "region escape: returning a pointer to local stack storage via sret") comes from `InterprocSummaryPass`, which id:z0012 retires and deletes. Do not change `src/summary_pass.zrl` beforehand; close this task with id:z0012 once the 3402 twins leave `bench/fuzz/store_grid_twin_rejections.txt`, the `accept` probe is added, and the rejection differential is recorded, citing id:z0012's commit on `main`.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+- [ ] +audit +AI-D @provenance id:z0017 A3.5 Twelve safe store-grid twins are rejected
+    > **Created:** 2026-11-03
+    > **Branch:** `provenance`
+    > **Depends:** id:z0012
+    > **Depends note:** (do not debug `src/summary_pass.zrl` before id:z0012 deletes it). Over-rejection audit, not a hole.
+
+    - **Cells (before id:z0012):** `{ref_local,elem_ref}__{struct_field,tuple_slot,array_slot}__{closure,param_65}__call_struct_mut__frame_ends` (12 cells) plus 96 cells exposed by id:z0008 in `bench/fuzz/store_grid_twin_rejections.txt`, rejected today by `src/summary_pass.zrl` ("region escape: storing local stack pointer into caller memory"). Also note the sibling found in id:z0047's review: passing a local struct `RefHolder { r: &c }` by value to `take_holder(h)` retains `Frame(c)` (`os_reach_all`).
+    - **Over-rejection from id:z0007 (found in its review, 2026-11-03):** liveness borrows are tracked per local, not per field, so `w.s = v.as_slice(); let x = w.s[0]; a.reset(); return x - 42 + w.t - 3;` is refused at `a.reset()` because `w` stays live for `w.t`.
+    - **Do (after id:z0012):** inspect every twin still listed in `bench/fuzz/store_grid_twin_rejections.txt` once `summary_pass.zrl` is gone (`param_65` twins should be accepted via the overflow bit; `closure`/`fn`-value twins: Decision 3 is decided (id:z0088), so any still refused after id:z0092 to id:z0094 is a finding, not a bound by design). Fix any unintended over-rejection without reopening any probe, add an `accept` probe for any fixed class, and document any deliberate precision bound (such as field-insensitive borrows) in `KNOWN_ISSUES.md` §5. `make test`, `make preflight-changed`, the rejection differential.
+    - **Done when (2026-11-06, the series' end criterion, recorded on id:z0012):** every safe twin still in `bench/fuzz/store_grid_twin_rejections.txt` (and the modular list) is in a class `KNOWN_ISSUES.md` §5 names, with its reason and a rewrite, and none is common in the tests. `closure`/`fn`-value twins follow id:z0088's decision, not the note above.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
 
 - [ ] +zil +decision +AI-D @zil ZL1 Settle the slice form of string_const and the slice_ptr opcode, and check what the pinned stage1 feeds zilc id:m6vm3
     > **Created:** 2026-11-13
@@ -133,3 +537,15 @@ Active priority series to reduce verification runtimes. Order of execution:
 **Expected from the rest of the series:** little more wall time from the runner itself. Z2c to Z2e (id:z0138 to id:z0140) are about portability, and should match `test.sh`'s times. id:z0139 saves about 10 ms of dispatch per per-file test (id:z0105), a few seconds a run. The rest is unmeasured: id:z0109 (scheduling and the preflight steps side by side), id:mrzb3 (the verifier's cost on `continue` in a match arm; the `stdlib` case is already taken by id:87kcw), id:z0113 (a result cache, undecided), and id:z0184's routes (a), about 28% of the differential's front end, and (c), under 17%, both to be re-measured. A cache hit for the differential's base side (id:z0114) saves 32–34% of a rerun on an unchanged base; the runs above were uncached.
 
 **`testinfra` merged into `main` at milestone Z2b (2026-11-13, by the maintainer; prepared in id:9nnvq):** `main` was fast-forwarded from git:c907824 to git:0e9a752, the 14 commits of id:87kcw, id:z0136, id:z0131, id:z0132, id:q8rsf, id:pnx9h, id:655rf, id:z0137, id:0f0vv, id:bekxx, id:trx5h, id:ppvzh, id:dcxxy and id:s6mg6. Nothing was squashed and no sha changed, so the citations in the task files stand, and `testinfra` equals `main` with nothing to rebuild. Checked on git:0e9a752: `make test`: `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (120.4s)` (id:s6mg6 C4, the same commit); `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=c907824`: rc 0, `No mutation targets a changed file (14 commit(s) and the working tree since c907824).`, `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, `reject-diff: base verdicts: fresh (no cache); base front end 132 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69145 programs against c9078246fabe77042603b14ec860a1238e3093a5`, `Total: 1195 run, 1195 passed, 0 failed, 0 skipped (46.3s)`. The host-specific `bench/` files the run wrote were deleted. The fuzz record (`bench/fuzz/README.md`) is stale on `main` (`stdlib/` and `tools/` changed). The default runner is still `test.sh`.
+
+**Open soundness holes on `main`, then the provenance series (2026-11-14, the maintainer's request):** with the `testinfra` series paused into `future.tm.md` (its remaining tasks are the runner rewrite, test-path portability and conveniences, with no defect among them), the queue after id:z0135 is the six open soundness holes on `main` (id:z0183, id:z0180, id:z0100, id:z0101, id:z0176, id:z0175), then the whole provenance series, then the ZIL series. Each moved task's payload says why. The `provenance` branch (tip git:a6bd53a) is 18 commits ahead of `main` and 90 behind it; rebuilding it on `main` or merging `main` into it is the maintainer's decision, asked before its first task starts.
+
+**The provenance series (its notes in `future.tm.md` until 2026-11-14, as they stood):**
+
+Provenance and liveness hardening series (`+safety` B1 to B4). Paused until the test-efficiency series finishes:
+1. Closure summaries and environments: id:z0093, id:z0094, id:z0096, id:z0097.
+2. Value precision & compiler refactoring: id:z0087 (integers from collections), id:z0086 (literals), id:z0089 (`exh_expand_or`), id:z0090 (`zbuild` manifest).
+3. Core provenance rules and diagnostics: id:z0073 (raw pointer decision), id:z0011 (borrows/stores decl check), id:z0044 (local field liveness), id:z0066 (diagnostics), id:z0065 (parallel checking), id:z0074 (differential review), id:z0012 (retirement of old passes).
+4. Post-series audits: id:z0045 (reference carrier through phi/let), id:z0017 (safe store-grid twins).
+
+**Series rule (2026-11-05, from id:z0071):** a precision fix that removes origins from a set (an exemption, a split, a moved-storage drop) is first measured alone, on top of the task it serves, to show it is needed; and it comes with probes of its sibling routes (the value built inside the callee, returned from a call, packed into a struct beside a view or a raw pointer). Stop for review after each `+safety` check-in.
