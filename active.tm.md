@@ -2,11 +2,12 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +safety +tests +AI-G @main A pattern's skipped parts and guard bindings drop once across or-patterns, guards and let patterns id:qm667
+- [x] +safety +tests +AI-G @main A pattern's skipped parts and guard bindings drop once across or-patterns, guards and let patterns id:qm667
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Depends:** id:nc1r2
     > **Placed:** before id:sj5ha, as follow-up to id:sq2m7 / id:nc1r2.
+    > **Completed:** 2026-11-14 git:1ec828c
 
     - **Found in id:nc1r2:**
       1. `Pattern.Or` (`src/lower_zir/lower_match.zrl:347-364`) emits `ZirStmt.Drop` in `alt_block` (before enclosing tuple/struct/variant sibling sub-patterns are checked) and only if `self.pattern_moved` is already true when the `Pattern.Or` finishes. Thus `(O.A(s, _) | O.C(_, s), 1)` on `(O.A(mk, mk), 2)` drops the skipped `_` in `alt_block` and then drops the whole tuple again when `1 == 2` fails (3 drops for 2 values), while `(O.A(_, _) | O.D, P.A(s, _))` does not drop `O.A`'s skipped parts at all (2 drops for 4 values).
@@ -25,6 +26,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` exits 0; quote the `fresh (no cache)` line and list any newly refused programs.
       - C5: Full `make test` passes (if `corpus/zrl_whole_program_zil.sha256` needs `UPDATE_GOLDEN=1 sh scripts/test_incremental.sh`, commit the golden update separately and re-run the full `make test` after it); quote the final `Total:` line. `rm build/zoril && make` prints no `warning:`.
       - C6: `sh scripts/run_safety_matrix.sh` reports `Mismatches: 0`, and `sh scripts/check_safety_figures.sh` exits 0.
+    - **Finding:** Allocating a separate `pat_check` block before `alt_fail_block` in `Pattern.Or` created a backward edge (`alt_fail_block -> pat_check`) per alternative; on `Verifier::storage_facts`'s 57-variant `ILInstr` or-pattern (`src/verify.zrl`), that pushed `check_zir`'s fixed-point loop past its 100-iteration cap during self-hosting. Reusing `alt_fail_block` directly as the next alternative's entry block when `pi + 1 < pats.len` keeps the fail chain forward (`make` clean build + self-hosted fixpoint: `20379486 bytes of ZIL, identical across two self-hosted generations`).
+    - **Note:** Code commit `git:fd5cfda` on `main`, corpus golden hashes `git:1ec828c` on `main`; also updated compiler figures in `doc/SAFETY.md` §5 (`47,520`, `848`) and `doc/spec/unsafe_policy.md` §5 (`4.66%`, `848 blocks`, `1,923 of 41,290`).
+      - C1: `./scripts/test.sh tests/language/match/match_skipped_parts_dropped.zrl tests/error_reporting/err_move_in_match_guard.zrl tests/error_reporting/err_or_pattern_skip_with_guard.zrl` passed (`Selected tests 3 run 3 passed 0 failed 0 skipped`, `Total: 4 run, 4 passed, 0 failed, 0 skipped (0.1s)`) with all 31 subcases in `match_skipped_parts_dropped.zrl`.
+      - C2: `err_move_in_match_guard.zrl` and `err_or_pattern_skip_with_guard.zrl` both `[PASS]` under `./scripts/test.sh`.
+      - C3: Temporarily commenting out `self.emit_skipped_drops(skipped.as_slice(), span);` in `lower_let_pattern` (`src/lower_zir/stmt.zrl`) caused `match_skipped_parts_dropped.zrl` to fail with `[FAIL] tests/language/match/match_skipped_parts_dropped.zrl (wrong exit code)` (`+exit 25`).
+      - C4: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` exited 0 against `c161107`: `reject-diff: base verdicts: fresh (no cache); base front end 110 s` and `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69149 programs against c161107f5f95e43c7557e5f44d046856a6bcbbd8`.
+      - C5: Full `make test` after `git:1ec828c` (`UPDATE_GOLDEN=1 sh scripts/test_incremental.sh` updated `06_enums_and_match.zil` and `39_range_patterns.zil`) passed: `Total: 3298 run, 3298 passed, 0 failed, 94 skipped (121.5s)`. `rm -f build/zoril && make` printed zero `warning:`.
+      - C6: `sh scripts/run_safety_matrix.sh` printed `All probes complete: 463/509 passed. Mismatches: 0`, and `sh scripts/check_safety_figures.sh` + `sh scripts/check_safety_model.sh` exited 0 (`[PASS] safety-figures: all 9 §5 figure(s) match the tree`).
+    - **Awaiting review:** `./scripts/test.sh tests/language/match/match_skipped_parts_dropped.zrl tests/error_reporting/err_move_in_match_guard.zrl tests/error_reporting/err_or_pattern_skip_with_guard.zrl` and `sh scripts/run_safety_matrix.sh`
 
 - [ ] +safety +tests +AI-G @main A payload is not moved out of an enum that has its own `Drop` id:sj5ha
     > **Created:** 2026-11-14
