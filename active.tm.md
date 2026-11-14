@@ -95,10 +95,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Who:** the maintainer decides. The rule text in `AGENTS.md` is a rule change, and a backport touches `bootstrap/stage1/`, which only a re-pin or a recorded backport may change.
     - **Decision (the maintainer, 2026-11-14):** (a), the backport: id:jhy7v, after the open soundness holes on `main`. The private-name rule and its gate: id:azqvx. The maintainer asked whether a re-pin (b) would let `src/` be written in more idiomatic Zoril; the answer is with the maintainer (2026-11-14) and decides nothing here.
 
-- [ ] +docs +bootstrap +AI-G @main doc/bootstrap/two_stage.md says the stage1 snapshot is the pinned release's src/, which it is not id:sydrz
+- [x] +docs +bootstrap +AI-G @main doc/bootstrap/two_stage.md says the stage1 snapshot is the pinned release's src/, which it is not id:sydrz
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Placed:** at the top of the queue: a documentation fix of under a session with no dependency.
+    > **Completed:** 2026-11-14 git:f684eaf
+
+    - **Completion:** C1 `diff -rq bootstrap/stage1/src build/z135/rel/src` gave 25 `differ` lines and 18 `Only in` lines; `.zrl` line counts 31434 and 46769. C2 the `rg -n` command printed nothing. C3 `make test-changed BASE=HEAD~1` (run after the last edit): `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (120.2s)`. `bootstrap/stage1/README.md` was edited (prose); the gate run passed with it.
 
     - **Found (2026-11-14, a reviewing session):** `bootstrap/stage1/src/` is not the `src/` of the release `bootstrap/stage1/PIN` names. `git archive v0.1.0-alpha src | tar -x -C build/z135/rel` and `diff -rq bootstrap/stage1/src build/z135/rel/src` report 25 files that differ and 18 on one side only (stage1 has `lower/`, `lower.zrl`, `lower_all.zrl`, `lower_zir/match.zrl`; the release has `driver/`, `parser/`, `fmt/`, `lower_zir/lower_match.zrl`, `il_typecheck.zrl` and others); `cat` over the `.zrl` files: 31,434 lines against 46,769. The repository's history starts at the release commit, so no commit in it is the snapshot's source.
     - **Do:** correct the sentences that say otherwise, and nothing else: `AGENTS.md` (the **stage1** bullet: "a snapshot of `src/` ... at the commit in `bootstrap/stage1/PIN`"), `doc/bootstrap/two_stage.md` (§1 or wherever `PIN` is described, and §4's "the snapshot's source, which is today's `src/` and already complies"), and `bootstrap/stage1/README.md` if it says the same. Say what is true: the snapshot is an older `src/`, ported to the stage0-C dialect, that shipped with the release `PIN` names; it is not that release's `src/`. Editing `bootstrap/stage1/README.md` is prose, not the snapshot's code; if a gate treats the directory as frozen, leave that file and say so.
