@@ -23,13 +23,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `make test-changed BASE=HEAD` before the commit (the doc tier selected the whole suite): `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (121.1s)`.
     - **Awaiting review:** re-run C1 to C3 (C3 as noted).
 
-- [ ] +docs +review +AI-D @main @checkin Review of the one-list queue rule in `AGENTS.md` id:kgv5s
+- [x] +docs +review +AI-D @main @checkin Review of the one-list queue rule in `AGENTS.md` id:kgv5s
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Depends:** id:m9hjt
     > **Placed:** after id:m9hjt, the batch it reviews.
+    > **Completed:** 2026-11-14 git:f7d5617
 
     - **Review:** re-run id:m9hjt C1 to C3; read the two `AGENTS.md` bullets whole for a sentence that still assumes two headings.
+    - **Review (2026-11-14):** git:f7d5617 changes the two `AGENTS.md` bullets exactly as id:m9hjt's **Do** says (2 lines out, 2 in, nothing else in the commit); read whole, neither bullet still assumes two headings. Re-run: C1 `rg -n '## Now|## Next' AGENTS.md CONTRIBUTING.md doc/developer_guide.md` prints nothing, and `grep -c '^## ' doc/tasks/active.tm.md` prints `1`. C2 `tm validate *.tm.md`: three `[PASS]` lines; `tm next` shows `[kgv5s]`, the first open task. C3 holds after the split: `git show --numstat --format= a9530ae` prints `0    4    active.tm.md`. The commit that broke C3 was the reviewing session's edit in the shared worktree, not the task's; it is split (see id:m9hjt's C3). Nothing blocks.
 
 - [ ] +bootstrap +audit +AI-D @main id:z0135 Z0 stage1 accepts modules in the `src/` closure and builds some of their paths wrong
     > **Created:** 2026-11-07
