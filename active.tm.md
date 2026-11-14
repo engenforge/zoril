@@ -67,23 +67,99 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `make test`: `Total: 3317 run, 3317 passed, 0 failed, 96 skipped (121.7s)`. `make preflight-changed`: `Total: 1214 run, 1214 passed, 0 failed, 0 skipped (44.9s)` (fixpoint `gen3.zil vs gen4.zil must be identical`). Full preflight (`./scripts/preflight.sh` after `user-tools`, `test_checked.sh` standalone `Total: 1214 run, 1214 passed, 0 failed, 0 skipped (37.5s)`, and `./scripts/test.sh --suite git` `Total: 7 run, 7 passed, 0 failed, 0 skipped (101.4s)`): `All mutations caught.`, `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, `Total: 1214 run, 1214 passed, 0 failed, 0 skipped (37.4s)`, `Total: 7 run, 7 passed, 0 failed, 0 skipped (101.2s)`, `All performance thresholds within tolerance of baseline.`, `fuzz-totals: progs=126 accepted=40 traps=1 rejected=44 candidates=0 faults=0 ...` (host-specific `bench/` files deleted afterwards). Note: during `make preflight`'s `user-tools`, `scenario runner-output`'s `hangs.zrl` fixture timed out/hung in the exported tree and had to be killed to unblock; `preflight-selftest` failed once due to leftover untracked `bench/` files from `make preflight-changed` and passed after deleting them.
     - **Awaiting review:** re-run C2 (`sh build/z135/s1.sh build/z135/m1.zrl ...`, `m2.zrl`, `m4.zrl`, `tests/stdlib/test_stdlib_fd.zrl`, `tests/stdlib/test_stdlib_io_result.zrl`) and C4 (`sh build/z135/s1.sh src/main.zrl build/z135/gen1` + `gdb -batch -x build/z135/cs.gdb --args build/z135/gen1 -I stdlib=stdlib --emit-zil -o build/z135/t3.zil build/z135/tiny3.zrl`).
 
-- [ ] +bootstrap +safety +review +AI-D @main @checkin Review of the stage1 backport for match-arm and by-value receiver moves id:yxvpa
+- [x] +bootstrap +safety +review +AI-D @main @checkin Review of the stage1 backport for match-arm and by-value receiver moves id:yxvpa
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Placed:** after id:jhy7v to review the stage1 backport before merging main into provenance (id:0m61c).
     > **Depends:** id:jhy7v
+    > **Completed:** 2026-11-14 git:f248f49
 
     - Re-run `id:jhy7v`'s **Awaiting review:** commands (`m1`, `m2`, `m4`, `test_stdlib_fd.zrl`, `test_stdlib_io_result.zrl` through `build/zoril-stage1`, and the `gdb` `cs.gdb` check on `gen1`) and probe sibling routes in `bootstrap/stage1/` (nested enum match in stage1, `if let` / `while let` in stage1, chained by-value method calls in stage1).
+    - **Commit reviewed since `id:e7qgj` (`62de977`):** `f248f49` (`id:jhy7v`: `stage1: mark match scrutinee and by-value self receiver moved`) — verified `bootstrap/stage1/src/lower_zir/match.zrl:81-86`, `bootstrap/stage1/src/lower_zir/expr.zrl:1406-1408`, `doc/bootstrap/two_stage.md:55`, and `KNOWN_ISSUES.md:37-41`.
+    - **Re-ran `id:jhy7v`'s Awaiting review checks:**
+      - `sh build/z135/s1.sh` on `m1.zrl`, `m2.zrl`, `m4.zrl`, `tests/stdlib/test_stdlib_fd.zrl`, and `tests/stdlib/test_stdlib_io_result.zrl` -> `m1: exit 1`, `m2: exit 1`, `m4: exit 1`, `fd: exit 0`, `io_result: exit 0`.
+      - `sh build/z135/s1.sh src/main.zrl build/z135/r_gen1` + `gdb -batch -x build/z135/cs.gdb --args build/z135/r_gen1 -I stdlib=stdlib --emit-zil -o build/z135/r_t3.zil build/z135/tiny3.zrl` -> `-38,0,-38,0,...[Inferior 1 (process 109272) exited normally]` (every `close` syscall returned `0`, none `-9`).
+    - **Sibling routes probed in `bootstrap/stage1/`:**
+      - Nested enum pattern in `match` (`Outer.Wrap(Inner.Leaf(s)) => s` in `sib_nested.zrl`) -> `sib_nested: exit 1` (1 drop).
+      - `if let` and `while let` (`if let E.A(s) = e` and `while let E.A(s) = ...` in `sib_if_while.zrl`) -> `sib_if_while: exit 2` (1 drop in `take_if` + 1 drop in `take_while`).
+      - Chained by-value method calls (`mk(np).step().take()` in `sib_chain.zrl`) -> `sib_chain: exit 1` (1 drop).
+    - **Diagnosed `id:n23zs` (added to `future.tm.md` after `id:jhy7v`'s `make preflight`) and promoted/settled it as `+AI-G` before `id:0m61c`:**
+      - (1) `scripts/test_runner_output.sh` (`check_mode`, lines 52–67, added in `git:6122499` / `id:z0137`) excludes `tests/runner/fixtures/tests/hangs.zrl` only in `opts_hidden` mode. When `scripts/check_user_tools.sh` Part 1 strips `timeout` from `PATH` (`path_without "$shim_dir" ... timeout ...`) and runs `make test`, `quiet`, `default`, and `verbose` modes in `test_runner_output.sh --both` run `hangs.zrl` without `timeout` on `PATH` (`run_with_timeout` in `scripts/lib/portability.sh:173-192` runs commands directly without a time limit), so all 6 runs of `hangs.zrl` loop indefinitely.
+      - (2) `scripts/check_user_tools.sh` Part 2 (lines 64–78) places a fake `git` on `PATH` that logs its caller and always exits `1`, then runs `make test` in the checkout. Because `make test` evaluates `build/gen/version.zrl: FORCE`, `./scripts/version.sh` calls the failing `git` shim, falls back to `VERSION` (`0.1.0-alpha`), and overwrites `build/gen/version.zrl`, forcing `make test` inside the gate to rebuild `build/zoril`, `build/zilc`, `tools/zman/build/zman`, and `build/zbuild` with `0.1.0-alpha` (`build/user_tools_checkout.log:1-6`, violating `AGENTS.md`). When `scripts/preflight.sh` then runs `scripts/mutation-check.sh` with real `git` on `PATH`, `mutation-check.sh:235` runs `make build/zoril build/zilc build/runtime.o`, updating `build/gen/version.zrl` back to `0.1.0-alpha-<N>-g<sha>` and rebuilding `build/zoril` and `build/zilc` (wiping `build/mutation/` and `build/mutation_cache/`) while leaving `build/zbuild` stamped with `0.1.0-alpha`, so `scenario: tool-versions` in `scripts/test_checked.sh` fails deterministically on `build/zbuild`.
+
+- [ ] +testinfra +bug +AI-G @main user-tools: runner-output hangs.zrl fixture does not time out and Part 2 git shim clobbers build/gen/version.zrl id:n23zs
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Depends:** id:yxvpa
+    > **Placed:** promoted from `future.tm.md` (check-in id:yxvpa) before id:0m61c so `main`'s broken `make user-tools` / `make preflight` is fixed before merging `main` into `provenance`.
+
+    - **Observed (2026-11-14, during id:jhy7v preflight):** `make preflight` runs `user-tools` (`scripts/check_user_tools.sh`), which exports `HEAD` to `/tmp/user_tools_exp_*` and runs `make test`. Inside that run, `scenario: runner-output` (`scripts/test_runner_output.sh --both`) ran `tests/runner/fixtures/tests/hangs.zrl` six times without `timeout` on `PATH` (~26m before `kill -9` on the first). Also, `scenario: tool-versions` in `test_checked.sh` failed because Part 2's failing `git` shim caused `scripts/version.sh` to overwrite `build/gen/version.zrl` with `0.1.0-alpha` and rebuild `build/zoril`, `build/zilc`, `tools/zman/build/zman`, and `build/zbuild` (`build/user_tools_checkout.log:1-6`), after which `mutation-check.sh:235` rebuilt `build/zoril` and `build/zilc` with the `git`-derived version while leaving `build/zbuild` stale.
+    - **Do (1) — `scripts/test_runner_output.sh` (`check_mode`, lines 52–67):** detect when `timeout` is already absent from `PATH` (`! command -v timeout >/dev/null 2>&1`) and exclude `hangs.zrl` with `EXPECTED_TOTAL_NO_TIMEOUT` in `quiet`, `default`, and `verbose` modes just as `opts_hidden` does:
+
+    ```sh
+    check_mode() {
+        mode="$1"
+        out="$TR_WORK/output.$mode"
+        expected="$EXPECTED_TOTAL"
+        exclude=""
+        if ! command -v timeout >/dev/null 2>&1; then
+            expected="$EXPECTED_TOTAL_NO_TIMEOUT"
+            exclude="tests/runner/fixtures/tests/hangs.zrl"
+        fi
+        mkdir -p "$TR_WORK"
+        case "$mode" in
+            quiet)   TR_EXCLUDE="$exclude" "$RUNNER_UNDER_TEST" --timeout 2 --quiet $FIXTURES > "$out" 2>&1 ;;
+            default) TR_EXCLUDE="$exclude" "$RUNNER_UNDER_TEST" --timeout 2 $FIXTURES > "$out" 2>&1 ;;
+            verbose) TR_EXCLUDE="$exclude" "$RUNNER_UNDER_TEST" --timeout 2 --verbose $FIXTURES > "$out" 2>&1 ;;
+            opts_hidden)
+                shim="$TR_WORK/shim_opts"
+                path_without "$shim" git timeout setsid valgrind dprint rustc
+                expected="$EXPECTED_TOTAL_NO_TIMEOUT"
+                TR_EXCLUDE=tests/runner/fixtures/tests/hangs.zrl PATH="$shim" "$RUNNER_UNDER_TEST" --timeout 2 $FIXTURES > "$out" 2>&1
+                ;;
+        esac
+    ```
+
+    - **Do (2) — `scripts/check_user_tools.sh` Part 2 (lines 61–71):** capture `real_git="$(command -v git)"` before creating `$git_shim_dir/git`, and in `$git_shim_dir/git` after logging to `$USER_TOOLS_GIT_LOG`, delegate to `$real_git` when `$caller` matches `*scripts/version.sh*` (the only caller allowed by line 85's `grep -v 'scripts/version.sh' "$git_log"`), exiting `1` for all other callers:
+
+    ```sh
+    real_git="$(command -v git)"
+    cat << EOF > "$git_shim_dir/git"
+    #!/bin/sh
+    caller=\$(ps -o args= -p "\$PPID" 2>/dev/null || echo "unknown")
+    printf '%s: git %s\n' "\$caller" "\$*" >> "\$USER_TOOLS_GIT_LOG"
+    case "\$caller" in
+        *scripts/version.sh*) exec "$real_git" "\$@" ;;
+    esac
+    exit 1
+    EOF
+    chmod +x "$git_shim_dir/git"
+    ```
+
+    - **Checks:**
+      - C1: `shim=$(mktemp -d); . scripts/lib/path_shim.sh; path_without "$shim" timeout; PATH="$shim" sh scripts/test_runner_output.sh --both; rc=$?; rm -rf "$shim"; echo "exit $rc"` finishes in a few seconds, prints all 9 `[PASS]` lines, and prints `exit 0`; quote the output.
+      - C2: Take-out check: revert the `scripts/test_runner_output.sh` edit and run `shim=$(mktemp -d); . scripts/lib/path_shim.sh; path_without "$shim" timeout; timeout 8s env PATH="$shim" sh scripts/test_runner_output.sh; rc=$?; rm -rf "$shim"; pkill -9 -f 'tests\\+runner\\+fixtures\\+tests\\+hangs.zrl/test' 2>/dev/null || true; echo "exit $rc"`, confirming it times out with `exit 124`, then restore the edit; quote the output.
+      - C3: Run `make user-tools && ./scripts/test_tool_versions.sh`: both exit `0`, `grep -c '^Building ' build/user_tools_checkout.log` prints `0` (before figure from `id:jhy7v`'s run: `3` `Building ...` lines in `build/user_tools_checkout.log`), and `./scripts/test_tool_versions.sh` passes every tool (`zoril`, `zilc`, `zbuild`) without rebuilding; quote the outputs.
+      - C4: `make test-changed`, quoting its `Total:` line. End with `**Awaiting review:**` naming the C1 and C3 checks.
+
+- [ ] +testinfra +review +AI-D @main @checkin Review of the user-tools timeout and version-shim fixes id:scffs
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** after id:n23zs to review the user-tools fixes before merging main into provenance (id:0m61c).
+    > **Depends:** id:n23zs
+
+    - Re-run `id:n23zs`'s **Awaiting review:** commands (`C1` timeout-hidden `scripts/test_runner_output.sh --both`, and `C3` `make user-tools && ./scripts/test_tool_versions.sh`), verify `build/user_tools_checkout.log` records zero rebuilds, and check that a non-`version.sh` `git` invocation under Part 2 still fails and is reported.
 
 - [ ] +merge +AI-D @provenance Merge `main` into `provenance` before the series resumes id:0m61c
     > **Created:** 2026-11-14
     > **Branch:** `provenance`
-    > **Depends:** id:qm667, id:sj5ha, id:vvtam, id:z0175, id:7f9k8, id:37p40, id:a47b8, id:jhy7v, id:yxvpa
+    > **Depends:** id:qm667, id:sj5ha, id:vvtam, id:z0175, id:7f9k8, id:37p40, id:a47b8, id:jhy7v, id:yxvpa, id:n23zs, id:scffs
     > **Placed:** before id:z0093, which it blocks: the series' first task starts from a branch that has `main`'s fixes.
 
     - **Decision (the maintainer, 2026-11-14):** `main` is merged into `provenance`, not the branch rebuilt on `main`: the branch is published (`hom/provenance`, `github/provenance` at git:a6bd53a) and the task files cite 14 of its 18 commits, so a rebuild would need a forced update and a sha remap for no gain. The merge waits for the six soundness fixes on `main` (id:z0183 to id:z0175 above), so it picks them up once.
     - **Depends changed (2026-11-14, check-in id:vvtam):** added id:7f9k8, the seventh soundness hole on `main` (`gap_84`, found at that check-in), so the merge picks up its fix too.
     - **Depends changed (2026-11-14, check-in id:g63ny):** added id:37p40 and id:a47b8, the fixes of gap_85 and gap_86 found at that check-in, so the merge picks them up too.
+    - **Depends changed (2026-11-14, check-in id:yxvpa):** added id:n23zs and its check-in id:scffs, so the merge picks up the user-tools / runner-output fix on `main`.
     - **Do:** on `provenance`, `git merge main`. Resolve conflicts in recorded figures (`README.md`, `doc/SAFETY.md`, `doc/spec/unsafe_policy.md`, `corpus/zrl_whole_program_zil.sha256`) by recomputing them from the merged tree (`scripts/check_safety_figures.sh --density --print`, `scripts/check_safety_model.sh`, `UPDATE_GOLDEN=1 sh scripts/test_incremental.sh`), never by taking a side. A conflict in `src/` is resolved by reading both changes; list each in the completion note.
     - **Checks:** C1 `git merge-base --is-ancestor main provenance` succeeds and `git log -1 --format=%p provenance` names two parents. C2 `make test` on the merge commit, its `Total:` quoted. C3 `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=<main at the merge>`, its `Total:`, `fresh (no cache)` and `reject-diff` lines quoted, and every newly accepted or refused program listed with its reason. C4 `sh scripts/run_safety_matrix.sh`: `Mismatches: 0`. C5 `git diff a6bd53a provenance --stat` against `git diff a6bd53a main --stat`: every file differing from `main`'s side is a conflict listed in the note.
 

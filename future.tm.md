@@ -280,14 +280,6 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Found:** `scripts/check_safety_figures.sh` checks `doc/SAFETY.md` §5.3 and the density rows of `doc/spec/unsafe_policy.md`, but not the probe counts in `doc/SAFETY.md` §5 ("**366 `compile_reject`**, ... **46 `known_gap`**") and §6 ("tracked as 46 `known_gap` probes"), nor the open-hole count in `doc/spec/safety_model.md` ("the 18 holes still open"), nor `doc/STABILITY.md`'s "16 open soundness holes", "72 safety properties" and "79-row architecture matrix". At git:891b76e `gap_80` made 47 `known_gap` probes while both `doc/SAFETY.md` lines said 46; `doc/STABILITY.md`'s 16 and `safety_model.md`'s 19 (now 18) already disagree.
     - **Do:** decide which of these counts each page should state at all (a page can link to the table instead of repeating a number); recompute the ones kept from the probes' `// expected:` lines and the Known gaps table in `check_safety_figures.sh`, and fail on a mismatch; a planted wrong count shows the check fails.
 
-- [ ] +testinfra +bug +AI-D @main user-tools: runner-output hangs.zrl fixture does not time out inside check_user_tools.sh id:n23zs
-    > **Created:** 2026-11-14
-    > **Branch:** `main`
-
-    - **Observed (2026-11-14, during id:jhy7v preflight):** `make preflight` runs `user-tools` (`scripts/check_user_tools.sh`), which exports `HEAD` to `/tmp/user_tools_exp_*` and runs `make test`. Inside that run, `scenario: runner-output` (`scripts/test_runner_output.sh --both`) runs `tests/runner/fixtures/tests/hangs.zrl` with `--timeout 2` (three times under `test.sh` and three times under `build/ztest`). Each `build/tests-runner-output/tests+runner+fixtures+tests+hangs.zrl/test` process failed to terminate after 2s and spun at 99% CPU (the first hung for ~26 minutes before being killed with `kill -9`; the subsequent five also hung past 2s and had to be killed manually so `check_user_tools.sh` could proceed).
-    - **Why:** not yet diagnosed (a `make test` in the main repo passed earlier in 121.7s without hanging; only the `check_user_tools.sh` exported-tree run hung).
-    - **Also observed in the same preflight:** `scenario: tool-versions` in `test_checked.sh` failed once during `make preflight` (`build/zbuild` reported `0.1.0-alpha` instead of `0.1.0-alpha-157-g62de977-dirty`), then passed standalone immediately afterwards (`37.5s`) and on the clean `./scripts/preflight.sh` rerun (`54s`).
-
 ## Types, diagnostics and the standard library
 
 - [ ] +generics +types id:z0032 G1 `impl<T: Copy> Source<T> for S` fails to bind `T` when it appears only in the trait's arguments
