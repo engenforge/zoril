@@ -101,11 +101,13 @@ impl ZirLowerer {
             let prev_or_depth = self.pattern_or_depth;
             let prev_has_guard = self.pattern_has_guard;
             let prev_entry_block = self.pattern_entry_block;
+            let prev_in_drop_type = self.pattern_in_drop_type;
             let skipped_base = self.pattern_skipped.len();
             self.pattern_moved = false;
             self.pattern_or_depth = 0 as u32;
             self.pattern_has_guard = arm.guard != 0 as u32;
             self.pattern_entry_block = self.current_block_idx;
+            self.pattern_in_drop_type = 0 as u32;
 
             self.lower_pattern(scrut_place, scrut_ty, arm.pattern, arm_body_block, fail_block);
 
@@ -114,6 +116,7 @@ impl ZirLowerer {
             self.pattern_or_depth = prev_or_depth;
             self.pattern_has_guard = prev_has_guard;
             self.pattern_entry_block = prev_entry_block;
+            self.pattern_in_drop_type = prev_in_drop_type;
 
             // The guard may lower a nested `match`, which reuses the field.
             let mut skipped = unsafe { Vec::<SkippedPart>.new_in_raw(self.arena) };
@@ -819,6 +822,10 @@ impl ZirLowerer {
         // Matching an enum through a reference binds its payload by reference.
         let scrut_tag = self.get_type_tag(scrut_ty);
         let sub_by_ref = by_ref || self.pattern_peels_pointer(scrut_tag);
+        let prev_in_drop_type = self.pattern_in_drop_type;
+        if !sub_by_ref && prev_in_drop_type == 0 as u32 && self.has_drop_impl(scrut_ty) {
+            self.pattern_in_drop_type = scrut_ty;
+        }
 
         if vp.payload.len == 1 as usize {
             self.lower_pattern_at(
@@ -829,6 +836,7 @@ impl ZirLowerer {
                 fail_block,
                 sub_by_ref
             );
+            self.pattern_in_drop_type = prev_in_drop_type;
             return;
         }
         // `V(a, b)`: one pattern per element of a tuple payload.
@@ -847,6 +855,7 @@ impl ZirLowerer {
                 k = k + 1 as usize;
             }
             self.terminate(ZirTerminator.Jmp(fail_block));
+            self.pattern_in_drop_type = prev_in_drop_type;
             return;
         }
         let places = self.alloc_places(n);
@@ -858,6 +867,7 @@ impl ZirLowerer {
             k = k + 1 as usize;
         }
         self.lower_pattern_seq(places, tys, vp.payload, pass_block, fail_block, sub_by_ref);
+        self.pattern_in_drop_type = prev_in_drop_type;
     }
 
     // Test PATS[i] against PLACES[i] in turn: each passes on to the next, the last to PASS.
@@ -1002,7 +1012,12 @@ impl ZirLowerer {
                 fi = fi + 1 as usize;
             }
         }
+        let prev_in_drop_type = self.pattern_in_drop_type;
+        if !by_ref && prev_in_drop_type == 0 as u32 && self.has_drop_impl(ty) {
+            self.pattern_in_drop_type = ty;
+        }
         self.lower_pattern_seq(places, tys, pats, pass_block, fail_block, by_ref);
+        self.pattern_in_drop_type = prev_in_drop_type;
     }
 
     // After a pattern error: declare the names it would bind, with no type, so the arm body
@@ -1090,7 +1105,15 @@ impl ZirLowerer {
             sym = self.resolver.define(name, SymbolKind.Local(0), false);
         }
         let bind_ty = if by_ref { self.get_ptr_type(ty) } else { ty };
-        if !by_ref && !self.is_copy_type(bind_ty) { self.pattern_moved = true; }
+        if !by_ref && !self.is_copy_type(bind_ty) {
+            if self.pattern_in_drop_type != 0 as u32 {
+                self.report_prefix(span);
+                eprint("cannot move out of type `");
+                eprint(self.mono.type_display(self.pattern_in_drop_type));
+                eprint("`, which implements `Drop`\n");
+            }
+            self.pattern_moved = true;
+        }
         let mut local_id = self.get_local_by_symbol(sym);
         if local_id == 0 as u32 {
             local_id = self.define_local(

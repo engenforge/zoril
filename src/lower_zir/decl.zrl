@@ -90,6 +90,7 @@ pub struct ZirLowerer {
     pub pattern_or_depth: u32,
     pub pattern_has_guard: bool,
     pub pattern_entry_block: usize,
+    pub pattern_in_drop_type: u32,
     // Non-Copy bindings created by an arm's pattern while its guard is lowered: the guard may not
     // move out of them, and early exits (`return`/`break`/`continue`) do not drop them because
     // the scrutinee still owns them until the guard passes.
@@ -171,6 +172,7 @@ impl ZirLowerer {
             pattern_or_depth: 0 as u32,
             pattern_has_guard: false,
             pattern_entry_block: 0 as usize,
+            pattern_in_drop_type: 0 as u32,
             guard_bound_locals: unsafe { Vec::<u32>.new_in_raw(arena) },
             had_error: false,
             error_count: 0 as u32,

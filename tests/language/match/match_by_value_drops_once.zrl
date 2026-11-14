@@ -16,6 +16,7 @@ enum D { A(S), B(*mut u8) }
 impl Drop for D {
     fn drop(self: &mut D) { if let D.B(q) = *self { unsafe { *q = *q + 10 as u8; } } }
 }
+enum ND { A(D), B }
 fn mk(fp: *mut u8) -> S { return S { p: fp }; }
 fn consume(s: S) {}
 fn bound(fp: *mut u8) { let e = E.A(mk(fp)); match e { E.A(s) => { let n = 1; }, E.B => {}, } }
@@ -57,6 +58,22 @@ fn by_return(fp: *mut u8) { let r = returns(E.A(mk(fp))); }
 fn result_returned(fp: *mut u8) -> E { return match E.B { E.B => E.A(mk(fp)), _ => E.B, }; }
 fn by_result(fp: *mut u8) { let e = result_returned(fp); }
 fn own_drop_kept(fp: *mut u8) { let d = D.B(fp); match d { D.B(q) => {}, D.A(_) => {}, } }
+fn by_ref_drop_enum(fp: *mut u8) {
+    let da = D.A(mk(fp));
+    match &da { D.A(s) => { let r: &S = s; }, D.B(_) => {}, }
+    let db = D.B(fp);
+    match &db { D.B(q) => { let r: &*mut u8 = q; }, D.A(_) => {}, }
+}
+fn wild_drop_enum(fp: *mut u8) {
+    let da = D.A(mk(fp));
+    match da { D.A(_) => {}, D.B(_) => {}, }
+    let db = D.B(fp);
+    match db { D.A(_) => {}, D.B(_) => {}, }
+}
+fn whole_drop_from_non_drop(fp: *mut u8) {
+    let n = ND.A(D.B(fp));
+    match n { ND.A(d) => {}, ND.B => {}, }
+}
 fn count(f: fn(*mut u8)) -> u8 {
     let mut flag = 0 as u8;
     f(&mut flag as *mut u8);
@@ -82,5 +99,8 @@ fn main() -> i32 {
     if count(by_return) != 1 as u8 { return 17; }
     if count(by_result) != 1 as u8 { return 18; }
     if count(own_drop_kept) != 10 as u8 { return 19; }
+    if count(by_ref_drop_enum) != 11 as u8 { return 20; }
+    if count(wild_drop_enum) != 11 as u8 { return 21; }
+    if count(whole_drop_from_non_drop) != 10 as u8 { return 22; }
     return 0;
 }

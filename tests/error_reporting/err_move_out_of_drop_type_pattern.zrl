@@ -1,0 +1,42 @@
+// Moving a non-Copy part out of a value whose type implements Drop is rejected: it would consume
+// the outer value and skip its Drop impl.
+// expected compile fail
+// EXPECT: cannot move out of type
+struct S { p: *mut u8 }
+impl Drop for S {
+    fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } }
+}
+enum D { A(S), B }
+impl Drop for D {
+    fn drop(self: &mut D) {}
+}
+enum N { A(D), B }
+enum NS { A(S), B }
+enum D2 { A(NS), B }
+impl Drop for D2 {
+    fn drop(self: &mut D2) {}
+}
+struct WD { s: S }
+impl Drop for WD {
+    fn drop(self: &mut WD) {}
+}
+
+fn direct_match(d: D) {
+    match d { D.A(s) => {}, D.B => {}, }
+}
+fn nested_non_drop_outer(n: N) {
+    match n { N.A(D.A(s)) => {}, N.A(D.B) => {}, N.B => {}, }
+}
+fn nested_drop_outer(d2: D2) {
+    match d2 { D2.A(NS.A(s)) => {}, D2.A(NS.B) => {}, D2.B => {}, }
+}
+fn in_if_let(d: D) {
+    if let D.A(s) = d { let x = 1; }
+}
+fn in_while_let(mut d: D) {
+    while let D.A(s) = d { d = D.B; }
+}
+fn struct_match(w: WD) {
+    match w { WD { s: s } => {}, }
+}
+fn main() -> i32 { return 0; }

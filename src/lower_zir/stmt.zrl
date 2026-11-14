@@ -422,12 +422,14 @@ impl ZirLowerer {
         let prev_or_depth = self.pattern_or_depth;
         let prev_has_guard = self.pattern_has_guard;
         let prev_entry_block = self.pattern_entry_block;
+        let prev_in_drop_type = self.pattern_in_drop_type;
         let skipped_base = self.pattern_skipped.len();
         self.pattern_binds_fresh = true;
         self.pattern_moved = false;
         self.pattern_or_depth = 0 as u32;
         self.pattern_has_guard = false;
         self.pattern_entry_block = self.current_block_idx;
+        self.pattern_in_drop_type = 0 as u32;
 
         self.lower_pattern(init_place, ty, pat, pass_block, fail_block);
 
@@ -437,6 +439,7 @@ impl ZirLowerer {
         self.pattern_or_depth = prev_or_depth;
         self.pattern_has_guard = prev_has_guard;
         self.pattern_entry_block = prev_entry_block;
+        self.pattern_in_drop_type = prev_in_drop_type;
 
         let mut skipped = unsafe { Vec::<SkippedPart>.new_in_raw(self.arena) };
         let mut si = skipped_base;
