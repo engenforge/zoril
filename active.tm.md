@@ -79,10 +79,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Proposal for the maintainer:** id:gsa2r.
     - **Completion:** the cause is named and both reproductions are recorded above with their results under stage1 and `build/zoril` (the task's one check). `KNOWN_ISSUES.md` §1's entry now names the cause, what `src/` reaches, and the rule as its **Workaround** (git:e56548e). Doc tier after the edit: `make test-changed BASE=HEAD`: `Total: 124 run, 124 passed, 0 failed, 0 skipped (15.3s)`. No compiled code changed, so no `make test` or `make preflight-changed`. Re-pinning or backporting is the maintainer's, asked in id:gsa2r; nothing in `bootstrap/stage1/` changed.
 
-- [ ] +bootstrap +decision +AI-D @main Stage1 drops a value twice after a match arm or a by-value self moves it: backport, re-pin, or keep the rule id:gsa2r
+- [x] +bootstrap +decision +AI-D @main Stage1 drops a value twice after a match arm or a by-value self moves it: backport, re-pin, or keep the rule id:gsa2r
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Placed:** after id:z0135, which found it. Blocks no task: today's closure takes the routes only on `File`, with a harmless second `close`.
+    > **Completed:** 2026-11-14 git:e56548e
 
     - **What:** id:z0135 found two moves stage1 does not record (a `match` arm on a by-value scrutinee, and a by-value `self` method receiver), so a value moved either way is dropped twice in what stage1 builds. In the compiler stage1 builds from `src/`, this happens only on `File` (`read_file_raw`, `write_file`, `append_file`), as a second `close` that fails with `EBADF`. Details and reproductions are on id:z0135.
     - **Options:**
@@ -92,6 +93,33 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Either way:** add the private-name rule ("no two modules in the closure share a private top-level function name"; 0 shared today) to the stage1 constraint, with a check: a short POSIX `awk` script over `--emit-deps`'s list, run as a gate.
     - **Recommendation:** (a). Rule (c) is hard to check by machine (it depends on which types have destructors, through generics), and the hazard grows with every `Option`/`Result` of a type with a destructor that the closure gains. The backport is small, and stage0-c builds it without a warning.
     - **Who:** the maintainer decides. The rule text in `AGENTS.md` is a rule change, and a backport touches `bootstrap/stage1/`, which only a re-pin or a recorded backport may change.
+    - **Decision (the maintainer, 2026-11-14):** (a), the backport: id:jhy7v, after the open soundness holes on `main`. The private-name rule and its gate: id:azqvx. The maintainer asked whether a re-pin (b) would let `src/` be written in more idiomatic Zoril; the answer is with the maintainer (2026-11-14) and decides nothing here.
+
+- [ ] +docs +bootstrap +AI-G @main doc/bootstrap/two_stage.md says the stage1 snapshot is the pinned release's src/, which it is not id:sydrz
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** at the top of the queue: a documentation fix of under a session with no dependency.
+
+    - **Found (2026-11-14, a reviewing session):** `bootstrap/stage1/src/` is not the `src/` of the release `bootstrap/stage1/PIN` names. `git archive v0.1.0-alpha src | tar -x -C build/z135/rel` and `diff -rq bootstrap/stage1/src build/z135/rel/src` report 25 files that differ and 18 on one side only (stage1 has `lower/`, `lower.zrl`, `lower_all.zrl`, `lower_zir/match.zrl`; the release has `driver/`, `parser/`, `fmt/`, `lower_zir/lower_match.zrl`, `il_typecheck.zrl` and others); `cat` over the `.zrl` files: 31,434 lines against 46,769. The repository's history starts at the release commit, so no commit in it is the snapshot's source.
+    - **Do:** correct the sentences that say otherwise, and nothing else: `AGENTS.md` (the **stage1** bullet: "a snapshot of `src/` ... at the commit in `bootstrap/stage1/PIN`"), `doc/bootstrap/two_stage.md` (§1 or wherever `PIN` is described, and §4's "the snapshot's source, which is today's `src/` and already complies"), and `bootstrap/stage1/README.md` if it says the same. Say what is true: the snapshot is an older `src/`, ported to the stage0-C dialect, that shipped with the release `PIN` names; it is not that release's `src/`. Editing `bootstrap/stage1/README.md` is prose, not the snapshot's code; if a gate treats the directory as frozen, leave that file and say so.
+    - **Checks:** C1 the two `diff -rq` and line-count commands above reproduce `25` differing, `18` one-sided, `31434` and `46769` (quote them). C2 `rg -n 'commit in .bootstrap/stage1/PIN|today.s .src/. and already complies' AGENTS.md doc/bootstrap/` prints nothing. C3 doc tier: `make test-changed BASE=HEAD~1`, its `Total:` quoted.
+
+- [ ] +tests +bootstrap +AI-G @main A gate refuses two modules of the src/ closure that define a private function of the same name id:azqvx
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** after id:sydrz: a rule check of under a session with no dependency. The maintainer agreed to the rule on 2026-11-14 (id:gsa2r).
+
+    - **Why:** stage1 refuses a program in which two modules each define a private function of the same name (`cannot access private function: helper`; id:z0135), and `build/zoril` accepts it, so nothing in the default build notices until a fresh checkout fails to bootstrap. No two modules of today's closure share one (id:z0135: 0 of 66 files).
+    - **Do:** `scripts/check_closure_private_names.sh`, POSIX `sh` and `awk`, no git: list the closure with `timeout -k 5s 30s build/zoril --emit-deps src/main.zrl -I stdlib=stdlib -I src -I build/gen -o <tmp>` (columns 1 and 2 of each line are module paths), or read the list from `--list FILE` (for C2). For each module, take the names of its top-level private functions (lines starting `fn ` or `unsafe fn `, not `pub`), and print `[FAIL] closure-private-names: <name> in <file> and <file>` for every name in two or more modules, then exit 1; otherwise `[PASS] closure-private-names: N modules, no shared private function name`. Add it as a gate in `scripts/test_plan.tsv`. Add one sentence to the stage1 constraint in `AGENTS.md`: no two modules in the closure define a private function of the same name, which the `closure-private-names` gate checks.
+    - **Checks:** C1 the gate on the tree prints its `[PASS]` line (quote it). C2 planted: two scratch modules under `build/` (`ma.zrl`, `mb.zrl`, each with `fn helper(x: i32) -> bool`) in a `--list` file: the script prints one `[FAIL]` line naming both and exits 1. C3 take the duplicate test out of the `awk` and watch C2 print `[PASS]`. C4 with a `git` on `PATH` that logs its arguments and exits 1, the gate still passes and the log is empty. C5 `make test`, its `Total:` quoted.
+
+- [ ] +review +AI-D @main @checkin Review of the stage1 documentation fix and the closure-private-names gate id:9y3ke
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Depends:** id:sydrz, id:azqvx
+    > **Placed:** after id:azqvx, the batch it reviews.
+
+    - **Review:** re-run id:sydrz C1 to C2 and id:azqvx C1 to C4; read the new `AGENTS.md` sentence and the gate script whole (POSIX, no git, its header names what it does not check).
 
 - [ ] +safety +tests +AI-D @main id:z0183 A struct holding a frame view is not pushed into the caller's `Vec`
     > **Created:** 2026-11-11
@@ -174,6 +202,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Diagnostic (2026-11-11, id:z0173):** with the bound unchecked, `Vec.extend_from_slice` on a `T` with no `Clone` is refused only inside `vec.zrl` (`stdlib/vec.zrl:431:60: error: no field 'clone' on 'S'`). Once `impl<T: Clone>` bounds are checked at the call, move `extend_from_slice` and `resize` into such an impl so the user sees `type 'S' does not implement trait 'Clone'` at their call, and update `tests/error_reporting/err_extend_from_slice_no_clone.zrl`'s EXPECT.
     - **Checks:** C1 the two programs above refused with the free function's diagnostic (`tests/error_reporting/`, `// EXPECT:`); C2 take the check out and watch them compile; C3 `scripts/check_reject_diff.sh` against the base, every newly refused program listed with its reason; C4 `make test`, `make preflight-changed`, each `Total:` quoted.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md`, with the five other open soundness holes on `main`, ahead of the provenance and ZIL series: each is a program `main` accepts and should refuse (or a drop it skips), one session-sized fix. Order among them: the reads of a dead frame first (id:z0183, id:z0180), then the `fn`-value faults (id:z0100, id:z0101), then the skipped drop (id:z0176) and the unchecked bound (id:z0175). Any "after the `vecclone` series merges" note above is met: the series is on `main`, with gap_76 to gap_79 in `bench/safety_matrix/probes/`.
+
+- [ ] +bootstrap +safety +AI-D @main Backport to stage1: a match arm and a by-value self receiver mark the value moved id:jhy7v
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** after the open soundness holes on `main` (id:z0183 to id:z0175): the maintainer's decision (a) of id:gsa2r. Today's closure takes the routes only on `File`, with a harmless second `close`, so the holes go first.
+
+    - **Do:** a recorded backport (`doc/bootstrap/two_stage.md` §3) of both fixes into `bootstrap/stage1/src/`. Route 1 is written and tried (id:z0135: seven lines after the guard in `lower_zir/match.zrl`). Route 2 is not: find where stage1's `lower_zir/expr.zrl` lowers a method call's receiver when the method takes `self` by value, and mark it moved as `src/` does (compare with `src/lower_zir/expr.zrl`'s method-call path, and with the tuple-argument loop that already consumes ordinary arguments). Both changes are the minimum in the stage0-C dialect. `bootstrap/stage1/PIN` is unchanged; record the backport in §3 beside the `.note.GNU-stack` entry, and remove the `KNOWN_ISSUES.md` §1 entry (git:e56548e).
+    - **Checks:** C1 stage0-c builds the patched stage1 with no `warning:` (`make build/zoril-stage1` from a clean `build/`). C2 through the stage1 pipeline (id:z0135's `s1.sh`, recorded in the task text), `m1` and `m2`/`m4` exit 1 (one drop), and `tests/stdlib/test_stdlib_fd.zrl`, `tests/stdlib/test_stdlib_io_result.zrl` and every `tests/stdlib/` test of a closure module exit 0; quote each. C3 take each fix out and watch its reproduction exit 2. C4 the generation-1 compiler stage1 builds makes no `close` that returns `-9` while compiling id:z0135's three-line program (`gdb`, `catch syscall close`). C5 §3's verification: the candidate builds current `src/`, the fixpoint holds (`make preflight-changed`), `make test`, `make preflight`, each `Total:` quoted.
 
 - [ ] +merge +AI-D @provenance Merge `main` into `provenance` before the series resumes id:0m61c
     > **Created:** 2026-11-14
