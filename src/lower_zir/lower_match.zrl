@@ -20,6 +20,7 @@ use io::{eprint, stderr};
 use fmt::write_u64;
 use mem_raw::zoril_allocator_alloc;
 use resolve::{Symbol, SymbolKind};
+use vec::Vec;
 use zir::{LOCAL_KIND_LET, LOCAL_KIND_LETMUT, LOCAL_KIND_TMP, Place, Projection, ZirRvalue, ZirStmt, ZirTerminator};
 
 // Where a tuple or struct sub-pattern is tested: the value's place and type, after
@@ -97,8 +98,17 @@ impl ZirLowerer {
             };
 
             self.pattern_moved = false;
+            self.pattern_skipped.clear();
+            self.pattern_has_guard = arm.guard != 0 as u32;
             self.lower_pattern(scrut_place, scrut_ty, arm.pattern, arm_body_block, fail_block);
             let arm_moves = self.pattern_moved;
+            // The guard may lower a nested `match`, which reuses the field.
+            let mut skipped = unsafe { Vec::<Place>.new_in_raw(self.arena) };
+            let mut si = 0 as usize;
+            while si < self.pattern_skipped.len() {
+                skipped.push(self.pattern_skipped[si]);
+                si = si + 1 as usize;
+            }
 
             self.switch_to_block(arm_body_block);
 
@@ -113,6 +123,11 @@ impl ZirLowerer {
             // An arm that binds nothing by value (`E.B`, `_`, `E.A(_)`) moves nothing, so the
             // scrutinee stays owned and is dropped at the end of its own scope.
             if arm_moves && !self.pattern_peels_pointer(self.get_type_tag(scrut_ty)) {
+                let mut di = 0 as usize;
+                while di < skipped.len() {
+                    self.emit(ZirStmt.Drop(skipped[di], self.get_expr_span(arm.body)));
+                    di = di + 1 as usize;
+                }
                 self.consume_place_if_move(&scrut_place);
             }
 
@@ -240,6 +255,9 @@ impl ZirLowerer {
 
         match pat {
             Pattern.Wildcard => {
+                if !by_ref && self.type_needs_drop(scrut_ty) {
+                    self.note_skipped(scrut_place, scrut_ty, span);
+                }
                 self.terminate(ZirTerminator.Jmp(pass_block));
             },
             Pattern.Ident(name) => {
@@ -304,25 +322,54 @@ impl ZirLowerer {
             },
             Pattern.Or(pats) => {
                 let mut pi = 0 as usize;
+                self.pattern_or_depth = self.pattern_or_depth + 1 as u32;
                 while pi < pats.len {
                     let next_pat_check_block = if pi + 1 < pats.len {
                         self.new_block("pat_check")
                     } else {
                         fail_block
                     };
+                    let skipped_before = self.pattern_skipped.len();
+                    let alt_block = self.new_block("pat_alt");
                     self.lower_pattern_at(
                         scrut_place,
                         scrut_ty,
                         pats[pi],
-                        pass_block,
+                        alt_block,
                         next_pat_check_block,
                         by_ref
                     );
+                    // Only the alternative that matched skips its parts, so its drops sit on its
+                    // own edge into the arm. A guard that fails would send the scrutinee on to the
+                    // next arm after these parts were dropped.
+                    let saved_block = self.current_block_idx;
+                    self.switch_to_block(alt_block);
+                    if self.pattern_skipped.len() > skipped_before {
+                        if self.pattern_moved && self.pattern_has_guard {
+                            self.report_prefix(span);
+                            eprint(
+                                "an or-pattern that moves a value out cannot skip a part that needs a drop when the arm has a guard; bind the part, or split the alternatives into arms\n"
+                            );
+                        }
+                        if self.pattern_moved {
+                            let mut di = skipped_before;
+                            while di < self.pattern_skipped.len() {
+                                self.emit(ZirStmt.Drop(self.pattern_skipped[di], span));
+                                di = di + 1 as usize;
+                            }
+                        }
+                        while self.pattern_skipped.len() > skipped_before {
+                            self.pattern_skipped.pop();
+                        }
+                    }
+                    self.terminate(ZirTerminator.Jmp(pass_block));
+                    self.switch_to_block(saved_block as u32);
                     if pi + 1 < pats.len {
                         self.switch_to_block(next_pat_check_block);
                     }
                     pi = pi + 1 as usize;
                 }
+                self.pattern_or_depth = self.pattern_or_depth - 1 as u32;
             },
             Pattern.Range(rp) => {
                 self.lower_range_pattern(rp, scrut_place, scrut_ty, pass_block, fail_block, span);
@@ -751,14 +798,47 @@ impl ZirLowerer {
             self.terminate(ZirTerminator.Jmp(pass_block));
             return;
         }
+        // A moving binding marks the aggregate it comes from moved, and a part skipped after that
+        // could no longer be reached, so the skipped parts are noted before any part is bound.
+        let mut skipped_here = unsafe { Vec::<bool>.new_in_raw(self.arena) };
         let mut i = 0 as usize;
+        while i < pats.len {
+            let is_wild = matches_wildcard(self.resolver.ast.patterns[pats[i] as usize]);
+            skipped_here.push(is_wild);
+            if is_wild && !by_ref && self.type_needs_drop(tys[i]) {
+                let span = self.resolver.ast.pattern_spans[pats[i] as usize];
+                self.note_skipped(places[i], tys[i], span);
+            }
+            i = i + 1 as usize;
+        }
+        i = 0 as usize;
         while i < pats.len {
             let last = i + 1 as usize == pats.len;
             let next = if last { pass_block } else { self.new_block("pat_next") };
-            self.lower_pattern_at(places[i], tys[i], pats[i], next, fail_block, by_ref);
+            if skipped_here[i] {
+                self.terminate(ZirTerminator.Jmp(next));
+            } else {
+                self.lower_pattern_at(places[i], tys[i], pats[i], next, fail_block, by_ref);
+            }
             if !last { self.switch_to_block(next); }
             i = i + 1 as usize;
         }
+    }
+
+    // Remember the skipped part at PLACE (of type TY) to drop it if the arm moves another part. A
+    // temporary the pattern made to reach the part (an enum payload address) is only defined on
+    // the pattern's own blocks, so the arm reaches the part through a local that holds its address.
+    fn note_skipped(self: &mut ZirLowerer, place: Place, ty: u32, span: Span) {
+        let ptr_local = self.define_local(
+            0 as *mut Symbol,
+            self.get_ptr_type(ty),
+            LOCAL_KIND_LETMUT
+        );
+        let reg = self.next_region_id;
+        self.next_region_id = self.next_region_id + 1 as u32;
+        self.emit(ZirStmt.Let(ptr_local, ZirRvalue.Ref(place, reg), span));
+        let base = Place { base: ptr_local, projections: @slice(0 as *mut Projection, 0 as usize) };
+        self.pattern_skipped.push(self.append_projection(&base, Projection.Deref));
     }
 
     // `Name { field: p, .. }` against a struct value at PLACE.
@@ -812,6 +892,26 @@ impl ZirLowerer {
             eprint("this pattern does not name every field of `");
             eprint(self.mono.type_display(ty));
             eprint("`; add `..` to ignore the rest\n");
+        }
+        if sp.has_rest && !by_ref {
+            let p_def = self.struct_def(ty);
+            let nfields = self.struct_field_count(ty);
+            let mut fi = 0 as usize;
+            while fi < nfields {
+                let fname = unsafe { (*p_def).get_Struct().fields[fi].name };
+                let fty = unsafe { (*p_def).get_Struct().fields[fi].ty };
+                let mut named = false;
+                let mut ni = 0 as usize;
+                while ni < n {
+                    if sp.fields[ni].name == fname { named = true; }
+                    ni = ni + 1 as usize;
+                }
+                if !named && self.type_needs_drop(fty) {
+                    let skipped_place = self.append_projection(&place, Projection.Field(fname));
+                    self.note_skipped(skipped_place, fty, span);
+                }
+                fi = fi + 1 as usize;
+            }
         }
         self.lower_pattern_seq(places, tys, pats, pass_block, fail_block, by_ref);
     }
@@ -1050,4 +1150,11 @@ impl ZirLowerer {
         };
         self.terminate(ZirTerminator.Branch(cond_place, pass_block, fail_block));
     }
+}
+
+fn matches_wildcard(pat: Pattern) -> bool {
+    return match pat {
+        Pattern.Wildcard => true,
+        _ => false,
+    };
 }

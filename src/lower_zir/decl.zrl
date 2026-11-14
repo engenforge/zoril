@@ -77,6 +77,12 @@ pub struct ZirLowerer {
     // Set by a pattern binding that moves a value out of the scrutinee (by value, not Copy):
     // only an arm whose pattern sets it consumes the scrutinee; any other leaves it owned.
     pub pattern_moved: bool,
+    // The parts a by-value pattern skips (`_`, a struct pattern's `..`) whose type needs a drop:
+    // an arm that moves another part out consumes the scrutinee, so it drops these itself.
+    // PATTERN_OR_DEPTH is above 0 inside an or-pattern, whose alternatives each drop their own.
+    pub pattern_skipped: Vec<Place>,
+    pub pattern_or_depth: u32,
+    pub pattern_has_guard: bool,
     pub had_error: bool,
     // Errors reported so far; a cleanup compares it around a `defer` to see whether that `defer` failed.
     pub error_count: u32,
@@ -150,6 +156,9 @@ impl ZirLowerer {
             next_region_id: 1 as u32,
             pattern_binds_fresh: false,
             pattern_moved: false,
+            pattern_skipped: unsafe { Vec::<Place>.new_in_raw(arena) },
+            pattern_or_depth: 0 as u32,
+            pattern_has_guard: false,
             had_error: false,
             error_count: 0 as u32,
             locals: unsafe { Vec::<Local>.new_in_raw(arena) },

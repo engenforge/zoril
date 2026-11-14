@@ -1,0 +1,63 @@
+// A pattern that moves one part of a payload drops the parts it skips: the arm consumes the whole
+// scrutinee, so a `_` or a `..` left those values undropped. Each case returns its drop count.
+// expected exit 0
+struct S { p: *mut u8 }
+impl Drop for S {
+    fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } }
+}
+enum P { A(S, S), B }
+enum N { A(P), B }
+enum O { A(S, S), C(S, S), D }
+enum C { A(S, i32), B }
+struct W2 { a: S, b: S }
+enum Q { A(W2), B }
+fn mk(fp: *mut u8) -> S { return S { p: fp }; }
+fn first(fp: *mut u8) { let e = P.A(mk(fp), mk(fp)); match e { P.A(s, _) => {}, P.B => {}, } }
+fn second(fp: *mut u8) { let e = P.A(mk(fp), mk(fp)); match e { P.A(_, t) => {}, P.B => {}, } }
+fn rest(fp: *mut u8) {
+    let e = Q.A(W2 { a: mk(fp), b: mk(fp) });
+    match e { Q.A(W2 { a: a, .. }) => {}, Q.B => {}, }
+}
+fn nested(fp: *mut u8) {
+    let e = N.A(P.A(mk(fp), mk(fp)));
+    match e { N.A(P.A(s, _)) => {}, N.A(P.B) => {}, N.B => {}, }
+}
+fn or_pattern(fp: *mut u8) {
+    let e = O.C(mk(fp), mk(fp));
+    match e { O.A(s, _) | O.C(_, s) => {}, O.D => {}, }
+}
+fn guard_fails(fp: *mut u8) {
+    let e = P.A(mk(fp), mk(fp));
+    let c = false;
+    match e { P.A(s, _) if c => {}, P.A(_, _) => {}, P.B => {}, }
+}
+fn nothing_moves(fp: *mut u8) { let e = P.A(mk(fp), mk(fp)); match e { P.A(_, _) => {}, P.B => {}, } }
+fn copy_skipped(fp: *mut u8) { let e = C.A(mk(fp), 1); match e { C.A(s, _) => {}, C.B => {}, } }
+fn if_let(fp: *mut u8) { let e = P.A(mk(fp), mk(fp)); if let P.A(s, _) = e { let n = 1; } }
+fn tuple_later(fp: *mut u8) {
+    let x = (O.A(mk(fp), mk(fp)), P.A(mk(fp), mk(fp)));
+    match x { (O.A(s, _), P.A(_, _)) => {}, _ => {}, }
+}
+fn tuple_earlier(fp: *mut u8) {
+    let x = (P.A(mk(fp), mk(fp)), O.A(mk(fp), mk(fp)));
+    match x { (P.A(_, _), O.A(s, _)) => {}, _ => {}, }
+}
+fn count(f: fn(*mut u8)) -> u8 {
+    let mut flag = 0 as u8;
+    f(&mut flag as *mut u8);
+    return flag;
+}
+fn main() -> i32 {
+    if count(first) != 2 as u8 { return 1; }
+    if count(second) != 2 as u8 { return 2; }
+    if count(rest) != 2 as u8 { return 3; }
+    if count(nested) != 2 as u8 { return 4; }
+    if count(or_pattern) != 2 as u8 { return 5; }
+    if count(guard_fails) != 2 as u8 { return 6; }
+    if count(nothing_moves) != 2 as u8 { return 7; }
+    if count(copy_skipped) != 1 as u8 { return 8; }
+    if count(if_let) != 2 as u8 { return 9; }
+    if count(tuple_later) != 4 as u8 { return 10; }
+    if count(tuple_earlier) != 4 as u8 { return 11; }
+    return 0;
+}
