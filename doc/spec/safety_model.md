@@ -184,7 +184,7 @@ Regarding runtime abort conventions: `zoril_abort()` exits **1** (unhandled logi
 
 ### Gap summary
 
-No row above is marked **GAP** today. That does not mean no hole is open: the 18 holes still open in checked code are routes inside rows the matrix counts as closed, and each is a `known_gap` probe listed under [Known gaps](#known-gaps).
+No row above is marked **GAP** today. That does not mean no hole is open: the 19 holes still open in checked code are routes inside rows the matrix counts as closed, and each is a `known_gap` probe listed under [Known gaps](#known-gaps).
 
 Every program that showed a hole in one of the rows is kept as a `compile_reject` probe (or, for the two drop-count probes, an `accept` that asserts one drop), so the hole cannot reopen unnoticed.
 
@@ -259,6 +259,7 @@ Every probe in `bench/safety_matrix/probes/` whose expectation is `known_gap` is
 - **[`gap_77_vec_clone_launders_frame_views.zrl`](../../bench/safety_matrix/probes/gap_77_vec_clone_launders_frame_views.zrl)**: `impl<T: Clone> Clone for Vec<T>` declares `#[borrows()]`, so its result holds no borrow, and the elements it clones are not tied to it: returning `v.clone()` of a local `Vec` holding views of a stack array is accepted (returning `v` is refused), and the caller reads the dead frame. Route class: a generic `#[borrows()]` `Clone` impl cloning a `T` that may be a view
 - **[`gap_78_option_clone_launders_frame_view.zrl`](../../bench/safety_matrix/probes/gap_78_option_clone_launders_frame_view.zrl)**: The same through `impl<T: Clone> Clone for Option<T>`: the clone of `Some(s)`, `s` a view of a stack array, is returned. Route class: a generic `#[borrows()]` `Clone` impl cloning a `T` that may be a view
 - **[`gap_79_struct_holding_frame_view_pushed.zrl`](../../bench/safety_matrix/probes/gap_79_struct_holding_frame_view_pushed.zrl)**: A struct literal holding a `[u8]` view of a stack array is pushed into the caller's `Vec` (`out.push(H { s: s })`): the bare view is refused with a region-escape error, the struct carrying it is not, so the caller reads the dead frame (exit 77 where the frame held 42). `resize` and `extend_from_slice` of such a struct take the same route. Route class: a struct whose field is a frame view, moved into memory that outlives the frame
+- **[`gap_80_struct_view_cloned_into_callers_vec.zrl`](../../bench/safety_matrix/probes/gap_80_struct_view_cloned_into_callers_vec.zrl)**: A struct holding a `[u8]` view of a stack array is cloned into the caller's `Vec` by `out.resize(1, H { s: &buf })`, with `impl Clone for H` returning `H { s: self.s }`: the clone's result is not tied to the view `self` holds, so the caller reads the dead frame (exit 77 where the frame held 42); `extend_from_slice` of an array of such structs is the same. Route class: a `Clone` impl whose result copies a view it does not declare (the class of `gap_77`)
 
 ---
 
