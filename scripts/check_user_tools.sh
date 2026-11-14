@@ -61,10 +61,14 @@ fi
 git_log="$REPO_ROOT/build/user_tools_git.log"
 rm -f "$git_log"
 
-cat << 'EOF' > "$git_shim_dir/git"
+real_git="$(command -v git)"
+cat << EOF > "$git_shim_dir/git"
 #!/bin/sh
-caller=$(ps -o args= -p "$PPID" 2>/dev/null || echo "unknown")
-printf '%s: git %s\n' "$caller" "$*" >> "$USER_TOOLS_GIT_LOG"
+caller=\$(ps -o args= -p "\$PPID" 2>/dev/null || echo "unknown")
+printf '%s: git %s\n' "\$caller" "\$*" >> "\$USER_TOOLS_GIT_LOG"
+case "\$caller" in
+    *scripts/version.sh*) exec "$real_git" "\$@" ;;
+esac
 exit 1
 EOF
 chmod +x "$git_shim_dir/git"

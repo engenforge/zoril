@@ -53,11 +53,16 @@ check_mode() {
     mode="$1"
     out="$TR_WORK/output.$mode"
     expected="$EXPECTED_TOTAL"
+    exclude=""
+    if ! command -v timeout >/dev/null 2>&1; then
+        expected="$EXPECTED_TOTAL_NO_TIMEOUT"
+        exclude="tests/runner/fixtures/tests/hangs.zrl"
+    fi
     mkdir -p "$TR_WORK"
     case "$mode" in
-        quiet)   "$RUNNER_UNDER_TEST" --timeout 2 --quiet $FIXTURES > "$out" 2>&1 ;;
-        default) "$RUNNER_UNDER_TEST" --timeout 2 $FIXTURES > "$out" 2>&1 ;;
-        verbose) "$RUNNER_UNDER_TEST" --timeout 2 --verbose $FIXTURES > "$out" 2>&1 ;;
+        quiet)   TR_EXCLUDE="$exclude" "$RUNNER_UNDER_TEST" --timeout 2 --quiet $FIXTURES > "$out" 2>&1 ;;
+        default) TR_EXCLUDE="$exclude" "$RUNNER_UNDER_TEST" --timeout 2 $FIXTURES > "$out" 2>&1 ;;
+        verbose) TR_EXCLUDE="$exclude" "$RUNNER_UNDER_TEST" --timeout 2 --verbose $FIXTURES > "$out" 2>&1 ;;
         opts_hidden)
             shim="$TR_WORK/shim_opts"
             path_without "$shim" git timeout setsid valgrind dprint rustc
