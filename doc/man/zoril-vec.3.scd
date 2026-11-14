@@ -23,7 +23,6 @@ impl<T> Vec<T> {
     pub fn pop(self: &mut Vec<T>) -> Option<T>;
     pub fn get(self: &Vec<T>, index: usize) -> Option<&T>;
     pub fn get_mut(self: &mut Vec<T>, index: usize) -> Option<&mut T>;
-    pub fn resize(self: &mut Vec<T>, new_len: usize, value: T);
     pub fn set(self: &mut Vec<T>, index: usize, val: T);
     pub fn len(self: &Vec<T>) -> usize;
     pub fn cap(self: &Vec<T>) -> usize;
@@ -34,6 +33,9 @@ impl<T> Vec<T> {
     pub fn as_mut_slice(self: &mut Vec<T>) -> [mut T];
     pub fn remove(self: &mut Vec<T>, index: usize) -> T;
     pub fn free(self: &mut Vec<T>);
+}
+impl<T: Clone> Vec<T> {
+    pub fn resize(self: &mut Vec<T>, new_len: usize, value: T);
     pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]);
 }
 pub fn extend_bytes(v: &mut Vec<u8>, bytes: [u8]);
@@ -120,14 +122,6 @@ pub fn get_mut(self: &mut Vec<T>, index: usize) -> Option<&mut T>;
 
 	Returns a mutable reference to the element at index, or None if out of bounds.
 
-*resize*
-```
-pub fn resize(self: &mut Vec<T>, new_len: usize, value: T);
-```
-
-	Resizes the vector to new\_len elements, filling each new one with a clone of
-	value; T must implement Clone. Shrinking keeps the first new\_len.
-
 *set*
 ```
 pub fn set(self: &mut Vec<T>, index: usize, val: T);
@@ -201,13 +195,21 @@ pub fn free(self: &mut Vec<T>);
 
 	Explicitly frees the vector's backing memory buffer.
 
+*resize*
+```
+pub fn resize(self: &mut Vec<T>, new_len: usize, value: T);
+```
+
+	Resizes the vector to new\_len elements, filling each new one with a clone of
+	value. Shrinking keeps the first new\_len.
+
 *extend_from_slice*
 ```
 pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]);
 ```
 
-	Appends a clone of each element of slice to the end of the vector; T must
-	implement Clone. extend\_bytes appends bytes without a call per byte.
+	Appends a clone of each element of slice to the end of the vector.
+	extend\_bytes appends bytes without a call per byte.
 	A clone of a view is the same view, but clone's #[borrows()] result hides that from
 	the body's summary, so the store is declared (probe 418 is accepted without it).
 

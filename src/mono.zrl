@@ -913,6 +913,21 @@ impl Monomorphizer {
         return true;
     }
 
+    // The arguments of IMP's own type parameters (`T` of `impl<T: Copy> W<T>`) for receiver
+    // SELF_TY, one per parameter, 0 where SELF_TY does not decide it; none for an impl that
+    // declares no parameters of its own. The list is a fresh arena one (as `impl_scope` makes
+    // for such an impl), so a caller may keep it across further `&mut self` calls.
+    #[borrows()]
+    pub fn impl_type_args(self: &mut Monomorphizer, imp: &ImplDecl, self_ty: u32) -> [u32] {
+        if imp.type_params.len == 0 as usize { return @slice(0 as *mut u32, 0 as usize); }
+        return self.impl_scope(
+            imp,
+            self_ty,
+            imp.type_params,
+            @slice(0 as *mut u32, 0 as usize)
+        ).args;
+    }
+
     // The type parameters impl IMP's methods see for receiver type SELF_TY, and their
     // arguments: the impl's own (`A` of `impl<A> Box2<A>`), bound by matching its target type
     // against SELF_TY; for an impl that declares none (`impl Vec<T>`), the type's own

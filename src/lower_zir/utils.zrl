@@ -1601,9 +1601,42 @@ impl ZirLowerer {
     ) -> bool {
         let p_decl: Decl = self.resolver.ast.decls[decl_id as usize];
         if p_decl.get_tag() != DECL_FN { return true; }
+        return self.check_type_param_bounds(
+            p_decl.get_Fn().type_params,
+            type_args,
+            p_decl.get_Fn().source_file,
+            span
+        );
+    }
+
+    // A method's bounds are those of its impl's own parameters (`impl<T: Copy> W<T>`), bound by
+    // the receiver type SELF_TY, and those of its own (`fn dup<U: Copy>`), bound by TYPE_ARGS:
+    // a call must meet both, as a call of a generic function meets its bounds.
+    pub fn check_method_type_arg_bounds(
+        self: &mut ZirLowerer,
+        imp: &ImplDecl,
+        f: &FnDecl,
+        self_ty: u32,
+        type_args: [u32],
+        span: Span
+    ) -> bool {
+        let module = if f.source_file != 0 as u32 { f.source_file } else { imp.source_file };
+        let impl_args = self.mono.impl_type_args(imp, self_ty);
+        let impl_hold = self.check_type_param_bounds(imp.type_params, impl_args, module, span);
+        let own_hold = self.check_type_param_bounds(f.type_params, type_args, module, span);
+        return impl_hold && own_hold;
+    }
+
+    // Each bound on TYPE_PARAMS, as written in MODULE, holds for the matching TYPE_ARGS (an
+    // argument of 0 is not yet known and is not checked); each that fails is reported at SPAN.
+    pub fn check_type_param_bounds(
+        self: &mut ZirLowerer,
+        type_params: [TypeParam],
+        type_args: [u32],
+        module: u32,
+        span: Span
+    ) -> bool {
         let mut all_hold = true;
-        let type_params = p_decl.get_Fn().type_params;
-        let module = p_decl.get_Fn().source_file;
         let copy_name = self.intern_table.intern("Copy");
         let mut ti = 0 as usize;
         while ti < type_params.len && ti < type_args.len {

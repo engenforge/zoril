@@ -5,7 +5,7 @@
 .nh
 .ad l
 .\" Begin generated content:
-.TH "zoril\-vec" "3" "2026\-11\-11"
+.TH "zoril\-vec" "3" "2026\-11\-14"
 .PP
 .SH NAME
 .PP
@@ -31,7 +31,6 @@ impl<T> Vec<T> {
     pub fn pop(self: &mut Vec<T>) \-> Option<T>;
     pub fn get(self: &Vec<T>, index: usize) \-> Option<&T>;
     pub fn get_mut(self: &mut Vec<T>, index: usize) \-> Option<&mut T>;
-    pub fn resize(self: &mut Vec<T>, new_len: usize, value: T);
     pub fn set(self: &mut Vec<T>, index: usize, val: T);
     pub fn len(self: &Vec<T>) \-> usize;
     pub fn cap(self: &Vec<T>) \-> usize;
@@ -42,6 +41,9 @@ impl<T> Vec<T> {
     pub fn as_mut_slice(self: &mut Vec<T>) \-> [mut T];
     pub fn remove(self: &mut Vec<T>, index: usize) \-> T;
     pub fn free(self: &mut Vec<T>);
+}
+impl<T: Clone> Vec<T> {
+    pub fn resize(self: &mut Vec<T>, new_len: usize, value: T);
     pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]);
 }
 pub fn extend_bytes(v: &mut Vec<u8>, bytes: [u8]);
@@ -169,18 +171,6 @@ pub fn get_mut(self: &mut Vec<T>, index: usize) \-> Option<&mut T>;
 Returns a mutable reference to the element at index, or None if out of bounds.\&
 .PP
 .RE
-\fBresize\fR
-.nf
-.RS 4
-pub fn resize(self: &mut Vec<T>, new_len: usize, value: T);
-.fi
-.RE
-.PP
-.RS 4
-Resizes the vector to new_len elements, filling each new one with a clone of
-value; T must implement Clone.\& Shrinking keeps the first new_len.\&
-.PP
-.RE
 \fBset\fR
 .nf
 .RS 4
@@ -294,6 +284,18 @@ pub fn free(self: &mut Vec<T>);
 Explicitly frees the vector'\&s backing memory buffer.\&
 .PP
 .RE
+\fBresize\fR
+.nf
+.RS 4
+pub fn resize(self: &mut Vec<T>, new_len: usize, value: T);
+.fi
+.RE
+.PP
+.RS 4
+Resizes the vector to new_len elements, filling each new one with a clone of
+value.\& Shrinking keeps the first new_len.\&
+.PP
+.RE
 \fBextend_from_slice\fR
 .nf
 .RS 4
@@ -302,8 +304,8 @@ pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]);
 .RE
 .PP
 .RS 4
-Appends a clone of each element of slice to the end of the vector; T must
-implement Clone.\& extend_bytes appends bytes without a call per byte.\&
+Appends a clone of each element of slice to the end of the vector.\&
+extend_bytes appends bytes without a call per byte.\&
 A clone of a view is the same view, but clone'\&s #[borrows()] result hides that from
 the body'\&s summary, so the store is declared (probe 418 is accepted without it).\&
 .PP

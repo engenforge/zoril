@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: error: no field 'clone' on 'S'
+// EXPECT: error: type `S` does not implement trait `Clone`
 // resize fills each new slot with a clone of its value, so an element type with no Clone is
 // refused rather than padded with zero bytes.
 import "vec.zrl";

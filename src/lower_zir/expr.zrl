@@ -1153,6 +1153,15 @@ impl ZirLowerer {
                     return self.no_place();
                 }
                 let self_ty = self.resolver.resolve_type(imp.target_ty);
+                if !self.check_method_type_arg_bounds(
+                    &imp,
+                    f,
+                    self_ty,
+                    @slice(0 as *mut u32, 0 as usize),
+                    span
+                ) {
+                    return self.no_place();
+                }
                 self.fn_value(
                     self.mono.instantiate_method(
                         f,
@@ -1910,6 +1919,9 @@ impl ZirLowerer {
                 return Option.Some(self.no_place());
             }
             let type_name = self.get_type_decl(resolved_ty).name;
+            if !self.check_method_type_arg_bounds(&imp, m_fn, resolved_ty, type_args, span) {
+                return Option.Some(self.no_place());
+            }
             let func_idx = self.mono.instantiate_method(
                 m_fn,
                 type_args,
@@ -2228,6 +2240,15 @@ impl ZirLowerer {
                 }
             }
             let impl_name = self.get_type_decl(impl_self_ty).name;
+            if !self.check_method_type_arg_bounds(
+                imp,
+                m_decl,
+                impl_self_ty,
+                method_type_args,
+                span
+            ) {
+                return Option.Some(self.no_place());
+            }
             let func_idx = self.mono.instantiate_method(
                 m_decl,
                 method_type_args,
@@ -2522,6 +2543,9 @@ impl ZirLowerer {
                 } else {
                     @slice(0 as *mut u32, 0 as usize)
                 };
+                if !self.check_method_type_arg_bounds(imp, f, self_ty, method_type_args, span) {
+                    return CalleeLookup.Rejected;
+                }
                 return CalleeLookup.Found(
                     self.mono.instantiate_method(
                         f,

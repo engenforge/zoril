@@ -1,0 +1,36 @@
+// expected exit 0
+// Calls whose impl-block and method bounds hold compile and run: a `Copy` argument for
+// `impl<T: Copy>` and `fn r<U: Copy>`, and a `#[derive(Clone)]` element for `Vec.resize` and
+// `extend_from_slice`, which need `T: Clone`.
+import "core.zrl";
+import "vec.zrl";
+use vec::Vec;
+
+struct W<T> { x: T }
+impl<T> W<T> { fn get(self: &W<T>) -> i32 { return 1; } }
+impl<T: Copy> W<T> { fn dup(self: &W<T>) -> i32 { return 2; } }
+
+struct V { x: i32 }
+impl V {
+    fn m<U: Copy>(u: &U) -> i32 { return 2; }
+    fn r<U: Copy>(self: &V, u: &U) -> i32 { return 3; }
+}
+
+#[derive(Clone)]
+struct N { a: i32 }
+
+fn through<T>(w: &W<T>) -> i32 { return w.dup(); }
+
+fn main() -> i32 {
+    let w = W { x: 5 };
+    if w.get() + w.dup() + through(&w) != 5 { return 1; }
+    let v = V { x: 1 };
+    if v.r(&7) + V.m::<i32>(&5) + V::m::<i32>(&5) != 7 { return 2; }
+    let mut ns = Vec::<N>.new();
+    ns.resize(2, N { a: 4 });
+    let mut more = Vec::<N>.new();
+    more.push(N { a: 6 });
+    ns.extend_from_slice(more.as_slice());
+    if ns.len() != 3 as usize || ns[2].a != 6 || ns[0].a != 4 { return 3; }
+    return 0;
+}
