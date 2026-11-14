@@ -790,3 +790,53 @@ Paused by the maintainer on 2026-11-14 in favour of open soundness holes. These 
 
     - **Do:** list candidates, removing nothing yet. Look for: per-file tests whose normalised ZIL or diagnostic output equals another's; `stage0c-*` items that duplicate `make -C bootstrap/stage0-c` targets run elsewhere; tests of features or bugs whose code is gone (search each test's subject in `src/`); gates whose check another gate already makes. Also list the tests that only one person can say are needed, for the maintainer. Each candidate gets its evidence and what would be lost. Removals are a separate task, with `make test` totals before and after.
     - **Narrowed by id:z0103 (2026-11-06):** per-file tests cost about 34 ms each (F2), so duplicates among them save seconds. Look first at the gates, the 48 scenarios and the seven `stage0c-*` gates (about 400 items), whose times id:z0105 records. Per-file duplicates are still listed, but for clarity, not for time.
+
+## Idiomatic Zoril in the compiler: an evaluation (requested by the maintainer, 2026-11-14)
+
+The maintainer wants the compiler written in idiomatic Zoril as far as possible. Most of `src/` predates the features it could use: on 2026-11-14 it had 971 `unsafe`, 348 `@slice(` constructions, 72 lines of pointer arithmetic over arrays (`(args as usize + i * sizeof(Place)) as *mut Place`), 341 `0 as *mut` sentinels, and 581 `while` loops against 363 `for`. stage1 is not the main limit: of 12 idioms probed (id:z0135's follow-up, `build/z135/idiom/`), it accepted generic structs and `impl<T: Copy>`, traits with bounds, `?`, `if let`, `while let`, `for` over ranges and slices, `defer`, methods on enums and `Vec<T>` of a struct, and refused an expression-bodied closure (`|x: i32| x + k`) and a capturing closure passed as a `fn` value. Until id:jhy7v lands, the closure must also avoid moving a value with a destructor out of a `match` or through a by-value `self`. A re-pin to gain closures means porting all of `src/` to the stage0-C dialect by hand (`doc/bootstrap/two_stage.md` §3). The series is an evaluation first: it measures, pilots one module, and then the maintainer decides whether and how far to convert. A conversion, if decided, is its own series on its own branch.
+
+- [ ] +idiomatic +audit +AI-D IZ1 Census: which low-level patterns src/ uses, where, and the idiom that would replace each id:d1zx4
+    > **Created:** 2026-11-14
+    > **Branch:** `main` (it reads and measures only; no code change)
+    > **Placed:** first of the series: the census the pilot and the decision use.
+
+    - **Do:** count, per file of `src/` and of the `stdlib/` modules in its closure (`--emit-deps`), each low-level pattern, and give for each the idiom that would replace it with one before-and-after example from the tree. Start from: pointer arithmetic over an array (`(p as usize + i * sizeof(T)) as *mut T`) where a `Vec<T>` or a slice index would do; `@slice(ptr, len)` built by hand; `0 as *mut T` as "none" where `Option<&T>` would do; integer tags and `u32` ids standing for an enum; `while` loops with a hand-kept index where `for` over a range or a slice would do; `unsafe` blocks, split into those a safe API would remove and those that are inherent (syscalls, the arena, the runtime ABI); and long `if`/`else if` chains over a tag where a `match` would do. Add any other pattern found while reading, such as hand-built strings where `fmt` would do.
+    - **Also:** separate the code in hot paths from the rest, using one profile of `build/zoril` compiling `src/` (`perf` if the host has it, otherwise the `make preflight` benchmark's per-phase times), so the pilot can weigh speed where it matters.
+    - **Checks:** C1 a table here: pattern, count, the files with the most, and one example each, with the commands that count them (POSIX `grep`/`awk`, recorded so they can be run again). C2 the hot-path list with the profile command and its output. C3 the patterns ranked by how much a rewrite would remove (`unsafe`, lines, marker density from `sh scripts/marker_density.sh`), with the reasoning.
+
+- [ ] +idiomatic +audit +bootstrap +AI-D IZ2 Which idioms the pinned stage1 accepts and builds correctly, and what a re-pin would add id:b6rf9
+    > **Created:** 2026-11-14
+    > **Branch:** `main` (probes under `build/` only)
+    > **Depends:** id:d1zx4
+    > **Placed:** after IZ1: each idiom the census names is probed here.
+
+    - **Already probed (2026-11-14, three-line programs through the stage1 pipeline `build/zoril-stage1` → `build/zilc-stage1` → qbe/as/ld, and through `build/zoril`):** accepted by both and correct: a generic struct with `impl<T: Copy>`, a trait with a generic bound and `for x in xs`, `?` on a `Result`, `if let`, `while let`, `for i in 0..5`, `defer`, a method on an enum with a `match` on `self`, and `Vec<P>` of a struct iterated with `for p in v.as_slice()`. Refused by stage1 and accepted by `build/zoril`: `let f = |x: i32| x + k;` (`error: expected {, but found identifier`; the block form `|x: i32| -> i32 { return x + k; }` is accepted) and a capturing closure passed as a `fn` argument (`capturing closure can only be bound with `let` or called directly`). Built wrongly by stage1: a value with a destructor moved out of a `match` or through a by-value `self` (id:z0135; fixed by id:jhy7v).
+    - **Do:** probe every idiom IZ1 names, each on its own and in the shape IZ1's example has (a `Vec<T>` of the compiler's own structs, `Option<&T>` fields, a `match` over an enum of IR nodes), and for each record: accepted or refused by stage1, run result under both, and whether the ZIL stage1 emits is the same size within 10% (a fat lowering in generation 1 slows only the bootstrap; record it, it does not refuse an idiom). Then list what a re-pin would add (the refused idioms) and what it costs: a hand port of `src/` to the stage0-C dialect, about 47,000 lines today, against the complexity ceiling in `doc/bootstrap/two_stage.md` §4.
+    - **Checks:** C1 each probe's program and both results here (the programs in the task text, under 10 lines each). C2 the re-pin answer: the idioms it adds, the code IZ1 counts that would use them, and an estimate of the port with its basis.
+
+- [ ] +idiomatic +measurement +AI-D IZ3 Pilot: one module rewritten in idiomatic Zoril, measured against the original id:2pkz3
+    > **Created:** 2026-11-14
+    > **Branch:** a scratch branch off `main` (`idiomatic-pilot`), never merged: the pilot measures, it does not land
+    > **Depends:** id:b6rf9
+    > **Placed:** after IZ2: the pilot uses only idioms IZ2 shows stage1 builds correctly.
+
+    - **Do:** pick one self-contained module of a few hundred lines that IZ1 ranks high (candidates: `src/pair_map.zrl`, `src/route_set.zrl`, `src/index_facts.zrl`, or one file of `src/fmt/`), and rewrite it in idiomatic Zoril with no change in behaviour. Measure before and after, on the same host, each the median of three runs: lines; `unsafe` count; `sh scripts/marker_density.sh <file>`; the time for `build/zoril` to build `src/` (generation 2) and for the stage1 pipeline to build it (generation 1); the size of `build/zoril`; the time for `build/zoril` to compile `corpus/` or the largest test program that reaches the module; `make test`'s `Total:` line. Note what the rewrite could not express and why (a stage1 refusal, a borrow rule, a missing stdlib API).
+    - **Checks:** C1 the module, the reason it was picked, and the diff's size. C2 the before and after table with every command. C3 the fixpoint holds and `make test` passes on the pilot branch (`make preflight-changed PREFLIGHT_BASE=<main>`, its `Total:`, and `0 newly accepted` from the rejection differential with `REJECT_DIFF_NO_CACHE=1`). C4 the list of what could not be expressed.
+
+- [ ] +idiomatic +decision +AI-D IZ4 The maintainer decides whether to convert src/, which patterns, in what order, and how each step is measured id:0v0fy
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Depends:** id:2pkz3
+    > **Placed:** after the pilot: the decision needs its figures.
+
+    - **Do:** put IZ1 to IZ3's results to the maintainer in plain terms (what idiomatic code removes, what it costs in compile time and size, what stage1 cannot express), with a recommendation, and record the answers here: (1) convert or not; (2) which patterns, and which stay (hot paths, inherent `unsafe`); (3) in what order (by module, by pattern, or by what a change touches anyway); (4) what each step must show (the pilot's measures and their limits, such as "no more than N% slower"); (5) whether a re-pin is wanted for closures, given IZ2's cost; (6) the branch the conversion lives on and its milestones. If the answer is to convert, write the conversion series (one module or one pattern per task, each `+AI-G` with numbered **Checks:** including the pilot's measures and a take-out where a test can fail), and IZ5's checks.
+    - **Checks:** C1 the six answers recorded with the maintainer's name and date. C2 the series written (or "none: the maintainer chose not to convert") and `tm validate` passing.
+
+- [ ] +idiomatic +docs +AI-G IZ5 The compiler source style rules IZ4 settles, in doc/developer_guide.md, with a gate for each rule a script can check id:ap0hp
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Depends:** id:0v0fy
+    > **Placed:** after IZ4, which writes its checks; not ready until then.
+
+    - **Do:** write the rules IZ4 settles into `doc/developer_guide.md` (a section on the compiler's own source: which idiom to use for each pattern, which `unsafe` is inherent, the stage1 limits that still apply), point to it from `AGENTS.md`'s **Editing** section in one sentence, and add a gate for each rule a POSIX script can check (for example a count that may only fall, recorded like `scripts/comment_budget.tsv`).
+    - **Checks:** written by IZ4.
