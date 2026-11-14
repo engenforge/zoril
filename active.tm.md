@@ -142,13 +142,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Do:** in `scripts/check_closure_private_names.sh`: (1) take the names of top-level private `struct`, `enum`, `trait` and `type` declarations beside `fn` and `unsafe fn`, each kind its own namespace in the report (`[FAIL] closure-private-names: struct H in A and B`); (2) list both closures, `src/main.zrl` (`-I stdlib=stdlib -I src -I build/gen`) and `tools/zilc/src/main.zrl` (`-I stdlib=stdlib -I src -I tools/zilc/src -I build/gen`), each checked on its own; (3) name every module that shares a name, not only the first two; (4) run `build/zoril` with `timeout` only where `command -v timeout` finds one, as `scripts/test_doc_snippets.sh` does, since `timeout` is not a POSIX utility. Update the header's checked/not-checked lines, the `AGENTS.md` sentence (functions, structs, enums, traits and type aliases) and `KNOWN_ISSUES.md` §1's private-name entry (the struct case and its internal error).
     - **Checks:** C1 the gate on the tree prints one `[PASS]` line per closure (quote both). C2 planted, through `--list`: two modules with `struct H` print `[FAIL] ... struct H in ...`; three modules with `fn helper` print one line naming all three. C3 take (1) out and watch C2's struct case pass. C4 with a logging `git` first on `PATH`, the gate passes and the log is not created. C5 `make test`, its `Total:` quoted.
 
-- [ ] +review +AI-D @main @checkin Review of the widened closure-private-names gate id:4374x
+- [x] +review +AI-D @main @checkin Review of the widened closure-private-names gate id:4374x
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Depends:** id:7d2f5
     > **Placed:** after id:7d2f5, the batch it reviews.
+    > **Completed:** 2026-11-14 git:174375c
 
     - **Review:** re-run id:7d2f5 C1 to C4, and planted private `enum` and `trait` pairs.
+    - **Review (2026-11-14, `main` at git:174375c):** the script, the `AGENTS.md` sentence and the `KNOWN_ISSUES.md` entry do what id:7d2f5 asked. Re-run: C1 `[PASS] closure-private-names: src/main.zrl: 66 modules, no shared private name` and `[PASS] closure-private-names: tools/zilc/src/main.zrl: 27 modules, no shared private name`. C2 planted `--list` files under `build/z135/ck2/`, each rc 1: `struct H` (two files), `fn helper` naming all three, `enum K`, `trait T`, and a generic pair `struct P<T>`/`struct P<U>` (`struct P`); passing as they should: `struct H` beside `fn H` (separate namespaces) and two `pub struct H`. C3 with the kind list cut to `(unsafe fn|fn)` (`REPO_ROOT=$PWD sh build/z135/ck2/takeout.sh`), the struct pair passes. C4 with a logging `git` first on `PATH`, rc 0 and no log file. Found: a missing or empty `--list` file passes with `0 modules`, id:rp4q6 in `future.tm.md`. Nothing blocks.
 
 - [ ] +safety +tests +AI-D @main id:z0183 A struct holding a frame view is not pushed into the caller's `Vec`
     > **Created:** 2026-11-11

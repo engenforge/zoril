@@ -263,6 +263,15 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Settled (the maintainer, 2026-11-13):** a `slice_ptr` opcode, and a new branch `zil` off `main`, started after the current `testinfra` work. The work is the series ZL1 to ZL5 at the end of `active.tm.md`'s `## Next` (id:m6vm3, id:qpc8d, id:htrqb, id:ehh6m, id:egsdq). This task is closed when ZL2 lands, since ZL2 fixes the two corpus programs. The larger question, decision 4, is id:ahd1c.
     - **Decide:** which of the three is wrong: the spec's `Slice` type for `string_const`, zilc's lowering, or the corpus file. Then decide whether zilc's type check should refuse `slice_len` on a `string_const` value typed `Slice`, and whether `bitcast` stays an accepted spelling (AGENTS.md: an ambiguity in `doc/spec/` is fixed in the change that relies on the answer). The test should also check its output: `// expected exit code: 0` alone let this pass.
 
+- [ ] +tests +bootstrap +AI-G @main The closure-private-names gate fails on a closure of zero modules instead of passing id:rp4q6
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** in `future.tm.md`: found by check-in id:4374x; the default path already exits 2 when a closure cannot be listed, so only an empty listing reaches it.
+
+    - **Found:** `scripts/check_closure_private_names.sh --list <missing file>` prints `awk: fatal: cannot open file ...` and then `[PASS] closure-private-names: <file>: 0 modules, no shared private name`, exit 0; an empty list file passes the same way. A check that reads nothing passes for the wrong reason.
+    - **Do:** in `check_closure`, exit 2 with `[FAIL] closure-private-names: <label>: no modules listed` when the list is unreadable or names no module that exists.
+    - **Checks:** C1 a missing and an empty `--list` file each print that line and exit 2. C2 the gate on the tree still prints both `[PASS]` lines. C3 `make test`, its `Total:` quoted.
+
 ## Types, diagnostics and the standard library
 
 - [ ] +generics +types id:z0032 G1 `impl<T: Copy> Source<T> for S` fails to bind `T` when it appears only in the trait's arguments
