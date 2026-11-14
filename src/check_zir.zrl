@@ -1316,7 +1316,103 @@ impl ZirVerifier {
             epoch: self.next_borrow_epoch,
             via: via,
         });
+        // A borrow through an enum payload's address (a pattern binding through a reference,
+        // `match e { Q.A(s) => .. }` with `e: &mut Q`) points into the enum the address was taken
+        // from, but its place is rooted at the address temporary, which nothing writes. It is
+        // recorded on that enum as well, so a write through `e` conflicts while `s` is live.
+        // Only for a named borrower, a binding: the compiler's own address of a skipped part,
+        // which the arm drops after moving another part out, would otherwise forbid that move.
+        let root = self.enum_payload_borrow_root(place, state, locals);
+        if root.base != 0 as u32 && !self.is_temp_local(borrower, locals) {
+            state.borrows.push(ActiveBorrow {
+                base: root,
+                is_mut: is_mut,
+                region: region,
+                borrower: borrower,
+                span: span,
+                derived: false,
+                direct: false,
+                epoch: self.next_borrow_epoch,
+                via: via,
+            });
+        }
         self.next_borrow_epoch = self.next_borrow_epoch + 1 as u32;
+    }
+
+    // The enum PLACE is a borrow of, when PLACE is `*t..` with `t` an enum payload address
+    // (`t = EnumPayload(src)`): `*src` when `src` is a reference, else `src`, followed through
+    // nested payloads. The whole enum stands for the payload part, which no projection names.
+    // Base 0 when PLACE is not such a place. The result is always a copy in the scratch arena,
+    // so it holds no borrow of PLACE, STATE or the verifier.
+    #[borrows()]
+    fn enum_payload_borrow_root(
+        self: &mut ZirVerifier,
+        place: &Place,
+        state: &ZirAnalysisState,
+        locals: [Local]
+    ) -> Place {
+        let mut cur = *place;
+        let mut found = false;
+        let mut depth = 0 as usize;
+        while depth < 8 as usize {
+            if cur.projections.len == 0 as usize || cur.projections[0].get_tag() != PROJ_DEREF {
+                break;
+            }
+            let mut hit = false;
+            let mut src = cur;
+            let mut i = 0 as usize;
+            while i < state.enum_aliases.len() {
+                if state.enum_aliases[i].local_id == cur.base {
+                    src = state.enum_aliases[i].source;
+                    hit = true;
+                    break;
+                }
+                i = i + 1 as usize;
+            }
+            if !hit || src.base == 0 as u32 { break; }
+            let src_ty = self.get_place_type(&src, locals);
+            let src_is_pointer = src_ty != 0 as u32
+                && is_any_pointer_tag(self.type_decl_copy(src_ty).def.get_tag());
+            cur = if src_is_pointer {
+                self.place_in_arena(&src, true)
+            } else {
+                src
+            };
+            found = true;
+            depth = depth + 1 as usize;
+        }
+        if !found {
+            return Place { base: 0 as u32, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        return self.place_in_arena(&cur, false);
+    }
+
+    // PL, with one more `Deref` projection when DEREF, its projections copied into the verifier's
+    // scratch arena, so the result does not point into the verifier.
+    #[borrows()]
+    fn place_in_arena(self: &mut ZirVerifier, pl: &Place, deref: bool) -> Place {
+        let new_len = if deref { pl.projections.len + 1 as usize } else { pl.projections.len };
+        if new_len == 0 as usize {
+            return Place { base: pl.base, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        let new_projs = unsafe {
+            zoril_allocator_alloc(self.arena, (new_len * sizeof(Projection)) as u64)
+        } as *mut Projection;
+        unsafe {
+            if pl.projections.len > 0 as usize {
+                memcpy(
+                    new_projs as *mut u8,
+                    pl.projections.ptr as *u8,
+                    (pl.projections.len * sizeof(Projection)) as u64
+                );
+            }
+            if deref {
+                *((new_projs as usize
+                    + pl.projections.len
+                        * sizeof(Projection)) as *mut Projection) = Projection.Deref;
+            }
+            return Place { base: pl.base, projections: @slice(new_projs, new_len) };
+        }
     }
 
     // Checks the places RV reads: moved operands (MOVE) must be owned, and borrowed ones not

@@ -592,7 +592,7 @@ match shape {
 }
 ```
 
-Tuple, struct and payload patterns see through a reference: matching a `&T` against them binds by reference (Rust's "match ergonomics"), so in `match &s { Shape.Pt(P { x, .. }) => .. }` `x` is a `&i32`. Bindings copy only when the value matched is not behind a reference.
+Tuple, struct and payload patterns see through a reference: matching a `&T` against them binds by reference (Rust's "match ergonomics"), so in `match &s { Shape.Pt(P { x, .. }) => .. }` `x` is a `&i32`. Bindings copy only when the value matched is not behind a reference. A binding by reference keeps what it points into borrowed while it is live, as `&` does, also when the reference matched is a `&mut T` variable: in `match e { Q.A(s) => { .. } }` with `e: &mut Q`, writing `*e` or passing `e` on while `s` is still used is refused ([`err_binding_through_mut_ref_then_write.zrl`](../../tests/error_reporting/err_binding_through_mut_ref_then_write.zrl)), and allowed after its last use ([`match_binding_through_mut_ref_dead.zrl`](../../tests/language/match/match_binding_through_mut_ref_dead.zrl)).
 
 The match expression can dereference a borrowed value before dispatching:
 

@@ -1,7 +1,7 @@
-// name: A binding made by matching through a &mut reference outlives a write through it
-// expected: known_gap
-// gap: fn g(e: &mut Q, p2) { match e { Q.A(s) => { *e = Q.A(S { p: p2 }); bump(s); } } } binds s as a reference into *e's payload, then the write through e drops that payload while s is still used: the old S is dropped (first counter 1) and bump(s) reaches the new one (second counter 10), so s no longer names what it borrowed; with *e = Q.B the use reads a zeroed payload and faults, and with a Box payload it is a use after free (exit 139); if let Q.A(s) = e, passing e on (touch(e)) and a local let e = &mut q take the same route, while match &mut q with a write to q, and let s = &h.b with a write through h, are refused
-// observed: exit 77
+// name: A write through a &mut reference while a binding made through it is live is rejected
+// expected: compile_reject
+// EXPECT: cannot assign to 'e' because it is borrowed
+// A binding made by matching through a &mut reference points into the referent, so the write would drop or replace what the binding still points at.
 struct S { p: *mut u8 }
 impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } } }
 enum Q { A(S), B }
