@@ -1403,6 +1403,12 @@ impl ZirLowerer {
                 // index goes through Projection.Index, so the borrow, mutability and bounds
                 // checks see the array or slice it points into (Unified Solution A).
                 let inner_place = self.lower_expr(u.expr, 0 as u32);
+                if is_mut_ref && self.guard_scrut_overlaps(&inner_place) {
+                    self.report_error(
+                        "cannot mutably borrow the matched value in a match guard",
+                        span
+                    );
+                }
                 let inner_ty = self.get_place_type(&inner_place);
                 let ptr_ty = if is_mut_ref {
                     self.get_ptr_mut_type(inner_ty)
@@ -1579,6 +1585,9 @@ impl ZirLowerer {
     fn lower_assign(self: &mut ZirLowerer, b: BinaryExpr, span: Span) -> Place {
         if !self.check_assignment_target(b.lhs, span) { return self.no_place(); }
         let lhs_place = self.lower_expr(b.lhs, 0 as u32);
+        if self.guard_scrut_overlaps(&lhs_place) {
+            self.report_error("cannot assign to the matched value in a match guard", span);
+        }
         let lhs_ty = self.get_place_type(&lhs_place);
         let mut rhs_place = self.lower_expr(b.rhs, lhs_ty);
         // The guard that stood here, `place_rawness_known(&lhs_place)`, admitted only a local or a
@@ -1626,6 +1635,9 @@ impl ZirLowerer {
             base_op = op_tag - 14 as u32;
         }
         let lhs_place = self.lower_expr(b.lhs, 0 as u32);
+        if self.guard_scrut_overlaps(&lhs_place) {
+            self.report_error("cannot assign to the matched value in a match guard", span);
+        }
         let lhs_ty = self.get_place_type(&lhs_place);
         let rhs_hint = if self.is_numeric_type(lhs_ty) { lhs_ty } else { 0 as u32 };
         let rhs_lowered = self.lower_expr(b.rhs, rhs_hint);

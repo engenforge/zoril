@@ -2444,6 +2444,9 @@ impl ZirLowerer {
             target = self.append_deref(&target);
         }
         if is_mut {
+            if self.guard_scrut_overlaps(&target) {
+                self.report_error("cannot mutably borrow the matched value in a match guard", span);
+            }
             self.emit(ZirStmt.Let(tmp, ZirRvalue.RefMut(target, reg), span));
         } else {
             self.emit(ZirStmt.Let(tmp, ZirRvalue.Ref(target, reg), span));

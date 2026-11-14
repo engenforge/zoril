@@ -164,7 +164,13 @@ impl ZirLowerer {
                 }
                 self.scope_locals[arm_scope_idx].clear();
 
+                let saved_guard_scrut = self.guard_scrut;
+                let saved_guard_scrut_active = self.guard_scrut_active;
+                self.guard_scrut = scrut_place;
+                self.guard_scrut_active = true;
                 let guard_place = self.lower_expr(arm.guard, 0 as u32);
+                self.guard_scrut = saved_guard_scrut;
+                self.guard_scrut_active = saved_guard_scrut_active;
                 self.check_condition(arm.guard, &guard_place);
                 self.terminate(ZirTerminator.Branch(guard_place, guard_pass_block, fail_block));
                 self.switch_to_block(guard_pass_block);

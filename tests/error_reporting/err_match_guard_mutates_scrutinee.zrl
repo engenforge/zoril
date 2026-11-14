@@ -1,0 +1,52 @@
+// A match guard may not assign to or mutably borrow the matched value (or any part of it).
+// expected compile fail
+// EXPECT: in a match guard
+struct S { p: *mut u8 }
+impl Drop for S {
+    fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } }
+}
+enum Q { A(S), B }
+impl Q {
+    fn reset(self: &mut Q) { *self = Q.B; }
+}
+struct W { a: S, n: i32 }
+fn mk(fp: *mut u8) -> S { return S { p: fp }; }
+fn touch(q: &mut Q) { *q = Q.B; }
+
+fn direct_assign(mut e: Q) {
+    match e { Q.A(s) if { e = Q.B; true } => {}, Q.A(_) => {}, Q.B => {}, }
+}
+
+fn field_assign(mut w: W, fp: *mut u8) {
+    match w { W { a: a, n: n } if { w.a = mk(fp); true } => {}, }
+}
+
+fn compound_assign(mut n: i32) {
+    match n { x if { n += 1; x > 0 } => {}, _ => {}, }
+}
+
+fn mut_method_call(mut e: Q) {
+    match e { Q.A(s) if { e.reset(); true } => {}, Q.A(_) => {}, Q.B => {}, }
+}
+
+fn mut_borrow_arg(mut e: Q) {
+    match e { Q.A(s) if { touch(&mut e); true } => {}, Q.A(_) => {}, Q.B => {}, }
+}
+
+fn nested_block_assign(mut e: Q, c: bool) {
+    match e { Q.A(s) if { if c { e = Q.B; } true } => {}, Q.A(_) => {}, Q.B => {}, }
+}
+
+fn deref_assign(r: &mut Q) {
+    match *r { Q.A(s) if { *r = Q.B; true } => {}, Q.A(_) => {}, Q.B => {}, }
+}
+
+fn closure_assign(mut e: Q) {
+    match e {
+        Q.A(s) if { let r = &mut e; let f = || { *r = Q.B; }; f(); true } => {},
+        Q.A(_) => {},
+        Q.B => {},
+    }
+}
+
+fn main() -> i32 { return 0; }
