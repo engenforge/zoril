@@ -2,6 +2,30 @@
 
 ## 2026-11
 
+- [x] +safety +review +AI-D @main @checkin Review of the nested-guard scrutinee check (gap_86) id:e7qgj
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Depends:** id:a47b8
+    > **Placed:** after id:a47b8, to review it (a fix to a safety rule written by an `+AI-G` session).
+    > **Completed:** 2026-11-14 git:62de977
+
+    - Re-run id:a47b8's **Awaiting review:** commands and `sh scripts/run_safety_matrix.sh`, and read the C5 differential's newly refused list.
+    - Probe: a guard in a `match` inside a closure inside a guard; a guard in an `if let` or `while let` body inside a guard; and a write to the outer scrutinee from an inner guard when the inner match is on the same place (`match e { .. if { match e { .. if { e = .. } } } }`).
+    - **Commits reviewed since `id:g63ny` (`56ea75e`):**
+      - `1b1d147` (`id:37p40`): `check_zir: a binding through a &mut reference keeps the referent borrowed` — verified `enum_payload_borrow_root` multi-hop loop and `ref_source_local` fallback in `src/check_zir.zrl`.
+      - `a662fda` (`id:a47b8`): `lower_zir: track a stack of match-guard scrutinees for nested guards` — verified `guard_scrutinee_bases: Vec<u32>` stack push/pop and reversed slice scan in `src/lower_zir/decl.zrl`, `src/lower_zir/lower_match.zrl`, and `src/lower_zir/expr.zrl`.
+      - `172c77e` (`id:kqp9n`): `probes: a view stored through a parameter outlives a free() in the callee` (`gap_87`).
+    - **Re-ran `id:a47b8`'s Awaiting review checks:**
+      - `sh scripts/run_safety_matrix.sh` -> `All probes complete: 467/513 passed. Mismatches: 0` (`gap_86` passes as `compile_reject`; `467/514 passed. Mismatches: 0` after adding `gap_88`).
+      - `./scripts/test.sh tests/error_reporting/err_match_guard_mutates_scrutinee.zrl tests/language/match/match_guard_reads_scrutinee.zrl` -> `Total: 3 run, 3 passed, 0 failed, 0 skipped (0.1s)`.
+      - `timeout -k 5s 30s build/zoril -I stdlib=stdlib --emit-zil -o /dev/null tests/error_reporting/err_match_guard_mutates_scrutinee.zrl` -> printed 11 `in a match guard` diagnostics (lines 17, 21, 25, 29, 33, 37, 41, 46, 54, 62, 70), one per function and no other errors.
+    - **Sibling routes probed:**
+      - Match inside a closure inside a guard (`match e { Q.A(x) if { let f = || -> bool { match d { ... } }; f() } => .. }`) — refused when the closure captures `e` by move (`use of moved value 'e'`), by copy (`the closure holds a copy of 'e'`), or by `&mut e` (`cannot mutably borrow the matched value in a match guard`).
+      - `if let` and `while let` inside a guard mutating the outer scrutinee — refused (`cannot assign to the matched value in a match guard`).
+      - Inner `match` on the same place (`match e { Q.A(x) if match e { Q.A(y) => { e = Q.B; true }, .. } => .. }`) — refused for assignment, `&mut e`, and `&mut` method call (`cannot assign to [or mutably borrow] the matched value in a match guard`).
+      - **New hole found (`gap_88`, recorded in git:62de977 and queued as `id:0tv49` after `id:3rata`):** when a `match` arm, `if let`, or `?` binds an enum payload by value (`Use(*payload_tmp)` where `payload_tmp = EnumPayload(scrut, ..)`), `check_place_use` in `src/check_zir.zrl:606-698` marks only the pointer temporary `payload_tmp` moved while the enum local stays `OWN_OWNED`, so using the enum again after the `match`/`if let`/`?`, in the arm body, or by moving it in a match guard (`match e { Q.A(s) if { match e { Q.A(s2) => true, Q.B => false } } => .. }`) is accepted and double-drops the payload (`gap_88_enum_used_after_payload_moved.zrl`, `exit 77`). Also noted in `id:0tv49` that `enum_payload_source_borrowed` (`src/check_zir.zrl:959-979`) walks only one hop in `state.enum_aliases` and `check_place_use` line 683 treats any unnamed pointer temporary (`loc.name_id == 0`) as non-borrowed, allowing moves out of nested enum borrows (`match *r { Q2.A(QB.A(b)) => {} }`) and temporary reference dereferences (`match *(&e) { Q.A(s) => {} }`, `let s = *id_ref(&s0);`).
+    - **Queue updates:** added `id:0tv49` after `id:3rata`, noted the `check_zir` ownership finding on `id:3rata`, settled Route 2 and numbered **Checks:** `C1`–`C5` on `id:jhy7v` and re-tagged it `+AI-G`, and placed `@checkin` `id:yxvpa` after `id:jhy7v` (blocking `id:0m61c`).
+
 - [x] +safety +tests +AI-G @main A pattern's skipped parts and guard bindings drop once across or-patterns, guards and let patterns id:qm667
     > **Created:** 2026-11-14
     > **Branch:** `main`
