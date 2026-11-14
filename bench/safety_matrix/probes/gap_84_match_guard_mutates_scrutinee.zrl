@@ -1,0 +1,17 @@
+// name: A match guard that assigns to the scrutinee drops the payload a binding still holds
+// expected: known_gap
+// gap: match e { Q.A(s) if { e = Q.B; true } => {}, Q.A(_) => {}, Q.B => {} } binds s by value as a copy of e's payload, then the guard's assignment drops e's old value, payload included, and s is dropped again at the end of the arm (the counter reads 2 where 1 is due); a &mut self method call on the scrutinee in the guard (e.reset()) is the same route, a guard that fails is not, and Rust refuses a guard that mutates the scrutinee (E0510)
+// observed: exit 7
+struct S { p: *mut u8 }
+impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } } }
+enum Q { A(S), B }
+fn main() -> i32 {
+    let mut flag = 0 as u8;
+    let fp = &mut flag as *mut u8;
+    {
+        let mut e = Q.A(S { p: fp });
+        match e { Q.A(s) if { e = Q.B; true } => { let n = 1; }, Q.A(_) => {}, Q.B => {}, }
+    }
+    if flag == 1 as u8 { return 0; }
+    return 7;
+}
