@@ -83,6 +83,7 @@ scripts/check_md_escapes.sh	scripts_check_md_escapes	md-check portability no-new
 scripts/check_md_fmt.sh	scripts_check_md_fmt	md-check portability no-new-deps	-	-	-	-	-	script	markdown formatter selects md-check gate
 scripts/check_md_links.sh	scripts_check_md_links	portability no-new-deps	-	-	-	md-links	-	script	markdown link validator selects md-links scenario
 scripts/check_md_tables.sh	scripts_check_md_tables	md-check portability no-new-deps	-	-	-	-	-	script	markdown table width validator selects md-check gate
+scripts/check_closure_private_names.sh	scripts_check_closure_private_names	closure-private-names portability no-new-deps	-	-	-	-	-	script	closure private-name check selects closure-private-names gate
 scripts/check_no_new_deps.sh	scripts_check_no_new_deps	no-new-deps portability	-	-	-	no-new-deps-selftest	-	script	dependency boundary check selects no-new-deps gate
 scripts/check_no_warnings.sh	scripts_check_no_warnings	no-warnings portability no-new-deps	-	-	-	-	-	script	compiler warning validator selects no-warnings gate
 scripts/check_portability.sh	scripts_check_portability	portability no-new-deps	-	-	-	-	-	script	portability gate script selects portability gate

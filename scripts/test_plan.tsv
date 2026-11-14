@@ -38,6 +38,7 @@ gate	static-image	-	./scripts/check_static_image_determinism.sh
 gate	perf-gate	-	./scripts/perf_gap.sh --gate-check
 gate	toolchain	-	./scripts/check_toolchain.sh
 gate	portability	-	./scripts/check_portability.sh
+gate	closure-private-names	-	./scripts/check_closure_private_names.sh
 gate	toolchain-offpath	-	./scripts/check_toolchain_offpath.sh
 gate	stage0c-fixed-bugs	-	./$STAGE0_DIR/scripts/test_fixed_bugs.sh
 gate	stage0c-unit	-	${MAKE:-make} --no-print-directory -C $STAGE0_DIR test_unit
