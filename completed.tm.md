@@ -2,6 +2,91 @@
 
 ## 2026-11
 
+- [x] +bootstrap +safety +AI-G @main Backport to stage1: a match arm and a by-value self receiver mark the value moved id:jhy7v
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Depends:** id:z0175, id:g63ny, id:e7qgj
+    > **Depends changed (2026-11-14, a reviewing session):** added id:g63ny, the check-in of id:7f9k8, and then id:e7qgj, the check-in of id:a47b8, since the first task after a batch waits for its review.
+    > **Placed:** after the open soundness holes on `main` (id:z0183 to id:z0175): the maintainer's decision (a) of id:gsa2r. Today's closure takes the routes only on `File`, with a harmless second `close`, so the holes go first.
+    > **Completed:** 2026-11-14 git:f248f49
+
+    - **Do:** a recorded backport (`doc/bootstrap/two_stage.md` §3) of both fixes into `bootstrap/stage1/src/` (settled and verified in `build/z135/s1fix/` during `id:e7qgj`), `bootstrap/stage1/PIN` stays unchanged:
+    - **Route 1 (`bootstrap/stage1/src/lower_zir/match.zrl`, after line 79, immediately after `if arm.guard != 0 as u32 { ... }` and before `let arm_res = self.lower_expr(arm.body, result_ty);`):** insert the 6 lines below right after the `if arm.guard` closing brace:
+
+    ```zoril
+    // An arm that runs has taken the scrutinee: a by-value binding moved its payload out,
+    // so the scrutinee's own drop must not run again at the match's exit.
+    let scrut_tag = self.get_type_tag(scrut_ty);
+    if !(scrut_tag == ILTYPE_PTR || scrut_tag == ILTYPE_PTRMUT || scrut_tag == ILTYPE_BOXED || scrut_tag == ILTYPE_BOXEDMUT) {
+        self.consume_place_if_move(&scrut_place);
+    }
+    ```
+
+    - **Route 2 (`bootstrap/stage1/src/lower_zir/expr.zrl`, lines 1404–1406, inside the `EXPR_MEMBER_ACCESS` method-call lowering block after the argument loop):** replace `if wants_ref { unsafe { *final_args = self.emit_receiver_ref(current_place, current_ty, expected_recv_ty, span); } }` with:
+
+    ```zoril
+    if wants_ref {
+        unsafe { *final_args = self.emit_receiver_ref(current_place, current_ty, expected_recv_ty, span); }
+    } else if !recv_by_ref {
+        self.consume_arg_if_move(expected_recv_ty, &receiver_final_place);
+    }
+    ```
+
+    - **Record the backport (`doc/bootstrap/two_stage.md` §3 and `KNOWN_ISSUES.md` §1):** in `doc/bootstrap/two_stage.md` §3, add a `- **Backport recorded:**` sub-bullet beside the `.note.GNU-stack` entry recording that `bootstrap/stage1/src/lower_zir/match.zrl` and `bootstrap/stage1/src/lower_zir/expr.zrl` mark a by-value `match` scrutinee moved after the arm's guard and mark a by-value `self` method receiver moved after argument evaluation (backporting git:a38ce23 and git:ac6e24e so a value with a destructor moved either way in the `src/` closure is dropped once). In `KNOWN_ISSUES.md` §1, remove the subsection `### \`stage1\`: a value moved by a \`match\` arm or a by-value \`self\` is dropped twice` (lines 40–46, added in git:e56548e).
+    - **Stage1 pipeline script (`s1.sh <src.zrl> <out>`, from `id:z0135`):**
+
+    ```sh
+    #!/bin/sh
+    set -e
+    src=$1; out=$2
+    ulimit -s 262144 2>/dev/null || true
+    timeout -k 5s 120s ./build/zoril-stage1 -I stdlib=stdlib -I src -I build/gen -I "$(dirname "$src")" --emit-zil -o "$out.zil" "$src"
+    timeout -k 5s 120s ./build/zilc-stage1 "$out.zil" "$out.ssa"
+    qbe -o "$out.s" "$out.ssa"
+    as -o "$out.o" "$out.s"
+    ld -o "$out" "$out.o" build/runtime.o
+    ```
+
+    - **Reproducers (`build/z135/`, from `id:z0135`):**
+      - `m1.zrl` (match arm move; expected exit 1): `struct S { p: *mut u8 } impl Drop for S { fn drop(self: S) { unsafe { *self.p = *self.p + 1 as u8; } } } enum E { A(S), B } fn take(e: E) -> S { return match e { E.A(s) => s, E.B => { return S { p: 0 as *mut u8 }; }, }; } fn main() -> i32 { let mut n = 0 as u8; let np = &mut n as *mut u8; { let s = take(E.A(S { p: np })); } return n as i32; }`
+      - `m2.zrl` (temporary by-value receiver `mk(np).take()`; expected exit 1): `struct S { p: *mut u8 } impl Drop for S { fn drop(self: S) { unsafe { *self.p = *self.p + 1 as u8; } } } struct W { s: S } impl W { fn take(self: W) -> S { return self.s; } } fn mk(p: *mut u8) -> W { return W { s: S { p: p } }; } fn main() -> i32 { let mut n = 0 as u8; let np = &mut n as *mut u8; { let s = mk(np).take(); } return n as i32; }`
+      - `m4.zrl` (local by-value receiver `let w = mk(np); let s = w.take();`; expected exit 1): same `S`, `W`, `mk`, with `let w = mk(np); let s = w.take();` inside the inner block of `main`.
+      - `tiny3.zrl`: `import "core.zrl"; import "vec.zrl"; fn main() -> i32 { return 0; }`
+      - `cs.gdb`: `set pagination off` / `catch syscall close` / `commands 1` / `silent` / `printf "%ld,", $rax` / `continue` / `end` / `run`
+    - **Checks:**
+      - C1: `rm -f build/zoril-stage1 build/zilc-stage1 build/zilc-boot build/zoril build/zilc && make build/zoril-stage1 build/zilc-stage1 && make` builds the patched stage1 and the full toolchain with no `warning:`; quote the output.
+      - C2: Through the stage1 pipeline (`sh build/z135/s1.sh <src> <out>`), `m1.zrl`, `m2.zrl`, and `m4.zrl` exit `1` (one drop), and `tests/stdlib/test_stdlib_fd.zrl`, `tests/stdlib/test_stdlib_io_result.zrl`, and the 20 `tests/stdlib/*.zrl` run-tests whose imports lie in `bootstrap/stage1/stdlib/` (`mem_lite`, `test_arena_reset_to_loop`, `test_nested_arena_marks`, `test_runtime_memcmp`, `test_stdlib_arena_handle_loop`, `test_stdlib_arena_interntable_tie`, `test_stdlib_arena_new_result`, `test_stdlib_arena_vec_tie`, `test_stdlib_bytevec`, `test_stdlib_bytevec_tie`, `test_stdlib_error_kind`, `test_stdlib_intern`, `test_stdlib_interntable_arena`, `test_stdlib_run`, `test_stdlib_vec_clone_in`, `test_stdlib_vec_with_capacity_in`, `test_user_type_named_like_stdlib_copy`, `test_vec_pop_remove_slice`, `test_vec_push_does_not_drop_slot`, `vec_basic`) exit `0`; quote each.
+      - C3: Take each fix out in turn (or in `build/z135/s1fix/`) and watch its reproduction exit `2`: without the `match.zrl` edit `m1` exits `2`, and without the `expr.zrl` edit `m2` and `m4` exit `2`; quote each.
+      - C4: Build the generation-1 compiler from `src/main.zrl` through the patched stage1 (`sh build/z135/s1.sh src/main.zrl build/z135/gen1`) and run `gdb -batch -x build/z135/cs.gdb --args build/z135/gen1 -I stdlib=stdlib --emit-zil -o build/z135/t3.zil build/z135/tiny3.zrl`: every `close` return value is `0` and none is `-9` (`EBADF`); quote the `gdb` output.
+      - C5: `doc/bootstrap/two_stage.md` §3's verification: the candidate builds current `src/`, the fixpoint holds (`make preflight-changed`), `make test`, and `make preflight` (delete host-specific benchmark files under `bench/` afterwards per `AGENTS.md`), each `Total:` line quoted. End with `**Awaiting review:**` naming the C2 and C4 commands for the check-in.
+    - **Completion notes (git:f248f49):**
+      - C1: `rm -f build/zoril-stage1 build/zilc-stage1 build/zilc-boot build/zoril build/zilc && make build/zoril-stage1 build/zilc-stage1 && make` exited `0` with `0` `warning:` lines: `Fixpoint reached: 20467960 bytes of ZIL, identical across two self-hosted generations` and `Built: the toolchain is up to date in build/ (zoril, zilc, zbuild; zoril 0.1.0-alpha-157-g62de977-dirty). Next: make test`.
+      - C2: `sh build/z135/s1.sh <src> <out>` results: `m1: exit 1`, `m2: exit 1`, `m4: exit 1`; `test_stdlib_fd: exit 0`, `test_stdlib_io_result: exit 0`; among the 20 `tests/stdlib/*.zrl` files, 14 exited `0` (`test_runtime_memcmp`, `test_stdlib_arena_handle_loop`, `test_stdlib_arena_interntable_tie`, `test_stdlib_arena_vec_tie`, `test_stdlib_bytevec`, `test_stdlib_bytevec_tie`, `test_stdlib_error_kind`, `test_stdlib_intern`, `test_stdlib_interntable_arena`, `test_stdlib_run`, `test_stdlib_vec_clone_in`, `test_stdlib_vec_with_capacity_in`, `test_vec_pop_remove_slice`, `vec_basic`), while 6 did not pass through `zoril-stage1` for pre-existing stage1 dialect/bug reasons unrelated to this backport: `mem_lite` has no `main` (`undefined reference to 'main'`), `test_arena_reset_to_loop`/`test_nested_arena_marks`/`test_stdlib_arena_new_result` fail stage1's older borrow rule (`error: cannot mutably borrow 'a' while it is already borrowed`), `test_user_type_named_like_stdlib_copy` fails stage1's `stdlib/io.zrl` visibility check (`error: cannot access private field: fd`), and `test_vec_push_does_not_drop_slot` exits `1` (P-0001 `src/` fix not in stage1).
+      - C3: Take-out runs: reverting `bootstrap/stage1/src/lower_zir/match.zrl` gave `m1 without match.zrl edit: exit 2`; reverting `bootstrap/stage1/src/lower_zir/expr.zrl` gave `m2 without expr.zrl edit: exit 2` and `m4 without expr.zrl edit: exit 2`.
+      - C4: `sh build/z135/s1.sh src/main.zrl build/z135/gen1` followed by `gdb -batch -x build/z135/cs.gdb --args build/z135/gen1 -I stdlib=stdlib --emit-zil -o build/z135/t3.zil build/z135/tiny3.zrl` printed `-38,0,-38,0,-38,0,-38,0,-38,0,-38,0,-38,0,-38,0,-38,0,-38,0,-38,0,-38,0,-38,0,-38,0,-38,0,[Inferior 1 (process 1138) exited normally]` (every `close` exit return value is `0`, none is `-9`).
+      - C5: `make test`: `Total: 3317 run, 3317 passed, 0 failed, 96 skipped (121.7s)`. `make preflight-changed`: `Total: 1214 run, 1214 passed, 0 failed, 0 skipped (44.9s)` (fixpoint `gen3.zil vs gen4.zil must be identical`). Full preflight (`./scripts/preflight.sh` after `user-tools`, `test_checked.sh` standalone `Total: 1214 run, 1214 passed, 0 failed, 0 skipped (37.5s)`, and `./scripts/test.sh --suite git` `Total: 7 run, 7 passed, 0 failed, 0 skipped (101.4s)`): `All mutations caught.`, `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, `Total: 1214 run, 1214 passed, 0 failed, 0 skipped (37.4s)`, `Total: 7 run, 7 passed, 0 failed, 0 skipped (101.2s)`, `All performance thresholds within tolerance of baseline.`, `fuzz-totals: progs=126 accepted=40 traps=1 rejected=44 candidates=0 faults=0 ...` (host-specific `bench/` files deleted afterwards). Note: during `make preflight`'s `user-tools`, `scenario runner-output`'s `hangs.zrl` fixture timed out/hung in the exported tree and had to be killed to unblock; `preflight-selftest` failed once due to leftover untracked `bench/` files from `make preflight-changed` and passed after deleting them.
+    - **Awaiting review:** re-run C2 (`sh build/z135/s1.sh build/z135/m1.zrl ...`, `m2.zrl`, `m4.zrl`, `tests/stdlib/test_stdlib_fd.zrl`, `tests/stdlib/test_stdlib_io_result.zrl`) and C4 (`sh build/z135/s1.sh src/main.zrl build/z135/gen1` + `gdb -batch -x build/z135/cs.gdb --args build/z135/gen1 -I stdlib=stdlib --emit-zil -o build/z135/t3.zil build/z135/tiny3.zrl`).
+
+- [x] +bootstrap +safety +review +AI-D @main @checkin Review of the stage1 backport for match-arm and by-value receiver moves id:yxvpa
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** after id:jhy7v to review the stage1 backport before merging main into provenance (id:0m61c).
+    > **Depends:** id:jhy7v
+    > **Completed:** 2026-11-14 git:f248f49
+
+    - Re-run `id:jhy7v`'s **Awaiting review:** commands (`m1`, `m2`, `m4`, `test_stdlib_fd.zrl`, `test_stdlib_io_result.zrl` through `build/zoril-stage1`, and the `gdb` `cs.gdb` check on `gen1`) and probe sibling routes in `bootstrap/stage1/` (nested enum match in stage1, `if let` / `while let` in stage1, chained by-value method calls in stage1).
+    - **Commit reviewed since `id:e7qgj` (`62de977`):** `f248f49` (`id:jhy7v`: `stage1: mark match scrutinee and by-value self receiver moved`) — verified `bootstrap/stage1/src/lower_zir/match.zrl:81-86`, `bootstrap/stage1/src/lower_zir/expr.zrl:1406-1408`, `doc/bootstrap/two_stage.md:55`, and `KNOWN_ISSUES.md:37-41`.
+    - **Re-ran `id:jhy7v`'s Awaiting review checks:**
+      - `sh build/z135/s1.sh` on `m1.zrl`, `m2.zrl`, `m4.zrl`, `tests/stdlib/test_stdlib_fd.zrl`, and `tests/stdlib/test_stdlib_io_result.zrl` -> `m1: exit 1`, `m2: exit 1`, `m4: exit 1`, `fd: exit 0`, `io_result: exit 0`.
+      - `sh build/z135/s1.sh src/main.zrl build/z135/r_gen1` + `gdb -batch -x build/z135/cs.gdb --args build/z135/r_gen1 -I stdlib=stdlib --emit-zil -o build/z135/r_t3.zil build/z135/tiny3.zrl` -> `-38,0,-38,0,...[Inferior 1 (process 109272) exited normally]` (every `close` syscall returned `0`, none `-9`).
+    - **Sibling routes probed in `bootstrap/stage1/`:**
+      - Nested enum pattern in `match` (`Outer.Wrap(Inner.Leaf(s)) => s` in `sib_nested.zrl`) -> `sib_nested: exit 1` (1 drop).
+      - `if let` and `while let` (`if let E.A(s) = e` and `while let E.A(s) = ...` in `sib_if_while.zrl`) -> `sib_if_while: exit 2` (1 drop in `take_if` + 1 drop in `take_while`).
+      - Chained by-value method calls (`mk(np).step().take()` in `sib_chain.zrl`) -> `sib_chain: exit 1` (1 drop).
+    - **Diagnosed `id:n23zs` (added to `future.tm.md` after `id:jhy7v`'s `make preflight`) and promoted/settled it as `+AI-G` before `id:0m61c`:**
+      - (1) `scripts/test_runner_output.sh` (`check_mode`, lines 52–67, added in `git:6122499` / `id:z0137`) excludes `tests/runner/fixtures/tests/hangs.zrl` only in `opts_hidden` mode. When `scripts/check_user_tools.sh` Part 1 strips `timeout` from `PATH` (`path_without "$shim_dir" ... timeout ...`) and runs `make test`, `quiet`, `default`, and `verbose` modes in `test_runner_output.sh --both` run `hangs.zrl` without `timeout` on `PATH` (`run_with_timeout` in `scripts/lib/portability.sh:173-192` runs commands directly without a time limit), so all 6 runs of `hangs.zrl` loop indefinitely.
+      - (2) `scripts/check_user_tools.sh` Part 2 (lines 64–78) places a fake `git` on `PATH` that logs its caller and always exits `1`, then runs `make test` in the checkout. Because `make test` evaluates `build/gen/version.zrl: FORCE`, `./scripts/version.sh` calls the failing `git` shim, falls back to `VERSION` (`0.1.0-alpha`), and overwrites `build/gen/version.zrl`, forcing `make test` inside the gate to rebuild `build/zoril`, `build/zilc`, `tools/zman/build/zman`, and `build/zbuild` with `0.1.0-alpha` (`build/user_tools_checkout.log:1-6`, violating `AGENTS.md`). When `scripts/preflight.sh` then runs `scripts/mutation-check.sh` with real `git` on `PATH`, `mutation-check.sh:235` runs `make build/zoril build/zilc build/runtime.o`, updating `build/gen/version.zrl` back to `0.1.0-alpha-<N>-g<sha>` and rebuilding `build/zoril` and `build/zilc` (wiping `build/mutation/` and `build/mutation_cache/`) while leaving `build/zbuild` stamped with `0.1.0-alpha`, so `scenario: tool-versions` in `scripts/test_checked.sh` fails deterministically on `build/zbuild`.
+
 - [x] +safety +review +AI-D @main @checkin Review of the nested-guard scrutinee check (gap_86) id:e7qgj
     > **Created:** 2026-11-14
     > **Branch:** `main`
