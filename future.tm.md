@@ -380,6 +380,16 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Found (2026-11-14, id:z0175):** `fn need<T: Copy>(x: &T) -> i32 { return 0; }` and `let a = need(&s); return a + 1;` with `S: Drop` report the bound (`type 'S' does not implement trait 'Copy'`), then `internal error: could not resolve the type of an operator operand` at `a`. That happens on the compiler at git:7877894 and for a refused method call alike (`build/z175/casc.zrl`).
     - **Why `+AI-D`:** the second message is deliberate. `check_operand_type_resolved` (`src/lower_zir/utils.zrl`) says an unresolved operand type "is an internal error, never a pass". Silencing it after an earlier error is a mechanism that decides what not to report: decide which unresolved operands may skip it (for example a local whose initializer reported an error, so its type was never set), name what a wrong skip would hide (a real internal error after an unrelated user error), and give a planted case for each before re-tagging `+AI-G`.
 
+- [ ] +types +safety +audit +AI-D @main DN3 Audit: which generic paths the type checker does not visit, and whether every instantiated body is checked after monomorphisation id:dr805
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** in `future.tm.md` under "Types, diagnostics and the standard library", beside id:7v42z and id:gsjhz: an audit with no task waiting for it, at the maintainer's request (2026-11-14, a review of the plan). Series DN, with DN1 (id:3rata) in `active.tm.md`.
+
+    - **Why:** id:z0175 (a bound on an impl block or a method's type parameter was not checked) and the open `unknown type T` reports (id:7v42z, id:z0067, id:gsjhz's cascade) are paths the generic checker does not visit or cannot resolve. Where an unvisited path is accepted, the next unlisted path is a hole; the backstop is that every instantiated body is type-checked in full after monomorphisation, so an unvisited path fails there instead of reaching code generation.
+    - **Not yet verified:** what `src/mono.zrl` and `src/il_typecheck.zrl` check of an instantiated body today; this is a question from the task history, not a finding.
+    - **Do:** list the places a generic item is checked (the declaration, the call, the instantiation, the ZIL type check) and what each checks. For each of: a bound on a function, an impl block, a method, a trait's associated item; a type argument that is a reference, a slice, a `fn` value, a raw pointer; a generic body read back from a `.zri`: write the three-line program that violates it and record which place refuses it, or that none does. Say what the ZIL type check would catch if every earlier place were removed (a mutation per place).
+    - **Checks:** C1 the table of violations against the place that refuses each is in this task. C2 each accepted violation is a probe (a `known_gap` if it is unsafe) and a task. C3 the same table under `zbuild` (separate compilation), since a `.zri` body is read back.
+
 ## Decisions and hygiene
 
 - [ ] +safety +decision +AI-D id:z0102 Whether `unsafe fn` gets a `fn` type of its own, callable only in `unsafe`
@@ -437,6 +447,16 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **The goal (the maintainer):** `zoril` translates `.zrl` to `.zil` in a form a person reads. It keeps the source's comments where they were, defines each variable near where the source did, and keeps the module boundaries: N `.zrl` files give N `.zil` files, each with its own module's code, not one merged program.
     - **Where things stand (2026-11-13):** the parser keeps comments in the AST: `doc_comment` on functions, `module_doc` on a file, and `stmt_comments` with one entry per statement (`src/ast.zrl`). `--emit-zil` is whole-program today and prints source-line markers such as `// 347: let _t2 = Fd::from_unix_raw(_t1)`, not the user's comments. Compiler temporaries (`_t1`, `v13`) carry most of the values. `zbuild` already compiles module by module through zilc; whether the ZIL it passes per module is the module's own, and how one `.zil` refers to another's functions and types, is not yet checked.
     - **Decide, when scheduled:** what "readable" requires (comments carried, user names on values, the order of definitions), what cross-module references look like in ZIL, and whether the readable form is the form `zilc` compiles or a separate output. It bears on id:0mbg3's checks: a diagnostic on readable ZIL can name the user's variable.
+
+- [ ] +safety +audit +AI-D @main DN2 Audit: is the `unsafe` boundary decided per operation or by operand type, and what a new expression form gets by default id:8wz0y
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** in `future.tm.md` under "Decisions and hygiene", beside id:z0102: an audit with no task waiting for it, at the maintainer's request (2026-11-14, a review of the plan). Series DN, with DN1 (id:3rata) in `active.tm.md`.
+
+    - **Why:** `doc/spec/unsafe_policy.md` §1 lists six operations that need `unsafe`, and the lowering checks `ZirLowerer.unsafe_depth` where each is lowered. If every site must remember to ask, an expression form nobody listed is allowed. The deny-by-default form decides by type: an operation with a raw-pointer operand is refused outside `unsafe` unless it is one of a short list of safe ones (a copy, a comparison, a cast to an integer, passing it on).
+    - **Not yet verified:** how the check is written today; this is a question from the documents, not a finding.
+    - **Do:** list every site that tests `unsafe_depth` and every expression and pattern form that can take a raw-pointer, integer-to-reference or `extern` operand (`rg -n unsafe_depth src`, the `Expr` and `Pattern` enums in `src/ast.zrl`); say for each form which site decides it, or that none does. Probe each form with no deciding site (a three-line program, built and run). Then say whether one type-directed check at a single place can replace the per-site ones, what it would newly refuse in the tree, and which mutation shows each site is tested.
+    - **Checks:** C1 the table of forms against deciding sites is in this task. C2 each form with no site has its probe and result; an accepted unsafe operation is a `known_gap` probe and a task. C3 the decision (keep, or one check by type) is recorded with the count of what it would newly refuse.
 
 ## Compatibility matrix
 
