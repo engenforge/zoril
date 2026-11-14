@@ -1,0 +1,23 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_extern_fn_value_outside_unsafe.zrl:14:42: error: an extern function made into a value requires unsafe block
+// EXPECT: tests/error_reporting/err_extern_fn_value_outside_unsafe.zrl:16:38: error: an extern function made into a value requires unsafe block
+// EXPECT: tests/error_reporting/err_extern_fn_value_outside_unsafe.zrl:17:20: error: an extern function made into a value requires unsafe block
+// EXPECT: tests/error_reporting/err_extern_fn_value_outside_unsafe.zrl:18:18: error: an extern function made into a value requires unsafe block
+// EXPECT: tests/error_reporting/err_extern_fn_value_outside_unsafe.zrl:19:9: error: an extern function made into a value requires unsafe block
+// EXPECT: tests/error_reporting/err_extern_fn_value_outside_unsafe.zrl:20:13: error: an extern function made into a value requires unsafe block
+// EXPECT: tests/error_reporting/err_extern_fn_value_outside_unsafe.zrl:21:48: error: an extern function made into a value requires unsafe block
+// A call through a `fn` value is never marked, so naming an `extern` as a value claims every call
+// through it is sound, as `unsafe` does for an `unsafe fn` (gap_65, gap_67). Every site is listed.
+extern fn external_add(a: i32, b: i32) -> i32;
+struct H { f: fn(i32, i32) -> i32 }
+fn call(f: fn(i32, i32) -> i32) -> i32 { return f(1, 2); }
+fn ret() -> fn(i32, i32) -> i32 { return external_add; }
+fn main() -> i32 {
+    let mut f: fn(i32, i32) -> i32 = external_add;
+    let h = H { f: external_add };
+    let n = call(external_add);
+    f = external_add;
+    let g = external_add;
+    let c = || -> fn(i32, i32) -> i32 { return external_add; };
+    return 0;
+}
