@@ -63,6 +63,11 @@ pub struct ZirLoopEntry {
     pub has_break: bool,
 }
 
+pub struct SkippedPart {
+    pub place: Place,
+    pub flag: u32,
+}
+
 pub struct ZirLowerer {
     pub arena: *mut ArenaHeader,
     pub persistent_arena: *mut ArenaHeader,
@@ -78,11 +83,17 @@ pub struct ZirLowerer {
     // only an arm whose pattern sets it consumes the scrutinee; any other leaves it owned.
     pub pattern_moved: bool,
     // The parts a by-value pattern skips (`_`, a struct pattern's `..`) whose type needs a drop:
-    // an arm that moves another part out consumes the scrutinee, so it drops these itself.
-    // PATTERN_OR_DEPTH is above 0 inside an or-pattern, whose alternatives each drop their own.
-    pub pattern_skipped: Vec<Place>,
+    // an arm (or `let`) that moves another part out consumes the scrutinee, so it drops these itself.
+    // Outside an or-pattern `flag` is 0 (dropped unconditionally); inside one, `flag` is a bool
+    // initialized false at pattern entry, set true on match, and reset if that alternative fails.
+    pub pattern_skipped: Vec<SkippedPart>,
     pub pattern_or_depth: u32,
     pub pattern_has_guard: bool,
+    pub pattern_entry_block: usize,
+    // Non-Copy bindings created by an arm's pattern while its guard is lowered: the guard may not
+    // move out of them, and early exits (`return`/`break`/`continue`) do not drop them because
+    // the scrutinee still owns them until the guard passes.
+    pub guard_bound_locals: Vec<u32>,
     pub had_error: bool,
     // Errors reported so far; a cleanup compares it around a `defer` to see whether that `defer` failed.
     pub error_count: u32,
@@ -156,9 +167,11 @@ impl ZirLowerer {
             next_region_id: 1 as u32,
             pattern_binds_fresh: false,
             pattern_moved: false,
-            pattern_skipped: unsafe { Vec::<Place>.new_in_raw(arena) },
+            pattern_skipped: unsafe { Vec::<SkippedPart>.new_in_raw(arena) },
             pattern_or_depth: 0 as u32,
             pattern_has_guard: false,
+            pattern_entry_block: 0 as usize,
+            guard_bound_locals: unsafe { Vec::<u32>.new_in_raw(arena) },
             had_error: false,
             error_count: 0 as u32,
             locals: unsafe { Vec::<Local>.new_in_raw(arena) },
@@ -705,6 +718,18 @@ impl ZirLowerer {
         self.local_consumed[local_id as usize - 1 as usize] = consumed;
     }
 
+    pub fn is_guard_bound(self: &ZirLowerer, local_id: u32) -> bool {
+        if local_id == 0 as u32 { return false; }
+        let mut i = 0 as usize;
+        while i < self.guard_bound_locals.len() {
+            if self.guard_bound_locals[i] == local_id {
+                return true;
+            }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
     pub fn consume_place_if_move(self: &mut ZirLowerer, place: &Place) {
         if place.base == 0 as u32 { return; }
         if place.projections.len > 0 as usize {
@@ -714,6 +739,13 @@ impl ZirLowerer {
         if place.base as usize > self.locals.len() { return; }
         let p_local = &self.locals[place.base as usize - 1 as usize];
         if !p_local.is_copy {
+            if self.is_guard_bound(place.base) {
+                self.report_error(
+                    "cannot move out of a pattern binding in a match guard",
+                    self.cur_span
+                );
+                return;
+            }
             if self.drop_flag_of(place.base) != 0 as u32 {
                 self.set_drop_flag(
                     place.base,

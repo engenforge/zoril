@@ -684,6 +684,13 @@ impl ZirLowerer {
                     self.emit(ZirStmt.Drop(val_place, span));
                     return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
                 }
+                if self.is_guard_bound(val_place.base) {
+                    self.report_error(
+                        "cannot move out of a pattern binding in a match guard",
+                        span
+                    );
+                    return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+                }
                 // Tell the checker this drop is the user's: unlike a scope-exit drop, it
                 // must find the value definitely live. Otherwise `if c { sink(r); }
                 // @drop(r);` drops `r` twice. ZIL lowering ignores the marker.

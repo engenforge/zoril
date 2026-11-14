@@ -10,7 +10,28 @@ enum N { A(P), B }
 enum O { A(S, S), C(S, S), D }
 enum C { A(S, i32), B }
 struct W2 { a: S, b: S }
+struct W3 { a: S, b: S, c: S }
 enum Q { A(W2), B }
+enum Q3 { A(W3), B }
+enum G<T, U> { A(T, U), B }
+enum Option<T> { Some(T), None }
+struct PairIter { rem: i32, fp: *mut u8 }
+impl PairIter {
+    fn next(self: &mut PairIter) -> Option<(S, S)> {
+        if self.rem > 0 {
+            self.rem = self.rem - 1;
+            return Option.Some((mk(self.fp), mk(self.fp)));
+        }
+        return Option.None;
+    }
+}
+fn next_p(i: &mut i32, fp: *mut u8) -> P {
+    if *i < 3 {
+        *i = *i + 1;
+        return P.A(mk(fp), mk(fp));
+    }
+    return P.B;
+}
 fn mk(fp: *mut u8) -> S { return S { p: fp }; }
 fn first(fp: *mut u8) { let e = P.A(mk(fp), mk(fp)); match e { P.A(s, _) => {}, P.B => {}, } }
 fn second(fp: *mut u8) { let e = P.A(mk(fp), mk(fp)); match e { P.A(_, t) => {}, P.B => {}, } }
@@ -42,6 +63,86 @@ fn tuple_earlier(fp: *mut u8) {
     let x = (P.A(mk(fp), mk(fp)), O.A(mk(fp), mk(fp)));
     match x { (P.A(_, _), O.A(s, _)) => {}, _ => {}, }
 }
+fn struct_in_variant_wild(fp: *mut u8) {
+    let e = Q.A(W2 { a: mk(fp), b: mk(fp) });
+    match e { Q.A(W2 { a: a, b: _ }) => {}, Q.B => {}, }
+}
+fn struct_in_variant_rest3(fp: *mut u8) {
+    let e = Q3.A(W3 { a: mk(fp), b: mk(fp), c: mk(fp) });
+    match e { Q3.A(W3 { a: a, b: _, .. }) => {}, Q3.B => {}, }
+}
+fn while_let_skip(fp: *mut u8) {
+    let mut i = 0;
+    while let P.A(s, _) = next_p(&mut i, fp) {}
+}
+fn if_let_not_taken(fp: *mut u8) {
+    let e = O.C(mk(fp), mk(fp));
+    if let O.A(s, _) = e { let n = 1; }
+}
+fn generic_skip(fp: *mut u8) {
+    let e1 = G.A(mk(fp), mk(fp));
+    match e1 { G.A(s, _) => {}, G.B => {}, }
+    let e2 = G.A(mk(fp), mk(fp));
+    match e2 { G.A(_, t) => {}, G.B => {}, }
+}
+fn return_in_arm(fp: *mut u8) {
+    let e = P.A(mk(fp), mk(fp));
+    match e { P.A(s, _) => { return; }, P.B => {}, }
+}
+fn break_in_arm(fp: *mut u8) {
+    while true {
+        let e = P.A(mk(fp), mk(fp));
+        match e { P.A(s, _) => { break; }, P.B => { break; }, }
+    }
+}
+fn guard_fails_bind_one(fp: *mut u8) {
+    let e = P.A(mk(fp), mk(fp));
+    let c = false;
+    match e { P.A(s, _) if c => {}, P.A(a, _) => {}, P.B => {}, }
+}
+fn guard_fails_bind_whole(fp: *mut u8) {
+    let e = P.A(mk(fp), mk(fp));
+    let c = false;
+    match e { P.A(s, _) if c => {}, x => {}, }
+}
+fn or_nested_tuple_fail(fp: *mut u8) {
+    let x = (O.A(mk(fp), mk(fp)), 2);
+    match x { (O.A(s, _) | O.C(_, s), 1) => {}, _ => {}, }
+}
+fn or_before_move(fp: *mut u8) {
+    let x = (O.A(mk(fp), mk(fp)), P.A(mk(fp), mk(fp)));
+    match x { (O.A(_, _) | O.D, P.A(s, _)) => {}, _ => {}, }
+}
+fn or_nested_first_fail(fp: *mut u8) {
+    let x = ((O.A(mk(fp), mk(fp)), 2), mk(fp));
+    match x { ((O.A(_, _), 1) | (_, 2), s) => {}, _ => {}, }
+}
+fn return_in_guard(fp: *mut u8) {
+    let e = P.A(mk(fp), mk(fp));
+    match e { P.A(s, _) if { if true { return; } true } => {}, P.A(_, _) => {}, P.B => {}, }
+}
+fn let_tuple_lit(fp: *mut u8) { let (s, _) = (mk(fp), mk(fp)); }
+fn let_tuple_var(fp: *mut u8) {
+    let t = (mk(fp), mk(fp));
+    let (s, _) = t;
+}
+fn let_struct_rest(fp: *mut u8) {
+    let w = W2 { a: mk(fp), b: mk(fp) };
+    let W2 { a: s, .. } = w;
+}
+fn let_wild_lit(fp: *mut u8) { let (_, _) = (mk(fp), mk(fp)); }
+fn let_wild_var(fp: *mut u8) {
+    let t = (mk(fp), mk(fp));
+    let (_, _) = t;
+}
+fn let_struct_all_rest(fp: *mut u8) {
+    let w = W2 { a: mk(fp), b: mk(fp) };
+    let W2 { .. } = w;
+}
+fn for_iter_skip(fp: *mut u8) {
+    let it = PairIter { rem: 3, fp: fp };
+    for (s, _) in it {}
+}
 fn count(f: fn(*mut u8)) -> u8 {
     let mut flag = 0 as u8;
     f(&mut flag as *mut u8);
@@ -59,5 +160,25 @@ fn main() -> i32 {
     if count(if_let) != 2 as u8 { return 9; }
     if count(tuple_later) != 4 as u8 { return 10; }
     if count(tuple_earlier) != 4 as u8 { return 11; }
+    if count(struct_in_variant_wild) != 2 as u8 { return 12; }
+    if count(struct_in_variant_rest3) != 3 as u8 { return 13; }
+    if count(while_let_skip) != 6 as u8 { return 14; }
+    if count(if_let_not_taken) != 2 as u8 { return 15; }
+    if count(generic_skip) != 4 as u8 { return 16; }
+    if count(return_in_arm) != 2 as u8 { return 17; }
+    if count(break_in_arm) != 2 as u8 { return 18; }
+    if count(guard_fails_bind_one) != 2 as u8 { return 19; }
+    if count(guard_fails_bind_whole) != 2 as u8 { return 20; }
+    if count(or_nested_tuple_fail) != 2 as u8 { return 21; }
+    if count(or_before_move) != 4 as u8 { return 22; }
+    if count(or_nested_first_fail) != 3 as u8 { return 23; }
+    if count(return_in_guard) != 2 as u8 { return 24; }
+    if count(let_tuple_lit) != 2 as u8 { return 25; }
+    if count(let_tuple_var) != 2 as u8 { return 26; }
+    if count(let_struct_rest) != 2 as u8 { return 27; }
+    if count(let_wild_lit) != 2 as u8 { return 28; }
+    if count(let_wild_var) != 2 as u8 { return 29; }
+    if count(let_struct_all_rest) != 2 as u8 { return 30; }
+    if count(for_iter_skip) != 6 as u8 { return 31; }
     return 0;
 }
