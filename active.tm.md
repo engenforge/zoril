@@ -2,29 +2,99 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +safety +review +AI-D @main @checkin Review of the nested-guard scrutinee check (gap_86) id:e7qgj
+- [x] +safety +review +AI-D @main @checkin Review of the nested-guard scrutinee check (gap_86) id:e7qgj
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Depends:** id:a47b8
     > **Placed:** after id:a47b8, to review it (a fix to a safety rule written by an `+AI-G` session).
+    > **Completed:** 2026-11-14 git:62de977
 
     - Re-run id:a47b8's **Awaiting review:** commands and `sh scripts/run_safety_matrix.sh`, and read the C5 differential's newly refused list.
     - Probe: a guard in a `match` inside a closure inside a guard; a guard in an `if let` or `while let` body inside a guard; and a write to the outer scrutinee from an inner guard when the inner match is on the same place (`match e { .. if { match e { .. if { e = .. } } } }`).
+    - **Commits reviewed since `id:g63ny` (`56ea75e`):**
+      - `1b1d147` (`id:37p40`): `check_zir: a binding through a &mut reference keeps the referent borrowed` — verified `enum_payload_borrow_root` multi-hop loop and `ref_source_local` fallback in `src/check_zir.zrl`.
+      - `a662fda` (`id:a47b8`): `lower_zir: track a stack of match-guard scrutinees for nested guards` — verified `guard_scrutinee_bases: Vec<u32>` stack push/pop and reversed slice scan in `src/lower_zir/decl.zrl`, `src/lower_zir/lower_match.zrl`, and `src/lower_zir/expr.zrl`.
+      - `172c77e` (`id:kqp9n`): `probes: a view stored through a parameter outlives a free() in the callee` (`gap_87`).
+    - **Re-ran `id:a47b8`'s Awaiting review checks:**
+      - `sh scripts/run_safety_matrix.sh` -> `All probes complete: 467/513 passed. Mismatches: 0` (`gap_86` passes as `compile_reject`; `467/514 passed. Mismatches: 0` after adding `gap_88`).
+      - `./scripts/test.sh tests/error_reporting/err_match_guard_mutates_scrutinee.zrl tests/language/match/match_guard_reads_scrutinee.zrl` -> `Total: 3 run, 3 passed, 0 failed, 0 skipped (0.1s)`.
+      - `timeout -k 5s 30s build/zoril -I stdlib=stdlib --emit-zil -o /dev/null tests/error_reporting/err_match_guard_mutates_scrutinee.zrl` -> printed 11 `in a match guard` diagnostics (lines 17, 21, 25, 29, 33, 37, 41, 46, 54, 62, 70), one per function and no other errors.
+    - **Sibling routes probed:**
+      - Match inside a closure inside a guard (`match e { Q.A(x) if { let f = || -> bool { match d { ... } }; f() } => .. }`) — refused when the closure captures `e` by move (`use of moved value 'e'`), by copy (`the closure holds a copy of 'e'`), or by `&mut e` (`cannot mutably borrow the matched value in a match guard`).
+      - `if let` and `while let` inside a guard mutating the outer scrutinee — refused (`cannot assign to the matched value in a match guard`).
+      - Inner `match` on the same place (`match e { Q.A(x) if match e { Q.A(y) => { e = Q.B; true }, .. } => .. }`) — refused for assignment, `&mut e`, and `&mut` method call (`cannot assign to [or mutably borrow] the matched value in a match guard`).
+      - **New hole found (`gap_88`, recorded in git:62de977 and queued as `id:0tv49` after `id:3rata`):** when a `match` arm, `if let`, or `?` binds an enum payload by value (`Use(*payload_tmp)` where `payload_tmp = EnumPayload(scrut, ..)`), `check_place_use` in `src/check_zir.zrl:606-698` marks only the pointer temporary `payload_tmp` moved while the enum local stays `OWN_OWNED`, so using the enum again after the `match`/`if let`/`?`, in the arm body, or by moving it in a match guard (`match e { Q.A(s) if { match e { Q.A(s2) => true, Q.B => false } } => .. }`) is accepted and double-drops the payload (`gap_88_enum_used_after_payload_moved.zrl`, `exit 77`). Also noted in `id:0tv49` that `enum_payload_source_borrowed` (`src/check_zir.zrl:959-979`) walks only one hop in `state.enum_aliases` and `check_place_use` line 683 treats any unnamed pointer temporary (`loc.name_id == 0`) as non-borrowed, allowing moves out of nested enum borrows (`match *r { Q2.A(QB.A(b)) => {} }`) and temporary reference dereferences (`match *(&e) { Q.A(s) => {} }`, `let s = *id_ref(&s0);`).
+    - **Queue updates:** added `id:0tv49` after `id:3rata`, noted the `check_zir` ownership finding on `id:3rata`, settled Route 2 and numbered **Checks:** `C1`–`C5` on `id:jhy7v` and re-tagged it `+AI-G`, and placed `@checkin` `id:yxvpa` after `id:jhy7v` (blocking `id:0m61c`).
 
-- [ ] +bootstrap +safety +AI-D @main Backport to stage1: a match arm and a by-value self receiver mark the value moved id:jhy7v
+- [ ] +bootstrap +safety +AI-G @main Backport to stage1: a match arm and a by-value self receiver mark the value moved id:jhy7v
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Depends:** id:z0175, id:g63ny, id:e7qgj
     > **Depends changed (2026-11-14, a reviewing session):** added id:g63ny, the check-in of id:7f9k8, and then id:e7qgj, the check-in of id:a47b8, since the first task after a batch waits for its review.
     > **Placed:** after the open soundness holes on `main` (id:z0183 to id:z0175): the maintainer's decision (a) of id:gsa2r. Today's closure takes the routes only on `File`, with a harmless second `close`, so the holes go first.
 
-    - **Do:** a recorded backport (`doc/bootstrap/two_stage.md` §3) of both fixes into `bootstrap/stage1/src/`. Route 1 is written and tried (id:z0135: seven lines after the guard in `lower_zir/match.zrl`). Route 2 is not: find where stage1's `lower_zir/expr.zrl` lowers a method call's receiver when the method takes `self` by value, and mark it moved as `src/` does (compare with `src/lower_zir/expr.zrl`'s method-call path, and with the tuple-argument loop that already consumes ordinary arguments). Both changes are the minimum in the stage0-C dialect. `bootstrap/stage1/PIN` is unchanged; record the backport in §3 beside the `.note.GNU-stack` entry, and remove the `KNOWN_ISSUES.md` §1 entry (git:e56548e).
-    - **Checks:** C1 stage0-c builds the patched stage1 with no `warning:` (`make build/zoril-stage1` from a clean `build/`). C2 through the stage1 pipeline (id:z0135's `s1.sh`, recorded in the task text), `m1` and `m2`/`m4` exit 1 (one drop), and `tests/stdlib/test_stdlib_fd.zrl`, `tests/stdlib/test_stdlib_io_result.zrl` and every `tests/stdlib/` test of a closure module exit 0; quote each. C3 take each fix out and watch its reproduction exit 2. C4 the generation-1 compiler stage1 builds makes no `close` that returns `-9` while compiling id:z0135's three-line program (`gdb`, `catch syscall close`). C5 §3's verification: the candidate builds current `src/`, the fixpoint holds (`make preflight-changed`), `make test`, `make preflight`, each `Total:` quoted.
+    - **Do:** a recorded backport (`doc/bootstrap/two_stage.md` §3) of both fixes into `bootstrap/stage1/src/` (settled and verified in `build/z135/s1fix/` during `id:e7qgj`), `bootstrap/stage1/PIN` stays unchanged:
+    - **Route 1 (`bootstrap/stage1/src/lower_zir/match.zrl`, after line 79, immediately after `if arm.guard != 0 as u32 { ... }` and before `let arm_res = self.lower_expr(arm.body, result_ty);`):** insert the 6 lines below right after the `if arm.guard` closing brace:
+
+    ```zoril
+    // An arm that runs has taken the scrutinee: a by-value binding moved its payload out,
+    // so the scrutinee's own drop must not run again at the match's exit.
+    let scrut_tag = self.get_type_tag(scrut_ty);
+    if !(scrut_tag == ILTYPE_PTR || scrut_tag == ILTYPE_PTRMUT || scrut_tag == ILTYPE_BOXED || scrut_tag == ILTYPE_BOXEDMUT) {
+        self.consume_place_if_move(&scrut_place);
+    }
+    ```
+
+    - **Route 2 (`bootstrap/stage1/src/lower_zir/expr.zrl`, lines 1404–1406, inside the `EXPR_MEMBER_ACCESS` method-call lowering block after the argument loop):** replace `if wants_ref { unsafe { *final_args = self.emit_receiver_ref(current_place, current_ty, expected_recv_ty, span); } }` with:
+
+    ```zoril
+    if wants_ref {
+        unsafe { *final_args = self.emit_receiver_ref(current_place, current_ty, expected_recv_ty, span); }
+    } else if !recv_by_ref {
+        self.consume_arg_if_move(expected_recv_ty, &receiver_final_place);
+    }
+    ```
+
+    - **Record the backport (`doc/bootstrap/two_stage.md` §3 and `KNOWN_ISSUES.md` §1):** in `doc/bootstrap/two_stage.md` §3, add a `- **Backport recorded:**` sub-bullet beside the `.note.GNU-stack` entry recording that `bootstrap/stage1/src/lower_zir/match.zrl` and `bootstrap/stage1/src/lower_zir/expr.zrl` mark a by-value `match` scrutinee moved after the arm's guard and mark a by-value `self` method receiver moved after argument evaluation (backporting git:a38ce23 and git:ac6e24e so a value with a destructor moved either way in the `src/` closure is dropped once). In `KNOWN_ISSUES.md` §1, remove the subsection `### \`stage1\`: a value moved by a \`match\` arm or a by-value \`self\` is dropped twice` (lines 40–46, added in git:e56548e).
+    - **Stage1 pipeline script (`s1.sh <src.zrl> <out>`, from `id:z0135`):**
+
+    ```sh
+    #!/bin/sh
+    set -e
+    src=$1; out=$2
+    ulimit -s 262144 2>/dev/null || true
+    timeout -k 5s 120s ./build/zoril-stage1 -I stdlib=stdlib -I src -I build/gen -I "$(dirname "$src")" --emit-zil -o "$out.zil" "$src"
+    timeout -k 5s 120s ./build/zilc-stage1 "$out.zil" "$out.ssa"
+    qbe -o "$out.s" "$out.ssa"
+    as -o "$out.o" "$out.s"
+    ld -o "$out" "$out.o" build/runtime.o
+    ```
+
+    - **Reproducers (`build/z135/`, from `id:z0135`):**
+      - `m1.zrl` (match arm move; expected exit 1): `struct S { p: *mut u8 } impl Drop for S { fn drop(self: S) { unsafe { *self.p = *self.p + 1 as u8; } } } enum E { A(S), B } fn take(e: E) -> S { return match e { E.A(s) => s, E.B => { return S { p: 0 as *mut u8 }; }, }; } fn main() -> i32 { let mut n = 0 as u8; let np = &mut n as *mut u8; { let s = take(E.A(S { p: np })); } return n as i32; }`
+      - `m2.zrl` (temporary by-value receiver `mk(np).take()`; expected exit 1): `struct S { p: *mut u8 } impl Drop for S { fn drop(self: S) { unsafe { *self.p = *self.p + 1 as u8; } } } struct W { s: S } impl W { fn take(self: W) -> S { return self.s; } } fn mk(p: *mut u8) -> W { return W { s: S { p: p } }; } fn main() -> i32 { let mut n = 0 as u8; let np = &mut n as *mut u8; { let s = mk(np).take(); } return n as i32; }`
+      - `m4.zrl` (local by-value receiver `let w = mk(np); let s = w.take();`; expected exit 1): same `S`, `W`, `mk`, with `let w = mk(np); let s = w.take();` inside the inner block of `main`.
+      - `tiny3.zrl`: `import "core.zrl"; import "vec.zrl"; fn main() -> i32 { return 0; }`
+      - `cs.gdb`: `set pagination off` / `catch syscall close` / `commands 1` / `silent` / `printf "%ld,", $rax` / `continue` / `end` / `run`
+    - **Checks:**
+      - C1: `rm -f build/zoril-stage1 build/zilc-stage1 build/zilc-boot build/zoril build/zilc && make build/zoril-stage1 build/zilc-stage1 && make` builds the patched stage1 and the full toolchain with no `warning:`; quote the output.
+      - C2: Through the stage1 pipeline (`sh build/z135/s1.sh <src> <out>`), `m1.zrl`, `m2.zrl`, and `m4.zrl` exit `1` (one drop), and `tests/stdlib/test_stdlib_fd.zrl`, `tests/stdlib/test_stdlib_io_result.zrl`, and the 20 `tests/stdlib/*.zrl` run-tests whose imports lie in `bootstrap/stage1/stdlib/` (`mem_lite`, `test_arena_reset_to_loop`, `test_nested_arena_marks`, `test_runtime_memcmp`, `test_stdlib_arena_handle_loop`, `test_stdlib_arena_interntable_tie`, `test_stdlib_arena_new_result`, `test_stdlib_arena_vec_tie`, `test_stdlib_bytevec`, `test_stdlib_bytevec_tie`, `test_stdlib_error_kind`, `test_stdlib_intern`, `test_stdlib_interntable_arena`, `test_stdlib_run`, `test_stdlib_vec_clone_in`, `test_stdlib_vec_with_capacity_in`, `test_user_type_named_like_stdlib_copy`, `test_vec_pop_remove_slice`, `test_vec_push_does_not_drop_slot`, `vec_basic`) exit `0`; quote each.
+      - C3: Take each fix out in turn (or in `build/z135/s1fix/`) and watch its reproduction exit `2`: without the `match.zrl` edit `m1` exits `2`, and without the `expr.zrl` edit `m2` and `m4` exit `2`; quote each.
+      - C4: Build the generation-1 compiler from `src/main.zrl` through the patched stage1 (`sh build/z135/s1.sh src/main.zrl build/z135/gen1`) and run `gdb -batch -x build/z135/cs.gdb --args build/z135/gen1 -I stdlib=stdlib --emit-zil -o build/z135/t3.zil build/z135/tiny3.zrl`: every `close` return value is `0` and none is `-9` (`EBADF`); quote the `gdb` output.
+      - C5: `doc/bootstrap/two_stage.md` §3's verification: the candidate builds current `src/`, the fixpoint holds (`make preflight-changed`), `make test`, and `make preflight` (delete host-specific benchmark files under `bench/` afterwards per `AGENTS.md`), each `Total:` line quoted. End with `**Awaiting review:**` naming the C2 and C4 commands for the check-in.
+
+- [ ] +bootstrap +safety +review +AI-D @main @checkin Review of the stage1 backport for match-arm and by-value receiver moves id:yxvpa
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** after id:jhy7v to review the stage1 backport before merging main into provenance (id:0m61c).
+    > **Depends:** id:jhy7v
+
+    - Re-run `id:jhy7v`'s **Awaiting review:** commands (`m1`, `m2`, `m4`, `test_stdlib_fd.zrl`, `test_stdlib_io_result.zrl` through `build/zoril-stage1`, and the `gdb` `cs.gdb` check on `gen1`) and probe sibling routes in `bootstrap/stage1/` (nested enum match in stage1, `if let` / `while let` in stage1, chained by-value method calls in stage1).
 
 - [ ] +merge +AI-D @provenance Merge `main` into `provenance` before the series resumes id:0m61c
     > **Created:** 2026-11-14
     > **Branch:** `provenance`
-    > **Depends:** id:qm667, id:sj5ha, id:vvtam, id:z0175, id:7f9k8, id:37p40, id:a47b8, id:jhy7v
+    > **Depends:** id:qm667, id:sj5ha, id:vvtam, id:z0175, id:7f9k8, id:37p40, id:a47b8, id:jhy7v, id:yxvpa
     > **Placed:** before id:z0093, which it blocks: the series' first task starts from a branch that has `main`'s fixes.
 
     - **Decision (the maintainer, 2026-11-14):** `main` is merged into `provenance`, not the branch rebuilt on `main`: the branch is published (`hom/provenance`, `github/provenance` at git:a6bd53a) and the task files cite 14 of its 18 commits, so a rebuild would need a forced update and a sha remap for no gain. The merge waits for the six soundness fixes on `main` (id:z0183 to id:z0175 above), so it picks them up once.
@@ -43,9 +113,22 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
     - **Why:** `gap_81` to `gap_86` and id:sq2m7, id:qm667, id:sj5ha, id:7f9k8, id:a47b8 were each the lowering of one pattern shape emitting the wrong drops or missing a write (an or-pattern, a guard, a nested guard, a `let` pattern, a `Drop` enum's payload), and each fix taught `src/lower_zir/` that shape. The provenance series replaced that method for escapes: the checker refuses what it cannot classify. The question here is the same for drops: a check, independent of the lowering, that refuses a function whose lowered form does not drop or move each value exactly once.
     - **Not yet verified (a suggestion from the task history, not from the code):** what `src/check_zir.zrl`'s ownership states (Uninitialized/Owned/Moved) already check of the lowering's own `ZirStmt.Drop` statements and drop flags, and why they passed the six gaps. Answer that first: if the checker trusts the drops the lowering emits, that trust is the "unknown means allowed" of this area.
+      - **Verified during `id:e7qgj` (git:62de977, `gap_88`):** `src/check_zir.zrl`'s `state.ownership` (`OWN_UNINIT` / `OWN_OWNED` / `OWN_MOVED`, lines 606-698) tracks only high-level local variables (`place.base` when `place.projections.len == 0` and `!loc.is_copy`); it does not inspect compiler-generated drop-flag locals (`LOCAL_KIND_DROP_FLAG`) or `ZirStmt.Drop`, and when `lower_variant_match` or `lower_try_expr` moves an enum payload out through `let payload_tmp = EnumPayload(scrut, ..); Let(s, Use(*payload_tmp))`, `place.base` is the pointer temporary `payload_tmp` (`is_copy == true`), so neither `scrut`'s `state.ownership` nor its drop flag is checked by `check_zir` (`gap_88`, tracked in `id:0tv49`).
     - **Do:** 1. For each of `gap_81` to `gap_86` (as recorded before its fix: `git log --all --grep 'gap_8[1-6]'`), take the fix out in a scratch worktree under `build/` and say which invariant of the lowered ZIR the bad program broke (a place dropped twice on a path, a place needing a drop that reaches a return neither dropped nor moved, a drop of a place a live binding points into). 2. State the invariant set, and where it is checked (ZIR after lowering, or ZIL), so that a lowering that emits no drop, two drops, or a drop under the wrong flag is a compile error (an internal error naming the place, since the user's program is not at fault). 3. Say what it costs: the compile time over `src/main.zrl`, and what it refuses in `src/`, `stdlib/`, `tools/` and `tests/` today (each one is a finding or a false alarm; list them). 4. Say what it cannot see (a leak by design: collections without `Drop`, a `Box`; `KNOWN_ISSUES.md` §5), and how the pattern grid below complements it.
     - **Also decide:** whether the area gets a grid like the store grid (pattern form × scrutinee kind × binding mode × what the guard or arm does × the drop count expected), generated, with the drop count as its oracle. The fuzz record shows 0 candidates over the same period in which reviews found six holes here.
     - **Checks:** C1 each of the six gaps has its broken invariant here, with the command that showed it. C2 a prototype of the check (a scratch compiler; not committed) refuses all six with their fixes taken out, and accepts the tree; quote both. C3 its cost and its refusals are quoted with their commands. C4 the implementation and the grid are tasks with **Do:** and numbered **Checks:**, placed after this one, or the note says why not.
+
+- [ ] +safety +AI-D @main Ownership and borrow-move check for enum payloads moved through EnumPayload temporaries (gap_88) id:0tv49
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** after id:3rata; found during the id:e7qgj check-in review of id:37p40 and id:a47b8, and depends on id:3rata's design for lowered-ZIR ownership/drop checking.
+    > **Depends:** id:3rata
+
+    - **Probe:** `bench/safety_matrix/probes/gap_88_enum_used_after_payload_moved.zrl` (`known_gap`, `exit 77`, recorded in git:62de977).
+    - **Cause (found during `id:e7qgj`):**
+      1. **Use-after-move of an enum whose payload was moved out (`gap_88`):** `lower_variant_match` (`src/lower_zir/lower_match.zrl:776-823`) and `lower_try_expr` (`src/lower_zir/expr.zrl:3055-3111`) bind a by-value payload via `let payload_tmp = EnumPayload(scrut_place, ..)` and `Let(binding, Use(*payload_tmp))`. In `src/check_zir.zrl:606-698` (`check_place_use`), `place` is `*payload_tmp` (`place.base == payload_tmp`, a pointer temporary with `loc.is_copy == true`), so `state.ownership[place.base] = OWN_MOVED` never marks the underlying enum `ea.source.base` moved (`consume_place_if_move` only clears its runtime drop flag). As a result, using `e` again after `match e { Q.A(s) => {}, Q.B => {} }`, after `if let Q.A(s) = e {}`, after `let s = e?;`, inside the arm body (`match e { Q.A(s) => { let x = e; }, .. }`), or inside a match guard (`match e { Q.A(s) if { match e { Q.A(s2) => true, Q.B => false } } => {}, .. }`) is accepted and double-drops the payload. Note: `bind_pattern_name` runs in `bind_block` before `arm.guard` and before later sub-patterns in `lower_pattern_seq`, so marking the scrutinee moved at `Let(s, Use(*payload_tmp))` would wrongly reject `read_scrut_ref` in `tests/language/match/match_guard_reads_scrutinee.zrl` and failed-guard / failed-second-element arms in `tests/language/match/match_skipped_parts_dropped.zrl`; the scrutinee is only consumed once the pattern and guard succeed (or at a move-marker statement emitted at that point).
+      2. **Multi-hop `enum_payload_source_borrowed` (`src/check_zir.zrl:683-685, 959-979`):** `enum_payload_source_borrowed` walks only one step in `state.enum_aliases` (unlike `id:37p40`'s `enum_payload_borrow_root` at `src/check_zir.zrl:1348-1384`), so a nested enum pattern on a borrow (`fn g(r: &Q2) { match *r { Q2.A(QB.A(b)) => {} _ => {} } }`, or `match e { Q2.A(QB.A(b)) => {} _ => {} }` while `let r = &e;` is live) is not recognised as moving out of a borrow and double-drops `b`.
+      3. **Dereference of an unnamed temporary reference (`src/check_zir.zrl:683`):** `let out_of_borrow = loc.name_id != 0 || self.enum_payload_source_borrowed(place.base, state, locals);` assumes any unnamed pointer temporary (`loc.name_id == 0`) is an `EnumPayload` address unless `enum_payload_source_borrowed` says otherwise. When `place` is `*t` for a temporary reference `t = &e` or `t = id_ref(&s0)` (`match *(&e) { Q.A(s) => {} }`, `match *id_ref(&e) { Q.A(s) => {} }`, `let s = *id_ref(&s0);`), `loc.name_id == 0` and `t` is not in `state.enum_aliases`, so `out_of_borrow` is `false` and the move out of the reference is accepted.
 
 - [ ] +safety +tests +AI-D @provenance id:z0180 A generic `Clone` impl's result keeps the borrows of what it clones
     > **Created:** 2026-11-11
