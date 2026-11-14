@@ -223,6 +223,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Branch:** `main`
     > **Depends:** id:e7qgj
     > **Placed:** after id:e7qgj, as a follow-up to the batch it reviews, at the maintainer's request (2026-11-14, a review of the plan): the last two check-ins each found a new hole in this area. It is a design, so it does not hold the merge id:0m61c; what it decides to build is placed by the maintainer.
+    > **Moved (2026-11-14, the maintainer):** from directly after id:e7qgj to after id:0m61c, so the stage1 backport and the merge of `main` into `provenance` are not held behind a design task. It stays a `main` task; it does not depend on the merge.
     > **Series:** DN ("deny by default"), with DN2 (id:8wz0y) and DN3 (id:dr805) in `future.tm.md` and, for liveness, L1 (id:dhded).
 
     - **Why:** `gap_81` to `gap_86` and id:sq2m7, id:qm667, id:sj5ha, id:7f9k8, id:a47b8 were each the lowering of one pattern shape emitting the wrong drops or missing a write (an or-pattern, a guard, a nested guard, a `let` pattern, a `Drop` enum's payload), and each fix taught `src/lower_zir/` that shape. The provenance series replaced that method for escapes: the checker refuses what it cannot classify. The question here is the same for drops: a check, independent of the lowering, that refuses a function whose lowered form does not drop or move each value exactly once.
@@ -473,7 +474,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Branch:** `provenance`
     > **Check-in:** stop for review after it.
     > **Closes:** `gap_37_local_mutref_field_reset`, `gap_38_param_field_reset`, `gap_39_method_self_field_reset`, `gap_43_box_field_reset`.
-    > **Depends:** id:z0010, id:z0011
+    > **Depends:** id:z0010, id:z0011, id:dhded
+    > **Depends changed (2026-11-14, the maintainer, in a review of the plan):** added id:dhded (L1), the liveness model: L1 decides whether this task's per-local borrow is the rule and rewrites its **Do:** and **Checks:**.
 
     - **Scope (narrowed to intra-frame liveness, 2026-11-03):** the frame-escape siblings (`gap_40`–`gap_42` and `gap_45`) are handled by id:z0048/id:z0012's origin sets. This task fixes intra-frame `Arena::reset` / `free` / `@drop` liveness (`ActiveBorrow` in `src/check_zir.zrl`), where a slice written into a local struct's field or a `Box`'s contents through a local `&mut`, through a callee's `&mut` parameter, through `self` in a `&mut self` method, or through `*b` on a `Box` is skipped today (`place_writes_through_pointer`), letting `a.reset()` pass while the field is read afterwards.
     - **Do:** carry the stored value's borrows to the local (or `Box` local) the pointer refers to: for a local `&mut` or `Box` deref, through the pointer's borrow/ownership of that local; for a callee, through id:z0010's pairwise `i -> j` store summary (`#[stores(..)]` checked in id:z0011). Probe the sibling routes: a `&mut` held in a struct field, a reborrow, a closure capturing `&mut w` across `a.reset()`, and a trait method; also verify `gap_44_borrows_attr_reset` is rejected once checked `#[borrows()]` is active.
