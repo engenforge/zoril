@@ -19,7 +19,7 @@ import "token.zrl";
 import "utils.zrl";
 use mono::INFER_RESULT;
 use diag::{LINT_REDUNDANT_CAST, diag_start, lint_enabled};
-use ast::{ArrayLiteralExpr, ArrayRepeatExpr, BINARY_ADD_ASSIGN, BINARY_ASSIGN, BINARY_SHL, BINARY_SHL_MASKED, BINARY_SHR, BINARY_SHR_ASSIGN, BINARY_SHR_MASKED, BinaryExpr, BlockExpr, BoxExpr, CallExpr, CastExpr, ClosureExpr, DECL_STRUCT, Decl, EXPR_GENERIC, EXPR_IDENT, EXPR_INDEX, EXPR_LITERAL, Expr, ExprId, FnDecl, IfExpr, IndexExpr, IntrinsicExpr, LITERAL_BOOL, LITERAL_CHAR, LITERAL_FLOAT, LITERAL_INT, LITERAL_STRING, Literal, MemberAccessExpr, Span, StructLiteralExpr, TYPE_PTR, TYPE_REFMUT, TYPE_SLICE, TupleLiteralExpr, TypeParam, UNARY_NEG, UNARY_REF, UnaryExpr};
+use ast::{ArrayLiteralExpr, ArrayRepeatExpr, BINARY_ADD_ASSIGN, BINARY_ASSIGN, BINARY_SHL, BINARY_SHL_MASKED, BINARY_SHR, BINARY_SHR_ASSIGN, BINARY_SHR_MASKED, BinaryExpr, BlockExpr, BoxExpr, CallExpr, CastExpr, ClosureExpr, DECL_STRUCT, Decl, EXPR_GENERIC, EXPR_IDENT, EXPR_INDEX, EXPR_LITERAL, Expr, ExprId, FnDecl, GenericExpr, IfExpr, IndexExpr, IntrinsicExpr, LITERAL_BOOL, LITERAL_CHAR, LITERAL_FLOAT, LITERAL_INT, LITERAL_STRING, Literal, MemberAccessExpr, Span, StructLiteralExpr, TYPE_PTR, TYPE_REFMUT, TYPE_SLICE, TupleLiteralExpr, TypeParam, UNARY_NEG, UNARY_REF, UnaryExpr};
 use bytevec::ByteVec;
 use decl::ZirLowerer;
 use il_cfg::ILFunction;
@@ -993,6 +993,7 @@ impl ZirLowerer {
             },
             Expr.Boxed(b) => { return self.lower_boxed_expr(b, span); },
             Expr.Generic(g) => {
+                if let Option.Some(p) = self.lower_generic_fn_value(g, span) { return p; }
                 // `T::<A>` as a value: what it names was looked for as a type (lower_expr_as_type).
                 if let Expr.Ident(id) = self.resolver.ast.exprs[g.expr as usize] {
                     // Once, though a method call lowers its receiver twice.
@@ -1234,6 +1235,50 @@ impl ZirLowerer {
             _ => {},
         }
         return self.no_place();
+    }
+
+    // `f::<A>` not called, with F a function declaration: the instance as a `fn` value, through
+    // fn_value so an `unsafe fn` instance needs `unsafe` as a non-generic one does. None when G
+    // names no function declaration. A value has no arguments to infer missing type arguments
+    // from, so the count must be the declaration's.
+    fn lower_generic_fn_value(self: &mut ZirLowerer, g: GenericExpr, span: Span) -> Option<Place> {
+        let id = match self.resolver.ast.exprs[g.expr as usize] {
+            Expr.Ident(id) => id,
+            _ => { return Option.None; }
+        };
+        let d = match self.resolver.resolve_ptr(id) {
+            Option.Some(sym) => match sym.kind {
+                SymbolKind.Global(d) => d,
+                SymbolKind.Function(_) => {
+                    self.report_error(
+                        "type arguments given to a function that is not generic",
+                        span
+                    );
+                    return Option.Some(self.no_place());
+                },
+                _ => { return Option.None; }
+            },
+            Option.None => { return Option.None; }
+        };
+        let ff = match self.resolver.ast.decls[d as usize] {
+            Decl.Fn(ff) => ff,
+            _ => { return Option.None; }
+        };
+        if self.private_elsewhere(ff.is_pub, ff.source_file, id, span) {
+            return Option.Some(self.no_place());
+        }
+        if g.type_args.len != ff.type_params.len {
+            self.report_error(
+                "a generic function named as a value needs one type argument for each of its type parameters",
+                span
+            );
+            return Option.Some(self.no_place());
+        }
+        let type_args = self.resolver.resolve_type_list(g.type_args);
+        if !self.check_fn_type_arg_bounds(d, type_args, span) {
+            return Option.Some(self.no_place());
+        }
+        return Option.Some(self.fn_value(self.mono.instantiate_function(d, type_args), span));
     }
 
     // Whether a function that is not IS_PUB, from SOURCE_FILE, is named from another module:
