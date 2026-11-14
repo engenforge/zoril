@@ -293,14 +293,19 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     }
     ```
 
-- [ ] +safety +review +AI-D @main @checkin Review of the extern-to-fn-value rule id:2ypfd
+- [x] +safety +review +AI-D @main @checkin Review of the extern-to-fn-value rule id:2ypfd
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Depends:** id:z0101
     > **Placed:** after id:z0101, the batch it reviews.
+    > **Completed:** 2026-11-14 git:8d4670b
 
     - **Review:** re-run id:z0101's C1 to C5 (the matrix, the error test, the take-out, the fresh-verdict differential), and probe the sibling routes: an `extern` reached through a `use` alias and by a module path, an `extern` named as a method-call argument, an `extern` from another module under `zbuild`, a variadic `extern`, and an `extern "C" fn` with a body still accepted as a plain `fn` value.
 
+    - **Review (2026-11-14, `main` at git:8d4670b; scratch `build/ck2y/`):** the change is the one condition id:z0101 settled, with the two tests and the records it asked for; nothing blocks. Re-run: C1 `sh scripts/run_safety_matrix.sh`: `All probes complete: 461/506 passed. Mismatches: 0`. C2 `./scripts/test.sh tests/error_reporting/err_extern_fn_value_outside_unsafe.zrl tests/integration/extern_fn_value.zrl`: `Total: 3 run, 3 passed, 0 failed, 0 skipped`. C4 take-out, `src/lower_zir/expr.zrl` at git:dc006a0 rebuilt: `[FAIL] tests/error_reporting/err_extern_fn_value_outside_unsafe.zrl (expected compile fail, but it compiled)` and `FAIL: 1 safety probe(s) did not match their documented expectation.`; restored and rebuilt. C5 `REJECT_DIFF_NO_CACHE=1 sh scripts/check_reject_diff.sh dc006a0`: `reject-diff: base verdicts: fresh (no cache); base front end 110 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 2 newly refused, of 69146 programs against dc006a0`, both `gap_67` (whole-program, and `zbuild refused it`).
+    - **Sibling routes probed, each refused with `an extern function made into a value requires unsafe block`:** an `extern` of another module by `use` and by module path (also under `zbuild`), as a method-call argument, a variadic `extern` (`let f = printf;`), inside a tuple, an array literal and `Option.Some(..)`, and inside a closure written in an `unsafe` block (the closure body is not in `unsafe`; the direct call in the same closure is refused the same way, so the two rules agree). Accepted, as they should be: the conversion in an `unsafe fn` body (where the direct call is accepted too), and copying a value made in `unsafe` (`let g = f;`). Not routes: `use .. as` is not syntax, and `#[borrows]`/`#[stores]` on an `extern` have nothing to describe, since an `extern` cannot take or return a reference (`an extern function cannot take or return a reference`); the value conversion is refused there too.
+    - **The C3 deviation is right:** an `extern "C" fn` with a body has its own type and does not convert to a plain `fn` (`type mismatch: expected fn(i32, i32) -> i32, found extern "C" fn(i32, i32) -> i32`); my settling text assumed otherwise. The `!is_export` clause is not dead: the `extern "C" fn` value in `tests/integration/extern_fn_value.zrl` goes through `fn_value` outside `unsafe`.
+    - **Plan:** no follow-up task. Next: id:z0176, then id:z0175, both `+AI-D` for a reviewing session; each is first checked under `--provenance` (the maintainer's decision on id:z0183) before a fix in the old rules.
 - [ ] +safety +tests +AI-D @main id:z0176 A value bound by value out of an enum payload in a `match` is dropped exactly once
     > **Created:** 2026-11-11
     > **Branch:** `main`
