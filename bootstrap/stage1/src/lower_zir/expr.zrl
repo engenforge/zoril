@@ -1403,6 +1403,8 @@ if u.type_args.len == 0 as usize && resolved_type_args.len > 0 as usize {
                                         // `self.define(self.table.intern(..))` is accepted.
                                         if wants_ref {
                                             unsafe { *final_args = self.emit_receiver_ref(current_place, current_ty, expected_recv_ty, span); }
+                                        } else if !recv_by_ref {
+                                            self.consume_arg_if_move(expected_recv_ty, &receiver_final_place);
                                         }
 
                                         let ret_ty = self.get_zil_effective_ret_ty(p_func);
