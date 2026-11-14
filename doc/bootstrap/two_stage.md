@@ -22,7 +22,7 @@ The snapshot holds the import closures of `src/main.zrl` and `tools/zilc/src/mai
 | `tools/zilc/src/` | `main`, `qbe`, `zil_parse`                        |
 | `rt/`             | `runtime.s`, to link the stage1 binaries          |
 
-It mirrors the repository paths under its own directory, plus a `PIN` file naming the pinned release. It is built with include roots inside the snapshot only and is never edited by hand.
+It mirrors the repository paths under its own directory, plus a `PIN` file naming the release it shipped with. The snapshot is an older `src/`, ported by hand to the `stage0-C` dialect; it is not that release's `src/` (the two differ in 25 files, and each has files the other lacks). It is built with include roots inside the snapshot only and is never edited by hand.
 
 After a freeze:
 
@@ -57,7 +57,7 @@ Each snapshot must be compilable by `stage0-C`, so the snapshot is never appende
 ## 4. Carried limits
 
 - **Complexity ceiling:** `stage0-C`'s verifier rejects a function with more than 10,000 IL instructions or 1,000 blocks. Blocks are the binding limit in practice. A re-pin re-measures the headroom.
-- The `stage0-C` dialect and its known bugs apply to the snapshot's source, which is today's `src/` and already complies. The dialect workarounds stay in the snapshot permanently; see [`KNOWN_ISSUES.md`](../../KNOWN_ISSUES.md) for the seed's known bugs and limits.
+- The `stage0-C` dialect and its known bugs apply to the snapshot's source, which was written in that dialect and is not today's `src/`. The dialect workarounds stay in the snapshot permanently; see [`KNOWN_ISSUES.md`](../../KNOWN_ISSUES.md) for the seed's known bugs and limits.
 
 ## 5. Host dependencies
 
