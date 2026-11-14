@@ -119,13 +119,33 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Do:** `scripts/check_closure_private_names.sh`, POSIX `sh` and `awk`, no git: list the closure with `timeout -k 5s 30s build/zoril --emit-deps src/main.zrl -I stdlib=stdlib -I src -I build/gen -o <tmp>` (columns 1 and 2 of each line are module paths), or read the list from `--list FILE` (for C2). For each module, take the names of its top-level private functions (lines starting `fn ` or `unsafe fn `, not `pub`), and print `[FAIL] closure-private-names: <name> in <file> and <file>` for every name in two or more modules, then exit 1; otherwise `[PASS] closure-private-names: N modules, no shared private function name`. Add it as a gate in `scripts/test_plan.tsv`. Add one sentence to the stage1 constraint in `AGENTS.md`: no two modules in the closure define a private function of the same name, which the `closure-private-names` gate checks.
     - **Checks:** C1 the gate on the tree prints its `[PASS]` line (quote it). C2 planted: two scratch modules under `build/` (`ma.zrl`, `mb.zrl`, each with `fn helper(x: i32) -> bool`) in a `--list` file: the script prints one `[FAIL]` line naming both and exits 1. C3 take the duplicate test out of the `awk` and watch C2 print `[PASS]`. C4 with a `git` on `PATH` that logs its arguments and exits 1, the gate still passes and the log is empty. C5 `make test`, its `Total:` quoted.
 
-- [ ] +review +AI-D @main @checkin Review of the stage1 documentation fix and the closure-private-names gate id:9y3ke
+- [x] +review +AI-D @main @checkin Review of the stage1 documentation fix and the closure-private-names gate id:9y3ke
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Depends:** id:sydrz, id:azqvx
     > **Placed:** after id:azqvx, the batch it reviews.
+    > **Completed:** 2026-11-14 git:b26ca47
 
     - **Review:** re-run id:sydrz C1 to C2 and id:azqvx C1 to C4; read the new `AGENTS.md` sentence and the gate script whole (POSIX, no git, its header names what it does not check).
+    - **Review (2026-11-14, `main` at git:b26ca47):** git:f684eaf changes the four sentences id:sydrz named and no others; each now says the snapshot is an older `src/` that shipped with the release `PIN` names. git:b26ca47 adds the script, its gate row, a `scripts/test_tiers.tsv` row the task did not ask for (needed so `make test-changed` selects the gate when the script changes; kept), and the `AGENTS.md` sentence. Re-run: id:sydrz C1 `25` differing, `18` one-sided, `31434` and `46769` lines; C2 prints nothing. id:azqvx C1 `[PASS] closure-private-names: 66 modules, no shared private function name`; C2 `[FAIL] closure-private-names: helper in build/z135/ck/ma.zrl and build/z135/ck/mb.zrl`, rc 1; C4 passes with a logging `git` first on `PATH` and no log file. C3 not re-run.
+    - **Sibling probes:** private structs of one name crash stage1 (internal error) and generic private functions are refused; zilc's closure, which stage1 also builds, is not checked; the script needs `timeout` and names only two of several sharing modules. All four go to id:7d2f5. A private `const` of one name fails to assemble under `build/zoril` itself: id:5342d in `future.tm.md`. Nothing blocks.
+
+- [ ] +tests +bootstrap +AI-G @main The closure-private-names gate also covers private struct, enum, trait and type names, and zilc's closure id:7d2f5
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** after id:9y3ke, whose review found it.
+
+    - **Found (check-in id:9y3ke, 2026-11-14):** stage1 also confuses two private structs of the same name in two imported modules: with `struct H { v: i32 }` in `ma.zrl` and `struct H { w: i32 }` in `mb.zrl`, `build/zoril-stage1` stops with `INTERNAL COMPILER ERROR: ZirToZilLowerer.get_field_index: field not found` (`Failed to find field: v among fields: w`); `build/zoril` accepts it and exits 0 (`build/z135/priv/struct/`). A generic private function (`fn helper<T>`) is refused like a plain one. A private `const` of the same name fails in both compilers (id:5342d, not stage1's). Stage1 also builds `tools/zilc/src/main.zrl`'s closure (`build/zilc-boot`), which the gate does not list: today 27 modules, no shared private function name. No module of either closure shares a private struct, enum, trait or type name today.
+    - **Do:** in `scripts/check_closure_private_names.sh`: (1) take the names of top-level private `struct`, `enum`, `trait` and `type` declarations beside `fn` and `unsafe fn`, each kind its own namespace in the report (`[FAIL] closure-private-names: struct H in A and B`); (2) list both closures, `src/main.zrl` (`-I stdlib=stdlib -I src -I build/gen`) and `tools/zilc/src/main.zrl` (`-I stdlib=stdlib -I src -I tools/zilc/src -I build/gen`), each checked on its own; (3) name every module that shares a name, not only the first two; (4) run `build/zoril` with `timeout` only where `command -v timeout` finds one, as `scripts/test_doc_snippets.sh` does, since `timeout` is not a POSIX utility. Update the header's checked/not-checked lines, the `AGENTS.md` sentence (functions, structs, enums, traits and type aliases) and `KNOWN_ISSUES.md` §1's private-name entry (the struct case and its internal error).
+    - **Checks:** C1 the gate on the tree prints one `[PASS]` line per closure (quote both). C2 planted, through `--list`: two modules with `struct H` print `[FAIL] ... struct H in ...`; three modules with `fn helper` print one line naming all three. C3 take (1) out and watch C2's struct case pass. C4 with a logging `git` first on `PATH`, the gate passes and the log is not created. C5 `make test`, its `Total:` quoted.
+
+- [ ] +review +AI-D @main @checkin Review of the widened closure-private-names gate id:4374x
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Depends:** id:7d2f5
+    > **Placed:** after id:7d2f5, the batch it reviews.
+
+    - **Review:** re-run id:7d2f5 C1 to C4, and planted private `enum` and `trait` pairs.
 
 - [ ] +safety +tests +AI-D @main id:z0183 A struct holding a frame view is not pushed into the caller's `Vec`
     > **Created:** 2026-11-11

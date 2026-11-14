@@ -299,6 +299,15 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
 
     - **Seen:** `Command.spawn` (`stdlib/proc.zrl`) uses the environment `build_envp` builds whenever an `env_*` method ran, and then ignores the array `set_envp` set; neither doc comment says so. **Do:** say it in `env_set`'s and `set_envp`'s comments (or make `set_envp` clear the `env_*` state, which is a behaviour change to decide first), `make man-gen`, `sh scripts/test_man_pages.sh`.
 
+- [ ] +modular +AI-G @main Two modules that each define a private const of the same name fail to assemble: the const's symbol is not qualified by its module id:5342d
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** in `future.tm.md`: found by check-in id:9y3ke; a build failure on a correct program, not a soundness hole.
+
+    - **Found (2026-11-14, `main` at git:b26ca47):** modules `ma.zrl` with `const LIM: i32 = 1;` and `mb.zrl` with `const LIM: i32 = 2;`, each read by a `pub fn`, imported by one `main`: `build/zoril` emits both as the symbol `z3LIME`, and the assembler fails with ``Error: symbol `z3LIME' is already defined`` (`build/z135/priv/const/`). Functions are qualified by their module (`z6stdlib3mem5Arena4dropE`); a const is not. The program is correct and should build.
+    - **Do:** qualify a const's symbol by its module, as a function's is, in whole-program and separate compilation (the `.zri` names the symbol the importer references). Probe a `pub const` read from another module, a `static`, and a const of the same name in a module and in the program's root.
+    - **Checks:** C1 the program above builds and exits 0, whole-program and through `zbuild` (a test under `tests/modular/`). C2 take the change out and watch C1 fail to assemble. C3 `make test` and `make preflight-changed`, each `Total:` quoted.
+
 ## Decisions and hygiene
 
 - [ ] +safety +decision +AI-D id:z0102 Whether `unsafe fn` gets a `fn` type of its own, callable only in `unsafe`
