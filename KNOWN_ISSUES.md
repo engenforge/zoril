@@ -29,9 +29,10 @@ This document records known limitations, bootstrap dialect boundaries, and open 
 
 These limits do not affect user code because user code is compiled by the self-hosted compiler (`build/zoril`), which supports the full language.
 
-### `stage1`: two modules with a private function of the same name are refused
+### `stage1`: two modules with a private function or struct of the same name are refused or miscompiled
 
 - **Symptom:** when two imported modules each define a private function with the same name, and each calls its own, `build/zoril-stage1` reports `cannot access private function: <name>` at the call in the second module. `build/zoril` accepts the program. Reproduction: modules `ma.zrl` and `mb.zrl`, each with a private `fn helper(x: i32) -> bool` and a `pub fn` that calls it, both imported by one `main` (`use ma::a_check; use mb::b_check;`); stage1 fails with `mb.zrl:2:41: error: cannot access private function: helper`.
+- **Struct case:** two private structs of one name in two imported modules (`struct H { v: i32 }` in one, `struct H { w: i32 }` in the other) stop `build/zoril-stage1` with `INTERNAL COMPILER ERROR: ZirToZilLowerer.get_field_index: field not found`; `build/zoril` accepts the program. The `closure-private-names` gate checks functions, structs, enums, traits and type aliases in both closures stage1 builds.
 - **Impact:** none on user code or on today's bootstrap. It constrains the modules `src/` imports: no two of them may define a private function of the same name. `stdlib/proc.zrl` and `stdlib/fsys.zrl` each define a private `has_interior_nul`, so stage1 refuses any program importing both (`tools/zbuild/src/main.zrl` among them); `src/` does not import `proc.zrl`.
 - **Workaround:** give the private functions distinct names in any module that joins the `src/` closure (`build/zoril -I stdlib=stdlib -I build/gen --emit-deps src/main.zrl` lists it).
 - **Why not fixed:** `stage1` changes only by a re-pin or a recorded backport (`doc/bootstrap/two_stage.md` §3), which is the maintainer's decision. Tracked in task Z-0135.
