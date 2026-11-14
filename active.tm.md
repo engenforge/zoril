@@ -2,8 +2,6 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-## Now
-
 - [ ] +docs +AI-G @main `AGENTS.md`: the queue is one ordered list, with no `## Now` and `## Next` headings id:m9hjt
     > **Created:** 2026-11-14
     > **Branch:** `main`
@@ -24,8 +22,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Placed:** after id:m9hjt, the batch it reviews.
 
     - **Review:** re-run id:m9hjt C1 to C3; read the two `AGENTS.md` bullets whole for a sentence that still assumes two headings.
-
-## Next
 
 - [ ] +bootstrap +audit +AI-D @main id:z0135 Z0 stage1 accepts modules in the `src/` closure and builds some of their paths wrong
     > **Created:** 2026-11-07
