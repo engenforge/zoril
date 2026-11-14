@@ -231,6 +231,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
          // pointer (the data, the environment) whose target is what matters, not the slot's.
          fn is_slice_like(self: &mut Verifier, ty: u32) -> bool {
     ```
+    - **Checked under the provenance rules (2026-11-14, `provenance` at git:a6bd53a built in `build/z183/prov/`, `--provenance`):** `gap_79`, `gap_80`, and the five saved error tests (struct literal, `let h`, `Option.Some(s)`, tuple, nested struct) are each refused with `error: provenance: the callee stores an address of this frame into memory tha[t outlives ...]`; the `if`-value reduction `build/z183/ifv.zrl` and `struct_view_pushed_accepted.zrl` are accepted. So the provenance call store rule closes this task's routes and the clone route of `gap_80` without the false refusal the tried `verify.zrl` change makes, and with no new `#[stores]` attributes asked of `src/` by this check.
+    - **Recommendation for the maintainer:** close `gap_79` and `gap_80` by the provenance series (B4a id:z0065 turns the new rules on beside the old), not by the old rules: add the five error tests and the accept test to the `provenance` branch now, as `--provenance` tests, so the series cannot lose them, and flip both probes when the series makes the rules the default. Fixing the old rules instead needs the lowering change in the **Stopped** bullet and about 30 attributes in `src/`, for rules B4 (id:z0012) deletes.
 
 - [ ] +safety +tests +AI-D @main id:z0180 A generic `Clone` impl's result keeps the borrows of what it clones
     > **Created:** 2026-11-11
