@@ -1,6 +1,6 @@
 // name: A callee copies a frame view between two locals the caller reaches through one argument
 // expected: known_gap
-// gap: copy_in(&mut r) with r = R { x: &mut wa, y: &wb } copies wb's arena view into wa, then *out = wa.s stores it out; the store summary's i != j filter drops the edge from parameter 0 to itself (gap_07's class, here through a struct of references); closed under --provenance by Z-0010's body summary (ParamContents(0) -> ParamContents(0))
+// gap: copy_in(&mut r) with r = R { x: &mut wa, y: &wb } copies wb's arena view into wa, then *out = wa.s stores it out; the store summary's i != j filter drops the edge from parameter 0 to itself (gap_07's class, here through a struct of references); closed under --provenance by the body summary (ParamContents(0) -> ParamContents(0))
 // observed: exit 77
 import "mem.zrl";
 import "vec.zrl";

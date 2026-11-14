@@ -1,0 +1,39 @@
+// A generic function's instance named with type arguments and not called is a `fn` value at
+// every site a non-generic function is: once, lowering dropped it, so the slot it was stored in
+// was never written (gap_66). Each site's result is counted, so a dropped one changes the total.
+// expected exit 0
+fn id<T>(x: T) -> T { return x; }
+fn twice<T>(f: fn(T) -> T, x: T) -> T { return f(f(x)); }
+fn pick<A, B>(a: A, b: B) -> A { return a; }
+fn wrap<U>(x: U) -> U { let f = id::<U>; return f(x); }
+struct H { f: fn(i32) -> i32 }
+struct Big { a: i64, b: i64, c: i64 }
+fn call(f: fn(i32) -> i32) -> i32 { return f(4); }
+fn get() -> fn(i32) -> i32 { return id::<i32>; }
+fn main() -> i32 {
+    let a: fn(i32) -> i32 = id::<i32>;
+    let b = id::<i32>;
+    let h = H { f: id::<i32> };
+    let hf = h.f;
+    let k = 40;
+    let mut c: fn(i32) -> i32 = |x: i32| x + k;
+    c = id::<i32>;
+    let g = get();
+    let p: fn(i32, u8) -> i32 = pick::<i32, u8>;
+    let big = id::<Big>;
+    let s = big(Big { a: 1, b: 7, c: 9 });
+    let cl = || -> i32 { let f = id::<i32>; return f(8); };
+    let total = a(1)
+        + b(2)
+        + hf(3)
+        + call(id::<i32>)
+        + c(5)
+        + g(6)
+        + p(7, 1 as u8)
+        + cl()
+        + twice::<i64>(id::<i64>, 9 as i64) as i32
+        + twice(id::<i32>, 10)
+        + wrap::<u8>(11 as u8) as i32
+        + s.b as i32;
+    return total - 73;
+}

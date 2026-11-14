@@ -6,9 +6,13 @@
 #   scripts/test.sh [options] --gates          every gate, then every group (make test)
 #   scripts/test.sh [options] --gate NAME ...  only the named gates (repeatable)
 #   scripts/test.sh [options] --group G ...    only the named groups (repeatable)
+#   scripts/test.sh [options] --scenario NAME ... only the named scenarios (repeatable)
 #   scripts/test.sh [options] --suite S        suite: all, group, corpus, incremental, chain, or tests/<dir>
 #   scripts/test.sh [options] PATH...          only these test files or directories
 #   scripts/test.sh [options] --smoke          the smoke suite, tests/smoke.list (make test-fast)
+#   scripts/test.sh --group-of PATH            print the group whose paths hold PATH (exit 1: none)
+#   scripts/test.sh [options] --print-plan     print the options and items a run would use, for another runner
+#   scripts/test.sh --item KIND NAME PREFIX    run one item of that plan, for another runner
 #
 # Groups: language, types, memory, stdlib, diagnostics, integration (--list-groups).
 # Gates: the repository checks make test runs first (--list-gates).
@@ -88,97 +92,72 @@ group_title() {
         stdlib)      echo "Stdlib" ;;
         diagnostics) echo "Diagnostics" ;;
         integration) echo "Integration" ;;
+        git)         echo "Git & Contributor Tools" ;;
     esac
 }
+
+# The plan - the gates, each group's per-file test roots and the scenarios - is the rows of
+# scripts/test_plan.tsv, which documents its own format. A row that does not fit stops the runner
+# with exit 2, so a typo cannot silently drop an item from a run.
+PLAN_FILE=scripts/test_plan.tsv
+
+plan_check() {
+    [ -f "$PLAN_FILE" ] || { echo "test.sh: $PLAN_FILE not found" >&2; return 1; }
+    awk -F'\t' -v f="$PLAN_FILE" -v groups="$GROUPS_ALL git" '
+        function bad(msg) { printf "test.sh: %s:%d: %s\n", f, NR, msg > "/dev/stderr"; err = 1 }
+        BEGIN { n = split(groups, a, " "); for (i = 1; i <= n; i++) known[a[i]] = 1 }
+        /^[ \t]*(#|$)/ { next }
+        {
+            if (NF != 4) { bad("expected 4 tab-separated columns (kind, name, group, command), found " NF); next }
+            if ($4 == "") { bad("empty command"); next }
+            if ($1 == "gate" || $1 == "extra-gate") {
+                if ($3 != "-") bad("a " $1 " row has \"-\" as its group, found \"" $3 "\"")
+                if ($2 in gate) bad("duplicate gate \"" $2 "\" (first at line " gate[$2] ")")
+                gate[$2] = NR
+            } else if ($1 == "paths") {
+                if ($2 != "-") bad("a paths row has \"-\" as its name, found \"" $2 "\"")
+                if (!($3 in known)) bad("unknown group \"" $3 "\"")
+            } else if ($1 == "scenario") {
+                if ($2 == "-" || $2 == "") bad("a scenario row needs a name")
+                if (!($3 in known)) bad("unknown group \"" $3 "\"")
+                if ($2 in scen) bad("duplicate scenario \"" $2 "\" (first at line " scen[$2] ")")
+                scen[$2] = NR
+            } else bad("unknown kind \"" $1 "\" (gate, extra-gate, paths or scenario)")
+        }
+        END { exit err }' "$PLAN_FILE"
+}
+plan_check || exit 2
 
 # group_paths G — the per-file test roots of group G. Every test belongs to exactly one.
 group_paths() {
-    case "$1" in
-        language)    echo tests/language/basic tests/language/control_flow tests/language/match \
-                          tests/language/other tests/language/modules tests/language/phi tests/language/slices \
-                          tests/functional/basic tests/functional/control_flow tests/functional/phi \
-                          tests/functional/codegen tests/functional/*.zrl \
-                          tests/compiler tests/unit tests/benchmarks ;;
-        types)       echo tests/language/enums tests/language/generics tests/language/structs \
-                          tests/language/traits tests/functional/enums tests/functional/structs ;;
-        memory)      echo tests/language/memory tests/language/pointers tests/language/closures \
-                          tests/functional/pointers tests/interproc_summary ;;
-        stdlib)      echo tests/stdlib tests/functional/stdlib ;;
-        diagnostics) echo tests/error_reporting ;;
-        integration) echo tests/integration tests/regressions tests/bootstrap corpus ;;
-    esac
+    awk -F'\t' -v g="$1" '$1 == "paths" && $3 == g { print $4 }' "$PLAN_FILE"
 }
 
-# scenario_export_checks_selftest is scripts/test_export_checks.sh: the guards it runs are
+# The export-checks scenario is scripts/test_export_checks.sh: the guards it runs are
 # private-only (scripts/export_public_release.sh does not ship them), so an exported tree lacks
 # them by design; the wrapper reports the skip and passes, never fails.
 
 # group_scenarios G — the multi-step scripts of group G, listed after its per-file tests.
 group_scenarios() {
-    case "$1" in
-        memory)      echo cross-module-safety-matrix origins ;;
-        stdlib)
-            echo sha256-differential
-            ;;
-        integration)
-            echo incremental fuzz-jobs fuzz-mode-diff fuzz-tools modular-mangling uncalled-method-emit runner-output readme-snippets doc-snippets getting-started struct-layout ffi-export ffi-callback zbuild-link module-names interface-attrs hosted platform-layer man-pages tool-versions md-links safety-comments-selftest no-new-deps-selftest comment-noise-selftest comment-census-selftest export-checks-selftest bench-contention bench-threshold-gate test-lock preflight-selftest check-deps-selftest result-file scdoc-min stray-files-selftest
-            echo bench-step-failed reject-diff-selftest zbuild-errors zbuild-diff user-paths build-info qbe-arg-order qbe-fingerprint full-test-stamp deps-matrix-interrupt
-            ;;
-        diagnostics) echo zilc-errors ;;
-    esac
+    awk -F'\t' -v g="$1" '$1 == "scenario" && $3 == g { print $2 }' "$PLAN_FILE"
+}
+
+scenario_group() {
+    for _g in $GROUPS_ALL git; do
+        for _s in $(group_scenarios "$_g"); do
+            if [ "$_s" = "$1" ]; then
+                echo "$_g"
+                return 0
+            fi
+        done
+    done
+    return 1
 }
 
 scenario_run() {
-    case "$1" in
-        cross-module-safety-matrix) tr_run_scenario "$1" ./scripts/test_safety_matrix_cross_module.sh ;;
-        origins)                    tr_run_scenario "$1" ./scripts/test_origins.sh ;;
-        sha256-differential)        tr_run_scenario "$1" ./scripts/test_sha256_differential.sh ;;
-        incremental)                tr_run_scenario "$1" ./scripts/test_incremental.sh --quiet ;;
-        fuzz-jobs)                  tr_run_scenario "$1" ./scripts/test_fuzz_jobs.sh --quiet ;;
-        fuzz-mode-diff)             tr_run_scenario "$1" ./scripts/test_fuzz_mode_diff.sh ;;
-        fuzz-tools)                 tr_run_scenario "$1" ./scripts/test_fuzz_tools.sh --quiet ;;
-        modular-mangling)           tr_run_scenario "$1" ./scripts/test_modular_mangling.sh ;;
-        uncalled-method-emit)       tr_run_scenario "$1" ./scripts/test_uncalled_method_emit.sh ;;
-        runner-output)              tr_run_scenario "$1" ./scripts/test_runner_output.sh ;;
-        readme-snippets)            tr_run_scenario "$1" ./scripts/test_readme_snippets.sh ;;
-        doc-snippets)               tr_run_scenario "$1" ./scripts/test_doc_snippets.sh ;;
-        getting-started)            tr_run_scenario "$1" ./scripts/test_getting_started.sh ;;
-        struct-layout)              tr_run_scenario "$1" ./scripts/test_struct_layout.sh ;;
-        ffi-export)                 tr_run_scenario "$1" ./scripts/test_ffi_export.sh ;;
-        ffi-callback)               tr_run_scenario "$1" ./scripts/test_ffi_callback.sh ;;
-        zbuild-link)                tr_run_scenario "$1" ./scripts/test_zbuild_link.sh ;;
-        module-names)               tr_run_scenario "$1" ./scripts/test_module_names.sh ;;
-        interface-attrs)            tr_run_scenario "$1" ./scripts/test_interface_attrs.sh ;;
-        hosted)                     tr_run_scenario "$1" ./scripts/test_hosted.sh ;;
-        platform-layer)             tr_run_scenario "$1" ./scripts/test_platform_layer.sh ;;
-        man-pages)                  tr_run_scenario "$1" ./scripts/test_man_pages.sh ;;
-        tool-versions)              tr_run_scenario "$1" ./scripts/test_tool_versions.sh ;;
-        md-links)                   tr_run_scenario "$1" ./scripts/test_check_md_links.sh ;;
-        safety-comments-selftest)   tr_run_scenario "$1" ./scripts/test_check_safety_comments.sh ;;
-        no-new-deps-selftest)         tr_run_scenario "$1" ./scripts/test_check_no_new_deps.sh ;;
-        comment-noise-selftest)     tr_run_scenario "$1" ./scripts/test_check_comment_noise.sh ;;
-        comment-census-selftest)    tr_run_scenario "$1" ./scripts/test_comment_census.sh ;;
-        export-checks-selftest)     tr_run_scenario "$1" ./scripts/test_export_checks.sh ;;
-        bench-contention)           tr_run_scenario "$1" ./scripts/test_bench_contention.sh ;;
-        bench-threshold-gate)       tr_run_scenario "$1" ./scripts/test_bench_threshold_gate.sh ;;
-        test-lock)                  tr_run_scenario "$1" ./scripts/test_test_lock.sh ;;
-        preflight-selftest)         tr_run_scenario "$1" ./scripts/test_preflight.sh ;;
-        check-deps-selftest)        tr_run_scenario "$1" ./scripts/test_check_deps.sh ;;
-        result-file)                tr_run_scenario "$1" ./scripts/test_result_file.sh ;;
-        scdoc-min)                  tr_run_scenario "$1" ./scripts/test_scdoc_min.sh ;;
-        stray-files-selftest)       tr_run_scenario "$1" ./scripts/check_stray_files.sh --selftest ;;
-        bench-step-failed)          tr_run_scenario "$1" ./scripts/test_bench_step_failed.sh ;;
-        reject-diff-selftest)       tr_run_scenario "$1" ./scripts/test_reject_diff.sh ;;
-        zbuild-errors)              tr_run_scenario "$1" ./scripts/test_zbuild_errors.sh ;;
-        zbuild-diff)                tr_run_scenario "$1" ./scripts/test_zbuild_diff.sh ;;
-        user-paths)                 tr_run_scenario "$1" ./scripts/test_user_paths.sh ;;
-        build-info)                 tr_run_scenario "$1" ./scripts/test_build_info.sh ;;
-        qbe-arg-order)              tr_run_scenario "$1" ./scripts/test_qbe_arg_order.sh ;;
-        qbe-fingerprint)            tr_run_scenario "$1" ./scripts/test_qbe_fingerprint.sh ;;
-        full-test-stamp)            tr_run_scenario "$1" ./scripts/test_full_test_stamp.sh ;;
-        deps-matrix-interrupt)  tr_run_scenario "$1" ./scripts/test_dep_matrix.sh --selftest ;;
-        zilc-errors)                tr_run_scenario "$1" ./scripts/test_zilc_errors.sh ;;
-    esac
+    _sc_cmd=$(awk -F'\t' -v n="$1" '$1 == "scenario" && $2 == n { print $4; exit }' "$PLAN_FILE")
+    # The command is a program and its arguments, split on blanks: no row quotes anything.
+    [ -n "$_sc_cmd" ] && tr_run_scenario "$1" $_sc_cmd
 }
 
 # Legacy TSUITE names that select a group.
@@ -192,54 +171,17 @@ group_alias() {
 # Gates: repository checks that are not per-file tests. Each prints one canonical item
 # line per thing it checks ([PASS]/[FAIL]/[SKIP] at the start of the line); anything else
 # it prints is detail and stays in build/gates/<name>.log.
-# This list is also the display order: results print in plan order, so one slow gate holds back
-# every line after it. The slowest is last for that reason - mutation-self-test builds four mutant
-# compilers (about a minute and a half), and it used to sit in the middle, freezing the count lines
-# of the twenty gates that had already finished.
-GATES_ALL="fmt-check md-check no-new-deps binary-sizes no-warnings test-strength fuzz-record fuzz-fresh safety-matrix safety-matrix-zbuild safety-model safety-comments safety-figures comment-noise reborrow-probes exhaustive route-coverage temp-names unsafe-scan runtimes static-image perf-gate toolchain portability clean-tree toolchain-offpath stage0c-fixed-bugs stage0c-unit
-           stage0c-corpus stage0c-docs stage0c-error-locations stage0c-functional stage0c-minimal mutation-self-test"
+# The rows of scripts/test_plan.tsv are in display order: results print in plan order, so one slow
+# gate holds back every line after it, and the slowest gate is the last row.
+GATES_ALL=$(awk -F'\t' '$1 == "gate" { printf "%s%s", sep, $2; sep = " " }' "$PLAN_FILE")
 
 gate_command() {
     case "$1" in
-        fmt-check)               echo ./scripts/check_fmt.sh ;;
-        mutation-self-test)      echo ./scripts/test_mutation_check.sh ;;
-        md-check)                echo ./scripts/check_md_fmt.sh ;;
-        no-new-deps)               echo ./scripts/check_no_new_deps.sh ;;
-        binary-sizes)            echo ./scripts/check_binary_sizes.sh ;;
-        no-warnings)             echo ./scripts/check_no_warnings.sh ;;
-        test-strength)           echo ./scripts/check_test_strength.sh ;;
-        fuzz-record)             echo ./scripts/check_fuzz_record.sh ;;
-        fuzz-fresh)              echo ./scripts/check_fuzz_fresh.sh ;;
-        safety-matrix)           echo ./scripts/run_safety_matrix.sh ;;
-        safety-matrix-zbuild)    echo ./scripts/run_safety_matrix.sh --zbuild ;;
-        safety-model)            echo ./scripts/check_safety_model.sh ;;
-        safety-comments)         echo ./scripts/check_safety_comments.sh ;;
-        safety-figures)          echo "./scripts/check_safety_figures.sh --all" ;;
-        comment-noise)           echo ./scripts/check_comment_noise.sh ;;
-        reborrow-probes)         echo ./scripts/check_reborrow_probes.sh ;;
-        store-grid)              echo ./scripts/check_store_grid.sh ;;
-        exhaustive)              echo "./scripts/check_exhaustive.sh --selftest && ./scripts/check_exhaustive.sh" ;;
-        route-coverage)          echo ./scripts/check_route_coverage.sh ;;
-        temp-names)              echo ./scripts/check_temp_names.sh ;;
-        unsafe-scan)             echo ./scripts/unsafe_scan.sh ;;
-        runtimes)                echo ./scripts/check_runtimes.sh ;;
-        static-image)            echo ./scripts/check_static_image_determinism.sh ;;
-        perf-gate)               echo "./scripts/perf_gap.sh --gate-check" ;;
-        toolchain)               echo ./scripts/check_toolchain.sh ;;
-        portability)             echo ./scripts/check_portability.sh ;;
-        clean-tree)              echo ./scripts/check_clean_tree.sh ;;
-        toolchain-offpath)       echo ./scripts/check_toolchain_offpath.sh ;;
-        stage0c-fixed-bugs)      echo "./$STAGE0_DIR/scripts/test_fixed_bugs.sh" ;;
-        stage0c-unit)            echo "${MAKE:-make} --no-print-directory -C $STAGE0_DIR test_unit" ;;
-        stage0c-corpus)          echo "${MAKE:-make} --no-print-directory -C $STAGE0_DIR test_corpus" ;;
-        stage0c-docs)            echo "${MAKE:-make} --no-print-directory -C $STAGE0_DIR test_docs" ;;
-        stage0c-error-locations) echo "${MAKE:-make} --no-print-directory -C $STAGE0_DIR test_error_locations" ;;
-        stage0c-functional)      echo "${MAKE:-make} --no-print-directory -C $STAGE0_DIR test_functional" ;;
-        stage0c-minimal)         echo ./scripts/check_stage0c_minimal.sh ;;
         # Misbehaving gates for the runner's own output test (scripts/test_runner_output.sh).
         fixture-*)
             _fx="tests/runner/fixtures/gates/$(echo "${1#fixture-}" | tr - _).sh"
             [ -x "$_fx" ] && echo "$_fx" ;;
+        *) awk -F'\t' -v n="$1" '($1 == "gate" || $1 == "extra-gate") && $2 == n { print $4; exit }' "$PLAN_FILE" ;;
     esac
 }
 
@@ -250,7 +192,7 @@ gate_run() {
     _gname="$1"
     _glog="build/gates/$_gname.log"
     mkdir -p build/gates
-    QUIET=0 $(gate_command "$_gname") > "$_glog" 2>&1
+    eval "QUIET=0 $(gate_command "$_gname")" > "$_glog" 2>&1
     _grc=$?
     [ $_grc -eq 130 ] && exit 130
     eval "$(awk -v g="$_gname" -v quiet="$TR_QUIET" -v out="$_glog.items" '
@@ -280,6 +222,30 @@ gate_run() {
 }
 
 # ------------------------------------------------------------------ worker
+# run_item KIND NAME PREFIX — run one item: its report goes to PREFIX.out, its timing to
+# PREFIX.time, and its counts are left in TR_RUN, TR_PASSED, TR_FAILED and TR_SKIPPED.
+run_item() {
+    TR_RESULTS=""
+    _item_start_s=$(date +%s)
+    tr_clock; _item_start_ms=$TR_NOW
+    case "$1" in
+        file)     tr_run_file "$2" > "$3.out" 2>&1 ;;
+        scenario) scenario_run "$2" > "$3.out" 2>&1 ;;
+        gate)     gate_run "$2" > "$3.out" 2>&1 ;;
+    esac
+    tr_clock; _item_ms=$(( TR_NOW - _item_start_ms ))
+    case "$1" in
+        gate)
+            _dur_s=$(( $(date +%s) - _item_start_s ))
+            printf '%d\t%d\n' "$_dur_s" "$_item_ms" > "$3.time"
+            ;;
+        *)
+            _dur_sec=$(printf '%d.%03d' $(( _item_ms / 1000 )) $(( _item_ms % 1000 )))
+            printf '%s\t%d\n' "$_dur_sec" "$_item_ms" > "$3.time"
+            ;;
+    esac
+}
+
 # scripts/test.sh --worker INDEX KIND NAME: run one item for the pool below. Its report
 # goes to $ITEMS/INDEX.out, its counts to $ITEMS/INDEX.st, then INDEX to the FIFO.
 if [ "$1" = "--worker" ]; then
@@ -306,18 +272,23 @@ if [ "$1" = "--worker" ]; then
     if [ -e "$ITEMS/stop" ]; then
         write_status STOPPED
     else
-        TR_RESULTS=""
-        case "$kind" in
-            file)     tr_run_file "$name" > "$ITEMS/$idx.out" 2>&1 ;;
-            scenario) scenario_run "$name" > "$ITEMS/$idx.out" 2>&1 ;;
-            gate)     gate_run "$name" > "$ITEMS/$idx.out" 2>&1 ;;
-        esac
+        run_item "$kind" "$name" "$ITEMS/$idx"
         # Every item reports the same four counts: run passed failed skipped.
         write_status "$TR_RUN $TR_PASSED $TR_FAILED $TR_SKIPPED"
         [ "$TR_FAILED" -gt 0 ] && [ "$TR_FAIL_FAST" -eq 1 ] && : > "$ITEMS/stop"
     fi
     dispatcher_alive || exit 0
     echo "$idx" > "$ITEMS/done.fifo"
+    exit 0
+fi
+
+# scripts/test.sh --item KIND NAME PREFIX: run one item as a worker does, for another runner. It
+# writes PREFIX.out, PREFIX.time and PREFIX.st (the four counts) and takes its settings from the
+# environment, never from options.
+if [ "$1" = "--item" ]; then
+    [ "$#" -eq 4 ] || { echo "test.sh: --item takes KIND NAME PREFIX" >&2; exit 2; }
+    run_item "$2" "$3" "$4"
+    printf '%s\n' "$TR_RUN $TR_PASSED $TR_FAILED $TR_SKIPPED" > "$4.st.tmp" && mv -f "$4.st.tmp" "$4.st"
     exit 0
 fi
 
@@ -346,8 +317,10 @@ fi
 groups=""
 gates=""
 paths=""
+scenarios=""
 label="Selected tests"
 suite_incremental=0
+print_plan=0
 while [ "$#" -gt 0 ]; do
     tr_parse_flag "$1" "$2"; n=$?
     if [ $n -gt 0 ]; then shift $n; continue; fi
@@ -389,7 +362,14 @@ while [ "$#" -gt 0 ]; do
             g=$(group_alias "$2")
             [ -n "$(group_title "$g")" ] || { echo "test.sh: unknown group '$2' ($GROUPS_ALL)" >&2; exit 2; }
             groups="$groups $g"; shift 2 ;;
+        --scenario)
+            [ -n "${2:-}" ] || { echo "test.sh: --scenario requires an argument" >&2; exit 2; }
+            _sc="$2"
+            _sc_grp=$(scenario_group "$_sc")
+            [ -n "$_sc_grp" ] || { echo "test.sh: unknown scenario '$_sc'" >&2; exit 2; }
+            scenarios="$scenarios $_sc"; shift 2 ;;
         --gates) gates="$GATES_ALL"; shift ;;
+        --print-plan) print_plan=1; shift ;;
         --gate)
             [ -n "$(gate_command "$2")" ] || { echo "test.sh: unknown gate '$2'" >&2; exit 2; }
             gates="$gates $2"; shift 2 ;;
@@ -403,6 +383,20 @@ while [ "$#" -gt 0 ]; do
         --list-groups)
             for g in $GROUPS_ALL; do printf '%-12s %s\n' "$g" "$(group_title "$g")"; done
             exit 0 ;;
+        --group-of)
+            [ -n "${2:-}" ] || { echo "test.sh: --group-of requires a path" >&2; exit 2; }
+            _q="${2#./}"
+            for g in $GROUPS_ALL; do
+                for _e in $(group_paths "$g"); do
+                    case "$_q" in "$_e"|"$_e"/*) echo "$g"; exit 0 ;; esac
+                    # A glob entry (tests/functional/*.zrl) lists only files that exist; a
+                    # deleted or new file beside them is in the same group.
+                    if [ -f "$_e" ] && [ "${_q%/*}" = "${_e%/*}" ]; then
+                        case "$_q" in *.zrl) echo "$g"; exit 0 ;; esac
+                    fi
+                done
+            done
+            exit 1 ;;
         -h|--help) sed -n '2,/^[^#]/ { /^[^#]/d; s/^# \{0,1\}//; p; }' "$0"; exit 0 ;;
         -*) echo "test.sh: unknown option $1" >&2; exit 2 ;;
         *) paths="$paths $1"; shift ;;
@@ -434,6 +428,7 @@ case "$gates" in
 esac
 ./scripts/check_deps.sh --required-only $_deps_profiles || exit $?
 
+if [ "$print_plan" -eq 0 ]; then
 exec 9>> "$TR_WORK/.lock" || { echo "test.sh: cannot open $TR_WORK/.lock" >&2; exit 2; }
 if ! command -v flock >/dev/null 2>&1; then
     echo "test.sh: flock is required but not found in PATH" >&2
@@ -467,6 +462,7 @@ printf '%s\n' "$$" > "$TR_WORK/.lock"
 # work in progress from failing the run, and ignored paths (build/) never enter the comparison.
 stray_start="$TR_WORK/stray.start"
 ./scripts/check_stray_files.sh --record "$stray_start" 2>/dev/null || stray_start=""
+fi
 
 if [ ! -f "$TR_RUNTIME" ]; then
     case "$TR_RUNTIME" in */*) mkdir -p "${TR_RUNTIME%/*}" ;; esac
@@ -483,7 +479,13 @@ filtered() {
 PLAN=$(mktemp)
 claimed=$(mktemp)
 ITEMS="$TR_WORK/items"
-rm -rf "$ITEMS" && mkdir -p "$ITEMS"
+TIMINGS_FILE="${TR_TIMINGS:-$TR_WORK/timings.tsv}"
+unset TR_TIMINGS
+if [ "$print_plan" -eq 0 ]; then
+    rm -rf "$ITEMS" && mkdir -p "$ITEMS"
+    mkdir -p "$(dirname "$TIMINGS_FILE")"
+    : > "$TIMINGS_FILE"
+fi
 cleanup() { rm -f "$PLAN" "$claimed"; }
 trap 'cleanup; _tr_sig_handler' INT TERM
 trap cleanup EXIT
@@ -491,17 +493,14 @@ trap cleanup EXIT
 for g in $gates; do echo "gate:$g gate $g" >> "$PLAN"; done
 
 full_run=0
-if [ -n "$paths" ]; then
-    filtered "$(tr_discover $paths)" | sed '/^$/d; s/^/- file /' >> "$PLAN"
-    if ! grep -q ' file ' "$PLAN"; then
-        echo "no tests found in$paths${TR_FILTER:+ matching '$TR_FILTER'}" >&2
-        exit 1
-    fi
-elif [ -n "$groups" ] || [ -z "$gates" ] || [ "$gates" = "$GATES_ALL" ]; then
-    if [ -z "$groups" ]; then
+if [ -z "$paths" ] && [ -z "$groups" ] && [ -z "$scenarios" ]; then
+    if [ -z "$gates" ] || [ "$gates" = "$GATES_ALL" ]; then
         groups="$GROUPS_ALL"
         [ -z "$TR_FILTER" ] && full_run=1
     fi
+fi
+
+if [ -n "$groups" ]; then
     for g in $groups; do
         all=$(tr_discover $(group_paths "$g"))
         printf '%s\n' "$all" >> "$claimed"
@@ -511,10 +510,38 @@ elif [ -n "$groups" ] || [ -z "$gates" ] || [ "$gates" = "$GATES_ALL" ]; then
             for sc in $(group_scenarios "$g"); do echo "$g scenario $sc" >> "$PLAN"; done
         fi
     done
-    if [ ! -s "$PLAN" ]; then
-        echo "no tests matched${TR_FILTER:+ '$TR_FILTER'}" >&2
+fi
+
+if [ -n "$paths" ]; then
+    _disc=$(filtered "$(tr_discover $paths)")
+    if [ -z "$_disc" ]; then
+        echo "no tests found in$paths${TR_FILTER:+ matching '$TR_FILTER'}" >&2
         exit 1
     fi
+    printf '%s\n' "$_disc" | while IFS= read -r _p; do
+        [ -n "$_p" ] || continue
+        if ! grep -q " file $_p\$" "$PLAN" 2>/dev/null; then
+            echo "- file $_p" >> "$PLAN"
+        fi
+    done
+fi
+
+if [ -n "$scenarios" ] && [ -z "$TR_FILTER" ]; then
+    for sc in $scenarios; do
+        _sc_grp=$(scenario_group "$sc")
+        if ! grep -q " scenario $sc\$" "$PLAN" 2>/dev/null; then
+            echo "$_sc_grp scenario $sc" >> "$PLAN"
+        fi
+    done
+fi
+
+if [ ! -s "$PLAN" ]; then
+    if [ -n "$paths" ]; then
+        echo "no tests found in$paths${TR_FILTER:+ matching '$TR_FILTER'}" >&2
+    else
+        echo "no tests matched${TR_FILTER:+ '$TR_FILTER'}" >&2
+    fi
+    exit 1
 fi
 
 # TR_EXCLUDE: space-separated test paths or scenario names this run leaves out, counted nowhere.
@@ -543,6 +570,35 @@ suite_title() {
         *)      _title=$(group_title "$1"); echo "${_title:-$1}" ;;
     esac
 }
+
+# claim_lines — the [FAIL] lines for a test in two groups or in none, one per line.
+claim_lines() {
+    dups=$(grep -v '^$' "$claimed" | sort | uniq -d)
+    lost=$(tr_discover tests corpus | grep -vxF -f "$claimed")
+    for f in $dups; do echo "[FAIL] $f (in more than one group)"; done
+    for f in $lost; do echo "[FAIL] $f (in no group; add it to a paths row of scripts/test_plan.tsv)"; done
+}
+
+# --print-plan: what a run with these options would do, as tab-separated rows. The claim rows are
+# computed before the run, so a test file the run itself writes under tests/ is not among them.
+if [ "$print_plan" -eq 1 ]; then
+    printf 'plan\t1\n'
+    printf 'option\tquiet\t%s\n' "$TR_QUIET"
+    printf 'option\tverbose\t%s\n' "$TR_VERBOSE"
+    printf 'option\tfail_fast\t%s\n' "$TR_FAIL_FAST"
+    printf 'option\ttimeout\t%s\n' "$TR_TIMEOUT"
+    printf 'option\tresults\t%s\n' "$TR_RESULTS"
+    printf 'option\ttimings\t%s\n' "$TIMINGS_FILE"
+    printf 'option\twork\t%s\n' "$TR_WORK"
+    printf 'option\tfull_run\t%s\n' "$full_run"
+    while read -r _s _k _n; do
+        printf 'item\t%s\t%s\t%s\t%s\n' "$_s" "$_k" "$_n" "$(suite_title "$_s")"
+    done < "$PLAN"
+    if [ "$full_run" -eq 1 ]; then
+        claim_lines | while IFS= read -r _l; do printf 'claim\t%s\n' "$_l"; done
+    fi
+    exit 0
+fi
 
 # ------------------------------------------------------------------ run
 # Workers finish in any order; results print in plan order as soon as every earlier
@@ -607,6 +663,17 @@ s_run=0; s_passed=0; s_failed=0; s_skipped=0
 cur_suite=""
 cur_section=""
 stopped=0
+grp_ms=0
+
+finish_suite_timing() {
+    case "$cur_suite" in
+        gate:*|-|stray-files|"") ;;
+        *)
+            _grp_sec=$(printf '%d.%03d' $(( grp_ms / 1000 )) $(( grp_ms % 1000 )))
+            printf '%s\tgroup\t%s\n' "$_grp_sec" "$cur_suite" >> "$TIMINGS_FILE"
+            ;;
+    esac
+}
 
 suite_line() {
     printf '  %-28s %5d run %5d passed %5d failed %5d skipped\n' \
@@ -643,9 +710,13 @@ while [ $next -le "$total" ]; do
         echo "[FAIL] $name (the worker left no result)" >> "$ITEMS/$next.out"
     fi
     if [ "$suite" != "$cur_suite" ]; then
-        [ -n "$cur_suite" ] && [ $stopped -eq 0 ] && suite_line
+        if [ -n "$cur_suite" ] && [ $stopped -eq 0 ]; then
+            suite_line
+            finish_suite_timing
+        fi
         cur_suite="$suite"
         s_run=0; s_passed=0; s_failed=0; s_skipped=0
+        grp_ms=0
         case "$suite" in gate:*) section=Gates ;; *) section=Tests ;; esac
         if [ "$section" != "$cur_section" ] && [ $stopped -eq 0 ]; then
             echo "$section"; cur_section=$section
@@ -657,12 +728,24 @@ while [ $next -le "$total" ]; do
         s_run=$((s_run + $1)); s_passed=$((s_passed + $2)); s_failed=$((s_failed + $3)); s_skipped=$((s_skipped + $4))
         tot_run=$((tot_run + $1)); tot_passed=$((tot_passed + $2))
         tot_failed=$((tot_failed + $3)); tot_skipped=$((tot_skipped + $4))
+        item_time_str="0"
+        item_ms=0
+        if [ -f "$ITEMS/$next.time" ]; then
+            read -r item_time_str item_ms < "$ITEMS/$next.time"
+        fi
+        grp_ms=$(( grp_ms + item_ms ))
+        case "$kind" in
+            gate)     printf '%s\tgate\t%s\n' "$item_time_str" "$name" >> "$TIMINGS_FILE" ;;
+            scenario) printf '%s\tscenario\t%s\n' "$item_time_str" "$name" >> "$TIMINGS_FILE" ;;
+            file)     printf '%s\ttest\t%s\n' "$item_time_str" "$name" >> "$TIMINGS_FILE" ;;
+        esac
         if [ -n "$TR_RESULTS" ]; then
             if [ "$3" -gt 0 ]; then st=FAIL; elif [ "$1" -eq 0 ]; then st=SKIP; else st=PASS; fi
             printf '%s\t%s\n' "$st" "$name" >> "$TR_RESULTS"
         fi
         if [ "$3" -gt 0 ] && [ "$TR_FAIL_FAST" -eq 1 ]; then
             suite_line
+            finish_suite_timing
             stopped=1
             echo "Stopping at the first failure (--fail-fast)."
         fi
@@ -671,14 +754,19 @@ while [ $next -le "$total" ]; do
 done
 exec 3<&- 4<&-
 wait $pool
-[ -n "$cur_suite" ] && [ $stopped -eq 0 ] && suite_line
+if [ -n "$cur_suite" ] && [ $stopped -eq 0 ]; then
+    suite_line
+    finish_suite_timing
+fi
 
 # Every test must belong to exactly one group, or the full run silently skips it.
 if [ $full_run -eq 1 ] && [ $stopped -eq 0 ]; then
-    dups=$(grep -v '^$' "$claimed" | sort | uniq -d)
-    lost=$(tr_discover tests corpus | grep -vxF -f "$claimed")
-    for f in $dups; do echo "[FAIL] $f (in more than one group)"; tot_run=$((tot_run + 1)); tot_failed=$((tot_failed + 1)); done
-    for f in $lost; do echo "[FAIL] $f (in no group; add it to group_paths in scripts/test.sh)"; tot_run=$((tot_run + 1)); tot_failed=$((tot_failed + 1)); done
+    _claims=$(claim_lines)
+    if [ -n "$_claims" ]; then
+        printf '%s\n' "$_claims"
+        _nclaims=$(printf '%s\n' "$_claims" | wc -l)
+        tot_run=$((tot_run + _nclaims)); tot_failed=$((tot_failed + _nclaims))
+    fi
 fi
 
 # Nothing this run wrote may stay outside build/: the next `git add -A` would commit it, and a
@@ -689,7 +777,7 @@ cur_suite="stray-files"
 s_run=0; s_passed=0; s_failed=0; s_skipped=0
 if [ -z "$stray_start" ]; then
     tot_skipped=$((tot_skipped + 1)); s_skipped=$((s_skipped + 1))
-    [ "$TR_QUIET" -eq 1 ] || echo "[SKIP] stray-files (this tree is not a git checkout, or the work directory is not writable)"
+    [ "$TR_QUIET" -eq 1 ] || echo "[SKIP] stray-files (the work directory is not writable)"
 else
     _stray=$(./scripts/check_stray_files.sh --compare "$stray_start" 2>/dev/null)
     tot_run=$((tot_run + 1)); s_run=$((s_run + 1))
@@ -706,12 +794,6 @@ fi
 [ $stopped -eq 0 ] && suite_line
 
 secs=$(awk -v ms="$(( $(tr_now_ms) - ALL_START ))" 'BEGIN { printf "%.1f", ms / 1000 }')
-echo "Total: $tot_run run, $tot_passed passed, $tot_failed failed, $tot_skipped skipped (${secs}s)"
-# A whole run (every gate and group, no filter) that passes leaves a stamp naming the tree it tested:
-# scripts/export_public_release.sh refuses to export a tree that has changed since (A0: an export was
-# made from a tree whose `make test` had not run after the last change).
-if [ $tot_failed -eq 0 ] && [ "${full_run:-0}" = 1 ] && [ -z "$paths" ] && [ -z "$TR_FILTER" ] \
-    && [ "$(echo $gates)" = "$(echo $GATES_ALL)" ] && [ -z "${TR_EXCLUDE:-}" ]; then
-    ./scripts/full_test_stamp.sh write 2> /dev/null || true
-fi
+_tot_line="Total: $tot_run run, $tot_passed passed, $tot_failed failed, $tot_skipped skipped (${secs}s)"
+echo "$_tot_line"
 [ $tot_failed -eq 0 ]

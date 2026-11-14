@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # scripts/test_corpus.sh
 #
 # Compiles and runs all examples in the zoril corpus using the current build.
@@ -6,7 +6,7 @@
 # Each corpus program is expected to exit with status 0 unless the source
 # contains a comment "// expected exit code: N".
 
-set -uo pipefail
+set -u
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -d "$REPO_ROOT/../../stdlib" ]; then
@@ -91,9 +91,9 @@ for f in "$CORPUS_DIR"/zrl/*.zrl "$CORPUS_DIR"/zil/*.zil; do
 
     # Determine extra flags based on extension
     EXTRA_FLAGS="-I $STDLIB_DIR"
-    if [[ "$f" == *.zil ]]; then
-        EXTRA_FLAGS="$EXTRA_FLAGS --il"
-    fi
+    case "$f" in
+        *.zil) EXTRA_FLAGS="$EXTRA_FLAGS --il" ;;
+    esac
 
     if ASAN_OPTIONS=detect_leaks=0 run_timed "$ZORIL_BIN" "$f" $KEEP_SSA_FLAG $EXTRA_FLAGS -o "$outbin" > "$tmpdir/compile.log" 2>&1; then
         COMPILE_RES=$?

@@ -1,0 +1,16 @@
+// link: tests/integration/external_stub.s
+// An `extern` made into a `fn` value inside `unsafe` is called through the value (outside it,
+// gap_67 refuses the conversion); an `extern "C" fn` with a body keeps its own function-pointer
+// type, whose call is already `unsafe`, and is named as a value with no `unsafe` block.
+// expected exit 0
+extern fn external_add(a: i32, b: i32) -> i32;
+extern "C" fn local_sub(a: i32, b: i32) -> i32 { return a - b; }
+fn call(f: fn(i32, i32) -> i32, a: i32, b: i32) -> i32 { return f(a, b); }
+fn main() -> i32 {
+    let f: fn(i32, i32) -> i32 = unsafe { external_add };
+    if call(f, 40, 2) != 42 { return 1; }
+    let g: extern "C" fn(i32, i32) -> i32 = local_sub;
+    let r = unsafe { g(50, 8) };
+    if r != 42 { return 2; }
+    return 0;
+}

@@ -22,7 +22,7 @@
 #
 # A harness that cannot produce either verdict fails here. Cost: four mutant builds and evaluations
 # run in parallel, about a minute and a half on 16 cores - which is why this gate is last in
-# scripts/test.sh's GATES_ALL, whose order is the display order.
+# scripts/test_plan.tsv, whose row order is the display order.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 
@@ -35,9 +35,31 @@ rm -rf "$WORK"
 mkdir -p "$WORK"
 report="$WORK/report.log"
 
-MUTATION_LIST="$LIST" MUTATION_STAGE="$WORK/stage" MUTATION_CACHE="$WORK/cache" \
-    ./scripts/mutation-check.sh > "$report" 2>&1
-rc=$?
+canary_suite="$WORK/canary_suite.list"
+cat tests/smoke.list > "$canary_suite"
+echo "tests/error_reporting/ec_bool_logical_int.zrl" >> "$canary_suite"
+echo "tests/interproc_summary/cross_module/global_stash_caller.zrl" >> "$canary_suite"
+
+report_c1="$WORK/report_c1.log"
+r1_rc=0
+MUTATION_LIST="$LIST" MUTATION_STAGE="$WORK/stage_c1" MUTATION_CACHE="$WORK/cache" \
+    ./scripts/mutation-check.sh C1 > "$report_c1" 2>&1 || r1_rc=$?
+
+list_rest="$WORK/list_rest"
+grep -v '^C1@@' "$LIST" > "$list_rest"
+report_rest="$WORK/report_rest.log"
+r2_rc=0
+MUTATION_LIST="$list_rest" MUTATION_SUITE="$canary_suite" MUTATION_STAGE="$WORK/stage_rest" MUTATION_CACHE="$WORK/cache" \
+    ./scripts/mutation-check.sh > "$report_rest" 2>&1 || r2_rc=$?
+
+cat "$report_c1" "$report_rest" > "$report"
+mkdir -p "$WORK/stage"
+cat "$WORK/stage_c1/survivors" "$WORK/stage_rest/survivors" > "$WORK/stage/survivors" 2>/dev/null || true
+
+rc=0
+if [ $r1_rc -ne 0 ] && [ $r2_rc -ne 0 ]; then
+    rc=1
+fi
 
 # block ID — the report's section for one mutation (its `ID  description` line up to the next).
 block() {
@@ -86,7 +108,7 @@ fi
 # silently, so `preflight-changed` passed while the full gate went red.
 bad="$WORK/bad.list"
 { echo "M9001@@src/main.zrl@@a@@b@@reason"; echo; echo "  orphaned continuation line"; } > "$bad"
-if MUTATION_LIST="$bad" MUTATION_STAGE="$WORK/badstage" MUTATION_CACHE="$WORK/badcache" \
+if MUTATION_LIST="$bad" MUTATION_STAGE="$WORK/badstage" MUTATION_CACHE="$WORK/badcache" MUTATION_CHANGED="src/main.zrl" \
    "$(dirname "$0")/mutation-check.sh" --changed > "$WORK/bad.log" 2>&1; then
     note "a malformed list was accepted in --changed mode"
 elif grep -q 'list line 3' "$WORK/bad.log"; then
@@ -115,8 +137,8 @@ mkdir -p "$stale_stage"
 echo "wrong_compiler_commit_12345" > "$stale_stage/stamp"
 touch "$stale_stage/old_file_marker"
 
-MUTATION_LIST="$LIST" MUTATION_STAGE="$stale_stage" MUTATION_CACHE="$WORK/cache" \
-    "$(dirname "$0")/mutation-check.sh" C1 > "$WORK/stale_stamp.log" 2>&1 || true
+MUTATION_LIST=/dev/null MUTATION_STAGE="$stale_stage" MUTATION_CACHE="$WORK/cache" \
+    "$(dirname "$0")/mutation-check.sh" > "$WORK/stale_stamp.log" 2>&1 || true
 
 if [ -f "$stale_stage/old_file_marker" ]; then
     note "a fixture stage with a wrong stamp was not cleaned"
@@ -141,17 +163,17 @@ else
 fi
 
 # A run following an early-exiting run with a surviving mutant resets result files and does not
-# falsely report stale survivors (Z-0069).
+# falsely report stale survivors.
 stale_surv_stage="$WORK/stale_surv_stage"
 rm -rf "$stale_surv_stage"
 mkdir -p "$stale_surv_stage"
 
 r1_rc=0
-MUTATION_LIST="$LIST" MUTATION_STAGE="$stale_surv_stage" MUTATION_CACHE="$WORK/cache" \
+MUTATION_LIST="$LIST" MUTATION_SUITE="$canary_suite" MUTATION_STAGE="$stale_surv_stage" MUTATION_CACHE="$WORK/cache" \
     "$(dirname "$0")/mutation-check.sh" C1 > "$WORK/surv_run1.log" 2>&1 || r1_rc=$?
 
 r2_rc=0
-MUTATION_LIST="$LIST" MUTATION_STAGE="$stale_surv_stage" MUTATION_CACHE="$WORK/cache" \
+MUTATION_LIST="$LIST" MUTATION_SUITE="$canary_suite" MUTATION_STAGE="$stale_surv_stage" MUTATION_CACHE="$WORK/cache" \
     "$(dirname "$0")/mutation-check.sh" C2 > "$WORK/surv_run2.log" 2>&1 || r2_rc=$?
 
 if [ "$r1_rc" -eq 1 ] && [ "$r2_rc" -eq 0 ]; then

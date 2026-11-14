@@ -12,7 +12,7 @@ What Zoril needs, and the package names on the distributions it is developed on.
 - **A C99 compiler** (`gcc`, `clang` or `cproc`), needed only to build the bootstrap seed. With the prebuilt `zoril` and `zilc` binaries of a release, no C compiler is needed (`make SYSTEM_ZORIL=1`).
 - **GNU make 4.x** (`make` on Linux, `gmake` on the BSDs).
 - **POSIX shell and utilities**, including `awk` and `sed`.
-- To run `make test`: `bash` (two of the checks are bash scripts; BusyBox-based systems such as Alpine need `apk add bash`), `flock` and `mkfifo` (in `util-linux` and `coreutils` on Linux). Optional: `lua` 5.3 or newer (the fuzzer and multi-module benchmarks; Lua 5.1 and LuaJIT are skipped as too old), `rustc`, `zig` and `hare` (the comparison benchmarks); they are skipped when absent.
+- To run `make test`: `flock`, `mkfifo` and an `xargs` that takes `-P` (in `util-linux`, `coreutils` and `findutils` on Linux; BusyBox has all three), for the parallel test runner until `tools/ztest` replaces it. `bash` is needed only by the fuzzer, whose checks skip without it. Optional: `lua` 5.3 or newer (the fuzzer and multi-module benchmarks; Lua 5.1 and LuaJIT are skipped as too old), `rustc`, `zig` and `hare` (the comparison benchmarks); they are skipped when absent.
 - To build the release archives: `bsdtar` (libarchive).
 
 `./scripts/check_deps.sh build` reports what is missing on your machine.

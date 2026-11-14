@@ -15,6 +15,7 @@ Signaled(i32),
 }
 pub struct Child {
 pub pid: i64,
+/* private fields */
 }
 pub struct Command {
 pub program: [u8],
@@ -28,8 +29,10 @@ impl ExitStatus {
 }
 impl Child {
     pub fn wait(self: &mut Child) -> Result<ExitStatus, Error>;
+    pub fn has_exited(self: &mut Child) -> Result<bool, Error>;
     pub fn kill(self: &mut Child) -> Result<(), Error>;
     pub fn unix_kill(self: &mut Child, sig: i32) -> Result<(), Error>;
+    pub fn kill_group(self: &mut Child, sig: i32) -> Result<(), Error>;
 }
 impl Command {
     pub fn new(program: [u8], a: &Arena) -> Command;
@@ -37,9 +40,16 @@ impl Command {
     pub fn set_stdin(self: &mut Command, fd: Fd);
     pub fn set_stdout(self: &mut Command, fd: Fd);
     pub fn set_stderr(self: &mut Command, fd: Fd);
+    pub fn set_new_group(self: &mut Command);
+    pub fn set_current_dir(self: &mut Command, dir: [u8]);
+    pub fn env_set(self: &mut Command, name: [u8], value: [u8]);
+    pub fn env_remove(self: &mut Command, name: [u8]);
+    pub fn env_clear(self: &mut Command);
     pub fn spawn(self: &Command) -> Result<Child, Error>;
     pub fn status(self: &Command) -> Result<ExitStatus, Error>;
 }
+pub fn wait_any(children: [mut Child]) -> Result<usize, Error>;
+pub fn try_wait_any(children: [mut Child]) -> Result<Option<usize>, Error>;
 pub fn spawn_simple(program: [u8], a: &Arena) -> Result<Child, Error>;
 pub fn run_simple(program: [u8], a: &Arena) -> Result<ExitStatus, Error>;
 ```
@@ -88,10 +98,31 @@ pub fn unix_signal(self: &ExitStatus) -> Option<i32>;
 ```
 pub struct Child {
 pub pid: i64,
+/* private fields */
 }
 ```
 
 	Handle representing a running or completed child process.
+
+*wait_any*
+```
+pub fn wait_any(children: [mut Child]) -> Result<usize, Error>;
+```
+
+	Blocks until one of the unreaped children in children ends, and returns its index. That call
+	reaps it: the status is kept on the Child, and its wait returns it without calling wait4.
+	Children that were already reaped are skipped; with none left the result is an error (ECHILD).
+	A child the call was not given is never reaped. While one of those has ended and is not yet
+	reaped, the result is ECHILD, at once and on every call, even if a child in children is still
+	running; wait for it with its own handle first. try\_wait\_any waits for each given child by pid,
+	and is not affected.
+
+*try_wait_any*
+```
+pub fn try_wait_any(children: [mut Child]) -> Result<Option<usize>, Error>;
+```
+
+	As wait\_any, but returns none at once when no child has ended yet.
 
 *wait*
 ```
@@ -99,6 +130,15 @@ pub fn wait(self: &mut Child) -> Result<ExitStatus, Error>;
 ```
 
 	Waits for the child process to complete and returns its exit status.
+
+*has_exited*
+```
+pub fn has_exited(self: &mut Child) -> Result<bool, Error>;
+```
+
+	True once the child has ended, without reaping it. A child that has ended but is not reaped
+	keeps its pid and its group id, so kill\_group between has\_exited and wait still
+	reaches whatever it left running in its group; after wait it cannot.
 
 *kill*
 ```
@@ -112,7 +152,20 @@ pub fn kill(self: &mut Child) -> Result<(), Error>;
 pub fn unix_kill(self: &mut Child, sig: i32) -> Result<(), Error>;
 ```
 
-	Sends the Unix signal number sig to the child process.
+	Sends the Unix signal number sig to the child process. After the child is reaped this fails
+	with ESRCH and signals nothing, since its pid may belong to another process by then.
+
+*kill_group*
+```
+pub fn kill_group(self: &mut Child, sig: i32) -> Result<(), Error>;
+```
+
+	Sends the Unix signal number sig to every process in the child's process group, which holds
+	the child and whatever it started. Fails with EINVAL, signalling nothing, for a child that
+	was not started with set\_new\_group, and for a group id of 0 or 1: kill(0) would signal the
+	caller's own group and kill(-1) every process the user may signal. After the child is reaped
+	this fails with ESRCH and signals nothing, so a group is signalled before wait to end what
+	the child left running.
 
 *Command*
 ```
@@ -163,12 +216,57 @@ pub fn set_stderr(self: &mut Command, fd: Fd);
 
 	Redirects child standard error to write to file descriptor fd.
 
+*set_new_group*
+```
+pub fn set_new_group(self: &mut Command);
+```
+
+	Starts the child in a process group of its own (setpgid(0, 0) before execve), so
+	Child.kill\_group can signal it together with everything it starts. spawn returns only
+	after the child has exec'd, so the group exists by then.
+
+*set_current_dir*
+```
+pub fn set_current_dir(self: &mut Command, dir: [u8]);
+```
+
+	Runs the child in the directory dir: chdir in the child just before execve, so a relative
+	program path is looked up from dir, and a directory that cannot be entered makes spawn
+	fail with the chdir error.
+
+*env_set*
+```
+pub fn env_set(self: &mut Command, name: [u8], value: [u8]);
+```
+
+	Sets the environment variable name to value in the child. The child gets the parent's
+	environment with the changes applied (env\_clear starts from an empty one), unless
+	set\_envp was used. spawn fails with
+	EINVAL for a name that is empty or holds '=' or NUL, and for a value that holds NUL.
+
+*env_remove*
+```
+pub fn env_remove(self: &mut Command, name: [u8]);
+```
+
+	Removes the environment variable name from the child's environment.
+
+*env_clear*
+```
+pub fn env_clear(self: &mut Command);
+```
+
+	Gives the child an empty environment, discarding the parent's and every env\_set so far.
+	Without it a command inherits the parent's environment.
+
 *spawn*
 ```
 pub fn spawn(self: &Command) -> Result<Child, Error>;
 ```
 
-	Spawns the configured command as an asynchronous child process.
+	Spawns the configured command as an asynchronous child process. The child's environment is
+	read from /proc/self/environ unless set\_envp supplied one, so the spawn fails where that
+	cannot be read.
 
 *status*
 ```

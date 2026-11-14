@@ -6,9 +6,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "${TEST_ROOT:-$REPO_DIR}"
 
-EXPECT_VER="${EXPECT_VER:-$("$REPO_DIR/scripts/version.sh")}"
+if [ -z "${EXPECT_VER:-}" ]; then
+    if [ -f "$REPO_DIR/build/gen/version.zrl" ]; then
+        EXPECT_VER=$(sed -n 's/.*return "\(.*\)";.*/\1/p' "$REPO_DIR/build/gen/version.zrl")
+    elif [ -f "$REPO_DIR/VERSION" ]; then
+        EXPECT_VER=$(tr -d ' \t\r\n' < "$REPO_DIR/VERSION")
+    else
+        EXPECT_VER="$("$REPO_DIR/scripts/version.sh")"
+    fi
+fi
 if [ -z "$EXPECT_VER" ]; then
-    echo "Error: empty version from scripts/version.sh" >&2
+    echo "Error: cannot determine expected version" >&2
     exit 1
 fi
 

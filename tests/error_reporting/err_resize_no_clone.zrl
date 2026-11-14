@@ -1,0 +1,13 @@
+// expected compile fail
+// EXPECT: error: type `S` does not implement trait `Clone`
+// resize fills each new slot with a clone of its value, so an element type with no Clone is
+// refused rather than padded with zero bytes.
+import "vec.zrl";
+use vec::Vec;
+struct S { id: i64 }
+impl Drop for S { fn drop(self: &mut S) {} }
+fn main() -> i32 {
+    let mut v = Vec::<S>.new();
+    v.resize(2, S { id: 1 });
+    return 0;
+}

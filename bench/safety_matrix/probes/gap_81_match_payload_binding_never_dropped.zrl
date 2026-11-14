@@ -1,0 +1,16 @@
+// name: A value moved out of an enum by a by-value match is dropped once
+// expected: accept
+// The arm's scope ends before its jump to the match exit, so its binding s is dropped there, and only an arm whose pattern moves a value out consumes the scrutinee; once, the drops were lost and S's drop ran 0 times.
+struct S { p: *mut u8 }
+impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } } }
+enum E { A(S), B }
+fn main() -> i32 {
+    let mut flag = 0 as u8;
+    let fp = &mut flag as *mut u8;
+    {
+        let e = E.A(S { p: fp });
+        match e { E.A(s) => { let n = 1; }, E.B => {}, }
+    }
+    if flag == 1 as u8 { return 0; }
+    return 7;
+}

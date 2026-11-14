@@ -1,0 +1,20 @@
+// name: `?` on a `Result` larger than the function's return type writes past the return slot
+// expected: accept
+// Accepted and correct now that the lowering of `?` is fixed: the early return builds a `Result<u8, i64>` holding the `Err` payload, where it used to copy the 72-byte operand into the 16-byte return slot and fault.
+import "core.zrl";
+fn inner() -> Result<[i64; 8], i64> { return Result.Err(5 as i64); }
+fn outer() -> Result<u8, i64> {
+    let v = inner()?;
+    return Result.Ok(v[0] as u8);
+}
+fn probe() -> i64 {
+    let canary = [7 as i64; 8];
+    let r = outer();
+    let mut sum = 0 as i64;
+    let mut i = 0 as usize;
+    while i < 8 as usize { sum = sum + canary[i]; i = i + 1; }
+    return match r { Ok(_) => 100 as i64, Err(e) => sum + e };
+}
+fn main() -> i32 {
+    return if probe() == 61 as i64 { 0 } else { 1 };
+}

@@ -392,6 +392,8 @@ Standard worklist algorithm:
 3. Repeat until worklist is empty.
 4. Loop headers automatically converge: states only move toward `Moved`/`Dropped`, never back to `Owned`.
 
+The verifier allows at most 100 passes. Reaching that cap without a fixed point is an internal compiler error naming the function, not a diagnostic, because the reporting pass is sound only from a fixed point.
+
 ---
 
 ## 8. Required Changes to Other Specifications

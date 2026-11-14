@@ -1,0 +1,21 @@
+// name: `?` on `&Result` returns a non-`Copy` error out of the borrow, dropping it twice
+// expected: compile_reject
+// Refused by the borrow checker after `lower_try_early_return` dereferences the reference place on early return: returning `*r` of type `Result<i32, Guard>` moves a non-`Copy` value out of a borrow.
+import "core.zrl";
+static mut DROPS: i32 = 0;
+struct Guard { id: i64 }
+impl Drop for Guard {
+    fn drop(self: &mut Guard) { unsafe { DROPS = DROPS + 1; } }
+}
+fn dup(r: &Result<i32, Guard>) -> Result<i32, Guard> {
+    let v = r?;
+    return Result.Ok(v);
+}
+fn run() {
+    let r: Result<i32, Guard> = Result.Err(Guard { id: 99 as i64 });
+    let _r2 = dup(&r);
+}
+fn main() -> i32 {
+    run();
+    return unsafe { DROPS };
+}

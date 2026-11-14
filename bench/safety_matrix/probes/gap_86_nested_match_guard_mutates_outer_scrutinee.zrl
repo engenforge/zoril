@@ -1,0 +1,21 @@
+// name: A nested match guard that assigns to an outer scrutinee is rejected
+// expected: compile_reject
+// EXPECT: cannot assign to the matched value in a match guard
+// The outer arm's by-value bindings are made before its guard runs, so assigning to the outer scrutinee from an inner guard drops the payload those bindings still hold.
+struct S { p: *mut u8 }
+impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } } }
+enum Q { A(S), B }
+fn main() -> i32 {
+    let mut flag = 0 as u8;
+    let fp = &mut flag as *mut u8;
+    {
+        let mut e = Q.A(S { p: fp });
+        match e {
+            Q.A(s) if { match 1 { 1 if { e = Q.B; true } => true, _ => false, } } => { let n = 1; },
+            Q.A(_) => {},
+            Q.B => {},
+        }
+    }
+    if flag == 1 as u8 { return 0; }
+    return 7;
+}

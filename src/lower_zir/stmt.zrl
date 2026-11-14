@@ -12,10 +12,11 @@ import "mem_raw.zrl";
 import "io.zrl";
 import "decl.zrl";
 use ast::{BINARY_ADD, BINARY_LT, ExprId, ForStmt, LetStmt, PatternId, Span, StmtId, WhileStmt};
-use decl::{ZirLoopEntry, ZirLowerer};
+use decl::{SkippedPart, ZirLoopEntry, ZirLowerer};
 use il_type::{ILPrimitive, ILTYPE_ARRAY, ILTYPE_SLICE};
 use io::eprint;
 use resolve::{Symbol, SymbolKind};
+use vec::Vec;
 use zir::{LOCAL_KIND_LET, LOCAL_KIND_LETMUT, LOCAL_KIND_TMP, Place, Projection, ZirRvalue, ZirStmt, ZirTerminator};
 
 impl ZirLowerer {
@@ -100,11 +101,6 @@ impl ZirLowerer {
 
         if l.pattern != 0 as PatternId {
             self.lower_let_pattern(l.pattern, init_place, ty, span);
-            // A `let` pattern matches by value (there is no `ref` binding), so the whole
-            // initializer is consumed: without this the source keeps its drop flag and both
-            // the bindings and the source are dropped (`let (d, _) = pair;` dropped `pair.0`
-            // twice), Unified Solution E.
-            self.consume_place_if_move(&init_place);
             return;
         }
 
@@ -227,6 +223,16 @@ impl ZirLowerer {
             }
         }
 
+        if self.defer_depth > 0 as u32 {
+            self.report_error("cannot `return` inside `defer`", span);
+            return;
+        }
+        if ret_place.base != 0 as u32
+            && ret_place.base as usize <= self.locals.len()
+            && !self.locals[ret_place.base as usize - 1 as usize].is_copy
+            && self.is_guard_bound(ret_place.base) {
+            self.report_error("cannot move out of a pattern binding in a match guard", span);
+        }
         ret_place = self.materialize_return(ret_place, span);
         self.emit_scope_cleanup(0 as usize, span, ret_place.base, true);
         self.terminate(ZirTerminator.Ret(ret_place));
@@ -364,10 +370,21 @@ impl ZirLowerer {
             );
             return;
         }
+        let entry = self.loop_stack[self.loop_stack.len() - 1 as usize];
+        if self.defer_depth > 0 as u32 && entry.scope_depth <= self.defer_scope_depth {
+            self.report_error(
+                if is_break {
+                    "cannot `break` out of `defer`"
+                } else {
+                    "cannot `continue` out of `defer`"
+                },
+                span
+            );
+            return;
+        }
         if is_break {
             self.loop_stack[self.loop_stack.len() - 1 as usize].has_break = true;
         }
-        let entry = self.loop_stack[self.loop_stack.len() - 1 as usize];
         self.emit_scope_cleanup(entry.scope_depth, span, 0 as u32, false);
         self.terminate(
             ZirTerminator.Jmp(if is_break { entry.exit_block } else { entry.cond_block })
@@ -399,10 +416,46 @@ impl ZirLowerer {
         self.switch_to_block(fail_block);
         self.terminate(ZirTerminator.Unreachable);
         self.switch_to_block(saved as u32);
+
+        let prev_binds_fresh = self.pattern_binds_fresh;
+        let prev_moved = self.pattern_moved;
+        let prev_or_depth = self.pattern_or_depth;
+        let prev_has_guard = self.pattern_has_guard;
+        let prev_entry_block = self.pattern_entry_block;
+        let prev_in_drop_type = self.pattern_in_drop_type;
+        let skipped_base = self.pattern_skipped.len();
         self.pattern_binds_fresh = true;
+        self.pattern_moved = false;
+        self.pattern_or_depth = 0 as u32;
+        self.pattern_has_guard = false;
+        self.pattern_entry_block = self.current_block_idx;
+        self.pattern_in_drop_type = 0 as u32;
+
         self.lower_pattern(init_place, ty, pat, pass_block, fail_block);
-        self.pattern_binds_fresh = false;
+
+        let pat_moves = self.pattern_moved;
+        self.pattern_binds_fresh = prev_binds_fresh;
+        self.pattern_moved = prev_moved;
+        self.pattern_or_depth = prev_or_depth;
+        self.pattern_has_guard = prev_has_guard;
+        self.pattern_entry_block = prev_entry_block;
+        self.pattern_in_drop_type = prev_in_drop_type;
+
+        let mut skipped = unsafe { Vec::<SkippedPart>.new_in_raw(self.arena) };
+        let mut si = skipped_base;
+        while si < self.pattern_skipped.len() {
+            skipped.push(self.pattern_skipped[si]);
+            si = si + 1 as usize;
+        }
+        while self.pattern_skipped.len() > skipped_base {
+            self.pattern_skipped.pop();
+        }
+
         self.switch_to_block(pass_block);
+        if pat_moves && !self.pattern_peels_pointer(self.get_type_tag(ty)) {
+            self.emit_skipped_drops(skipped.as_slice(), span);
+            self.consume_place_if_move(&init_place);
+        }
     }
 
     // `for PAT in ITERABLE`: bind the iterable once, then run the index loop over a slice or

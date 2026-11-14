@@ -142,6 +142,9 @@ struct Options {
     // difference in the output is the entry's name, `zoril_main` instead of `main`: the hosted
     // runtime defines `main` itself and calls it.
     hosted: bool,
+    // `--lower-all`: lower every function of every imported stdlib module, reached or not
+    // (Driver.lower_all), so a check can see all of the stdlib's bodies.
+    lower_all: bool,
 }
 
 // Hosted mode: the program's entry `main` becomes `zoril_main`, because the hosted runtime defines the
@@ -183,6 +186,9 @@ fn print_usage() {
     );
     print(
         "  --emit-origins           Developer option: print each function's origin sets per local (no ZIL)\n"
+    );
+    print(
+        "  --lower-all              Developer option: also lower and check the stdlib functions the program does not reach\n"
     );
     print("  -v, --verbose            Report each phase, file and function as it is compiled\n");
     print("  -W <lint> | -A <lint>    Turn a lint on (warn) or off (allow): wildcard-arm,\n");
@@ -251,7 +257,7 @@ fn levenshtein(a: [u8], b: [u8]) -> u64 {
 
 fn suggest_option(arg: [u8]) -> [u8] {
     if arg == "--" { return ""; }
-    let opts: [[u8]; 26] = [
+    let opts: [[u8]; 27] = [
         "-h",
         "--help",
         "-V",
@@ -269,6 +275,7 @@ fn suggest_option(arg: [u8]) -> [u8] {
         "--emit-deps",
         "--emit-zir-stats",
         "--emit-origins",
+        "--lower-all",
         "-v",
         "--verbose",
         "-W",
@@ -282,7 +289,7 @@ fn suggest_option(arg: [u8]) -> [u8] {
     let mut best_dist = 99 as u64;
     let mut best_opt: [u8] = "";
     let mut i = 0 as usize;
-    while i < 26 as usize {
+    while i < 27 as usize {
         let opt = opts[i];
         let d = levenshtein(arg, opt);
         if d < best_dist {
@@ -324,7 +331,7 @@ fn parse_args(argc: i32, argv: **u8, table: &mut InternTable, arena: *mut ArenaH
         include_ids: unsafe { Vec::<u32>.new_in_raw(arena) },
         bad_args: false,
         no_verify: false, interproc_summary: false, interproc_stats: false,
-        show_help: false, checked: false, provenance: 0 as u32, hosted: false,
+        show_help: false, checked: false, provenance: 0 as u32, hosted: false, lower_all: false,
     };
     let mut end_of_options = false;
     let mut i = 1 as i32;
@@ -382,6 +389,8 @@ fn parse_args(argc: i32, argv: **u8, table: &mut InternTable, arena: *mut ArenaH
             o.emit_zir_stats = true;
         } else if !end_of_options && arg == "--emit-origins" {
             o.emit_origins = true;
+        } else if !end_of_options && arg == "--lower-all" {
+            o.lower_all = true;
         } else if !end_of_options && arg == "--emit-zil" {
             // ZIL is the default output.
         } else if !end_of_options && (arg == "-v" || arg == "--verbose") {
@@ -580,6 +589,7 @@ fn compile(
         (*driver).hosted = o.hosted;
         (*driver).collect_zir_stats = o.emit_zir_stats;
         (*driver).emit_origins = o.emit_origins;
+        (*driver).lower_all = o.lower_all;
         (*monomorphizer).set_lowerer(driver_lower_fn_instance, driver as *mut u8);
         (*driver).lower_module();
         if o.emit_zir_stats {

@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_try_box_operand.zrl:5:66: error: `?` needs a `Result` or an `Option`, found `Box<Result<i32, i64>>`
+// `?` takes a `Result` or `Option` (or a reference to one), never a `Box`.
+import "core.zrl";
+fn outer(b: Box<Result<i32, i64>>) -> Result<i32, i64> { let v = b?; return Result.Ok(v); }
+fn main() -> i32 { return 0; }

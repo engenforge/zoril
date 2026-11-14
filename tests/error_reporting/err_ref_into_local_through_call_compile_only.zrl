@@ -1,0 +1,8 @@
+// expected compile fail
+// flags: -c
+// EXPECT: tests/error_reporting/err_ref_into_local_through_call_compile_only.zrl:8:1: error: region escape: returning a pointer to local stack storage
+// A call's result pointing into a stack argument is caught under separate compilation (-c)
+// by the ZIL verifier (tie_call_result_storage), where summary_pass does not run.
+struct C { v: i32 }
+impl C { fn get(self: &C) -> &i32 { return &self.v; } }
+fn leak() -> &i32 { let c = C { v: 7 }; return c.get(); }

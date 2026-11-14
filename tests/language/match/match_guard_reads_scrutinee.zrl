@@ -1,0 +1,126 @@
+// A match guard may read the scrutinee by shared reference, write an unrelated local or a
+// disjoint field of a scrutinee's struct, or contain a nested match whose guard writes a local;
+// and the arm body may assign to the scrutinee once the guard has passed.
+// expected exit 0
+struct S { p: *mut u8 }
+impl Drop for S {
+    fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } }
+}
+enum Q { A(S), B }
+struct W { a: i32, n: i32 }
+struct WDrop { a: S, n: i32 }
+fn mk(fp: *mut u8) -> S { return S { p: fp }; }
+fn is_a(q: &Q) -> bool {
+    match q {
+        Q.A(_) => { return true; },
+        Q.B => { return false; },
+    }
+}
+
+fn read_scrut_ref(fp: *mut u8) {
+    let e = Q.A(mk(fp));
+    match e {
+        Q.A(s) if is_a(&e) => {},
+        Q.A(_) => {},
+        Q.B => {},
+    }
+}
+
+fn assign_unrelated_local(fp: *mut u8) -> i32 {
+    let e = Q.A(mk(fp));
+    let mut other = 0;
+    match e {
+        Q.A(s) if { other = 42; true } => {},
+        Q.A(_) => {},
+        Q.B => {},
+    }
+    return other;
+}
+
+fn disjoint_field_copy() -> i32 {
+    let mut w = W { a: 10, n: 1 };
+    match w.a {
+        10 if { w.n = 2; true } => {},
+        _ => {},
+    }
+    return w.n;
+}
+
+fn disjoint_field_ref(fp: *mut u8) -> i32 {
+    let mut w = WDrop { a: mk(fp), n: 1 };
+    match &w.a {
+        _ if { w.n = 2; true } => {},
+        _ => {},
+    }
+    return w.n;
+}
+
+fn assign_in_body_after_guard(fp: *mut u8) {
+    let mut e = Q.A(mk(fp));
+    match e {
+        Q.A(s) if is_a(&e) => { e = Q.A(mk(fp)); },
+        Q.A(_) => {},
+        Q.B => {},
+    }
+}
+
+fn nested_match_guard_writes_local(fp: *mut u8) -> i32 {
+    let e = Q.A(mk(fp));
+    let k = 0;
+    let mut inner_local = 0;
+    let mut outer_ok = 0;
+    match e {
+        Q.A(s) if match k {
+            0 if { inner_local = 5; true } => true,
+            _ => false,
+        } => { outer_ok = 1; },
+        Q.A(_) => {},
+        Q.B => {},
+    }
+    return outer_ok + inner_local;
+}
+
+fn inner_guard_writes_inner_local(fp: *mut u8) -> i32 {
+    let e = Q.A(mk(fp));
+    let mut result = 0;
+    match e {
+        Q.A(s) if {
+            let mut inner_local = 10;
+            let ok = match 1 {
+                1 if { inner_local = 20; true } => true,
+                _ => false,
+            };
+            result = inner_local;
+            ok
+        } => {},
+        Q.A(_) => {},
+        Q.B => {},
+    }
+    return result;
+}
+
+fn main() -> i32 {
+    let mut count = 0 as u8;
+    let fp = &mut count as *mut u8;
+
+    read_scrut_ref(fp);
+    if count != 1 as u8 { return 1; }
+
+    if assign_unrelated_local(fp) != 42 { return 2; }
+    if count != 2 as u8 { return 3; }
+
+    if disjoint_field_copy() != 2 { return 4; }
+    if disjoint_field_ref(fp) != 2 { return 5; }
+    if count != 3 as u8 { return 6; }
+
+    assign_in_body_after_guard(fp);
+    if count != 5 as u8 { return 7; }
+
+    if nested_match_guard_writes_local(fp) != 6 { return 8; }
+    if count != 6 as u8 { return 9; }
+
+    if inner_guard_writes_inner_local(fp) != 20 { return 10; }
+    if count != 7 as u8 { return 11; }
+
+    return 0;
+}

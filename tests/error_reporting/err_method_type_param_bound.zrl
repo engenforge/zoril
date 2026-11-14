@@ -1,0 +1,28 @@
+// expected compile fail
+// EXPECT: error: type `S` does not implement trait `Copy`
+// A bound on a method's own type parameter is checked at the call, by a receiver, by the type
+// (`V.m::<S>`), by a path (`V::m::<S>`) and through a generic caller.
+import "core.zrl";
+
+struct S { id: i64 }
+impl Drop for S { fn drop(self: &mut S) {} }
+
+struct V { x: i32 }
+impl V {
+    fn m<U: Copy>(u: &U) -> i32 { return 2; }
+    fn r<U: Copy>(self: &V, u: &U) -> i32 { return 3; }
+}
+
+fn through<T>(v: &V, t: &T) -> i32 {
+    return v.r(t);
+}
+
+fn main() -> i32 {
+    let v = V { x: 1 };
+    let s = S { id: 1 };
+    let a = v.r(&s);
+    let b = V.m::<S>(&s);
+    let c = V::m::<S>(&s);
+    let d = through(&v, &s);
+    return 0;
+}

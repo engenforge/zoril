@@ -1,0 +1,120 @@
+// Test for proc::wait_any and proc::try_wait_any: first child to end, non-blocking poll, cached status
+// expected exit 0
+
+import "core.zrl";
+import "mem_raw.zrl";
+import "proc.zrl";
+import "vec.zrl";
+import "io.zrl";
+use mem_raw::{ArenaHeader, arena_init};
+use proc::{Command, Child, wait_any, try_wait_any};
+use vec::Vec;
+use io::Error;
+
+fn now_ms() -> i64 {
+    let ts = unsafe { @alloca<[i64; 2]>(1) };
+    let _ = unsafe { @syscall(228, 1 as u64, ts as u64) };
+    return ts[0 as usize] * 1000 + ts[1 as usize] / 1000000;
+}
+
+fn sleep_ms(ms: i64) {
+    let ts = unsafe { @alloca<[i64; 2]>(1) };
+    ts[0 as usize] = ms / 1000;
+    ts[1 as usize] = (ms % 1000) * 1000000;
+    let _ = unsafe { @syscall(35, ts as u64, 0 as u64) };
+}
+
+fn sh(arena: *mut ArenaHeader, script: [u8]) -> Result<Child, Error> {
+    let mut cmd = unsafe { Command.new_raw("/bin/sh", arena) };
+    cmd.arg("-c");
+    cmd.arg(script);
+    return cmd.spawn();
+}
+
+// C1: the shorter sleeper is reported first whichever order the children were started in.
+fn first_of(arena: *mut ArenaHeader, short_first: bool) -> bool {
+    let mut kids = unsafe { Vec::<Child>.new_in_raw(arena) };
+    if short_first {
+        kids.push(sh(arena, "sleep 0.2").ok().unwrap());
+        kids.push(sh(arena, "sleep 1").ok().unwrap());
+    } else {
+        kids.push(sh(arena, "sleep 1").ok().unwrap());
+        kids.push(sh(arena, "sleep 0.2").ok().unwrap());
+    }
+    let want = if short_first { 0 as usize } else { 1 as usize };
+    let r = wait_any(kids.as_mut_slice());
+    if r.is_err() || r.ok().unwrap() != want {
+        return false;
+    }
+    // C3: the reaped child's wait returns the cached status at once.
+    let t0 = now_ms();
+    let st = kids.get_mut(want).unwrap().wait();
+    if st.is_err() || !st.ok().unwrap().is_success() || now_ms() - t0 > 100 {
+        return false;
+    }
+    let other = if short_first { 1 as usize } else { 0 as usize };
+    let _ = kids.get_mut(other).unwrap().kill();
+    let r2 = wait_any(kids.as_mut_slice());
+    return r2.is_ok() && r2.ok().unwrap() == other;
+}
+
+// C2: the poll returns none while the children run, then the index once one ends.
+fn poll(arena: *mut ArenaHeader) -> bool {
+    let mut kids = unsafe { Vec::<Child>.new_in_raw(arena) };
+    kids.push(sh(arena, "sleep 0.3").ok().unwrap());
+    kids.push(sh(arena, "sleep 5").ok().unwrap());
+    let early = try_wait_any(kids.as_mut_slice());
+    if early.is_err() || early.ok().unwrap().is_some() {
+        return false;
+    }
+    let t0 = now_ms();
+    while now_ms() - t0 < 5000 {
+        let r = try_wait_any(kids.as_mut_slice());
+        if r.is_err() {
+            return false;
+        }
+        let got = r.ok().unwrap();
+        if got.is_some() {
+            let _ = kids.get_mut(1 as usize).unwrap().kill();
+            let _ = kids.get_mut(1 as usize).unwrap().wait();
+            return got.unwrap() == 0 as usize;
+        }
+        sleep_ms(20);
+    }
+    return false;
+}
+
+// C4: a signalled child is reported with its signal.
+fn signalled(arena: *mut ArenaHeader) -> bool {
+    let mut kids = unsafe { Vec::<Child>.new_in_raw(arena) };
+    kids.push(sh(arena, "kill -TERM $$").ok().unwrap());
+    let r = wait_any(kids.as_mut_slice());
+    if r.is_err() || r.ok().unwrap() != 0 as usize {
+        return false;
+    }
+    let st = kids.get_mut(0 as usize).unwrap().wait();
+    if st.is_err() {
+        return false;
+    }
+    let sg = st.ok().unwrap().unix_signal();
+    return sg.is_some() && sg.unwrap() == 15;
+}
+
+// With every child already reaped there is nothing to wait for: ECHILD, not a hang.
+fn none_left(arena: *mut ArenaHeader) -> bool {
+    let mut kids = unsafe { Vec::<Child>.new_in_raw(arena) };
+    kids.push(sh(arena, "exit 0").ok().unwrap());
+    let _ = wait_any(kids.as_mut_slice());
+    let r = wait_any(kids.as_mut_slice());
+    return r.is_err() && r.err().unwrap().linux_errno() == 10;
+}
+
+fn main() -> i32 {
+    let arena = unsafe { arena_init(4194304) } as *mut ArenaHeader;
+    if !first_of(arena, true) { return 1; }
+    if !first_of(arena, false) { return 2; }
+    if !poll(arena) { return 3; }
+    if !signalled(arena) { return 4; }
+    if !none_left(arena) { return 5; }
+    return 0;
+}

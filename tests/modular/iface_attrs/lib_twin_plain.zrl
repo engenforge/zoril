@@ -1,0 +1,5 @@
+// Types with no `Drop`, named like types that have one in lib_twin_drop.zrl and in the importer.
+pub struct S { pub x: i64 }
+pub struct G<T> { pub v: T }
+pub fn make() -> i32 { let s = S { x: 8 }; return (s.x - 8) as i32; }
+pub fn make_g() -> i32 { let g = G::<i64> { v: 2 }; return (g.v - 2) as i32; }

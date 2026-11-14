@@ -1,0 +1,15 @@
+// name: Vec.clone of a Vec holding views of this frame is returned
+// expected: known_gap
+// gap: impl<T: Clone> Clone for Vec<T> declares #[borrows()], so its result holds no borrow, and the elements it clones (views of a stack array here) are not tied to the result; returning v.clone() is accepted, while returning v itself is refused, and the caller reads the dead frame
+// observed: exit 7
+import "vec.zrl";
+import "clone.zrl";
+use vec::Vec;
+fn views() -> Vec<[u8]> {
+    let buf = [42 as u8; 16];
+    let mut v = Vec::<[u8]>.new();
+    v.push(&buf);
+    return v.clone();
+}
+fn smash(n: i32) -> i32 { let junk = [7 as u8; 256]; if n > 0 { return smash(n - 1) + junk[3] as i32; } return 0; }
+fn main() -> i32 { let v = views(); let _ = smash(8); let s = *v.get(0).unwrap(); return s[0] as i32; }

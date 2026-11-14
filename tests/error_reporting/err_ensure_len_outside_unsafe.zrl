@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_ensure_len_outside_unsafe.zrl:10:5: error: call to unsafe function requires unsafe block
+// ensure_len leaves zero bytes, which are not a value of every element type, so it is an
+// unsafe fn and calling it outside unsafe is refused.
+import "vec.zrl";
+use vec::Vec;
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+
+    v.ensure_len(4);
+    return v.len() as i32 - 4;
+}

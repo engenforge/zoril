@@ -1,0 +1,13 @@
+// An or-pattern that moves a value out and skips a part that needs a drop cannot have a guard: a
+// guard that fails would send the scrutinee to the next arm after the skipped part was dropped.
+// expected compile fail
+// EXPECT: an or-pattern that moves a value out cannot skip a part that needs a drop when the arm has a guard
+struct S { p: *mut u8 }
+impl Drop for S {
+    fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } }
+}
+enum O { A(S, S), C(S, S), D }
+fn f(e: O, c: bool) {
+    match e { O.A(s, _) | O.C(_, s) if c => {}, _ => {}, }
+}
+fn main() -> i32 { return 0; }

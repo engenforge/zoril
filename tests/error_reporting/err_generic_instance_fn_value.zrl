@@ -1,0 +1,24 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_generic_instance_fn_value.zrl:18:29: error: a generic function named as a value needs one type argument for each of its type parameters
+// EXPECT: tests/error_reporting/err_generic_instance_fn_value.zrl:19:13: error: a generic function named as a value needs one type argument for each of its type parameters
+// EXPECT: tests/error_reporting/err_generic_instance_fn_value.zrl:20:13: error: type arguments given to a function that is not generic
+// EXPECT: tests/error_reporting/err_generic_instance_fn_value.zrl:21:13: error: type `S` does not implement trait `Tr`
+// EXPECT: tests/error_reporting/err_generic_instance_fn_value.zrl:22:30: error: an unsafe function made into a value requires unsafe block
+// A value has no arguments to infer type arguments from, so it names each one; the instance meets
+// its bounds, and an `unsafe fn` instance needs `unsafe` as a non-generic one does (gap_65, gap_66).
+fn id<T>(x: T) -> T { return x; }
+fn plain(x: i32) -> i32 { return x; }
+trait Tr {
+    fn v(self: &Self) -> i32;
+}
+struct S { a: i32 }
+fn get<T: Tr>(x: &T) -> i32 { return x.v(); }
+unsafe fn rd<T>(p: *T) -> T { return *p; }
+fn main() -> i32 {
+    let a: fn(i32) -> i32 = id::<i32, i32>;
+    let b = id::<>;
+    let c = plain::<i32>;
+    let d = get::<S>;
+    let e: fn(*i32) -> i32 = rd::<i32>;
+    return 0;
+}

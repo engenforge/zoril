@@ -1,0 +1,39 @@
+// A binding made by matching through a `&mut` reference points into the referent, so a write
+// through the reference while the binding is live is refused: it would drop or replace what the
+// binding points at.
+// expected compile fail
+// EXPECT: while it is already borrowed
+enum QB { A(Box<i32>), B }
+fn tb(q: &mut QB) { *q = QB.B; }
+enum Q2 { A(QB), B }
+struct RB { q: &mut QB }
+
+fn passed_on(e: &mut QB) -> i32 {
+    match e { QB.A(s) => { tb(e); return **s; }, QB.B => { return 0; }, }
+}
+fn written(e: &mut QB) -> i32 {
+    match e { QB.A(s) => { *e = QB.B; return **s; }, QB.B => { return 0; }, }
+}
+fn in_if_let(e: &mut QB) -> i32 {
+    if let QB.A(s) = e { tb(e); return **s; }
+    return 0;
+}
+fn in_while_let(e: &mut QB) -> i32 {
+    while let QB.A(s) = e { tb(e); return **s; }
+    return 0;
+}
+fn in_guard(e: &mut QB) -> i32 {
+    match e { QB.A(s) if { tb(e); true } => { return **s; }, QB.A(_) => { return 0; }, QB.B => { return 0; }, }
+}
+fn nested(e: &mut Q2) -> i32 {
+    match e { Q2.A(QB.A(s)) => { *e = Q2.B; return **s; }, _ => { return 0; }, }
+}
+fn local_ref(q: QB) -> i32 {
+    let mut v = q;
+    let e = &mut v;
+    match e { QB.A(s) => { tb(e); return **s; }, QB.B => { return 0; }, }
+}
+fn field_ref(r: &mut RB) -> i32 {
+    match r.q { QB.A(s) => { tb(r.q); return **s; }, QB.B => { return 0; }, }
+}
+fn main() -> i32 { return 0; }

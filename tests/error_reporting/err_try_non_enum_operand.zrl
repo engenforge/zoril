@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_try_non_enum_operand.zrl:5:42: error: `?` needs a `Result` or an `Option`, found `i32`
+// `?` takes a `Result` or an `Option`; on an integer it used to stop with an internal error.
+import "core.zrl";
+fn outer() -> Result<i32, i64> { let v = 5?; return Result.Ok(v); }
+fn main() -> i32 { return match outer() { Ok(v) => v, Err(_) => 1 }; }

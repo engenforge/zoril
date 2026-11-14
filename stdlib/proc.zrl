@@ -9,6 +9,8 @@ import "mem.zrl";
 import "mem_raw.zrl";
 import "vec.zrl";
 import "io.zrl";
+import "file.zrl";
+use file::read_file_raw;
 use io::{Error, Fd, exit};
 use mem::{Arena, arena_raw};
 use mem_raw::{ArenaHeader, memcpy, zoril_allocator_alloc};
@@ -50,6 +52,20 @@ impl ExitStatus {
 // Handle representing a running or completed child process.
 pub struct Child {
     pub pid: i64,
+    // Set once the child has been reaped, by `wait` or by `wait_any`: the pid may be reused after
+    // that, so a later `wait` must not wait4 it again.
+    status: Option<ExitStatus>,
+    // True when `spawn` put the child in a process group of its own, whose id is `pid`: only then
+    // is `kill_group` allowed to signal `-pid`.
+    own_group: bool,
+}
+
+fn decode_status(st: i32) -> ExitStatus {
+    let sig = st & 0x7f;
+    if sig == 0 {
+        return ExitStatus.Exited((st >> 8) & 0xff);
+    }
+    return ExitStatus.Signaled(sig);
 }
 
 // wait4 until the child's status is observed. EINTR is retried; any other failure is an error,
@@ -68,19 +84,136 @@ fn wait_for_pid(pid: i64) -> Result<ExitStatus, Error> {
     if r < 0 {
         return Result.Err(Error.from_linux_errno((0 as i64 - r) as i32));
     }
-    let st = *wstatus_ptr;
-    let sig = st & 0x7f;
-    if sig == 0 {
-        let c = (st >> 8) & 0xff;
-        return Result.Ok(ExitStatus.Exited(c));
+    return Result.Ok(decode_status(*wstatus_ptr));
+}
+
+// Reaps the first unreaped child in `children` that has ended, by pid with WNOHANG, and records its
+// status on that `Child`; returns its index, or none when none has ended. Only the given children
+// are waited for: wait4(-1) would reap one that is not in `children`, whose own handle would never
+// learn it was reaped. With no unreaped child the result is an error (ECHILD).
+fn reap_listed(children: [mut Child]) -> Result<Option<usize>, Error> {
+    let mut pending = false;
+    // SAFETY: one uninitialized `i32` slot in this frame, which wait4 fills before anything
+    // reads it.
+    let wstatus_ptr = unsafe { @alloca<i32>(1) };
+    let mut i = 0 as usize;
+    while i < children.len {
+        if children[i].status.is_none() {
+            pending = true;
+            let mut r = -4 as i64;
+            while r == -4 as i64 {
+                *wstatus_ptr = 0;
+                // SAFETY: wait4(61) with WNOHANG writes the status of the child `children[i].pid`
+                // through `wstatus_ptr`, the slot allocated just above.
+                r = unsafe {
+                    @syscall(61, children[i].pid as u64, wstatus_ptr as u64, 1 as u64, 0 as u64)
+                } as i64;
+            }
+            if r < 0 {
+                return Result.Err(Error.from_linux_errno((0 as i64 - r) as i32));
+            }
+            if r > 0 {
+                children[i].status = Option.Some(decode_status(*wstatus_ptr));
+                return Result.Ok(Option.Some(i));
+            }
+        }
+        i = i + 1 as usize;
     }
-    return Result.Ok(ExitStatus.Signaled(sig));
+    if !pending {
+        return Result.Err(Error.from_linux_errno(10));
+    }
+    return Result.Ok(Option.None);
+}
+
+// Blocks until one of the unreaped children in `children` ends, and returns its index. That call
+// reaps it: the status is kept on the `Child`, and its `wait` returns it without calling wait4.
+// Children that were already reaped are skipped; with none left the result is an error (ECHILD).
+// A child the call was not given is never reaped. While one of those has ended and is not yet
+// reaped, the result is ECHILD, at once and on every call, even if a child in `children` is still
+// running; wait for it with its own handle first. `try_wait_any` waits for each given child by pid,
+// and is not affected.
+pub fn wait_any(children: [mut Child]) -> Result<usize, Error> {
+    let first = reap_listed(children);
+    if first.is_err() {
+        return Result.Err(first.err().unwrap());
+    }
+    let got = first.ok().unwrap();
+    if got.is_some() {
+        return Result.Ok(got.unwrap());
+    }
+    // SAFETY: 32 `i32` slots (a 128-byte siginfo_t) in this frame, zeroed below before
+    // waitid fills them; nothing reads them.
+    let info = unsafe { @alloca<[i32; 32]>(1) };
+    let mut r = -4 as i64;
+    while r == -4 as i64 {
+        let mut k = 0 as usize;
+        while k < 32 as usize {
+            info[k] = 0;
+            k = k + 1 as usize;
+        }
+        // SAFETY: waitid(247) with P_ALL (0), WEXITED|WNOWAIT blocks until a child has ended
+        // and reaps nothing; it writes a siginfo_t through `info`, the slot allocated above.
+        r = unsafe {
+            @syscall(247, 0 as u64, 0 as u64, info as u64, 16777220 as u64, 0 as u64)
+        } as i64;
+    }
+    if r < 0 {
+        return Result.Err(Error.from_linux_errno((0 as i64 - r) as i32));
+    }
+    let second = reap_listed(children);
+    if second.is_err() {
+        return Result.Err(second.err().unwrap());
+    }
+    let found = second.ok().unwrap();
+    if found.is_some() {
+        return Result.Ok(found.unwrap());
+    }
+    return Result.Err(Error.from_linux_errno(10));
+}
+
+// As `wait_any`, but returns none at once when no child has ended yet.
+pub fn try_wait_any(children: [mut Child]) -> Result<Option<usize>, Error> {
+    return reap_listed(children);
 }
 
 impl Child {
     // Waits for the child process to complete and returns its exit status.
     pub fn wait(self: &mut Child) -> Result<ExitStatus, Error> {
-        return wait_for_pid(self.pid);
+        if self.status.is_some() {
+            return Result.Ok(self.status.unwrap());
+        }
+        let st = wait_for_pid(self.pid)?;
+        self.status = Option.Some(st);
+        return Result.Ok(st);
+    }
+
+    // True once the child has ended, without reaping it. A child that has ended but is not reaped
+    // keeps its pid and its group id, so `kill_group` between `has_exited` and `wait` still
+    // reaches whatever it left running in its group; after `wait` it cannot.
+    pub fn has_exited(self: &mut Child) -> Result<bool, Error> {
+        if self.status.is_some() {
+            return Result.Ok(true);
+        }
+        // SAFETY: 32 `i32` slots (a 128-byte siginfo_t) in this frame, zeroed below before
+        // waitid reads or fills them.
+        let info = unsafe { @alloca<[i32; 32]>(1) };
+        let mut r = -4 as i64;
+        while r == -4 as i64 {
+            let mut k = 0 as usize;
+            while k < 32 as usize {
+                info[k] = 0;
+                k = k + 1 as usize;
+            }
+            // SAFETY: waitid(247) with P_PID (1), WEXITED|WNOHANG|WNOWAIT writes a siginfo_t
+            // through `info`, the 128-byte slot allocated just above; the pid is this handle's.
+            r = unsafe {
+                @syscall(247, 1 as u64, self.pid as u64, info as u64, 16777221 as u64, 0 as u64)
+            } as i64;
+        }
+        if r < 0 {
+            return Result.Err(Error.from_linux_errno((0 as i64 - r) as i32));
+        }
+        return Result.Ok(info[4 as usize] != 0);
     }
 
     // Forcibly terminates the child process (SIGKILL on the Unixes).
@@ -88,10 +221,35 @@ impl Child {
         return self.unix_kill(9);
     }
 
-    // Sends the Unix signal number sig to the child process.
+    // Sends the Unix signal number sig to the child process. After the child is reaped this fails
+    // with ESRCH and signals nothing, since its pid may belong to another process by then.
     pub fn unix_kill(self: &mut Child, sig: i32) -> Result<(), Error> {
+        if self.status.is_some() {
+            return Result.Err(Error.from_linux_errno(3));
+        }
         // SAFETY: kill(62) takes no pointer, only the pid of the child this handle owns.
         let res = unsafe { @syscall(62, self.pid as u64, sig as u64) } as i64;
+        if res < 0 {
+            return Result.Err(Error.from_linux_errno((0 as i64 - res) as i32));
+        }
+        return Result.Ok(());
+    }
+
+    // Sends the Unix signal number sig to every process in the child's process group, which holds
+    // the child and whatever it started. Fails with EINVAL, signalling nothing, for a child that
+    // was not started with `set_new_group`, and for a group id of 0 or 1: kill(0) would signal the
+    // caller's own group and kill(-1) every process the user may signal. After the child is reaped
+    // this fails with ESRCH and signals nothing, so a group is signalled before `wait` to end what
+    // the child left running.
+    pub fn kill_group(self: &mut Child, sig: i32) -> Result<(), Error> {
+        if self.status.is_some() {
+            return Result.Err(Error.from_linux_errno(3));
+        }
+        if !self.own_group || self.pid <= 1 as i64 {
+            return Result.Err(Error.from_linux_errno(22));
+        }
+        // SAFETY: kill(62) takes no pointer, only the negated pid of the group this child leads.
+        let res = unsafe { @syscall(62, (0 as i64 - self.pid) as u64, sig as u64) } as i64;
         if res < 0 {
             return Result.Err(Error.from_linux_errno((0 as i64 - res) as i32));
         }
@@ -108,6 +266,18 @@ pub struct Command {
     stdin_fd: Fd,
     stdout_fd: Fd,
     stderr_fd: Fd,
+    new_group: bool,
+    cwd: [u8],
+    has_cwd: bool,
+    // The child's environment is built at `spawn` from the parent's (unless `env_clear` ran) with
+    // these changes applied, unless `set_envp` supplied one: `env_names[i]` is set to
+    // `env_values[i]`, and each name in `env_removed` is dropped from the inherited part. The
+    // three lists never share a name.
+    env_names: Vec<[u8]>,
+    env_values: Vec<[u8]>,
+    env_removed: Vec<[u8]>,
+    env_touched: bool,
+    env_cleared: bool,
 }
 
 // Always copies: returning `s.ptr` for an already-terminated slice made the result look like it
@@ -152,6 +322,190 @@ fn has_interior_nul(s: [u8]) -> bool {
     return false;
 }
 
+fn slices_equal(a: [u8], b: [u8]) -> bool {
+    if a.len != b.len {
+        return false;
+    }
+    let mut i = 0 as usize;
+    while i < a.len {
+        if a[i] != b[i] {
+            return false;
+        }
+        i = i + 1 as usize;
+    }
+    return true;
+}
+
+// The index of `name` in `list`, or `list.len()` when it is not there.
+fn index_of(list: &Vec<[u8]>, name: [u8]) -> usize {
+    let items = list.as_slice();
+    let mut i = 0 as usize;
+    while i < list.len() {
+        if slices_equal(items[i], name) {
+            return i;
+        }
+        i = i + 1 as usize;
+    }
+    return list.len();
+}
+
+// A variable name `env_set` accepts: not empty, no '=' and no NUL.
+fn env_name_ok(name: [u8]) -> bool {
+    if name.len == 0 as usize {
+        return false;
+    }
+    let mut i = 0 as usize;
+    while i < name.len {
+        if name[i] == 61 as u8 || name[i] == 0 as u8 {
+            return false;
+        }
+        i = i + 1 as usize;
+    }
+    return true;
+}
+
+// The parent's environment as the NUL-separated text of /proc/self/environ. Nothing else reads it,
+// so another source for it changes here alone.
+unsafe fn parent_environ(arena: *mut ArenaHeader) -> Result<[u8], Error> {
+    return read_file_raw("/proc/self/environ", arena);
+}
+
+// True when the inherited entry `base[start..end]` names a variable of `list`.
+fn entry_named_in(base: [u8], start: usize, end: usize, list: &Vec<[u8]>) -> bool {
+    let mut nl = 0 as usize;
+    while start + nl < end && base[start + nl] != 61 as u8 {
+        nl = nl + 1 as usize;
+    }
+    let items = list.as_slice();
+    let mut i = 0 as usize;
+    while i < list.len() {
+        let name = items[i];
+        if name.len == nl {
+            let mut k = 0 as usize;
+            while k < nl && base[start + k] == name[k] {
+                k = k + 1 as usize;
+            }
+            if k == nl {
+                return true;
+            }
+        }
+        i = i + 1 as usize;
+    }
+    return false;
+}
+
+// Whether the inherited entry `base[start..end]` stays in the child's environment: it is not empty
+// and neither removed nor overridden.
+fn keep_entry(cmd: &Command, base: [u8], start: usize, end: usize) -> bool {
+    if end == start {
+        return false;
+    }
+    return !entry_named_in(base, start, end, &cmd.env_removed)
+        && !entry_named_in(base, start, end, &cmd.env_names);
+}
+
+// The NULL-terminated `envp` array for a command that did not use `set_envp`, in the command's
+// arena: the parent's entries that stay, then `NAME=value` for each
+// variable set. EINVAL for a name or value that could not be one entry.
+fn build_envp(cmd: &Command) -> Result<**u8, Error> {
+    let names = cmd.env_names.as_slice();
+    let values = cmd.env_values.as_slice();
+    let removed = cmd.env_removed.as_slice();
+    let nsets = cmd.env_names.len();
+    let mut i = 0 as usize;
+    while i < nsets {
+        if !env_name_ok(names[i]) || has_interior_nul(values[i]) {
+            return Result.Err(Error.from_linux_errno(22));
+        }
+        i = i + 1 as usize;
+    }
+    i = 0 as usize;
+    while i < cmd.env_removed.len() {
+        if has_interior_nul(removed[i]) {
+            return Result.Err(Error.from_linux_errno(22));
+        }
+        i = i + 1 as usize;
+    }
+
+    let mut base = "";
+    if !cmd.env_cleared {
+        // SAFETY: `cmd.arena` is live for the life of the command.
+        let r = unsafe { parent_environ(cmd.arena) };
+        if r.is_err() {
+            return Result.Err(r.err().unwrap());
+        }
+        base = r.ok().unwrap();
+    }
+    // SAFETY: `to_cstr` copies into the command's own arena and appends the NUL that ends the
+    // last entry.
+    let cbase = unsafe { to_cstr(base, cmd.arena) };
+
+    let mut kept = 0 as usize;
+    let mut start = 0 as usize;
+    let mut j = 0 as usize;
+    while j <= base.len {
+        if j == base.len || base[j] == 0 as u8 {
+            if keep_entry(cmd, base, start, j) {
+                kept = kept + 1 as usize;
+            }
+            start = j + 1 as usize;
+        }
+        j = j + 1 as usize;
+    }
+
+    // SAFETY: `(kept + nsets + 1)` pointers of 8 bytes: every slot filled below, the last with
+    // the NULL that ends the array.
+    let envp = unsafe {
+        zoril_allocator_alloc(cmd.arena, ((kept + nsets + 1 as usize) * 8) as u64)
+    } as *mut *u8;
+    let mut slot = 0 as usize;
+    start = 0 as usize;
+    j = 0 as usize;
+    while j <= base.len {
+        if j == base.len || base[j] == 0 as u8 {
+            if keep_entry(cmd, base, start, j) {
+                // SAFETY: `slot < kept`, so the slot is inside the array allocated above.
+                unsafe {
+                    *((envp as usize + slot * 8) as *mut *u8) = (cbase as usize + start) as *u8;
+                }
+                slot = slot + 1 as usize;
+            }
+            start = j + 1 as usize;
+        }
+        j = j + 1 as usize;
+    }
+    i = 0 as usize;
+    while i < nsets {
+        let name = names[i];
+        let value = values[i];
+        // SAFETY: a fresh allocation of exactly `name '=' value NUL`, filled completely below.
+        let entry = unsafe {
+            zoril_allocator_alloc(
+                cmd.arena,
+                (name.len + 1 as usize + value.len + 1 as usize) as u64
+            )
+        } as *mut u8;
+        // SAFETY: the copies and the two single bytes stay inside that allocation.
+        unsafe {
+            memcpy(entry, name.ptr, name.len);
+            *((entry as usize + name.len) as *mut u8) = 61 as u8;
+            memcpy((entry as usize + name.len + 1 as usize) as *mut u8, value.ptr, value.len);
+            *((entry as usize + name.len + 1 as usize + value.len) as *mut u8) = 0 as u8;
+        }
+        // SAFETY: `slot < kept + nsets`, so the slot is inside the array allocated above.
+        unsafe {
+            *((envp as usize + slot * 8) as *mut *u8) = entry as *u8;
+        }
+        slot = slot + 1 as usize;
+        i = i + 1 as usize;
+    }
+    // SAFETY: the last of the `kept + nsets + 1` slots holds the NULL terminator.
+    unsafe {
+        *((envp as usize + slot * 8) as *mut *u8) = 0 as *u8;
+    }
+    return Result.Ok(envp as **u8);
+}
+
 impl Command {
     // Creates a new Command for program with arguments allocated in arena a.
     //
@@ -162,6 +516,9 @@ impl Command {
         // borrowed arena the command is tied to.
         let mut cmd = unsafe { Command.new_raw(program, arena_raw(a)) };
         cmd.args.anchor = Option.Some(a);
+        cmd.env_names.anchor = Option.Some(a);
+        cmd.env_values.anchor = Option.Some(a);
+        cmd.env_removed.anchor = Option.Some(a);
         return cmd;
     }
 
@@ -181,6 +538,14 @@ impl Command {
             stdin_fd: Fd.from_unix_raw(-1),
             stdout_fd: Fd.from_unix_raw(-1),
             stderr_fd: Fd.from_unix_raw(-1),
+            new_group: false,
+            cwd: "",
+            has_cwd: false,
+            env_names: Vec::<[u8]>.new_in_raw(arena),
+            env_values: Vec::<[u8]>.new_in_raw(arena),
+            env_removed: Vec::<[u8]>.new_in_raw(arena),
+            env_touched: false,
+            env_cleared: false,
         };
     }
 
@@ -213,7 +578,69 @@ impl Command {
         self.stderr_fd = fd;
     }
 
-    // Spawns the configured command as an asynchronous child process.
+    // Starts the child in a process group of its own (setpgid(0, 0) before execve), so
+    // `Child.kill_group` can signal it together with everything it starts. `spawn` returns only
+    // after the child has exec'd, so the group exists by then.
+    pub fn set_new_group(self: &mut Command) {
+        self.new_group = true;
+    }
+
+    // Runs the child in the directory dir: `chdir` in the child just before `execve`, so a relative
+    // program path is looked up from dir, and a directory that cannot be entered makes `spawn`
+    // fail with the `chdir` error.
+    #[stores(dir -> self)]
+    pub fn set_current_dir(self: &mut Command, dir: [u8]) {
+        self.cwd = dir;
+        self.has_cwd = true;
+    }
+
+    // Sets the environment variable name to value in the child. The child gets the parent's
+    // environment with the changes applied (`env_clear` starts from an empty one), unless
+    // `set_envp` was used. `spawn` fails with
+    // EINVAL for a name that is empty or holds '=' or NUL, and for a value that holds NUL.
+    #[stores(name -> self, value -> self)]
+    pub fn env_set(self: &mut Command, name: [u8], value: [u8]) {
+        self.env_touched = true;
+        let gone = index_of(&self.env_removed, name);
+        if gone < self.env_removed.len() {
+            let _ = self.env_removed.remove(gone);
+        }
+        let at = index_of(&self.env_names, name);
+        if at < self.env_names.len() {
+            self.env_values.set(at, value);
+        } else {
+            self.env_names.push(name);
+            self.env_values.push(value);
+        }
+    }
+
+    // Removes the environment variable name from the child's environment.
+    #[stores(name -> self)]
+    pub fn env_remove(self: &mut Command, name: [u8]) {
+        self.env_touched = true;
+        let at = index_of(&self.env_names, name);
+        if at < self.env_names.len() {
+            let _ = self.env_names.remove(at);
+            let _ = self.env_values.remove(at);
+        }
+        if index_of(&self.env_removed, name) == self.env_removed.len() {
+            self.env_removed.push(name);
+        }
+    }
+
+    // Gives the child an empty environment, discarding the parent's and every `env_set` so far.
+    // Without it a command inherits the parent's environment.
+    pub fn env_clear(self: &mut Command) {
+        self.env_touched = true;
+        self.env_cleared = true;
+        self.env_names.clear();
+        self.env_values.clear();
+        self.env_removed.clear();
+    }
+
+    // Spawns the configured command as an asynchronous child process. The child's environment is
+    // read from /proc/self/environ unless `set_envp` supplied one, so the spawn fails where that
+    // cannot be read.
     pub fn spawn(self: &Command) -> Result<Child, Error> {
         if has_interior_nul(self.program) {
             return Result.Err(Error.from_linux_errno(22));
@@ -226,6 +653,25 @@ impl Command {
             }
             check_i = check_i + 1;
         }
+        if self.has_cwd && has_interior_nul(self.cwd) {
+            return Result.Err(Error.from_linux_errno(22));
+        }
+        // Built before the pipe and the fork, so a bad name or an unreadable parent environment
+        // leaves nothing to clean up. Only `set_envp` replaces the inherited environment.
+        let mut built_envp = self.envp;
+        if self.env_touched || built_envp as usize == 0 {
+            let built = build_envp(self);
+            if built.is_err() {
+                return Result.Err(built.err().unwrap());
+            }
+            built_envp = built.ok().unwrap();
+        }
+        let cwd_cstr = if self.has_cwd {
+            // SAFETY: `to_cstr` copies into `self.arena`, which belongs to this command and is live.
+            unsafe { to_cstr(self.cwd, self.arena) }
+        } else {
+            0 as *u8
+        };
 
         // SAFETY: one uninitialized two-descriptor slot in this frame, which pipe2 fills before
         // it is read.
@@ -269,15 +715,7 @@ impl Command {
         let prog_cstr = unsafe { to_cstr(self.program, self.arena) };
 
         // Marshal envp
-        let actual_envp = if self.envp as usize != 0 {
-            self.envp
-        } else {
-            // SAFETY: one uninitialized slot for the empty environment's NULL terminator, which
-            // the next line writes before execve reads it.
-            let empty_env = unsafe { @alloca<[*u8; 1]>(1) };
-            empty_env[0 as usize] = 0 as *u8;
-            empty_env as **u8
-        };
+        let actual_envp = built_envp;
 
         // SAFETY: fork(57) takes no arguments.
         let pid = unsafe { @syscall(57) } as i64;
@@ -311,6 +749,19 @@ impl Command {
                 // SAFETY: close(3) of the original slot, now that the copy >= 3 holds it.
                 let _ = unsafe { @syscall(3, old_wfd as u64) };
                 cur_wfd = new_wfd as i32;
+            }
+
+            if self.new_group {
+                // SAFETY: setpgid(109) with pid 0 and pgid 0 takes no pointer: the calling child
+                // becomes the leader of a new group named after itself.
+                let rc = unsafe { @syscall(109, 0 as u64, 0 as u64) } as i64;
+                if rc < 0 { child_fail(cur_wfd, (0 as i64 - rc) as i32); }
+            }
+
+            if self.has_cwd {
+                // SAFETY: chdir(80) takes the NUL-terminated path copied into the arena above.
+                let rc = unsafe { @syscall(80, cwd_cstr as u64) } as i64;
+                if rc < 0 { child_fail(cur_wfd, (0 as i64 - rc) as i32); }
             }
 
             let mut cur_in = self.stdin_fd.unix_raw();
@@ -434,7 +885,7 @@ impl Command {
             return Result.Err(Error.from_linux_errno(errno_val));
         }
 
-        return Result.Ok(Child { pid: pid });
+        return Result.Ok(Child { pid: pid, status: Option.None, own_group: self.new_group });
     }
 
     // Spawns the command and waits for completion, returning the process exit status.

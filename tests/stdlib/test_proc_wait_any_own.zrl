@@ -1,0 +1,158 @@
+// [PASS] wait_any and try_wait_any reap only the children they are given; another child is left to its own handle
+// expected exit 0
+//
+// A is `sleep 1` in the slice, B is `/bin/true` outside it. B ends first and is a zombie while
+// the calls run: neither call may take it, and `wait_any` reports ECHILD rather than waiting for
+// it. Reads /proc/<pid>/stat, which a host without /proc lacks: the test then says so and passes
+// without running.
+import "core.zrl";
+import "mem_raw.zrl";
+import "proc.zrl";
+import "io.zrl";
+import "vec.zrl";
+use io::eprint;
+use mem_raw::{ArenaHeader, arena_init};
+use proc::{Command, Child, wait_any, try_wait_any};
+use vec::Vec;
+
+fn now_ms() -> i64 {
+    // SAFETY: clock_gettime(228) of CLOCK_MONOTONIC (1) writes two i64 into the slot above.
+    let ts = unsafe { @alloca<[i64; 2]>(1) };
+    let _ = unsafe { @syscall(228, 1 as u64, ts as u64) };
+    return ts[0 as usize] * 1000 + ts[1 as usize] / 1000000;
+}
+
+fn sleep_ms(ms: i64) {
+    // SAFETY: nanosleep(35) reads the two i64 of the slot written just below.
+    let ts = unsafe { @alloca<[i64; 2]>(1) };
+    ts[0 as usize] = ms / 1000;
+    ts[1 as usize] = (ms % 1000) * 1000000;
+    let _ = unsafe { @syscall(35, ts as u64, 0 as u64) };
+}
+
+fn put(p: *mut u8, at: usize, c: u8) {
+    // SAFETY: every caller passes a 512-byte buffer and keeps `at` below that.
+    unsafe { *((p as usize + at) as *mut u8) = c; }
+}
+
+fn get(p: *mut u8, at: usize) -> u8 {
+    // SAFETY: as `put`, for a byte that was written or read into the buffer.
+    return unsafe { *((p as usize + at) as *mut u8) };
+}
+
+// The state letter of /proc/<pid>/stat as its character code; -1 when there is no such entry.
+fn state_of(pid: i64) -> i64 {
+    // SAFETY: a 512-byte slot, used first for the path and then as the read buffer.
+    let buf = unsafe { @alloca<[u8; 512]>(1) };
+    let p = buf as *mut u8;
+    let head = "/proc/";
+    let mut n = 0 as usize;
+    while n < 6 as usize {
+        put(p, n, head[n]);
+        n = n + 1 as usize;
+    }
+    let mut digits = 1 as usize;
+    let mut t = pid / 10;
+    while t > 0 {
+        digits = digits + 1 as usize;
+        t = t / 10;
+    }
+    let mut v = pid;
+    let mut k = digits;
+    while k > 0 as usize {
+        put(p, n + k - 1 as usize, (48 + (v % 10)) as u8);
+        v = v / 10;
+        k = k - 1 as usize;
+    }
+    n = n + digits;
+    let tail = "/stat";
+    let mut m = 0 as usize;
+    while m < 5 as usize {
+        put(p, n + m, tail[m]);
+        m = m + 1 as usize;
+    }
+    put(p, n + 5 as usize, 0 as u8);
+    // SAFETY: open(2) O_RDONLY on the NUL-terminated path just written into `p`.
+    let fd = unsafe { @syscall(2, p as u64, 0 as u64, 0 as u64) } as i64;
+    if fd < 0 {
+        return -1 as i64;
+    }
+    // SAFETY: read(0) fills at most 511 bytes of the 512-byte slot.
+    let got = unsafe { @syscall(0, fd as u64, p as u64, 511 as u64) } as i64;
+    // SAFETY: close(3) of the descriptor opened above.
+    let _ = unsafe { @syscall(3, fd as u64) };
+    if got <= 0 {
+        return -1 as i64;
+    }
+    // The command name is parenthesised and may hold anything, so the state follows the last ')'.
+    let mut r = (got - 1) as usize;
+    while r > 0 as usize && get(p, r) != 41 as u8 {
+        r = r - 1 as usize;
+    }
+    return get(p, r + 2 as usize) as i64;
+}
+
+fn spawn_sh(arena: *mut ArenaHeader, script: [u8]) -> Child {
+    let mut cmd = unsafe { Command.new_raw("/bin/sh", arena) };
+    cmd.arg("-c");
+    cmd.arg(script);
+    return cmd.spawn().ok().unwrap();
+}
+
+// Waits up to five seconds for the process to be a zombie.
+fn zombie(pid: i64) -> bool {
+    let t0 = now_ms();
+    while now_ms() - t0 < 5000 {
+        if state_of(pid) == 90 { return true; }
+        sleep_ms(10);
+    }
+    return false;
+}
+
+fn main() -> i32 {
+    // SAFETY: getpid(39) takes no arguments.
+    let me = unsafe { @syscall(39) } as i64;
+    if state_of(me) < 0 {
+        eprint("test_proc_wait_any_own: skipped, /proc is not available\n");
+        return 0;
+    }
+    let arena = unsafe { arena_init(1048576) } as *mut ArenaHeader;
+    let mut slice = unsafe { Vec::<Child>.new_in_raw(arena) };
+    slice.push(spawn_sh(arena, "sleep 1"));
+    let mut b = spawn_sh(arena, "exit 0");
+    if !zombie(b.pid) { return 1; }
+
+    let r = try_wait_any(slice.as_mut_slice());
+    if r.is_err() || r.ok().unwrap().is_some() { return 2; }
+    if state_of(b.pid) != 90 { return 3; }
+    let bs = b.wait();
+    if bs.is_err() || bs.ok().unwrap().code().unwrap() != 0 { return 4; }
+
+    let mut b2 = spawn_sh(arena, "exit 0");
+    if !zombie(b2.pid) { return 5; }
+    let w = wait_any(slice.as_mut_slice());
+    if w.is_ok() || w.err().unwrap().linux_errno() != 10 { return 6; }
+    let b2s = b2.wait();
+    if b2s.is_err() || b2s.ok().unwrap().code().unwrap() != 0 { return 7; }
+
+    let w2 = wait_any(slice.as_mut_slice());
+    if w2.is_err() || w2.ok().unwrap() != 0 as usize { return 8; }
+    let a = slice.get_mut(0 as usize).unwrap().wait();
+    if a.is_err() || a.ok().unwrap().code().unwrap() != 0 { return 9; }
+
+    // An ended child outside the slice makes every wait_any an error, even with a slice child still
+    // running, until that child's own handle has waited for it.
+    let mut slice2 = unsafe { Vec::<Child>.new_in_raw(arena) };
+    slice2.push(spawn_sh(arena, "sleep 2"));
+    let mut b3 = spawn_sh(arena, "exit 0");
+    if !zombie(b3.pid) { return 10; }
+    let e1 = wait_any(slice2.as_mut_slice());
+    if e1.is_ok() || e1.err().unwrap().linux_errno() != 10 { return 11; }
+    let e2 = wait_any(slice2.as_mut_slice());
+    if e2.is_ok() || e2.err().unwrap().linux_errno() != 10 { return 12; }
+    let b3s = b3.wait();
+    if b3s.is_err() { return 13; }
+    let e3 = wait_any(slice2.as_mut_slice());
+    if e3.is_err() || e3.ok().unwrap() != 0 as usize { return 14; }
+    return 0;
+}

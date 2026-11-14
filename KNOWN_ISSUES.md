@@ -29,18 +29,13 @@ This document records known limitations, bootstrap dialect boundaries, and open 
 
 These limits do not affect user code because user code is compiled by the self-hosted compiler (`build/zoril`), which supports the full language.
 
-### `stage1`: two modules with a private function of the same name are refused
+### `stage1`: two modules with a private function or struct of the same name are refused or miscompiled
 
 - **Symptom:** when two imported modules each define a private function with the same name, and each calls its own, `build/zoril-stage1` reports `cannot access private function: <name>` at the call in the second module. `build/zoril` accepts the program. Reproduction: modules `ma.zrl` and `mb.zrl`, each with a private `fn helper(x: i32) -> bool` and a `pub fn` that calls it, both imported by one `main` (`use ma::a_check; use mb::b_check;`); stage1 fails with `mb.zrl:2:41: error: cannot access private function: helper`.
+- **Struct case:** two private structs of one name in two imported modules (`struct H { v: i32 }` in one, `struct H { w: i32 }` in the other) stop `build/zoril-stage1` with `INTERNAL COMPILER ERROR: ZirToZilLowerer.get_field_index: field not found`; `build/zoril` accepts the program. The `closure-private-names` gate checks functions, structs, enums, traits and type aliases in both closures stage1 builds.
 - **Impact:** none on user code or on today's bootstrap. It constrains the modules `src/` imports: no two of them may define a private function of the same name. `stdlib/proc.zrl` and `stdlib/fsys.zrl` each define a private `has_interior_nul`, so stage1 refuses any program importing both (`tools/zbuild/src/main.zrl` among them); `src/` does not import `proc.zrl`.
 - **Workaround:** give the private functions distinct names in any module that joins the `src/` closure (`build/zoril -I stdlib=stdlib -I build/gen --emit-deps src/main.zrl` lists it).
 - **Why not fixed:** `stage1` changes only by a re-pin or a recorded backport (`doc/bootstrap/two_stage.md` §3), which is the maintainer's decision. Tracked in task Z-0135.
-
-### `stage1`: some stdlib paths are built into programs that crash
-
-- **Symptom:** built by `build/zoril-stage1` and `build/zilc-stage1` (the pipeline `build/zilc-boot` uses), `tests/stdlib/test_stdlib_fd.zrl` and `tests/stdlib/test_stdlib_io_result.zrl` compile without a diagnostic and then crash with a segmentation fault: in `zoril_allocator_alloc` (`stdlib/mem_raw.zrl`), called from `test_pipe_large_buffer`, and in `arena_free` (`stdlib/mem_raw.zrl`), called from `Arena::drop` (`stdlib/mem.zrl`) in `test_command_redirect_stdout`. Built by `build/zoril` through the same steps, both exit 0. The cause is not yet known.
-- **Impact:** none on user code, which `build/zoril` compiles. `mem.zrl` and `mem_raw.zrl` are among the modules `src/` imports, so an edit to `src/` that starts reaching such a path would get a compiler built wrongly on a fresh checkout, seen only if the self-hosting fixpoint differs.
-- **Why not fixed:** the cause is under investigation in task Z-0135; a fix to `stage1` itself is a re-pin or a recorded backport, the maintainer's decision.
 
 ---
 
@@ -113,6 +108,12 @@ For functions containing tens of thousands of instructions in a single basic blo
 - **Symptom:** the warning `this`pub fn`stores the reference parameter ... add`#[stores(...)]`` for a generic function or method appears when the program is built whole, and not under `zbuild`.
 - **Why:** a generic body is checked where it is instantiated, and under `-c` the instantiating module reads the body from the interface, whose lines are not the source's: the warning would name the interface's line under the source's file name, so it is not given (`FnDecl.from_interface`). The module's own `-c` build does not instantiate the body. The declared contract is carried in the interface either way, so callers are checked against it.
 - **Workaround:** build the program whole-program once; a standard-library function never needs it (`scripts/test_interface_attrs.sh`).
+
+### An error inside an imported generic body names the interface's line under `zbuild`
+
+- **Symptom:** an error raised while instantiating another module's generic body (`Vec.extend_from_slice` on an element type with no `Clone`) names the right file and message under `zbuild`, but the line and column of the module's interface: `stdlib/vec.zrl:300:57` where a whole-program build says `stdlib/vec.zrl:431:60`.
+- **Why:** as above, the instantiating module reads the body from the interface, whose lines are not the source's; unlike the warning, the error is still given, so it carries the interface's position.
+- **Workaround:** the message is the same in both builds; build whole-program for the source line. `bench/safety_matrix/probes/gap_76_vec_extend_from_slice_double_drop.zrl` records the difference with a `// zbuild:` line.
 
 ---
 

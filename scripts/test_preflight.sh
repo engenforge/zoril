@@ -14,6 +14,10 @@
 #   14. preflight-changed refuses to start without a base, and hands the base it chose to mutation-check.
 #   15. The rejection differential still runs when the seed compiler refuses the base source: the scratch
 #       tree's compiler is built through stage1 instead (a stand-in make plays both builds).
+#   16. Nested runs do not touch default preflight timings or log files.
+#   17. A doc-only change skips preflight-changed, reporting [SKIP] and exiting 0.
+#   18. A change to scripts/preflight.sh does not skip preflight-changed.
+#   19. A test-only change does not skip preflight-changed and runs the checked pass.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 . scripts/lib/portability.sh
@@ -35,6 +39,12 @@ fi
 tmp="$(mktemp -d)"
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT INT TERM
+
+# Scratch timing and log paths so nested preflight runs do not touch default files
+scratch_timings="$tmp/preflight_scratch_timings.tsv"
+scratch_log="$tmp/preflight_scratch.log"
+export PREFLIGHT_TIMINGS="$scratch_timings"
+export PREFLIGHT_LOG="$scratch_log"
 
 # Create stub scripts
 cat << 'EOF' > "$tmp/stub_pass.sh"
@@ -123,19 +133,20 @@ status=0
 fail() { echo "[FAIL] preflight-selftest: $1" >&2; status=1; }
 pass() { echo "[PASS] preflight-selftest: $1"; }
 
-# Preserve existing preflight log if present
-saved_log=""
-if [ -f build/preflight-selfhost.log ]; then
-    saved_log="$(mktemp)"
-    cp build/preflight-selfhost.log "$saved_log"
+# Record default timings and log file state before cases run
+timings_existed_before=0
+timings_hash_before=""
+if [ -f build/preflight-timings.tsv ]; then
+    timings_existed_before=1
+    timings_hash_before=$(sha256_of build/preflight-timings.tsv 2>/dev/null | awk '{print $1}')
 fi
-restore_log() {
-    if [ -n "$saved_log" ] && [ -f "$saved_log" ]; then
-        cp "$saved_log" build/preflight-selfhost.log
-        rm -f "$saved_log"
-    fi
-}
-trap 'cleanup; restore_log' EXIT INT TERM
+
+log_existed_before=0
+log_hash_before=""
+if [ -f build/preflight-selfhost.log ]; then
+    log_existed_before=1
+    log_hash_before=$(sha256_of build/preflight-selfhost.log 2>/dev/null | awk '{print $1}')
+fi
 
 # Case 1: selfhost failure
 rc=0
@@ -182,6 +193,43 @@ else
     fail "expected background selfhost to complete before report (rc=$rc, out=$out)"
 fi
 
+cat << 'EOS' > "$tmp/stub_fail_git.sh"
+#!/bin/sh
+exit 1
+EOS
+chmod +x "$tmp/stub_fail_git.sh"
+
+cat << 'EOS' > "$tmp/stub_track_bench.sh"
+#!/bin/sh
+echo "bench" >> "$PREFLIGHT_TEST_TRACE"
+exit 0
+EOS
+chmod +x "$tmp/stub_track_bench.sh"
+
+# Case 5b: git failure in full mode aborts and suppresses bench, density, fuzz
+rc=0
+trace_file="$tmp/trace_case5b.log"
+out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
+      PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+      PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+      PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
+      PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
+      PREFLIGHT_GIT="$tmp/stub_fail_git.sh" \
+      PREFLIGHT_BENCH="$tmp/stub_track_bench.sh" \
+      PREFLIGHT_DENSITY="$tmp/stub_track_density.sh" \
+      PREFLIGHT_FUZZ="$tmp/stub_track_fuzz.sh" \
+      PREFLIGHT_TEST_TRACE="$trace_file" \
+      ./scripts/preflight.sh 2>&1) || rc=$?
+if [ $rc -ne 0 ]; then
+    if [ ! -f "$trace_file" ]; then
+        pass "git failure in full mode aborts with non-zero exit and suppresses bench/density/fuzz"
+    else
+        fail "git failure in full mode executed subsequent steps: $(cat "$trace_file")"
+    fi
+else
+    fail "expected non-zero exit on git failure in full mode (rc=$rc, out=$out)"
+fi
+
 # Case 6: bench failure in full mode aborts and suppresses density and fuzz
 rc=0
 trace_file="$tmp/trace_case6.log"
@@ -190,6 +238,7 @@ out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
       PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
       PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
       PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
+      PREFLIGHT_GIT="$tmp/stub_pass.sh" \
       PREFLIGHT_BENCH="$tmp/stub_fail_bench.sh" \
       PREFLIGHT_DENSITY="$tmp/stub_track_density.sh" \
       PREFLIGHT_FUZZ="$tmp/stub_track_fuzz.sh" \
@@ -229,6 +278,7 @@ out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
       PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
       PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
       PREFLIGHT_BENCH="$tmp/stub_pass.sh" \
+      PREFLIGHT_GIT="$tmp/stub_pass.sh" \
       PREFLIGHT_STORE_GRID="$tmp/stub_pass.sh" \
       PREFLIGHT_DENSITY="$tmp/stub_fail_density.sh" \
       PREFLIGHT_FUZZ="$tmp/stub_track_fuzz.sh" \
@@ -252,6 +302,7 @@ out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
       PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
       PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
       PREFLIGHT_BENCH="$tmp/stub_pass.sh" \
+      PREFLIGHT_GIT="$tmp/stub_pass.sh" \
       PREFLIGHT_STORE_GRID="$tmp/stub_pass.sh" \
       PREFLIGHT_DENSITY="$tmp/stub_pass.sh" \
       PREFLIGHT_FUZZ="$tmp/stub_fail_fuzz.sh" \
@@ -260,6 +311,35 @@ if [ $rc -ne 0 ]; then
     pass "fuzz failure in full mode aborts with non-zero exit"
 else
     fail "expected non-zero exit on fuzz failure in full mode (rc=$rc, out=$out)"
+fi
+
+# Case 9b: preflight records step timings to PREFLIGHT_TIMINGS
+pf_timings="$tmp/preflight_timings.tsv"
+rc=0
+out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
+      PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+      PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+      PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
+      PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
+      PREFLIGHT_BENCH="$tmp/stub_pass.sh" \
+      PREFLIGHT_GIT="$tmp/stub_pass.sh" \
+      PREFLIGHT_STORE_GRID="$tmp/stub_pass.sh" \
+      PREFLIGHT_DENSITY="$tmp/stub_pass.sh" \
+      PREFLIGHT_FUZZ="$tmp/stub_pass.sh" \
+      PREFLIGHT_TIMINGS="$pf_timings" \
+      ./scripts/preflight.sh 2>&1) || rc=$?
+if [ $rc -eq 0 ] && [ -s "$pf_timings" ]; then
+    missing_steps=""
+    for step in selfhost mutation calibrate reject-diff checked git bench store-grid density fuzz; do
+        grep -Eq "^[0-9]+	$step$" "$pf_timings" || missing_steps="$missing_steps $step"
+    done
+    if [ -z "$missing_steps" ]; then
+        pass "preflight records timings for all 10 steps"
+    else
+        fail "preflight timings missing steps:$missing_steps (got: $(cat "$pf_timings"))"
+    fi
+else
+    fail "expected preflight to pass and write timings (rc=$rc, out=$out)"
 fi
 
 # Cases 10-11: the rejection differential runs when a checker differs from its base, fails the
@@ -275,11 +355,12 @@ chmod +x "$tmp/stub_fail_reject_diff.sh"
 # scratch_base PATH: print a commit of HEAD's tree with PATH replaced by a one-line file, a base that
 # differs from this tree in PATH alone. It is made with a git configuration of its own: under the
 # caller's, `commit-tree` needs an identity and honours commit.gpgsign, and a commit that could not
-# be made left the base empty, so the differential compared the tree with itself (Z-0098).
+# be made left the base empty, so the differential compared the tree with itself.
 scratch_base() {
     _idx="$tmp/scratch_base_idx"
     rm -f "$_idx"
     GIT_INDEX_FILE="$_idx" git read-tree HEAD || return 1
+    GIT_INDEX_FILE="$_idx" git add -A || return 1
     _blob=$(printf '// preflight-selftest base\n' | git hash-object -w --stdin) || return 1
     GIT_INDEX_FILE="$_idx" git update-index --add --cacheinfo 100644 "$_blob" "$1" || return 1
     _tree=$(GIT_INDEX_FILE="$_idx" git write-tree) || return 1
@@ -318,7 +399,7 @@ else
 fi
 
 # Case 11b: a stdlib/-only change runs the rejection differential (a stdlib function's summary
-# changes what the checkers refuse, Z-0069).
+# changes what the checkers refuse).
 if stdlib_only_base=$(scratch_base stdlib/test_preflight_dummy.zrl 2>"$tmp/scratch_base.err") && [ -n "$stdlib_only_base" ]; then
     rc=0
     out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
@@ -398,6 +479,44 @@ if [ "$res" = "0 $c1" ]; then
 else
     fail "an uncommitted change should be measured from HEAD $c1 (got: $res)"
 fi
+# A remote not named origin, no remote at all, and a remote main behind a local one merged in since.
+r="$tmp/repo13b"
+mkdir -p "$r/hom.git" "$r/w"
+g init --bare "$r/hom.git"
+g -C "$r/w" init
+echo a > "$r/w/f"; g -C "$r/w" add f; g -C "$r/w" commit -m one
+m1=$(git -C "$r/w" rev-parse HEAD)
+g -C "$r/w" checkout -b feature
+echo b > "$r/w/g"; g -C "$r/w" add g; g -C "$r/w" commit -m feature-one
+res=$(repo_base "$r/w")
+if [ "$res" = "0 $m1" ]; then
+    pass "with no remote, a feature branch is measured from its merge base with the local main"
+else
+    fail "with no remote, the base should be the merge base $m1 with main (got: $res)"
+fi
+g -C "$r/w" remote add hom "$r/hom.git"
+g -C "$r/w" push hom main
+g -C "$r/w" fetch hom
+g -C "$r/w" branch -D main
+res=$(repo_base "$r/w")
+if [ "$res" = "0 $m1" ]; then
+    pass "a feature branch whose only remote is not origin is measured from its merge base with that remote's main"
+else
+    fail "the base should be the merge base $m1 with hom/main (got: $res)"
+fi
+g -C "$r/w" branch main hom/main
+g -C "$r/w" checkout main
+echo c > "$r/w/f"; g -C "$r/w" commit -am two
+m2=$(git -C "$r/w" rev-parse HEAD)
+g -C "$r/w" checkout feature
+g -C "$r/w" merge --no-edit main
+echo d > "$r/w/g"; g -C "$r/w" commit -am feature-two
+res=$(repo_base "$r/w")
+if [ "$res" = "0 $m2" ]; then
+    pass "a local main merged in since the remote's is the nearer base"
+else
+    fail "the base should be the local merge base $m2, not hom/main's $m1 (got: $res)"
+fi
 
 # Case 14: preflight-changed refuses to start without a base, and passes the one it chose to mutation-check.
 trace14="$tmp/trace14"
@@ -461,6 +580,100 @@ if [ -x build/zoril ] && [ -f build/zilc ] && [ -f build/runtime.o ]; then
     fi
 else
     echo "[SKIP] preflight-selftest: case 15 needs build/zoril, build/zilc and build/runtime.o (run make)"
+fi
+
+# Case 17: a doc-only change skips preflight-changed (reporting [SKIP] and exiting 0).
+if doc_base=$(scratch_base doc/tasks/active.tm.md 2>"$tmp/scratch_base.err") && [ -n "$doc_base" ]; then
+    rc=0
+    out=$(PREFLIGHT_BASE="$doc_base" PREFLIGHT_SELFHOST="$tmp/stub_fail_selfhost.sh" \
+          PREFLIGHT_MUTATION="$tmp/stub_fail_mutation.sh" PREFLIGHT_BENCH="$tmp/stub_fail_bench.sh" \
+          ./scripts/preflight.sh --changed 2>&1) || rc=$?
+    if [ $rc -eq 0 ] && echo "$out" | grep -qF "[SKIP] preflight-changed: only documentation changed since $doc_base"; then
+        pass "a doc-only change skips preflight-changed"
+    else
+        fail "doc-only change should skip preflight-changed (rc=$rc, out=$out)"
+    fi
+else
+    fail "cannot make a base commit for case 17: $(cat "$tmp/scratch_base.err")"
+fi
+
+# Case 18: a change to scripts/preflight.sh does not skip preflight-changed.
+if script_base=$(scratch_base scripts/preflight.sh 2>"$tmp/scratch_base.err") && [ -n "$script_base" ]; then
+    rc=0
+    out=$(PREFLIGHT_BASE="$script_base" PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
+          PREFLIGHT_MUTATION="$tmp/stub_pass.sh" PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+          PREFLIGHT_BENCH="$tmp/stub_pass.sh" PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
+          PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
+          ./scripts/preflight.sh --changed 2>&1) || rc=$?
+    if [ $rc -eq 0 ] && ! echo "$out" | grep -qF "[SKIP] preflight-changed:" && echo "$out" | grep -qF "stub: selfhost ok"; then
+        pass "a change to scripts/preflight.sh does not skip preflight-changed"
+    else
+        fail "change to scripts/preflight.sh must not skip preflight-changed (rc=$rc, out=$out)"
+    fi
+else
+    fail "cannot make a base commit for case 18: $(cat "$tmp/scratch_base.err")"
+fi
+
+# Case 19: a test-only change does not skip preflight-changed and runs checked.
+cat << 'EOS' > "$tmp/stub_fail_checked.sh"
+#!/bin/sh
+echo "stub: test-checked ran"
+exit 37
+EOS
+chmod +x "$tmp/stub_fail_checked.sh"
+if test_base=$(scratch_base tests/functional/test_dummy_case19.zrl 2>"$tmp/scratch_base.err") && [ -n "$test_base" ]; then
+    rc=0
+    out=$(PREFLIGHT_BASE="$test_base" PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
+          PREFLIGHT_MUTATION="$tmp/stub_pass.sh" PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+          PREFLIGHT_BENCH="$tmp/stub_pass.sh" PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
+          PREFLIGHT_CHECKED="$tmp/stub_fail_checked.sh" \
+          ./scripts/preflight.sh --changed 2>&1) || rc=$?
+    if [ $rc -eq 37 ] && ! echo "$out" | grep -qF "[SKIP] preflight-changed:" && echo "$out" | grep -qF "stub: test-checked ran"; then
+        pass "a test-only change runs checked"
+    else
+        fail "test-only change should run checked pass (rc=$rc, out=$out)"
+    fi
+else
+    fail "cannot make a base commit for case 19: $(cat "$tmp/scratch_base.err")"
+fi
+
+# Case 16: nested runs do not touch default timings or log files
+if [ "$timings_existed_before" -eq 1 ]; then
+    if [ -f build/preflight-timings.tsv ]; then
+        timings_hash_after=$(sha256_of build/preflight-timings.tsv 2>/dev/null | awk '{print $1}')
+        if [ "$timings_hash_after" = "$timings_hash_before" ]; then
+            pass "nested runs do not touch default preflight timings file (content unchanged)"
+        else
+            fail "nested runs modified default preflight timings file (hash changed from $timings_hash_before to $timings_hash_after)"
+        fi
+    else
+        fail "nested runs deleted default preflight timings file"
+    fi
+else
+    if [ ! -e build/preflight-timings.tsv ]; then
+        pass "nested runs do not create default preflight timings file"
+    else
+        fail "nested runs created default preflight timings file (got: $(cat build/preflight-timings.tsv 2>/dev/null))"
+    fi
+fi
+
+if [ "$log_existed_before" -eq 1 ]; then
+    if [ -f build/preflight-selfhost.log ]; then
+        log_hash_after=$(sha256_of build/preflight-selfhost.log 2>/dev/null | awk '{print $1}')
+        if [ "$log_hash_after" = "$log_hash_before" ]; then
+            pass "nested runs do not touch default preflight log file (content unchanged)"
+        else
+            fail "nested runs modified default preflight log file (hash changed from $log_hash_before to $log_hash_after)"
+        fi
+    else
+        fail "nested runs deleted default preflight log file"
+    fi
+else
+    if [ ! -e build/preflight-selfhost.log ]; then
+        pass "nested runs do not create default preflight log file"
+    else
+        fail "nested runs created default preflight log file (got: $(cat build/preflight-selfhost.log 2>/dev/null))"
+    fi
 fi
 
 exit $status

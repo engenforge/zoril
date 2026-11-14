@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_try_err_type_differs.zrl:7:43: error: `?` on `Result<i32, i64>` returns its `Err` early, which `Result<i32, [u8]>` cannot hold
+// `e?` returns `e`'s error from the function; the function's `Result` must hold that error type. It
+// used to return `e` whole, so the caller read an `i64` as a `[u8]` (probe gap_68).
+import "core.zrl";
+fn inner() -> Result<i32, i64> { return Result.Err(7 as i64); }
+fn outer() -> Result<i32, [u8]> { let v = inner()?; return Result.Ok(v); }
+fn main() -> i32 { return match outer() { Ok(v) => v, Err(_) => 1 }; }

@@ -1,0 +1,22 @@
+// name: Vec.resize clones its fill value, so each slot and the value are dropped once
+// expected: accept
+// The accepted twin of gap_75: S implements Clone, so resize(2, v) writes two clones and drops v, set drops the clone it replaces, and the two popped values are dropped: four values, four drops.
+import "vec.zrl";
+use vec::Vec;
+static mut DROPS: i32 = 0;
+#[derive(Clone)]
+struct S { id: i64 }
+impl Drop for S { fn drop(self: &mut S) { DROPS = DROPS + 1; } }
+fn main() -> i32 {
+    {
+        let mut v = Vec::<S>.new();
+        v.resize(2, S { id: 7 });
+        if DROPS != 1 { return 1; }
+        v.set(0, S { id: 8 });
+        if DROPS != 2 { return 2; }
+        match v.pop() { Option.Some(s) => { if s.id != 7 { return 3; } @drop(s); }, Option.None => { return 4; }, }
+        if DROPS != 3 { return 5; }
+        match v.pop() { Option.Some(s) => { if s.id != 8 { return 6; } @drop(s); }, Option.None => { return 7; }, }
+    }
+    return DROPS - 4;
+}

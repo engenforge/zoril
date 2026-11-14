@@ -12,8 +12,24 @@
 #     passed/skipped item; --quiet prints no [PASS] or [SKIP] lines;
 #   - the suite lines add up to the Total, and the Total and exit status are as expected.
 # Gate scripts themselves are held to the item format on every run by scripts/test.sh.
+#
+# RUNNER_UNDER_TEST names the runner under test (default ./scripts/test.sh). It is not called
+# RUNNER because `make test RUNNER=ztest` exports that name to every scenario. `--both` runs the
+# checks for the default runner and then for build/ztest, so one scenario row holds both to the
+# same grammar.
 
 cd "$(dirname "$0")/.." || exit 2
+if [ "${1:-}" = "--both" ]; then
+    rc=0
+    sh "$0" || rc=1
+    RUNNER_UNDER_TEST=build/ztest sh "$0" || rc=1
+    exit $rc
+fi
+RUNNER_UNDER_TEST=${RUNNER_UNDER_TEST:-./scripts/test.sh}
+if [ ! -x "$RUNNER_UNDER_TEST" ]; then
+    echo "[FAIL] the runner $RUNNER_UNDER_TEST is not an executable file (run: make ztest)"
+    exit 1
+fi
 . scripts/lib/path_shim.sh
 . scripts/lib/portability.sh
 
@@ -22,10 +38,13 @@ cd "$(dirname "$0")/.." || exit 2
 export TR_WORK=build/tests-runner-output TR_QUIET=0 TR_VERBOSE=0 TR_FAIL_FAST=0 TR_FILTER= TR_RESULTS=
 FIXTURES="tests/runner/fixtures/tests --gate fixture-good --gate fixture-fails
           --gate fixture-bad-format --gate fixture-silent-failure --gate fixture-empty"
-# 13 fixture items, plus the run's own "stray-files" item, which needs git: with git hidden from
-# PATH (opts_hidden), or absent on the host, it is reported as [SKIP] instead of [PASS].
-EXPECTED_TOTAL="Total: 14 run, 7 passed, 7 failed, 2 skipped"
-EXPECTED_TOTAL_NO_GIT="Total: 13 run, 6 passed, 7 failed, 3 skipped"
+# 16 fixture items, plus the run's own "stray-files" item (which needs no git). hangs.zrl ends at
+# the 2-second timeout. bad_header.zrl fails: its header, `expected exit banana`, is malformed.
+# With `timeout` off PATH (opts_hidden) nothing limits a run, so hangs.zrl is left out there.
+EXPECTED_TOTAL="Total: 17 run, 7 passed, 10 failed, 2 skipped"
+EXPECTED_TOTAL_NO_TIMEOUT="Total: 16 run, 7 passed, 9 failed, 2 skipped"
+UNDER_TEST_LABEL=
+[ "$RUNNER_UNDER_TEST" = ./scripts/test.sh ] || UNDER_TEST_LABEL=" ($RUNNER_UNDER_TEST)"
 
 errors=0
 fail() { echo "[FAIL] $1"; errors=$((errors + 1)); }
@@ -34,19 +53,21 @@ check_mode() {
     mode="$1"
     out="$TR_WORK/output.$mode"
     expected="$EXPECTED_TOTAL"
-    # git is optional; without it on the host the stray-files item skips in every mode, which is the
-    # total opts_hidden pins with git explicitly hidden.
-    git_checkout_usable . || expected="$EXPECTED_TOTAL_NO_GIT"
+    exclude=""
+    if ! command -v timeout >/dev/null 2>&1; then
+        expected="$EXPECTED_TOTAL_NO_TIMEOUT"
+        exclude="tests/runner/fixtures/tests/hangs.zrl"
+    fi
     mkdir -p "$TR_WORK"
     case "$mode" in
-        quiet)   ./scripts/test.sh --quiet $FIXTURES > "$out" 2>&1 ;;
-        default) ./scripts/test.sh $FIXTURES > "$out" 2>&1 ;;
-        verbose) ./scripts/test.sh --verbose $FIXTURES > "$out" 2>&1 ;;
+        quiet)   TR_EXCLUDE="$exclude" "$RUNNER_UNDER_TEST" --timeout 2 --quiet $FIXTURES > "$out" 2>&1 ;;
+        default) TR_EXCLUDE="$exclude" "$RUNNER_UNDER_TEST" --timeout 2 $FIXTURES > "$out" 2>&1 ;;
+        verbose) TR_EXCLUDE="$exclude" "$RUNNER_UNDER_TEST" --timeout 2 --verbose $FIXTURES > "$out" 2>&1 ;;
         opts_hidden)
             shim="$TR_WORK/shim_opts"
             path_without "$shim" git timeout setsid valgrind dprint rustc
-            expected="$EXPECTED_TOTAL_NO_GIT"
-            PATH="$shim" ./scripts/test.sh $FIXTURES > "$out" 2>&1
+            expected="$EXPECTED_TOTAL_NO_TIMEOUT"
+            TR_EXCLUDE=tests/runner/fixtures/tests/hangs.zrl PATH="$shim" "$RUNNER_UNDER_TEST" --timeout 2 $FIXTURES > "$out" 2>&1
             ;;
     esac
     rc=$?
@@ -90,15 +111,46 @@ $(echo "$bad" | head -n 5 | sed 's/^/       /')"
                 END { printf "%d %d %d %d", r, p, f, s }' "$out")
     [ "$sums" = "$run $passed $failed $skipped" ] || fail "$mode: suite lines sum to $sums, Total says $run $passed $failed $skipped"
 
+    # Every run writes timings.tsv with format: seconds<TAB>kind<TAB>name
+    timings="$TR_WORK/timings.tsv"
+    [ -s "$timings" ] || fail "$mode: timings.tsv was not written or is empty"
+    bad_timings=$(awk -F'\t' '
+        NF != 3 { printf "line %d: expected 3 tab-separated fields, got %d: %s\n", NR, NF, $0; next }
+        $1 !~ /^[0-9]+(\.[0-9]+)?$/ { printf "line %d: invalid seconds \"%s\": %s\n", NR, $1, $0; next }
+        $2 !~ /^(gate|group|test|scenario)$/ { printf "line %d: invalid kind \"%s\": %s\n", NR, $2, $0; next }
+        $3 == "" { printf "line %d: empty name: %s\n", NR, $0; next }
+    ' "$timings")
+    [ -z "$bad_timings" ] || fail "$mode: lines in timings.tsv outside format:
+$(echo "$bad_timings" | head -n 5 | sed 's/^/       /')"
+
 }
 
 for mode in quiet default verbose opts_hidden; do
     before=$errors
     check_mode "$mode"
     if [ $errors -eq $before ]; then
-        echo "[PASS] $mode output follows the grammar and its counts agree"
+        echo "[PASS] $mode output follows the grammar and its counts agree$UNDER_TEST_LABEL"
     else
         echo "       output: $TR_WORK/output.$mode"
     fi
 done
+
+# The helper below is the runner library's, the same for either runner.
+[ -z "$UNDER_TEST_LABEL" ] || exit $((errors > 0))
+
+# A scenario that exits 77 is reported as [SKIP] with the reason from its last [SKIP] line, and
+# is not counted as run; one that prints [SKIP] and exits 0 would be counted as passed.
+skip_out=$(
+    TR_WORK="$TR_WORK/skip-exit"; mkdir -p "$TR_WORK"
+    . scripts/lib/test_runner.sh
+    TR_RUN=0; TR_PASSED=0; TR_FAILED=0; TR_SKIPPED=0
+    tr_run_logged scenario skip-probe "$TR_WORK/skip.log" sh -c 'echo "[SKIP] needs a probe tool"; exit 77'
+    echo "counts: $TR_RUN run $TR_PASSED passed $TR_FAILED failed $TR_SKIPPED skipped"
+)
+if printf '%s\n' "$skip_out" | grep -q '^\[SKIP\] scenario: skip-probe (needs a probe tool)' \
+    && printf '%s\n' "$skip_out" | grep -qx 'counts: 0 run 0 passed 0 failed 1 skipped'; then
+    echo "[PASS] a scenario exiting 77 is reported as skipped, with its reason"
+else
+    fail "a scenario exiting 77 was not reported as skipped: $skip_out"
+fi
 [ $errors -eq 0 ]

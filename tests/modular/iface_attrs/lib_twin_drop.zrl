@@ -1,0 +1,10 @@
+// Types named like the importers' types (probe 421): each `drop` here runs on this module's values
+// only. A drop counts 1 for an `S` and 10 for a `G`.
+static mut TWIN_DROPS: i32 = 0;
+pub struct S { pub x: i64 }
+impl S { pub fn get(self: &S) -> i64 { return 100; } }
+impl Drop for S { fn drop(self: &mut S) { TWIN_DROPS = TWIN_DROPS + 1; } }
+pub struct G<T> { pub v: T }
+impl<T> Drop for G<T> { fn drop(self: &mut G<T>) { TWIN_DROPS = TWIN_DROPS + 10; } }
+pub fn drops() -> i32 { return TWIN_DROPS; }
+pub fn make_one() -> i32 { let s = S { x: 1 }; return (s.x - 1) as i32; }

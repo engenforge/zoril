@@ -148,6 +148,7 @@ fn check_qbe_version(qbe: [u8], qbe_sha: [u8], cache_dir: [u8], arena: *mut Aren
         Err(_) => { return 0; },
     };
     let mut cmd = unsafe { Command.new_raw(qbe, arena) };
+    cmd.env_clear();
     cmd.arg("-o");
     cmd.arg("/dev/null");
     cmd.arg(path);

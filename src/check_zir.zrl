@@ -15,7 +15,7 @@ import "route_set.zrl";
 use ast::Span;
 use bytevec::ByteVec;
 use diag::diag_start;
-use il_cfg::{ILFunction, ILModule};
+use il_cfg::{ILFunction, ILModule, NO_DROP_FN};
 use il_type::{is_raw_pointer_tag, is_reference_tag, type_name_is, ILPRIM_BOOL, ILPRIM_CHAR, ILPRIM_F32, ILPRIM_I16, ILPRIM_I32, ILPRIM_I64, ILPRIM_I8, ILPRIM_ISIZE, ILPRIM_NEVER, ILPRIM_U16, ILPRIM_U32, ILPRIM_U64, ILPRIM_U8, ILPRIM_UNIT, ILPRIM_USIZE, ILTYPE_ARRAY, ILTYPE_BOXED, ILTYPE_BOXEDMUT, ILTYPE_FD, ILTYPE_FN, ILTYPE_IORING, ILTYPE_PRIMITIVE, ILTYPE_PTR, ILTYPE_PTRMUT, ILTYPE_RAWPTR, ILTYPE_RAWPTRMUT, ILTYPE_SLICE, ILTYPE_TUPLE, ILTYPE_USER, ILType, ILTypeDecl, IL_TYPEDEF_ENUM, IL_TYPEDEF_STRUCT, is_any_pointer_tag, is_mut_pointer_tag, is_shared_pointer_tag};
 use intern::InternTable;
 use io::{eprint, print, stderr, stdout};
@@ -762,7 +762,7 @@ impl ZirVerifier {
         if tag != ILTYPE_USER { return false; }
         let user = p_ty.def.get_User();
         if self.is_collection_type_name(user.name) { return true; }
-        if self.has_drop_impl(user.name) { return true; }
+        if self.has_drop_impl(ty) { return true; }
         let user_id = user.id;
         if user_id == 0xffffffff as u32 || user_id as usize >= self.zil_module.typedefs.len() {
             return false;
@@ -1316,7 +1316,103 @@ impl ZirVerifier {
             epoch: self.next_borrow_epoch,
             via: via,
         });
+        // A borrow through an enum payload's address (a pattern binding through a reference,
+        // `match e { Q.A(s) => .. }` with `e: &mut Q`) points into the enum the address was taken
+        // from, but its place is rooted at the address temporary, which nothing writes. It is
+        // recorded on that enum as well, so a write through `e` conflicts while `s` is live.
+        // Only for a named borrower, a binding: the compiler's own address of a skipped part,
+        // which the arm drops after moving another part out, would otherwise forbid that move.
+        let root = self.enum_payload_borrow_root(place, state, locals);
+        if root.base != 0 as u32 && !self.is_temp_local(borrower, locals) {
+            state.borrows.push(ActiveBorrow {
+                base: root,
+                is_mut: is_mut,
+                region: region,
+                borrower: borrower,
+                span: span,
+                derived: false,
+                direct: false,
+                epoch: self.next_borrow_epoch,
+                via: via,
+            });
+        }
         self.next_borrow_epoch = self.next_borrow_epoch + 1 as u32;
+    }
+
+    // The enum PLACE is a borrow of, when PLACE is `*t..` with `t` an enum payload address
+    // (`t = EnumPayload(src)`): `*src` when `src` is a reference, else `src`, followed through
+    // nested payloads. The whole enum stands for the payload part, which no projection names.
+    // Base 0 when PLACE is not such a place. The result is always a copy in the scratch arena,
+    // so it holds no borrow of PLACE, STATE or the verifier.
+    #[borrows()]
+    fn enum_payload_borrow_root(
+        self: &mut ZirVerifier,
+        place: &Place,
+        state: &ZirAnalysisState,
+        locals: [Local]
+    ) -> Place {
+        let mut cur = *place;
+        let mut found = false;
+        let mut depth = 0 as usize;
+        while depth < 8 as usize {
+            if cur.projections.len == 0 as usize || cur.projections[0].get_tag() != PROJ_DEREF {
+                break;
+            }
+            let mut hit = false;
+            let mut src = cur;
+            let mut i = 0 as usize;
+            while i < state.enum_aliases.len() {
+                if state.enum_aliases[i].local_id == cur.base {
+                    src = state.enum_aliases[i].source;
+                    hit = true;
+                    break;
+                }
+                i = i + 1 as usize;
+            }
+            if !hit || src.base == 0 as u32 { break; }
+            let src_ty = self.get_place_type(&src, locals);
+            let src_is_pointer = src_ty != 0 as u32
+                && is_any_pointer_tag(self.type_decl_copy(src_ty).def.get_tag());
+            cur = if src_is_pointer {
+                self.place_in_arena(&src, true)
+            } else {
+                src
+            };
+            found = true;
+            depth = depth + 1 as usize;
+        }
+        if !found {
+            return Place { base: 0 as u32, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        return self.place_in_arena(&cur, false);
+    }
+
+    // PL, with one more `Deref` projection when DEREF, its projections copied into the verifier's
+    // scratch arena, so the result does not point into the verifier.
+    #[borrows()]
+    fn place_in_arena(self: &mut ZirVerifier, pl: &Place, deref: bool) -> Place {
+        let new_len = if deref { pl.projections.len + 1 as usize } else { pl.projections.len };
+        if new_len == 0 as usize {
+            return Place { base: pl.base, projections: @slice(0 as *mut Projection, 0 as usize) };
+        }
+        let new_projs = unsafe {
+            zoril_allocator_alloc(self.arena, (new_len * sizeof(Projection)) as u64)
+        } as *mut Projection;
+        unsafe {
+            if pl.projections.len > 0 as usize {
+                memcpy(
+                    new_projs as *mut u8,
+                    pl.projections.ptr as *u8,
+                    (pl.projections.len * sizeof(Projection)) as u64
+                );
+            }
+            if deref {
+                *((new_projs as usize
+                    + pl.projections.len
+                        * sizeof(Projection)) as *mut Projection) = Projection.Deref;
+            }
+            return Place { base: pl.base, projections: @slice(new_projs, new_len) };
+        }
     }
 
     // Checks the places RV reads: moved operands (MOVE) must be owned, and borrowed ones not
@@ -1780,6 +1876,16 @@ impl ZirVerifier {
                 }
             }
             iter = iter + 1 as usize;
+        }
+
+        // The reporting pass below is sound only from a fixed point; a borrow or move fact
+        // that a later pass would reach must not go unchecked, so a stop at the cap is a bug.
+        if changed {
+            let mut msg = unsafe { ByteVec.new_raw(self.arena) };
+            msg.push_slice("ZirVerifier: the fixed point of `");
+            msg.push_slice(self.intern_table.lookup((*func).name));
+            msg.push_slice("` did not converge within the pass cap");
+            ICE(msg.as_slice());
         }
 
         // Then once more from the fixed point, reporting.
@@ -2978,7 +3084,7 @@ impl ZirVerifier {
             return self.type_has_drop(p_ty.def.get_BoxedMut(), depth + 1 as usize);
         }
         if tag != ILTYPE_USER { return false; }
-        if self.has_drop_impl(p_ty.def.get_User().name) { return true; }
+        if self.has_drop_impl(ty_id) { return true; }
         let user_id = p_ty.def.get_User().id;
         if user_id == 0xffffffff as u32 || user_id as usize >= self.zil_module.typedefs.len() {
             return false;
@@ -3702,6 +3808,41 @@ impl ZirVerifier {
         return res;
     }
 
+    // The alias list's order follows which predecessor a merge visited first, not anything the
+    // state says. A positional comparison keeps a loop whose back edges carry the same aliases in
+    // different orders from reaching its fixed point, so compare as sets.
+    fn alias_lists_equal(
+        self: &ZirVerifier,
+        a: &Vec<EnumPayloadAlias>,
+        b: &Vec<EnumPayloadAlias>
+    ) -> bool {
+        let mut i = 0 as usize;
+        while i < a.len() {
+            let mut found = false;
+            let mut j = 0 as usize;
+            while j < b.len() && !found {
+                found = a[i].local_id == b[j].local_id
+                    && self.places_equal(&a[i].source, &b[j].source);
+                j = j + 1 as usize;
+            }
+            if !found { return false; }
+            i = i + 1 as usize;
+        }
+        let mut j = 0 as usize;
+        while j < b.len() {
+            let mut found = false;
+            let mut i2 = 0 as usize;
+            while i2 < a.len() && !found {
+                found = a[i2].local_id == b[j].local_id
+                    && self.places_equal(&a[i2].source, &b[j].source);
+                i2 = i2 + 1 as usize;
+            }
+            if !found { return false; }
+            j = j + 1 as usize;
+        }
+        return true;
+    }
+
     fn states_equal(
         self: &ZirVerifier,
         s1: *mut ZirAnalysisState,
@@ -3743,15 +3884,7 @@ impl ZirVerifier {
             }
             i = i + 1 as usize;
         }
-        if a.enum_aliases.len() != b.enum_aliases.len() { return false; }
-        let mut ei = 0 as usize;
-        while ei < a.enum_aliases.len() {
-            if a.enum_aliases[ei].local_id != b.enum_aliases[ei].local_id
-                || !self.places_equal(&a.enum_aliases[ei].source, &b.enum_aliases[ei].source) {
-                return false;
-            }
-            ei = ei + 1 as usize;
-        }
+        if !self.alias_lists_equal(&a.enum_aliases, &b.enum_aliases) { return false; }
         if a.mark_infos.len() != b.mark_infos.len() { return false; }
         let mut mi = 0 as usize;
         while mi < a.mark_infos.len() {
@@ -4288,25 +4421,8 @@ impl ZirVerifier {
         return ty_id;
     }
 
-    fn has_drop_impl(self: &mut ZirVerifier, type_name_id: u32) -> bool {
-        if type_name_id == 0 as u32 { return false; }
-        let type_str = self.intern_table.lookup(type_name_id);
-        let mut name_buf: &mut ByteVec = unsafe { ByteVec.new_raw(self.arena) };
-        name_buf.push_slice(type_str);
-        name_buf.push(':' as u8);
-        name_buf.push(':' as u8);
-        name_buf.push_slice("drop");
-        let mangled = self.intern_table.intern(name_buf.as_slice());
-
-        let mut fi = 0 as usize;
-        while fi < self.zil_module.functions.len() {
-            let p_func = &self.zil_module.functions[fi];
-            if p_func.name == mangled {
-                return true;
-            }
-            fi = fi + 1 as usize;
-        }
-        return false;
+    fn has_drop_impl(self: &mut ZirVerifier, type_id: u32) -> bool {
+        return self.zil_module.drop_fn_index(self.intern_table, type_id) != NO_DROP_FN;
     }
 
     pub fn is_copy_type(self: &mut ZirVerifier, type_id: u32) -> bool {
@@ -4353,7 +4469,7 @@ impl ZirVerifier {
         }
         if tag == ILTYPE_USER {
             let u = p_ty.def.get_User();
-            if self.has_drop_impl(u.name) { return false; }
+            if self.has_drop_impl(type_id) { return false; }
             let user_id = u.id;
             if user_id as usize >= self.zil_module.typedefs.len() { return true; }
             let p_def = self.zil_module.typedefs[user_id as usize];
@@ -5374,7 +5490,7 @@ pub fn compute_ret_storage_zir(
 // it holds, and S(L), the origins of the storage it owns, as a forward, flow-insensitive fixpoint
 // over every statement. Field-insensitive: a write into any projection of L adds to L's sets.
 // `zoril --emit-origins` prints them; under `--provenance` one more pass applies the store and
-// return rules (Z-0048), beside the old ones until Z-0012.
+// return rules, beside the old ones.
 //
 // A set is `words` u64s in `buf`: word OS_W_ADDR holds ParamAddr(i), what argument i itself holds,
 // and OS_W_CONTENTS ParamContents(i), the memory reached through it (§3, _The summary_; bit 63
@@ -5423,7 +5539,7 @@ const OS_Q_FRESH: usize = 2;
 const OS_Q_ARENA_REF: usize = 3;
 const OS_Q_COUNT: usize = 4;
 
-// The rules of §3 (Z-0048): off, refusing, or warning only (`--provenance=warn`).
+// The rules of §3: off, refusing, or warning only (`--provenance=warn`).
 pub const PROVENANCE_OFF: u32 = 0;
 pub const PROVENANCE_ON: u32 = 1;
 pub const PROVENANCE_WARN: u32 = 2;
@@ -6658,7 +6774,7 @@ fn os_edge_effects(
 
 // The smallest lowering depth among FUNC's direct callees that are still being lowered and have
 // no summary yet (ILFunction.os_depth), 0xffffffff when there is none: such a call closes a
-// recursive cycle through a body on the driver's stack (Z-0059). The condition is os_call's for
+// recursive cycle through a body on the driver's stack. The condition is os_call's for
 // giving such a callee an empty summary; the two must stay the same.
 pub fn zir_open_call_depth(module: &ILModule, func: &ZirFunction) -> u32 {
     let mut low = 0xffffffff as u32;
@@ -6689,7 +6805,7 @@ pub fn zir_open_call_depth(module: &ILModule, func: &ZirFunction) -> u32 {
 // parameter origins of the result's O, its Static and Unknown (a Frame origin is Unknown to a
 // caller), whether the result's S is fresh storage (a Frame or Unknown origin), and the store
 // edges, copied into ARENA because the sets live in the body's scratch arena. The summary is
-// joined with the one the function already has, so a recursive cycle's fixpoint (Z-0059) only
+// joined with the one the function already has, so a recursive cycle's fixpoint only
 // grows it; returns whether it grew.
 pub fn store_origin_summary(
     arena: *mut ArenaHeader,
@@ -6835,7 +6951,7 @@ fn os_call(
         to_mask = f.store_targets;
         if !f.os_known && f.os_depth != 0 as u32 {
             // A callee still being lowered: this body is in a recursive cycle with it. Its summary
-            // starts empty and grows with the cycle's fixpoint (Z-0059), which rechecks this body
+            // starts empty and grows with the cycle's fixpoint, which rechecks this body
             // with the final summaries; the rules are deferred until then. The driver finds such
             // calls before this pass with zir_open_call_depth, which must test the same condition.
             body = true;
@@ -6850,7 +6966,7 @@ fn os_call(
             known = true;
             storage = f.os_ret_addr;
             // A declared `#[borrows(..)]` adds to what the body proves, as `#[stores(..)]` below
-            // does, until Z-0011 checks the two against each other: a copy through a bare `extern`
+            // does: a copy through a bare `extern`
             // (`memcpy` in `Vec.clone_in`) is invisible to the body, and a declaration may be wider
             // than it. A narrowing `#[borrows()]` adds nothing, so it no longer launders a tie.
             ties = f.os_ret_contents | (if f.has_borrows { f.ret_ties } else { 0 as u64 });
@@ -6914,7 +7030,7 @@ fn os_call(
                 if arena { arena_tie = true; }
                 // An argument that holds its arena by value (`unwrap` of a `Result<Arena, _>`)
                 // names the arena's storage by what it owns, S; what it holds, O, is what that
-                // storage holds (a literal a callee put in the arena), never storage (Z-0082).
+                // storage holds (a literal a callee put in the arena), never storage.
                 let arena_store = if aty != 0 as u32
                     && !os_type_has(c, module, aty, OS_Q_ARENA_REF) {
                     tas
@@ -6925,7 +7041,7 @@ fn os_call(
                     // A body summary's Param(i) is what argument i holds. An owner passed by value
                     // (`id(v)`, `o.unwrap()`) moves the storage it owns into the call, so that
                     // storage is no address the result holds; a callee returning an address into
-                    // it says so with Unknown, its own Frame (Z-0083).
+                    // it says so with Unknown, its own Frame.
                     if body && aty != 0 as u32 && os_owns(c, module, aty) {
                         let _ = os_or(c, vo, tah);
                     } else {

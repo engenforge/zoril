@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_break_in_defer.zrl:7:17: error: cannot `break` out of `defer`
+import "core.zrl";
+fn main() -> i32 {
+    let mut i = 0;
+    while i < 3 {
+        defer { break; };
+        i = i + 1;
+    }
+    return i;
+}

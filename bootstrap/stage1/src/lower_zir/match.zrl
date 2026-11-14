@@ -78,6 +78,13 @@ impl ZirLowerer {
                 self.switch_to_block(guard_pass_block);
             }
 
+            // An arm that runs has taken the scrutinee: a by-value binding moved its payload out,
+            // so the scrutinee's own drop must not run again at the match's exit.
+            let scrut_tag = self.get_type_tag(scrut_ty);
+            if !(scrut_tag == ILTYPE_PTR || scrut_tag == ILTYPE_PTRMUT || scrut_tag == ILTYPE_BOXED || scrut_tag == ILTYPE_BOXEDMUT) {
+                self.consume_place_if_move(&scrut_place);
+            }
+
             let arm_res = self.lower_expr(arm.body, result_ty);
             if result_ty == 0 as u32 {
                 result_ty = self.get_place_type(&arm_res);

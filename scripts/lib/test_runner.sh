@@ -6,7 +6,7 @@
 #   is_timeout_exit CODE      true for timeout/kill exit codes
 #   tr_now_ms                 milliseconds since the epoch
 #   tr_report STATUS NAME DETAIL MS [OUTPUT_FILE]   one result line
-#   tr_expectations FILE      sets T_KIND (run|compile_success|compile_fail|warning|skip),
+#   tr_expectations FILE      sets T_KIND (run|compile_success|compile_fail|warning|skip|malformed),
 #                             T_EXIT, T_EXPECT (diagnostic substrings, one per line), T_SKIP, T_LINK,
 #                             T_FLAGS
 #   tr_run_file FILE          compile, link and run one test per its header
@@ -16,6 +16,13 @@
 # Common flags (all runners): --verbose, --quiet, --filter PATTERN, --fail-fast,
 # --timeout SECS, --results FILE (appends "STATUS<TAB>path" per test), --jobs N.
 
+# Portability helpers
+if [ -f "$(dirname "$0")/portability.sh" ]; then
+    . "$(dirname "$0")/portability.sh"
+elif [ -f "$(dirname "$0")/lib/portability.sh" ]; then
+    . "$(dirname "$0")/lib/portability.sh"
+fi
+
 TR_VERBOSE=${TR_VERBOSE:-0}
 TR_QUIET=${TR_QUIET:-0}
 TR_FILTER=${TR_FILTER:-}
@@ -23,20 +30,13 @@ TR_FAIL_FAST=${TR_FAIL_FAST:-0}
 TR_TIMEOUT=${TR_TIMEOUT:-${TIMEOUT_SECS:-30}}
 TR_KILL=${KILL_DUR:-2s}
 TR_RESULTS=${TR_RESULTS:-}
-TR_JOBS=${TR_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}
+TR_JOBS=${TR_JOBS:-$(nproc_count 2>/dev/null || echo 1)}
 
 TR_RUN=0
 TR_PASSED=0
 TR_FAILED=0
 TR_SKIPPED=0
 TR_START_MS=0
-
-# Portability helpers
-if [ -f "$(dirname "$0")/portability.sh" ]; then
-    . "$(dirname "$0")/portability.sh"
-elif [ -f "$(dirname "$0")/lib/portability.sh" ]; then
-    . "$(dirname "$0")/lib/portability.sh"
-fi
 
 # Toolchain (the public pipeline: zoril -> zilc -> qbe -> as -> ld).
 ZORIL_CC=${ZORIL_CC:-./build/zoril}
@@ -139,18 +139,42 @@ tr_expectations() {
     # toolchain, dominate the cost of a test.
     eval "$(awk '
         function q(v) { gsub(/\047/, "\047\\\047\047", v); return "\047" v "\047" }
-        skip == "" && /^[ \t]*\/\/[ \t]*@skip:/ { v = $0; sub(/^[ \t]*\/\/[ \t]*@skip:[ \t]*/, "", v); skip = v }
-        /^\/\/ EXPECT: / { v = $0; sub(/^\/\/ EXPECT: /, "", v); expect = expect (expect == "" ? "" : "\n") v }
-        flags == "" && /^\/\/ flags: / { v = $0; sub(/^\/\/ flags: /, "", v); flags = v }
-        /^\/\/ link: / { v = $0; sub(/^\/\/ link: /, "", v); link = link v " " }
-        /expected compile fail/ { cfail = 1 }
-        /expected compile success/ { csucc = 1 }
-        ex == "" && match($0, /expected exit( code:)? [0-9]+/) { v = substr($0, RSTART, RLENGTH); sub(/.* /, "", v); ex = v }
+        # Directives live in the header: the lines up to the first that is neither blank nor a
+        # comment. A header line that starts like a directive but is not exactly one of the
+        # forms is malformed, and so is a header whose directives contradict each other. An EXPECT
+        # line without `expected compile fail` makes a warning test, which only compiles, so an
+        # exit code or `compile success` beside it would be dropped. The reader goes on past the
+        # header, and a directive after it is malformed, not ignored: it would otherwise leave the
+        # test at the default expectation.
+        function bad(why) { if (mal == "") mal = FNR ": " $0 }
+        !/^[ \t]*(\/\/.*)?$/ { ended = 1 }
+        ended {
+            if ($0 ~ /^[ \t]*\/\/[ \t]*(expected (exit|compile)|EXPECT:|@skip:|flags:|link:)/) bad()
+            next
+        }
+        {
+            body = $0
+            if (match(body, /^[ \t]*\/\/[ \t]*/)) body = substr(body, RLENGTH + 1)
+        }
+        body !~ /^(expected |EXPECT|flags|link|@skip)/ { next }
+        /^[ \t]*\/\/[ \t]*@skip:/ { v = $0; sub(/^[ \t]*\/\/[ \t]*@skip:[ \t]*/, "", v); if (v == "") bad(); if (skip == "") skip = v; next }
+        /^\/\/ EXPECT: / { if (nexit || csucc) bad(); nexpect++; v = $0; sub(/^\/\/ EXPECT: /, "", v); if (v ~ /^[ \t]*$/) bad(); expect = expect (expect == "" ? "" : "\n") v; next }
+        /^\/\/ flags: / { if (nflags++) bad(); v = $0; sub(/^\/\/ flags: /, "", v); flags = v; next }
+        /^\/\/ link: / { v = $0; sub(/^\/\/ link: /, "", v); link = link v " "; next }
+        /^[ \t]*\/\/[ \t]*expected compile fail[ \t]*$/ { if (csucc || nexit) bad(); cfail = 1; next }
+        /^[ \t]*\/\/[ \t]*expected compile success[ \t]*$/ { if (cfail || nexit || nexpect) bad(); csucc = 1; next }
+        /^[ \t]*\/\/[ \t]*expected exit( code:)? [0-9]+[ \t]*$/ {
+            v = $0; sub(/[ \t]*$/, "", v); sub(/.* /, "", v)
+            if (nexit++ || cfail || csucc || nexpect || v + 0 > 255) bad()
+            ex = v; next
+        }
+        { bad() }
         END {
-            printf "T_SKIP=%s T_EXPECT=%s T_FLAGS=%s T_LINK=%s ", q(skip), q(expect), q(flags), q(link)
+            printf "T_SKIP=%s T_EXPECT=%s T_FLAGS=%s T_LINK=%s T_MALFORMED=%s ", q(skip), q(expect), q(flags), q(link), q(mal)
             printf "_cfail=%d _csucc=%d T_EXIT=%d\n", cfail, csucc, ex + 0
         }' "$1" 2>/dev/null)"
-    if [ -n "$T_SKIP" ]; then T_KIND=skip
+    if [ -n "$T_MALFORMED" ]; then T_KIND=malformed
+    elif [ -n "$T_SKIP" ]; then T_KIND=skip
     elif [ "$_cfail" -eq 1 ]; then T_KIND=compile_fail
     elif [ -n "$T_EXPECT" ]; then
         # A diagnostic that is not an error: the file must compile and report it.
@@ -191,12 +215,13 @@ _tr_done() {
 # log does not contain; fails when every one is there.
 _tr_missing_expect() {
     printf '%s\n' "$T_EXPECT" | while IFS= read -r _want; do
-        grep -Fq -- "$_want" "$_log" || { printf '%s\n' "$_want"; exit 0; }
+        grep -Fq -- "$_want" "$_dir/compile.out" || { printf '%s\n' "$_want"; exit 0; }
     done | grep .
 }
 
-# _tr_diagnostics — the compiler's error and warning lines from the current log.
-_tr_diagnostics() { grep -E 'error|warning' "$_log" | head -n 3; }
+# _tr_diagnostics — the compiler's error and warning lines from the current test. They are read
+# from the compiler's own output, not $_log, where --verbose also writes the command line.
+_tr_diagnostics() { grep -E 'error|warning' "$_dir/compile.out" | head -n 3; }
 
 # tr_run_file FILE — run one test; reports exactly one result line.
 tr_run_file() {
@@ -213,15 +238,20 @@ tr_run_file() {
     mkdir -p "$_dir"
     _log="$_dir/output.log"
     : > "$_log"
+    if [ "$T_KIND" = malformed ]; then
+        _tr_done FAIL "malformed header, line $T_MALFORMED"
+        return 0
+    fi
     _why=""
     _bin="$_dir/test"
 
     case "$_file" in
-        *.zil) cp "$_file" "$_dir/test.zil"; _compiled=0 ;;
+        *.zil) cp "$_file" "$_dir/test.zil"; : > "$_dir/compile.out"; _compiled=0 ;;
         *)
             [ "$TR_VERBOSE" -eq 1 ] && echo "\$ $ZORIL_CC $TR_INCLUDES -I $(dirname "$_file") --emit-zil -o $_dir/test.zil $T_FLAGS $_file" >> "$_log"
-            run_timed "$ZORIL_CC" $TR_INCLUDES -I "$(dirname "$_file")" --emit-zil -o "$_dir/test.zil" $T_FLAGS "$_file" >> "$_log" 2>&1
+            run_timed "$ZORIL_CC" $TR_INCLUDES -I "$(dirname "$_file")" --emit-zil -o "$_dir/test.zil" $T_FLAGS "$_file" > "$_dir/compile.out" 2>&1
             _compiled=$?
+            cat "$_dir/compile.out" >> "$_log"
             [ $_compiled -eq 130 ] && exit 130
             ;;
     esac
@@ -317,7 +347,10 @@ tr_discover() {
 
 # tr_run_logged KIND NAME LOG CMD... — run a command as one result line ("[PASS] KIND:
 # NAME"). Its output goes to LOG; a failure shows the log's last lines (all of it with
-# --verbose).
+# --verbose). Exit 77 (TR_EXIT_SKIP, the automake convention) reports it as skipped, with
+# the reason from its last "[SKIP] ..." line: an exit 0 would count a check that did not run
+# as passed.
+TR_EXIT_SKIP=77
 tr_run_logged() {
     _kind="$1"; _name="$2"; _log="$3"; shift 3
     TR_RUN=$((TR_RUN + 1))
@@ -329,6 +362,12 @@ tr_run_logged() {
     _ms=$(( $(tr_now_ms) - _t0 ))
     if [ $_rc -eq 0 ]; then
         tr_report PASS "$_kind: $_name" "" "$_ms" "$_log"
+        return 0
+    fi
+    if [ $_rc -eq $TR_EXIT_SKIP ]; then
+        TR_RUN=$((TR_RUN - 1))
+        _why=$(sed -n 's/^.*\[SKIP\] *//p' "$_log" | tail -n 1)
+        tr_report SKIP "$_kind: $_name" "${_why:-exit $TR_EXIT_SKIP, no reason given; log: $_log}" "$_ms"
         return 0
     fi
     tr_report FAIL "$_kind: $_name" "exit $_rc; log: $_log" "$_ms"

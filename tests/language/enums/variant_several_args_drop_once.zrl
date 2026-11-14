@@ -1,0 +1,41 @@
+// A variant built from several arguments owns each of them, so each is dropped once, with the
+// enum. Once, the arguments' drop flags stayed set and each was dropped twice (gap_82); and a
+// generic enum's type arguments were inferred from the declared `(T, U)`, an instance with no
+// drop glue, so the enum itself was never dropped. Each case returns its drop count.
+// expected exit 0
+struct S { p: *mut u8 }
+impl Drop for S {
+    fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } }
+}
+enum P { A(S, S), B }
+enum P3 { A(S, S, S), B }
+enum M { A(S, i32), B }
+enum G<T, U> { A(T, U), B }
+fn mk(fp: *mut u8) -> S { return S { p: fp }; }
+fn consume_p(p: P) {}
+fn named(fp: *mut u8) { let a = S { p: fp }; let b = S { p: fp }; let e = P.A(a, b); }
+fn temps(fp: *mut u8) { let e = P.A(S { p: fp }, S { p: fp }); }
+fn calls(fp: *mut u8) { let e = P.A(mk(fp), mk(fp)); }
+fn three(fp: *mut u8) { let e = P3.A(mk(fp), mk(fp), mk(fp)); }
+fn mixed(fp: *mut u8) { let e = M.A(mk(fp), 5); }
+fn moved_on(fp: *mut u8) { let e = P.A(mk(fp), mk(fp)); consume_p(e); }
+fn generic(fp: *mut u8) { let e = G.A(mk(fp), mk(fp)); }
+fn generic_mixed(fp: *mut u8) { let e = G.A(3, mk(fp)); }
+fn generic_named(fp: *mut u8) { let e = G::<S, S>.A(mk(fp), mk(fp)); }
+fn count(f: fn(*mut u8)) -> u8 {
+    let mut flag = 0 as u8;
+    f(&mut flag as *mut u8);
+    return flag;
+}
+fn main() -> i32 {
+    if count(named) != 2 as u8 { return 1; }
+    if count(temps) != 2 as u8 { return 2; }
+    if count(calls) != 2 as u8 { return 3; }
+    if count(three) != 3 as u8 { return 4; }
+    if count(mixed) != 1 as u8 { return 5; }
+    if count(moved_on) != 2 as u8 { return 6; }
+    if count(generic) != 2 as u8 { return 7; }
+    if count(generic_mixed) != 1 as u8 { return 8; }
+    if count(generic_named) != 2 as u8 { return 9; }
+    return 0;
+}

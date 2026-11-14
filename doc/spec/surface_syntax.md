@@ -559,7 +559,7 @@ Function values cannot be compared with `==`, cast with `as`, held in a `static`
 
 ### 5.3 Match Patterns
 
-A `match` arm has the form `pattern [if guard] => expr` or `pattern [if guard] => { block }`. Matches are enforced at compile time to be exhaustive, looking inside nested patterns: every enum variant, both `bool` values, and every combination of them in tuples, structs and payloads must be covered, or a wildcard (`_`) or binding must catch the rest. Integers, chars and slices are covered only by a wildcard or binding (ranges and literals never add up to all values). The error names a value that is not covered: `non-exhaustive match: missing case`Some(None)``. Guarded arms (`if` guards) do not count toward exhaustiveness. At runtime, any unreachable fallthrough triggers a deterministic `zoril_abort()` trap. A `_` arm on an enum that stands for only a few variants (at most three, or at most a third of the enum) is warned about by the `wildcard-arm` lint, on by default (`-A wildcard-arm` turns it off, `-W` on): listing those variants makes a variant added later a compile error at this match, which is the point of the exhaustiveness check. A `_` arm that diverges (`_ => panic(..)`) is exempt, as is the `else` of an `if let`. An arm the arms before it already cover is warned about as unreachable.
+A `match` arm has the form `pattern [if guard] => expr` or `pattern [if guard] => { block }`. A guard may read the matched value and the arm's bindings, but may not assign to the matched value or any part of it, nor borrow it mutably (including through a `&mut self` method): the arm's by-value bindings are made before the guard runs, so such a write would drop a value a binding still holds ([`tests/error_reporting/err_match_guard_mutates_scrutinee.zrl`](../../tests/error_reporting/err_match_guard_mutates_scrutinee.zrl)). Matches are enforced at compile time to be exhaustive, looking inside nested patterns: every enum variant, both `bool` values, and every combination of them in tuples, structs and payloads must be covered, or a wildcard (`_`) or binding must catch the rest. Integers, chars and slices are covered only by a wildcard or binding (ranges and literals never add up to all values). The error names a value that is not covered: `non-exhaustive match: missing case`Some(None)``. Guarded arms (`if` guards) do not count toward exhaustiveness. At runtime, any unreachable fallthrough triggers a deterministic `zoril_abort()` trap. A `_` arm on an enum that stands for only a few variants (at most three, or at most a third of the enum) is warned about by the `wildcard-arm` lint, on by default (`-A wildcard-arm` turns it off, `-W` on): listing those variants makes a variant added later a compile error at this match, which is the point of the exhaustiveness check. A `_` arm that diverges (`_ => panic(..)`) is exempt, as is the `else` of an `if let`. An arm the arms before it already cover is warned about as unreachable.
 
 Patterns (in precedence order):
 
@@ -593,7 +593,7 @@ match shape {
 }
 ```
 
-Tuple, struct and payload patterns see through a reference: matching a `&T` against them binds by reference (Rust's "match ergonomics"), so in `match &s { Shape.Pt(P { x, .. }) => .. }` `x` is a `&i32`. Bindings copy only when the value matched is not behind a reference.
+Tuple, struct and payload patterns see through a reference: matching a `&T` against them binds by reference (Rust's "match ergonomics"), so in `match &s { Shape.Pt(P { x, .. }) => .. }` `x` is a `&i32`. Bindings copy only when the value matched is not behind a reference. A binding by reference keeps what it points into borrowed while it is live, as `&` does, also when the reference matched is a `&mut T` variable: in `match e { Q.A(s) => { .. } }` with `e: &mut Q`, writing `*e` or passing `e` on while `s` is still used is refused ([`err_binding_through_mut_ref_then_write.zrl`](../../tests/error_reporting/err_binding_through_mut_ref_then_write.zrl)), and allowed after its last use ([`match_binding_through_mut_ref_dead.zrl`](../../tests/language/match/match_binding_through_mut_ref_dead.zrl)).
 
 The match expression can dereference a borrowed value before dispatching:
 
@@ -813,12 +813,16 @@ fn write_field(ptr: *mut Node, val: i32) {
 
 Both read and write compile to direct memory operations through the pointer; no copy of the pointed-to struct is made. This extends to chained accesses: `(*ptr.inner).field = val` loads `ptr.inner` (a `*mut Inner`) and writes directly through that pointer.
 
+**A store through a raw pointer does not drop the old value.** An assignment whose place is reached through a raw pointer (`*p = v`, `(*p).f = v`, `p[i] = v` with `p` a `*mut T`) writes `v` and runs no `drop` on what the place held, because what a raw pointer points at may be uninitialized: a fresh slot in an allocation, as in `Vec::push`. A store through a reference (`*r = v` with `r: &mut T`) does drop the old value, because a reference's target is always initialized. To replace a live value through a raw pointer, move it out first and let it drop (`let old = *p; *p = v;`), as `Vec::set` does; leaving that out leaks the old value, which is safe ([`tests/stdlib/test_vec_push_does_not_drop_slot.zrl`](../../tests/stdlib/test_vec_push_does_not_drop_slot.zrl)).
+
 ### 7.3 Drop Order
 
 When a scope exits:
 
 1. All `defer` statements execute in reverse order of declaration (LIFO).
 1. All local variables are dropped in reverse order of declaration.
+
+Because a `defer` statement runs while its enclosing scope is already exiting, it may not leave that scope early with `return`, `?`, or a `break` or `continue` targeting a loop outside the `defer`.
 
 ### 7.4 Allocators
 
@@ -871,7 +875,7 @@ trait Drop {
 
 - **Semantics:** `drop` is called automatically at the end of scope (or upon early return via `return` or `?`) for any local variable of a type that implements `Drop`. The order of dropping is the reverse order of declaration (LIFO), after any `defer` blocks execute.
 - **Recognition:** the compiler finds the trait by the name `Drop`. A program may declare `trait Drop` itself (as a library with its own `drop` signature does), and an `impl Drop for T` written against that declaration, or with no declaration at all, is the one drop glue calls. A path-qualified name (`m::Drop`) is a different trait to the drop caller: its `impl` is not run at scope exit.
-- **Constraints:** Types that implement `Drop` are automatically non-`Copy`, regardless of their fields.
+- **Constraints:** Types that implement `Drop` are automatically non-`Copy`, regardless of their fields. A pattern match cannot move a non-`Copy` field or payload out of a value whose type implements `Drop` (this is rejected at compile time so the outer type's `drop` is never skipped: [`tests/error_reporting/err_move_out_of_drop_type_pattern.zrl`](../../tests/error_reporting/err_move_out_of_drop_type_pattern.zrl)), while matching through a reference (`match &d`), matching with `_`, or moving the `Drop` value as a whole out of a non-`Drop` owner stays accepted ([`tests/language/match/match_by_value_drops_once.zrl`](../../tests/language/match/match_by_value_drops_once.zrl)).
 - **Explicit Drop:** The drop behavior can be explicitly triggered using the `@drop(x)` builtin or by calling the method directly via `x.drop()`. This takes ownership of the value, so the automatic drop at scope exit does not run.
 - **Move Suppression:** If a value is moved (e.g., passed by value to a function or returned), the automatic drop is suppressed in the current scope.
 

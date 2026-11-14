@@ -427,10 +427,9 @@ pub fn write_all_fd(fd: Fd, buf: [u8]) -> Result<(), Error> {
                 total = total + n;
             },
             Err(e) => {
-                if e.errno == 4 { // EINTR
-                    continue;
+                if e.errno != 4 { // EINTR is retried
+                    return Result.Err(e);
                 }
-                return Result.Err(e);
             },
         }
     }
@@ -468,10 +467,9 @@ pub fn write_all<W: Write>(w: &mut W, buf: [u8]) -> Result<(), Error> {
                 total = total + n;
             },
             Err(e) => {
-                if e.errno == 4 { // EINTR
-                    continue;
+                if e.errno != 4 { // EINTR is retried
+                    return Result.Err(e);
                 }
-                return Result.Err(e);
             },
         }
     }

@@ -1,6 +1,6 @@
 # stage1/ — frozen bootstrap compiler
 
-A frozen snapshot of the compiler (`src/`), the `stdlib/` modules it imports, zilc (`tools/zilc/src/`) and the runtime (`rt/runtime.s`), pinned for the `v0.1.0-alpha` release bootstrap. stage0-C builds it into `build/zoril-stage1` and `build/zilc-stage1`, which build `src/`.
+A frozen snapshot of the compiler (`src/`), the `stdlib/` modules it imports, zilc (`tools/zilc/src/`) and the runtime (`rt/runtime.s`), shipped with the `v0.1.0-alpha` release bootstrap. It is an older `src/` ported to the stage0-C dialect, not that release's `src/`. stage0-C builds it into `build/zoril-stage1` and `build/zilc-stage1`, which build `src/`.
 
 **Never edit these files by hand.** They are written in the stage0-C dialect and change only by re-pinning against a newer compiler version.
 

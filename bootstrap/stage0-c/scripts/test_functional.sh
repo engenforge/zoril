@@ -1,9 +1,9 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # scripts/test_functional.sh
 #
 # Compiles and runs all tests in the tests/functional/ and tests/bootstrap/ directories.
 
-set -uo pipefail
+set -u
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -d "$REPO_ROOT/../../stdlib" ]; then
@@ -59,7 +59,7 @@ TEST_FILES=$(find "$TOP_DIR/tests/functional" "$TOP_DIR/tests/bootstrap" "$REPO_
 for f in $TEST_FILES; do
     [ -e "$f" ] || continue
     name=$(basename "$f")
-    [[ "$name" == .* ]] && continue
+    case "$name" in .* ) continue ;; esac
     # Out of scope for stage0-C (tests/outside_dialect.txt): not run, not counted.
     is_outside_dialect "$f" && continue
     reason=$(known_bug_reason "$f")
@@ -96,9 +96,9 @@ for f in $TEST_FILES; do
 
     # Determine extra flags based on extension
     EXTRA_FLAGS="-I $STDLIB_DIR -I $TOP_DIR/src -I $TOP_DIR/tests/include"  # same include roots as the self-hosted runner
-    if [[ "$f" == *.zil ]]; then
-        EXTRA_FLAGS="$EXTRA_FLAGS --il"
-    fi
+    case "$f" in
+        *.zil) EXTRA_FLAGS="$EXTRA_FLAGS --il" ;;
+    esac
 
     # Compile the file
     COMPILE_RES=0
@@ -106,8 +106,7 @@ for f in $TEST_FILES; do
     if [ "$EXPECTED_CODE" -eq -2 ]; then
         EMIT_IR_FLAG="--emit-ir"
     fi
-    ZORIL_CMD=("$ZORIL_BIN" $EXTRA_FLAGS -I "$(dirname "$f")" -I "$TOP_DIR/tests/helpers" "$f" $KEEP_SSA_FLAG $EMIT_IR_FLAG -o "$outbin")
-    ASAN_OPTIONS=detect_leaks=0 run_timed "${ZORIL_CMD[@]}" > "$tmpdir/compile.log" 2>&1 || COMPILE_RES=$?
+    ASAN_OPTIONS=detect_leaks=0 run_timed "$ZORIL_BIN" $EXTRA_FLAGS -I "$(dirname "$f")" -I "$TOP_DIR/tests/helpers" "$f" $KEEP_SSA_FLAG $EMIT_IR_FLAG -o "$outbin" > "$tmpdir/compile.log" 2>&1 || COMPILE_RES=$?
 
     if [ "$EXPECTED_CODE" -eq -1 ]; then
         if is_timeout_exit "$COMPILE_RES"; then

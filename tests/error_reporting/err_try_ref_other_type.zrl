@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_try_ref_other_type.zrl:6:62: error: `?` on a reference returns the value it refers to, so the function must return `Result<i32, i64>`, not `Result<i64, i64>`
+// `r?` on a reference returns the referenced value itself; building one of another type would copy
+// the error out of a borrow, so the function must return the referenced type.
+import "core.zrl";
+fn outer(r: &Result<i32, i64>) -> Result<i64, i64> { let v = r?; return Result.Ok(v as i64); }
+fn main() -> i32 {
+    let e: Result<i32, i64> = Result.Err(5 as i64);
+    return match outer(&e) { Ok(_) => 1, Err(x) => x as i32 };
+}

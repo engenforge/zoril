@@ -14,17 +14,19 @@ Each tool belongs to the lowest role whose command needs it (`AGENTS.md`, Portab
 - **Contributor** (`make test-changed`, `make preflight-changed`, fuzzing, the documentation): the user's tools, plus git, Lua, scdoc, dprint, rustc and valgrind.
 - **Maintainer** (`make preflight`, `make dist`, a release): the contributor's tools, plus bsdtar.
 
-Today `make test` also needs `flock` and `mkfifo` for its parallel pool, `bash` for `scripts/check_md_links.sh`, `scripts/check_safety_model.sh` and the stage0-c suite scripts, and some of its items call git; all are being removed (the `tools/ztest` series ending with Z-0140, Z-0111 with Z-0144, and Z-0146 and Z-0147). The list below says what each tool is used for:
+Today `make test` also needs `flock`, `mkfifo` and an `xargs` that takes `-P` for the parallel pool in `scripts/test.sh`, and uses `setsid` where it is present. `tools/ztest`, the test runner written in Zoril, replaces that pool: `make test RUNNER=ztest` already runs the same plan through it, one item at a time, and once it runs items in parallel and is the default, the pool and these tools leave the list. `make user-tools` (`scripts/check_user_tools.sh`, part of `make preflight`) checks the user's list: it runs `make` and `make test` with git, bash, Lua, scdoc, dprint, rustc, valgrind, `timeout`, `setsid`, cproc, mcpp and bsdtar off `PATH`. The list below says what each tool is used for:
 
 - **flock (`util-linux` or BusyBox):** Required for process synchronization in the parallel test runner.
 - **Lua (5.3 or 5.4):** Required for the generative fuzzer (`scripts/fuzz/gen.lua`) and benchmark generators.
-- **coreutils (`mkfifo`, `xargs`, `timeout`):** Required for parallel test runners and stage timeout enforcement.
-- **git:** Required for self-hosting repository isolation checks, clean tree checks, and version stamping.
+- **coreutils and findutils (`mkfifo`, `xargs -P`, `timeout`):** `mkfifo` and `xargs -P` for the parallel test runner; `timeout` bounds each test step and benchmark, and `make test` runs without it, unbounded.
+- **git:** Required for self-hosting repository isolation checks, clean tree checks, and version stamping. `zoril-c --version` reports `unknown` for the git hash, because no `make` passes `GIT_HASH` (passing one from the top-level Makefile would change stage0-c's generated header between gate runs and rebuild it, the `build/zoril-c.tmp` race).
 - **dprint:** Optional markdown formatting checker (used by `make md-check` and `make md-fmt`).
 - **valgrind:** Optional memory profiling checker (used by `make perf-gate`).
 - **rustc:** Optional differential oracle for fuzz testing (`make fuzz`).
 - **scdoc 1.11.5 or newer:** Required for development: the roff man pages in `doc/man/` are committed, so building, installing and `make test` need no scdoc (`make test` skips the page check without it, and with a scdoc older than 1.11.5, the version the pages are generated with, because older releases write other roff for the same source), but `make preflight` and `make man` require 1.11.5 or newer and fails when a committed page does not match its `.scd` source. `make man` regenerates them.
 - **bsdtar (libarchive):** Required only to build the release archives (`make dist`, `make dist-bin`, `make dist-check`): `libarchive-tools` on Alpine and Debian, part of `libarchive` on Arch, built in on FreeBSD and macOS.
+
+The repository-hygiene gates (`no-new-deps`, `stray-files` and the Markdown checks) read every file in the tree, untracked and ignored ones too, so a stray local file fails `make test`.
 
 You can verify all developer dependencies on your machine by running:
 
@@ -40,15 +42,26 @@ Before submitting changes, all contributions must pass rigorous verification sui
 
 ### Verification Rules
 
-- **Code Changes:** Any task modifying `src/`, `stdlib/`, or `tools/` must pass both `make test` and `make preflight-changed` prior to commit.
-- **Documentation or Test Only Changes:** Must pass `make test`.
-- **Smoke Tests:** While editing, run `make test-fast` for sub-second feedback on core functionality.
+- **Scoped Tier While Editing:** Run `make test-changed` while editing to run only what the tier table (`scripts/test_tiers.tsv`) selects for changed and untracked files. The base commit is chosen by `preflight_base` (the upstream branch or default branch merge base when unpushed commits exist, else HEAD for uncommitted working tree changes). Pass `BASE=HEAD` while editing to scope checks only to uncommitted changes, or `BASE=HEAD~1` after committing task or doc files to test only that commit and avoid running the tiers of unpushed commits. Use `make test-changed BASE=<commit>` to select changes against an arbitrary base commit. On a clean tree with no commit beyond the upstream or default branch there is nothing to compare, and it fails saying so; pass `BASE=` to name a base.
+- **Code Changes:** Any task modifying `src/`, `stdlib/`, or `tools/` must pass both `make test` and `make preflight-changed` once, after the last change to compiled code.
+- **Documentation or Task Only Changes:** If a passing whole test run has already run on the tree, a commit modifying only documentation or task files reruns only the doc tier (`make test-changed BASE=HEAD~1` or its gates).
+- **The Plan and the Runners:** `scripts/test_plan.tsv` lists every gate, test group (its `paths` rows) and scenario that `make test` runs, in display order; every test file belongs to exactly one group. `scripts/test.sh` runs the plan today. `make test RUNNER=ztest` runs the same plan through `build/ztest` (`tools/ztest/`), which is replacing `test.sh`'s pool. It asks `scripts/test.sh --print-plan` what to run and runs each item with `scripts/test.sh --item`, so the two runners cannot differ on what they run; the `runner-output` scenario holds both to the same output. `ztest` runs one item at a time for now, so a full run takes about four times as long. `TR_ITEM_TIMEOUT` (seconds, default 3600) bounds each item.
+- **Smoke Tests:** While editing, run `make test-fast` for sub-second feedback on core functionality (`make test-fast` alone is never enough for a code change).
 
 ```sh
 # Fast smoke tests during development
 make test-fast
 
-# Full fast test suite: unit, functional, error-reporting, and safety matrix
+# Scoped tier for changed files during development (defaults to upstream if unpushed commits exist)
+make test-changed
+# Scoped tier for uncommitted changes while editing
+make test-changed BASE=HEAD
+# Scoped tier for the latest commit (e.g. after committing doc or task files)
+make test-changed BASE=HEAD~1
+# Scoped tier against an arbitrary base commit
+make test-changed BASE=main
+
+# Full test suite
 make test
 
 # Fast pre-merge gate: 4-generation bootstrap fixpoint + mutation tests on changed files

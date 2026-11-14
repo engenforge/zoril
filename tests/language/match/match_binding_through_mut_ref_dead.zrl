@@ -1,0 +1,44 @@
+// expected exit 0
+// A binding made through a `&mut` reference borrows the referent only while it is live: a write
+// through the reference after its last use is accepted, and so is a write through the binding.
+enum QB { A(Box<i32>), B }
+fn tb(q: &mut QB) { *q = QB.B; }
+enum Q2 { A(QB), B }
+struct RB { q: &mut QB }
+enum QP { A(Box<i32>, Box<i32>), B }
+
+fn read_then_pass(e: &mut QB) -> i32 {
+    match e { QB.A(s) => { let n = **s; tb(e); return n; }, QB.B => { return 0; }, }
+}
+fn read_then_write_if_let(e: &mut QB) -> i32 {
+    if let QB.A(s) = e { let n = **s; *e = QB.B; return n; }
+    return 0;
+}
+fn nested_read_then_write(e: &mut Q2) -> i32 {
+    match e { Q2.A(QB.A(s)) => { let n = **s; *e = Q2.B; return n; }, _ => { return 0; }, }
+}
+fn field_read(r: &mut RB) -> i32 {
+    match r.q { QB.A(s) => { return **s; }, QB.B => { return 0; }, }
+}
+fn two_bindings(e: &mut QP) -> i32 {
+    match e { QP.A(a, b) => { return **a + **b; }, QP.B => { return 0; }, }
+}
+fn write_through_binding(e: &mut QB) -> i32 {
+    match e { QB.A(s) => { **s = 41; return **s + 1; }, QB.B => { return 0; }, }
+}
+fn main() -> i32 {
+    let mut q = QB.A(box 42);
+    if read_then_pass(&mut q) != 42 { return 1; }
+    let mut q2 = QB.A(box 42);
+    if read_then_write_if_let(&mut q2) != 42 { return 2; }
+    let mut n = Q2.A(QB.A(box 42));
+    if nested_read_then_write(&mut n) != 42 { return 3; }
+    let mut q3 = QB.A(box 42);
+    let mut r = RB { q: &mut q3 };
+    if field_read(&mut r) != 42 { return 4; }
+    let mut p = QP.A(box 40, box 2);
+    if two_bindings(&mut p) != 42 { return 5; }
+    let mut q4 = QB.A(box 1);
+    if write_through_binding(&mut q4) != 42 { return 6; }
+    return 0;
+}

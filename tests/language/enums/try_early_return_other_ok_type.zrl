@@ -1,0 +1,70 @@
+// expected exit 0
+// `e?` in a function whose return type differs from `e`'s only in the success payload returns a
+// value of the function's type holding `e`'s error (standard_library.md §5.3). Copying `e` whole
+// overran the return slot when it was larger and overwrote the receiving frame, which `shrunk`
+// sees in its canary (probe gap_70).
+import "core.zrl";
+
+enum R { Ok(i32), Err(i64) }
+
+fn big(fail: bool) -> Result<[i64; 8], i64> {
+    if fail { return Result.Err(5 as i64); }
+    return Result.Ok([3 as i64; 8]);
+}
+fn small(fail: bool) -> Result<u8, i64> {
+    if fail { return Result.Err(6 as i64); }
+    return Result.Ok(4 as u8);
+}
+fn none_or(fail: bool) -> Option<u8> {
+    if fail { return Option.None; }
+    return Option.Some(9 as u8);
+}
+
+fn shrink(fail: bool) -> Result<u8, i64> {
+    let v = big(fail)?;
+    return Result.Ok(v[7] as u8);
+}
+fn grow(fail: bool) -> Result<[i64; 4], i64> {
+    let v = small(fail)?;
+    return Result.Ok([v as i64; 4]);
+}
+fn widen(fail: bool) -> Option<[i64; 4]> {
+    let v = none_or(fail)?;
+    return Option.Some([v as i64; 4]);
+}
+fn through_ref(r: &Result<i32, i64>) -> Result<i32, i64> {
+    let v = r?;
+    return Result.Ok(v + 1);
+}
+fn from_user_enum(x: R) -> Result<u8, i64> {
+    let v = x?;
+    return Result.Ok(v as u8);
+}
+
+// The canary sits in the frame that receives the shrunk result, where an overrun lands.
+fn shrunk() -> i64 {
+    let canary = [7 as i64; 8];
+    let r = shrink(true);
+    let mut sum = 0 as i64;
+    let mut i = 0 as usize;
+    while i < 8 as usize { sum = sum + canary[i]; i = i + 1; }
+    return match r { Ok(_) => 0 as i64 - 1, Err(e) => sum + e };
+}
+
+fn err_of(r: Result<u8, i64>) -> i64 { return match r { Ok(_) => 0 as i64 - 1, Err(e) => e }; }
+fn ok_of(r: Result<u8, i64>) -> i64 { return match r { Ok(v) => v as i64, Err(_) => 0 as i64 - 1 }; }
+
+fn main() -> i32 {
+    if shrunk() != 61 as i64 { return 1; }
+    if ok_of(shrink(false)) != 3 as i64 { return 2; }
+    let g = grow(true);
+    match g { Ok(_) => { return 3; }, Err(e) => { if e != 6 as i64 { return 4; } } }
+    match grow(false) { Ok(a) => { if a[3] != 4 as i64 { return 5; } }, Err(_) => { return 6; } }
+    match widen(true) { Some(_) => { return 7; }, None => {} }
+    match widen(false) { Some(a) => { if a[0] != 9 as i64 { return 8; } }, None => { return 9; } }
+    let e: Result<i32, i64> = Result.Err(11 as i64);
+    match through_ref(&e) { Ok(_) => { return 10; }, Err(x) => { if x != 11 as i64 { return 11; } } }
+    if err_of(from_user_enum(R.Err(12 as i64))) != 12 as i64 { return 12; }
+    if ok_of(from_user_enum(R.Ok(13))) != 13 as i64 { return 13; }
+    return 0;
+}

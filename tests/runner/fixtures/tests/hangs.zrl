@@ -1,0 +1,5 @@
+// expected exit 0
+fn main() -> i32 {
+    while true {}
+    return 0;
+}

@@ -18,7 +18,7 @@ use fsys::{env_var_raw, exe_dir_raw, list_dir_raw, realtime_ns, rename_path_raw,
 use graph::{Graph, deps_of, push_compiler_paths};
 use io::{eprint, exit, print};
 use manifest::{Entry, Manifest, empty_manifest, find_entry, parse_manifest, serialize_manifest};
-use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+use mem_raw::ArenaHeader;
 use module_path::{bytes_lt, encode_module_key, iface_relative_path, make_absolute};
 use proc::{Command, ExitStatus};
 use string::String;
@@ -119,6 +119,7 @@ fn compile_to_object(ctx: &BuildCtx, path: [u8], src_file: [u8], action_key: [u8
 
     // 1. zoril -c: the TU's ZIL plus its interface, checked against dependency interfaces only.
     let mut c1 = unsafe { Command.new_raw(ctx.tools.compiler, arena) };
+    c1.env_clear();
     c1.arg("-c");
     c1.arg(src_file);
     push_compiler_paths(&mut c1, ctx);
@@ -134,12 +135,14 @@ fn compile_to_object(ctx: &BuildCtx, path: [u8], src_file: [u8], action_key: [u8
 
     // 2. zilc
     let mut c2 = unsafe { Command.new_raw(ctx.tools.zilc, arena) };
+    c2.env_clear();
     c2.arg(zil.as_slice());
     c2.arg(ssa.as_slice());
     run_cmd_checked(c2, "zilc");
 
     // 3. qbe
     let mut c3 = unsafe { Command.new_raw(ctx.tools.qbe, arena) };
+    c3.env_clear();
     c3.arg("-o");
     c3.arg(asm_src.as_slice());
     c3.arg(ssa.as_slice());
@@ -147,6 +150,7 @@ fn compile_to_object(ctx: &BuildCtx, path: [u8], src_file: [u8], action_key: [u8
 
     // 4. as
     let mut c4 = unsafe { Command.new_raw(ctx.tools.asm_tool, arena) };
+    c4.env_clear();
     c4.arg(asm_src.as_slice());
     c4.arg("-o");
     c4.arg(obj.as_slice());
@@ -393,24 +397,16 @@ pub fn link_program(ctx: &BuildCtx, g: &Graph, results: &Vec<ModResult>) -> i32 
     let tmp_out = tmp_out_str.as_slice();
 
     let mut cmd = unsafe { Command.new_raw(linker, arena) };
+    cmd.env_clear();
     if hosted {
-        // A child starts with an empty environment, and cc needs PATH to find ld and its helpers.
-        // Nothing else is passed on: a hosted link names the system's libc, so it is not covered by
-        // the reproducibility claim, but it does not pick up the caller's environment either.
+        // cc needs PATH to find ld and its helpers. Nothing else is passed on: a hosted link names
+        // the system's libc, so it is not covered by the reproducibility claim, but it does not
+        // pick up the caller's environment either.
         let path_value = match unsafe { env_var_raw("PATH", arena) } {
             Some(v) => v,
             None => "/usr/bin:/bin",
         };
-        let mut entry = unsafe { String.new_in_raw(arena) };
-        entry.push_str("PATH=");
-        entry.push_str(path_value);
-        entry.push_u8(0 as u8);
-        let envp = unsafe { zoril_allocator_alloc(arena, 16 as u64) } as *mut *u8;
-        unsafe {
-            *envp = entry.as_slice().ptr;
-            *((envp as usize + 8) as *mut *u8) = 0 as *u8;
-            cmd.set_envp(envp as **u8);
-        }
+        cmd.env_set("PATH", path_value);
     }
     cmd.arg("-o");
     cmd.arg(tmp_out);

@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_try_two_variant_no_err.zrl:6:41: error: `?` needs a `Result` or an `Option`, found `OnlyOk`
+// `?` on a two-variant enum with `Ok` requires an `Err` variant; without `Err`, `x?` in a
+// function returning the same enum used to pass the early same-type check.
+enum OnlyOk { Ok(i32), Other(i64) }
+fn outer(x: OnlyOk) -> OnlyOk { let v = x?; return OnlyOk.Ok(v); }
+fn main() -> i32 { return 0; }

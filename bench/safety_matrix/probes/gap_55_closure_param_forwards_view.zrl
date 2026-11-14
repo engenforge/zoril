@@ -1,6 +1,6 @@
 // name: A closure forwards a captured frame view to a callee that stores it through the closure's parameter
 // expected: known_gap
-// gap: cl(out) with cl = |o: &mut [i32]| { put(o, view); } and fn put(o: &mut [i32], v: [i32]) { *o = v; }: inside the closure the view is Env and o a parameter, so its body is clean, and the call through the closure value at cl(out) is not checked against what the environment holds; closed under --provenance by the unknown-call rule (Z-0048)
+// gap: cl(out) with cl = |o: &mut [i32]| { put(o, view); } and fn put(o: &mut [i32], v: [i32]) { *o = v; }: inside the closure the view is Env and o a parameter, so its body is clean, and the call through the closure value at cl(out) is not checked against what the environment holds; closed under --provenance by the unknown-call rule
 // observed: exit 77
 import "mem.zrl";
 import "vec.zrl";

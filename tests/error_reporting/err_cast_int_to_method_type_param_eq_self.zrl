@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: cannot cast integer to type parameter: type parameters may be reference types
+struct P { a: i32 }
+type Ref = &i32;
+impl Ref { fn forge<P>(n: u64) -> P { return n as P; } }
+fn main() -> i32 { let r: &i32 = Ref::forge::<&i32>(8 as u64); return *r; }

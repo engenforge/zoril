@@ -1,6 +1,6 @@
 // name: Vec.extend_from_slice copies a slice of frame views into the caller's Vec through memcpy, a store no summary records
 // expected: known_gap
-// gap: out.extend_from_slice(&views) with views = [s] and s a view of fill's stack array: extend_from_slice copies the elements with memcpy, a bare extern with no declared effect, and declares no #[stores], so neither the old rules nor --provenance see the elements of slice stored into self (Z-0060)
+// gap: out.extend_from_slice(&views) with views = [s] and s a view of fill's stack array: extend_from_slice copies the elements with memcpy, a bare extern with no declared effect, and declares no #[stores], so neither the old rules nor --provenance see the elements of slice stored into self
 // observed: exit 77
 import "vec.zrl";
 use vec::Vec;

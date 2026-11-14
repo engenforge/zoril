@@ -1,0 +1,110 @@
+# scripts/test_plan.tsv - what scripts/test.sh runs, in the order results are printed.
+#
+# One row per item, four tab-separated columns: kind, name, group, command. Blank lines and lines
+# starting with # are skipped. A row that does not fit is an error that names this file and its line.
+#
+#   gate        name  -      command   a repository check (--gates, --gate NAME), run through `eval`
+#                                      so $STAGE0_DIR and ${MAKE:-make} expand; the order of the rows is the
+#                                      display order, so the slowest gate is last, because one slow gate holds
+#                                      back every line after it (mutation-self-test builds four mutant
+#                                      compilers, about a minute and a half)
+#   extra-gate  name  -      command   a gate that `--gate NAME` runs and `--gates` does not
+#   paths       -     group  roots     the per-file test roots of the group; every test belongs to exactly
+#                                      one group, and a root may be a glob (tests/functional/*.zrl)
+#   scenario    name  group  command   a multi-step script, run after its group's per-file tests; the
+#                                      group `git` holds the ones that need git
+gate	fmt-check	-	./scripts/check_fmt.sh
+gate	md-check	-	./scripts/check_md_fmt.sh
+gate	no-new-deps	-	./scripts/check_no_new_deps.sh
+gate	binary-sizes	-	./scripts/check_binary_sizes.sh
+gate	no-warnings	-	./scripts/check_no_warnings.sh
+gate	test-strength	-	./scripts/check_test_strength.sh
+gate	fuzz-record	-	./scripts/check_fuzz_record.sh
+gate	fuzz-fresh	-	./scripts/check_fuzz_fresh.sh --selftest && ./scripts/check_fuzz_fresh.sh
+gate	safety-matrix	-	./scripts/run_safety_matrix.sh
+gate	safety-matrix-zbuild	-	./scripts/run_safety_matrix.sh --zbuild
+gate	safety-model	-	./scripts/check_safety_model.sh
+gate	safety-comments	-	./scripts/check_safety_comments.sh
+gate	safety-figures	-	./scripts/check_safety_figures.sh --all
+gate	comment-noise	-	./scripts/check_comment_noise.sh
+gate	reborrow-probes	-	./scripts/check_reborrow_probes.sh
+gate	exhaustive	-	./scripts/check_exhaustive.sh --selftest && ./scripts/check_exhaustive.sh
+gate	route-coverage	-	./scripts/check_route_coverage.sh
+gate	temp-names	-	./scripts/check_temp_names.sh
+gate	stdlib-bodies	-	./scripts/check_stdlib_bodies.sh
+gate	unsafe-scan	-	./scripts/unsafe_scan.sh
+gate	runtimes	-	./scripts/check_runtimes.sh
+gate	static-image	-	./scripts/check_static_image_determinism.sh
+gate	perf-gate	-	./scripts/perf_gap.sh --gate-check
+gate	toolchain	-	./scripts/check_toolchain.sh
+gate	portability	-	./scripts/check_portability.sh
+gate	closure-private-names	-	./scripts/check_closure_private_names.sh
+gate	toolchain-offpath	-	./scripts/check_toolchain_offpath.sh
+gate	stage0c-fixed-bugs	-	./$STAGE0_DIR/scripts/test_fixed_bugs.sh
+gate	stage0c-unit	-	${MAKE:-make} --no-print-directory -C $STAGE0_DIR test_unit
+gate	stage0c-corpus	-	${MAKE:-make} --no-print-directory -C $STAGE0_DIR test_corpus
+gate	stage0c-docs	-	${MAKE:-make} --no-print-directory -C $STAGE0_DIR test_docs
+gate	stage0c-error-locations	-	${MAKE:-make} --no-print-directory -C $STAGE0_DIR test_error_locations
+gate	stage0c-functional	-	${MAKE:-make} --no-print-directory -C $STAGE0_DIR test_functional
+gate	stage0c-minimal	-	./scripts/check_stage0c_minimal.sh
+gate	mutation-self-test	-	./scripts/test_mutation_check.sh
+extra-gate	store-grid	-	./scripts/check_store_grid.sh
+extra-gate	clean-tree	-	./scripts/check_clean_tree.sh
+paths	-	language	tests/language/basic tests/language/control_flow tests/language/match tests/language/other tests/language/modules tests/language/phi tests/language/slices tests/functional/basic tests/functional/control_flow tests/functional/phi tests/functional/codegen tests/functional/*.zrl tests/compiler tests/unit tests/benchmarks
+paths	-	types	tests/language/enums tests/language/generics tests/language/structs tests/language/traits tests/functional/enums tests/functional/structs
+paths	-	memory	tests/language/memory tests/language/pointers tests/language/closures tests/functional/pointers tests/interproc_summary
+paths	-	stdlib	tests/stdlib tests/functional/stdlib
+paths	-	diagnostics	tests/error_reporting
+paths	-	integration	tests/integration tests/regressions tests/bootstrap corpus
+scenario	cross-module-safety-matrix	memory	./scripts/test_safety_matrix_cross_module.sh
+scenario	origins	memory	./scripts/test_origins.sh
+scenario	sha256-differential	stdlib	./scripts/test_sha256_differential.sh
+scenario	zilc-errors	diagnostics	./scripts/test_zilc_errors.sh
+scenario	incremental	integration	./scripts/test_incremental.sh --quiet
+scenario	fuzz-jobs	integration	./scripts/test_fuzz_jobs.sh --quiet
+scenario	fuzz-mode-diff	integration	./scripts/test_fuzz_mode_diff.sh
+scenario	modular-mangling	integration	./scripts/test_modular_mangling.sh
+scenario	uncalled-method-emit	integration	./scripts/test_uncalled_method_emit.sh
+scenario	runner-output	integration	./scripts/test_runner_output.sh --both
+scenario	test-headers	integration	./scripts/test_test_headers.sh
+scenario	readme-snippets	integration	./scripts/test_readme_snippets.sh
+scenario	doc-snippets	integration	./scripts/test_doc_snippets.sh
+scenario	getting-started	integration	./scripts/test_getting_started.sh
+scenario	struct-layout	integration	./scripts/test_struct_layout.sh
+scenario	ffi-export	integration	./scripts/test_ffi_export.sh
+scenario	ffi-callback	integration	./scripts/test_ffi_callback.sh
+scenario	zbuild-link	integration	./scripts/test_zbuild_link.sh
+scenario	module-names	integration	./scripts/test_module_names.sh
+scenario	interface-attrs	integration	./scripts/test_interface_attrs.sh
+scenario	hosted	integration	./scripts/test_hosted.sh
+scenario	platform-layer	integration	./scripts/test_platform_layer.sh
+scenario	man-pages	integration	./scripts/test_man_pages.sh
+scenario	tool-versions	integration	./scripts/test_tool_versions.sh
+scenario	md-links	integration	./scripts/test_check_md_links.sh
+scenario	safety-comments-selftest	integration	./scripts/test_check_safety_comments.sh
+scenario	no-new-deps-selftest	integration	./scripts/test_check_no_new_deps.sh
+scenario	comment-noise-selftest	integration	./scripts/test_check_comment_noise.sh
+scenario	comment-census-selftest	integration	./scripts/test_comment_census.sh
+scenario	export-checks-selftest	integration	./scripts/test_export_checks.sh
+scenario	bench-contention	integration	./scripts/test_bench_contention.sh
+scenario	bench-threshold-gate	integration	./scripts/test_bench_threshold_gate.sh
+scenario	test-lock	integration	./scripts/test_test_lock.sh
+scenario	check-deps-selftest	integration	./scripts/test_check_deps.sh
+scenario	result-file	integration	./scripts/test_result_file.sh
+scenario	scdoc-min	integration	./scripts/test_scdoc_min.sh
+scenario	stray-files-selftest	integration	./scripts/check_stray_files.sh --selftest
+scenario	bench-step-failed	integration	./scripts/test_bench_step_failed.sh
+scenario	zbuild-errors	integration	./scripts/test_zbuild_errors.sh
+scenario	zbuild-diff	integration	./scripts/test_zbuild_diff.sh
+scenario	user-paths	integration	./scripts/test_user_paths.sh
+scenario	qbe-arg-order	integration	./scripts/test_qbe_arg_order.sh
+scenario	qbe-fingerprint	integration	./scripts/test_qbe_fingerprint.sh
+scenario	deps-matrix-interrupt	integration	./scripts/test_dep_matrix.sh --selftest
+scenario	tier-select	integration	./scripts/test_tier_select.sh
+scenario	fuzz-tools	integration	./scripts/test_fuzz_tools.sh --quiet
+scenario	clean-tree	git	./scripts/check_clean_tree.sh
+scenario	test-changed	git	./scripts/test_test_changed.sh
+scenario	build-info	git	./scripts/test_build_info.sh
+scenario	preflight-selftest	git	./scripts/test_preflight.sh
+scenario	reject-diff-selftest	git	./scripts/test_reject_diff.sh
+scenario	fuzz-tools-git	git	./scripts/test_fuzz_tools_git.sh --quiet

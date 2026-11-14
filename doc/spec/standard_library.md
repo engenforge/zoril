@@ -187,10 +187,14 @@ Process spawning and management in `proc.zrl` use `Command` and `Child`, with fa
 - `Command::new(program, &arena)`: Builds a command tied to an arena.
 - `cmd.arg(arg)`: Appends an argument.
 - `cmd.set_stdin(fd)` / `cmd.set_stdout(fd)` / `cmd.set_stderr(fd)`: Configures stream redirection with typed `Fd` handles.
+- `cmd.set_current_dir(dir)`: The child's working directory, entered just before the program is started, so a relative program path is looked up from it; `spawn` fails with the `chdir` error if the directory cannot be entered.
+- `cmd.env_set(name, value)` / `cmd.env_remove(name)` / `cmd.env_clear()`: The child's environment. A command inherits the parent's environment, with the changes applied; `env_clear` starts from an empty one instead. `set_envp` supplies one outright.
+- `cmd.set_new_group()`: The child starts in a process group of its own, whose id is its pid, so `child.kill_group(sig)` reaches it and whatever it started.
 - `cmd.spawn() -> Result<Child, io::Error>`: Spawns the process.
 - `cmd.status() -> Result<ExitStatus, io::Error>`: Runs and waits for termination.
 - `child.wait() -> Result<ExitStatus, io::Error>`: Waits for child completion.
-- `child.kill() -> Result<(), io::Error>`: Forcibly terminates the child. `child.unix_kill(sig)` sends a Unix signal number; `ExitStatus.unix_signal()` reports one. The raw process syscalls (`sys_fork`, `sys_execve`, `sys_wait4`, `sys_kill`, `sys_pipe2`, `sys_dup2`, `sys_fstat`) are Linux-only and live in `stdlib/os/linux.zrl`.
+- `wait_any(children) -> Result<usize, io::Error>` / `try_wait_any(children) -> Result<Option<usize>, io::Error>`: Wait for whichever unreaped child of the slice ends first and return its index; `try_wait_any` returns none at once when none has ended. Only the children of the slice are reaped: a child the call was not given is left for its own handle to wait for, and while such a child has ended and is not yet reaped, `wait_any` returns ECHILD at once and on every call, even if a child of the slice is still running (`try_wait_any` is not affected).
+- `child.kill() -> Result<(), io::Error>`: Forcibly terminates the child. `child.unix_kill(sig)` sends a Unix signal number; `ExitStatus.unix_signal()` reports one. `child.kill_group(sig)` signals the child's whole process group, and fails with EINVAL, signalling nothing, for a child not started with `set_new_group`. Once a child is reaped (by `wait`, `wait_any` or `try_wait_any`), all three fail with ESRCH and signal nothing, because its pid may belong to another process by then. The raw process syscalls (`sys_fork`, `sys_execve`, `sys_wait4`, `sys_kill`, `sys_pipe2`, `sys_dup2`, `sys_fstat`) are Linux-only and live in `stdlib/os/linux.zrl`.
 - `exit(code: i32) -> never`: Terminates the process via the `exit` syscall (60).
 
 Filesystem and lock operations in `fsys.zrl`:
@@ -233,7 +237,15 @@ A `Result` is handled by matching on it, propagating it with `?`, or unwrapping 
 
 ### 5.3 `Result` and `?`
 
-`Result<T, E>` is an ordinary enum in `core.zrl`. The `?` operator on a `Result` returns its `Err` from the enclosing function early, and on an `Option` returns its `None`. `trait Error { fn message(self: &Self) -> [u8]; }` is the trait for error types, and `impl Error for [u8]` is provided: a byte slice message returns itself.
+`Result<T, E>` is an ordinary enum in `core.zrl`. The `?` operator on a `Result` returns its `Err` from the enclosing function early, and on an `Option` returns its `None`; otherwise `e?` is `e`'s success payload. The value returned is of the enclosing function's return type `R`, and there is no conversion between error types:
+
+- when `e` has type `R`, or is a reference to a value of type `R` (when `R` is `Copy`), that value is returned;
+- otherwise `e` must not be a reference, and `R` must have the variant `e` propagates (`Err`, or `None`) with the same payload type, so `Result<T, E>` propagates out of any `Result<U, E>` and `Option<T>` out of any `Option<U>`; a new value of type `R` holding `e`'s payload is returned;
+- any other `e?` is a compile error.
+
+The variants are found by name: a two-variant enum with `Ok` and `Err` variants is taken as a `Result` (propagating `Err`), and one with `Some` and a unit `None` variant as an `Option` (propagating `None`), so a user enum `enum R { Ok(i32), Err(E) }` propagates out of a `Result<U, E>`. `?` on a value of any other type, or inside a `defer` statement, is a compile error.
+
+`trait Error { fn message(self: &Self) -> [u8]; }` is the trait for error types, and `impl Error for [u8]` is provided: a byte slice message returns itself.
 
 ## 6. Iteration (`iter.zrl`)
 
@@ -275,7 +287,7 @@ pub trait Clone { fn clone(self: &Self) -> Self; }
 pub trait Copy {}
 ```
 
-`Copy` marks implicit bitwise duplication and is structural: a type is Copy exactly when it owns no `Drop` value, a `T: Copy` bound needs no impl, and `impl Copy for T` is rejected otherwise. `Clone` is explicit and deep: `clone.zrl` implements it for `bool`, every integer type, `Option<T: Clone>`, `Vec<T: Clone>` (element-wise, on the same allocator) and `String` (its own buffer). `#[derive(Clone)]` writes a struct's field-by-field impl; see the surface specification §8.5.
+`Copy` marks implicit bitwise duplication and is structural: a type is Copy exactly when it owns no `Drop` value, a `T: Copy` bound needs no impl, and `impl Copy for T` is rejected otherwise. `Clone` is explicit and deep: `core.zrl` implements it for `bool`, every integer type, `Option<T: Clone>` and slices `[T: Clone]` (the header: the elements are not duplicated), beside the trait, so a generic body in any module reaches them; `clone.zrl` implements it for `Vec<T: Clone>` (element-wise, on the same allocator) and `String` (its own buffer). `Vec.extend_from_slice` clones each element, so its `T` must implement `Clone` (a value with a `Drop` copied bitwise would be owned twice); `vec::extend_bytes` appends bytes in one copy. `Vec.resize(new_len, value)` fills each new slot with a clone of `value` (its `T` must implement `Clone` too), and `Vec.ensure_len` is an `unsafe fn`: it leaves zero bytes, which are not a value of every `T` (a reference, a `fn` value, a type whose `Drop` reads a field), so its caller writes each new element before anything reads or drops it. `#[derive(Clone)]` writes a struct's field-by-field impl; see the surface specification §8.5.
 
 ## 9. Collections (`stdlib/hashmap.zrl`)
 

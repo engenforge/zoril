@@ -75,12 +75,15 @@ pub struct Driver {
     // `zoril --emit-origins`: print the origin sets of each function the input file defines
     // (check_zir::compute_origins_zir, computed for every body either way).
     pub emit_origins: bool,
-    // Tarjan's low-links on the lowering stack (Z-0059): entry d - 1 is the smallest depth still
+    // Tarjan's low-links on the lowering stack: entry d - 1 is the smallest depth still
     // being lowered that the body at depth d, or one nested in it, calls; NO_LOW when none.
     pub os_low: Vec<u32>,
     // A recursive cycle's bodies, waiting for its root: their ZIR stays in the scratch arena until
     // then, so the summaries can be iterated and the bodies checked with the final ones.
     pub os_pending: Vec<OsPending>,
+    // `zoril --lower-all`: lower an imported stdlib function even when nothing reaches it
+    // (Driver.lowers_on_demand).
+    pub lower_all: bool,
 }
 
 // A body of a recursive cycle, kept for the cycle's fixpoint (Driver.os_fixpoint).
@@ -231,6 +234,7 @@ impl Driver {
                 // SAFETY: ARENA is the driver's main arena, which outlives the driver.
                 os_low: unsafe { Vec::<u32>.new_in_raw(arena) },
                 os_pending: unsafe { Vec::<OsPending>.new_in_raw(arena) },
+                lower_all: false,
             };
         }
         return l;

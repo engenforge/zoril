@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_return_in_defer.zrl:5:13: error: cannot `return` inside `defer`
+import "core.zrl";
+fn outer() -> i32 {
+    defer { return 3; };
+    return 1;
+}
+fn main() -> i32 { return outer(); }

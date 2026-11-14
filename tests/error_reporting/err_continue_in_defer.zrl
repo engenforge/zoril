@@ -1,0 +1,11 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_continue_in_defer.zrl:8:17: error: cannot `continue` out of `defer`
+import "core.zrl";
+fn main() -> i32 {
+    let mut i = 0;
+    while i < 3 {
+        i = i + 1;
+        defer { continue; };
+    }
+    return i;
+}

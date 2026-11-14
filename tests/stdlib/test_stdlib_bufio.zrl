@@ -480,7 +480,7 @@ fn test_buf_buffer_and_read_trait() -> bool {
 
     // Call Read::read on BufReader
     let mut dest = Vec::<u8>.new();
-    dest.ensure_len(8 as usize);
+    dest.resize(8 as usize, 0 as u8);
     let n = match reader.read(dest.as_mut_slice()) {
         Ok(n) => n,
         Err(_) => { return false; },
@@ -521,7 +521,7 @@ fn test_buf_writer_file_into_inner() -> bool {
         Err(_) => { return false; },
     };
     let mut read_buf = Vec::<u8>.new();
-    read_buf.ensure_len(64 as usize);
+    read_buf.resize(64 as usize, 0 as u8);
     let n = match f_read.read(read_buf.as_mut_slice()) {
         Ok(bytes) => bytes,
         Err(_) => { return false; },
@@ -569,7 +569,7 @@ fn test_buf_reader_file_into_inner() -> bool {
     };
     let mut reader = BufReader::<File>.with_capacity(f_read, 8 as usize);
     let mut chunk = Vec::<u8>.new();
-    chunk.ensure_len(4 as usize);
+    chunk.resize(4 as usize, 0 as u8);
     let n = match reader.read(chunk.as_mut_slice()) {
         Ok(bytes) => bytes,
         Err(_) => { return false; },
@@ -579,7 +579,7 @@ fn test_buf_reader_file_into_inner() -> bool {
     let mut f_recovered = reader.into_inner();
     // f_recovered should still be open and readable without errors
     let mut rest = Vec::<u8>.new();
-    rest.ensure_len(16 as usize);
+    rest.resize(16 as usize, 0 as u8);
     let n2 = match f_recovered.read(rest.as_mut_slice()) {
         Ok(bytes) => bytes,
         Err(_) => { return false; },

@@ -13,6 +13,8 @@
 set -u
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO_ROOT" || exit 2
+. "$REPO_ROOT/scripts/lib/portability.sh"
+. "$REPO_ROOT/scripts/lib/tree_files.sh"
 . "$REPO_ROOT/scripts/lib/fuzz_run.sh"
 . "$REPO_ROOT/scripts/lib/fuzz_fresh.sh"
 ONLY=""

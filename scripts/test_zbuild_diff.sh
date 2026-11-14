@@ -16,6 +16,8 @@
 # gap fails the safety matrix. The include roots are the ones the runner passes; the test's own
 # directory is left out when it is named `stdlib`, which would hide the installed standard library
 # (a directory merely named so is U5's question).
+# The header is read with the runner's own reader, tr_expectations (scripts/lib/test_runner.sh), so
+# this gate judges a program as the runner does; a malformed header is a DIFF here as it is a [FAIL] there.
 cd "$(dirname "$0")/.." || exit 2
 . scripts/env.sh
 . scripts/lib/portability.sh
@@ -44,22 +46,18 @@ find tests corpus/zrl -type f -name '*.zrl' ! -name '*_lib.zrl' ! -name '.*' \
 cat > "$WORK/worker.sh" << 'EOF'
 #!/bin/sh
 . scripts/lib/portability.sh
+. scripts/lib/test_runner.sh
 # worker.sh WORK BIN RT BACKEND ASM LINK FILE... -> one line per runnable program: "OK|DIFF|SKIP <file> <why>"
 WORK="$1"; BIN="$2"; RT="$3"; BACKEND="$4"; ASM="$5"; LINK="$6"; shift 6
 INC="-I src -I tools/zilc/src -I tests -I tests/include -I tests/helpers"
 for f in "$@"; do
-    eval "$(awk '
-        function q(v) { gsub(/\047/, "\047\\\047\047", v); return "\047" v "\047" }
-        /^[ \t]*\/\/[ \t]*@skip:/ { skip = 1 }
-        flags == "" && /^\/\/ flags: / { v = $0; sub(/^\/\/ flags: /, "", v); flags = v }
-        /^\/\/ link: / { v = $0; sub(/^\/\/ link: /, "", v); link = link v " " }
-        /expected compile fail/ { cfail = 1 }
-        /expected compile success/ { csucc = 1 }
-        /^\/\/ EXPECT: / { ex_diag = 1 }
-        ex == "" && match($0, /expected exit( code:)? [0-9]+/) { v = substr($0, RSTART, RLENGTH); sub(/.* /, "", v); ex = v }
-        END { printf "h_skip=%d h_flags=%s h_link=%s h_cfail=%d h_csucc=%d h_diag=%d h_exit=%s\n", skip, q(flags), q(link), cfail, csucc, ex_diag, q(ex) }' "$f")"
-    [ "$h_skip" -eq 0 ] && [ "$h_cfail" -eq 0 ] && [ "$h_csucc" -eq 0 ] && [ "$h_diag" -eq 0 ] || continue
-    h_exit=${h_exit:-0}   # no header: a run test that expects 0, as the runner reads it
+    tr_expectations "$f"
+    case "$T_KIND" in
+        malformed) echo "DIFF $f malformed header, line $T_MALFORMED"; continue ;;
+        run) ;;
+        *) continue ;;
+    esac
+    h_exit=$T_EXIT; h_flags=$T_FLAGS; h_link=$T_LINK
     d="$WORK/p/$(printf '%s' "$f" | tr / +)"
     mkdir -p "$d"
     zflags=""

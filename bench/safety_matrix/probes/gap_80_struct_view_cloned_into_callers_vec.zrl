@@ -1,0 +1,19 @@
+// name: A struct holding a view of this frame is cloned into the caller's Vec by resize
+// expected: known_gap
+// gap: out.resize(1, H { s: &buf }) with buf a stack array and impl Clone for H returning H { s: self.s }: resize stores clones of value, and the clone's result is not tied to the view self holds, so the caller's Vec gets the frame view; out.push(H { s: &buf }) is refused (also through extend_from_slice of an array of such structs)
+// observed: exit 77
+import "vec.zrl";
+use vec::Vec;
+struct H { s: [u8] }
+impl Clone for H { fn clone(self: &H) -> H { return H { s: self.s }; } }
+fn fill(out: &mut Vec<H>) {
+    let buf = [42 as u8; 16];
+    out.resize(1, H { s: &buf });
+}
+fn clobber_stack() -> u8 { let arr = [77 as u8; 512]; return arr[0]; }
+fn main() -> i32 {
+    let mut v: Vec<H> = Vec.new();
+    fill(&mut v);
+    let c = clobber_stack();
+    return v[0].s[0] as i32 + (c as i32) * 0;
+}

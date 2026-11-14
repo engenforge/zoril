@@ -1,0 +1,570 @@
+// ztest: the test run's dispatcher, written in Zoril.
+//
+// It holds no plan rules. `scripts/test.sh --print-plan` says what to run and with which options,
+// `scripts/test.sh --item` runs one item, and this program starts the items, reads back what each
+// one wrote, and prints and records the results the way `scripts/test.sh` does, so both runners
+// give the same output and the same results and timings files.
+//
+// It does not yet run items in parallel, take the work directory's lock, or end the running item's
+// process group on SIGINT or SIGTERM: it runs one item at a time, and an interrupted run leaves
+// that item's processes alive. An item that has not ended after TR_ITEM_TIMEOUT seconds (default
+// 3600) has its process group ended and is reported as a failure.
+
+import "core.zrl";
+import "args.zrl";
+import "file.zrl";
+import "fsys.zrl";
+import "io.zrl";
+import "mem.zrl";
+import "proc.zrl";
+import "string.zrl";
+import "time.zrl";
+import "vec.zrl";
+use args::args;
+use file::{append_file, read_file, write_file};
+use fsys::{env_var, make_dir_all, unlink_path};
+use io::{File, eprint, print};
+use mem::Arena;
+use proc::Command;
+use string::String;
+use time::{monotonic_ns, sleep_ns};
+use vec::Vec;
+
+struct Counts {
+    run: i64,
+    passed: i64,
+    failed: i64,
+    skipped: i64,
+}
+
+impl Counts {
+    fn zero() -> Counts {
+        return Counts { run: 0, passed: 0, failed: 0, skipped: 0 };
+    }
+
+    fn add(self: &mut Counts, other: &Counts) {
+        self.run = self.run + other.run;
+        self.passed = self.passed + other.passed;
+        self.failed = self.failed + other.failed;
+        self.skipped = self.skipped + other.skipped;
+    }
+}
+
+#[borrows(a)]
+fn cat2(a: &Arena, x: [u8], y: [u8]) -> [u8] {
+    let mut s = String.new_in(a);
+    s.push_str(x);
+    s.push_str(y);
+    return s.as_slice();
+}
+
+#[borrows(a)]
+fn item_path(a: &Arena, dir: [u8], n: usize, ext: [u8]) -> [u8] {
+    let mut s = String.new_in(a);
+    s.push_str(dir);
+    s.push_str("/");
+    s.push_u64(n as u64);
+    s.push_str(ext);
+    return s.as_slice();
+}
+
+fn pad_spaces(s: &mut String, n: i64) {
+    let mut k = n;
+    while k > 0 {
+        s.push_str(" ");
+        k = k - 1;
+    }
+}
+
+fn digits(v: i64) -> i64 {
+    let mut d = 1 as i64;
+    let mut t = v / 10;
+    while t > 0 {
+        d = d + 1;
+        t = t / 10;
+    }
+    return d;
+}
+
+// The line `printf '  %-28s %5d run %5d passed %5d failed %5d skipped\n'` makes in test.sh.
+fn suite_line(a: &Arena, title: [u8], c: &Counts) {
+    let mut s = String.new_in(a);
+    s.push_str("  ");
+    s.push_str(title);
+    pad_spaces(&mut s, 28 - title.len as i64);
+    s.push_str(" ");
+    pad_spaces(&mut s, 5 - digits(c.run));
+    s.push_i64(c.run);
+    s.push_str(" run ");
+    pad_spaces(&mut s, 5 - digits(c.passed));
+    s.push_i64(c.passed);
+    s.push_str(" passed ");
+    pad_spaces(&mut s, 5 - digits(c.failed));
+    s.push_i64(c.failed);
+    s.push_str(" failed ");
+    pad_spaces(&mut s, 5 - digits(c.skipped));
+    s.push_i64(c.skipped);
+    s.push_str(" skipped\n");
+    print(s.as_slice());
+}
+
+// Milliseconds as `printf '%d.%03d'` of seconds and the remainder.
+fn seconds_text(a: &Arena, ms: i64) -> [u8] {
+    let mut s = String.new_in(a);
+    s.push_i64(ms / 1000);
+    s.push_str(".");
+    let rest = ms % 1000;
+    if rest < 100 { s.push_str("0"); }
+    if rest < 10 { s.push_str("0"); }
+    s.push_i64(rest);
+    return s.as_slice();
+}
+
+fn append_line(a: &Arena, path: [u8], parts: [[u8]]) {
+    let mut s = String.new_in(a);
+    let mut i = 0 as usize;
+    while i < parts.len {
+        if i > 0 as usize { s.push_str("\t"); }
+        s.push_str(parts[i]);
+        i = i + 1 as usize;
+    }
+    s.push_str("\n");
+    let _ = append_file(path, s.as_slice());
+}
+
+fn contents_or_empty(a: &Arena, path: [u8]) -> [u8] {
+    return match read_file(path, a) {
+        Ok(d) => d,
+        Err(_) => "",
+    };
+}
+
+fn field(fields: &Vec<[u8]>, i: usize) -> [u8] {
+    if i >= fields.len() { return ""; }
+    return fields.as_slice()[i];
+}
+
+// Starts `scripts/test.sh --item KIND NAME PREFIX` in a process group of its own and waits for it.
+// 0: it ended, 1: it did not end within limit_s and its group was ended, 2: it could not be started.
+fn run_one(
+    a: &Arena,
+    kind: [u8],
+    name: [u8],
+    prefix: [u8],
+    quiet: [u8],
+    verbose: [u8],
+    fail_fast: [u8],
+    timeout: [u8],
+    work: [u8],
+    limit_s: i64,
+) -> i32 {
+    let mut cmd = Command.new("/bin/sh", a);
+    cmd.arg("scripts/test.sh");
+    cmd.arg("--item");
+    cmd.arg(kind);
+    cmd.arg(name);
+    cmd.arg(prefix);
+    cmd.env_set("TR_QUIET", quiet);
+    cmd.env_set("TR_VERBOSE", verbose);
+    cmd.env_set("TR_FAIL_FAST", fail_fast);
+    cmd.env_set("TR_TIMEOUT", timeout);
+    cmd.env_set("TR_WORK", work);
+    cmd.set_new_group();
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => { return 2; },
+    };
+    let deadline = monotonic_ns() + limit_s * 1000000000;
+    loop {
+        let r = child.has_exited();
+        if r.is_err() {
+            let _ = child.kill_group(9);
+            let _ = child.wait();
+            return 0;
+        }
+        if r.ok().unwrap() {
+            let _ = child.wait();
+            return 0;
+        }
+        if monotonic_ns() >= deadline { break; }
+        sleep_ns(20000000);
+    }
+    // The group is ended before the shell is reaped: a reaped child's group can no longer be
+    // signalled, and something in the group may ignore SIGTERM after the shell has died from it.
+    let _ = child.kill_group(15);
+    let grace = monotonic_ns() + 5000000000;
+    loop {
+        let r = child.has_exited();
+        if r.is_err() { break; }
+        if r.ok().unwrap() { break; }
+        if monotonic_ns() >= grace { break; }
+        sleep_ns(20000000);
+    }
+    let _ = child.kill_group(9);
+    let _ = child.wait();
+    return 1;
+}
+
+// Runs `/bin/sh scripts/NAME ARGS...` with its output in out_path (empty: discarded) and returns
+// its exit code, or 127 when it could not be started.
+fn run_script(a: &Arena, script: [u8], first: [u8], second: [u8], out_path: [u8]) -> i32 {
+    let mut cmd = Command.new("/bin/sh", a);
+    cmd.arg(script);
+    cmd.arg(first);
+    if second.len > 0 as usize { cmd.arg(second); }
+    let target = if out_path.len > 0 as usize { out_path } else { "/dev/null" };
+    let mut sink = match File.create(target) {
+        Ok(f) => f,
+        Err(_) => { return 127; },
+    };
+    cmd.set_stdout(sink.fd());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => {
+            let _ = sink.close();
+            return 127;
+        },
+    };
+    let st = child.wait();
+    let _ = sink.close();
+    if st.is_err() { return 127; }
+    let code = st.ok().unwrap().code();
+    if code.is_none() { return 1; }
+    return code.unwrap();
+}
+
+fn text_is(s: [u8], t: [u8]) -> bool {
+    return s == t;
+}
+
+fn main() -> i32 {
+    let mut arena = match Arena.new(1073741824) {
+        Ok(m) => m,
+        Err(_) => {
+            eprint("ztest: cannot allocate memory\n");
+            return 2;
+        },
+    };
+    let argv = args();
+
+    let work = match env_var("TR_WORK", &arena) {
+        Some(w) => w,
+        None => "build/tests",
+    };
+    if make_dir_all(work, &arena).is_err() {
+        eprint("ztest: cannot create the work directory\n");
+        return 2;
+    }
+
+    // The plan: test.sh's own answer to its own options.
+    let plan_path = cat2(&arena, work, "/ztest.plan");
+    let mut planned = Command.new("/bin/sh", &arena);
+    planned.arg("scripts/test.sh");
+    planned.arg("--print-plan");
+    let mut ai = 1 as usize;
+    while ai < argv.len() {
+        planned.arg(argv.get(ai).unwrap());
+        ai = ai + 1 as usize;
+    }
+    let mut plan_file = match File.create(plan_path) {
+        Ok(f) => f,
+        Err(_) => {
+            eprint("ztest: cannot write the plan file\n");
+            return 2;
+        },
+    };
+    planned.set_stdout(plan_file.fd());
+    let mut planner = match planned.spawn() {
+        Ok(c) => c,
+        Err(_) => {
+            eprint("ztest: cannot start /bin/sh\n");
+            let _ = plan_file.close();
+            return 2;
+        },
+    };
+    let plan_status = planner.wait();
+    let _ = plan_file.close();
+    let plan_code = if plan_status.is_err() {
+        2
+    } else {
+        let c = plan_status.ok().unwrap().code();
+        if c.is_none() { 1 } else { c.unwrap() }
+    };
+    let plan_text = contents_or_empty(&arena, plan_path);
+    if plan_code != 0 || !plan_text.starts_with("plan\t1\n") {
+        print(plan_text);
+        return plan_code;
+    }
+
+    let mut quiet = "0";
+    let mut verbose = "0";
+    let mut fail_fast = "0";
+    let mut timeout = "30";
+    let mut results = "";
+    let mut timings = "";
+    let mut full_run = "0";
+    let mut suites = Vec::<[u8]>.new_in(&arena);
+    let mut kinds = Vec::<[u8]>.new_in(&arena);
+    let mut names = Vec::<[u8]>.new_in(&arena);
+    let mut titles = Vec::<[u8]>.new_in(&arena);
+    let mut claims = Vec::<[u8]>.new_in(&arena);
+    let lines = plan_text.split('\n' as u8, &arena);
+    let mut li = 0 as usize;
+    while li < lines.len() {
+        let line = lines.as_slice()[li];
+        li = li + 1 as usize;
+        let f = line.split('\t' as u8, &arena);
+        let tag = field(&f, 0 as usize);
+        if text_is(tag, "option") {
+            let key = field(&f, 1 as usize);
+            let val = field(&f, 2 as usize);
+            if text_is(key, "quiet") { quiet = val; }
+            if text_is(key, "verbose") { verbose = val; }
+            if text_is(key, "fail_fast") { fail_fast = val; }
+            if text_is(key, "timeout") { timeout = val; }
+            if text_is(key, "results") { results = val; }
+            if text_is(key, "timings") { timings = val; }
+            if text_is(key, "full_run") { full_run = val; }
+        } else if text_is(tag, "item") {
+            suites.push(field(&f, 1 as usize));
+            kinds.push(field(&f, 2 as usize));
+            names.push(field(&f, 3 as usize));
+            titles.push(field(&f, 4 as usize));
+        } else if text_is(tag, "claim") {
+            claims.push(line.sub(6 as usize, line.len - 6 as usize));
+        }
+    }
+    let is_quiet = text_is(quiet, "1");
+    let item_limit = match env_var("TR_ITEM_TIMEOUT", &arena) {
+        Some(v) => match v.parse_i64() {
+            Some(n) => n,
+            None => 3600 as i64,
+        },
+        None => 3600 as i64,
+    };
+
+    let started = monotonic_ns();
+    let _ = write_file(timings, "");
+    let stray_start = cat2(&arena, work, "/stray.start");
+    let stray_recorded = run_script(
+        &arena,
+        "scripts/check_stray_files.sh",
+        "--record",
+        stray_start,
+        ""
+    )
+        == 0;
+    let items_dir = cat2(&arena, work, "/ztest-items");
+    if make_dir_all(items_dir, &arena).is_err() {
+        eprint("ztest: cannot create the items directory\n");
+        return 2;
+    }
+
+    let suite_list = suites.as_slice();
+    let kind_list = kinds.as_slice();
+    let name_list = names.as_slice();
+    let title_list = titles.as_slice();
+    let mut total = Counts::zero();
+    let mut suite = Counts::zero();
+    let mut cur_suite = "";
+    let mut cur_title = "";
+    let mut cur_section = "";
+    let mut group_ms = 0 as i64;
+    let mut stopped = false;
+    let mut n = 0 as usize;
+    while n < suite_list.len && !stopped {
+        let item_suite = suite_list[n];
+        let kind = kind_list[n];
+        let name = name_list[n];
+        let prefix = item_path(&arena, items_dir, n + 1 as usize, "");
+        let out_path = cat2(&arena, prefix, ".out");
+        let st_path = cat2(&arena, prefix, ".st");
+        let time_path = cat2(&arena, prefix, ".time");
+        let _ = unlink_path(out_path, &arena);
+        let _ = unlink_path(st_path, &arena);
+        let _ = unlink_path(time_path, &arena);
+
+        let outcome = run_one(
+            &arena,
+            kind,
+            name,
+            prefix,
+            quiet,
+            verbose,
+            fail_fast,
+            timeout,
+            work,
+            item_limit
+        );
+        let mut counts = Counts::zero();
+        let st_text = contents_or_empty(&arena, st_path).trim();
+        let st_fields = st_text.split(' ' as u8, &arena);
+        let mut have = st_fields.len() == 4 as usize;
+        if have {
+            let r = field(&st_fields, 0 as usize).parse_i64();
+            let p = field(&st_fields, 1 as usize).parse_i64();
+            let x = field(&st_fields, 2 as usize).parse_i64();
+            let s = field(&st_fields, 3 as usize).parse_i64();
+            if r.is_some() && p.is_some() && x.is_some() && s.is_some() {
+                counts = Counts {
+                    run: r.unwrap(),
+                    passed: p.unwrap(),
+                    failed: x.unwrap(),
+                    skipped: s.unwrap()
+                };
+            } else {
+                have = false;
+            }
+        }
+        if outcome == 1 {
+            let mut m = String.new_in(&arena);
+            m.push_str("[FAIL] ");
+            m.push_str(name);
+            m.push_str(" (no result within ");
+            m.push_i64(item_limit);
+            m.push_str("s; its process group was ended)\n");
+            let _ = append_file(out_path, m.as_slice());
+            counts = Counts { run: 1, passed: 0, failed: 1, skipped: 0 };
+        } else if !have {
+            let mut m = String.new_in(&arena);
+            m.push_str("[FAIL] ");
+            m.push_str(name);
+            m.push_str(" (the worker left no result)\n");
+            let _ = append_file(out_path, m.as_slice());
+            counts = Counts { run: 1, passed: 0, failed: 1, skipped: 0 };
+        }
+
+        if !text_is(item_suite, cur_suite) {
+            if cur_suite.len > 0 as usize {
+                suite_line(&arena, cur_title, &suite);
+                finish_group(&arena, timings, cur_suite, group_ms);
+            }
+            cur_suite = item_suite;
+            cur_title = title_list[n];
+            suite = Counts::zero();
+            group_ms = 0;
+            let section = if item_suite.starts_with("gate:") { "Gates" } else { "Tests" };
+            if !text_is(section, cur_section) {
+                print(cat2(&arena, section, "\n"));
+                cur_section = section;
+            }
+        }
+        print(contents_or_empty(&arena, out_path));
+        suite.add(&counts);
+        total.add(&counts);
+
+        let mut time_text = "0";
+        let mut item_ms = 0 as i64;
+        let time_fields = contents_or_empty(&arena, time_path).trim().split('\t' as u8, &arena);
+        if time_fields.len() == 2 as usize {
+            time_text = field(&time_fields, 0 as usize);
+            let ms = field(&time_fields, 1 as usize).parse_i64();
+            if ms.is_some() { item_ms = ms.unwrap(); }
+        }
+        group_ms = group_ms + item_ms;
+        let timing_kind = if text_is(kind, "file") { "test" } else { kind };
+        let row: [[u8]; 3] = [time_text, timing_kind, name];
+        append_line(&arena, timings, &row);
+        if results.len > 0 as usize {
+            let verdict = if counts.failed > 0 {
+                "FAIL"
+            } else if counts.run == 0 {
+                "SKIP"
+            } else {
+                "PASS"
+            };
+            let rec: [[u8]; 2] = [verdict, name];
+            append_line(&arena, results, &rec);
+        }
+        if counts.failed > 0 && text_is(fail_fast, "1") {
+            suite_line(&arena, cur_title, &suite);
+            finish_group(&arena, timings, cur_suite, group_ms);
+            stopped = true;
+            print("Stopping at the first failure (--fail-fast).\n");
+        }
+        n = n + 1 as usize;
+    }
+    if cur_suite.len > 0 as usize && !stopped {
+        suite_line(&arena, cur_title, &suite);
+        finish_group(&arena, timings, cur_suite, group_ms);
+    }
+
+    if text_is(full_run, "1") && !stopped {
+        let list = claims.as_slice();
+        let mut ci = 0 as usize;
+        while ci < list.len {
+            print(cat2(&arena, list[ci], "\n"));
+            total.run = total.run + 1;
+            total.failed = total.failed + 1;
+            ci = ci + 1 as usize;
+        }
+    }
+
+    // Nothing the run wrote may stay outside build/.
+    let mut stray = Counts::zero();
+    if !stray_recorded {
+        total.skipped = total.skipped + 1;
+        stray.skipped = 1;
+        if !is_quiet { print("[SKIP] stray-files (the work directory is not writable)\n"); }
+    } else {
+        let found_path = cat2(&arena, work, "/ztest.stray");
+        let _ = run_script(
+            &arena,
+            "scripts/check_stray_files.sh",
+            "--compare",
+            stray_start,
+            found_path
+        );
+        let found = contents_or_empty(&arena, found_path).split('\n' as u8, &arena);
+        let mut bad = 0 as i64;
+        let mut fi = 0 as usize;
+        while fi < found.len() {
+            let entry = field(&found, fi);
+            fi = fi + 1 as usize;
+            if entry.len == 0 as usize { continue; }
+            let mut m = String.new_in(&arena);
+            m.push_str("[FAIL] stray-files: ");
+            m.push_str(entry);
+            m.push_str(" (a test wrote it outside build/)\n");
+            print(m.as_slice());
+            bad = bad + 1;
+        }
+        total.run = total.run + 1;
+        stray.run = 1;
+        if bad > 0 {
+            total.failed = total.failed + 1;
+            stray.failed = 1;
+        } else {
+            total.passed = total.passed + 1;
+            stray.passed = 1;
+            if !is_quiet { print("[PASS] stray-files: nothing was written outside build/\n"); }
+        }
+    }
+    if !stopped { suite_line(&arena, "stray-files", &stray); }
+
+    let tenths = ((monotonic_ns() - started) / 1000000 + 50) / 100;
+    let mut t = String.new_in(&arena);
+    t.push_str("Total: ");
+    t.push_i64(total.run);
+    t.push_str(" run, ");
+    t.push_i64(total.passed);
+    t.push_str(" passed, ");
+    t.push_i64(total.failed);
+    t.push_str(" failed, ");
+    t.push_i64(total.skipped);
+    t.push_str(" skipped (");
+    t.push_i64(tenths / 10);
+    t.push_str(".");
+    t.push_i64(tenths % 10);
+    t.push_str("s)\n");
+    print(t.as_slice());
+    if total.failed > 0 { return 1; }
+    return 0;
+}
+
+// A group's own row in the timings file; gates and the tests named on the command line have none.
+fn finish_group(a: &Arena, timings: [u8], suite: [u8], ms: i64) {
+    if suite.starts_with("gate:") || text_is(suite, "-") || suite.len == 0 as usize { return; }
+    let row: [[u8]; 3] = [seconds_text(a, ms), "group", suite];
+    append_line(a, timings, &row);
+}

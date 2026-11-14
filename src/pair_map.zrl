@@ -22,7 +22,7 @@ pub struct PairMap {
 impl PairMap {
     pub fn new(arena: *mut ArenaHeader) -> PairMap {
         let mut buckets = unsafe { Vec::<u32>.new_in_raw(arena) };
-        buckets.resize(64 as usize);
+        buckets.resize(64 as usize, 0 as u32);
         return PairMap { entries: unsafe { Vec::<PairEntry>.new_in_raw(arena) }, buckets: buckets };
     }
 
@@ -63,7 +63,7 @@ impl PairMap {
         let size = self.buckets.len() * 2 as usize;
         let mask = size - 1 as usize;
         self.buckets.clear();
-        self.buckets.resize(size);
+        self.buckets.resize(size, 0 as u32);
         for k in 0 as usize..self.entries.len() {
             let e = self.entries.as_slice()[k];
             let mut i = pair_hash(e.a, e.b) & mask;

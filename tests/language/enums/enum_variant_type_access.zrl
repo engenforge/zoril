@@ -1,0 +1,33 @@
+enum E {
+    A,
+    B,
+}
+
+type F = E;
+
+impl E {
+    fn make_self() -> E {
+        return Self.B;
+    }
+}
+
+fn main() -> i32 {
+    let e1 = E.B;
+    let e2 = F.B;
+    let e3 = E::make_self();
+
+    match e1 {
+        E.B => {},
+        _ => { return 1; },
+    };
+    match e2 {
+        E.B => {},
+        _ => { return 2; },
+    };
+    match e3 {
+        E.B => {},
+        _ => { return 3; },
+    };
+
+    return 0;
+}

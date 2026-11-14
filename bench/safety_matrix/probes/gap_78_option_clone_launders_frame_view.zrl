@@ -1,0 +1,9 @@
+// name: Option.clone of an Option holding a view of this frame is returned
+// expected: known_gap
+// gap: impl<T: Clone> Clone for Option<T> declares #[borrows()], so the clone of Some(s), s a view of a stack array, holds no borrow; returning it is accepted and the caller reads the dead frame
+// observed: exit 7
+import "core.zrl";
+import "clone.zrl";
+fn view() -> Option<[u8]> { let buf = [42 as u8; 16]; let s: [u8] = &buf; let o = Option.Some(s); return o.clone(); }
+fn smash(n: i32) -> i32 { let junk = [7 as u8; 256]; if n > 0 { return smash(n - 1) + junk[3] as i32; } return 0; }
+fn main() -> i32 { let o = view(); let _ = smash(8); match o { Some(s) => { return s[0] as i32; }, None => { return 1; } } }

@@ -1,0 +1,24 @@
+// expected compile fail
+// EXPECT: error: type `S` does not implement trait `Copy`
+// A bound on an impl block's own type parameter is checked at each call of its methods, as a
+// generic function's bound is: directly and through a generic caller.
+import "core.zrl";
+
+struct S { id: i64 }
+impl Drop for S { fn drop(self: &mut S) {} }
+
+struct W<T> { x: T }
+impl<T> W<T> { fn get(self: &W<T>) -> i32 { return 1; } }
+impl<T: Copy> W<T> { fn dup(self: &W<T>) -> i32 { return 2; } }
+
+fn through<T>(w: &W<T>) -> i32 {
+    return w.dup();
+}
+
+fn main() -> i32 {
+    let w = W { x: S { id: 1 } };
+    let a = w.get();
+    let b = w.dup();
+    let c = through(&w);
+    return 0;
+}

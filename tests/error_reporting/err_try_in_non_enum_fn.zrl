@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_try_in_non_enum_fn.zrl:6:29: error: `?` on `Result<i32, i64>` returns its `Err` early, which `i32` cannot hold
+// `?` in a function that returns no `Result` has nowhere to put the error.
+import "core.zrl";
+fn inner() -> Result<i32, i64> { return Result.Err(7 as i64); }
+fn outer() -> i32 { let v = inner()?; return v; }
+fn main() -> i32 { return outer(); }

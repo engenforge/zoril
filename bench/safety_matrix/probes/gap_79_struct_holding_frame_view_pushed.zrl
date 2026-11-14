@@ -1,0 +1,19 @@
+// name: A struct holding a view of this frame is pushed into the caller's Vec
+// expected: known_gap
+// gap: out.push(H { s: s }) with s a [u8] view of the stack array buf: the struct literal carries the view, and the push stores it into the caller's Vec without the region-escape error that out.push(s) of the bare view gets, so the caller reads the dead frame (also through resize and extend_from_slice)
+// observed: exit 77
+import "vec.zrl";
+use vec::Vec;
+struct H { s: [u8] }
+fn fill(out: &mut Vec<H>) {
+    let buf = [42 as u8; 16];
+    let s: [u8] = &buf;
+    out.push(H { s: s });
+}
+fn clobber_stack() -> u8 { let arr = [77 as u8; 512]; return arr[0]; }
+fn main() -> i32 {
+    let mut v: Vec<H> = Vec.new();
+    fill(&mut v);
+    let c = clobber_stack();
+    return v[0].s[0] as i32 + (c as i32) * 0;
+}

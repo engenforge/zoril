@@ -1,0 +1,18 @@
+// name: Moving a payload out of an enum that has its own Drop is rejected
+// expected: compile_reject
+// EXPECT: cannot move out of type
+// Moving a non-Copy payload out of a value whose type implements Drop consumes the value and skips its Drop.
+struct S { p: *mut u8 }
+impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } } }
+enum D { A(S), B }
+impl Drop for D { fn drop(self: &mut D) { match self { D.A(s) => { unsafe { *s.p = *s.p + 10 as u8; } }, D.B => {}, } } }
+fn main() -> i32 {
+    let mut flag = 0 as u8;
+    let fp = &mut flag as *mut u8;
+    {
+        let d = D.A(S { p: fp });
+        match d { D.A(s) => { let n = 1; }, D.B => {}, }
+    }
+    if flag == 11 as u8 { return 0; }
+    return 7;
+}

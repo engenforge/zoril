@@ -216,8 +216,24 @@ printf '// The rationale is in doc/design/provenance.md.\nfn f() {}\n' > "$d/src
 run "$d"
 expect "a doc/design file the tree does not carry fails" 1 "references 'doc/design/provenance.md', which the tree does not carry"
 
+# 26. A task identifier in a comment is a finding, in either form; a word that only ends in `id:` is not one.
+d=$(tree task_id_z)
+printf '// Fixed for Z-%s.\nfn f() {}\n' 0128 > "$d/src/a.zrl"
+run "$d"
+expect "a counted task ID in a comment fails" 1 "task-id: Z-$(printf %s 0128)"
+
+d=$(tree task_id_word)
+printf '// Fixed for id:k7q2x.\nfn f() {}\n' > "$d/src/a.zrl"
+run "$d"
+expect "a drawn task ID in a comment fails" 1 "task-id: id:k7q2x"
+
+d=$(tree task_id_pid)
+printf '// The pid:12345 line and a field id: u32 are not task IDs.\nfn f() {}\n' > "$d/src/a.zrl"
+run "$d"
+expect "a pid: word and an id: field pass" 0 "no scaffolding"
+
 if [ "$errors" -ne 0 ]; then
     echo "[FAIL] $errors case(s) failed"
     exit 1
 fi
-echo "[PASS] check_comment_noise.sh behaves as specified (25 cases)"
+echo "[PASS] check_comment_noise.sh behaves as specified (28 cases)"

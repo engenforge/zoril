@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_try_option_into_result.zrl:6:42: error: `?` on `Option<i32>` returns its `None` early, which `Result<i32, i32>` cannot hold
+// `?` on an `Option` returns its `None`, which a `Result` cannot hold (probe gap_69).
+import "core.zrl";
+fn inner() -> Option<i32> { return Option.None; }
+fn outer() -> Result<i32, i32> { let v = inner()?; return Result.Ok(v); }
+fn main() -> i32 { return match outer() { Ok(v) => v, Err(_) => 1 }; }

@@ -24,7 +24,7 @@ use mem_raw::{ArenaHeader, zoril_allocator_alloc};
 use mono::{INFER_RESULT, Monomorphizer};
 use resolve::{Resolver, Symbol, SymbolKind};
 use vec::Vec;
-use zir::{LOCAL_KIND_ARG, LOCAL_KIND_LET, LOCAL_KIND_LETMUT, LOCAL_KIND_TMP, Local, Place, Projection, ZirBlock, ZirFunction, ZirRvalue, ZirStmt, ZirTerminator};
+use zir::{LOCAL_KIND_ARG, LOCAL_KIND_LET, LOCAL_KIND_LETMUT, LOCAL_KIND_TMP, Local, PROJ_FIELD, PROJ_INDEX, PROJ_TUPLEINDEX, Place, Projection, ZirBlock, ZirFunction, ZirRvalue, ZirStmt, ZirTerminator};
 
 pub struct ZirSymbolMapEntry {
     pub sym: *mut Symbol,
@@ -63,6 +63,11 @@ pub struct ZirLoopEntry {
     pub has_break: bool,
 }
 
+pub struct SkippedPart {
+    pub place: Place,
+    pub flag: u32,
+}
+
 pub struct ZirLowerer {
     pub arena: *mut ArenaHeader,
     pub persistent_arena: *mut ArenaHeader,
@@ -74,7 +79,28 @@ pub struct ZirLowerer {
     // Set while lowering a `let` pattern: its bindings shadow same-named locals of the
     // enclosing scope instead of joining them (which only or-pattern alternatives do).
     pub pattern_binds_fresh: bool,
+    // Set by a pattern binding that moves a value out of the scrutinee (by value, not Copy):
+    // only an arm whose pattern sets it consumes the scrutinee; any other leaves it owned.
+    pub pattern_moved: bool,
+    // The parts a by-value pattern skips (`_`, a struct pattern's `..`) whose type needs a drop:
+    // an arm (or `let`) that moves another part out consumes the scrutinee, so it drops these itself.
+    // Outside an or-pattern `flag` is 0 (dropped unconditionally); inside one, `flag` is a bool
+    // initialized false at pattern entry, set true on match, and reset if that alternative fails.
+    pub pattern_skipped: Vec<SkippedPart>,
+    pub pattern_or_depth: u32,
+    pub pattern_has_guard: bool,
+    pub pattern_entry_block: usize,
+    pub pattern_in_drop_type: u32,
+    // Non-Copy bindings created by an arm's pattern while its guard is lowered: the guard may not
+    // move out of them, and early exits (`return`/`break`/`continue`) do not drop them because
+    // the scrutinee still owns them until the guard passes.
+    pub guard_bound_locals: Vec<u32>,
+    // Scrutinee places of every match whose guard is currently being lowered, innermost last,
+    // so a guard cannot assign to or mutably borrow any enclosing scrutinee (or overlapping subplace).
+    pub guard_scruts: Vec<Place>,
     pub had_error: bool,
+    // Errors reported so far; a cleanup compares it around a `defer` to see whether that `defer` failed.
+    pub error_count: u32,
 
     pub locals: Vec<Local>,
     pub local_consumed: Vec<bool>,
@@ -110,6 +136,10 @@ pub struct ZirLowerer {
     pub is_void_main: bool,
     pub current_literal_comment: u32, // ambient: the AST-level literal comment for the statement currently being lowered, 0 if none
     pub unsafe_depth: u32,
+    // Nonzero while a scope's defers are being lowered; `defer_scope_depth` is the scope being
+    // exited, so a loop entered inside the `defer` (deeper) may still `break`.
+    pub defer_depth: u32,
+    pub defer_scope_depth: usize,
     // Path reported by `report_prefix`: the file of the function being lowered (the
     // `Resolver`'s is the entry file's, shared across every imported file). Empty means the
     // resolver's.
@@ -140,7 +170,16 @@ impl ZirLowerer {
             module: module,
             next_region_id: 1 as u32,
             pattern_binds_fresh: false,
+            pattern_moved: false,
+            pattern_skipped: unsafe { Vec::<SkippedPart>.new_in_raw(arena) },
+            pattern_or_depth: 0 as u32,
+            pattern_has_guard: false,
+            pattern_entry_block: 0 as usize,
+            pattern_in_drop_type: 0 as u32,
+            guard_bound_locals: unsafe { Vec::<u32>.new_in_raw(arena) },
+            guard_scruts: unsafe { Vec::<Place>.new_in_raw(arena) },
             had_error: false,
+            error_count: 0 as u32,
             locals: unsafe { Vec::<Local>.new_in_raw(arena) },
             local_consumed: unsafe { Vec::<bool>.new_in_raw(arena) },
             local_drop_flag: unsafe { Vec::<u32>.new_in_raw(arena) },
@@ -163,6 +202,8 @@ impl ZirLowerer {
             is_void_main: false,
             current_literal_comment: 0 as u32,
             unsafe_depth: 0 as u32,
+            defer_depth: 0 as u32,
+            defer_scope_depth: 0 as usize,
             file_path: "",
             current_source_file: 0 as u32,
             compile_only: false,
@@ -170,8 +211,48 @@ impl ZirLowerer {
         };
     }
 
+    fn guard_place_overlaps(self: &ZirLowerer, scrut: &Place, place: &Place) -> bool {
+        if scrut.base == 0 as u32 || scrut.base != place.base {
+            return false;
+        }
+        let n = if scrut.projections.len < place.projections.len {
+            scrut.projections.len
+        } else {
+            place.projections.len
+        };
+        let mut i = 0 as usize;
+        while i < n {
+            let pr1 = &scrut.projections[i];
+            let pr2 = &place.projections[i];
+            let tag1 = pr1.get_tag();
+            let tag2 = pr2.get_tag();
+            if tag1 != tag2 { return true; }
+            if tag1 == PROJ_FIELD {
+                if pr1.get_Field() != pr2.get_Field() { return false; }
+            } else if tag1 == PROJ_TUPLEINDEX {
+                if pr1.get_TupleIndex() != pr2.get_TupleIndex() { return false; }
+            } else if tag1 == PROJ_INDEX {
+                if pr1.get_Index() != pr2.get_Index() { return true; }
+            }
+            i = i + 1 as usize;
+        }
+        return true;
+    }
+
+    pub fn guard_scrut_overlaps(self: &ZirLowerer, place: &Place) -> bool {
+        let mut i = 0 as usize;
+        while i < self.guard_scruts.len() {
+            if self.guard_place_overlaps(&self.guard_scruts[i], place) {
+                return true;
+            }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
     pub fn report_prefix(self: &mut ZirLowerer, span: Span) {
         self.had_error = true;
+        self.error_count = self.error_count + 1 as u32;
         self.resolver.had_error = true;
         diag_start(
             if self.file_path.len > 0 as usize { self.file_path } else { self.resolver.file_path },
@@ -385,11 +466,26 @@ impl ZirLowerer {
                 let defers = &self.scope_defers[depth];
                 defers_copy.extend_from_slice(defers.as_slice());
             }
+            // A `defer` runs while its scope exits: an exit from inside it (`return`, `?`, or a
+            // `break`/`continue` past `depth`) would lower this cleanup again, without end, so the
+            // exits check `defer_depth` and refuse (surface_syntax.md §7.3).
+            let saved_defer_depth = self.defer_depth;
+            let saved_defer_scope = self.defer_scope_depth;
+            self.defer_depth = self.defer_depth + 1 as u32;
+            self.defer_scope_depth = depth;
             let mut j = defers_copy.len();
             while j > 0 as usize {
                 j = j - 1 as usize;
+                let errors_before = self.error_count;
                 self.lower_expr(defers_copy.as_slice()[j], 0 as u32);
+                // Every exit of the scope lowers its defers again; a refused one would repeat
+                // its diagnostic once per exit.
+                if self.error_count != errors_before {
+                    self.scope_defers[depth].clear();
+                }
             }
+            self.defer_depth = saved_defer_depth;
+            self.defer_scope_depth = saved_defer_scope;
 
             // 2. Emit drops for locals
             let mut locals_copy = unsafe { Vec::<u32>.new_in_raw(self.arena) };
@@ -667,6 +763,18 @@ impl ZirLowerer {
         self.local_consumed[local_id as usize - 1 as usize] = consumed;
     }
 
+    pub fn is_guard_bound(self: &ZirLowerer, local_id: u32) -> bool {
+        if local_id == 0 as u32 { return false; }
+        let mut i = 0 as usize;
+        while i < self.guard_bound_locals.len() {
+            if self.guard_bound_locals[i] == local_id {
+                return true;
+            }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
     pub fn consume_place_if_move(self: &mut ZirLowerer, place: &Place) {
         if place.base == 0 as u32 { return; }
         if place.projections.len > 0 as usize {
@@ -676,6 +784,13 @@ impl ZirLowerer {
         if place.base as usize > self.locals.len() { return; }
         let p_local = &self.locals[place.base as usize - 1 as usize];
         if !p_local.is_copy {
+            if self.is_guard_bound(place.base) {
+                self.report_error(
+                    "cannot move out of a pattern binding in a match guard",
+                    self.cur_span
+                );
+                return;
+            }
             if self.drop_flag_of(place.base) != 0 as u32 {
                 self.set_drop_flag(
                     place.base,
@@ -733,7 +848,8 @@ impl ZirLowerer {
                     self.emit(ZirStmt.Drop(lhs_place, span));
                 }
                 self.set_local_consumed(lhs_place.base, false);
-            } else if lhs_place.projections.len > 0 as usize {
+            } else if lhs_place.projections.len > 0 as usize
+                && !self.place_through_raw_pointer(&lhs_place) {
                 self.emit(ZirStmt.Drop(lhs_place, span));
             }
             self.consume_place_if_move(rhs_place);

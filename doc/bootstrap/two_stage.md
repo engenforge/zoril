@@ -22,7 +22,7 @@ The snapshot holds the import closures of `src/main.zrl` and `tools/zilc/src/mai
 | `tools/zilc/src/` | `main`, `qbe`, `zil_parse`                        |
 | `rt/`             | `runtime.s`, to link the stage1 binaries          |
 
-It mirrors the repository paths under its own directory, plus a `PIN` file naming the pinned release. It is built with include roots inside the snapshot only and is never edited by hand.
+It mirrors the repository paths under its own directory, plus a `PIN` file naming the release it shipped with. The snapshot is an older `src/`, ported by hand to the `stage0-C` dialect; it is not that release's `src/` (the two differ in 25 files, and each has files the other lacks). It is built with include roots inside the snapshot only and is never edited by hand.
 
 After a freeze:
 
@@ -52,12 +52,13 @@ Each snapshot must be compilable by `stage0-C`, so the snapshot is never appende
 - A re-pin replaces the snapshot with a newer snapshot of `src/` that has been ported back into the `stage0-C` dialect by hand. It is expected to be rare: only when the compiler's own source needs a language feature added after the freeze.
 - A deliberate **backport** may add a language feature the frozen compiler must parse (`use` / `ns::item`, `unsafe fn`). It is made through the re-pin procedure and recorded in the commit that carries it; a runtime fix moves `bootstrap/stage1/rt/runtime.s` with `rt/runtime.s`, because the `runtimes` gate requires the two to stay byte-identical.
   - **Backport recorded:** `bootstrap/stage1/rt/runtime.s` gained a `.note.GNU-stack` section (`.section .note.GNU-stack,"",@progbits`, which marks the stack non-executable) as a byte-identical copy of the same addition to `rt/runtime.s`. It changes no symbol and no code: the stage1 binaries link the object and now get a non-executable `GNU_STACK` instead of `RWE`. It is not a language backport and not a re-pin; `bootstrap/stage1/PIN` is unchanged.
+  - **Backport recorded:** `bootstrap/stage1/src/lower_zir/match.zrl` and `bootstrap/stage1/src/lower_zir/expr.zrl` mark a by-value `match` scrutinee moved after the arm's guard and mark a by-value `self` method receiver moved after argument evaluation (backporting git:a38ce23 and git:ac6e24e so a value with a destructor moved either way in the `src/` closure is dropped once).
 - Verification, scripted in the source repository: `stage0-C` builds the candidate, the candidate builds current `src/`, the fixpoint holds, `make test` and `make preflight` pass, and `bootstrap/stage1/PIN` records the release it was pinned for.
 
 ## 4. Carried limits
 
 - **Complexity ceiling:** `stage0-C`'s verifier rejects a function with more than 10,000 IL instructions or 1,000 blocks. Blocks are the binding limit in practice. A re-pin re-measures the headroom.
-- The `stage0-C` dialect and its known bugs apply to the snapshot's source, which is today's `src/` and already complies. The dialect workarounds stay in the snapshot permanently; see [`KNOWN_ISSUES.md`](../../KNOWN_ISSUES.md) for the seed's known bugs and limits.
+- The `stage0-C` dialect and its known bugs apply to the snapshot's source, which was written in that dialect and is not today's `src/`. The dialect workarounds stay in the snapshot permanently; see [`KNOWN_ISSUES.md`](../../KNOWN_ISSUES.md) for the seed's known bugs and limits.
 
 ## 5. Host dependencies
 

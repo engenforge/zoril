@@ -21,6 +21,7 @@
 #
 # Usage: test_result_file.sh      (no arguments)
 cd "$(dirname "$0")/.." || exit 2
+. scripts/lib/portability.sh
 
 # Its own work directory and settings: this usually runs inside another test.sh run, whose exported
 # options would otherwise leak in.
@@ -36,7 +37,7 @@ pass() { echo "[PASS] result-file: $1"; }
 
 # 1. a held write must not be read half done
 out="$TR_WORK/held.out"
-TR_TEST_ST_DELAY=1:3 timeout 120 ./scripts/test.sh -j 2 $TESTS > "$out" 2>&1
+TR_TEST_ST_DELAY=1:3 run_with_timeout 120 ./scripts/test.sh -j 2 $TESTS > "$out" 2>&1
 rc=$?
 if [ "$rc" -eq 0 ] && ! grep -qF "left no result" "$out" && grep -qE '^Total: [0-9]+ run, [0-9]+ passed, 0 failed' "$out"; then
     pass "a status file held open and empty for 3 s is not read: every test passes, none is \"left no result\""
@@ -48,7 +49,7 @@ fi
 # 2. a result that is really missing keeps the worker's output and gets the line appended
 out="$TR_WORK/killed.out"
 rm -rf "$TR_WORK/items"    # the first run's items, or the wait below would see its 1.out
-TR_TEST_ST_DELAY=1:4 timeout 120 ./scripts/test.sh -j 1 tests/language/basic/bool_int_strict.zrl > "$out" 2>&1 &
+TR_TEST_ST_DELAY=1:4 run_with_timeout 120 ./scripts/test.sh -j 1 tests/language/basic/bool_int_strict.zrl > "$out" 2>&1 &
 run=$!
 i=0
 while [ ! -s "$TR_WORK/items/1.out" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done

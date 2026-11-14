@@ -5,7 +5,7 @@
 .nh
 .ad l
 .\" Begin generated content:
-.TH "zoril\-clone" "3" "2026\-10\-27"
+.TH "zoril\-clone" "3" "2026\-11\-11"
 .PP
 .SH NAME
 .PP
@@ -17,45 +17,6 @@ zoril\-clone \- Explicit deep cloning traits and implementations (Clone, Copy)
 .PP
 .nf
 .RS 4
-impl Clone for bool {
-    pub fn clone(self: &bool) \-> bool;
-}
-impl Clone for u8 {
-    pub fn clone(self: &u8) \-> u8;
-}
-impl Clone for u16 {
-    pub fn clone(self: &u16) \-> u16;
-}
-impl Clone for u32 {
-    pub fn clone(self: &u32) \-> u32;
-}
-impl Clone for u64 {
-    pub fn clone(self: &u64) \-> u64;
-}
-impl Clone for usize {
-    pub fn clone(self: &usize) \-> usize;
-}
-impl Clone for i8 {
-    pub fn clone(self: &i8) \-> i8;
-}
-impl Clone for i16 {
-    pub fn clone(self: &i16) \-> i16;
-}
-impl Clone for i32 {
-    pub fn clone(self: &i32) \-> i32;
-}
-impl Clone for i64 {
-    pub fn clone(self: &i64) \-> i64;
-}
-impl Clone for isize {
-    pub fn clone(self: &isize) \-> isize;
-}
-impl<T: Clone> Clone for Option<T> {
-    pub fn clone(self: &Option<T>) \-> Option<T>;
-}
-impl<T: Clone> Clone for [T] {
-    pub fn clone(self: &[T]) \-> [T];
-}
 impl<T: Clone> Clone for Vec<T> {
     pub fn clone(self: &Vec<T>) \-> Vec<T>;
 }
@@ -73,149 +34,6 @@ memory without relying on the C runtime library.\&
 .PP
 .SH ITEMS
 .PP
-\fBclone\fR
-.nf
-.RS 4
-pub fn clone(self: &bool) \-> bool;
-.fi
-.RE
-.PP
-.RS 4
-Creates an explicit duplicate copy of the value.\&
-.PP
-.RE
-\fBclone\fR
-.nf
-.RS 4
-pub fn clone(self: &u8) \-> u8;
-.fi
-.RE
-.PP
-.RS 4
-Creates an explicit duplicate copy of the value.\&
-.PP
-.RE
-\fBclone\fR
-.nf
-.RS 4
-pub fn clone(self: &u16) \-> u16;
-.fi
-.RE
-.PP
-.RS 4
-Creates an explicit duplicate copy of the value.\&
-.PP
-.RE
-\fBclone\fR
-.nf
-.RS 4
-pub fn clone(self: &u32) \-> u32;
-.fi
-.RE
-.PP
-.RS 4
-Creates an explicit duplicate copy of the value.\&
-.PP
-.RE
-\fBclone\fR
-.nf
-.RS 4
-pub fn clone(self: &u64) \-> u64;
-.fi
-.RE
-.PP
-.RS 4
-Creates an explicit duplicate copy of the value.\&
-.PP
-.RE
-\fBclone\fR
-.nf
-.RS 4
-pub fn clone(self: &usize) \-> usize;
-.fi
-.RE
-.PP
-.RS 4
-Creates an explicit duplicate copy of the value.\&
-.PP
-.RE
-\fBclone\fR
-.nf
-.RS 4
-pub fn clone(self: &i8) \-> i8;
-.fi
-.RE
-.PP
-.RS 4
-Creates an explicit duplicate copy of the value.\&
-.PP
-.RE
-\fBclone\fR
-.nf
-.RS 4
-pub fn clone(self: &i16) \-> i16;
-.fi
-.RE
-.PP
-.RS 4
-Creates an explicit duplicate copy of the value.\&
-.PP
-.RE
-\fBclone\fR
-.nf
-.RS 4
-pub fn clone(self: &i32) \-> i32;
-.fi
-.RE
-.PP
-.RS 4
-Creates an explicit duplicate copy of the value.\&
-.PP
-.RE
-\fBclone\fR
-.nf
-.RS 4
-pub fn clone(self: &i64) \-> i64;
-.fi
-.RE
-.PP
-.RS 4
-Creates an explicit duplicate copy of the value.\&
-.PP
-.RE
-\fBclone\fR
-.nf
-.RS 4
-pub fn clone(self: &isize) \-> isize;
-.fi
-.RE
-.PP
-.RS 4
-Creates an explicit duplicate copy of the value.\&
-.PP
-.RE
-\fBclone\fR
-.nf
-.RS 4
-pub fn clone(self: &Option<T>) \-> Option<T>;
-.fi
-.RE
-.PP
-.RS 4
-Creates an explicit duplicate copy of the value.\&
-.PP
-.RE
-\fBclone\fR
-.nf
-.RS 4
-pub fn clone(self: &[T]) \-> [T];
-.fi
-.RE
-.PP
-.RS 4
-Creates an explicit duplicate copy of the value.\&
-.PP
-.RE
 \fBclone\fR
 .nf
 .RS 4
