@@ -333,6 +333,14 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Found:** a call ignores a wrong number of type arguments: `id::<i32, i32>(3)` with `fn id<T>(x: T) -> T` and `g::<i32>(3)` with a non-generic `g` both compile and run (exit 0 for `return id::<i32, i32>(3) - 3;`), and `id::<>(3)` infers `T`. The value form refuses each since git:dc006a0 (`a generic function named as a value needs one type argument for each of its type parameters`, `type arguments given to a function that is not generic`). `direct_callee` in `src/lower_zir/expr.zrl` passes `type_args` to `instantiate_function` without comparing the count with `ff.type_params.len`; a method call (`instantiate_method`) is the twin to probe.
     - **Do:** refuse a count that is not zero and not the declaration's (zero still infers), and type arguments on a non-generic function, at the call as the value form does; an error test per form; `make test`, `make preflight-changed` (the differential lists the newly refused programs).
 
+- [ ] +types +diagnostics @main A pattern that moves several values out of a tuple or struct is accepted id:ts1jg
+    > **Created:** 2026-11-14
+    > **Context:** found by id:z0176's sibling probes.
+    > **Placed:** in `future.tm.md`: a false refusal (the safe side), no task depends on it; after id:z0176's fix, whose arm-scope change it should be re-probed against.
+
+    - **Found (`main` at git:8d4670b, `S: Drop`):** each is refused with `use of moved value`, though it moves each value once: `let (s, k) = t;` with `t: (S, i32)`, `let W { s: s, k: k } = w;` with `struct W { s: S, k: i32 }`, `match w { W { s: s, k: k } => .. }`, and `T.A((s, k))` for `enum T { A((S, i32)), B }` (`use of moved value 'the value of the expression at ..'`). Binding the aggregate whole (`T.A(t)`, `F.A(w)`) is accepted.
+    - **Do:** find which move the checker sees twice (the destructured place, then a field of it), and accept a pattern whose bindings move disjoint parts; the rejection differential lists every newly accepted program, each read for a second owner.
+
 ## Decisions and hygiene
 
 - [ ] +safety +decision +AI-D id:z0102 Whether `unsafe fn` gets a `fn` type of its own, callable only in `unsafe`

@@ -27,6 +27,130 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Do, first:** probe the siblings on the current tree and count the drops each makes (0, 1 or 2): the payload used (`consume(s)`, one drop in `consume`), a `_` arm, a nested pattern, `if let`, a struct payload, a tuple payload. Record each count here; a 0 is a `known_gap` probe (with the Known gaps entry and a `doc/SAFETY.md` §6 class), a 2 a `known_gap` probe that also stops this task for the maintainer before the fix. Then fix in the same session only if it is one mechanism; otherwise split.
     - **Checks:** C1 each sibling's drop count quoted; C2 the probes recorded and `sh scripts/run_safety_matrix.sh` `Mismatches: 0`; C3 `make test`, its `Total:` quoted.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md`, with the five other open soundness holes on `main`, ahead of the provenance and ZIL series: each is a program `main` accepts and should refuse (or a drop it skips), one session-sized fix. Order among them: the reads of a dead frame first (id:z0183, id:z0180), then the `fn`-value faults (id:z0100, id:z0101), then the skipped drop (id:z0176) and the unchecked bound (id:z0175). Any "after the `vecclone` series merges" note above is met: the series is on `main`, with gap_76 to gap_79 in `bench/safety_matrix/probes/`.
+    - **C1, drop counts on `main` at git:8d4670b (scratch `build/z176/`; `run.sh NAME` builds and runs `NAME.zrl`, its exit status is the drop count; `runh.sh` the same with the HEAD compiler):** 0, where 1 is due: the task's reproducer (`E.A(s) => { let n = 1; }`), `E.A(_)`, a `_` arm (`E.B => {}, _ => {}`), an arm not taken (`E.B => .., E.A(s) => {}`), a nested pattern (`N.A(E.A(s))`), `if let E.A(s) = e`, a struct payload bound whole and by field (`F.A(w)`, `F.A(W { s: s, k: k })`), a tuple payload bound whole (`T.A(t)`), a `match` used as a value (`let n = match e { E.A(s) => 1, .. }`), `match x { y => .. }` on a plain struct, a temporary scrutinee (`match E.A(S { .. }) { .. }`), a scrutinee moved once before (`let e2 = e; match e2 ..`), and a by-value parameter scrutinee. 1, as due: no `match`, `E.A(s) => { consume(s); }`, `if let E.A(s) = e { consume(s); }`, and `match &e`. 2 or more: `P.A(s, _)` with `enum P { A(S, S), B }` (2 drops for 2 values; with `consume(s)` in the arm, 3), traced to a second hole outside `match`: `P.A(a, b)` drops each argument twice (4 drops for 2 values, with named arguments or temporaries; `P1.A((a, b))` with a tuple payload, a tuple literal and a struct literal drop each value once). Refused, not holes: `T.A((s, k))` (`use of moved value 'the value of the expression at ..'`), `let W { s: s, k: k } = w;` and `let (s, k) = t;` (`use of moved value`).
+    - **C2:** `gap_81_match_payload_binding_never_dropped.zrl` (the 0s) and `gap_82_variant_two_payload_args_dropped_twice.zrl` (the 2s) recorded as `known_gap` probes in git:aec6c55, with Known gaps entries and `doc/SAFETY.md` §6 class (M); `sh scripts/run_safety_matrix.sh`: `All probes complete: 461/508 passed. Mismatches: 0`. Both are public by `SECURITY.md`'s line: each needs the program to declare the shape, and no enum in `stdlib/`, `src/` or `tools/` has a variant with several payload fields that need a drop. C3 `make test` at git:aec6c55: `Total: 3286 run, 3286 passed, 0 failed, 96 skipped (120.1s)`.
+    - **Cause of the 0s (gap_81), found in `lower_match` (`src/lower_zir/lower_match.zrl`):** (1) each arm's `pop_scope` runs after the arm's `Jmp` to `match_exit`, and `pop_scope_exclude` emits no cleanup into a terminated block, so no arm ever dropped its bindings (the ZIL of the reproducer has no `drop s`); (2) every arm calls `consume_place_if_move(&scrut_place)`, which clears the scrutinee's drop flag also in an arm that moves nothing out. Cause of the 2s (gap_82): in the ZIL of `P.A(S { .. }, S { .. })` the two argument temporaries' drop flags are set and never cleared when the payload tuple is built from them, so the scope's end drops them and the enum's drop drops them again; not yet located in the lowering of a variant call.
+    - **Tried (not committed; `build/z176/fix.patch`, below):** one mechanism for gap_81, in `lower_match`: a `pattern_moved` flag that `bind_pattern_name` sets for a by-value binding of a non-Copy type, read per arm, so only an arm whose pattern moves consumes the scrutinee; `pop_scope` moved before the arm's jump; and, because the arm's scope end now runs, the match's result local (made lazily inside the first arm that yields a value) promoted to the parent scope (`promote_local_to_parent_scope`), with its drop flag set false in the block the match starts in (`clear_drop_flag_in`), since an arm that returns drops it by that flag. The first two alone made `src/` refuse itself (`stdlib/os/linux.zrl:69:5: error: use of moved value 'a temporary'`: the result local dropped at the first arm's end; then `stdlib/file.zrl:210:12: error: use of uninitialized variable 'a temporary'`: its flag not set on an arm that returns), and a compiler built from that state cannot rebuild `src/`, so `rm build/zoril && make` (through stage1) was needed. With all of it the tree self-hosts and every 0 above drops once, `x_guard_fail`, `x_guard_pass`, `x_or`, `x_return`, `x_break`, `x_nested_match`, `x_loop` (3 for 3 iterations), `x_structrest` and the `u1` to `u6` result cases are right; `P.A(s, _)` gives 3 (gap_82's two extra drops, and the `_` field, which no one drops once the scrutinee is consumed). Not run with it: `make test`, `make preflight-changed`, the rejection differential.
+    - **Stopped (2026-11-14): a 2 was found, so this task stops for the maintainer before the fix, as its **Do** says.** Decision asked: how to proceed with the two holes and the partial-move remainder. Recommendation: (a) fix gap_82 first, as a new task placed before this one, since a repeated drop of a value that owns a resource is worse than a lost one: find where a variant call with several arguments builds its payload tuple and consume each argument as a struct literal's fields are; (b) then this task applies the patch below for gap_81, with an error-free `make test`, `make preflight-changed` and the differential; (c) a pattern that moves one field of a payload and skips another that needs a drop (`P.A(s, _)`, `W { a: a, .. }`) drops the skipped field at the arm's start, as Rust does, which needs a `Drop` of a projected place; or it is refused, as `let x = w.d;` is ("partial moves are not tracked per field", `safety_model.md`): the maintainer's choice, a separate task either way.
+    ```diff
+    diff --git a/src/lower_zir/decl.zrl b/src/lower_zir/decl.zrl
+    index 3ee9ebd..be0aa6a 100644
+    --- a/src/lower_zir/decl.zrl
+    +++ b/src/lower_zir/decl.zrl
+    @@ -74,6 +74,9 @@ pub struct ZirLowerer {
+         // Set while lowering a `let` pattern: its bindings shadow same-named locals of the
+         // enclosing scope instead of joining them (which only or-pattern alternatives do).
+         pub pattern_binds_fresh: bool,
+    +    // Set by a pattern binding that moves a value out of the scrutinee (by value, not Copy):
+    +    // only an arm whose pattern sets it consumes the scrutinee; any other leaves it owned.
+    +    pub pattern_moved: bool,
+         pub had_error: bool,
+         // Errors reported so far; a cleanup compares it around a `defer` to see whether that `defer` failed.
+         pub error_count: u32,
+    @@ -146,6 +149,7 @@ impl ZirLowerer {
+                 module: module,
+                 next_region_id: 1 as u32,
+                 pattern_binds_fresh: false,
+    +            pattern_moved: false,
+                 had_error: false,
+                 error_count: 0 as u32,
+                 locals: unsafe { Vec::<Local>.new_in_raw(arena) },
+    diff --git a/src/lower_zir/lower_match.zrl b/src/lower_zir/lower_match.zrl
+    index b1db455..193b791 100644
+    --- a/src/lower_zir/lower_match.zrl
+    +++ b/src/lower_zir/lower_match.zrl
+    @@ -64,6 +64,7 @@ impl ZirLowerer {
+                 projections: @slice(0 as *mut Projection, 0 as usize)
+             };
+             let mut result_ty = expected_ty;
+    +        let entry_block = self.current_block_idx;
+     
+             let mut any_arm_alive = false;
+             let mut arm_idx = 0 as usize;
+    @@ -95,7 +96,9 @@ impl ZirLowerer {
+                     unreachable_block
+                 };
+     
+    +            self.pattern_moved = false;
+                 self.lower_pattern(scrut_place, scrut_ty, arm.pattern, arm_body_block, fail_block);
+    +            let arm_moves = self.pattern_moved;
+     
+                 self.switch_to_block(arm_body_block);
+     
+    @@ -107,7 +110,9 @@ impl ZirLowerer {
+                     self.switch_to_block(guard_pass_block);
+                 }
+     
+    -            if !self.pattern_peels_pointer(self.get_type_tag(scrut_ty)) {
+    +            // An arm that binds nothing by value (`E.B`, `_`, `E.A(_)`) moves nothing, so the
+    +            // scrutinee stays owned and is dropped at the end of its own scope.
+    +            if arm_moves && !self.pattern_peels_pointer(self.get_type_tag(scrut_ty)) {
+                     self.consume_place_if_move(&scrut_place);
+                 }
+     
+    @@ -134,6 +139,11 @@ impl ZirLowerer {
+                                 result_ty,
+                                 LOCAL_KIND_LETMUT
+                             );
+    +                        // Made inside this arm's scope, but the value is the whole `match`'s, so
+    +                        // its drop flag starts false before any arm: an arm that returns drops
+    +                        // it by that flag.
+    +                        self.promote_local_to_parent_scope(result_place.base);
+    +                        self.clear_drop_flag_in(entry_block, result_place.base);
+                         }
+                         let final_res = self.branch_value_as(
+                             arm_res,
+    @@ -152,13 +162,15 @@ impl ZirLowerer {
+                     }
+                 }
+     
+    +            // The arm's scope ends before its jump: emitted after it, into a terminated block, its
+    +            // bindings' drops were lost.
+    +            self.pop_scope(self.get_expr_span(arm.body));
+    +
+                 if !self.blocks[self.current_block_idx].is_terminated {
+                     any_arm_alive = true;
+                     self.terminate(ZirTerminator.Jmp(exit_block));
+                 }
+     
+    -            self.pop_scope(self.get_expr_span(arm.body));
+    -
+                 if next_arm_check_block != 0 as u32 {
+                     self.switch_to_block(next_arm_check_block);
+                 }
+    @@ -177,6 +189,23 @@ impl ZirLowerer {
+             return result_place;
+         }
+     
+    +    // LOCAL_ID's drop flag set false in block BLOCK_IDX, which may already end in its branch: a
+    +    // block's statements run before its terminator whenever they were added.
+    +    fn clear_drop_flag_in(self: &mut ZirLowerer, block_idx: usize, local_id: u32) {
+    +        let flag = self.drop_flag_of(local_id);
+    +        if flag == 0 as u32 { return; }
+    +        let bool_ty = self.get_primitive_type(ILPrimitive.Bool);
+    +        let p_block = &mut self.blocks[block_idx];
+    +        p_block.stmts.push(
+    +            ZirStmt.Let(
+    +                flag,
+    +                ZirRvalue.Const(0 as u64, bool_ty),
+    +                Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 }
+    +            )
+    +        );
+    +        p_block.literal_comments.push(0 as u32);
+    +    }
+    +
+         pub fn lower_pattern(
+             self: &mut ZirLowerer,
+             scrut_place: Place,
+    @@ -872,6 +901,7 @@ impl ZirLowerer {
+                 sym = self.resolver.define(name, SymbolKind.Local(0), false);
+             }
+             let bind_ty = if by_ref { self.get_ptr_type(ty) } else { ty };
+    +        if !by_ref && !self.is_copy_type(bind_ty) { self.pattern_moved = true; }
+             let mut local_id = self.get_local_by_symbol(sym);
+             if local_id == 0 as u32 {
+                 local_id = self.define_local(
+    ```
 
 - [ ] +safety +types +AI-D @main id:z0175 A bound on an impl block or a method's type parameter is checked
     > **Created:** 2026-11-11
