@@ -2,10 +2,11 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +docs +AI-G @main `AGENTS.md`: the queue is one ordered list, with no `## Now` and `## Next` headings id:m9hjt
+- [x] +docs +AI-G @main `AGENTS.md`: the queue is one ordered list, with no `## Now` and `## Next` headings id:m9hjt
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Placed:** at the top of the queue: a rule fix of under a session with no dependency.
+    > **Completed:** 2026-11-14 git:f7d5617
 
     - **Why (the maintainer, 2026-11-14):** the split between `## Now` (about ten tasks) and `## Next` was a cut by count. It says nothing position does not already say, and promoting a task from `## Next` became a step that blocked sessions. The queue becomes one list in `active.tm.md` ("scheduled, in this order"); `future.tm.md` keeps work that is paused or not scheduled. Who may reorder or promote is unchanged.
     - **Do, in `AGENTS.md` on `main` (one commit):**
@@ -14,6 +15,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       3. Nothing else: `rg -n 'Now|Next' AGENTS.md CONTRIBUTING.md doc/` afterwards names no queue heading.
     - **Do, on the `tasks` branch (a task commit of its own, after the code commit):** delete the `## Now` and `## Next` lines of `active.tm.md` and the blank line after each; move no task.
     - **Checks:** C1 `rg -n '## Now|## Next' AGENTS.md CONTRIBUTING.md doc/developer_guide.md` prints nothing, and `grep -c '^## ' doc/tasks/active.tm.md` prints `1` (Sprint notes). C2 `tm validate doc/tasks/*.tm.md` passes and `tm next` shows the same task before and after the heading deletion (quote both). C3 `git -C doc/tasks show --stat HEAD` changes only `active.tm.md`, with deletions only. C4 doc tier: `make test-changed BASE=HEAD~1`, its `Total:` quoted (no compiled code changes).
+    - **Completion (generalist, 2026-11-14, git:f7d5617):** the "The queue." and "Placing a new task." bullets of `AGENTS.md` are reworded as the task says (one ordered list under no headings but Sprint notes; "the first open task whose"; "top of `active.tm.md`"; "promoting from `future.tm.md`"). The `## Now` and `## Next` lines and the blank line after each are deleted from `active.tm.md` in tasks commit 96b8ec3.
+      - C1: `rg -n '## Now|## Next' AGENTS.md CONTRIBUTING.md doc/developer_guide.md` prints nothing; `grep -c '^## ' doc/tasks/active.tm.md` prints `1`. `rg -n 'Now|Next'` over the three files also names nothing.
+      - C2: `tm validate *.tm.md` passes for all three files; `tm next` shows `[m9hjt]` before and after the deletion.
+      - C3: not as stated. `git show --stat HEAD` of 96b8ec3 shows only `active.tm.md`, but with 11 insertions and 5 deletions, not deletions only. The 9 other inserted lines were the reviewing session's uncommitted edits in the shared worktree (the new task id:0m61c, and a changed line of the 2026-11-14 notes paragraph), which my `git add active.tm.md` committed with the heading deletion. Their content is intact; the commit just holds more than my change.
+      - C4: `make test-changed BASE=HEAD` before the commit (the doc tier selected the whole suite): `Total: 3274 run, 3274 passed, 0 failed, 94 skipped (121.1s)`.
+    - **Awaiting review:** re-run C1 to C3 (C3 as noted).
 
 - [ ] +docs +review +AI-D @main @checkin Review of the one-list queue rule in `AGENTS.md` id:kgv5s
     > **Created:** 2026-11-14
