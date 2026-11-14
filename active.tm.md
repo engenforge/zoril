@@ -192,28 +192,76 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
     - **Completion (2026-11-14):** git:a2f6b6c on `main`, with the golden hashes in git:c161107. The ZIR-to-ZIL lowering and the move checker accept a `ZirStmt.Drop` of a projected place as Settled said, but not of one reached through the pattern's own temporary: an enum payload address (`EnumPayload`) is defined only on the pattern's blocks, so a `Drop` in the arm gave `invalid ZIL (field_addr 1 of Ptr)`. `note_skipped` therefore takes the part's address into a local at the pattern (`Let local = Ref(part)`) and the arm drops `(*local)`. A moving binding marks its aggregate moved, so `lower_pattern_seq` notes every `_` element before it binds any (else `use of moved value`). C1 (`tests/language/match/match_skipped_parts_dropped.zrl`, `// expected exit 0`; 11 cases, each its count): `P.A(s, _)` 2, `P.A(_, t)` 2, `Q.A(W2 { a: a, .. })` 2, `N.A(P.A(s, _))` 2, `O.A(s, _) | O.C(_, s)` 2, a guard that fails then `P.A(_, _)` 2, `P.A(_, _)` 2, a skipped Copy field 1, `if let P.A(s, _)` 2, and two tuples of a moving and a wildcard-only variant 4. The spec's "later arm that binds both" after a failing guard cannot be written: `P.A(s, t) if c => {}, P.A(a, b) => {}` is refused today with `use of moved value`, with no skipped part involved (the binding moves before the guard; see id:ts1jg); the later arm is `P.A(_, _)`. C2 `tests/error_reporting/err_or_pattern_skip_with_guard.zrl` passes (`an or-pattern that moves a value out cannot skip a part that needs a drop when the arm has a guard`; the message is printed twice, as other pattern errors are, once per pass). C3 the arm's drop loop disabled (`while false && di < skipped.len()`), rebuilt: `[FAIL] tests/language/match/match_skipped_parts_dropped.zrl (wrong exit code)`; restored. C4 `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (exit 0; fixpoint; `All mutations caught.`; its suite `Total: 1205 run, 1205 passed, 0 failed, 0 skipped (44.8s)`): `reject-diff: base verdicts: fresh (no cache); base front end 111 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 2 newly refused, of 69149 programs against 7cf8c3e0be26b6bcfd0b3befe3f96e0ebe0f40b7`; the two are `gap_67` (id:z0101, base `hom/main` is behind), none is C2's test (it is a new file, not in the base's corpus). C5 `make test` at git:a2f6b6c: only the `incremental` scenario failed (`06_enums_and_match.zil`, `39_range_patterns.zil`: an or-pattern's alternatives each jump through a block of their own, so those two gain empty blocks); the run was `Total: 3297 run, 3296 passed, 1 failed, 94 skipped (120.8s)`; after `UPDATE_GOLDEN=1 sh scripts/test_incremental.sh` (git:c161107) only that scenario was rerun, printing `PASS: all incremental compilation tests passed.` (the full `make test` was not rerun after the golden commit, which changes only the file that scenario reads); `rm build/zoril && make` printed no `warning:`. The figures in `doc/SAFETY.md` §5 and `doc/spec/unsafe_policy.md` §5 were recomputed in git:a2f6b6c (845 `unsafe` blocks, 47,357 lines). C6 `sh scripts/run_safety_matrix.sh`: `All probes complete: 463/509 passed. Mismatches: 0`. Not done: a skipped part of an or-pattern reached before any alternative has moved (`(O.A(_, _) | O.D, E.A(s))` binds `s` after the or-pattern) is not dropped, because the alternative's edge is built before the later binding is seen; `bench/fuzz/README.md` is stale for this change to `src/`; the host-specific `bench/` files were deleted.
 
-- [ ] +safety +review +AI-D @main @checkin Review of the skipped-part drops in a moving match arm id:nc1r2
+- [x] +safety +review +AI-D @main @checkin Review of the skipped-part drops in a moving match arm id:nc1r2
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Depends:** id:sq2m7
     > **Placed:** after id:sq2m7, the batch it reviews.
+    > **Completed:** 2026-11-14 git:c161107
 
     - **Review:** re-run id:sq2m7's C1, C3, C4 and C6; probe the siblings: a `..` rest in a tuple pattern if the grammar has one, a skipped part inside a struct inside a variant, a `while let` and an `if let` with a skipped part, a skipped part of a generic payload (`G.A(s, _)`), and a moving arm that `return`s or `break`s with a skipped part (dropped once on that path). Then ask the maintainer id:sj5ha's question if it is still open.
+    - **Completion (2026-11-14):** reviewed `git:a2f6b6c` and `git:c161107` (id:sq2m7). Re-ran C1 & C2 (`./scripts/test.sh tests/language/match/match_skipped_parts_dropped.zrl tests/error_reporting/err_or_pattern_skip_with_guard.zrl`: `Total: 3 run, 3 passed, 0 failed, 0 skipped (0.1s)`) and C6 (`sh scripts/run_safety_matrix.sh`: `All probes complete: 463/509 passed. Mismatches: 0`). Noted that id:sq2m7 re-ran only `test_incremental.sh` after `git:c161107` rather than the full `make test`.
+    - Probed the 7 sibling routes named in the check-in: (1) `(s, ..)` on a 3-tuple of `String` is refused by the parser (`error: expected ), but found ..`, grammar has no tuple rest); (2) `Q.A(W2 { a: a, b: _ })` (struct inside variant with `_`) drops 2 times for 2 values; (3) `Q3.A(W3 { a: a, b: _, .. })` (struct inside variant with `_` and `..`) drops 3 times for 3 values; (4) `while let P.A(s, _) = step(&mut i, fp)` over 3 values drops 6 times for 6 values; (5) `if let O.A(s, _) = e` when `e = O.C(mk, mk)` drops 2 times for 2 values; (6) generic `G.A(s, _)` and `G.A(_, t)` on `enum G<T, U>` drops 4 times for 4 values; (7) `return` and `break` inside a moving arm that skips a `String` drop 2 times each for 2 values. Also verified that a failing guard followed by `P.A(a, _) => {}` or `x => {}` compiles and drops 2 times for 2 values (id:sq2m7 only tried `P.A(a, b)`, which hits id:ts1jg).
+    - Deeper probes uncovered four defects: (a) repeated drop in nested `Pattern.Or` when a later sibling sub-pattern fails (`(O.A(s, _) | O.C(_, s), 1)` on `(O.A(mk, mk), 2)` drops 3 times for 2 values because `Pattern.Or` emits `ZirStmt.Drop` inside `alt_block` before outer tuple element `1` is checked, and `_ => {}` then drops the whole tuple); (b) repeated drop in a match guard when a pattern moves (`P.A(s, _) if { let t = s; false } => {}` and `P.A(s, _) if { if true { return; } true } => {}` drop 3 times for 2 values because `bind_pattern_name` initializes `s` with a live drop flag in the arm scope before the guard runs, while `consume_place_if_move(&scrut_place)` only clears the scrutinee's drop flag in `guard_pass_block`); (c) lost drops in `Pattern.Or` before a moving sibling (`(O.A(_, _) | O.D, P.A(s, _))` drops 2 times for 4 values because `Pattern.Or` runs before `P.A(s, _)` sets `pattern_moved`); and (d) lost drops in `let PAT = INIT;` and iterator `for PAT in ITER` (`lower_let_stmt` calls `consume_place_if_move(&init_place)` unconditionally without dropping `pattern_skipped`, so `let (s, _) = (mk, mk);` drops 1 for 2 and `let (_, _) = (mk, mk);` drops 0 for 2).
+    - Per the maintainer's decision: placed id:qm667 right before id:sj5ha to fix all four routes in one task, settled id:sj5ha as `+AI-G` (refuse moving a non-`Copy` value out of a type with its own `Drop`), added `@checkin` id:vvtam after id:sj5ha, and cleaned up stale `Before:`/`After:`/`Blocks:` headers across `active.tm.md`.
 
-- [ ] +safety +decision +AI-D @main A payload is not moved out of an enum that has its own Drop id:sj5ha
+- [ ] +safety +tests +AI-G @main A pattern's skipped parts and guard bindings drop once across or-patterns, guards and let patterns id:qm667
     > **Created:** 2026-11-14
     > **Branch:** `main`
-    > **Placed:** after id:sq2m7: found by id:z0176's twin probes; the same arm-consumes-the-scrutinee rule, for a type with its own `Drop`.
+    > **Depends:** id:nc1r2
+    > **Placed:** before id:sj5ha, as follow-up to id:sq2m7 / id:nc1r2.
+
+    - **Found in id:nc1r2:**
+      1. `Pattern.Or` (`src/lower_zir/lower_match.zrl:347-364`) emits `ZirStmt.Drop` in `alt_block` (before enclosing tuple/struct/variant sibling sub-patterns are checked) and only if `self.pattern_moved` is already true when the `Pattern.Or` finishes. Thus `(O.A(s, _) | O.C(_, s), 1)` on `(O.A(mk, mk), 2)` drops the skipped `_` in `alt_block` and then drops the whole tuple again when `1 == 2` fails (3 drops for 2 values), while `(O.A(_, _) | O.D, P.A(s, _))` does not drop `O.A`'s skipped parts at all (2 drops for 4 values).
+      2. `bind_pattern_name` emits `Let(s, Use(place))` in the arm scope before `arm.guard` runs, while `consume_place_if_move(&scrut_place)` only clears the scrutinee's drop flag in `guard_pass_block`. Moving `s` inside a guard that then returns `false`, or exiting early (`return`/`break`/`continue`) from inside `arm.guard`, drops `s` both from the local and from the unconsumed scrutinee (3 drops for 2 values).
+      3. `lower_let_stmt` (`src/lower_zir/stmt.zrl:101-109`) calls `self.consume_place_if_move(&init_place)` unconditionally and never drops `self.pattern_skipped`. Thus `let (s, _) = (mk, mk);`, `let W2 { a: s, .. } = w;` and `for (s, _) in iter` leak the skipped part, and `let (_, _) = (mk, mk);` and `let W2 { .. } = w;` leak the whole initializer.
+    - **Do:**
+      - Replace `pattern_skipped: Vec<Place>` on `ZirLowerer` (`src/lower_zir/decl.zrl`) with `Vec<SkippedPart>` (`pub struct SkippedPart { pub place: Place, pub flag: u32 }`), plus `pub pattern_entry_block: usize` and `pub guard_bound_locals: Vec<u32>`.
+      - In `note_skipped` (`src/lower_zir/lower_match.zrl`): when `self.pattern_or_depth == 0`, push `SkippedPart { place: deref_place, flag: 0 }`; when `self.pattern_or_depth > 0`, allocate a `bool` flag local initialized to `0` in `self.pattern_entry_block`, emit `Assign(flag, 1)` at the current point in the alternative, and push `SkippedPart { place: deref_place, flag: flag_local }`.
+      - In `Pattern.Or`: do not emit `ZirStmt.Drop` in `alt_block` and do not pop `self.pattern_skipped`. Instead, give each alternative `pats[pi]` its own `alt_fail_block` that resets to `0` the `flag` of every `SkippedPart` pushed during `pats[pi]` before jumping to `next_pat_check_block`, and passes `pass_block` directly as the alternative's success target. In `lower_match` (in `guard_pass_block`, or `arm_body_block` when there is no guard), if `arm_moves && !self.pattern_peels_pointer(...)`, emit all `skipped` drops for the arm (unconditional `Drop` when `flag == 0`, conditional on `flag != 0` when `flag != 0`) right before `self.consume_place_if_move(&scrut_place)`. If `arm_moves && arm.guard != 0` and any `SkippedPart` of the arm has `flag != 0`, report the existing `an or-pattern that moves a value out cannot skip a part that needs a drop when the arm has a guard; bind the part, or split the alternatives into arms` diagnostic.
+      - In `lower_match` when `arm.guard != 0`: while lowering `arm.guard`, temporarily remove the pattern-bound locals from `self.scope_locals[arm_depth]` (so `return`/`break`/`continue` in the guard does not drop them while the scrutinee still owns them) and record them in `self.guard_bound_locals`; in `consume_place_if_move` (`src/lower_zir/decl.zrl`) and `lower_return_stmt` (`src/lower_zir/stmt.zrl`), refuse moving a non-`Copy` local in `self.guard_bound_locals` with `cannot move out of a pattern binding in a match guard`. Restore the locals to `self.scope_locals[arm_depth]` and clear `self.guard_bound_locals` in `guard_pass_block` before lowering `arm.body`.
+      - In `lower_let_stmt` and `lower_let_pattern` (`src/lower_zir/stmt.zrl`): remove the unconditional `self.consume_place_if_move(&init_place)` in `lower_let_stmt`. In `lower_let_pattern`, save and restore the pattern state (`pattern_moved`, `pattern_or_depth`, `pattern_has_guard`, `pattern_entry_block`, and `skipped_base`), and in `pass_block` when `pat_moves && !self.pattern_peels_pointer(self.get_type_tag(ty))`, emit the skipped-part drops for `skipped_base .. self.pattern_skipped.len()` and call `self.consume_place_if_move(&init_place)`.
+    - **Checks:**
+      - C1: `tests/language/match/match_skipped_parts_dropped.zrl` passes with cases covering: struct-in-variant `Q.A(W2 { a: a, b: _ })` (2) and `Q3.A(W3 { a: a, b: _, .. })` (3); `while let P.A(s, _)` over 3 values (6); `if let O.A(s, _)` not taken (2); generic `G.A(s, _)` and `G.A(_, t)` (4); `return` and `break` in a moving arm with a skipped part (2 each); failing guard followed by `P.A(a, _)` (2) and by `x` (2); nested `(O.A(s, _) | O.C(_, s), 1)` failing at `1` (2); `(O.A(_, _) | O.D, P.A(s, _))` (4); `((O.A(_, _), 1) | (_, 2), s)` failing the first alternative at `1` (3); `return` inside a match guard of a moving arm (2); `let (s, _) = (mk, mk)` (2), `let (s, _) = t` (2), `let W2 { a: s, .. } = w` (2), `let (_, _) = (mk, mk)` (2), `let (_, _) = t` (2), `let W2 { .. } = w` (2); and iterator `for (s, _) in iter` over 3 pairs (6).
+      - C2: `tests/error_reporting/err_move_in_match_guard.zrl` (`// expected compile fail`, `// EXPECT: cannot move out of a pattern binding in a match guard`) and `tests/error_reporting/err_or_pattern_skip_with_guard.zrl` pass under `./scripts/test.sh`.
+      - C3: With the `alt_fail_block` flag reset or the `lower_let_pattern` skipped drops commented out in a scratch edit, C1 fails with a wrong exit code.
+      - C4: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` exits 0; quote the `fresh (no cache)` line and list any newly refused programs.
+      - C5: Full `make test` passes (if `corpus/zrl_whole_program_zil.sha256` needs `UPDATE_GOLDEN=1 sh scripts/test_incremental.sh`, commit the golden update separately and re-run the full `make test` after it); quote the final `Total:` line. `rm build/zoril && make` prints no `warning:`.
+      - C6: `sh scripts/run_safety_matrix.sh` reports `Mismatches: 0`, and `sh scripts/check_safety_figures.sh` exits 0.
+
+- [ ] +safety +tests +AI-G @main A payload is not moved out of an enum that has its own `Drop` id:sj5ha
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Depends:** id:qm667
+    > **Placed:** after id:qm667; originally after id:sq2m7 (found by id:z0176's twin probes).
 
     - **Found:** `match d { D.A(s) => {}, D.B => {} }` with `impl Drop for D` moves `s` out and consumes `d`, so `D`'s drop never runs (`bench/safety_matrix/probes/gap_83_payload_moved_out_of_drop_enum.zrl`, the counter reads 1 where 11 is due; on `main` before git:87f24b3 it read 0, every drop lost). An arm that moves nothing (`D.B(q)` with `q` a raw pointer, `D.A(_)`) runs `D`'s drop since git:87f24b3. The struct twin is refused: `let s = w.s;` with `impl Drop for WD` gives `cannot move a field that needs dropping out of a value (partial moves are not tracked)`; Rust refuses a move out of a type that implements `Drop` (E0509).
-    - **Question for the maintainer (a rule in `doc/spec/`):** refuse a by-value pattern that moves a non-Copy value out of a value whose type has its own `Drop` (recommended: it is the struct rule's twin, and running `D`'s drop after its payload has moved out would let it read a moved value); or keep accepting it and document that `D`'s drop does not run. Either way the rule goes into `surface_syntax.md` beside the struct rule and the `Drop Exactly Once` row of `safety_model.md`.
-    - **Do, once decided:** for the refusal, in `bind_pattern_name` (`src/lower_zir/lower_match.zrl`), where `pattern_moved` is set, report when an enclosing pattern's value has a `Drop` impl (the scrutinee and each projection the pattern passes through); probes for a nested `N.A(D.A(s))`, an `if let`, a `while let`, and a by-reference match (accepted); flip `gap_83` to `compile_reject`.
-    - **Checks:** C1 `sh scripts/run_safety_matrix.sh` `Mismatches: 0`; C2 an error test with one `// EXPECT:` per form; C3 take the check out and watch C2 fail; C4 `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, every newly refused program listed with its reason; C5 `make test`, its `Total:` quoted.
+    - **Decision (2026-11-14, maintainer):** Refuse moving a non-`Copy` value out of an enum or struct that implements `Drop` (matching the existing struct partial-move rule and Rust E0509). Binding by reference (`match &d { D.A(s) => {} }`), matching with `_` (`match d { D.A(_) => {} }`), and moving the `Drop` value as a whole (`match n { N.A(d) => {} }`) remain allowed.
+    - **Do:**
+      - Track `pub pattern_in_drop_type: u32` on `ZirLowerer` (`src/lower_zir/decl.zrl`), saved and restored around `lower_pattern` in `lower_match`, `lower_let_pattern`, `lower_pattern_enum_variant` (when `!sub_by_ref` and `self.has_drop_impl(scrut_ty)`), and `lower_pattern_struct` (when `!by_ref` and `self.has_drop_impl(ty)`).
+      - In `bind_pattern_name` (`src/lower_zir/lower_match.zrl`): when `!by_ref && !self.is_copy_type(bind_ty)` and `self.pattern_in_drop_type != 0`, report ``cannot move out of type `<type>`, which implements `Drop` `` (using `self.mono.type_display(self.pattern_in_drop_type)`).
+      - Flip `bench/safety_matrix/probes/gap_83_payload_moved_out_of_drop_enum.zrl` from `// expected: known_gap` to `// expected: compile_reject` with `// EXPECT: cannot move out of type`.
+      - Document the rule in `doc/spec/surface_syntax.md` §8.4 (`The Drop Trait`) and in `doc/spec/safety_model.md` (`Drop Exactly Once` row, and `bench/safety_matrix/matrix.md`), remove `gap_83` from Known gaps in `doc/spec/safety_model.md` and class `(M)` from `doc/SAFETY.md` §6, and recompute the figures in `doc/SAFETY.md` and `doc/spec/unsafe_policy.md` (`sh scripts/check_safety_figures.sh --density --print`, `sh scripts/check_safety_model.sh`).
+    - **Checks:**
+      - C1: `sh scripts/run_safety_matrix.sh` reports `Mismatches: 0`, with `gap_83_payload_moved_out_of_drop_enum.zrl` passing as `compile_reject`.
+      - C2: `tests/error_reporting/err_move_out_of_drop_type_pattern.zrl` (`match d { D.A(s) => {} }`, nested `N.A(D.A(s))`, `D2.A(N.A(s))`, `if let D.A(s) = d`, `while let D.A(s) = d`, and `match w { WD { s: s } => {} }`) and an accepted test in `tests/language/match/match_by_value_drops_once.zrl` (`match &d { D.A(s) => {} }`, `match d { D.A(_) => {} }`, and `match n { N.A(d) => {} }`) pass under `./scripts/test.sh`.
+      - C3: With the `self.pattern_in_drop_type != 0` check in `bind_pattern_name` commented out, C2 and `run_safety_matrix.sh` fail.
+      - C4: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` exits 0; quote the `fresh (no cache)` line and list every newly refused program.
+      - C5: Full `make test` passes (if `corpus/zrl_whole_program_zil.sha256` changes, update it with `UPDATE_GOLDEN=1 sh scripts/test_incremental.sh` in its own commit and re-run `make test` after it); quote the `Total:` line. `rm build/zoril && make` prints no `warning:`.
+
+- [ ] +safety +review +AI-D @main @checkin Review of the pattern-drop fixes and the Drop-enum move refusal id:vvtam
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Depends:** id:qm667, id:sj5ha
+    > **Placed:** after id:sj5ha, to review id:qm667 and id:sj5ha before id:z0175.
+
+    - Re-run id:qm667 and id:sj5ha's **Awaiting review:** commands and `sh scripts/run_safety_matrix.sh`.
+    - Probe sibling routes around pattern drops (nested or-patterns inside structs/tuples/variants, guards with references and nested blocks, `let` destructuring of nested structs/tuples) and `Drop` types in patterns (generic enums with `Drop`, nested tuples/arrays inside a `Drop` enum or struct, `if let` / `while let` / `let` on a `Drop` struct).
 
 - [ ] +safety +types +AI-D @main id:z0175 A bound on an impl block or a method's type parameter is checked
     > **Created:** 2026-11-11
     > **Branch:** `main`
-    > **After:** the `vecclone` series is merged (it may refuse programs the series' tests use).
+    > **Depends:** id:vvtam
 
     - **Found (2026-11-11, git:fc55a0a, scratch `build/p34/`):** `impl<T: Copy> W<T> { fn dup(self: &W<T>) -> i32 }` called on a `W<S>` with `S: Drop` compiles (`b_split_impl_drop.zrl`, exit 0), and so does `fn dup<U: Copy>(self: &W<T>, u: &U)` called with `&S` (`b_method_bound.zrl`). A free function's bound is checked, also through an unbounded generic caller (`b_fn_bound_drop.zrl`, `b_through_generic.zrl`: `error: type 'S' does not implement trait 'Copy'`).
     - **Do:** check both at the call as a free function's bound is checked; probe trait impls (`impl<T: Clone> Clone for Vec<T>` on a `Vec` of a non-`Clone` `T`) beside them. The rejection differential lists every program newly refused.
@@ -224,6 +272,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 - [ ] +bootstrap +safety +AI-D @main Backport to stage1: a match arm and a by-value self receiver mark the value moved id:jhy7v
     > **Created:** 2026-11-14
     > **Branch:** `main`
+    > **Depends:** id:z0175
     > **Placed:** after the open soundness holes on `main` (id:z0183 to id:z0175): the maintainer's decision (a) of id:gsa2r. Today's closure takes the routes only on `File`, with a harmless second `close`, so the holes go first.
 
     - **Do:** a recorded backport (`doc/bootstrap/two_stage.md` §3) of both fixes into `bootstrap/stage1/src/`. Route 1 is written and tried (id:z0135: seven lines after the guard in `lower_zir/match.zrl`). Route 2 is not: find where stage1's `lower_zir/expr.zrl` lowers a method call's receiver when the method takes `self` by value, and mark it moved as `src/` does (compare with `src/lower_zir/expr.zrl`'s method-call path, and with the tuple-argument loop that already consumes ordinary arguments). Both changes are the minimum in the stage0-C dialect. `bootstrap/stage1/PIN` is unchanged; record the backport in §3 beside the `.note.GNU-stack` entry, and remove the `KNOWN_ISSUES.md` §1 entry (git:e56548e).
@@ -232,7 +281,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 - [ ] +merge +AI-D @provenance Merge `main` into `provenance` before the series resumes id:0m61c
     > **Created:** 2026-11-14
     > **Branch:** `provenance`
-    > **Depends:** id:z0175
+    > **Depends:** id:qm667, id:sj5ha, id:vvtam, id:z0175, id:jhy7v
     > **Placed:** before id:z0093, which it blocks: the series' first task starts from a branch that has `main`'s fixes.
 
     - **Decision (the maintainer, 2026-11-14):** `main` is merged into `provenance`, not the branch rebuilt on `main`: the branch is published (`hom/provenance`, `github/provenance` at git:a6bd53a) and the task files cite 14 of its 18 commits, so a rebuild would need a forced update and a sha remap for no gain. The merge waits for the six soundness fixes on `main` (id:z0183 to id:z0175 above), so it picks them up once.
@@ -243,6 +292,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-11
     > **Context:** by id:z0173.
     > **Branch:** `provenance` (moved from `main` 2026-11-14)
+    > **Depends:** id:0m61c
     > **Branch note:** after the `vecclone` series merges (its probes are git:e7b4d6c on `vecclone`).
     > **Check-in:** stop for review after it: a fix to a safety rule.
 
@@ -258,9 +308,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Found by:** id:z0088 (why experiment A was unsound).
-    > **Depends:** id:z0088
-    > **After:** id:z0092.
-    > **Before:** id:z0094, id:z0065.
+    > **Depends:** id:z0088, id:0m61c, id:z0180
     > **Check-in:** stop for review after it. **Split here** if the design note and the implementation take more than a session: the design (§3 text and probes) first.
 
     - **Now:** inside a closure body every capture is read as the `Env` flag (`out O={Env}`), which `os_note_edges` turns into an `Unknown` value stored into a global: `|| { *out = routed; }` has the summary `store Unknown -> global`. An owned capture (moved into the environment) is also marked as storage of the body's own frame (`os_stmt`, "an owned capture's storage dies with the closure"), so a view of it cannot leave the body, but a store *into* it is a store into this frame and records no summary edge. A caller applying such a summary sees no store at all: id:z0088's experiment A did, and accepted 1490 unsafe grid cells (all `closure_owned_capture`, e.g. `arena_vec__arena_struct_bundle__direct__closure_owned_capture__frame_ends`, where the closure owns `h` and stores the view `routed` into it).
@@ -273,7 +321,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Branch:** `provenance`
     > **Found by:** id:z0088 (option 1, experiment A).
     > **Depends:** id:z0093
-    > **Before:** id:z0065.
     > **Check-in:** stop for review after it. Accepts more: the rejection differential applies.
 
     - **Now:** a closure or a `fn` item bound to a local and called in the same body (`let mut cl = || { *out = routed; }; cl();`, `let f_ptr: fn(..) = forward_fn_target; f_ptr(x)`) is an unknown call. Every closure and `fn`-value shape in the store grid is of this kind. After id:z0092, the unknown-call store rule still refuses the cells where the closure itself stores, since it must assume any frame-bound argument may go into any memory another reaches: `closure_capture_mut` 1708, `closure_call_mut` 2534 and `closure_owned_capture` 3300 safe twins (id:z0088, experiment B; id:z0092's grid run refuses the same set, `build/z92/grid/twin_rejections.txt`).
@@ -285,9 +332,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Found by:** id:z0092 (the store side of the rule's boundary).
+    > **Depends:** id:z0093
     > **Check-in:** stop for review after it.
-    > **After:** id:z0093, whose closure summary over `__env` gives the closure's store into a global an edge this task can carry through the callee.
-    > **Before:** id:z0012, which deletes `check_fn_value`.
 
     - **Now:** `bench/safety_matrix/probes/gap_64_closure_global_store_via_fn_param.zrl`: `run(|| { G = r as *i32; })` with `fn run(f: fn()) { f(); }` and `r = &x` compiles with and without `--provenance`, and the global keeps a dead frame's address (exit 77). The closure body stores `Env` (not frame-bound) into a global; the unknown call through `f` in `run` records edges only into what its arguments reach, never a global, so `run`'s summary has none and the call to `run` checks nothing. The direct call `cl()` is refused by the old rules ("callee stashes local stack pointer via indirect call"); a `fn` item storing into a global cannot become a value (`check_fn_value` in `src/verify.zrl`), which id:z0012 has to carry over.
     - **Route class:** a closure passed as an argument to a callee that calls it (`gap_52`), here with a global destination. Probe the siblings: a `static mut` reached through a captured reference, a closure kept in a struct field, two levels of callers.
@@ -297,8 +343,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Found by:** id:z0092 (its accept probes).
-    > **Depends:** id:z0092
-    > **Before:** id:z0065: a higher-order function handed a local's address is common in user code. Accepts more: the rejection differential applies.
+    > **Depends:** id:z0092, id:0m61c
 
     - **Now:** an unknown call through a `fn` parameter `f` records store edges into `ParamContents(f)`, its environment (`os_unknown_call_effects`, the environment as argument K = ARGS.len). At a call that passes a `fn` item (`Static`, no environment), the edge's destination is the item's reach, `Static`, a global, so a frame address passed beside it is refused by the call store rule: `fn first(f: fn(&i32, &i32) -> &i32, a: &i32, b: &i32) -> &i32 { return f(a, b); }` called as `first(pick, &x, &y)` with locals, `walk(step, &x, n)`, `run(&m, &x)` with `m.f` a `fn` item (id:z0092's `build/z92/a_*.zrl`; the base compiler refuses them the same way). Inside the callee `os_unknown_arg` already reads a `Static` callee as adding no memory; the caller's edge mapping does not.
     - **Do:** decide whether an edge into the `ParamContents` of a `fn`-typed parameter maps, at the caller, to the environment of the value passed (`os_through` of its `O` without `Static`, as `os_unknown_arg` takes it) rather than to everything it reaches. A rule that removes destinations: the series rule's probes (a capturing closure passed in its place must still be refused, `gap_52`'s shapes), the store grid under `--provenance`, and `test_stdlib_iter.zrl`'s seven warnings read first to see whether they are this class.
@@ -309,7 +354,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Found by:** id:z0064 (root (f)).
-    > **Depends:** id:z0075
+    > **Depends:** id:z0075, id:z0094, id:0m61c
     > **Check-in:** stop for review after it.
     > **Routed (2026-11-06, by id:z0075):** a rule, though only `src` shows the class (6 warnings): it adds a type fact (an integer holds no address), the cheapest of the rules to state, and the exemption for a primitive result exists already.
 
@@ -350,7 +395,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Found by:** id:z0064 (root (e)).
-    > **Depends:** id:z0075
+    > **Depends:** id:z0087, id:0m61c
     > **Check-in:** stop for review after it.
     > **Routed (2026-11-06, by id:z0075):** a rule. id:z0084's rule is deferred, so this one must cover the lowerer's literals without it: `exh_missing` writes literals into a `ByteVec` in `self.arena`, which the call rule names `Param(0)` (`*self`), so the `Static` lands in `*self` and not only in the arena.
 
@@ -364,8 +409,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Found by:** id:z0064 (root (d2)).
+    > **Depends:** id:0m61c
     > **Routed by:** id:z0075, to a code change at the site; the rule is deferred (id:z0085 in `future.tm.md`).
-    > **Before:** id:z0065.
 
     - **Now:** `src/lower_zir/exhaust.zrl`, `ZirLowerer::exh_expand_or`: `if !is_or { out.push(row); }` pushes the row slice read out of `rows`. The new rules read a value copied out of a referenced `Vec` as an address into its buffer, and with the function's self-recursion (`return self.exh_expand_or(&out)`) that turns `exh_useful`'s summary into every parameter stored into every parameter and a global: 153 of `src/main.zrl`'s 167 "into a global" warnings under `--provenance=warn`.
     - **Do:** push a fresh copy of the row (`let copy = self.alloc_u32s(row.len);`, copy the elements, `out.push(copy);`), as the or-pattern branch a few lines above does. The rows are read-only pattern lists, so behaviour is unchanged; the cost is one scratch-arena allocation per kept row. A one-line comment says why the copy is there (the origin rules), without a task ID. Plain code: `src/` must build under the pinned stage1.
@@ -382,8 +427,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Found by:** id:z0064 (root (d1)).
+    > **Depends:** id:0m61c
     > **Routed by:** id:z0075, to code changes at zbuild's sites; the rule is deferred (id:z0084 in `future.tm.md`).
-    > **Before:** id:z0065.
 
     - **Now:** `tools/zbuild` gives 25 warnings under `--provenance=warn` (18 and 4 call store rule, 2 return rule, 1 store rule), all in manifest parsing (`parse_manifest`, `parse_entry`, `write_manifest`, `load_manifest` in `tools/zbuild/src/manifest.zrl`). `parse_entry(&cols, arena)` takes the column `Vec` by reference, and because a `Vec` holds a raw arena pointer, the call rule names its result's arena storage by `&cols`'s address (`Frame(cols)`); what is read out of the result is then an address of this frame.
     - **Do:** change the sites so that no argument whose only tie to the arena is the `Vec`'s pointer names the result's storage. First try passing `cols.as_slice()` (a `[[u8]]`, which reaches no `ArenaHeader`) to `parse_entry`, then the sites the remaining warnings name. Keep the manifest format and behaviour unchanged. If a site cannot be changed without `unsafe`, stop and report: id:z0084's rule comes back instead.
@@ -400,7 +445,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-05
     > **Branch:** `provenance`
     > **Found by:** the review of id:z0071.
-    > **Before:** id:z0012. Decision first; the fix or the probe is the next step it names.
+    > **Depends:** id:0m61c
+    > **Note:** Decision first; the fix or the probe is the next step it names.
 
     - **The case:** `struct Buf { data: *mut u8 }` with `Drop` freeing a heap block; `fn keep(out: &mut *mut u8, b: Buf) { *out = b.data; }` and `fn f(out: &mut *mut u8) { let b = Buf.new(); keep(out, b); }` (`tests/language/memory/provenance/addr_edge_by_value_owner_refused.zrl` at `403a092`), and the twin storing `BothPtr { own_v: Vec::<i32>.new(), p: b.data }` (`build/z71r/c2.zrl`). Accepted by the old rules and by `--provenance` at `a1ea096`; the caller's pointer is left dangling once `keep` drops `b`. Only `403a092` refused the first form, through the edge kinds id:z0072 removes.
     - **Question:** the stored value is a raw pointer, dereferenced only in `unsafe`. id:z0063 decided that the new rules check a raw pointer's origins (`Raw` is exempt only as a value). Does that make this a hole (a `known_gap` probe now, a fix that tells a moved owner from an address read out of it without per-store kinds), or is a dangling raw pointer outside the guarantee (record it in `doc/spec/safety_model.md` and `doc/spec/unsafe_policy.md`, with a test showing the accept)?
@@ -412,9 +458,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 - [ ] +safety +tests +AI-D @provenance id:z0011 B3 Declarations are checked against the body: `#[borrows(..)]`, `#[stores(..)]`, the `&self` default
     > **Created:** 2026-11-03
     > **Branch:** `provenance`
-    > **Depends:** id:z0049
+    > **Depends:** id:z0049, id:z0064, id:0m61c
     > **Check-in:** stop for review after it.
-    > **Depends also (2026-11-05):** id:z0064 (its re-measurement comes first).
 
     - **Rule (Decision 1):** a declaration may list more than the body proves (a wider public contract), never less. For a function with a body the effective ties and stores are the union of what the body proves and any declaration (id:z0010 already sums them); a declaration that claims less than the body is a compile error, the narrowing rule of `CHANGELOG.md`'s pre-1.0 note. The `&self` elision default and the declarations apply as written to bodyless items (`extern`, trait signatures, `.zri` imports). Each of the tree's 82 `#[borrows()]` declarations (such as `Lexer.text_from`) is either proved unnecessary by id:z0010's `ParamAddr`/`ParamContents` summary and removed, or converted into an explicit, reviewed `unsafe` interior with a `// SAFETY:` comment, listed with its decision in the commit. **Stop and report** before changing a `pub` stdlib signature.
     - **Test expectation note:** `tests/error_reporting/err_stores_attribute_false.zrl` currently expects a wider `#[stores]` contract than the body performs to fail; under the wider-contract rule that test changes (stop and document the test change per `AGENTS.md`).
@@ -440,7 +485,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-05
     > **Branch:** `provenance`
     > **Found by:** id:z0049's review (correction 8).
-    > **Before:** id:z0065, which makes these messages users' errors.
+    > **Depends:** id:0m61c
 
     - **Now:** the return rule says "the returned value holds an address of this frame" also when the returned origins are only `Unknown`, and the call store rule often prints the same warning twice at one location: under `--provenance=warn`, `src/fmt/doc.zrl:111:21`, `src/driver/module.zrl:1338:13`, `tools/zbuild/src/build.zrl:580:17`, `tests/unit/test_empty_compile_and_tool_errors.zrl:65:5` (re-checked 2026-11-06 after id:z0092).
     - **Stale examples (2026-11-06):** the `Unknown`-only return was `fn mk3(n: u64) -> Box<H> { let p = @ptr_from_int<*u8>(n); return box H { p: p, n: n }; }`, now accepted (`@ptr_from_int` gives `Raw` since id:z0063), and the duplicate was `fn add(v: &mut Vec<Vec<i32>>) { v.push(Vec::<i32>.new()); }`, now accepted. Find a current `Unknown`-only return first: the sources left are a summary-less call (a `.zri` import with no summary) and an index the walk cannot type.
@@ -458,13 +503,9 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-05
     > **Branch:** `provenance`
     > **Split from:** id:z0012.
-    > **Depends:** id:z0064, id:z0011, id:z0044, id:z0066
+    > **Depends:** id:z0064, id:z0075, id:z0088, id:z0092, id:z0180, id:z0093, id:z0094, id:z0097, id:z0087, id:z0086, id:z0089, id:z0090, id:z0011, id:z0044, id:z0066
     > **Check-in:** stop for review after it.
-    > **Ordering note:** this task only refuses more, and depends in substance only on id:z0064 (the tree must be clean); the maintainer may move it ahead of id:z0011 and id:z0044 to close the escape holes for users sooner.
-    > **Depends also (2026-11-06, from id:z0064):** id:z0075, and id:z0084 to id:z0088 as id:z0075 routes them (a task it routes to "accepted refusal" or "code change" is done here instead).
-    > **Depends also (2026-11-06, as id:z0075 routed them):** id:z0088, id:z0087, id:z0086 (rules), id:z0089, id:z0090 (code changes at the sites). id:z0084, id:z0085 and id:z0091 are deferred to `future.tm.md` and are not dependencies.
-    > **Depends also (2026-11-06, as id:z0088 decided):** id:z0092, id:z0093, id:z0094.
-    > **Depends also (2026-11-06, from id:z0092):** id:z0097 (an over-refusal of higher-order calls). id:z0095 and id:z0096 are holes in both modes, not dependencies.
+    > **Ordering note:** this task only refuses more, and depends in substance only on id:z0064 (the tree must be clean); the maintainer may move it ahead of id:z0011 and id:z0044 to close the escape holes for users sooner. (id:z0084, id:z0085 and id:z0091 are deferred to `future.tm.md`, and id:z0095 and id:z0096 are holes in both modes, not dependencies.)
 
     - **Do:** make the rules of `--provenance` run by default **in addition to** the old rules (nothing is deleted here; the old rules still run). Keep `--provenance=warn` as a developer option or retire it; decide and record. Resolve whatever the default build of `src/`, `stdlib/`, `tools/` and `tests/` now refuses, per id:z0064's classification (a real escape: fix the code; an over-rejection: it should already have its own task done).
     - **Code changes id:z0064 left here (2026-11-06):** `Driver::lower_fn_body` pushes `OsPending { zir: zir_func }` into `self.os_pending` (`src/driver/module.zrl`, 2 warnings): `zir_func`'s slices are tied to the local `zir_low` though they live in the driver's scratch arena; change the code or route it to id:z0084's rule. `Driver::set_ice_context` stores an arena-built note into a global through `set_ice_note`'s `#[stores(note -> static)]` (`src/driver/module.zrl:864`): a true store, safe only because the arena lives as long as the program, and no warning of its own once the other roots are gone; if the default build refuses it, an explicit `unsafe` with a `// SAFETY:` comment naming that invariant, not a rule.
@@ -480,7 +521,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Branch:** `provenance`
     > **Found by:** the review of id:z0071.
     > **Depends:** id:z0065
-    > **Blocks:** id:z0012, which is the change that accepts them.
 
     - **Why:** `leak_vec` (id:z0071) was refused by neither differential the series runs: the rejection differential compares two compilers in the default mode, and `build/rv/provdiff.sh` compares `--provenance` before and after a change over the existing probes. A reviewer found it by hand. id:z0012 deletes the old rules, so every program only they refuse is accepted after it; that list is not computed anywhere.
     - **Do:** run the new rules alone (a scratch compiler with the old rules' refusals off, as `check_reject_diff.sh` builds its base in a scratch worktree, or a developer flag if one is cheaper; say which) and the default compiler over the rejection differential's program set (69,122 at id:z0071, `tests/`, the safety probes, the store grid twins). List every program refused by the default and accepted by the new rules alone, and read each: a real escape gets a fix or a `known_gap` probe before id:z0012; a safe program is recorded as id:z0012's intended acceptance.
@@ -491,11 +531,9 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 - [ ] +safety +tests +AI-D @provenance id:z0012 B4 Make `--provenance` the default, delete the old classifiers, and fix what the measurement found
     > **Created:** 2026-11-03
     > **Branch:** `provenance`
-    > **Depends:** id:z0011, id:z0044
+    > **Depends:** id:z0011, id:z0044, id:z0065, id:z0063, id:z0073, id:z0074, id:z0075, id:z0096
     > **Check-in:** stop for review after it. **Split here** if the tree needs more than a session of changes.
     > **Split (2026-11-05, from id:z0049's review):** turning the rules on by default beside the old ones is id:z0065 (it only refuses more); this task is now the half that accepts more: delete the old rules and `src/summary_pass.zrl`, with the rejection differential, and the docs and twin lists. The fixes of the measurement are id:z0060 to id:z0063, and the `unsafe fn` exemption item moved to id:z0063, which narrowed it to `Raw`.
-    > **Depends also:** id:z0065, id:z0063.
-    > **Depends also (2026-11-05):** id:z0074 (the old-refuses, new-accepts list), id:z0073 (the raw-pointer decision), id:z0075 (the checkpoint).
 
     - **Do:** make the new rules the default and remove `--provenance`; resolve every warn-mode rejection recorded in id:z0049 and id:z0011 (a real escape: fix the code; a common over-rejection: apply the decided fix; a leak through a by-value collection parameter: change the code); then delete `local_storage_external`, `local_is_external_target`, `rvalue_is_external_target`, `place_outlives_frame`, `rvalue_storage_external`, `storage_walk_zir`'s mask logic, `note_call_stores_zir`, the depth limits, `is_collection_type_name`, the same-parameter filters, and `src/summary_pass.zrl` (keeping `src/verify.zrl`'s stack-address check as an add-only second net).
     - **Flip probes and twin lists (including id:z0045's):** flip all closed `known_gap` probes (`gap_07`, `gap_11`, `gap_13`, `gap_16`, `gap_18`, `gap_21`, `gap_23`, `gap_26`, `gap_27`, `gap_28`, `gap_29`, `gap_32`, `gap_33`, `gap_36`, `gap_40`, `gap_41`, `gap_42`, `gap_44`, `gap_45`, `gap_47`, `gap_48`, `gap_49`, `gap_50`, `gap_51`, `gap_52`, `gap_53`, `gap_54`, `gap_55`) to `compile_reject` and remove their Known gaps entries in `doc/spec/safety_model.md` and `doc/SAFETY.md` §6. Fold in id:z0045: remove the 3402 `ref_{let,identity,phi}` twins (and any id:z0017 twins newly accepted when `summary_pass.zrl` is retired) from `bench/fuzz/store_grid_twin_rejections.txt`, flip `read_through_{ref,identity,phi}.zrl` from `expected compile fail` to running tests, add an `accept` probe for `id:z0045` and a regression test returning `s.as_slice()` from `String.with_capacity(a, cap)` (`a: &Arena`). Because retiring `summary_pass.zrl` and `local_storage_external` accepts more safe programs, run `scripts/check_reject_diff.sh <base>` and list every newly accepted program class in the completion note (none may be unsafe). Update `doc/SAFETY.md` §2.3 and §5–§6, `doc/spec/surface_syntax.md` (`#[borrows]`/`#[stores]`), `README.md`, `KNOWN_ISSUES.md` and `bench/fuzz/store_grid_expected_failures.txt`.
@@ -560,7 +598,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decisions in id:1kaye (`future.tm.md`), 2026-11-13
     > **Branch:** `zil` (new, off `main`; created when ZL1 starts)
-    > **Placed:** at the end of `## Next`: the maintainer starts the series after the current `testinfra` work. Nothing in `testinfra` depends on it. ZL4 changes the per-file runner, which `testinfra` rewrites (id:z0139), so the series waits for `testinfra` to merge into `main`.
+    > **Depends:** id:z0017
+    > **Placed:** after the provenance series (`id:z0017`), before ZL2 to ZL6. Nothing in `testinfra` depends on it. ZL4 changes the per-file runner, which `testinfra` rewrites (id:z0139).
 
     - **Why:** `string_const` is to give a `Slice<u8, 'local>` everywhere, as the spec says (id:1kaye, decision 1). Hand-written ZIL then needs `slice_ptr` to get the data pointer back.
     - **Decide, and write into ZL2 to ZL5 as their **Do:** and numbered **Checks:**:** (a) What a slice-typed `string_const` lowers to in zilc's QBE output: a static `{ptr, len}` pair beside the bytes, whose address is the value, or another layout. It must match how the front end's slice slots are laid out (pointer at offset 0, `usize` length at 8, today's `v5` slot in `--emit-zil`). (b) How the front end uses it: copy the pair into the slot, or use the value directly. (c) `slice_ptr`'s syntax, typing and spec entry beside `slice_len` (`doc/spec/intermediate_language.md` §5), and whether the front end's cast-and-load idiom is replaced by it. (d) What the pinned stage1 feeds to which zilc: does any path pass ZIL written by `bootstrap/stage1/` to the new `build/zilc`, `zilc-boot` included? If one does, the new zilc must also accept the old form until a re-pin, which is the maintainer's. (e) Which recorded figures change (`corpus/zrl_whole_program_zil.sha256`, the safety figures) and how each is recomputed.
