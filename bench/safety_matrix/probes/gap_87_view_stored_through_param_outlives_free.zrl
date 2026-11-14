@@ -1,0 +1,18 @@
+// name: A view of a parameter's Vec stored through another parameter outlives a free() in the callee
+// expected: known_gap
+// gap: a borrow is held by a local of the frame; a view of what one parameter reaches, stored into what a parameter reaches, is held by no local of the callee, so the free() after it passes and the caller then reads the freed buffer
+// observed: exit 77
+import "vec.zrl";
+use vec::Vec;
+
+fn k2(out: &mut [i32], v: &mut Vec<i32>) { *out = v.as_slice(); v.free(); }
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    k2(&mut s, &mut v);
+    let mut w = Vec::<i32>.new();
+    w.push(77);
+    return s[0];
+}

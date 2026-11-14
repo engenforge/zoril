@@ -184,7 +184,7 @@ Regarding runtime abort conventions: `zoril_abort()` exits **1** (unhandled logi
 
 ### Gap summary
 
-No row above is marked **GAP** today. That does not mean no hole is open: the 17 holes still open in checked code are routes inside rows the matrix counts as closed, and each is a `known_gap` probe listed under [Known gaps](#known-gaps).
+No row above is marked **GAP** today. That does not mean no hole is open: the 18 holes still open in checked code are routes inside rows the matrix counts as closed, and each is a `known_gap` probe listed under [Known gaps](#known-gaps).
 
 Every program that showed a hole in one of the rows is kept as a `compile_reject` probe (or, for the two drop-count probes, an `accept` that asserts one drop), so the hole cannot reopen unnoticed.
 
@@ -258,6 +258,7 @@ Every probe in `bench/safety_matrix/probes/` whose expectation is `known_gap` is
 - **[`gap_78_option_clone_launders_frame_view.zrl`](../../bench/safety_matrix/probes/gap_78_option_clone_launders_frame_view.zrl)**: The same through `impl<T: Clone> Clone for Option<T>`: the clone of `Some(s)`, `s` a view of a stack array, is returned. Route class: a generic `#[borrows()]` `Clone` impl cloning a `T` that may be a view
 - **[`gap_79_struct_holding_frame_view_pushed.zrl`](../../bench/safety_matrix/probes/gap_79_struct_holding_frame_view_pushed.zrl)**: A struct literal holding a `[u8]` view of a stack array is pushed into the caller's `Vec` (`out.push(H { s: s })`): the bare view is refused with a region-escape error, the struct carrying it is not, so the caller reads the dead frame (exit 77 where the frame held 42). `resize` and `extend_from_slice` of such a struct take the same route. Route class: a struct whose field is a frame view, moved into memory that outlives the frame
 - **[`gap_80_struct_view_cloned_into_callers_vec.zrl`](../../bench/safety_matrix/probes/gap_80_struct_view_cloned_into_callers_vec.zrl)**: A struct holding a `[u8]` view of a stack array is cloned into the caller's `Vec` by `out.resize(1, H { s: &buf })`, with `impl Clone for H` returning `H { s: self.s }`: the clone's result is not tied to the view `self` holds, so the caller reads the dead frame (exit 77 where the frame held 42); `extend_from_slice` of an array of such structs is the same. Route class: a `Clone` impl whose result copies a view it does not declare (the class of `gap_77`)
+- **[`gap_87_view_stored_through_param_outlives_free.zrl`](../../bench/safety_matrix/probes/gap_87_view_stored_through_param_outlives_free.zrl)**: A view of a `Vec` reached through one parameter is stored into memory a parameter reaches (`fn k2(out: &mut [i32], v: &mut Vec<i32>) { *out = v.as_slice(); v.free(); }`), and the `free()` after it is accepted: a borrow is held by a local of the frame, and here no local holds the view, so the caller reads the freed buffer (exit 77 where the buffer held 42). `out.push(v.as_slice())`, the store and the free made by two callees (`fill(h, v); kill(v);`) and one parameter holding both (`p.s = p.a.as_slice(); p.a.free();` through `p: &mut P`) are the same; with a local struct the `free()` is refused. Route class: a view of what a parameter reaches, stored into what a parameter reaches, then invalidated in the same body
 
 ---
 
