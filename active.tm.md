@@ -337,11 +337,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 ## Next
 
-- [ ] +testinfra +decision +AI-D @testinfra id:z0113 T9 One verification record for the author and the reviewer: a result cache keyed by inputs
+- [x] +testinfra +decision +AI-D @testinfra id:z0113 T9 One verification record for the author and the reviewer: a result cache keyed by inputs
     > **Created:** 2026-11-06
     > **Branch:** `testinfra`
     > **Asked by:** the maintainer.
     > **Before:** id:z0112 (the review rule it changes), id:z0114.
+    > **Completed:** 2026-11-14
 
     - **The stamp's record (the maintainer, 2026-11-07):** a cache keyed by inputs decides what not to run, as the unchanged-tree stamp did. The stamp needed four fixes (id:z0142, id:z0143, id:z0144, id:z0150) and was removed (id:z0154), because a defect in it reports a pass for code that was not tested. Before recommending a cache, say what in its design keeps it from failing the same ways (a key that misses an input, a record taken at the wrong moment, a lookup that depends on git), and how a reviewer sees a wrong hit.
 
@@ -354,6 +355,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Order (id:z0103, 2026-11-06):** after the tiers (id:z0115) and the differential's caches (id:z0114), which take most of the saving with fewer inputs to declare. Its implementation goes in the runner, if id:z0117 decides on one. Its keys and verdicts are kept as plain files under `build/` (the series rule), so a `sh` script and a Zoril runner can read the same cache.
     - **Review (2026-11-06):** the header's **Before:** id:z0112, id:z0114 is stale: by the bullet above and id:z0112's own order bullet, this task follows id:z0114 and id:z0115, and id:z0112 precedes it. The **Measure first** bullet is id:z0123, done first; this task decides from its answers.
     - **Order (review, 2026-11-11):** also after id:z0184. If the stdlib's share of each compile (about 85% of 14 ms) can be cut for every run, the saving left for a result cache shrinks, and this task weighs it against the record of the mechanisms that skip work (the stamp, the tiers, id:z0114's R4).
+    - **Weighed (reviewing session, 2026-11-14):** id:z0123 showed that the same inputs give the same verdicts. That rules out a test that flips by itself as a source of wrong hits, but not the two that matter: a key that misses an input (how the stamp failed) and a wrong verdict stored under a right key (id:z0114's R4). The design's safeguard against both is a 10% random sample. That catches a single stale entry in a given review about one time in ten, and a missed input outside the change only when the sample lands on it. So a review that took verdicts from the cache would rest on complete input lists for every item kind, gates included, and on that sample: a weaker basis than today's fresh reviewer run. The saving is also smaller than when this task was written. `make test` is about 2 minutes (`Total: ... (119.9s)` at git:7cf8c3e), not 4. The reviewer's reruns in this week's check-ins (id:83cp1, id:ed5ta) were the targeted checks and the fresh differential (248 s), not the whole suite. And the differential has its own base-side cache for the author's runs (id:z0114).
+    - **Decided (the maintainer, 2026-11-14): no result cache.** Neither a cache that reviews may cite, nor one that serves only the author's runs. Review runs stay fresh, and the time goes into making the runs themselves cheaper, which pays on every run and has nothing to go stale. id:z0112's review rule is unchanged. To reopen it: id:z0123's measurements stand, and a new design would have to show, with planted stale entries and a planted missed input, that they are caught on every review, not by sampling.
 
 - [ ] +bootstrap +audit +AI-D @main id:z0135 Z0 stage1 accepts modules in the `src/` closure and builds some of their paths wrong
     > **Created:** 2026-11-07
