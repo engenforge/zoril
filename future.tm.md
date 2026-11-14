@@ -341,6 +341,28 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Found (`main` at git:8d4670b, `S: Drop`):** each is refused with `use of moved value`, though it moves each value once: `let (s, k) = t;` with `t: (S, i32)`, `let W { s: s, k: k } = w;` with `struct W { s: S, k: i32 }`, `match w { W { s: s, k: k } => .. }`, and `T.A((s, k))` for `enum T { A((S, i32)), B }` (`use of moved value 'the value of the expression at ..'`). Binding the aggregate whole (`T.A(t)`, `F.A(w)`) is accepted.
     - **Do:** find which move the checker sees twice (the destructured place, then a field of it), and accept a pattern whose bindings move disjoint parts; the rejection differential lists every newly accepted program, each read for a second owner.
 
+- [ ] +tests +AI-D @main A by-value pattern that binds a part needing a drop beside any other part is refused with `use of moved value` id:2bx4a
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** in `future.tm.md` by the check-in id:vvtam: a correct program refused, not a hole, and it predates that batch (stage1 refuses it too).
+
+    - **Found (2026-11-14, id:vvtam, scratch `build/vvtam/p/`):** with `struct S { p: *mut u8 }` and `impl Drop for S`, each of these is refused, at the second binding, with `use of moved value 'w'` (or `'the value of the expression at L:C'` for a temporary scrutinee): `let w = (mk(fp), 1); let (x, z) = w;` (the second part is an `i32`), `let w = (mk(fp), mk(fp)); let (x, z) = w;`, `match w { (x, z) => {} }`, `match e { P.A(x, z) => {}, P.B => {} }`, `let W2 { a: x, b: z } = w;`, `let W2 { a: x, b: z } = W2 { .. };`. Binding one part and skipping the others (`let (x, _) = w;`, `P.A(s, _)`) is accepted and drops each value once (`tests/language/match/match_skipped_parts_dropped.zrl`). Without a `Drop` type in the aggregate (`(T, T)`, `T` a plain struct) it is accepted. `build/zoril` at git:7877894, the compiler at git:c161107 and `build/zoril-stage1` all refuse it, and no test in `tests/` binds two parts of an aggregate that needs a drop.
+    - **Lead:** the first by-value binding seems to mark the scrutinee moved before the next sub-pattern reads its part. Compare `bind_pattern_name` (`src/lower_zir/lower_match.zrl`) with the borrow checker's view of `Let(x, Use(w.0))` followed by a read of `w.1`.
+    - **Do:** diagnose (`+AI-D`: the cause is unknown), then settle the fix in this task's text and re-tag it `+AI-G` if it is mechanical. The fix must keep `match_skipped_parts_dropped.zrl` and `match_by_value_drops_once.zrl` passing and add the six programs above as drop-count cases (each part dropped once). It makes the checker accept more, so the rejection differential applies.
+
+- [ ] +tests +AI-G @main An or-pattern whose alternatives bind different names is refused with a clear diagnostic id:vdgj4
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** in `future.tm.md` by the check-in id:vvtam: a spec rule not enforced and a poor diagnostic, not a hole (a binding missing from the alternative that matched is caught as `use of uninitialized variable` when it is read).
+
+    - **Found (2026-11-14, id:vvtam):** `doc/spec/surface_syntax.md` §"OR Patterns" says every alternative must bind the same set of names. `match x { I.A(n) | I.B(m) => { return 1; } }` (`enum I { A(i32), B(i32) }`) is accepted. `match x { O.A(s, _) | O.D => {}, _ => {} }` (`S: Drop`) is refused only as `use of uninitialized variable 'a temporary'`, at line 1 column 1 of the enclosing function, and `I.A(n) | I.B => { return n; }` is refused as `use of uninitialized variable 'n'`. The compiler at git:c161107 behaves the same.
+    - **Do:** in `Pattern.Or` (`src/lower_zir/lower_match.zrl`), collect the names each alternative binds (the per-alternative symbol set `bind_pattern_name` defines). If one alternative's set differs from the first's, report `a binding in an or-pattern must appear in every alternative: '<name>' is missing from one` at the pattern's span, next to the existing `a binding in an or-pattern must have the same type in every alternative` check.
+    - **Checks:**
+      - C1: `tests/error_reporting/err_or_pattern_binding_missing.zrl` (`// expected compile fail`, `// EXPECT: a binding in an or-pattern must appear in every alternative`) passes under `./scripts/test.sh`. It holds the three programs above, one per function, and the direct `build/zoril --emit-zil` output shows the new error once for each.
+      - C2: with the new check commented out, C1 fails (`I.A(n) | I.B(m)` compiles).
+      - C3: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` exits 0. Quote the `fresh (no cache)` line and list every newly refused program with its reason; any test in `tests/` that is newly refused is a finding to report, not one to rewrite.
+      - C4: full `make test` passes; quote the `Total:` line.
+
 ## Decisions and hygiene
 
 - [ ] +safety +decision +AI-D id:z0102 Whether `unsafe fn` gets a `fn` type of its own, callable only in `unsafe`
