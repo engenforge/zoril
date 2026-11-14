@@ -1,7 +1,6 @@
-// name: A value moved out of an enum by a by-value match is never dropped
-// expected: known_gap
-// gap: match e { E.A(s) => { .. }, E.B => {} } with S: Drop runs S's drop 0 times where 1 is due: the arm's bindings are dropped when its scope ends, after the arm's jump to the match exit, so the drops are lost, and every arm marks e moved, also one that binds nothing (E.B, _, E.A(_)); if let, a nested pattern, a struct or tuple payload, a temporary or by-value parameter scrutinee, and match x { y => .. } on a struct take the same route
-// observed: exit 7
+// name: A value moved out of an enum by a by-value match is dropped once
+// expected: accept
+// The arm's scope ends before its jump to the match exit, so its binding s is dropped there, and only an arm whose pattern moves a value out consumes the scrutinee; once, the drops were lost and S's drop ran 0 times.
 struct S { p: *mut u8 }
 impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } } }
 enum E { A(S), B }

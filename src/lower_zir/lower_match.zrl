@@ -64,6 +64,7 @@ impl ZirLowerer {
             projections: @slice(0 as *mut Projection, 0 as usize)
         };
         let mut result_ty = expected_ty;
+        let entry_block = self.current_block_idx;
 
         let mut any_arm_alive = false;
         let mut arm_idx = 0 as usize;
@@ -95,7 +96,9 @@ impl ZirLowerer {
                 unreachable_block
             };
 
+            self.pattern_moved = false;
             self.lower_pattern(scrut_place, scrut_ty, arm.pattern, arm_body_block, fail_block);
+            let arm_moves = self.pattern_moved;
 
             self.switch_to_block(arm_body_block);
 
@@ -107,7 +110,9 @@ impl ZirLowerer {
                 self.switch_to_block(guard_pass_block);
             }
 
-            if !self.pattern_peels_pointer(self.get_type_tag(scrut_ty)) {
+            // An arm that binds nothing by value (`E.B`, `_`, `E.A(_)`) moves nothing, so the
+            // scrutinee stays owned and is dropped at the end of its own scope.
+            if arm_moves && !self.pattern_peels_pointer(self.get_type_tag(scrut_ty)) {
                 self.consume_place_if_move(&scrut_place);
             }
 
@@ -134,6 +139,11 @@ impl ZirLowerer {
                             result_ty,
                             LOCAL_KIND_LETMUT
                         );
+                        // Made inside this arm's scope, but the value is the whole `match`'s, so
+                        // its drop flag starts false before any arm: an arm that returns drops
+                        // it by that flag.
+                        self.promote_local_to_parent_scope(result_place.base);
+                        self.clear_drop_flag_in(entry_block, result_place.base);
                     }
                     let final_res = self.branch_value_as(
                         arm_res,
@@ -152,12 +162,14 @@ impl ZirLowerer {
                 }
             }
 
+            // The arm's scope ends before its jump: emitted after it, into a terminated block, its
+            // bindings' drops were lost.
+            self.pop_scope(self.get_expr_span(arm.body));
+
             if !self.blocks[self.current_block_idx].is_terminated {
                 any_arm_alive = true;
                 self.terminate(ZirTerminator.Jmp(exit_block));
             }
-
-            self.pop_scope(self.get_expr_span(arm.body));
 
             if next_arm_check_block != 0 as u32 {
                 self.switch_to_block(next_arm_check_block);
@@ -175,6 +187,23 @@ impl ZirLowerer {
             self.terminate(ZirTerminator.Unreachable);
         }
         return result_place;
+    }
+
+    // LOCAL_ID's drop flag set false in block BLOCK_IDX, which may already end in its branch: a
+    // block's statements run before its terminator whenever they were added.
+    fn clear_drop_flag_in(self: &mut ZirLowerer, block_idx: usize, local_id: u32) {
+        let flag = self.drop_flag_of(local_id);
+        if flag == 0 as u32 { return; }
+        let bool_ty = self.get_primitive_type(ILPrimitive.Bool);
+        let p_block = &mut self.blocks[block_idx];
+        p_block.stmts.push(
+            ZirStmt.Let(
+                flag,
+                ZirRvalue.Const(0 as u64, bool_ty),
+                Span { start: 0 as u32, end: 0 as u32, line: 0 as u32, col: 0 as u32 }
+            )
+        );
+        p_block.literal_comments.push(0 as u32);
     }
 
     pub fn lower_pattern(
@@ -872,6 +901,7 @@ impl ZirLowerer {
             sym = self.resolver.define(name, SymbolKind.Local(0), false);
         }
         let bind_ty = if by_ref { self.get_ptr_type(ty) } else { ty };
+        if !by_ref && !self.is_copy_type(bind_ty) { self.pattern_moved = true; }
         let mut local_id = self.get_local_by_symbol(sym);
         if local_id == 0 as u32 {
             local_id = self.define_local(

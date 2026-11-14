@@ -1,0 +1,18 @@
+// name: A payload moved out of an enum that has its own Drop skips that Drop
+// expected: known_gap
+// gap: match d { D.A(s) => {}, D.B => {} } with impl Drop for D moves s out and consumes d, so D's drop never runs (the counter reads 1 where 11 is due: S's drop once, D's not at all); moving a field out of a struct that needs dropping is refused (let s = w.s;), and Rust refuses a move out of a type that implements Drop; an arm that moves nothing (D.B(q) with q a raw pointer, D.A(_)) runs D's drop
+// observed: exit 7
+struct S { p: *mut u8 }
+impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } } }
+enum D { A(S), B }
+impl Drop for D { fn drop(self: &mut D) { match self { D.A(s) => { unsafe { *s.p = *s.p + 10 as u8; } }, D.B => {}, } } }
+fn main() -> i32 {
+    let mut flag = 0 as u8;
+    let fp = &mut flag as *mut u8;
+    {
+        let d = D.A(S { p: fp });
+        match d { D.A(s) => { let n = 1; }, D.B => {}, }
+    }
+    if flag == 11 as u8 { return 0; }
+    return 7;
+}

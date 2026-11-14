@@ -1,0 +1,86 @@
+// A value matched by value is dropped once: by the arm's binding when the arm moves it out, or
+// with the scrutinee when the arm binds nothing. Once, an arm's bindings were dropped after its
+// jump to the match exit, so never, and every arm marked the scrutinee moved, so a value matched
+// by value was never dropped (gap_81). Each case returns its drop count.
+// expected exit 0
+struct S { p: *mut u8 }
+impl Drop for S {
+    fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } }
+}
+enum E { A(S), B }
+enum N { A(E), B }
+struct W { s: S, k: i32 }
+enum F { A(W), B }
+enum T { A((S, i32)), B }
+enum D { A(S), B(*mut u8) }
+impl Drop for D {
+    fn drop(self: &mut D) { if let D.B(q) = *self { unsafe { *q = *q + 10 as u8; } } }
+}
+fn mk(fp: *mut u8) -> S { return S { p: fp }; }
+fn consume(s: S) {}
+fn bound(fp: *mut u8) { let e = E.A(mk(fp)); match e { E.A(s) => { let n = 1; }, E.B => {}, } }
+fn passed_on(fp: *mut u8) { let e = E.A(mk(fp)); match e { E.A(s) => { consume(s); }, E.B => {}, } }
+fn wild_payload(fp: *mut u8) { let e = E.A(mk(fp)); match e { E.A(_) => {}, E.B => {}, } }
+fn wild_arm(fp: *mut u8) { let e = E.A(mk(fp)); match e { E.B => {}, _ => {}, } }
+fn other_arm(fp: *mut u8) { let e = E.A(mk(fp)); match e { E.B => { let n = 1; }, E.A(s) => {}, } }
+fn nested(fp: *mut u8) { let e = N.A(E.A(mk(fp))); match e { N.A(E.A(s)) => {}, _ => {}, } }
+fn if_let(fp: *mut u8) { let e = E.A(mk(fp)); if let E.A(s) = e { let n = 1; } }
+fn while_let(fp: *mut u8) {
+    let mut i = 0;
+    let mut e = E.A(mk(fp));
+    while let E.A(s) = e {
+        i = i + 1;
+        e = if i < 3 { E.A(mk(fp)) } else { E.B };
+    }
+}
+fn struct_payload(fp: *mut u8) {
+    let e = F.A(W { s: mk(fp), k: 1 });
+    match e { F.A(w) => {}, F.B => {}, }
+}
+fn struct_fields(fp: *mut u8) {
+    let e = F.A(W { s: mk(fp), k: 1 });
+    match e { F.A(W { s: s, k: k }) => {}, F.B => {}, }
+}
+fn tuple_payload(fp: *mut u8) { let e = T.A((mk(fp), 1)); match e { T.A(t) => {}, T.B => {}, } }
+fn as_value(fp: *mut u8) { let e = E.A(mk(fp)); let n = match e { E.A(s) => 1, E.B => 2, }; }
+fn whole_struct(fp: *mut u8) { let x = mk(fp); match x { y => {} } }
+fn temporary(fp: *mut u8) { match E.A(mk(fp)) { E.A(s) => {}, E.B => {}, } }
+fn param(e: E) { match e { E.A(s) => {}, E.B => {}, } }
+fn by_param(fp: *mut u8) { param(E.A(mk(fp))); }
+fn guard_fails(fp: *mut u8) {
+    let e = E.A(mk(fp));
+    let c = false;
+    match e { E.A(s) if c => {}, _ => {}, }
+}
+fn returns(e: E) -> i32 { match e { E.A(s) => { return 1; }, E.B => {}, } return 0; }
+fn by_return(fp: *mut u8) { let r = returns(E.A(mk(fp))); }
+fn result_returned(fp: *mut u8) -> E { return match E.B { E.B => E.A(mk(fp)), _ => E.B, }; }
+fn by_result(fp: *mut u8) { let e = result_returned(fp); }
+fn own_drop_kept(fp: *mut u8) { let d = D.B(fp); match d { D.B(q) => {}, D.A(_) => {}, } }
+fn count(f: fn(*mut u8)) -> u8 {
+    let mut flag = 0 as u8;
+    f(&mut flag as *mut u8);
+    return flag;
+}
+fn main() -> i32 {
+    if count(bound) != 1 as u8 { return 1; }
+    if count(passed_on) != 1 as u8 { return 2; }
+    if count(wild_payload) != 1 as u8 { return 3; }
+    if count(wild_arm) != 1 as u8 { return 4; }
+    if count(other_arm) != 1 as u8 { return 5; }
+    if count(nested) != 1 as u8 { return 6; }
+    if count(if_let) != 1 as u8 { return 7; }
+    if count(while_let) != 3 as u8 { return 8; }
+    if count(struct_payload) != 1 as u8 { return 9; }
+    if count(struct_fields) != 1 as u8 { return 10; }
+    if count(tuple_payload) != 1 as u8 { return 11; }
+    if count(as_value) != 1 as u8 { return 12; }
+    if count(whole_struct) != 1 as u8 { return 13; }
+    if count(temporary) != 1 as u8 { return 14; }
+    if count(by_param) != 1 as u8 { return 15; }
+    if count(guard_fails) != 1 as u8 { return 16; }
+    if count(by_return) != 1 as u8 { return 17; }
+    if count(by_result) != 1 as u8 { return 18; }
+    if count(own_drop_kept) != 10 as u8 { return 19; }
+    return 0;
+}

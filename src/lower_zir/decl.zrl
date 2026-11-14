@@ -74,6 +74,9 @@ pub struct ZirLowerer {
     // Set while lowering a `let` pattern: its bindings shadow same-named locals of the
     // enclosing scope instead of joining them (which only or-pattern alternatives do).
     pub pattern_binds_fresh: bool,
+    // Set by a pattern binding that moves a value out of the scrutinee (by value, not Copy):
+    // only an arm whose pattern sets it consumes the scrutinee; any other leaves it owned.
+    pub pattern_moved: bool,
     pub had_error: bool,
     // Errors reported so far; a cleanup compares it around a `defer` to see whether that `defer` failed.
     pub error_count: u32,
@@ -146,6 +149,7 @@ impl ZirLowerer {
             module: module,
             next_region_id: 1 as u32,
             pattern_binds_fresh: false,
+            pattern_moved: false,
             had_error: false,
             error_count: 0 as u32,
             locals: unsafe { Vec::<Local>.new_in_raw(arena) },
