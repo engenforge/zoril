@@ -132,6 +132,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Depends:** id:z0175, id:g63ny
+    > **Depends changed (2026-11-14, a reviewing session):** added id:g63ny, the check-in of id:7f9k8, since the first task after a batch waits for its review.
     > **Placed:** after the open soundness holes on `main` (id:z0183 to id:z0175): the maintainer's decision (a) of id:gsa2r. Today's closure takes the routes only on `File`, with a harmless second `close`, so the holes go first.
 
     - **Do:** a recorded backport (`doc/bootstrap/two_stage.md` §3) of both fixes into `bootstrap/stage1/src/`. Route 1 is written and tried (id:z0135: seven lines after the guard in `lower_zir/match.zrl`). Route 2 is not: find where stage1's `lower_zir/expr.zrl` lowers a method call's receiver when the method takes `self` by value, and mark it moved as `src/` does (compare with `src/lower_zir/expr.zrl`'s method-call path, and with the tuple-argument loop that already consumes ordinary arguments). Both changes are the minimum in the stage0-C dialect. `bootstrap/stage1/PIN` is unchanged; record the backport in §3 beside the `.note.GNU-stack` entry, and remove the `KNOWN_ISSUES.md` §1 entry (git:e56548e).
