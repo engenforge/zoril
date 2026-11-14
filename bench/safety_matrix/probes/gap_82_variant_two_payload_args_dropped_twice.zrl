@@ -1,0 +1,18 @@
+// name: A variant built from several arguments drops each argument twice
+// expected: known_gap
+// gap: P.A(a, b) with enum P { A(S, S), B } and S: Drop runs S's drop 4 times for 2 values: the arguments are moved into the payload tuple but their drop flags stay set, so each is dropped at its scope's end and again with the enum; temporaries (P.A(S { .. }, S { .. })) are the same, while a one-argument payload, a tuple literal, a struct literal and P1.A((a, b)) with a tuple payload drop each value once
+// observed: exit 4
+struct S { p: *mut u8 }
+impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } } }
+enum P { A(S, S), B }
+fn main() -> i32 {
+    let mut flag = 0 as u8;
+    let fp = &mut flag as *mut u8;
+    {
+        let a = S { p: fp };
+        let b = S { p: fp };
+        let e = P.A(a, b);
+    }
+    if flag == 2 as u8 { return 0; }
+    return flag as i32;
+}
