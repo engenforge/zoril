@@ -36,11 +36,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `sh scripts/run_safety_matrix.sh` printed `All probes complete: 463/509 passed. Mismatches: 0`, and `sh scripts/check_safety_figures.sh` + `sh scripts/check_safety_model.sh` exited 0 (`[PASS] safety-figures: all 9 §5 figure(s) match the tree`).
     - **Awaiting review:** `./scripts/test.sh tests/language/match/match_skipped_parts_dropped.zrl tests/error_reporting/err_move_in_match_guard.zrl tests/error_reporting/err_or_pattern_skip_with_guard.zrl` and `sh scripts/run_safety_matrix.sh`
 
-- [ ] +safety +tests +AI-G @main A payload is not moved out of an enum that has its own `Drop` id:sj5ha
+- [x] +safety +tests +AI-G @main A payload is not moved out of an enum that has its own `Drop` id:sj5ha
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Depends:** id:qm667
     > **Placed:** after id:qm667; originally after id:sq2m7 (found by id:z0176's twin probes).
+    > **Completed:** 2026-11-14 git:acd1312
 
     - **Found:** `match d { D.A(s) => {}, D.B => {} }` with `impl Drop for D` moves `s` out and consumes `d`, so `D`'s drop never runs (`bench/safety_matrix/probes/gap_83_payload_moved_out_of_drop_enum.zrl`, the counter reads 1 where 11 is due; on `main` before git:87f24b3 it read 0, every drop lost). An arm that moves nothing (`D.B(q)` with `q` a raw pointer, `D.A(_)`) runs `D`'s drop since git:87f24b3. The struct twin is refused: `let s = w.s;` with `impl Drop for WD` gives `cannot move a field that needs dropping out of a value (partial moves are not tracked)`; Rust refuses a move out of a type that implements `Drop` (E0509).
     - **Decision (2026-11-14, maintainer):** Refuse moving a non-`Copy` value out of an enum or struct that implements `Drop` (matching the existing struct partial-move rule and Rust E0509). Binding by reference (`match &d { D.A(s) => {} }`), matching with `_` (`match d { D.A(_) => {} }`), and moving the `Drop` value as a whole (`match n { N.A(d) => {} }`) remain allowed.
@@ -55,6 +56,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: With the `self.pattern_in_drop_type != 0` check in `bind_pattern_name` commented out, C2 and `run_safety_matrix.sh` fail.
       - C4: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` exits 0; quote the `fresh (no cache)` line and list every newly refused program.
       - C5: Full `make test` passes (if `corpus/zrl_whole_program_zil.sha256` changes, update it with `UPDATE_GOLDEN=1 sh scripts/test_incremental.sh` in its own commit and re-run `make test` after it); quote the `Total:` line. `rm build/zoril && make` prints no `warning:`.
+    - **Note:** Code/probe/doc commit `git:acd1312` on `main` (tracked in `lower_variant_match` where `sub_by_ref` is computed rather than `lower_pattern_enum_variant`, plus `lower_pattern_struct`, `lower_match`, and `lower_let_pattern`; `doc/SAFETY.md` §5.3 updated to `47,548` lines / `848` blocks, §5.1 to `368` `compile_reject` / `45` `known_gap`, §6 class `(M)` removed; `doc/spec/unsafe_policy.md` §5 updated to `4.65%` / `1,923` of `41,318`). Also verified direct compiler output on `err_move_out_of_drop_type_pattern.zrl` showed all 6 functions error with `cannot move out of type ..., which implements Drop`.
+      - C1: `sh scripts/run_safety_matrix.sh` printed `[PASS] Moving a payload out of an enum that has its own Drop is rejected (compile error; expected compile_reject)` and `All probes complete: 464/509 passed. Mismatches: 0` (also gated inside `make test`: `safety-matrix 464 run 464 passed 0 failed 45 skipped`).
+      - C2: `./scripts/test.sh tests/error_reporting/err_move_out_of_drop_type_pattern.zrl tests/language/match/match_by_value_drops_once.zrl` passed (`Selected tests 2 run 2 passed 0 failed 0 skipped`; `Total: 3 run, 3 passed, 0 failed, 0 skipped (0.1s)`), and both pass in `make test`.
+      - C3: Temporarily commenting out the `if self.pattern_in_drop_type != 0 as u32` check in `bind_pattern_name` caused `err_move_out_of_drop_type_pattern.zrl` to fail (`[FAIL] ... (expected compile fail, but it compiled)`, `Total: 2 run, 1 passed, 1 failed, 0 skipped (0.1s)`) and `sh scripts/run_safety_matrix.sh` to fail (`[FAIL] Moving a payload out of an enum that has its own Drop is rejected (exit (7); expected compile_reject)`, `All probes complete: 463/509 passed. Mismatches: 1`).
+      - C4: `PREFLIGHT_BASE=1ec828c REJECT_DIFF_NO_CACHE=1 make preflight-changed` exited 0: `reject-diff: base verdicts: fresh (no cache); base front end 111 s` and `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 2 newly refused, of 69149 programs against 1ec828cc8c7019148f26c128cba869e64e1d8b04` (both newly refused lines are `bench/safety_matrix/probes/gap_83_payload_moved_out_of_drop_enum.zrl`, once direct and once via `zbuild`).
+      - C5: `rm -f build/zoril && make` reached fixpoint (`Fixpoint reached: 20389454 bytes of ZIL, identical across two self-hosted generations`) with zero `warning:`, and full `make test` after `git:acd1312` passed: `Total: 3301 run, 3301 passed, 0 failed, 92 skipped (121.2s)`.
+    - **Awaiting review:** `./scripts/test.sh tests/error_reporting/err_move_out_of_drop_type_pattern.zrl tests/language/match/match_by_value_drops_once.zrl` and `sh scripts/run_safety_matrix.sh`
 
 - [ ] +safety +review +AI-D @main @checkin Review of the pattern-drop fixes and the Drop-enum move refusal id:vvtam
     > **Created:** 2026-11-14
