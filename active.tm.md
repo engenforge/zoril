@@ -33,11 +33,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Review:** re-run id:m9hjt C1 to C3; read the two `AGENTS.md` bullets whole for a sentence that still assumes two headings.
     - **Review (2026-11-14):** git:f7d5617 changes the two `AGENTS.md` bullets exactly as id:m9hjt's **Do** says (2 lines out, 2 in, nothing else in the commit); read whole, neither bullet still assumes two headings. Re-run: C1 `rg -n '## Now|## Next' AGENTS.md CONTRIBUTING.md doc/developer_guide.md` prints nothing, and `grep -c '^## ' doc/tasks/active.tm.md` prints `1`. C2 `tm validate *.tm.md`: three `[PASS]` lines; `tm next` shows `[kgv5s]`, the first open task. C3 holds after the split: `git show --numstat --format= a9530ae` prints `0    4    active.tm.md`. The commit that broke C3 was the reviewing session's edit in the shared worktree, not the task's; it is split (see id:m9hjt's C3). Nothing blocks.
 
-- [ ] +bootstrap +audit +AI-D @main id:z0135 Z0 stage1 accepts modules in the `src/` closure and builds some of their paths wrong
+- [x] +bootstrap +audit +AI-D @main id:z0135 Z0 stage1 accepts modules in the `src/` closure and builds some of their paths wrong
     > **Created:** 2026-11-07
     > **Context:** by id:z0117's measurement.
     > **Branch:** `main`
     > **Before:** id:z0131, id:z0133 (they edit closure modules).
+    > **Completed:** 2026-11-14 git:e56548e
 
     - **Review (2026-11-11/12):** the header's **Before:** id:z0131 no longer holds: by the maintainer's decision on id:z0131 its syscalls go into `stdlib/proc.zrl`, which is outside the `src/` closure, so that task and id:z0132 start without this one. Whether id:z0133 needs it is asked on id:z0133. This task keeps its own reason: an edit to `src/` that reaches one of the paths stage1 builds wrong.
 
@@ -46,6 +47,51 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Do:** reduce each crash to a minimal program against stage1 (`AGENTS.md`: before blaming a seed compiler, reproduce against it), and name what stage1 does differently (a language rule that changed since the pin, such as a drop or layout rule, or a stage1 bug). Find whether any function `src/` reaches today takes the same route (`--emit-deps`, and the generation-1 compiler run over the stdlib tests). Then propose, for the maintainer: a rule added to the stage1 constraint and `doc/bootstrap/two_stage.md` (for example "no two modules in the closure share a private name", and the construct stage1 builds wrong), and whether a check can enforce it (build the closure modules' own tests through stage1 in a gate). Fixing stage1 itself is a re-pin or a recorded backport, the maintainer's decision: stop and ask.
     - **Checks:** the minimal reproductions recorded here, each run against stage1 and `build/zoril`.
     - **Filed (2026-11-07):** both issues are in `KNOWN_ISSUES.md` §1 (the two `stage1` entries), the crash with its cause marked unknown. When this task names the cause, replace that sentence with it, and add the rule it proposes to the entry's **Workaround**.
+    - **Found (2026-11-14, `main` at git:f7d5617; scratch `build/z135/`):** both crashes have one cause, two moves stage1 does not record, so the moved-from value's destructor runs again. Neither is a rule changed since the pin: `build/zoril`'s code for both is in the v0.1.0-alpha commit, and the stage1 snapshot predates it (stage1 has `src/lower_zir/match.zrl` where the release has `lower_match.zrl`).
+    - **A `match` arm does not mark a by-value scrutinee moved.** `src/lower_zir/lower_match.zrl` calls `consume_place_if_move(&scrut_place)` after the guard when the scrutinee's type is not a reference or a `Box` (`pattern_peels_pointer`); stage1's `match.zrl` has no such call, so the scrutinee's drop flag stays set and `match e { E.A(s) => s, .. }` drops the payload with `e` at the exit. Reproduction (`build/z135/m1.zrl`; `S` counts its drops; exit 1 is right):
+    ```zoril
+    struct S { p: *mut u8 }
+    impl Drop for S { fn drop(self: S) { unsafe { *self.p = *self.p + 1 as u8; } } }
+    enum E { A(S), B }
+    fn take(e: E) -> S {
+        return match e { E.A(s) => s, E.B => { return S { p: 0 as *mut u8 }; }, };
+    }
+    fn main() -> i32 {
+        let mut n = 0 as u8;
+        let np = &mut n as *mut u8;
+        { let s = take(E.A(S { p: np })); }
+        return n as i32;
+    }
+    ```
+    - **Result:** stage1 pipeline (`build/zoril-stage1` → `build/zilc-stage1` → qbe/as/ld with `build/runtime.o`): exit 2; `build/zoril` → `build/zilc`, same steps: exit 1.
+    - **A by-value `self` receiver is not marked moved.** With `struct W { s: S }`, `impl W { fn take(self: W) -> S { return self.s; } }` and `fn mk(p: *mut u8) -> W`, the same `main` shape gives, stage1 / `build/zoril`: `mk(np).take()` 2 / 1 (`m2`); `let w = mk(np); w.take()` 2 / 1 (`m4`); `free_take(mk(np))` with `fn free_take(w: W) -> S` 1 / 1 (`m3`); `let w = mk(np); free_take(w)` 1 / 1 (`m5`); `W.take(mk(np))` 1 / 1 (`m6`). Only the method-call receiver is missed.
+    - **How the tests reach it:** `Result.unwrap` takes both routes: `Arena.new(65536).unwrap()` frees the `Arena` inside `unwrap` (route 1) and the caller frees it again (`gdb`, a breakpoint on `arena_free`: `Result_TArenaError6unwrapE` then `main`; `build/zoril`: `main` only). `test_command_redirect_stdout` then faults reading the unmapped header in `arena_free`; `test_pipe_large_buffer` allocates from the freed arena (`zoril_allocator_alloc`). `match Arena.new(65536) { Ok(a) => a, .. }` alone also crashes (`r5`).
+    - **What `src/` reaches (the compiler stage1 builds):** built by the stage1 pipeline from `src/main.zrl` (`build/z135/gen1`, 36 s), it links three destructors with a body: `File` (`f45`), `Arena` (`f65`) and `FileLock` (`f1653`). `Arena`'s and `FileLock`'s are not called on these routes (`src/` names neither type; no type in the closure holds one; `acquire_file_lock` has no such `match`). `File`'s is, in `read_file_raw` (route 1, `match os_linux::open_file(..) { Ok(file) => file, .. }`), `write_file` and `append_file` (route 1 and route 2, `f.close()`), all in `stdlib/file.zrl`. Measured with `gdb` (`catch syscall close`, printing the result) while compiling a three-line program importing `core.zrl` and `vec.zrl`: generation 1 makes 29 closes that succeed and 9 that return `-9` (`EBADF`); `build/zoril` makes 29 and none. Harmless today only because nothing is opened between the two closes; one `open` between them would close an unrelated descriptor. The 277 `.unwrap()`/`.expect()`/`.ok()`/`.err()` calls in `src/` take route 2 too, on types with no destructor.
+    - **Private-name refusal:** reproduced (`build/z135/priv/`, the id:z0117 shape): stage1 `mb.zrl:2:41: error: cannot access private function: helper`; `build/zoril` accepts, exit 0. No two modules of today's closure (66 files, `--emit-deps` into `build/closure.txt`) share a private top-level function name (`awk` over `^(unsafe )?fn` per file: 0 shared).
+    - **A backport, tried (route 1 only):** in a scratch copy of `bootstrap/stage1/` (`build/z135/s1fix/`), after the guard in `src/lower_zir/match.zrl`'s arm loop:
+    ```zoril
+    let scrut_tag = self.get_type_tag(scrut_ty);
+    if !(scrut_tag == ILTYPE_PTR || scrut_tag == ILTYPE_PTRMUT || scrut_tag == ILTYPE_BOXED || scrut_tag == ILTYPE_BOXEDMUT) {
+        self.consume_place_if_move(&scrut_place);
+    }
+    ```
+    - **Result:** built by stage0-c with no warning. With it: `m1` exit 1, `r5` 0, `test_stdlib_fd` 0; `r7` (`.unwrap()`) and `test_stdlib_io_result` still crash, now both frees in `main` (route 2). Route 2's patch is not written: the receiver path in stage1's `expr.zrl` is not the tuple-argument loop that consumes ordinary arguments.
+    - **Proposal for the maintainer:** id:gsa2r.
+    - **Completion:** the cause is named and both reproductions are recorded above with their results under stage1 and `build/zoril` (the task's one check). `KNOWN_ISSUES.md` §1's entry now names the cause, what `src/` reaches, and the rule as its **Workaround** (git:e56548e). Doc tier after the edit: `make test-changed BASE=HEAD`: `Total: 124 run, 124 passed, 0 failed, 0 skipped (15.3s)`. No compiled code changed, so no `make test` or `make preflight-changed`. Re-pinning or backporting is the maintainer's, asked in id:gsa2r; nothing in `bootstrap/stage1/` changed.
+
+- [ ] +bootstrap +decision +AI-D @main Stage1 drops a value twice after a match arm or a by-value self moves it: backport, re-pin, or keep the rule id:gsa2r
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** after id:z0135, which found it. Blocks no task: today's closure takes the routes only on `File`, with a harmless second `close`.
+
+    - **What:** id:z0135 found two moves stage1 does not record (a `match` arm on a by-value scrutinee, and a by-value `self` method receiver), so a value moved either way is dropped twice in what stage1 builds. In the compiler stage1 builds from `src/`, this happens only on `File` (`read_file_raw`, `write_file`, `append_file`), as a second `close` that fails with `EBADF`. Details and reproductions are on id:z0135.
+    - **Options:**
+      - (a) A recorded backport (`doc/bootstrap/two_stage.md` §3) of both fixes. Route 1's is tried (7 lines in stage1's `src/lower_zir/match.zrl`, on id:z0135): it fixes `m1`, `r5` and `test_stdlib_fd`. Route 2's is not yet written. Done when every `tests/stdlib/` test of a closure module, and `test_stdlib_fd` and `test_stdlib_io_result`, exit 0 through the stage1 pipeline, and generation 1 makes no `EBADF` close.
+      - (b) A re-pin of stage1 to a later `main`, which has both fixes. Larger: everything since the snapshot comes with it.
+      - (c) Keep stage1 and make the rule part of the stage1 constraint (`AGENTS.md`, `doc/bootstrap/two_stage.md`): in the closure, a value whose type has a destructor is not moved out of an enum payload (`match`, `unwrap`, `expect`, `ok`, `err`) and gets no `x.method()` call with a by-value `self` (write `Type.method(x)`). Then rewrite the three `File` functions so they follow it.
+    - **Either way:** add the private-name rule ("no two modules in the closure share a private top-level function name"; 0 shared today) to the stage1 constraint, with a check: a short POSIX `awk` script over `--emit-deps`'s list, run as a gate.
+    - **Recommendation:** (a). Rule (c) is hard to check by machine (it depends on which types have destructors, through generics), and the hazard grows with every `Option`/`Result` of a type with a destructor that the closure gains. The backport is small, and stage0-c builds it without a warning.
+    - **Who:** the maintainer decides. The rule text in `AGENTS.md` is a rule change, and a backport touches `bootstrap/stage1/`, which only a re-pin or a recorded backport may change.
 
 - [ ] +safety +tests +AI-D @main id:z0183 A struct holding a frame view is not pushed into the caller's `Vec`
     > **Created:** 2026-11-11
