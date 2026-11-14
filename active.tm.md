@@ -163,6 +163,74 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Do:** find why the push's store rule sees the bare slice and not the struct carrying it (`build/zoril -v` on `gap_79`, then the summary pass for a struct literal argument), and make the struct's field views count as the stored region; decide the same for an `Option`/enum payload (probe `Option.Some(s)` read back first). Flip `gap_79` to `compile_reject`, remove its Known gaps entry and its sentence in `doc/SAFETY.md` §6 (K); keep `gap_61`'s record as it is unless the fix reaches it.
     - **Checks:** C1 `gap_79` is `compile_reject` and `sh scripts/run_safety_matrix.sh` passes; C2 error tests under `tests/error_reporting/` for the struct push, the `let h` form, `resize` and `extend_from_slice` of the struct, and the enum payload if it is a hole, each with `// EXPECT:`; C3 take the fix out and watch them fail; C4 `scripts/check_reject_diff.sh` against the commit before the fix, every newly refused program listed with its reason, none newly accepted; C5 a program that pushes a struct holding a view of a caller-owned or arena buffer is still accepted; C6 `make test`, `make preflight-changed`, `rm build/zoril && make` without a warning, each `Total:` quoted.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md`, with the five other open soundness holes on `main`, ahead of the provenance and ZIL series: each is a program `main` accepts and should refuse (or a drop it skips), one session-sized fix. Order among them: the reads of a dead frame first (id:z0183, id:z0180), then the `fn`-value faults (id:z0100, id:z0101), then the skipped drop (id:z0176) and the unchecked bound (id:z0175). Any "after the `vecclone` series merges" note above is met: the series is on `main`, with gap_76 to gap_79 in `bench/safety_matrix/probes/`.
+    - **Found (2026-11-14, `main` at git:174375c; scratch `build/z183/`):** `out.push(s)` of the bare view is refused by `check_call_stores_stack` in `src/verify.zrl`: the callee's summary (`storage_facts`) seeds a slice parameter's contents mask (`cmask`), so `push` stores `val`'s storage, and the caller's `arg_points_to_stack` asks whether the slice points into the stack. A struct passed by value (`ILParam.by_ref`, a pointer to the caller's copy) is seeded as an address (`mask`), so `push` of an `H` stores nothing that counts, and the caller asks only whether the copy's own address is on the stack (it always is). The caller side already knows the copy holds the view: the `memcpy` of `s` into the literal's slot marks it (`track_arena_call`, `holds_stack`). `summary_pass.zrl` already reads a `by_ref` argument by its contents (`arg_provenance`); `verify.zrl` does not.
+    - **Tried (not committed; the `src/verify.zrl` part of `build/z183/attempt1.patch` is below):** one helper, `param_is_contents(func, i)`: true for `is_slice_like` or for a `by_ref` parameter whose pointee `self.module.type_holds_reference(..)`; used in `storage_param` (seed `cmask`), `call_storage_mask` (map a callee's stored bit through the argument's contents) and `arg_points_to_stack` (a `by_ref` argument counts only if it `holds_stack`). Results with it:
+      - Refused, all with `region escape: a pointer to local stack storage is written to memory that outlives this function`: `gap_79`; the same struct bound by `let h` first; `Option.Some(s)` pushed into a `Vec<Option<[u8]>>`; a tuple `(s, 1)`; a struct inside a struct. Five error tests are saved in `build/z183/saved_tests/`.
+      - Still accepted, as they should be: a struct holding a view of the caller's array passed in, of an array in the same frame as the `Vec`, and of a string literal (`struct_view_pushed_accepted.zrl`, saved).
+      - Also closed: `gap_59`, `gap_61` and `gap_62` (class (K) and (F)); `gap_60` and `gap_63` stay open. `resize` and `extend_from_slice` stay open: they clone, and the clone route is now `gap_80` (git:891b76e), id:z0180's class.
+      - **Blocks it:** the rebuilt compiler refuses `src/` itself. (1) 27 warnings and 3 errors of the `#[stores]` declaration rule: `pub fn`s that keep a by-value aggregate holding pointers (`push_instr(instr: ILInstr)`, `Parser.new_modular(lexer: Lexer, ..)`, `alloc_type(t: Type)`) now store it, which is true, so their attributes would have to list it (`#[stores(instr -> self)]`). (2) Three false region escapes in `src/parser/parse_type.zrl` (lines 39 and 116): an aggregate value produced by an `if` reaches the call as `load` of a pointer slot holding one branch's slot address, and `mark_store` reads that store as a stack pointer written into the slot (`into_ptr_slot`), because a `Ptr<T>` to an aggregate means the aggregate value there and `&h` elsewhere, and the IL types do not say which. Reduction (`build/z183/ifv.zrl`): `fn f(a: &mut Ast, m: bool, x: u32) -> u32 { return a.alloc(if m { T.A(x) } else { T.A(x + 1 as u32) }); }` with `enum T { A(u32), B([u32]) }` and `alloc` pushing into a `Vec<T>`: refused with the change, accepted without; `a.alloc(T.A(x))` is accepted either way.
+    - **Stopped (2026-11-14):** two decisions the task does not settle, asked of the maintainer: whether the `#[stores]` declaration rule extends to by-value aggregates that hold pointers (about 30 attributes in `src/`), and where the fix lives, given (2): in `verify.zrl` with the lowering made to say which `Ptr<T>` is a value (an `if`/`match` aggregate result copied into a `T` slot, not a `Ptr<T>` slot), or in the provenance series' call store rule (`gap_61`'s note says `--provenance` refuses it; checked below).
+    ```diff
+    diff --git a/src/verify.zrl b/src/verify.zrl
+    index ce8f703..079a803 100644
+    --- a/src/verify.zrl
+    +++ b/src/verify.zrl
+    @@ -795,8 +795,7 @@ impl Verifier {
+             if pi >= hidden && pi - hidden < STORE_INTO_GLOBAL as usize {
+                 let bit = (1 as u64) << ((pi - hidden) as u64);
+                 fl.reach[ssa as usize] = bit;
+    -            let pty = func.param(pi).ty;
+    -            if self.is_slice_like(pty) {
+    +            if self.param_is_contents(func, pi) {
+                     fl.cmask[ssa as usize] = bit;
+                 } else {
+                     fl.mask[ssa as usize] = bit;
+    @@ -996,8 +995,7 @@ impl Verifier {
+                 if u < STORE_INTO_GLOBAL as usize
+                     && ((ties >> (u as u64)) & 1 as u64) != 0 as u64
+                     && (a as usize) < fl.mask.len {
+    -                let pty = unsafe { (*p_callee).param(i).ty };
+    -                if self.is_slice_like(pty) {
+    +                if self.param_is_contents(unsafe { &*p_callee }, i) {
+                         let slot = fl.slot_of[a as usize];
+                         r = r
+                             | (if slot != 0 as u32 {
+    @@ -1060,10 +1058,13 @@ impl Verifier {
+             i: usize,
+             arg: SSAId
+         ) -> bool {
+    -        let param_ty = unsafe { (*p_f).param(i).ty };
+    -        if self.is_slice_like(param_ty) {
+    +        let is_slice = self.is_slice_like(unsafe { (*p_f).param(i).ty });
+    +        if self.param_is_contents(unsafe { &*p_f }, i) {
+    +            // A by-value aggregate's argument is the address of the caller's copy, on this stack
+    +            // by construction (a phi of two branches' slots for an `if` value), so only what the
+    +            // copy holds counts; a slice's own value is the pointer, so that counts as well.
+                 return (arg as usize) < self.uses.len
+    -                && (self.points_to_stack[arg as usize] || self.holds_stack(arg));
+    +                && ((is_slice && self.points_to_stack[arg as usize]) || self.holds_stack(arg));
+             }
+             return self.is_stack_addr(arg);
+         }
+    @@ -1193,6 +1194,17 @@ impl Verifier {
+             }
+         }
+     
+    +    // Whether parameter I of FUNC stands for what it holds rather than for its own address: a
+    +    // slice or a function value (is_slice_like), or a by-value aggregate, which the ABI passes
+    +    // as a pointer to the caller's copy (`ILParam.by_ref`), so the pointers that copy holds are
+    +    // the caller's. An aggregate that can hold no pointer (`Span`) is plain data and holds none.
+    +    fn param_is_contents(self: &mut Verifier, func: &ILFunction, i: usize) -> bool {
+    +        let p = func.param(i);
+    +        if self.is_slice_like(p.ty) { return true; }
+    +        return p.by_ref
+    +            && self.module.type_holds_reference(self.get_ptr_inner_type(p.ty), 0 as usize);
+    +    }
+    +
+         // A slice or a function value, or the slot one arrives in: two words, one of them a
+         // pointer (the data, the environment) whose target is what matters, not the slot's.
+         fn is_slice_like(self: &mut Verifier, ty: u32) -> bool {
+    ```
 
 - [ ] +safety +tests +AI-D @main id:z0180 A generic `Clone` impl's result keeps the borrows of what it clones
     > **Created:** 2026-11-11
@@ -176,6 +244,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Do:** decide what the result of a generic `#[borrows()]` function holds when `T` carries a borrow (Rust: the lifetime inside `T` stays in the result), and implement it; or drop the attribute from these impls if the default rule refuses no correct program the tests hold (the differential says). Flip gap_77 and gap_78.
     - **Checks:** C1 gap_77 and gap_78 `compile_reject`, and a `Vec<u8>` / `Option<i32>` clone returned from a function still accepted; C2 take the change out and watch them run (`exit 7`); C3 `scripts/check_reject_diff.sh` against the base, every newly refused program listed; C4 `make test`, `make preflight-changed`, each `Total:` quoted.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md`, with the five other open soundness holes on `main`, ahead of the provenance and ZIL series: each is a program `main` accepts and should refuse (or a drop it skips), one session-sized fix. Order among them: the reads of a dead frame first (id:z0183, id:z0180), then the `fn`-value faults (id:z0100, id:z0101), then the skipped drop (id:z0176) and the unchecked bound (id:z0175). Any "after the `vecclone` series merges" note above is met: the series is on `main`, with gap_76 to gap_79 in `bench/safety_matrix/probes/`.
+    - **Also (2026-11-14, id:z0183):** a user `impl Clone for H` returning `H { s: self.s }` hides the view the same way, with no `#[borrows()]`: `out.resize(1, H { s: &buf })` and `extend_from_slice` of an array of such structs put a frame view into the caller's `Vec` (`gap_80`, git:891b76e, exit 77). The result of a function that loads a view through a reference parameter and returns it in a struct is not tied to the parameter (`reach`, not `storage`, in `verify.zrl`'s `storage_facts`). Flip `gap_80` with this task's fix, or say why it is a different route.
 
 - [ ] +safety +tests +AI-D @main id:z0100 A generic instance made into a `fn` value is lowered, not dropped
     > **Created:** 2026-11-06
