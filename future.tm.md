@@ -363,6 +363,23 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
       - C3: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` exits 0. Quote the `fresh (no cache)` line and list every newly refused program with its reason; any test in `tests/` that is newly refused is a finding to report, not one to rewrite.
       - C4: full `make test` passes; quote the `Total:` line.
 
+- [ ] +types +AI-D @main A static or path call of a method in a generic impl, or of a generic method with no type arguments, fails with `unknown type T` id:7v42z
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** in `future.tm.md` by id:z0175, where it was found: correct programs refused, not a hole, and older than that task (the compiler at git:7877894 behaves the same).
+
+    - **Found (2026-11-14, id:z0175, scratch `build/z175/`):** with `struct W<T> { x: T }`, `impl<T: Copy> W<T> { fn make(x: T) -> W<T> { return W { x: x }; } }`, `fn main() -> i32 { let w = W.make(4); return w.x - 4; }` is refused with `error: unknown type 'T'` at the impl's target type (`mk.zrl:2:17`). So is `W::dup(&w)` for a method `dup(self: &W<T>)` of that impl (`path_ok.zrl`). A receiver call (`w.dup()`) works. With `struct V { x: i32 }` and `impl V { fn m<U: Copy>(u: &U) -> i32 }`, `V.m(&5)` and `V::m(&5)` are refused with `unknown type 'U'` (`st_ok.zrl`, `pa_ok.zrl`), while `V.m::<i32>(&5)` and `V::m::<i32>(&5)` compile.
+    - **Lead:** the method-as-value and path routes (`SymbolKind.Method` in `direct_callee` and in the identifier lowering, `src/lower_zir/expr.zrl`) call `self.resolver.resolve_type(imp.target_ty)` outside the impl's scope, so the impl's own `T` is not defined. Static generic calls do not infer the method's type arguments from the arguments, as receiver calls do (`infer_method_type_args`).
+    - **Do:** diagnose both and split into `+AI-G` tasks. Once the static and path routes work, add their `impl<T: Copy>` cases to `tests/error_reporting/err_impl_block_bound.zrl` (they reach id:z0175's bound check, `check_method_type_arg_bounds`).
+
+- [ ] +diagnostics +AI-D @main A refused call does not cascade into `internal error: could not resolve the type of an operator operand` id:gsjhz
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** in `future.tm.md` by id:z0175, where it was found: a misleading second diagnostic after a correct first one, older than that task.
+
+    - **Found (2026-11-14, id:z0175):** `fn need<T: Copy>(x: &T) -> i32 { return 0; }` and `let a = need(&s); return a + 1;` with `S: Drop` report the bound (`type 'S' does not implement trait 'Copy'`), then `internal error: could not resolve the type of an operator operand` at `a`. That happens on the compiler at git:7877894 and for a refused method call alike (`build/z175/casc.zrl`).
+    - **Why `+AI-D`:** the second message is deliberate. `check_operand_type_resolved` (`src/lower_zir/utils.zrl`) says an unresolved operand type "is an internal error, never a pass". Silencing it after an earlier error is a mechanism that decides what not to report: decide which unresolved operands may skip it (for example a local whose initializer reported an error, so its type was never set), name what a wrong skip would hide (a real internal error after an unrelated user error), and give a planted case for each before re-tagging `+AI-G`.
+
 ## Decisions and hygiene
 
 - [ ] +safety +decision +AI-D id:z0102 Whether `unsafe fn` gets a `fn` type of its own, callable only in `unsafe`
