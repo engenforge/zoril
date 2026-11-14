@@ -64,13 +64,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `make test-changed` exited `0`: `Total: 3317 run, 3317 passed, 0 failed, 96 skipped (121.4s)`.
     - **Awaiting review:** re-run C1 (`PATH="$shim" sh scripts/test_runner_output.sh --both` with `timeout` hidden) and C3 (`make user-tools && ./scripts/test_tool_versions.sh`).
 
-- [ ] +testinfra +review +AI-D @main @checkin Review of the user-tools timeout and version-shim fixes id:scffs
+- [x] +testinfra +review +AI-D @main @checkin Review of the user-tools timeout and version-shim fixes id:scffs
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Placed:** after id:n23zs to review the user-tools fixes before merging main into provenance (id:0m61c).
     > **Depends:** id:n23zs
+    > **Completed:** 2026-11-14 git:e0febf3
 
     - Re-run `id:n23zs`'s **Awaiting review:** commands (`C1` timeout-hidden `scripts/test_runner_output.sh --both`, and `C3` `make user-tools && ./scripts/test_tool_versions.sh`), verify `build/user_tools_checkout.log` records zero rebuilds, and check that a non-`version.sh` `git` invocation under Part 2 still fails and is reported.
+    - **Review (2026-11-14):** inspected `git show e0febf3` on `main` (`scripts/test_runner_output.sh` excludes `hangs.zrl` with `EXPECTED_TOTAL_NO_TIMEOUT` in `quiet`/`default`/`verbose` when `timeout` is absent; `scripts/check_user_tools.sh` delegates `*scripts/version.sh*` callers to `real_git` while logging every invocation and exiting `1` for other callers). Re-ran `C1` (`PATH="$shim" sh scripts/test_runner_output.sh --both` with `timeout` hidden via `path_without "$shim" timeout`): all 9 `[PASS]` lines printed, exited `0`. Re-ran `C3` (`make user-tools && ./scripts/test_tool_versions.sh`): `PASS: user tools gate passed.` (`[PASS] user-tools (checkout): make test invoked git only for scripts/version.sh`, `Total: 3317 run, 3317 passed, 0 failed, 96 skipped (121.1s)` in `build/user_tools_checkout.log`), `grep -c '^Building ' build/user_tools_checkout.log` printed `0`, `build/user_tools_git.log` held 20 `scripts/version.sh` calls, and all 6 `test_tool_versions.sh` checks passed (`0.1.0-alpha-159-ge0febf3`). Probed Part 2's `git` shim on a non-`version.sh` caller (`sh -c 'git status'`): exited `1` and logged `sh -c git status ...: git status`, while `sh ./scripts/version.sh` exited `0`. Queue unchanged; next ready task is `id:0m61c`.
 
 - [ ] +merge +AI-D @provenance Merge `main` into `provenance` before the series resumes id:0m61c
     > **Created:** 2026-11-14
