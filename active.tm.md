@@ -2,6 +2,15 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
+- [ ] +safety +tests +AI-D @main A variant built from several arguments drops each argument once id:qjc80
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** before id:z0176, by the maintainer's decision on it (a repeated drop is fixed before a lost one).
+
+    - **Now:** `P.A(a, b)` with `enum P { A(S, S), B }` and `S: Drop` drops each argument twice, 4 drops for 2 values (`bench/safety_matrix/probes/gap_82_variant_two_payload_args_dropped_twice.zrl`, `observed: exit 4`; found by id:z0176). In the ZIL of `P.A(S { .. }, S { .. })` the argument temporaries' drop flags are set and never cleared when the payload tuple is built from them. A one-argument payload, a tuple literal, a struct literal and `P1.A((a, b))` (a tuple payload as one argument) drop each value once, so the route is the variant call that packs several arguments into a tuple.
+    - **Do:** find where a variant call with more than one argument builds its payload tuple (`lower_variant_constructor_call` and what it calls, `src/lower_zir/expr.zrl`) and consume each argument there as the tuple literal does; flip `gap_82` to `accept` (exit 0), remove its Known gaps entry and its half of `doc/SAFETY.md` §6 class (M), recount the §5 figures. Probe the twins: an `Option`/`Result`-style generic enum with two payload fields, a variant called by path (`P::A`), three arguments, a mix of a `Drop` and a Copy argument, the arguments being a moved local, a field moved out of a by-value parameter, and a call result.
+    - **Checks:** C1 `sh scripts/run_safety_matrix.sh` `Mismatches: 0`, `gap_82` `accept`; C2 a test under `tests/language/` counting drops for each twin above (each 1 per value); C3 take the fix out and watch C2 and the matrix fail; C4 `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, its `reject-diff: base verdicts: fresh (no cache)` line quoted, every newly accepted or refused program listed; C5 `make test`, its `Total:` quoted, and `rm build/zoril && make` with no `warning:`.
+
 - [ ] +safety +tests +AI-D @main id:z0176 A value bound by value out of an enum payload in a `match` is dropped exactly once
     > **Created:** 2026-11-11
     > **Branch:** `main`
@@ -151,6 +160,17 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
              if local_id == 0 as u32 {
                  local_id = self.define_local(
     ```
+    - **Decision (the maintainer, 2026-11-14):** fix gap_82 first, in id:qjc80 (placed before this task); then this task applies the patch above for gap_81 with the checks in full (`make test`, `make preflight-changed`, the fresh-verdict differential, a drop-count test for every 0 above, the take-out); a pattern that skips a field that needs a drop drops it, in id:sq2m7 (after this task). Flip `gap_81` to `accept` and remove its half of `doc/SAFETY.md` §6 class (M).
+
+- [ ] +safety +tests +AI-D @main A pattern that moves one field of a payload drops the fields it skips id:sq2m7
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Placed:** after id:z0176, which makes a moving arm consume its scrutinee; this task drops what that arm's pattern skips.
+
+    - **Decision (the maintainer, 2026-11-14):** a pattern that moves one field of a payload and skips another that needs a drop drops the skipped fields, as Rust does; it is not refused.
+    - **Now (after id:z0176's fix, by its tried patch):** `P.A(s, _)` with `enum P { A(S, S), B }` drops `s` at the arm's end, and the scrutinee is consumed, so the second `S` is never dropped; `Q.A(W2 { a: a, .. })` the same for `b`.
+    - **Do:** when an arm's pattern moves something (id:z0176's `pattern_moved`), drop each part it does not bind that needs a drop (a `_`, a `..` rest, a literal position of a droppable type cannot occur) at the start of the arm, after its guard; that needs a `ZirStmt.Drop` of a projected place (a payload field), so check first that the ZIR-to-ZIL lowering and the move checker accept one, and say so here. Probes: `P.A(s, _)`, `P.A(_, t)`, `Q.A(W2 { a: a, .. })`, a nested `N.A(P.A(s, _))`, an or-pattern, a guard that fails (nothing dropped on that path), and a `let` pattern if id:ts1jg has made one accepted.
+    - **Checks:** C1 each probe's drop count, 1 per value; C2 a test under `tests/language/` for them; C3 take the change out and watch it fail; C4 the fresh-verdict differential; C5 `make test`, its `Total:` quoted.
 
 - [ ] +safety +types +AI-D @main id:z0175 A bound on an impl block or a method's type parameter is checked
     > **Created:** 2026-11-11
