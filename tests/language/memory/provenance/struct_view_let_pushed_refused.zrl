@@ -1,0 +1,13 @@
+// The same struct bound to a local first, then pushed: the local holds the view (doc/design/provenance.md §3).
+// flags: --provenance
+// EXPECT: call store rule
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+struct H { s: [u8] }
+fn fill(out: &mut Vec<H>) {
+    let buf = [42 as u8; 16];
+    let h = H { s: &buf };
+    out.push(h);
+}
+fn main() -> i32 { let mut v: Vec<H> = Vec.new(); fill(&mut v); return 0; }
