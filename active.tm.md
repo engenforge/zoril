@@ -2,11 +2,12 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +testinfra +bug +AI-G @main user-tools: runner-output hangs.zrl fixture does not time out and Part 2 git shim clobbers build/gen/version.zrl id:n23zs
+- [x] +testinfra +bug +AI-G @main user-tools: runner-output hangs.zrl fixture does not time out and Part 2 git shim clobbers build/gen/version.zrl id:n23zs
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Depends:** id:yxvpa
     > **Placed:** promoted from `future.tm.md` (check-in id:yxvpa) before id:0m61c so `main`'s broken `make user-tools` / `make preflight` is fixed before merging `main` into `provenance`.
+    > **Completed:** 2026-11-14 git:e0febf3
 
     - **Observed (2026-11-14, during id:jhy7v preflight):** `make preflight` runs `user-tools` (`scripts/check_user_tools.sh`), which exports `HEAD` to `/tmp/user_tools_exp_*` and runs `make test`. Inside that run, `scenario: runner-output` (`scripts/test_runner_output.sh --both`) ran `tests/runner/fixtures/tests/hangs.zrl` six times without `timeout` on `PATH` (~26m before `kill -9` on the first). Also, `scenario: tool-versions` in `test_checked.sh` failed because Part 2's failing `git` shim caused `scripts/version.sh` to overwrite `build/gen/version.zrl` with `0.1.0-alpha` and rebuild `build/zoril`, `build/zilc`, `tools/zman/build/zman`, and `build/zbuild` (`build/user_tools_checkout.log:1-6`), after which `mutation-check.sh:235` rebuilt `build/zoril` and `build/zilc` with the `git`-derived version while leaving `build/zbuild` stale.
     - **Do (1) — `scripts/test_runner_output.sh` (`check_mode`, lines 52–67):** detect when `timeout` is already absent from `PATH` (`! command -v timeout >/dev/null 2>&1`) and exclude `hangs.zrl` with `EXPECTED_TOTAL_NO_TIMEOUT` in `quiet`, `default`, and `verbose` modes just as `opts_hidden` does:
@@ -56,6 +57,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: Take-out check: revert the `scripts/test_runner_output.sh` edit and run `shim=$(mktemp -d); . scripts/lib/path_shim.sh; path_without "$shim" timeout; timeout 8s env PATH="$shim" sh scripts/test_runner_output.sh; rc=$?; rm -rf "$shim"; pkill -9 -f 'tests\\+runner\\+fixtures\\+tests\\+hangs.zrl/test' 2>/dev/null || true; echo "exit $rc"`, confirming it times out with `exit 124`, then restore the edit; quote the output.
       - C3: Run `make user-tools && ./scripts/test_tool_versions.sh`: both exit `0`, `grep -c '^Building ' build/user_tools_checkout.log` prints `0` (before figure from `id:jhy7v`'s run: `3` `Building ...` lines in `build/user_tools_checkout.log`), and `./scripts/test_tool_versions.sh` passes every tool (`zoril`, `zilc`, `zbuild`) without rebuilding; quote the outputs.
       - C4: `make test-changed`, quoting its `Total:` line. End with `**Awaiting review:**` naming the C1 and C3 checks.
+    - **Completion notes (git:e0febf3):**
+      - C1: `shim=$(mktemp -d); . scripts/lib/path_shim.sh; path_without "$shim" timeout; PATH="$shim" sh scripts/test_runner_output.sh --both; rc=$?; rm -rf "$shim"; echo "exit $rc"` printed all 9 `[PASS]` lines (`quiet`, `default`, `verbose`, `opts_hidden`, `scenario exiting 77`, and the 4 `build/ztest` modes) and `exit 0`.
+      - C2: Take-out check (with `scripts/test_runner_output.sh` reverted to `HEAD`): `timeout 8s env PATH="$shim" sh scripts/test_runner_output.sh` timed out with `exit 124`; restored the edit afterwards.
+      - C3: `make user-tools && ./scripts/test_tool_versions.sh` exited `0`: `PASS: user tools gate passed.`, `grep -c '^Building ' build/user_tools_checkout.log` printed `0` (down from `3`), and `./scripts/test_tool_versions.sh` printed `[PASS]` for `zoril`, `zilc`, and `zbuild` (`0.1.0-alpha-159-ge0febf3`) without rebuilding.
+      - C4: `make test-changed` exited `0`: `Total: 3317 run, 3317 passed, 0 failed, 96 skipped (121.4s)`.
+    - **Awaiting review:** re-run C1 (`PATH="$shim" sh scripts/test_runner_output.sh --both` with `timeout` hidden) and C3 (`make user-tools && ./scripts/test_tool_versions.sh`).
 
 - [ ] +testinfra +review +AI-D @main @checkin Review of the user-tools timeout and version-shim fixes id:scffs
     > **Created:** 2026-11-14
