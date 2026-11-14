@@ -1,0 +1,21 @@
+// name: A match guard nested in another match's guard writes the outer scrutinee unrefused
+// expected: known_gap
+// gap: match e { Q.A(s) if { match 1 { 1 if { e = Q.B; true } => true, _ => false } } => {}, .. } assigns the outer scrutinee from the inner match's guard; the lowering tracks one guard's scrutinee at a time, so the inner guard hides the outer one, and s, bound by value before the outer guard, is dropped again after the assignment dropped e's payload (the counter reads 2 where 1 is due); e.reset() there is the same, while the same write in the inner match's arm body, or directly in the outer guard, is refused
+// observed: exit 7
+struct S { p: *mut u8 }
+impl Drop for S { fn drop(self: &mut S) { unsafe { *self.p = *self.p + 1 as u8; } } }
+enum Q { A(S), B }
+fn main() -> i32 {
+    let mut flag = 0 as u8;
+    let fp = &mut flag as *mut u8;
+    {
+        let mut e = Q.A(S { p: fp });
+        match e {
+            Q.A(s) if { match 1 { 1 if { e = Q.B; true } => true, _ => false, } } => { let n = 1; },
+            Q.A(_) => {},
+            Q.B => {},
+        }
+    }
+    if flag == 1 as u8 { return 0; }
+    return 7;
+}
