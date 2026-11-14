@@ -1960,20 +1960,40 @@ impl ZirLowerer {
             if args.len > 1 as usize {
                 // Several arguments make a tuple payload.
                 let variant_payload_ty = e.variants[v_idx].payload;
+                let mut arg_types = unsafe {
+                    Vec::<u32>.with_capacity_in_raw(self.persistent_arena, args.len)
+                };
+                let mut all_typed = true;
                 for ai in 0 as usize..args.len {
-                    elems.push(
-                        self.lower_operand(
-                            args,
-                            ai,
-                            self.get_tuple_elem_type(variant_payload_ty, ai as u32)
-                        )
+                    let arg = self.lower_operand(
+                        args,
+                        ai,
+                        self.get_tuple_elem_type(variant_payload_ty, ai as u32)
                     );
+                    // The tuple owns each argument from here, as a tuple literal does; a flag
+                    // left set dropped it again where it was made.
+                    let arg_ty = self.get_place_type(&arg);
+                    if arg_ty != 0 as u32 && !self.is_copy_type(arg_ty) {
+                        self.consume_place_if_move(&arg);
+                    }
+                    if arg_ty == 0 as u32 { all_typed = false; }
+                    arg_types.push(arg_ty);
+                    elems.push(arg);
                 }
-                let tmp_payload = self.define_local(
-                    0 as *mut Symbol,
-                    variant_payload_ty,
-                    LOCAL_KIND_TMP
-                );
+                // The tuple has its arguments' types, as a tuple literal does: a generic enum's
+                // type arguments are inferred from it, and the declared `(T, U)` gave an
+                // instance with no drop glue, so the enum was never dropped.
+                let tuple_ty = if all_typed {
+                    self.module.alloc_type(ILTypeDecl {
+                        id: 0,
+                        name: 0,
+                        def: ILType.Tuple(arg_types.as_slice()),
+                        source_file: 0 as u32
+                    })
+                } else {
+                    variant_payload_ty
+                };
+                let tmp_payload = self.define_local(0 as *mut Symbol, tuple_ty, LOCAL_KIND_TMP);
                 self.emit(ZirStmt.Let(tmp_payload, ZirRvalue.Tuple(elems.as_slice()), span));
                 payload_place = Place {
                     base: tmp_payload,
