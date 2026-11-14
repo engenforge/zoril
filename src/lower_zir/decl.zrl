@@ -95,10 +95,9 @@ pub struct ZirLowerer {
     // move out of them, and early exits (`return`/`break`/`continue`) do not drop them because
     // the scrutinee still owns them until the guard passes.
     pub guard_bound_locals: Vec<u32>,
-    // Scrutinee place of the match arm whose guard is currently being lowered, so the guard
-    // cannot assign to or mutably borrow it (or any overlapping subplace).
-    pub guard_scrut: Place,
-    pub guard_scrut_active: bool,
+    // Scrutinee places of every match whose guard is currently being lowered, innermost last,
+    // so a guard cannot assign to or mutably borrow any enclosing scrutinee (or overlapping subplace).
+    pub guard_scruts: Vec<Place>,
     pub had_error: bool,
     // Errors reported so far; a cleanup compares it around a `defer` to see whether that `defer` failed.
     pub error_count: u32,
@@ -178,11 +177,7 @@ impl ZirLowerer {
             pattern_entry_block: 0 as usize,
             pattern_in_drop_type: 0 as u32,
             guard_bound_locals: unsafe { Vec::<u32>.new_in_raw(arena) },
-            guard_scrut: Place {
-                base: 0 as u32,
-                projections: @slice(0 as *mut Projection, 0 as usize)
-            },
-            guard_scrut_active: false,
+            guard_scruts: unsafe { Vec::<Place>.new_in_raw(arena) },
             had_error: false,
             error_count: 0 as u32,
             locals: unsafe { Vec::<Local>.new_in_raw(arena) },
@@ -216,21 +211,18 @@ impl ZirLowerer {
         };
     }
 
-    pub fn guard_scrut_overlaps(self: &ZirLowerer, place: &Place) -> bool {
-        if !self.guard_scrut_active || self.guard_scrut.base == 0 as u32 {
+    fn guard_place_overlaps(self: &ZirLowerer, scrut: &Place, place: &Place) -> bool {
+        if scrut.base == 0 as u32 || scrut.base != place.base {
             return false;
         }
-        if self.guard_scrut.base != place.base {
-            return false;
-        }
-        let n = if self.guard_scrut.projections.len < place.projections.len {
-            self.guard_scrut.projections.len
+        let n = if scrut.projections.len < place.projections.len {
+            scrut.projections.len
         } else {
             place.projections.len
         };
         let mut i = 0 as usize;
         while i < n {
-            let pr1 = &self.guard_scrut.projections[i];
+            let pr1 = &scrut.projections[i];
             let pr2 = &place.projections[i];
             let tag1 = pr1.get_tag();
             let tag2 = pr2.get_tag();
@@ -245,6 +237,17 @@ impl ZirLowerer {
             i = i + 1 as usize;
         }
         return true;
+    }
+
+    pub fn guard_scrut_overlaps(self: &ZirLowerer, place: &Place) -> bool {
+        let mut i = 0 as usize;
+        while i < self.guard_scruts.len() {
+            if self.guard_place_overlaps(&self.guard_scruts[i], place) {
+                return true;
+            }
+            i = i + 1 as usize;
+        }
+        return false;
     }
 
     pub fn report_prefix(self: &mut ZirLowerer, span: Span) {

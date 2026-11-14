@@ -49,4 +49,28 @@ fn closure_assign(mut e: Q) {
     }
 }
 
+fn nested_guard_assign(mut e: Q) {
+    match e {
+        Q.A(s) if { match 1 { 1 if { e = Q.B; true } => true, _ => false } } => {},
+        Q.A(_) => {},
+        Q.B => {},
+    }
+}
+
+fn nested_guard_method(mut e: Q) {
+    match e {
+        Q.A(s) if { match 1 { 1 if { e.reset(); true } => true, _ => false } } => {},
+        Q.A(_) => {},
+        Q.B => {},
+    }
+}
+
+fn nested_two_deep(mut e: Q) {
+    match e {
+        Q.A(s) if { match 1 { 1 if { match 2 { 2 if { e = Q.B; true } => true, _ => false } } => true, _ => false } } => {},
+        Q.A(_) => {},
+        Q.B => {},
+    }
+}
+
 fn main() -> i32 { return 0; }

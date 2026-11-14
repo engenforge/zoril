@@ -80,6 +80,25 @@ fn nested_match_guard_writes_local(fp: *mut u8) -> i32 {
     return outer_ok + inner_local;
 }
 
+fn inner_guard_writes_inner_local(fp: *mut u8) -> i32 {
+    let e = Q.A(mk(fp));
+    let mut result = 0;
+    match e {
+        Q.A(s) if {
+            let mut inner_local = 10;
+            let ok = match 1 {
+                1 if { inner_local = 20; true } => true,
+                _ => false,
+            };
+            result = inner_local;
+            ok
+        } => {},
+        Q.A(_) => {},
+        Q.B => {},
+    }
+    return result;
+}
+
 fn main() -> i32 {
     let mut count = 0 as u8;
     let fp = &mut count as *mut u8;
@@ -99,6 +118,9 @@ fn main() -> i32 {
 
     if nested_match_guard_writes_local(fp) != 6 { return 8; }
     if count != 6 as u8 { return 9; }
+
+    if inner_guard_writes_inner_local(fp) != 20 { return 10; }
+    if count != 7 as u8 { return 11; }
 
     return 0;
 }
