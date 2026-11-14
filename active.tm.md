@@ -251,7 +251,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Probed (scratch `build/z100/`, `run.sh NAME` builds and runs `NAME.zrl`):** each site exits 0 with the fix: a `let` with a `fn` type, an inferred `let f = id::<i32>;`, a struct field, an assignment over a closure, an argument, a `return`, a closure body, a generic higher-order callee with and without turbofish (`apply::<i64>(id::<i64>, ..)`, `apply(id::<i32>, 3)`), two type parameters, an aggregate parameter, `id::<U>` inside a generic function instantiated twice, a stdlib generic (`first::<i32>` over `&Vec<i32>`), a public generic of another module by `use` and by path, and the same four under `zbuild`. Refused: `unsafe fn id<T>` as `id::<*i32>` outside `unsafe` (accepted inside), a wrong count (`id::<i32, i32>`, `id::<>`), a non-generic `g::<i32>`, an unmet bound (`get::<S>`), a wrong `fn` type (`type mismatch: expected fn(i64) -> i64, found fn(i32) -> i32`), and a private generic of another module (`unresolved symbol: lib::hid`, the same as a call).
     - **Completion (2026-11-14):** git:dc006a0 on `main`. `gap_66` flipped to `accept`; its Known gaps entry and `doc/SAFETY.md` §6 class (L) removed, (M) and (N) re-lettered (L) and (M) (id:z0101's class is now (L)); the open-hole count in `safety_model.md` 19 to 18; `doc/SAFETY.md` §5's `accept` count 74 to 75 and compiler lines 47,137 to 47,182, `unsafe_policy.md`'s `src/` density 4.67% to 4.66%. The §5 `known_gap` count reads 46, which the tree now has; it read 46 at git:891b76e too, where the tree had 47 (follow-up in `future.tm.md`). Tests: `tests/language/generics/instance_as_fn_value.zrl` (every value site, results summed so a dropped one changes the total) and `tests/error_reporting/err_generic_instance_fn_value.zrl` (count, non-generic, bound, `unsafe`). Take-out: with `src/lower_zir/expr.zrl` reverted and rebuilt, both new tests fail (`compile failed`; `expected compile fail, but it compiled`) and `sh scripts/run_safety_matrix.sh` reports `Mismatches: 1`; with the fix, `All probes complete: 460/506 passed. Mismatches: 0`. `make test`: `Total: 3281 run, 3281 passed, 0 failed, 94 skipped (119.5s)`. `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (exit 0, its clean-tree build with no `warning:`, fixpoint and `All mutations caught.`): `reject-diff: base verdicts: fresh (no cache); base front end 110 s` and `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69146 programs against 7cf8c3e0be26b6bcfd0b3befe3f96e0ebe0f40b7`; its suite run `Total: 1199 run, 1199 passed, 0 failed, 0 skipped (44.8s)`. Newly accepted beyond the corpus, by design: each value site above, which `main` refused with an unrelated error or accepted and miscompiled. `bench/fuzz/README.md` is stale for this change to `src/` (the record predates it). An `+AI-D` task: no check-in of its own (AGENTS.md).
 
-- [ ] +safety +tests +AI-D @main id:z0101 An `extern` function made into a `fn` value needs `unsafe`
+- [ ] +safety +tests +AI-G @main id:z0101 An `extern` function made into a `fn` value needs `unsafe`
     > **Created:** 2026-11-06
     > **Branch:** `main`
     > **Found by:** id:z0095 (its structural twin).
@@ -260,6 +260,43 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Now:** a bare `extern` declaration (`extern fn memset(p: *mut u8, c: i32, n: usize) -> *mut u8;`) named as a value converts to a plain `fn` type with no `unsafe`, and a call through the value is never marked, so safe code calls C with a forged pointer and faults (`bench/safety_matrix/probes/gap_67_extern_fn_as_fn_value.zrl`; `build/z95/x_extern_call.zrl`, exit 139). A direct call is refused ("call to extern function requires unsafe block"); id:z0095's check in `ZirLowerer.fn_value` does not reach it: a bare `extern` is not `is_unsafe` (an `unsafe extern fn` is, and is refused since id:z0095's review).
     - **Decide, then do:** refuse the conversion outside `unsafe` as id:z0095 does (one condition in `fn_value`), or refuse it everywhere: a plain `fn` value is called with the Zoril convention, two words and an environment argument, and an `extern` is a C symbol, which `extern "C" fn(..)` (the C function pointer, its call already `unsafe`) is the type for. Probe every conversion site, an exported (`is_export`) function, and an `extern` with `#[borrows]`/`#[stores]`; flip `gap_67` with its Known gaps entry and the `doc/SAFETY.md` §6 class (M) removed. `make test`, `make preflight-changed`, `sh scripts/run_safety_matrix.sh`.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md`, with the five other open soundness holes on `main`, ahead of the provenance and ZIL series: each is a program `main` accepts and should refuse (or a drop it skips), one session-sized fix. Order among them: the reads of a dead frame first (id:z0183, id:z0180), then the `fn`-value faults (id:z0100, id:z0101), then the skipped drop (id:z0176) and the unchecked bound (id:z0175). Any "after the `vecclone` series merges" note above is met: the series is on `main`, with gap_76 to gap_79 in `bench/safety_matrix/probes/`.
+    - **Settled (2026-11-14, a reviewing session):** refuse the conversion outside `unsafe`, as id:z0095 does for an `unsafe fn`; do not refuse it everywhere. Why: a call through the value works at the ABI level, since the environment word goes after the C arguments (`build/z100/x_sub.zrl`, with `ext_sub` in `build/z100/ext.s` returning `rdi - rsi`: `call(ext_sub)` through `fn call(f: fn(i64, i64) -> i64)` returns 5, the same as the direct call; `callq *%rax` with the environment in `%rdx`), so refusing it everywhere would take away a working form, while `unsafe` states the same claim a safe wrapper around the call would. Re-tagged `+AI-G`.
+    - **Do:** in `ZirLowerer.fn_value` (`src/lower_zir/expr.zrl`), beside the `is_unsafe` condition, refuse `p_func.is_extern && !p_func.is_export` outside `unsafe` with `an extern function made into a value requires unsafe block` (the `is_export` exclusion is the one `check_extern_call_is_marked`'s caller makes: an `extern "C" fn f() { .. }` has a checked body and its direct call needs no `unsafe`). No `zoril_abort` exemption: the compiler never makes it a value. Flip `gap_67` to `compile_reject` (with a reason line as `gap_65` has), remove its Known gaps entry from `doc/spec/safety_model.md` (and lower the "18 holes" count there by one), remove class (L) from `doc/SAFETY.md` §6 and re-letter (M) to (L), and update the §5 figures `scripts/check_safety_figures.sh --print` reports and the probe counts in §5 (`compile_reject` up one) and §6 (`known_gap` down one). If the rebuilt compiler refuses a site in `src/`, `stdlib/`, `tools/` or a test, stop and report it rather than wrapping it in `unsafe`.
+    - **Checks:**
+      - C1 `sh scripts/run_safety_matrix.sh`: `Mismatches: 0`, with `gap_67` now `compile_reject`.
+      - C2 a new `tests/error_reporting/err_extern_fn_value_outside_unsafe.zrl` with one `// EXPECT:` line per site, each `an extern function made into a value requires unsafe block`: a `let` with a `fn` type, an argument, a struct field, an assignment, a `return`, a closure's return, an inferred `let f = memset;`, and an `extern` declared with `#[borrows(..)]` or `#[stores(..)]` if the parser accepts one on an `extern`.
+      - C3 a new accepted test under `tests/language/` (`// expected exit 0`): the same `extern` made into a value inside `unsafe { }` and called through it, and an `extern "C" fn f(..) { .. }` with a body made into a plain `fn` value outside `unsafe` and called (link a small `.s` with `// link:` as other tests that need a C symbol do, or use a symbol `rt/runtime.s` defines).
+      - C4 take the new condition out, rebuild, and show C2 fails (`expected compile fail, but it compiled`) and the matrix reports `Mismatches: 1`.
+      - C5 `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: quote its `reject-diff: base verdicts: fresh (no cache)` line; the change only refuses more, so list every newly refused program with its reason (expected: `gap_67` and the new error test only).
+      - C6 `make test` and `make preflight-changed`, each `Total:` line quoted; `rm build/zoril && make` with no `warning:`.
+    - **Reproducer for the ABI claim above** (`ext.s`, assembled and linked into the runtime with `as -o ext.o ext.s && ld -r -o rt_ext.o build/runtime.o ext.o`, then `sh scripts/build_zrl.sh x_sub.bin x_sub.zrl --runtime rt_ext.o`; exit 0):
+    ```
+    .text
+    .globl ext_sub
+    ext_sub:
+      mov %rdi, %rax
+      sub %rsi, %rax
+      ret
+    ```
+    ```
+    extern fn ext_sub(a: i64, b: i64) -> i64;
+    fn call(f: fn(i64, i64) -> i64) -> i64 { return f(9 as i64, 4 as i64); }
+    fn main() -> i32 {
+        let direct = unsafe { ext_sub(9 as i64, 4 as i64) };
+        let via = call(ext_sub);
+        if direct != 5 as i64 { return 10; }
+        if via != 5 as i64 { return 20; }
+        return 0;
+    }
+    ```
+
+- [ ] +safety +review +AI-D @main @checkin Review of the extern-to-fn-value rule id:2ypfd
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+    > **Depends:** id:z0101
+    > **Placed:** after id:z0101, the batch it reviews.
+
+    - **Review:** re-run id:z0101's C1 to C5 (the matrix, the error test, the take-out, the fresh-verdict differential), and probe the sibling routes: an `extern` reached through a `use` alias and by a module path, an `extern` named as a method-call argument, an `extern` from another module under `zbuild`, a variadic `extern`, and an `extern "C" fn` with a body still accepted as a plain `fn` value.
 
 - [ ] +safety +tests +AI-D @main id:z0176 A value bound by value out of an enum payload in a `match` is dropped exactly once
     > **Created:** 2026-11-11

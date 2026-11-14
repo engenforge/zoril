@@ -272,6 +272,14 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Do:** in `check_closure`, exit 2 with `[FAIL] closure-private-names: <label>: no modules listed` when the list is unreadable or names no module that exists.
     - **Checks:** C1 a missing and an empty `--list` file each print that line and exit 2. C2 the gate on the tree still prints both `[PASS]` lines. C3 `make test`, its `Total:` quoted.
 
+- [ ] +docs +tests @main The safety pages' probe and hole counts are checked against the tree id:594de
+    > **Created:** 2026-11-14
+    > **Context:** found while closing id:z0100.
+    > **Placed:** in `future.tm.md`: documentation drift with no safety effect; no task depends on it.
+
+    - **Found:** `scripts/check_safety_figures.sh` checks `doc/SAFETY.md` §5.3 and the density rows of `doc/spec/unsafe_policy.md`, but not the probe counts in `doc/SAFETY.md` §5 ("**366 `compile_reject`**, ... **46 `known_gap`**") and §6 ("tracked as 46 `known_gap` probes"), nor the open-hole count in `doc/spec/safety_model.md` ("the 18 holes still open"), nor `doc/STABILITY.md`'s "16 open soundness holes", "72 safety properties" and "79-row architecture matrix". At git:891b76e `gap_80` made 47 `known_gap` probes while both `doc/SAFETY.md` lines said 46; `doc/STABILITY.md`'s 16 and `safety_model.md`'s 19 (now 18) already disagree.
+    - **Do:** decide which of these counts each page should state at all (a page can link to the table instead of repeating a number); recompute the ones kept from the probes' `// expected:` lines and the Known gaps table in `check_safety_figures.sh`, and fail on a mismatch; a planted wrong count shows the check fails.
+
 ## Types, diagnostics and the standard library
 
 - [ ] +generics +types id:z0032 G1 `impl<T: Copy> Source<T> for S` fails to bind `T` when it appears only in the trait's arguments
@@ -316,6 +324,14 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Found (2026-11-14, `main` at git:b26ca47):** modules `ma.zrl` with `const LIM: i32 = 1;` and `mb.zrl` with `const LIM: i32 = 2;`, each read by a `pub fn`, imported by one `main`: `build/zoril` emits both as the symbol `z3LIME`, and the assembler fails with ``Error: symbol `z3LIME' is already defined`` (`build/z135/priv/const/`). Functions are qualified by their module (`z6stdlib3mem5Arena4dropE`); a const is not. The program is correct and should build.
     - **Do:** qualify a const's symbol by its module, as a function's is, in whole-program and separate compilation (the `.zri` names the symbol the importer references). Probe a `pub const` read from another module, a `static`, and a const of the same name in a module and in the program's root.
     - **Checks:** C1 the program above builds and exits 0, whole-program and through `zbuild` (a test under `tests/modular/`). C2 take the change out and watch C1 fail to assemble. C3 `make test` and `make preflight-changed`, each `Total:` quoted.
+
+- [ ] +types +diagnostics @main A call with turbofish checks the number of type arguments id:7sb2k
+    > **Created:** 2026-11-14
+    > **Context:** found by id:z0100's probes.
+    > **Placed:** in `future.tm.md`: a diagnostic gap, not a soundness hole; no task depends on it.
+
+    - **Found:** a call ignores a wrong number of type arguments: `id::<i32, i32>(3)` with `fn id<T>(x: T) -> T` and `g::<i32>(3)` with a non-generic `g` both compile and run (exit 0 for `return id::<i32, i32>(3) - 3;`), and `id::<>(3)` infers `T`. The value form refuses each since git:dc006a0 (`a generic function named as a value needs one type argument for each of its type parameters`, `type arguments given to a function that is not generic`). `direct_callee` in `src/lower_zir/expr.zrl` passes `type_args` to `instantiate_function` without comparing the count with `ff.type_params.len`; a method call (`instantiate_method`) is the twin to probe.
+    - **Do:** refuse a count that is not zero and not the declaration's (zero still infers), and type arguments on a non-generic function, at the call as the value form does; an error test per form; `make test`, `make preflight-changed` (the differential lists the newly refused programs).
 
 ## Decisions and hygiene
 
