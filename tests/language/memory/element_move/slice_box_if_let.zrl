@@ -1,0 +1,12 @@
+// Binding a Box payload by value in an if let on a slice element is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+enum O { Some(Box<i32>), None }
+
+fn g(a: [O]) -> i32 { if let O.Some(b) = a[0] { return *b; } return 0; }
+
+fn main() -> i32 {
+    let a = [O.Some(box 5)];
+    return g(&a) - 5;
+}

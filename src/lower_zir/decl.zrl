@@ -791,6 +791,10 @@ impl ZirLowerer {
                 );
                 return;
             }
+            if self.guard_scrut_overlaps(place) {
+                self.report_error("cannot move the matched value in a match guard", self.cur_span);
+                return;
+            }
             if self.drop_flag_of(place.base) != 0 as u32 {
                 self.set_drop_flag(
                     place.base,
@@ -801,6 +805,18 @@ impl ZirLowerer {
                 self.set_local_consumed(place.base, true);
             }
         }
+    }
+
+    pub fn emit_consume_place(self: &mut ZirLowerer, place: &Place, span: Span) {
+        if place.base == 0 as u32 || place.projections.len > 0 as usize { return; }
+        if place.base as usize > self.locals.len() { return; }
+        let p_local = &self.locals[place.base as usize - 1 as usize];
+        if p_local.is_copy { return; }
+        let mut places = unsafe { Vec::<Place>.new_in_raw(self.arena) };
+        places.push(*place);
+        self.emit(
+            ZirStmt.Intrinsic(self.intern_table.intern("consume_place"), places.as_slice(), span)
+        );
     }
 
     // Moving a field that needs dropping out of a local (`let x = w.d;`) would leave the local's drop

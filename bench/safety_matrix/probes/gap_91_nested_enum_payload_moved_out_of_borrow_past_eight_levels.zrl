@@ -1,0 +1,37 @@
+// name: A payload nine enum levels deep is moved out of a borrowed enum by a nested pattern
+// expected: compile_reject
+// EXPECT: cannot move out of borrow
+struct S { p: *mut i32 }
+impl Drop for S {
+    fn drop(self: &mut S) {
+        unsafe {
+            if *self.p == 1 { *self.p = 77; }
+            else { *self.p = *self.p + 1; }
+        }
+    }
+}
+enum E0 { A(S), B }
+enum E1 { A(E0), B }
+enum E2 { A(E1), B }
+enum E3 { A(E2), B }
+enum E4 { A(E3), B }
+enum E5 { A(E4), B }
+enum E6 { A(E5), B }
+enum E7 { A(E6), B }
+enum E8 { A(E7), B }
+
+fn g(r: &E8) {
+    match *r {
+        E8.A(E7.A(E6.A(E5.A(E4.A(E3.A(E2.A(E1.A(E0.A(s))))))))) => {},
+        _ => {},
+    }
+}
+
+fn main() -> i32 {
+    let mut drops: i32 = 0;
+    {
+        let e = E8.A(E7.A(E6.A(E5.A(E4.A(E3.A(E2.A(E1.A(E0.A(S { p: &mut drops as *mut i32 })))))))));
+        g(&e);
+    }
+    return drops;
+}

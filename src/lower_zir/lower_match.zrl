@@ -186,6 +186,7 @@ impl ZirLowerer {
             if arm_moves && !self.pattern_peels_pointer(self.get_type_tag(scrut_ty)) {
                 self.emit_skipped_drops(skipped.as_slice(), self.get_expr_span(arm.body));
                 self.consume_place_if_move(&scrut_place);
+                self.emit_consume_place(&scrut_place, self.get_expr_span(arm.body));
             }
 
             let arm_res = self.lower_expr(arm.body, result_ty);

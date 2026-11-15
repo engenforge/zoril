@@ -1,0 +1,25 @@
+// name: A value with a Drop impl is moved out of an array or slice element, and the array drops it again
+// expected: compile_reject
+// EXPECT: cannot move out of an array or slice element
+struct S { p: *mut i32 }
+impl Drop for S {
+    fn drop(self: &mut S) {
+        unsafe {
+            if *self.p == 1 { *self.p = 77; }
+            else { *self.p = *self.p + 1; }
+        }
+    }
+}
+
+fn take(a: [S]) {
+    let s = a[0];
+}
+
+fn main() -> i32 {
+    let mut drops: i32 = 0;
+    {
+        let a = [S { p: &mut drops as *mut i32 }];
+        take(&a);
+    }
+    return drops;
+}

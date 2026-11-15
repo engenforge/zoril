@@ -1,0 +1,20 @@
+// Reading parts of a closure capture without moving is accepted.
+// expected exit 0
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+enum Q { A(S), B }
+struct W { s: S, n: i32 }
+
+fn main() -> i32 {
+    let e1 = Q.A(S { p: 1 });
+    let e2 = Q.A(S { p: 1 });
+    let w = W { s: S { p: 2 }, n: 3 };
+    let f1 = || -> i32 { match e1 { Q.B => { return 1; }, _ => { return 2; } } };
+    let f2 = || -> i32 { match &e2 { Q.A(s) => { return s.p; }, _ => { return 0; } } };
+    let f3 = || -> i32 { return w.n; };
+    if f1() != 2 { return 1; }
+    if f2() != 1 { return 2; }
+    if f3() != 3 { return 3; }
+    return 0;
+}

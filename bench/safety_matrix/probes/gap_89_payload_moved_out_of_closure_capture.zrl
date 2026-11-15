@@ -1,0 +1,23 @@
+// name: A closure moves an enum payload out of a value it captured, and the environment drops it again
+// expected: compile_reject
+// EXPECT: cannot move out of a closure capture
+struct S { p: *mut i32 }
+impl Drop for S {
+    fn drop(self: &mut S) {
+        unsafe {
+            if *self.p == 1 { *self.p = 77; }
+            else { *self.p = *self.p + 1; }
+        }
+    }
+}
+enum Q { A(S), B }
+
+fn main() -> i32 {
+    let mut drops: i32 = 0;
+    {
+        let e = Q.A(S { p: &mut drops as *mut i32 });
+        let f = || { match e { Q.A(s) => {}, Q.B => {} } };
+        f();
+    }
+    return drops;
+}

@@ -1,0 +1,19 @@
+// Reading a struct that holds a Vec by value out of a slice element is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+import "vec.zrl";
+use vec::Vec;
+
+struct N { v: Vec<i32>, n: i32 }
+
+fn g(a: [N]) { let x = a[0]; }
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    let mut a = [N { v: v, n: 1 }];
+    g(&a);
+    a[0].v.free();
+    return 0;
+}

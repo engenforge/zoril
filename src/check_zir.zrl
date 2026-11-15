@@ -409,6 +409,15 @@ impl ZirVerifier {
         return false;
     }
 
+    fn place_has_index(self: &mut ZirVerifier, place: &Place) -> bool {
+        let mut pi = 0 as usize;
+        while pi < place.projections.len {
+            if place.projections[pi].get_tag() == PROJ_INDEX { return true; }
+            pi = pi + 1 as usize;
+        }
+        return false;
+    }
+
     // Whether a write to PL reaches its target through a pointer, a box or a slice view: an explicit
     // dereference, or a field, tuple or index step out of a value of such a type (a field access
     // through a reference dereferences it implicitly, as place_last_deref_is_readonly reads it).
@@ -680,12 +689,35 @@ impl ZirVerifier {
             // Moving out through a named reference moves out of what it borrows. Through a
             // temporary pointer (a field or payload address) it is a move out of the owner,
             // unless that is borrowed: the source of an enum payload address.
+            let is_enum_ptr = self.is_enum_payload_alias(place.base, state);
+            let why = if is_enum_ptr {
+                self.enum_payload_source_refusal(place.base, state, locals)
+            } else {
+                0 as u32
+            };
+            if why == 2 as u32 {
+                self.report_error("cannot move out of a closure capture", span);
+                return;
+            }
+            if why == 3 as u32 {
+                self.report_error("cannot move out of an array or slice element", span);
+                return;
+            }
             let out_of_borrow = loc.name_id != 0 as u32
-                || self.enum_payload_source_borrowed(place.base, state, locals);
+                || (!is_enum_ptr && self.local_holds_borrow(place.base, state))
+                || why == 1 as u32;
             if out_of_borrow {
                 self.report_error("cannot move out of borrow", span);
                 return;
             }
+        }
+        if loc.is_capture_alias {
+            self.report_error("cannot move out of a closure capture", span);
+            return;
+        }
+        if self.place_has_index(place) {
+            self.report_error("cannot move out of an array or slice element", span);
+            return;
         }
         if self.is_borrowed_by_other(place, state, locals) {
             self.report_var_error("cannot move borrowed value", place.base, "", span, locals);
@@ -711,6 +743,29 @@ impl ZirVerifier {
         if loc.ty == 0 as u32 { return false; }
         let tag = self.get_type_decl(loc.ty).def.get_tag();
         return is_any_pointer_tag(tag);
+    }
+
+    fn local_is_reference(self: &ZirVerifier, loc: &Local) -> bool {
+        if loc.ty == 0 as u32 { return false; }
+        return is_reference_tag(self.get_type_decl(loc.ty).def.get_tag());
+    }
+
+    fn is_enum_payload_alias(self: &ZirVerifier, local_id: u32, state: &ZirAnalysisState) -> bool {
+        let mut i = 0 as usize;
+        while i < state.enum_aliases.len() {
+            if state.enum_aliases[i].local_id == local_id { return true; }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
+    fn local_holds_borrow(self: &ZirVerifier, local_id: u32, state: &ZirAnalysisState) -> bool {
+        let mut i = 0 as usize;
+        while i < state.borrows.len() {
+            if state.borrows[i].borrower == local_id { return true; }
+            i = i + 1 as usize;
+        }
+        return false;
     }
 
     // Whether a borrow that still constrains PLACE overlaps it: one whose borrower is owned and
@@ -953,29 +1008,56 @@ impl ZirVerifier {
         return self.local_storage_external(func, locals, p.base, depth);
     }
 
-    // Whether temporary LOCAL_ID is an enum payload address whose source is borrowed: by a
-    // live borrow, or because the source is behind a named reference (a parameter's `&T`,
-    // borrowed from the caller).
-    fn enum_payload_source_borrowed(
+    // Why moving out of temporary LOCAL_ID (an enum payload address) is refused: 0 if not
+    // refused, 1 if its source is borrowed (by a live borrow, or because the source is behind
+    // a named reference), 2 if its source is a closure capture, 3 if its source is an array
+    // or slice element. The walk is bounded by the alias table's length plus one because any
+    // longer chain must cycle, and running out answers borrowed so a cycle cannot bypass the
+    // check.
+    fn enum_payload_source_refusal(
         self: &mut ZirVerifier,
         local_id: u32,
         state: &ZirAnalysisState,
         locals: [Local]
-    ) -> bool {
-        let mut i = 0 as usize;
-        while i < state.enum_aliases.len() {
-            let ea = &state.enum_aliases[i];
-            if ea.local_id == local_id {
-                if self.is_borrowed_by_other(&ea.source, state, locals) { return true; }
-                if ea.source.base == 0 as u32 || ea.source.base > locals.len as u32 {
-                    return false;
+    ) -> u32 {
+        let mut cur = local_id;
+        let mut depth = 0 as usize;
+        let limit = state.enum_aliases.len() + 1 as usize;
+        while depth < limit {
+            let mut found = false;
+            let mut src = Place {
+                base: 0 as u32,
+                projections: @slice(0 as *mut Projection, 0 as usize)
+            };
+            let mut i = 0 as usize;
+            while i < state.enum_aliases.len() {
+                if state.enum_aliases[i].local_id == cur {
+                    src = state.enum_aliases[i].source;
+                    found = true;
+                    break;
                 }
-                let src = &locals[ea.source.base as usize - 1 as usize];
-                return src.name_id != 0 as u32 && self.local_is_pointer(src);
+                i = i + 1 as usize;
             }
-            i = i + 1 as usize;
+            if !found { return 0 as u32; }
+            if self.is_borrowed_by_other(&src, state, locals) { return 1 as u32; }
+            if src.base == 0 as u32 || src.base > locals.len as u32 { return 0 as u32; }
+            let src_loc = &locals[src.base as usize - 1 as usize];
+            if src_loc.is_capture_alias { return 2 as u32; }
+            if self.place_has_index(&src) { return 3 as u32; }
+            if (!self.is_enum_payload_alias(src.base, state) || src.projections.len > 1 as usize)
+                && self.local_is_pointer(src_loc)
+                && (src_loc.name_id != 0 as u32
+                    || self.local_holds_borrow(src.base, state)
+                    || self.local_is_reference(src_loc)) {
+                return 1 as u32;
+            }
+            if src.projections.len == 0 as usize || src.projections[0].get_tag() != PROJ_DEREF {
+                return 0 as u32;
+            }
+            cur = src.base;
+            depth = depth + 1 as usize;
         }
-        return false;
+        return 1 as u32;
     }
 
     fn get_borrow_base(self: &ZirVerifier, borrower: u32, state: &ZirAnalysisState) -> u32 {
@@ -1497,6 +1579,40 @@ impl ZirVerifier {
         for p in places { self.check_place_use(p, true, span, state, locals); }
     }
 
+    fn check_places_consumed(
+        self: &mut ZirVerifier,
+        places: [Place],
+        span: Span,
+        state: &mut ZirAnalysisState,
+        locals: [Local]
+    ) {
+        for p in places {
+            if p.base == 0 as u32 || p.base > locals.len as u32 { continue; }
+            let st = state.ownership[p.base as usize];
+            if st == OWN_UNINIT {
+                self.report_var_error("use of uninitialized variable", p.base, "", span, locals);
+                continue;
+            }
+            if st == OWN_DROPPED {
+                self.report_var_error("use of dropped value", p.base, "", span, locals);
+                continue;
+            }
+            if st != OWN_MOVED && self.is_borrowed_by_other(p, state, locals) {
+                self.report_var_error("cannot move borrowed value", p.base, "", span, locals);
+                continue;
+            }
+            let loc = &locals[p.base as usize - 1 as usize];
+            if loc.is_capture_alias && !loc.is_copy {
+                self.report_error("cannot move out of a closure capture", span);
+                continue;
+            }
+            if !loc.is_copy {
+                state.ownership[p.base as usize] = OWN_MOVED;
+                state.maybe_live[p.base as usize] = false;
+            }
+        }
+    }
+
     pub fn verify(self: &mut ZirVerifier) {
         let mut i = 0 as usize;
         while i < self.module.funcs.len {
@@ -1679,7 +1795,11 @@ impl ZirVerifier {
                 self.rv_uses(&rv, set);
             },
             ZirStmt.Drop(pl, _) | ZirStmt.DropIfLive(pl, _) => { self.place_uses(&pl, set); },
-            ZirStmt.Intrinsic(_, args, _) => { self.places_uses(args, set); },
+            ZirStmt.Intrinsic(name_id, args, _) => {
+                if self.intern_table.lookup(name_id) != "consume_place" {
+                    self.places_uses(args, set);
+                }
+            },
             ZirStmt.EndBorrow(_, _) => {},
         }
     }
@@ -1849,7 +1969,7 @@ impl ZirVerifier {
                 if bj > 0 as usize {
                     let new_entry = self.merge_states(
                         bj,
-                        preds[bj],
+                        &preds[bj],
                         &block_exit_states,
                         locals_len
                     );
@@ -2495,8 +2615,11 @@ impl ZirVerifier {
                 self.check_drop(&place, true, span, state, locals);
             },
             ZirStmt.Intrinsic(name_id, args, span) => {
-                if self.intern_table.lookup(name_id) == "explicit_drop" {
+                let name = self.intern_table.lookup(name_id);
+                if name == "explicit_drop" {
                     self.check_explicit_drop(args, span, state, locals);
+                } else if name == "consume_place" {
+                    self.check_places_consumed(args, span, state, locals);
                 } else {
                     self.check_places_moved(args, span, state, locals);
                 }
@@ -3637,7 +3760,7 @@ impl ZirVerifier {
     fn merge_states(
         self: &mut ZirVerifier,
         target: usize,
-        predecessors: Vec<u32>,
+        predecessors: &Vec<u32>,
         exit_states: &[*mut ZirAnalysisState],
         locals_len: usize
     ) -> *mut ZirAnalysisState {

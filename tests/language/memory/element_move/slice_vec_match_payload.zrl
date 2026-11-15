@@ -1,0 +1,18 @@
+// Binding a Vec payload by value in a match on a slice element is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+import "vec.zrl";
+use vec::Vec;
+
+enum V { Some(Vec<i32>), None }
+
+fn g(a: [V]) { match a[0] { V.Some(x) => {}, _ => {} } }
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    let a = [V.Some(v)];
+    g(&a);
+    return 0;
+}

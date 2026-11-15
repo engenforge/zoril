@@ -1,0 +1,18 @@
+// Moving the matched value inside a match guard is rejected.
+// expected compile fail
+// EXPECT: cannot move the matched value in a match guard
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+enum Q { A(S), B }
+
+fn take(e: Q) -> bool { return true; }
+
+fn main() -> i32 {
+    let e = Q.A(S { p: 1 });
+    match e {
+        Q.B if take(e) => {},
+        _ => {}
+    }
+    return 0;
+}

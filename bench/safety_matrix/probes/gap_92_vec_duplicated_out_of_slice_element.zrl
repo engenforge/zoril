@@ -1,0 +1,20 @@
+// name: A Vec is copied twice out of a slice element, freed through one copy and read through the other
+// expected: compile_reject
+// EXPECT: cannot move out of an array or slice element
+import "vec.zrl";
+use vec::Vec;
+
+fn dup(a: [Vec<i32>]) -> i32 {
+    let mut v1 = a[0];
+    let mut v2 = a[0];
+    v1.free();
+    v2.push(7);
+    return v2.as_slice()[0];
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    let a = [v];
+    return dup(&a) - 7;
+}

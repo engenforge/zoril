@@ -1,0 +1,18 @@
+// Moving a Drop payload out of a slice element via ? is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+enum Result<T, E> { Ok(T), Err(E) }
+
+fn g(a: [Result<S, i32>]) -> Result<i32, i32> {
+    let s = a[0]?;
+    return Result.Ok(1);
+}
+
+fn main() -> i32 {
+    let a = [Result::<S, i32>.Ok(S { p: 1 })];
+    let _ = g(&a);
+    return 0;
+}

@@ -1,0 +1,20 @@
+// Unwrapping a slice element that holds a Vec with ? is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+import "vec.zrl";
+use vec::Vec;
+
+enum Result<T, E> { Ok(T), Err(E) }
+
+fn g(a: [Result<Vec<i32>, i32>]) -> Result<i32, i32> { let x = a[0]?; return Result.Ok(1); }
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    let a = [Result::<Vec<i32>, i32>.Ok(v)];
+    match g(&a) {
+        Result.Ok(n) => { return n - 1; },
+        Result.Err(e) => { return e; }
+    }
+}

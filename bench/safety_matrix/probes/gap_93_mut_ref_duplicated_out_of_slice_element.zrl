@@ -1,0 +1,28 @@
+// name: A &mut is read twice out of a slice element, and a view taken through one copy is written after the other grows the Vec
+// expected: compile_reject
+// EXPECT: cannot move out of an array or slice element
+import "vec.zrl";
+use vec::Vec;
+
+fn dup(a: [mut &mut Vec<i32>]) -> i32 {
+    let r = a[0];
+    let q = a[0];
+    let view = r.as_mut_slice();
+    let mut i = 0;
+    while i < 64 {
+        q.push(i);
+        i = i + 1;
+    }
+    view[0] = 99;
+    if q.as_slice()[0] == 41 { return 77; }
+    return 0;
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(41);
+    let mut a = [&mut v];
+    let n = dup(&mut a);
+    v.free();
+    return n;
+}

@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: cannot move out of borrow
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+
+fn id_ref(r: &S) -> &S { return r; }
+
+fn main() -> i32 {
+    let s0 = S { p: 1 };
+    let s = *id_ref(&s0);
+    return s.p;
+}

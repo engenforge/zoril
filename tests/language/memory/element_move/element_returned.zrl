@@ -1,0 +1,14 @@
+// Returning a Drop element by value from a slice is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+
+fn pick(a: [S]) -> S { return a[0]; }
+
+fn main() -> i32 {
+    let a = [S { p: 1 }];
+    let _ = pick(&a);
+    return 0;
+}

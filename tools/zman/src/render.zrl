@@ -125,8 +125,8 @@ fn owner_already_listed(items: &Vec<Item>, stop: usize, owner: [u8]) -> bool {
     let all = items.as_slice();
     let mut i = 0 as usize;
     while i < stop {
-        let item = all[i];
-        if item.kind == KIND_FN && !is_internal(&item) && item.owner == owner { return true; }
+        let item = &all[i];
+        if item.kind == KIND_FN && !is_internal(item) && item.owner == owner { return true; }
         i = i + 1;
     }
     return false;
@@ -138,25 +138,25 @@ fn put_synopsis(out: &mut String, items: &Vec<Item>) {
     let mut i = 0 as usize;
     // Types and traits first, then constants, then one block per impl, then free functions.
     while i < all.len {
-        let item = all[i];
-        if !is_internal(&item)
+        let item = &all[i];
+        if !is_internal(item)
             && (item.kind == KIND_STRUCT || item.kind == KIND_ENUM || item.kind == KIND_TRAIT) {
-            put_declaration(out, &item, false);
+            put_declaration(out, item, false);
         }
         i = i + 1;
     }
     i = 0;
     while i < all.len {
-        let item = all[i];
-        if !is_internal(&item) && item.kind == KIND_CONST {
+        let item = &all[i];
+        if !is_internal(item) && item.kind == KIND_CONST {
             put_line(out, item.lines.as_slice()[0]);
         }
         i = i + 1;
     }
     i = 0;
     while i < all.len {
-        let item = all[i];
-        if !is_internal(&item)
+        let item = &all[i];
+        if !is_internal(item)
             && item.kind == KIND_FN
             && item.owner.len > 0
             && !owner_already_listed(items, i, item.owner) {
@@ -164,8 +164,8 @@ fn put_synopsis(out: &mut String, items: &Vec<Item>) {
             put_line(out, " {");
             let mut j = 0 as usize;
             while j < all.len {
-                let method = all[j];
-                if !is_internal(&method) && method.kind == KIND_FN && method.owner == item.owner {
+                let method = &all[j];
+                if !is_internal(method) && method.kind == KIND_FN && method.owner == item.owner {
                     if method.must_use { put_line(out, "    #[must_use]"); }
                     out.push_str("    ");
                     put_line(out, method.lines.as_slice()[0]);
@@ -178,9 +178,9 @@ fn put_synopsis(out: &mut String, items: &Vec<Item>) {
     }
     i = 0;
     while i < all.len {
-        let item = all[i];
-        if !is_internal(&item) && item.kind == KIND_FN && item.owner.len == 0 {
-            put_declaration(out, &item, item.must_use);
+        let item = &all[i];
+        if !is_internal(item) && item.kind == KIND_FN && item.owner.len == 0 {
+            put_declaration(out, item, item.must_use);
         }
         i = i + 1;
     }

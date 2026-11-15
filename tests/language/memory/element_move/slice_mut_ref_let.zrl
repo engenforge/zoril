@@ -1,0 +1,12 @@
+// Reading a &mut by value out of a slice element is rejected: a second read would be a second live &mut.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+fn g(a: [mut &mut i32]) { let r = a[0]; *r = 2; }
+
+fn main() -> i32 {
+    let mut n = 1;
+    let mut a = [&mut n];
+    g(&mut a);
+    return 0;
+}

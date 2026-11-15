@@ -1,0 +1,13 @@
+// Moving a tuple part out of a closure capture is rejected.
+// expected compile fail
+// EXPECT: cannot move out of a closure capture
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+
+fn main() -> i32 {
+    let t = (S { p: 1 }, 1);
+    let f = || { let (s, _) = t; };
+    f();
+    return 0;
+}

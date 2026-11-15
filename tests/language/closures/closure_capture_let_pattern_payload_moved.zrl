@@ -1,0 +1,14 @@
+// Moving an enum payload out of a closure capture via let pattern is rejected.
+// expected compile fail
+// EXPECT: cannot move out of a closure capture
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+enum E1 { A(S) }
+
+fn main() -> i32 {
+    let e = E1.A(S { p: 1 });
+    let f = || { let E1.A(s) = e; };
+    f();
+    return 0;
+}

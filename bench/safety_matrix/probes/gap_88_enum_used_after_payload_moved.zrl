@@ -1,7 +1,6 @@
 // name: An enum value used again after a match arm, if let, or ? moves its payload out by value
-// expected: known_gap
-// gap: lower_variant_match and lower_try_expr bind a by-value payload through a pointer temporary (Use(*payload_tmp)), so check_zir's check_place_use marks only payload_tmp moved while the enum local itself stays OWN_OWNED; using the enum again in the arm, in a guard, or after the match/if let/? copies its payload and drops it a second time
-// observed: exit 77
+// expected: compile_reject
+// EXPECT: use of moved value 'e'
 struct S { p: *mut i32 }
 impl Drop for S {
     fn drop(self: &mut S) {

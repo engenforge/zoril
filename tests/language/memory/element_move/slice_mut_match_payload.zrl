@@ -1,0 +1,20 @@
+// Moving a Drop payload out of a mutable slice element via match is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+enum Q { A(S), B }
+
+fn g(a: [mut Q]) {
+    match a[0] {
+        Q.A(s) => {},
+        _ => {}
+    }
+}
+
+fn main() -> i32 {
+    let mut a = [Q.A(S { p: 1 })];
+    g(&mut a);
+    return 0;
+}

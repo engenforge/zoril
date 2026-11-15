@@ -1,0 +1,17 @@
+// Moving a Drop payload out of a slice element via let pattern is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+enum E1 { A(S) }
+
+fn g(a: [E1]) {
+    let E1.A(s) = a[0];
+}
+
+fn main() -> i32 {
+    let a = [E1.A(S { p: 1 })];
+    g(&a);
+    return 0;
+}

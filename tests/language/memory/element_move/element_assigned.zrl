@@ -1,0 +1,13 @@
+// Assigning a Drop element out of an array is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+
+fn main() -> i32 {
+    let a = [S { p: 1 }];
+    let mut s = S { p: 2 };
+    s = a[0];
+    return 0;
+}

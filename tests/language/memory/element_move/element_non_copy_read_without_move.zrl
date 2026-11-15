@@ -1,0 +1,87 @@
+// Reading a non-Copy element through a reference, calling a method on it in place, reading a
+// Copy field of it, assigning to it, and reading a Copy element that is itself a slice or a
+// shared reference are accepted.
+// expected exit 0
+
+import "vec.zrl";
+use vec::Vec;
+
+struct N { v: Vec<i32>, n: i32 }
+enum V { Some(Vec<i32>), None }
+
+fn through_ref(a: [Vec<i32>]) -> i32 {
+    let x = &a[0];
+    return x.as_slice()[0];
+}
+
+fn in_place(a: [mut Vec<i32>]) -> i32 {
+    a[0].push(4);
+    return a[0].len() as i32;
+}
+
+fn copy_field(a: [N]) -> i32 {
+    let n = a[0].n;
+    return n;
+}
+
+fn replace(a: [mut Vec<i32>], w: Vec<i32>) {
+    a[0].free();
+    a[0] = w;
+}
+
+fn match_ref(a: [V]) -> i32 {
+    match &a[0] {
+        V.Some(x) => { return x.len() as i32; },
+        V.None => { return 9; }
+    }
+}
+
+fn tag_only(a: [V]) -> i32 {
+    match a[0] {
+        V.None => { return 9; },
+        V.Some(_) => { return 0; }
+    }
+}
+
+fn slice_element(a: [[i32]]) -> i32 {
+    let s = a[0];
+    return s[0];
+}
+
+fn ref_element(a: [&i32]) -> i32 {
+    let r = a[0];
+    return *r;
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    let mut a = [v];
+    if through_ref(&a) != 1 { return 1; }
+    if in_place(&mut a) != 2 { return 2; }
+    let mut w = Vec::<i32>.new();
+    w.push(7);
+    replace(&mut a, w);
+    if through_ref(&a) != 7 { return 3; }
+    a[0].free();
+
+    let mut nv = Vec::<i32>.new();
+    let mut an = [N { v: nv, n: 5 }];
+    if copy_field(&an) != 5 { return 4; }
+    an[0].v.free();
+
+    let mut pv = Vec::<i32>.new();
+    pv.push(3);
+    let mut av = [V.Some(pv)];
+    if match_ref(&av) != 1 { return 5; }
+    if tag_only(&av) != 0 { return 6; }
+
+    let b = [8, 9];
+    let s: [i32] = &b;
+    let ss = [s];
+    if slice_element(&ss) != 8 { return 7; }
+    let k = 6;
+    let rs = [&k];
+    if ref_element(&rs) != 6 { return 8; }
+    return 0;
+}

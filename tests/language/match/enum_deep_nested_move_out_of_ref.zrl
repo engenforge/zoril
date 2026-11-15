@@ -1,0 +1,33 @@
+// Moving out of a deeply nested enum payload (>8 levels) behind &T is rejected.
+// expected compile fail
+// EXPECT: cannot move out of borrow
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+
+enum E0 { A(S), B }
+enum E1 { A(E0), B }
+enum E2 { A(E1), B }
+enum E3 { A(E2), B }
+enum E4 { A(E3), B }
+enum E5 { A(E4), B }
+enum E6 { A(E5), B }
+enum E7 { A(E6), B }
+enum E8 { A(E7), B }
+enum E9 { A(E8), B }
+enum E10 { A(E9), B }
+enum E11 { A(E10), B }
+enum E12 { A(E11), B }
+
+fn g(r: &E12) {
+    match *r {
+        E12.A(E11.A(E10.A(E9.A(E8.A(E7.A(E6.A(E5.A(E4.A(E3.A(E2.A(E1.A(E0.A(s))))))))))))) => {},
+        _ => {}
+    }
+}
+
+fn main() -> i32 {
+    let e = E12.A(E11.A(E10.A(E9.A(E8.A(E7.A(E6.A(E5.A(E4.A(E3.A(E2.A(E1.A(E0.A(S { p: 1 })))))))))))));
+    g(&e);
+    return 0;
+}

@@ -129,10 +129,10 @@ pub fn parse_manifest(content: [u8], arena: *mut ArenaHeader) -> Manifest {
     return m;
 }
 
-pub fn find_entry(m: &Manifest, path: [u8]) -> Option<Entry> {
+pub fn find_entry(m: &Manifest, path: [u8]) -> Option<&Entry> {
     let mut i = 0 as usize;
     while i < m.entries.len() {
-        let e = m.entries.as_slice()[i];
+        let e = &m.entries.as_slice()[i];
         if e.path == path { return Option.Some(e); }
         i = i + 1;
     }
@@ -179,7 +179,7 @@ pub fn serialize_manifest(m: &Manifest, arena: *mut ArenaHeader) -> [u8] {
     }
     let mut i = 0 as usize;
     while i < m.entries.len() {
-        let e = m.entries.as_slice()[i];
+        let e = &m.entries.as_slice()[i];
         out.push_str(e.path);
         push_tab(&mut out);
         out.push_str(i64_to_str_in(e.mtime, arena));

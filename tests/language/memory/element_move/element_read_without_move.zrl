@@ -1,0 +1,34 @@
+// Reading Copy fields, references, and Copy elements from a slice is accepted.
+// expected exit 0
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+enum Q { A(S), B }
+struct P { s: S, n: i32 }
+
+fn n_of(a: [P]) -> i32 {
+    let n = a[0].n;
+    return n;
+}
+
+fn tag(a: [Q]) -> i32 {
+    match &a[0] {
+        Q.A(s) => { return s.p; },
+        _ => { return 0; }
+    }
+}
+
+fn first(a: [i32]) -> i32 {
+    let x = a[0];
+    return x;
+}
+
+fn main() -> i32 {
+    let ap = [P { s: S { p: 1 }, n: 7 }];
+    let aq = [Q.A(S { p: 5 })];
+    let ai = [9];
+    if n_of(&ap) != 7 { return 1; }
+    if tag(&aq) != 5 { return 2; }
+    if first(&ai) != 9 { return 3; }
+    return 0;
+}

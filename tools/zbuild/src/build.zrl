@@ -183,7 +183,7 @@ fn dep_paths(g: &Graph, node: usize, arena: *mut ArenaHeader) -> Vec<[u8]> {
 
 // A module whose source is gone is served from the cache: it needs its manifest row, object and
 // interface, and its dependencies are whatever it recorded.
-fn reuse_frozen(ctx: &BuildCtx, path: [u8], prev: Option<Entry>, out: &mut ModResult) -> i32 {
+fn reuse_frozen(ctx: &BuildCtx, path: [u8], prev: Option<&Entry>, out: &mut ModResult) -> i32 {
     match prev {
         Some(e) => {
             if !file_exists(e.object, ctx.arena) || !file_exists(iface_file(ctx, path), ctx.arena) {
@@ -195,8 +195,7 @@ fn reuse_frozen(ctx: &BuildCtx, path: [u8], prev: Option<Entry>, out: &mut ModRe
             out.key = e.iface_key;
             out.object = e.object;
             out.zri_sha = e.zri_sha;
-            // `deps` owns storage, so it moves last: a partial move marks the whole `e` moved.
-            out.deps = e.deps;
+            out.deps = unsafe { e.deps.clone_in_raw(ctx.arena) };
             out.key_changed = false;
             out.compiled = false;
             log(ctx, "[frozen] ", path);
@@ -211,7 +210,7 @@ fn reuse_frozen(ctx: &BuildCtx, path: [u8], prev: Option<Entry>, out: &mut ModRe
 fn source_state(
     ctx: &BuildCtx,
     src_file: [u8],
-    prev: &Option<Entry>,
+    prev: &Option<&Entry>,
     out: &mut ModResult
 ) -> Option<bool> {
     let arena = ctx.arena;
@@ -295,7 +294,7 @@ pub fn process_module(
     let mut dep_keys = unsafe { Vec::<[u8]>.new_in_raw(arena) };
     let mut i = 0 as usize;
     while i < dep_idxs.len() {
-        let dr = results.as_slice()[dep_idxs.as_slice()[i]];
+        let dr = &results.as_slice()[dep_idxs.as_slice()[i]];
         if dr.key_changed { dep_key_changed = true; }
         dep_keys.push(dr.key);
         i = i + 1;
@@ -628,7 +627,7 @@ pub fn collect_garbage(ctx: &BuildCtx, manifest: &Manifest) {
     let mut keep_iface = unsafe { Vec::<[u8]>.new_in_raw(arena) };
     let mut i = 0 as usize;
     while i < manifest.entries.len() {
-        let e = manifest.entries.as_slice()[i];
+        let e = &manifest.entries.as_slice()[i];
         keep_obj.push(base_name(e.object));
         keep_iface.push(iface_relative_path(e.path, arena));
         i = i + 1;

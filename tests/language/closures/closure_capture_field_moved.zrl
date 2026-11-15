@@ -1,0 +1,14 @@
+// Moving a struct field out of a closure capture is rejected.
+// expected compile fail
+// EXPECT: cannot move out of a closure capture
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+struct W { s: S, n: i32 }
+
+fn main() -> i32 {
+    let w = W { s: S { p: 1 }, n: 2 };
+    let f = || { let x = w.s; };
+    f();
+    return 0;
+}
