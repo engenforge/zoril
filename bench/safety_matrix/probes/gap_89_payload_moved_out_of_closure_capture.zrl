@@ -1,7 +1,6 @@
 // name: A closure moves an enum payload out of a value it captured, and the environment drops it again
-// expected: known_gap
-// gap: check_zir refuses a move out of a closure capture only when the whole capture alias is moved (check_place_use, projections.len == 0); a by-value pattern, a field or tuple projection, or ? on the capture moves a part out through a projection or an EnumPayload pointer temporary, which no rule ties to the capture, so the closure body drops the part and the captured value's owner drops it again
-// observed: exit 77
+// expected: compile_reject
+// EXPECT: cannot move out of a closure capture
 struct S { p: *mut i32 }
 impl Drop for S {
     fn drop(self: &mut S) {

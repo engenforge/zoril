@@ -681,13 +681,26 @@ impl ZirVerifier {
             // temporary pointer (a field or payload address) it is a move out of the owner,
             // unless that is borrowed: the source of an enum payload address.
             let is_enum_ptr = self.is_enum_payload_alias(place.base, state);
+            let why = if is_enum_ptr {
+                self.enum_payload_source_refusal(place.base, state, locals)
+            } else {
+                0 as u32
+            };
+            if why == 2 as u32 {
+                self.report_error("cannot move out of a closure capture", span);
+                return;
+            }
             let out_of_borrow = loc.name_id != 0 as u32
                 || (!is_enum_ptr && self.local_holds_borrow(place.base, state))
-                || (is_enum_ptr && self.enum_payload_source_borrowed(place.base, state, locals));
+                || why == 1 as u32;
             if out_of_borrow {
                 self.report_error("cannot move out of borrow", span);
                 return;
             }
+        }
+        if loc.is_capture_alias {
+            self.report_error("cannot move out of a closure capture", span);
+            return;
         }
         if self.is_borrowed_by_other(place, state, locals) {
             self.report_var_error("cannot move borrowed value", place.base, "", span, locals);
@@ -978,17 +991,17 @@ impl ZirVerifier {
         return self.local_storage_external(func, locals, p.base, depth);
     }
 
-    // Whether temporary LOCAL_ID is an enum payload address whose source is borrowed: by a
-    // live borrow, or because the source is behind a named reference (a parameter's `&T`,
-    // borrowed from the caller). The walk is bounded by the alias table's length plus one
-    // because any longer chain must cycle, and running out answers borrowed so a cycle
-    // cannot bypass the check.
-    fn enum_payload_source_borrowed(
+    // Why moving out of temporary LOCAL_ID (an enum payload address) is refused: 0 if not
+    // refused, 1 if its source is borrowed (by a live borrow, or because the source is behind
+    // a named reference), 2 if its source is a closure capture. The walk is bounded by the
+    // alias table's length plus one because any longer chain must cycle, and running out
+    // answers borrowed so a cycle cannot bypass the check.
+    fn enum_payload_source_refusal(
         self: &mut ZirVerifier,
         local_id: u32,
         state: &ZirAnalysisState,
         locals: [Local]
-    ) -> bool {
+    ) -> u32 {
         let mut cur = local_id;
         let mut depth = 0 as usize;
         let limit = state.enum_aliases.len() + 1 as usize;
@@ -1007,24 +1020,25 @@ impl ZirVerifier {
                 }
                 i = i + 1 as usize;
             }
-            if !found { return false; }
-            if self.is_borrowed_by_other(&src, state, locals) { return true; }
-            if src.base == 0 as u32 || src.base > locals.len as u32 { return false; }
+            if !found { return 0 as u32; }
+            if self.is_borrowed_by_other(&src, state, locals) { return 1 as u32; }
+            if src.base == 0 as u32 || src.base > locals.len as u32 { return 0 as u32; }
             let src_loc = &locals[src.base as usize - 1 as usize];
+            if src_loc.is_capture_alias { return 2 as u32; }
             if (!self.is_enum_payload_alias(src.base, state) || src.projections.len > 1 as usize)
                 && self.local_is_pointer(src_loc)
                 && (src_loc.name_id != 0 as u32
                     || self.local_holds_borrow(src.base, state)
                     || self.local_is_reference(src_loc)) {
-                return true;
+                return 1 as u32;
             }
             if src.projections.len == 0 as usize || src.projections[0].get_tag() != PROJ_DEREF {
-                return false;
+                return 0 as u32;
             }
             cur = src.base;
             depth = depth + 1 as usize;
         }
-        return true;
+        return 1 as u32;
     }
 
     fn get_borrow_base(self: &ZirVerifier, borrower: u32, state: &ZirAnalysisState) -> u32 {
@@ -1569,6 +1583,10 @@ impl ZirVerifier {
                 continue;
             }
             let loc = &locals[p.base as usize - 1 as usize];
+            if loc.is_capture_alias && !loc.is_copy {
+                self.report_error("cannot move out of a closure capture", span);
+                continue;
+            }
             if !loc.is_copy {
                 state.ownership[p.base as usize] = OWN_MOVED;
                 state.maybe_live[p.base as usize] = false;
