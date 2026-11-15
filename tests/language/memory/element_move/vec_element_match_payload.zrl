@@ -1,0 +1,21 @@
+// Moving a Drop payload out of a Vec element via match is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+import "vec.zrl";
+use vec::Vec;
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+enum Q { A(S), B }
+
+fn main() -> i32 {
+    let mut v = Vec::<Q>.new();
+    v.push(Q.A(S { p: 1 }));
+    match v[0] {
+        Q.A(s) => {},
+        _ => {}
+    }
+    v.free();
+    return 0;
+}

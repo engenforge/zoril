@@ -1,0 +1,17 @@
+// Moving a Drop element out of a slice via struct pattern is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+struct P { s: S, n: i32 }
+
+fn g(a: [P]) {
+    let P { s, n } = a[0];
+}
+
+fn main() -> i32 {
+    let a = [P { s: S { p: 1 }, n: 2 }];
+    g(&a);
+    return 0;
+}

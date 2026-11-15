@@ -1,7 +1,6 @@
 // name: A value with a Drop impl is moved out of an array or slice element, and the array drops it again
-// expected: known_gap
-// gap: a by-value read of an element (let s = a[0];, a pattern or ? on a[0], an argument, a return) is a move that neither the lowering's reject_partial_move (it stops at an index projection) nor check_zir's check_place_use (a slice local is not a pointer local, and an enum payload address taken from a[0] is not seen as borrowed) refuses, so the new owner drops the value and the array's owner drops it again
-// observed: exit 77
+// expected: compile_reject
+// EXPECT: cannot move out of an array or slice element
 struct S { p: *mut i32 }
 impl Drop for S {
     fn drop(self: &mut S) {

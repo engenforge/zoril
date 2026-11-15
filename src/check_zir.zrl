@@ -409,6 +409,15 @@ impl ZirVerifier {
         return false;
     }
 
+    fn place_has_index(self: &mut ZirVerifier, place: &Place) -> bool {
+        let mut pi = 0 as usize;
+        while pi < place.projections.len {
+            if place.projections[pi].get_tag() == PROJ_INDEX { return true; }
+            pi = pi + 1 as usize;
+        }
+        return false;
+    }
+
     // Whether a write to PL reaches its target through a pointer, a box or a slice view: an explicit
     // dereference, or a field, tuple or index step out of a value of such a type (a field access
     // through a reference dereferences it implicitly, as place_last_deref_is_readonly reads it).
@@ -690,6 +699,11 @@ impl ZirVerifier {
                 self.report_error("cannot move out of a closure capture", span);
                 return;
             }
+            if why == 3 as u32
+                && self.type_has_drop(self.get_place_type(place, locals), 0 as usize) {
+                self.report_error("cannot move out of an array or slice element", span);
+                return;
+            }
             let out_of_borrow = loc.name_id != 0 as u32
                 || (!is_enum_ptr && self.local_holds_borrow(place.base, state))
                 || why == 1 as u32;
@@ -700,6 +714,11 @@ impl ZirVerifier {
         }
         if loc.is_capture_alias {
             self.report_error("cannot move out of a closure capture", span);
+            return;
+        }
+        if self.place_has_index(place)
+            && self.type_has_drop(self.get_place_type(place, locals), 0 as usize) {
+            self.report_error("cannot move out of an array or slice element", span);
             return;
         }
         if self.is_borrowed_by_other(place, state, locals) {
@@ -993,9 +1012,10 @@ impl ZirVerifier {
 
     // Why moving out of temporary LOCAL_ID (an enum payload address) is refused: 0 if not
     // refused, 1 if its source is borrowed (by a live borrow, or because the source is behind
-    // a named reference), 2 if its source is a closure capture. The walk is bounded by the
-    // alias table's length plus one because any longer chain must cycle, and running out
-    // answers borrowed so a cycle cannot bypass the check.
+    // a named reference), 2 if its source is a closure capture, 3 if its source is an array
+    // or slice element. The walk is bounded by the alias table's length plus one because any
+    // longer chain must cycle, and running out answers borrowed so a cycle cannot bypass the
+    // check.
     fn enum_payload_source_refusal(
         self: &mut ZirVerifier,
         local_id: u32,
@@ -1025,6 +1045,7 @@ impl ZirVerifier {
             if src.base == 0 as u32 || src.base > locals.len as u32 { return 0 as u32; }
             let src_loc = &locals[src.base as usize - 1 as usize];
             if src_loc.is_capture_alias { return 2 as u32; }
+            if self.place_has_index(&src) { return 3 as u32; }
             if (!self.is_enum_payload_alias(src.base, state) || src.projections.len > 1 as usize)
                 && self.local_is_pointer(src_loc)
                 && (src_loc.name_id != 0 as u32

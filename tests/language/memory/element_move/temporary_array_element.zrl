@@ -1,0 +1,13 @@
+// Moving a Drop element out of a temporary array is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+
+fn mk() -> [S; 1] { return [S { p: 1 }]; }
+
+fn main() -> i32 {
+    let s = mk()[0];
+    return 0;
+}
