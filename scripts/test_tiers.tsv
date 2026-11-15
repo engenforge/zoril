@@ -65,7 +65,7 @@ tests/*	tests	test-strength	-	-	-	-	-	test	individual test files select themselv
 corpus/*	corpus	test-strength stage0c-corpus	-	integration	-	-	-	test	corpus examples select test-strength integration group and stage0c-corpus
 
 # --- Explicit rows for individual scripts ---
-scripts/bench_cross_lang.sh	scripts_bench_cross_lang	perf-gate portability no-new-deps	-	-	-	-	-	script	cross language benchmark harness selects perf-gate
+scripts/bench_cross_lang.sh	scripts_bench_cross_lang	perf-gate portability no-new-deps	-	-	-	bench-contention bench-threshold-gate	-	script	cross language benchmark harness selects perf-gate and threshold scenarios
 scripts/bench_threshold_check.sh	scripts_bench_threshold_check	portability no-new-deps	-	-	-	bench-threshold-gate	-	script	threshold gate script selects bench-threshold-gate
 scripts/bootstrap_zoril.sh	scripts_bootstrap_zoril	toolchain portability no-new-deps	-	-	-	clean-tree	-	script	bootstrap compilation script selects toolchain gate
 scripts/build_zrl.sh	scripts_build_zrl	toolchain portability no-new-deps	-	-	-	clean-tree	-	script	batch zrl build helper selects toolchain gate
@@ -113,7 +113,7 @@ scripts/fuzz_safe.sh	scripts_fuzz_safe	fuzz-record portability no-new-deps	-	-	-
 scripts/generate_build_info.sh	scripts_generate_build_info	portability no-new-deps	-	-	-	build-info	-	script	build info generator selects build-info scenario
 scripts/man_pages.sh	scripts_man_pages	portability no-new-deps	-	-	-	man-pages	-	script	man page builder selects man-pages scenario
 scripts/marker_density.sh	scripts_marker_density	unsafe-scan portability no-new-deps	-	-	-	-	-	script	raw pointer marker density tool selects unsafe-scan gate
-scripts/perf_gap.sh	scripts_perf_gap	perf-gate portability no-new-deps	-	-	-	-	-	script	performance gap check selects perf-gate
+scripts/perf_gap.sh	scripts_perf_gap	perf-gate portability no-new-deps	-	-	-	bench-threshold-gate	-	script	performance gap check selects perf-gate and bench-threshold-gate
 scripts/preflight.sh	scripts_preflight	portability no-new-deps	-	-	-	preflight-selftest	-	script	preflight runner script selects preflight-selftest scenario
 scripts/qbe_fingerprint.sh	scripts_qbe_fingerprint	portability no-new-deps	-	-	-	qbe-fingerprint	-	script	qbe backend fingerprint generator selects qbe-fingerprint scenario
 scripts/record_marker_density.sh	scripts_record_marker_density	unsafe-scan portability no-new-deps	-	-	-	-	-	script	marker density census recorder selects unsafe-scan gate
