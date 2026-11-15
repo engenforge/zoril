@@ -1,5 +1,5 @@
 #!/bin/sh
-# scripts/test_bench_threshold_gate.sh — tests for per-host gate history, tolerances, and noise retry.
+# scripts/test_bench_threshold_gate.sh — tests for per-host gate history and tolerances.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -44,63 +44,19 @@ write_metrics() {
         "$_tp" "$_inc" "$_rat" "$_rss" > "$_file"
 }
 
-mkdir -p "$tmp/bench" "$tmp/work" "$tmp/metrics"
-printf 'clean_throughput_loc_s|15|higher_better\nincremental_rebuild_ms|15|lower_better\nruntime_ratio_vs_gcc_o2|15|lower_better\n' > "$tmp/tol_legacy.cfg"
+mkdir -p "$tmp/bench" "$tmp/metrics"
 
-# Case 1: Normal ratio (~3.720) within tolerance (< 4.447) passes cleanly and appends run/pass
+# Case 1: Normal run within tolerance passes cleanly and appends run/pass
 write_header "$tmp/bench/gate_c1.tsv"
 append_row "$tmp/bench/gate_c1.tsv" "2026-11-01-00-00-00" "aaaaaaaaaaaa" "Linux 6.1.0" "performance" "baseline" "baseline" "10000" "100" "3.867" "10.0"
 write_metrics "$tmp/metrics/metrics_pass.tsv" "10000" "100" "3.720" "10.0"
 rc=0
-out="$(TOLERANCES_FILE="$tmp/tol_legacy.cfg" BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_c1.tsv" METRICS_FILE="$tmp/metrics/metrics_pass.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
-expect "normal ratio within tolerance passes" 0 "[OK]  runtime_ratio_vs_gcc_o2"
+out="$(BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_c1.tsv" METRICS_FILE="$tmp/metrics/metrics_pass.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
+expect "normal run within tolerance passes" 0 "[OK]  clean_throughput_loc_s"
 if [ "$(awk -F'\t' 'END {print $12 "|" $13}' "$tmp/bench/gate_c1.tsv")" != "run|pass" ]; then
-    echo "[FAIL] normal ratio case did not append run/pass row"
+    echo "[FAIL] normal run case did not append run/pass row"
     errors=$((errors + 1))
 fi
-
-# Case 2: Deliberately slowed build (ratio 5.25) fails both runs and rejects with exit 1
-cat << 'EOF' > "$tmp/work/fib_zoril"
-#!/bin/sh
-sleep 1.5
-EOF
-chmod +x "$tmp/work/fib_zoril"
-
-cat << 'EOF' > "$tmp/work/fib_gcc2"
-#!/bin/sh
-sleep 0.01
-EOF
-chmod +x "$tmp/work/fib_gcc2"
-
-write_header "$tmp/bench/gate_c2.tsv"
-append_row "$tmp/bench/gate_c2.tsv" "2026-11-01-00-00-00" "aaaaaaaaaaaa" "Linux 6.1.0" "performance" "baseline" "baseline" "10000" "100" "3.867" "10.0"
-write_metrics "$tmp/metrics/metrics_slow.tsv" "10000" "100" "5.250" "10.0"
-rc=0
-out="$(TOLERANCES_FILE="$tmp/tol_legacy.cfg" RUNTIME_RUNS=3 TMP_DIR="$tmp/work" BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_c2.tsv" METRICS_FILE="$tmp/metrics/metrics_slow.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
-expect "deliberately slowed build fails the gate after confirmation" 1 "confirmation"
-
-# Case 3: Transient noise spike (initial > 4.447, but confirmation measurement passes)
-cat << 'EOF' > "$tmp/work/fib_zoril_fast"
-#!/bin/sh
-sleep 0.2
-EOF
-chmod +x "$tmp/work/fib_zoril_fast"
-
-cat << 'EOF' > "$tmp/work/fib_gcc2_fast"
-#!/bin/sh
-sleep 0.075
-EOF
-chmod +x "$tmp/work/fib_gcc2_fast"
-
-cp "$tmp/work/fib_zoril_fast" "$tmp/work/fib_zoril"
-cp "$tmp/work/fib_gcc2_fast" "$tmp/work/fib_gcc2"
-
-write_header "$tmp/bench/gate_c3.tsv"
-append_row "$tmp/bench/gate_c3.tsv" "2026-11-01-00-00-00" "aaaaaaaaaaaa" "Linux 6.1.0" "performance" "baseline" "baseline" "10000" "100" "3.867" "10.0"
-write_metrics "$tmp/metrics/metrics_spike.tsv" "10000" "100" "4.600" "10.0"
-rc=0
-out="$(TOLERANCES_FILE="$tmp/tol_legacy.cfg" RUNTIME_RUNS=3 TMP_DIR="$tmp/work" BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_c3.tsv" METRICS_FILE="$tmp/metrics/metrics_spike.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
-expect "transient noise spike re-measured and passes gate" 0 "noise retry"
 
 # P1: Only another host's baseline (bbbbbbbbbbbb, twice as good) -> new host aaaaaaaaaaaa, exit 0, appends baseline
 write_header "$tmp/bench/gate_p1.tsv"
@@ -630,6 +586,34 @@ if [ "$rc" -eq 1 ] && printf '%s\n' "$out" | grep -qF '[FAIL] runtime_geomean_vs
     echo "[PASS] T5: runtime_geomean_vs_gcc_o2 gate fails at 2.400 and passes at 2.200 vs 2.000"
 else
     echo "[FAIL] T5: rc=$rc rc2=$rc2"
+    errors=$((errors + 1))
+fi
+
+# T10: vs last line shows runtime_geomean_vs_gcc_o2 2.200 (was 2.000) for an 18-field row
+write_header_18 "$tmp/bench/gate_t10.tsv"
+printf '2026-11-01-00-00-00\tabc1234\t0.1.0\taaaaaaaaaaaa\tLinux 6.1.0\tx86_64\tTestCPU\t4\t16\tperformance\tok\tbaseline\tbaseline\t10000\t100\t3.000\t10.0\t2.000\n' >> "$tmp/bench/gate_t10.tsv"
+rc=0
+out="$(BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_t10.tsv" METRICS_FILE="$tmp/metrics/metrics_t5_pass.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
+expect "T10: vs last line prints runtime_geomean_vs_gcc_o2 2.200 (was 2.000)" 0 "runtime_geomean_vs_gcc_o2 2.200 (was 2.000)"
+
+# T11: vs last line shows runtime_geomean_vs_gcc_o2 2.200 (was -) when last row has 17 fields
+write_header "$tmp/bench/gate_t11.tsv"
+append_row "$tmp/bench/gate_t11.tsv" "2026-11-01-00-00-00" "aaaaaaaaaaaa" "Linux 6.1.0" "performance" "baseline" "baseline" "10000" "100" "3.000" "10.0"
+rc=0
+out="$(BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_t11.tsv" METRICS_FILE="$tmp/metrics/metrics_t5_pass.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
+expect "T11: vs last line prints runtime_geomean_vs_gcc_o2 2.200 (was -) for 17-field row" 0 "runtime_geomean_vs_gcc_o2 2.200 (was -)"
+
+# T12: runtime_ratio_vs_gcc_o2 in a tolerance file is ignored (not gated)
+printf 'runtime_ratio_vs_gcc_o2|15|lower_better\n' > "$tmp/tol_t12.cfg"
+write_header "$tmp/bench/gate_t12.tsv"
+append_row "$tmp/bench/gate_t12.tsv" "2026-11-01-00-00-00" "aaaaaaaaaaaa" "Linux 6.1.0" "performance" "baseline" "baseline" "10000" "100" "3.867" "10.0"
+write_metrics "$tmp/metrics/metrics_t12.tsv" "10000" "100" "5.250" "10.0"
+rc=0
+out="$(TOLERANCES_FILE="$tmp/tol_t12.cfg" BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_t12.tsv" METRICS_FILE="$tmp/metrics/metrics_t12.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
+if [ "$rc" -eq 0 ] && ! printf '%s\n' "$out" | grep -qE '\[(FAIL|RE''TEST)\].*runtime_ratio_vs_gcc_o2'; then
+    echo "[PASS] T12: runtime_ratio_vs_gcc_o2 in tolerance file is ignored"
+else
+    echo "[FAIL] T12: rc=$rc out=$out"
     errors=$((errors + 1))
 fi
 

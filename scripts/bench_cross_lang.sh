@@ -631,9 +631,9 @@ check_thresholds_gate() {
         return 0
     fi
 
-    local tab b_date b_commit b_gov b_tp b_inc b_rat b_geo
+    local tab b_date b_commit b_gov b_tp b_inc b_geo
     tab=$(printf '\t')
-    IFS="$tab" read -r b_date b_commit _ _ _ _ _ _ _ b_gov _ _ _ b_tp b_inc b_rat _ b_geo <<EOF
+    IFS="$tab" read -r b_date b_commit _ _ _ _ _ _ _ b_gov _ _ _ b_tp b_inc _ _ b_geo <<EOF
 $base_line
 EOF
     printf '\nComparing against baseline of %s, commit %s (host %s):\n' "$b_date" "$b_commit" "$HOST_ID"
@@ -641,23 +641,22 @@ EOF
         printf '  Note: CPU governor differs from baseline (%s vs baseline %s).\n' "$HOST_GOVERNOR" "$b_gov"
     fi
     if [ -n "$last_line" ]; then
-        local l_date l_kind l_tp l_inc l_rat l_geo
-        IFS="$tab" read -r l_date _ _ _ _ _ _ _ _ _ _ l_kind _ l_tp l_inc l_rat _ l_geo <<EOF
+        local l_date l_kind l_tp l_inc l_geo
+        IFS="$tab" read -r l_date _ _ _ _ _ _ _ _ _ _ l_kind _ l_tp l_inc _ _ l_geo <<EOF
 $last_line
 EOF
-        printf '  vs last %s (%s): clean_throughput_loc_s %s (was %s), incremental_rebuild_ms %s (was %s), runtime_ratio_vs_gcc_o2 %s (was %s)\n' \
-            "$l_kind" "$l_date" "$m_tp" "$l_tp" "$m_inc" "$l_inc" "$m_rat" "$l_rat"
+        printf '  vs last %s (%s): clean_throughput_loc_s %s (was %s), incremental_rebuild_ms %s (was %s), runtime_geomean_vs_gcc_o2 %s (was %s)\n' \
+            "$l_kind" "$l_date" "$m_tp" "$l_tp" "$m_inc" "$l_inc" "${m_geo:--}" "${l_geo:--}"
     fi
 
     local gate_fail=0
-    local axis tol dir baseline cur b c t ok cur2 c2 ok2
+    local axis tol dir baseline cur b c t ok
     while IFS='|' read -r axis tol dir; do
         [ -z "$axis" ] && continue
         case "$axis" in \#*) continue ;; esac
         case "$axis" in
             clean_throughput_loc_s) baseline="$b_tp" ;;
             incremental_rebuild_ms) baseline="$b_inc" ;;
-            runtime_ratio_vs_gcc_o2) baseline="$b_rat" ;;
             runtime_geomean_vs_gcc_o2) baseline="$b_geo" ;;
             *) continue ;;
         esac
@@ -676,24 +675,7 @@ EOF
         else
             awk "BEGIN { if ($c > $b*(1+$t)) exit 1; exit 0 }" || ok=0
         fi
-        if [ "$ok" -eq 0 ] && [ "$axis" = "runtime_ratio_vs_gcc_o2" ] && [ -x "${TMP_DIR:-}/fib_zoril" ] && [ -x "${TMP_DIR:-}/fib_gcc2" ]; then
-            printf '  [RETEST] %-24s %s exceeded limit; running confirmation measurement...\n' "$axis" "$cur"
-            measure_runtime_pair "$TMP_DIR/fib_zoril" "$TMP_DIR/fib_gcc2"
-            cur2="${RT_PAIR_RATIO:-$(awk "BEGIN { if ($RT_B > 0) printf \"%.3f\", ($RT_A / $RT_B); else print 0 }")}"
-            c2=$(awk "BEGIN {print $cur2}")
-            ok2=1
-            awk "BEGIN { if ($c2 > $b*(1+$t)) exit 1; exit 0 }" || ok2=0
-            if [ "$ok2" -eq 1 ]; then
-                printf '  [OK]  %-26s %s (baseline %s, tol %s%%) [noise retry: first was %s]\n' "$axis" "$cur2" "$baseline" "$tol" "$cur"
-                ok=1
-                cur="$cur2"
-                m_rat="$cur2"
-            else
-                printf '  [FAIL] %-26s confirmation %s also regressed past baseline %s (first was %s)\n' "$axis" "$cur2" "$baseline" "$cur"
-                m_rat="$cur2"
-                gate_fail=1
-            fi
-        elif [ "$ok" -eq 1 ]; then
+        if [ "$ok" -eq 1 ]; then
             printf '  [OK]  %-26s %s (baseline %s, tol %s%%)\n' "$axis" "$cur" "$baseline" "$tol"
         else
             printf '  [FAIL] %-26s %s regressed past baseline %s (%s, tol %s%%)\n' "$axis" "$cur" "$baseline" "$dir" "$tol"
