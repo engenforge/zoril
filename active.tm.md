@@ -2,13 +2,14 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +bench +measurement +AI-D @main Rebuild the benchmark history of this host from the commits since the release id:tmydc
+- [x] +bench +measurement +AI-D @main Rebuild the benchmark history of this host from the commits since the release id:tmydc
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Depends:** id:ev54n
     > **Depends changed (2026-11-15):** was id:25ttc; the check-in id:25ttc added id:455bt and its check-in before this task, and this task waits for that review.
     > **Placed:** after the check-in id:25ttc: it writes into the history that batch creates. The maintainer's request of 2026-11-15.
     > **Note:** a measurement whose first result (which harness can measure an old commit) decides how the rest is run.
+    > **Completed:** 2026-11-15 git:50b1e8f
 
     - **Why:** nothing was recorded between the release (git:7417fdc, 2026-11-02) and id:nxrav. The host is the same one, so the series can be measured again: each row is today's measurement of an old commit, marked `backfill`.
     - **Changed (2026-11-15):** by the maintainer's decision the records live on the `records` branch mounted at `bench/records/` (id:455bt). Where this task says `bench/gate_history.tsv`, read `bench/records/gate_history.tsv`; each run is committed there by the scripts, so there is no `bench:` commit on `main`, and a run made from a scratch worktree under `build/backfill/` is pointed at the mounted file with `GATE_HISTORY`. C4 falls away (no file of `main` changes); in its place, `git -C bench/records log --oneline` lists the backfill commits and `git status --short` of the code tree is empty.
@@ -23,6 +24,52 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: `awk -F'\t' '$12=="backfill"' bench/gate_history.tsv | wc -l` equals the number of commits measured; quote both numbers, and any commit that did not build or run, with its error.
       - C3: no `backfill` row is taken as a baseline: after the series and before `--record`, `sh scripts/bench_threshold_check.sh` prints `new host` (or names an earlier real baseline), not a backfill row.
       - C4: `make test-changed BASE=HEAD` on the commit that adds the rows; quote its `Total:` line.
+    - **Result (2026-11-15):** the history of this host (`a52c24a80e04`) from the release to git:cb76bfa is on `records`: 42 `backfill` rows in `bench/records/gate_history.tsv` with their speed rows, one commit there per measured commit, then a fresh baseline measured on git:50b1e8f.
+      - C1: above. One correction to it: the 41 commits are the first-parent commits from git:7417fdc up to git:e5087d4 that changed those paths; the last of them is git:cb76bfa.
+      - C2: `awk -F'\t' '$12=="backfill"' bench/records/gate_history.tsv | wc -l` prints 42, and `git -C bench/records log --oneline | grep -c backfill` prints 42: every commit of the series built and ran; none failed.
+      - What moved: nothing. Clean throughput stays between 10003 and 10356 LOC/s (git:7417fdc 10177, git:cb76bfa 10072; the largest step between neighbours is 2.1%, at git:cc932fe), the runtime ratio to `gcc -O2` between 3.836 and 4.064 (the largest step 3.6%, at git:2c91ace), peak RSS between 5.108 and 5.123 MB per kLOC. The incremental rebuild is 22, 23 or 24 ms: it is measured in whole milliseconds, so one millisecond is 4% and a step from 22 to 24 is not a change. No measure moved by 5% between two neighbouring commits, and none drifted from the release to today.
+      - C3: after the series and before `--record`, `sh scripts/bench_threshold_check.sh` printed `Comparing against baseline of 2026-11-15-15-51-39, commit 4bff90f (host a52c24a80e04):` (the real baseline, not a backfill row), `vs last backfill (2026-11-15-18-37-11): ...` for information, and three `[OK]` lines.
+      - The baseline: `sh scripts/bench_cross_lang.sh --record` on git:50b1e8f -> `Recorded baseline row to .../bench/records/gate_history.tsv (host a52c24a80e04)`: 10141 LOC/s, 22 ms, ratio 3.941, 5.118 MB per kLOC (`4e40d85` on `records`).
+      - C4 (as changed): `git status --short` of the code tree is empty; the backfill commits are on `records`. No file of `main` changed, so no test run is owed. The scratch worktrees under `build/backfill/` were removed.
+    - **The driver** (`build/backfill/measure.sh <sha>`, run from the main tree, one commit at a time):
+
+    ```sh
+    #!/bin/sh
+    # usage: measure.sh <sha>   (run from the main tree's root; one at a time)
+    # Builds <sha> in a scratch worktree if it is not built yet, measures it with today's harness
+    # (today's scripts/ and bench/cross_lang/ beside that tree's build/ and stdlib/), and appends
+    # the run to bench/records/ as a `backfill` row of gate_history.tsv plus its speed rows.
+    set -u
+    sha=$1
+    R=$(pwd)
+    B=$R/build/backfill
+    wt=$B/wt-$sha
+    H=$B/h-$sha
+    T=$B/t-$sha
+    if [ ! -x "$wt/build/zbuild" ]; then
+        [ -d "$wt" ] || git worktree add --detach "$wt" "$sha" > "$B/$sha.wt.log" 2>&1 || { echo "$sha: worktree failed"; exit 1; }
+        (cd "$wt" && make > "$B/$sha.make.log" 2>&1) || { echo "$sha: build failed (see $B/$sha.make.log)"; exit 1; }
+    fi
+    [ "${BUILD_ONLY:-0}" -eq 1 ] && { echo "$sha: built"; exit 0; }
+    rm -rf "$H" "$T"; mkdir -p "$H/bench" "$T"
+    cp -R "$R/scripts" "$H/scripts"
+    cp -R "$R/bench/cross_lang" "$H/bench/cross_lang"
+    for f in config.mk config.local.mk config.local.sh; do [ -f "$R/$f" ] && cp "$R/$f" "$H/$f"; done
+    ln -s "$wt/build" "$H/build"
+    ln -s "$wt/stdlib" "$H/stdlib"
+    mkdir -p "$wt/build/bench"
+    [ -d "$wt/build/bench/compare" ] || cp -R "$R/build/bench/compare" "$wt/build/bench/compare" 2>/dev/null
+    GATE_HISTORY=$T/g.tsv SPEED_HISTORY=$T/s.tsv METRICS_FILE=$T/m.tsv sh "$H/scripts/bench_threshold_check.sh" > "$B/$sha.bench.log" 2>&1
+    rc=$?
+    if [ $rc -ne 0 ] || [ ! -s "$T/g.tsv" ]; then echo "$sha: bench failed rc=$rc (see $B/$sha.bench.log)"; exit 1; fi
+    row=$(awk -F'\t' -v OFS='\t' -v c="$sha" 'NR==2 { $2=c; $12="backfill"; $13="backfill"; print }' "$T/g.tsv")
+    [ -n "$row" ] || { echo "$sha: no gate row"; exit 1; }
+    if [ "${DRY:-0}" -eq 1 ]; then printf '%s\n' "$row" | cut -f1-4,11-17; exit 0; fi
+    printf '%s\n' "$row" >> "$R/bench/records/gate_history.tsv"
+    awk -F'\t' -v OFS='\t' -v c="$sha" 'NR>1 { $2=c; print }' "$T/s.tsv" >> "$R/bench/records/speed_history.tsv"
+    git -C "$R/bench/records" add gate_history.tsv speed_history.tsv && git -C "$R/bench/records" commit -q -m "a52c24a80e04 $sha: backfill (measured $(date +%Y-%m-%d) with the harness of $(git -C "$R" rev-parse --short HEAD))" || { echo "$sha: records commit failed"; exit 1; }
+    printf '%s\n' "$row" | cut -f2,11,14-17
+    ```
 
 - [ ] +bench +testinfra +AI-G @main A record commit that loses a race is retried, the figures row carries the bare version, and the rule names all four record files id:h1dj3
     > **Created:** 2026-11-15
