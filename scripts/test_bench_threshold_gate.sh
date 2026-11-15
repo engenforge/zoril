@@ -272,6 +272,83 @@ case "$_r5_c1|$_r5_c2" in
     *) echo "[FAIL] R5: modified tracked file not marked dirty: $_r5_c2"; errors=$((errors + 1)) ;;
 esac
 
+# F1-F3: scripts/record_figures.sh in scratch repositories
+cat > "$tmp/stub_figures.sh" << 'EOF'
+#!/bin/sh
+case "${1:-}" in
+    --print)
+        printf 'stdlib modules\t30\nstdlib lines\t6734\nstdlib `unsafe { }` blocks\t187\nstdlib modules with such a block\t23\nstdlib `unsafe fn` declarations\t65\nof those, public\t60\ncompiler modules\t50\ncompiler lines\t47930\ncompiler `unsafe { }` blocks\t852\n'
+        ;;
+    --density)
+        printf 'src density\t**4.66%%**\nstdlib density\t**10.96%%**\nline counts\t1,943 of 41,660 lines in `src/`, 531 of 4,845 in `stdlib/`\n'
+        ;;
+    --probes)
+        printf 'probes\t519\ncompile_reject\t377\naccept\t77\nruntime_trap\t8\nruntime_fault\t11\nknown_gap\t46\n'
+        ;;
+esac
+EOF
+chmod +x "$tmp/stub_figures.sh"
+
+REC_FIG="$(pwd)/scripts/record_figures.sh"
+
+# F1: clean commit appends header + 1 row with matching field count and commits it
+f1="$tmp/f1"
+setup_scratch_repo "$f1" with_git
+cp "$REC_FIG" "$f1/scripts/record_figures.sh"
+git -C "$f1" add scripts/record_figures.sh
+git -C "$f1" commit -q -m "add record_figures"
+git -C "$f1" worktree add -q --orphan -b records "$f1/bench/records"
+git -C "$f1/bench/records" config user.email "test@example.com"
+git -C "$f1/bench/records" config user.name "Test"
+printf 'init\n' > "$f1/bench/records/README.md"
+git -C "$f1/bench/records" add README.md
+git -C "$f1/bench/records" commit -q -m "records init"
+rc=0
+out="$(FIGURES_SCRIPT="$tmp/stub_figures.sh" "$f1/scripts/record_figures.sh" 2>&1)" || rc=$?
+_f1_hdr=$(awk -F'\t' 'NR == 1 { print NF }' "$f1/bench/records/figures_history.tsv" 2>/dev/null || echo 0)
+_f1_row=$(awk -F'\t' 'NR == 2 { print NF }' "$f1/bench/records/figures_history.tsv" 2>/dev/null || echo 0)
+_f1_lines=$(wc -l < "$f1/bench/records/figures_history.tsv" 2>/dev/null || echo 0)
+if [ "$rc" -eq 0 ] && [ "$_f1_lines" -eq 2 ] && [ "$_f1_hdr" -gt 0 ] && [ "$_f1_hdr" -eq "$_f1_row" ] && \
+   [ "$(git -C "$f1/bench/records" rev-list --count HEAD)" -eq 2 ] && \
+   git -C "$f1/bench/records" log -1 --pretty=%s | grep -q ': figures$'; then
+    echo "[PASS] F1: record_figures appends row with matching field count ($_f1_row) and commits"
+else
+    echo "[FAIL] F1: record_figures failed (rc=$rc lines=$_f1_lines hdr=$_f1_hdr row=$_f1_row)"
+    errors=$((errors + 1))
+fi
+
+# F2: second run on same clean commit adds nothing and says "already recorded"
+rc=0
+out="$(FIGURES_SCRIPT="$tmp/stub_figures.sh" "$f1/scripts/record_figures.sh" 2>&1)" || rc=$?
+_f2_lines=$(wc -l < "$f1/bench/records/figures_history.tsv" 2>/dev/null || echo 0)
+if [ "$rc" -eq 0 ] && [ "$_f2_lines" -eq 2 ] && \
+   [ "$(git -C "$f1/bench/records" rev-list --count HEAD)" -eq 2 ] && \
+   printf '%s\n' "$out" | grep -q 'is already recorded'; then
+    echo "[PASS] F2: second run on same clean commit adds nothing and says already recorded"
+else
+    echo "[FAIL] F2: second run on same clean commit failed (rc=$rc lines=$_f2_lines out=$out)"
+    errors=$((errors + 1))
+fi
+
+# F3: dirty tree adds a row marked -dirty, and so does the next run
+printf '# dirty\n' >> "$f1/bench/cross_lang/tolerances.cfg"
+rc=0
+out="$(FIGURES_SCRIPT="$tmp/stub_figures.sh" "$f1/scripts/record_figures.sh" 2>&1)" || rc=$?
+rc2=0
+out2="$(FIGURES_SCRIPT="$tmp/stub_figures.sh" "$f1/scripts/record_figures.sh" 2>&1)" || rc2=$?
+_f3_lines=$(wc -l < "$f1/bench/records/figures_history.tsv" 2>/dev/null || echo 0)
+_f3_c3=$(awk -F'\t' 'NR == 3 { print $2 }' "$f1/bench/records/figures_history.tsv" 2>/dev/null || echo "")
+_f3_c4=$(awk -F'\t' 'NR == 4 { print $2 }' "$f1/bench/records/figures_history.tsv" 2>/dev/null || echo "")
+case "$rc|$rc2|$_f3_lines|$_f3_c3|$_f3_c4" in
+    0\|0\|4\|*-dirty\|*-dirty)
+        echo "[PASS] F3: dirty tree appends -dirty row each run ($_f3_c3, $_f3_c4)"
+        ;;
+    *)
+        echo "[FAIL] F3: dirty tree test failed (rc=$rc rc2=$rc2 lines=$_f3_lines c3=$_f3_c3 c4=$_f3_c4)"
+        errors=$((errors + 1))
+        ;;
+esac
+
 if [ "$errors" -eq 0 ]; then
     echo "All bench threshold gate tests passed."
     exit 0

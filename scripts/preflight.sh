@@ -37,6 +37,7 @@ STORE_GRID_CMD="${PREFLIGHT_STORE_GRID:-./scripts/check_store_grid.sh}"
 DENSITY_CMD="${PREFLIGHT_DENSITY:-./scripts/record_marker_density.sh}"
 FUZZ_CMD="${PREFLIGHT_FUZZ:-./scripts/fuzz_safe.sh}"
 FIGURES_CMD="${PREFLIGHT_FIGURES:-./scripts/check_safety_figures.sh --milestone}"
+FIGURES_REC_CMD="${PREFLIGHT_FIGURES_REC:-./scripts/record_figures.sh}"
 GIT_CMD="${PREFLIGHT_GIT:-./scripts/test.sh --quiet --group git}"
 LOG="${PREFLIGHT_LOG:-build/preflight-selfhost.log}"
 TIMINGS="${PREFLIGHT_TIMINGS:-build/preflight-timings.tsv}"
@@ -166,6 +167,12 @@ $BENCH_CMD
 bench_rc=$?
 record_step bench $(( $(date +%s) - bench_start ))
 [ $bench_rc -eq 0 ] || exit $bench_rc
+
+fig_rec_start=$(date +%s)
+$FIGURES_REC_CMD
+fig_rec_rc=$?
+record_step figures-record $(( $(date +%s) - fig_rec_start ))
+[ $fig_rec_rc -eq 0 ] || exit $fig_rec_rc
 
 if [ "$changed" -eq 0 ]; then
     sg_start=$(date +%s)

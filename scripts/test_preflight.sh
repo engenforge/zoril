@@ -43,6 +43,7 @@ trap cleanup EXIT INT TERM
 # Scratch timing and log paths so nested preflight runs do not touch default files
 scratch_timings="$tmp/preflight_scratch_timings.tsv"
 scratch_log="$tmp/preflight_scratch.log"
+export PREFLIGHT_FIGURES_REC="$tmp/stub_pass.sh"
 export PREFLIGHT_TIMINGS="$scratch_timings"
 export PREFLIGHT_LOG="$scratch_log"
 
