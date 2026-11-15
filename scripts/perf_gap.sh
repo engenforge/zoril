@@ -138,7 +138,8 @@ if [ -n "$GATE" ]; then
     if [ "$GATE" = record ]; then
         printf '# Instructions executed by each workload'"'"'s Zoril build at gate size (scripts/perf_gap.sh).\n# Re-record after an intended change: scripts/perf_gap.sh --gate-record\n' > "$BASELINE.tmp"
         for n in $WORKLOADS; do
-            set -- $(gate_count "$n") || exit 1
+            _gc=$(gate_count "$n") || exit 1
+            set -- $_gc
             printf '%s\t%s\t%s\n' "$n" "$1" "$2" >> "$BASELINE.tmp"
             echo "recorded $n: $1 instructions, exit $2"
         done
@@ -153,7 +154,8 @@ if [ -n "$GATE" ]; then
             echo "[FAIL] $n has no baseline (scripts/perf_gap.sh --gate-record)"; errors=$((errors + 1)); continue
         fi
         set -- $base; bir=$1; brc=$2
-        set -- $(gate_count "$n") || exit 1
+        _gc=$(gate_count "$n") || exit 1
+        set -- $_gc
         ir=$1; rc=$2
         pct=$(awk -v a="$ir" -v b="$bir" 'BEGIN { printf "%+.1f", (a - b) * 100 / b }')
         if [ "$rc" != "$brc" ]; then
@@ -204,7 +206,8 @@ if [ "$RECORD_RUN" -eq 1 ]; then
         fi
         ratio=$(awk -v a="$z" -v b="$g" 'BEGIN { printf "%.3f", a / (b > 0 ? b : 1) }')
         if [ "$HAS_VALGRIND" -eq 1 ]; then
-            set -- $(gate_count "$n") || exit 1
+            _gc=$(gate_count "$n") || exit 1
+            set -- $_gc
             ir=$1
         else
             ir=""

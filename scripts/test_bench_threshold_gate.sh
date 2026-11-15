@@ -653,6 +653,44 @@ else
     errors=$((errors + 1))
 fi
 
+# T8: valgrind stub that prints nothing to stderr and exits 2 fails --record-run with no row written
+t8="$tmp/t8"
+setup_pg_scratch "$t8" fib
+cat > "$t8/stub_bin/valgrind" << 'EOF'
+#!/bin/sh
+exit 2
+EOF
+chmod +x "$t8/stub_bin/valgrind"
+rc=0
+out="$(cd "$t8" && PATH="$t8/stub_bin:$PATH" BENCH_HOST_ID=aaaaaaaaaaaa sh "$t8/scripts/perf_gap.sh" -n 1 --record-run fib 2>&1)" || rc=$?
+if [ "$rc" -ne 0 ] && [ ! -e "$t8/bench/records/runtime_history.tsv" ] && \
+   printf '%s\n' "$out" | grep -qF 'callgrind reported no instruction count'; then
+    echo "[PASS] T8: failed instruction count stops --record-run with no row"
+else
+    echo "[FAIL] T8: rc=$rc exists=$(test -e "$t8/bench/records/runtime_history.tsv" && echo yes || echo no) out=$out"
+    errors=$((errors + 1))
+fi
+
+# T9: same stub with --gate-record leaves gate_baseline.tsv unchanged and exits non-zero
+t9="$tmp/t9"
+setup_pg_scratch "$t9" fib
+cat > "$t9/stub_bin/valgrind" << 'EOF'
+#!/bin/sh
+exit 2
+EOF
+chmod +x "$t9/stub_bin/valgrind"
+printf 'fib\t1\t0\n' > "$t9/bench/perf_gap/gate_baseline.tsv"
+rc=0
+out="$(cd "$t9" && PATH="$t9/stub_bin:$PATH" sh "$t9/scripts/perf_gap.sh" --gate-record fib 2>&1)" || rc=$?
+_t9_base="$(cat "$t9/bench/perf_gap/gate_baseline.tsv")"
+_t9_exp="$(printf 'fib\t1\t0')"
+if [ "$rc" -ne 0 ] && [ "$_t9_base" = "$_t9_exp" ]; then
+    echo "[PASS] T9: failed instruction count stops --gate-record and preserves baseline"
+else
+    echo "[FAIL] T9: rc=$rc base='$_t9_base' out=$out"
+    errors=$((errors + 1))
+fi
+
 if [ "$errors" -eq 0 ]; then
     echo "All bench threshold gate tests passed."
     exit 0
