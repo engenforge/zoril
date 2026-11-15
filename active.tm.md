@@ -192,12 +192,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - Sibling routes not yet probed: a capture of a capture (a closure inside a closure moving a part out); a `move` of a part out of a captured array's element; `for x in a` over an array of values with a `Drop` impl (what the loop variable is, and whether the array is dropped again); an element read by value through `&[S; 1]`, `Box<[S; 1]>` and a struct held in a slice (`a[0].w.s`); an index through a `Vec` of `Vec`s; a `while let Q.A(s) = a[i]`.
       - `doc/SAFETY.md` §6 class (N) and the counts read correctly with only `gap_92` left of the four.
 
-- [ ] +safety +decision +AI-D @main Decide whether a by-value read of a slice element that is not `Copy` is refused (gap_92) id:v0bwt
+- [x] +safety +decision +AI-D @main Decide whether a by-value read of a slice element that is not `Copy` is refused (gap_92) id:v0bwt
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** after the check-in id:qmms1: found by the check-in id:3yasf (finding 4) beside the holes that batch closes, and what it decides is built on id:760hd's rule.
-    > **Depends:** id:qmms1
+    > **Depends changed (2026-11-15):** was id:qmms1; removed when the maintainer answered, since the answer needs nothing from that batch. What it leads to, id:cx46y, waits for id:qmms1 instead.
     > **Note:** a decision for the maintainer; the implementation is the task it names.
+    > **Completed:** 2026-11-15
+    > - Decided by the maintainer: (a), refuse it (the **Decided** bullet below). No code changed and no check was run; `gap_92` stays a `known_gap` probe until id:cx46y's implementation lands.
 
     - **Probe:** `bench/safety_matrix/probes/gap_92_vec_duplicated_out_of_slice_element.zrl` (`known_gap`, a fault, git:f63b51c): `fn dup(a: [Vec<i32>]) -> i32 { let mut v1 = a[0]; let mut v2 = a[0]; v1.free(); v2.push(7); return v2.as_slice()[0]; }` compiles with no `unsafe` and writes freed memory.
     - **What is checked today:** the same read through a reference is refused (`fn g(r: &Vec<i32>) { let mut v1 = *r; }`: `cannot move out of borrow`), and out of a local array it moves the whole array (a second `a[0]` is `use of moved value 'a'`). A slice is a borrow too, but `check_place_use` does not read a slice local as a pointer local, so `a[0]` is a move that leaves the slice holding the value. id:760hd refuses it for a value that needs a drop; a `Vec`, a `Box` and a struct holding one need none.
@@ -207,6 +209,19 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - **(b) Leave it accepted** and say in `doc/spec/safety_model.md` that a type that is not `Copy` and has no `Drop` impl may be duplicated out of a slice, so that `free()` on such a handle is outside the guarantee. A change to what the project claims; `Vec.free` and its like would then need `unsafe` or a statement that they are unchecked.
       - **Recommendation (the reviewing session's):** (a). The rule already holds for `&T`, the slice is its structural twin, and the cost measured so far is six sites with a mechanical rewrite. It also covers the `Box` shape of id:z0021 (`let x = s[i]` with `s: &[Box<T>]`).
     - **Then:** if (a), an `+AI-D` measurement first (every site in `src/`, `stdlib/`, `tools/` and `tests/` the rule refuses, with the rewrite of each, and whether the local-array form should be refused too rather than move the array), then the `+AI-G` implementation with its numbered checks. If (b), the spec text and an accept test.
+    - **Decided (2026-11-15, the maintainer):** (a). A by-value read of a slice element that is not `Copy` is refused, as the read through `&T` is. The measurement is id:cx46y; the implementation is the task it writes.
+
+- [ ] +safety +measurement +AI-D @main Measure every site a refusal of non-`Copy` by-value slice element reads would refuse, and settle the rule for the implementation (gap_92) id:cx46y
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** after id:v0bwt, whose decision it follows up.
+    > **Depends:** id:qmms1
+    > **Note:** the rule extends id:760hd's refusal in `check_place_use`, so it is measured on that code once its check-in has reviewed it.
+
+    - **Decided in id:v0bwt (the maintainer, 2026-11-15):** a by-value read of a slice element that is not `Copy` is refused, as `*r` through `&T` is. `gap_92` (`bench/safety_matrix/probes/gap_92_vec_duplicated_out_of_slice_element.zrl`) is the probe it closes.
+    - **Do:** in a scratch worktree under `build/` (never replace `build/zoril`), widen id:760hd's element refusal from `type_has_drop` to every type that is not `Copy`, and list every site it refuses in `src/`, the `stdlib/` modules, `tools/` and `tests/`, with the rewrite of each (`&a[i]`, a clone, or a field read). The compiler stops at the first module that fails, so rewrite and rebuild until the tree builds and `make test` runs. Known so far (id:v0bwt): `src/check_zir.zrl:1971`, and in `tools/zbuild/src/`: `manifest.zrl:135`, `manifest.zrl:182`, `build.zrl:297`, `build.zrl:630`, `main.zrl:67`.
+    - **Settle, each with a probe:** (1) whether the read out of a local array is refused too, or still moves the whole array as today (`let v = a[0];` then `a[0]` is `use of moved value`); (2) the diagnostic text (`cannot move out of borrow`, or id:760hd's element message); (3) the pattern, `?` and `for` forms id:760hd's twenty tests cover, each tried with a `Vec` and a `Box` element; (4) that every rewrite in `src/` and in the `stdlib/` modules it imports is accepted by the pinned stage1 and by the compiler before the change; (5) whether id:z0021's `Box` shape (`let x = s[i]` with `s: &[Box<T>]`) is closed by it.
+    - **Result:** the `+AI-G` implementation task or tasks, added after this one: the rewrites of the tree first, in a commit that builds under the old rule, then the rule, with the patch, the tests, the numbered **Checks:** (a take-out check among them, the rejection differential with `REJECT_DIFF_NO_CACHE=1`, the flip of `gap_92` and its entries in `doc/spec/safety_model.md` and `doc/SAFETY.md`) and a check-in after them. If the site count makes the rule cost more than the six sites the decision weighed, say so to the maintainer with the count before writing the implementation.
 
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
