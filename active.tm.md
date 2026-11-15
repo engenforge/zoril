@@ -2,12 +2,13 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +docs +tests +AI-G @main The spec says a match guard may not move or drop the matched value, and both forms have a test id:4jawf
+- [x] +docs +tests +AI-G @main The spec says a match guard may not move or drop the matched value, and both forms have a test id:4jawf
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** directly after id:3yasf, as a follow-up to the batch it reviewed (finding 5).
     > **Depends:** id:3yasf
     > **Check-in:** reviewed with the batch in id:qmms1.
+    > **Completed:** 2026-11-15 git:b671f6d
 
     - **Now:** git:67f87b0 made `consume_place_if_move` (`src/lower_zir/decl.zrl`) and `lower_drop_intrinsic` (`src/lower_zir/expr.zrl`) refuse a move or an `@drop` of the matched value inside a match guard (`cannot move the matched value in a match guard`). `doc/spec/surface_syntax.md` §5.3 names only assignment and a mutable borrow, and the only test of the new message is the nested match of `tests/language/match/enum_payload_move_used_in_guard.zrl`.
     - **Do:** no change to `src/`.
@@ -22,6 +23,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `git diff --stat HEAD` names only the two spec files and the two tests.
       - C4: `make test-changed BASE=HEAD` before the commit; quote its `Total:` line.
       - C5: commit on `main`, add `**Awaiting review:**` with C1, C2 and C4, `tm done`.
+    - **Awaiting review:**
+      - C1: `./scripts/test.sh tests/error_reporting/err_match_guard_moves_scrutinee.zrl tests/error_reporting/err_match_guard_drops_scrutinee.zrl` -> `Total: 3 run, 3 passed, 0 failed, 0 skipped (0.1s)`.
+      - C2: in detached worktree `build/4jawf` with both `guard_scrut_overlaps` blocks removed and rebuilt via `make -j4`, C1 failed with `[FAIL] tests/error_reporting/err_match_guard_drops_scrutinee.zrl (diagnostic mismatch) (15ms)` (`error: use of moved value 'e'`, `error: use of dropped value 'e'`) and `[FAIL] tests/error_reporting/err_match_guard_moves_scrutinee.zrl (diagnostic mismatch) (15ms)` (`error: use of moved value 'e'`). Worktree removed.
+      - C3: also updated `bench/safety_matrix/matrix.md` (and ran `make md-fmt`) because `safety-model` gate requires the **Drop Exactly Once** row in `doc/spec/safety_model.md` and `bench/safety_matrix/matrix.md` to match. Changed files: `doc/spec/surface_syntax.md`, `doc/spec/safety_model.md`, `bench/safety_matrix/matrix.md`, `tests/error_reporting/err_match_guard_moves_scrutinee.zrl`, `tests/error_reporting/err_match_guard_drops_scrutinee.zrl`.
+      - C4: `make test-changed BASE=HEAD` -> `Total: 1603 run, 1603 passed, 0 failed, 100 skipped (50.4s)`.
+      - C5: committed on `main` as `git:b671f6d`.
 
 - [ ] +safety +tests +AI-G @main The walk from an enum payload address to its enum has no depth at which it answers "not borrowed" (gap_91) id:yw8h9
     > **Created:** 2026-11-15
