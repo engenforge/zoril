@@ -1,0 +1,10 @@
+// Reading a Box by value out of a slice element is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+fn g(a: [Box<i32>]) -> i32 { let b = a[0]; return *b; }
+
+fn main() -> i32 {
+    let a = [box 5];
+    return g(&a) - 5;
+}

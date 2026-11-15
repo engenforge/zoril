@@ -1,7 +1,6 @@
 // name: A &mut is read twice out of a slice element, and a view taken through one copy is written after the other grows the Vec
-// expected: known_gap
-// gap: a by-value read of a slice element whose type is not Copy (here a `&mut Vec<i32>`) is accepted as a move although the slice still holds the value, so the same element can be read out again; the two `&mut` are live together, and a view taken through one is not ended by a push through the other, which reallocates the buffer the view points into
-// observed: exit 77
+// expected: compile_reject
+// EXPECT: cannot move out of an array or slice element
 import "vec.zrl";
 use vec::Vec;
 

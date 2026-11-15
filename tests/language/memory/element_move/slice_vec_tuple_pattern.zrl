@@ -1,0 +1,16 @@
+// Destructuring a slice element that holds a Vec with a tuple pattern is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+import "vec.zrl";
+use vec::Vec;
+
+fn g(a: [(Vec<i32>, i32)]) { let (x, n) = a[0]; }
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    let a = [(v, 1)];
+    g(&a);
+    return 0;
+}

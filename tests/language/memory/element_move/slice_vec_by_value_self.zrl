@@ -1,0 +1,20 @@
+// Calling a by-value self method on a slice element that holds a Vec is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+import "vec.zrl";
+use vec::Vec;
+
+struct N { v: Vec<i32>, n: i32 }
+impl N { fn eat(self: N) {} }
+
+fn g(a: [N]) { a[0].eat(); }
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    let mut a = [N { v: v, n: 1 }];
+    g(&a);
+    a[0].v.free();
+    return 0;
+}

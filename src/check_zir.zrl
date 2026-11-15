@@ -699,8 +699,7 @@ impl ZirVerifier {
                 self.report_error("cannot move out of a closure capture", span);
                 return;
             }
-            if why == 3 as u32
-                && self.type_has_drop(self.get_place_type(place, locals), 0 as usize) {
+            if why == 3 as u32 {
                 self.report_error("cannot move out of an array or slice element", span);
                 return;
             }
@@ -716,8 +715,7 @@ impl ZirVerifier {
             self.report_error("cannot move out of a closure capture", span);
             return;
         }
-        if self.place_has_index(place)
-            && self.type_has_drop(self.get_place_type(place, locals), 0 as usize) {
+        if self.place_has_index(place) {
             self.report_error("cannot move out of an array or slice element", span);
             return;
         }

@@ -1,0 +1,14 @@
+// Reading a Vec by value out of a local array element is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+import "vec.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    let mut a = [v];
+    let v1 = a[0];
+    return 0;
+}

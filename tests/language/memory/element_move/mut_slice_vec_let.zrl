@@ -1,0 +1,17 @@
+// Reading a Vec by value out of a mutable slice element is rejected.
+// expected compile fail
+// EXPECT: cannot move out of an array or slice element
+
+import "vec.zrl";
+use vec::Vec;
+
+fn g(a: [mut Vec<i32>]) { let v1 = a[0]; }
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    let mut a = [v];
+    g(&mut a);
+    a[0].free();
+    return 0;
+}
