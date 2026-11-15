@@ -332,6 +332,14 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Do:** list the places a generic item is checked (the declaration, the call, the instantiation, the ZIL type check) and what each checks. For each of: a bound on a function, an impl block, a method, a trait's associated item; a type argument that is a reference, a slice, a `fn` value, a raw pointer; a generic body read back from a `.zri`: write the three-line program that violates it and record which place refuses it, or that none does. Say what the ZIL type check would catch if every earlier place were removed (a mutation per place).
     - **Checks:** C1 the table of violations against the place that refuses each is in this task. C2 each accepted violation is a probe (a `known_gap` if it is unsafe) and a task. C3 the same table under `zbuild` (separate compilation), since a `.zri` body is read back.
 
+- [ ] +diagnostics +AI-G @main A refusal on a `return` expression is reported at the expression, not at the function's first column id:tcy7e
+    > **Created:** 2026-11-15
+    > **Found by:** the check-in id:qmms1, while probing id:760hd's element rule.
+    > **Placed:** under this heading: a diagnostic's position, no safety effect, not scheduled.
+
+    - **Reproducer:** `struct S { p: i32 }`, `impl Drop for S { fn drop(self: &mut S) {} }`, then `fn pick(r: &S) -> S {` on line 3 and `return *r;` on line 4: the compiler prints `3:1: error: cannot move out of borrow`, the function's first column, not `4:12`. `tests/language/memory/element_move/element_returned.zrl` shows the same for `return a[0];` (`8:1: error: cannot move out of an array or slice element`). The same refusals on a `let` are reported at the expression.
+    - **Not settled:** where the position is lost (the `return` terminator's span in the lowering, or `check_place_use`'s caller in `src/check_zir.zrl`), and which other refusals on a returned value share it. A session that takes this up finds that first, then writes the numbered **Checks:** (a test that states the line and column, and the change taken out to watch it fail).
+
 ## Decisions and hygiene
 
 - [ ] +safety +decision +AI-D id:z0102 Whether `unsafe fn` gets a `fn` type of its own, callable only in `unsafe`
