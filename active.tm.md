@@ -108,10 +108,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `sh scripts/run_safety_matrix.sh` -> `All probes complete: 473/519 passed. Mismatches: 0`; `sh scripts/check_safety_figures.sh --all` -> all 4 checks `[PASS]`; `sh scripts/check_safety_model.sh` -> `safety model: 79 rows — 78 proven, 0 GAP (1 N/A)` and `PASS: safety_model.md is self-consistent.`
       - C6: `make test` -> `Total: 3455 run, 3455 passed, 0 failed, 94 skipped (124.9s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` -> `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 20 newly refused, of 69159 programs against c161107f5f95e43c7557e5f44d046856a6bcbbd8`, `Total: 1278 run, 1278 passed, 0 failed, 0 skipped (45.2s)` (`--checked`). `sh scripts/check_reject_diff.sh HEAD` against `HEAD` (`949e72e`): `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 4 newly refused, of 69159 programs against HEAD` (`gap_92_vec_duplicated_out_of_slice_element.zrl` and `gap_93_mut_ref_duplicated_out_of_slice_element.zrl`, each whole-program and under `zbuild`).
 
-- [ ] +docs +AI-G @main The spec says a closure may not move a part out of a capture, and names the tests id:025c3
+- [x] +docs +AI-G @main The spec says a closure may not move a part out of a capture, and names the tests id:025c3
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** after id:v0rsm, in the batch the check-in id:48h1s reviews; found by the check-in id:qmms1 (finding 1). It depends on nothing.
+    > **Completed:** 2026-11-15 git:e5087d4
 
     - **Why:** id:613zw made the compiler refuse a move of any part of a closure capture. `doc/spec/surface_syntax.md` §5.2 (_What a closure captures, and how_, the bullet **An owning value is moved**) still gives whole-value examples only, and does not cite the tests.
     - **Do:** in that bullet, replace `so moving out of a capture (`return v;`, `let w = v;`) or explicitly dropping it (`@drop(v);`) inside the closure is rejected (`cannot move out of a closure capture`; `err_closure_capture_move_out.zrl`, `err_closure_capture_drop_box.zrl`, `err_closure_capture_drop_vec.zrl`)` by `so moving a capture or any part of it out (`return v;`, `let w = v;`, a field or tuple part as in `let s = w.s;`, a payload bound by value by `match`, `if let`, a `let` pattern or `?`) or explicitly dropping it (`@drop(v);`) inside the closure is rejected (`cannot move out of a closure capture`; `err_closure_capture_move_out.zrl`, `err_closure_capture_drop_box.zrl`, `err_closure_capture_drop_vec.zrl`, and `closure_capture_field_moved.zrl`, `closure_capture_tuple_part_moved.zrl`, `closure_capture_struct_pattern_moved.zrl`, `closure_capture_match_payload_moved.zrl`, `closure_capture_if_let_payload_moved.zrl`, `closure_capture_let_pattern_payload_moved.zrl` and `closure_capture_try_payload_moved.zrl` under `tests/language/closures/`)`. Directly after that sentence's closing clause (`: doing so inside one call would leave the environment dangling for the next.`) add `The same holds for a captured value with a `Drop` impl, or a struct, enum or tuple holding one: reading it, matching it by reference and reading its `Copy` parts stay allowed (`tests/language/closures/closure_capture_read_without_move.zrl`).` No other file changes.
@@ -120,6 +121,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: `git diff --stat HEAD` names `doc/spec/surface_syntax.md` only.
       - C3: `make test-changed BASE=HEAD` before the commit; quote its `Total:` line.
       - C4: commit on `main`, add `**Awaiting review:**` with C1 to C3, `tm done`, and stop at the check-in id:48h1s.
+    - **Awaiting review:**
+      - C1: `ls` listed all 8 `closure_capture_*` test files; `./scripts/test.sh tests/language/closures/closure_capture_*.zrl` passed: `Total: 10 run, 10 passed, 0 failed, 0 skipped (0.1s)`.
+      - C2: `git diff --stat HEAD` named `doc/spec/surface_syntax.md` only (`1 file changed, 1 insertion(+), 1 deletion(-)`).
+      - C3: `make test-changed BASE=HEAD` passed: `Total: 134 run, 134 passed, 0 failed, 0 skipped (15.5s)`.
 
 - [ ] +safety +review +AI-D @main @checkin Review of the element rewrites, the non-`Copy` element rule (gap_92, gap_93) and the capture spec text id:48h1s
     > **Created:** 2026-11-15
