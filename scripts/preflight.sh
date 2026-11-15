@@ -36,6 +36,7 @@ BENCH_CMD="${PREFLIGHT_BENCH:-./scripts/bench_threshold_check.sh}"
 STORE_GRID_CMD="${PREFLIGHT_STORE_GRID:-./scripts/check_store_grid.sh}"
 DENSITY_CMD="${PREFLIGHT_DENSITY:-./scripts/record_marker_density.sh}"
 FUZZ_CMD="${PREFLIGHT_FUZZ:-./scripts/fuzz_safe.sh}"
+FIGURES_CMD="${PREFLIGHT_FIGURES:-./scripts/check_safety_figures.sh --milestone}"
 GIT_CMD="${PREFLIGHT_GIT:-./scripts/test.sh --quiet --group git}"
 LOG="${PREFLIGHT_LOG:-build/preflight-selfhost.log}"
 TIMINGS="${PREFLIGHT_TIMINGS:-build/preflight-timings.tsv}"
@@ -187,4 +188,10 @@ if [ "$changed" -eq 0 ]; then
     record_step fuzz $(( $(date +%s) - fuzz_start ))
     rm -rf "$fuzz_findings"
     [ $fuzz_rc -eq 0 ] || exit $fuzz_rc
+
+    fig_start=$(date +%s)
+    $FIGURES_CMD
+    fig_rc=$?
+    record_step figures $(( $(date +%s) - fig_start ))
+    [ $fig_rc -eq 0 ] || exit $fig_rc
 fi

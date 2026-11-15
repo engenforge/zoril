@@ -308,7 +308,9 @@ reborrow-probes: $(TARGET) ## Gate: the programs the reborrow rule must reject a
 store-grid: $(TARGET) $(ZILC) $(RT_HOST) ## Gate: the store-rule grid (source x carrier x path x destination x invalidation)
 	@./scripts/check_store_grid.sh
 safety-comments: ## Gate: every stdlib unsafe block states its invariant
-safety-figures: ## Gate: the figures doc/SAFETY.md section 5 quotes match the tree
+safety-figures: ## Gate: safety-figures selftest, doc/SAFETY.md §5 stamp, and small-page counts
+figures-check: ## Gate: milestone figures in docs match the tree
+	@./scripts/check_safety_figures.sh --milestone
 exhaustive: ## Gate: transfer functions marked // exhaustive have no wildcard arm
 route-coverage: $(TARGET) ## Gate: every route a safety-matrix row lists has a probe
 temp-names: ## Gate: no expected diagnostic names a compiler temporary by id
