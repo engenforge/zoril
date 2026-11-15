@@ -2,11 +2,12 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +bench +testinfra +AI-G @main A record commit that loses a race is retried, the figures row carries the bare version, and the rule names all four record files id:h1dj3
+- [x] +bench +testinfra +AI-G @main A record commit that loses a race is retried, the figures row carries the bare version, and the rule names all four record files id:h1dj3
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** after id:tmydc, which runs one measurement at a time and does not need it; found by the check-in id:ev54n.
     > **Check-in:** reviewed in id:269a6.
+    > **Completed:** 2026-11-15 git:35bc5f7
 
     - **Found by the check-in id:ev54n:**
       1. Four gate runs started together against one records work tree (a scratch one): all four rows were appended intact and one commit carried them all, but three runs ended with exit 1 and `[FAIL] bench records: the row was appended to ... but not committed: fatal: Unable to create '.../index.lock'` (or `cannot lock ref 'HEAD'`). Two sessions that run a preflight at the same time on one host would each see the bench step fail although nothing was lost.
@@ -23,6 +24,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `rg -n 'figures_history' AGENTS.md doc/developer_guide.md`; quote the line numbers.
       - C4: `make test`; quote its `Total:` line. No `src/`, `stdlib/` or `tools/` file changes, so no preflight (`git diff --stat HEAD` shows it).
       - C5: commit on `main`, add `**Awaiting review:**` with C2 to C4, `tm done`, and stop at the check-in id:269a6.
+    - **Awaiting review:** `sh scripts/test_bench_threshold_gate.sh`, `rg -n 'figures_history' AGENTS.md doc/developer_guide.md`, `make test`.
+    - **Completion note:**
+      - C1: before: four concurrent `--force --check-thresholds-only` runs against one scratch `records` worktree exited `1 0 1 1` (one succeeded; three failed with `cannot lock ref 'HEAD'` or `Unable to create '.../index.lock': File exists`).
+      - C2: after: `sh scripts/test_bench_threshold_gate.sh` printed `[PASS] R6: four concurrent record commits all exit 0 with 4 rows and clean status`, `[PASS] R7: persistent lock fails with appended but not committed`, `[PASS] F4: figures row third field is bare version (0.1.0-alpha-176-g50b1e8f)`, and last line `All bench threshold gate tests passed.`. With retry removed (`-lt 1`), R6 failed: `[FAIL] R6: concurrent record commits failed (fail=1 rows=4 status='')`. With the "already committed" `status --porcelain` check removed, R6 failed: `[FAIL] R6: concurrent record commits failed (fail=1 rows=4 status='')`. Restored both.
+      - C3: `rg -n 'figures_history' AGENTS.md doc/developer_guide.md` printed `AGENTS.md:38` and `doc/developer_guide.md:202`.
+      - C4: `git diff --stat HEAD` changed only `AGENTS.md`, `doc/developer_guide.md`, `scripts/lib/records.sh`, `scripts/record_figures.sh`, `scripts/test_bench_threshold_gate.sh` (no `src/`, `stdlib/` or `tools/`). `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.4s)`.
+      - C5: committed on `main` as git:35bc5f7.
 
 - [ ] +bench +testinfra +AI-G @main The runtime measure is six programs against `gcc -O2`, recorded per run and gated on their geometric mean id:9d99n
     > **Created:** 2026-11-15
@@ -48,6 +56,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: a real run, `sh scripts/bench_threshold_check.sh > build/runtime-run.log 2>&1`: quote the `[NEW]` line, the six rows it appended, the three commits on `records` (speed, runtime, gate), and `git status --short` of the code tree (nothing). Do not re-record the baseline: that is the next task's.
       - C4: `make test`, then `make preflight-changed`; quote each `Total:` line and the time of the bench step from `build/preflight-timings.tsv` before and after (expected: about 40 s more).
       - C5: commit on `main`, add `**Awaiting review:**` with C2 to C4, `tm done`, and stop at the check-in id:269a6.
+    - **Awaiting review:** `sh scripts/test_bench_threshold_gate.sh`, `rg -n 'figures_history' AGENTS.md doc/developer_guide.md`, `make test`.
+    - **Completion note:**
+      - C1: before: four concurrent `--force --check-thresholds-only` runs against one scratch `records` worktree exited `1 0 1 1` (one succeeded; three failed with `cannot lock ref 'HEAD'` or `Unable to create '.../index.lock': File exists`).
+      - C2: after: `sh scripts/test_bench_threshold_gate.sh` printed `[PASS] R6: four concurrent record commits all exit 0 with 4 rows and clean status`, `[PASS] R7: persistent lock fails with appended but not committed`, `[PASS] F4: figures row third field is bare version (0.1.0-alpha-176-g50b1e8f)`, and last line `All bench threshold gate tests passed.`. With retry removed (`-lt 1`), R6 failed: `[FAIL] R6: concurrent record commits failed (fail=1 rows=4 status='')`. With the "already committed" `status --porcelain` check removed, R6 failed: `[FAIL] R6: concurrent record commits failed (fail=1 rows=4 status='')`. Restored both.
+      - C3: `rg -n 'figures_history' AGENTS.md doc/developer_guide.md` printed `AGENTS.md:38` and `doc/developer_guide.md:202`.
+      - C4: `git diff --stat HEAD` changed only `AGENTS.md`, `doc/developer_guide.md`, `scripts/lib/records.sh`, `scripts/record_figures.sh`, `scripts/test_bench_threshold_gate.sh` (no `src/`, `stdlib/` or `tools/`). `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.4s)`.
+      - C5: committed on `main` as git:35bc5f7.
 
 - [ ] +bench +review +AI-D @main @checkin Review of the record commit retry and the two small record fixes id:269a6
     > **Created:** 2026-11-15
