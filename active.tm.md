@@ -2,17 +2,146 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +safety +measurement +AI-D @main Measure every site a refusal of non-`Copy` by-value slice element reads would refuse, and settle the rule for the implementation (gap_92) id:cx46y
+- [x] +safety +measurement +AI-D @main Measure every site a refusal of non-`Copy` by-value slice element reads would refuse, and settle the rule for the implementation (gap_92) id:cx46y
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** after id:v0bwt, whose decision it follows up.
     > **Depends:** id:qmms1
     > **Note:** the rule extends id:760hd's refusal in `check_place_use`, so it is measured on that code once its check-in has reviewed it.
+    > **Completed:** 2026-11-15 git:8aff926
 
     - **Decided in id:v0bwt (the maintainer, 2026-11-15):** a by-value read of a slice element that is not `Copy` is refused, as `*r` through `&T` is. `gap_92` (`bench/safety_matrix/probes/gap_92_vec_duplicated_out_of_slice_element.zrl`) is the probe it closes.
     - **Do:** in a scratch worktree under `build/` (never replace `build/zoril`), widen id:760hd's element refusal from `type_has_drop` to every type that is not `Copy`, and list every site it refuses in `src/`, the `stdlib/` modules, `tools/` and `tests/`, with the rewrite of each (`&a[i]`, a clone, or a field read). The compiler stops at the first module that fails, so rewrite and rebuild until the tree builds and `make test` runs. Known so far (id:v0bwt): `src/check_zir.zrl:1971`, and in `tools/zbuild/src/`: `manifest.zrl:135`, `manifest.zrl:182`, `build.zrl:297`, `build.zrl:630`, `main.zrl:67`.
     - **Settle, each with a probe:** (1) whether the read out of a local array is refused too, or still moves the whole array as today (`let v = a[0];` then `a[0]` is `use of moved value`); (2) the diagnostic text (`cannot move out of borrow`, or id:760hd's element message); (3) the pattern, `?` and `for` forms id:760hd's twenty tests cover, each tried with a `Vec` and a `Box` element; (4) that every rewrite in `src/` and in the `stdlib/` modules it imports is accepted by the pinned stage1 and by the compiler before the change; (5) whether id:z0021's `Box` shape (`let x = s[i]` with `s: &[Box<T>]`) is closed by it.
     - **Result:** the `+AI-G` implementation task or tasks, added after this one: the rewrites of the tree first, in a commit that builds under the old rule, then the rule, with the patch, the tests, the numbered **Checks:** (a take-out check among them, the rejection differential with `REJECT_DIFF_NO_CACHE=1`, the flip of `gap_92` and its entries in `doc/spec/safety_model.md` and `doc/SAFETY.md`) and a check-in after them. If the site count makes the rule cost more than the six sites the decision weighed, say so to the maintainer with the count before writing the implementation.
+    - **Measured (2026-11-15, on git:1cc65c1):**
+      - The sites. A compiler patched to print a note at each by-value read of an element that is not `Copy` and needs no drop (instead of refusing it; the patch is `build/cx46y/note.awk` applied to `src/check_zir.zrl`: a `note_elem_move` beside `report_error`, called where the two `type_has_drop` conditions of `check_place_use` are false) compiled `src/`, the four tools, the `bench/` programs and, through `make test` with the compiler wrapped to collect the notes, every test and probe. Twelve sites, all `let x = slice[i];`: `src/check_zir.zrl:1988` (`preds[bj]` passed to `merge_states`); `tools/zbuild/src/build.zrl:297`, `:630`, `main.zrl:67`, `manifest.zrl:135`, `:182`; `tools/zman/src/render.zrl:128`, `:141`, `:150`, `:158`, `:167`, `:181`. None in `stdlib/`, `tools/zilc`, `tools/ztest`, `bench/` or `tests/`; the one probe is `gap_92`.
+      - The rewrites, each built: a reference in place of the copy at ten sites; `find_entry` returns `Option<&Entry>` and `reuse_frozen` clones the `deps` it used to move; `load_manifest` edits the entries in place. With them alone `make test` gave `Total: 3409 run, 3409 passed, 0 failed, 96 skipped (122.2s)`. They are id:pex09.
+      - (1) The local-array form is refused too: one rule for an index step, as id:760hd's is. Reasons and the maintainer's veto are in id:v0rsm.
+      - (2) The message is id:760hd's, `cannot move out of an array or slice element`.
+      - (3) Forms, each tried with a `Vec`, a `Box`, a struct holding a `Vec` or a `&mut` element (programs in `build/cx46y/p/*.zrl` on the measuring host): `let` on a slice, a mutable slice and a local array, a field of an element, a `match` payload, `if let`, `?`, a tuple pattern, an argument, a returned value, a struct literal, an assignment, element to element, a by-value `self`, a generic `first<T>`, a `Vec` of `Vec`s. Fourteen of them fault today (`exit 139`), and the rule refuses all. `for x in a` then `*x` and a closure reading `a[0]` were refused already. Accepted before and after: `&a[0]`, a method on `a[0]` in place, a `Copy` field, an assignment to `a[0]`, a match on `&a[0]`, a match that binds nothing, and a slice or `&T` element read by value.
+      - (4) Stage1: with the rewrites the tree builds through stage1 (`rm build/zoril`, `make` in the scratch worktree) and with the compiler of git:1cc65c1; with the rule added the new compiler builds itself, `zilc`, `zbuild`, `zman` and `ztest`.
+      - (5) id:z0021's `Box` shape (`let x = s[i]` with a slice of `Box<i32>`) is accepted today and refused by the rule (`slice_box_let.zrl` in id:v0rsm).
+      - With the rule and the rewrites: `make test` -> `Total: 3413 run, 3409 passed, 4 failed, 94 skipped (122.6s)`, the four being `gap_92` now refused (two modes) and the two line-count figures; the uncached differential against the unchanged tree: `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 2 newly refused, of 69158 programs against HEAD`, both `gap_92`.
+      - **Found:** a `&mut` read twice out of a slice element (`[mut &mut Vec<i32>]`) gives two live `&mut` to one `Vec`; a view taken through one is written after pushes through the other reallocate the buffer (exit 77). The same reads through `&mut &mut Vec<i32>` are refused. Same route class as `gap_92`, and refused by the rule. Recorded as `gap_93_mut_ref_duplicated_out_of_slice_element.zrl` with its Known gaps entry, git:8aff926 (`make test-changed BASE=HEAD` -> `Total: 3411 run, 3411 passed, 0 failed, 98 skipped (122.3s)`).
+      - The cost is twelve sites, not the six the decision weighed, all with the same mechanical rewrite and none outside `src/` and two tools; not a change of kind, so the implementation is written: id:pex09 (the rewrites), id:v0rsm (the rule), with id:025c3 (a spec sentence the check-in id:qmms1 asked for) and the check-in id:48h1s.
+
+- [ ] +refactor +AI-G @main The compiler, zbuild and zman read a non-`Copy` slice element through a reference, not by value id:pex09
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** after id:cx46y, which measured these sites; before id:v0rsm, which it blocks.
+    > **Check-in:** reviewed in id:48h1s.
+
+    - **Why:** id:v0rsm refuses a by-value read of an array or slice element that is not `Copy` (the maintainer's decision, id:v0bwt). id:cx46y measured every such read in the tree: twelve, listed here. They are rewritten first, in a commit that builds under today's rule, so that the compiler that carries the new rule can build the tree. No behaviour changes.
+    - **The sites and their rewrite** (measured and built in id:cx46y; the same diff is `build/cx46y/rewrites.patch` on the host that ran it, `git apply` it if it is there, otherwise make these edits by hand):
+      - `src/check_zir.zrl`: in the call of `merge_states`, the argument `preds[bj],` becomes `&preds[bj],`; in `fn merge_states`, the parameter `predecessors: Vec<u32>,` becomes `predecessors: &Vec<u32>,`. The body is unchanged.
+      - `tools/zman/src/render.zrl`: the five `let item = all[i];` and the one `let method = all[j];` become `let item = &all[i];` and `let method = &all[j];`; every `is_internal(&item)` becomes `is_internal(item)`, `is_internal(&method)` becomes `is_internal(method)`, and the two `put_declaration(out, &item, ..)` become `put_declaration(out, item, ..)`.
+      - `tools/zbuild/src/manifest.zrl`: `pub fn find_entry(m: &Manifest, path: [u8]) -> Option<Entry>` returns `Option<&Entry>`; both `let e = m.entries.as_slice()[i];` (in `find_entry` and in the function that writes the manifest) become `let e = &m.entries.as_slice()[i];`.
+      - `tools/zbuild/src/build.zrl`: `reuse_frozen`'s parameter `prev: Option<Entry>` becomes `prev: Option<&Entry>`; in it, the comment line `` // `deps` owns storage, so it moves last: a partial move marks the whole `e` moved. `` is deleted and `out.deps = e.deps;` becomes `out.deps = unsafe { e.deps.clone_in_raw(ctx.arena) };`; `source_state`'s parameter `prev: &Option<Entry>,` becomes `prev: &Option<&Entry>,`; `let dr = results.as_slice()[dep_idxs.as_slice()[i]];` becomes `let dr = &results.as_slice()[dep_idxs.as_slice()[i]];`; `let e = manifest.entries.as_slice()[i];` becomes `let e = &manifest.entries.as_slice()[i];`.
+      - `tools/zbuild/src/main.zrl`, `load_manifest`: the loop that copied each entry into a second `Vec` edits the entries in place. `let mut fixed = unsafe { Vec::<Entry>.new_in_raw(arena) };` becomes `let entries = m.entries.as_mut_slice();`; `while i < m.entries.len() {` becomes `while i < entries.len {`; `let mut e = m.entries.as_slice()[i];` becomes `let object = entries[i].object;`; the condition reads `object.len > 0 && object[0] != '/' as u8`; the assignment becomes `entries[i].object = join_path(cache_dir, object, arena);`; `fixed.push(e);` and `m.entries = fixed;` are deleted.
+    - **Measured in id:cx46y with exactly these edits on git:1cc65c1:** the tree builds with today's compiler and through stage1 (`rm build/zoril` in a scratch worktree, then `make`), and `make test` there gave `Total: 3409 run, 3409 passed, 0 failed, 96 skipped (122.2s)` (one test short of the tree's count: a file of the scratch tree was moved aside by mistake during that run; nothing failed).
+    - **Checks:**
+      - C1: `make` after the edits, no warning; quote its last line.
+      - C2: `git diff --stat HEAD` names these five files and no other; quote it.
+      - C3: no by-value read is left at the sites: `grep -n 'let item = all\[\|let method = all\[\|as_slice()\[i\];\|as_slice()\[dep_idxs' tools/zman/src/render.zrl tools/zbuild/src/*.zrl` prints only lines that begin the right-hand side with `&` (quote the output), and `grep -n 'preds\[bj\],' src/check_zir.zrl` prints the `&preds[bj],` line.
+      - C4: `make test`, then `make preflight-changed`; quote each `Total:` line. A failure in the `zbuild` tests or scenarios: stop and report, do not change a test to fit.
+      - C5: commit on `main` (the note says the fuzz record is stale for `src/` and `tools/zbuild/`), add `**Awaiting review:**` with C1 to C4, `tm done`. There is no take-out check here: the change is a refactor, and id:v0rsm's C4 is the check that fails without it.
+
+- [ ] +safety +tests +AI-G @main A value that is not `Copy` is not read by value out of an array or slice element (gap_92, gap_93) id:v0rsm
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** after id:pex09, which it needs; written by id:cx46y from the maintainer's decision id:v0bwt.
+    > **Depends:** id:pex09
+    > **Depends note:** with this rule the compiler refuses the twelve sites id:pex09 rewrites, so the tree does not build without it.
+    > **Check-in:** a fix to a safety rule; reviewed in id:48h1s.
+
+    - **Probes:** `bench/safety_matrix/probes/gap_92_vec_duplicated_out_of_slice_element.zrl` (`known_gap`, a fault) and `gap_93_mut_ref_duplicated_out_of_slice_element.zrl` (`known_gap`, exit 77, git:8aff926).
+    - **Decided (the maintainer, id:v0bwt):** a by-value read of a slice element that is not `Copy` is refused.
+    - **Settled in id:cx46y:**
+      - The rule is id:760hd's with its `type_has_drop` condition removed: any by-value read of a place with an index step whose type is not `Copy` is refused, with id:760hd's message `cannot move out of an array or slice element`. One rule and one message for a value that needs a drop and one that does not.
+      - It covers a local array as well as a slice. Today `let x = a[0];` on a local array of `Vec`s moves the whole array (a second read is `use of moved value 'a'`); `doc/spec/` does not say what that read does, no program in `src/`, `stdlib/`, `tools/` or `tests/` relies on it (measured, below), and id:760hd already refuses it for a value that needs a drop. The maintainer was told of this choice when id:cx46y was reported; if the maintainer objects, stop and report instead of starting.
+      - Measured on a prototype of exactly this change over git:1cc65c1 with id:pex09's rewrites: `make test` failed only on `gap_92` (`known gap closed? compile error now`, whole-program and `zbuild`) and the two line-count figures (`Total: 3413 run, 3409 passed, 4 failed, 94 skipped (122.6s)`); `REJECT_DIFF_NO_CACHE=1 sh scripts/check_reject_diff.sh HEAD` gave `reject-diff: base verdicts: fresh (no cache); base front end 110 s` and `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 2 newly refused, of 69158 programs against HEAD`, both `gap_92` (`gap_93` did not exist yet in that tree).
+    - **Settled change, `src/check_zir.zrl`, `check_place_use` only:** delete the line `&& self.type_has_drop(self.get_place_type(place, locals), 0 as usize) {` in two places and close the condition on the line before it, so that the two blocks read:
+
+    ```diff
+    -            if why == 3 as u32
+    -                && self.type_has_drop(self.get_place_type(place, locals), 0 as usize) {
+    +            if why == 3 as u32 {
+                     self.report_error("cannot move out of an array or slice element", span);
+    ```
+
+    - and
+
+    ```diff
+    -        if self.place_has_index(place)
+    -            && self.type_has_drop(self.get_place_type(place, locals), 0 as usize) {
+    +        if self.place_has_index(place) {
+                 self.report_error("cannot move out of an array or slice element", span);
+    ```
+
+    - Nothing else in the checker or the lowering changes. `type_has_drop` keeps its other callers.
+    - **Do, with the change:**
+      - Flip both probes: `// expected: compile_reject`, `// EXPECT: cannot move out of an array or slice element`, with the `// gap:` and `// observed:` lines removed.
+      - `doc/spec/safety_model.md`: remove the two Known gaps entries; "the 20 holes" becomes "the 18 holes"; in the **Use After Move (Linear/Owned)** row, before ` [side: safe;`, add `; reading a value that is not `Copy` by value out of an array or slice element (`let v = a[0];`) is rejected, since the array or slice still holds it`. Keep `bench/safety_matrix/matrix.md` in step with the row (`make md-fmt`; the `safety-model` gate compares them).
+      - `doc/SAFETY.md`: remove the class (N) bullet of §6; `classes (M) and (N), which are liveness and ownership holes and need rules of their own` becomes `class (M), which is a liveness hole and needs a rule of its own`; `compile_reject` 375 to 377 and `known_gap` 48 to 46 (the count sentence of §5.1 and the sentence above the class list); the compiler line count, and `doc/spec/unsafe_policy.md`'s, as `sh scripts/check_safety_figures.sh --all` asks.
+      - `doc/spec/surface_syntax.md` §7.1, a new paragraph after `Use-after-move is a compile-time error.`: `A value that is not `Copy` cannot be read by value out of an array or slice element: `let v = a[i];`, a pattern, `if let` or `?` that binds part of `a[i]` by value, and `a[i]` as an argument, a returned value, an assigned value or a field of a literal are rejected (`cannot move out of an array or slice element`; `tests/language/memory/element_move/`). The array or slice still holds the element, so the read would leave two owners of it. Read it through a reference (`&a[i]`), use it in place (`a[i].push(1)`, `a[i].n`), or `clone()` it.`
+      - Tests, twenty new files in `tests/language/memory/element_move/`. They are in `build/cx46y/newtests/` on the host that ran id:cx46y (copy them if they are there). Otherwise write them: nineteen with `// expected compile fail` and `// EXPECT: cannot move out of an array or slice element`, each a `main` that builds the array and calls `g`, with `import "vec.zrl"; use vec::Vec;` where a `Vec` is used and, where named, `struct N { v: Vec<i32>, n: i32 }`, `enum V { Some(Vec<i32>), None }`, `enum O { Some(Box<i32>), None }`, `enum Result<T, E> { Ok(T), Err(E) }`:
+      - `slice_vec_let.zrl`: `fn g(a: [Vec<i32>]) { let v1 = a[0]; }`
+      - `mut_slice_vec_let.zrl`: `fn g(a: [mut Vec<i32>]) { let v1 = a[0]; }`
+      - `array_vec_let.zrl`: in `main`, `let mut a = [v]; let v1 = a[0]; return 0;` (no later use of `a`, so that it builds before the change)
+      - `slice_box_let.zrl`: `fn g(a: [Box<i32>]) -> i32 { let b = a[0]; return *b; }`, called with `[box 5]`
+      - `slice_mut_ref_let.zrl`: `fn g(a: [mut &mut i32]) { let r = a[0]; *r = 2; }`, called with `&mut a` where `let mut a = [&mut n];`
+      - `slice_vec_struct_let.zrl`: `fn g(a: [N]) { let x = a[0]; }`
+      - `slice_vec_field_of_element.zrl`: `fn g(a: [N]) { let x = a[0].v; }`
+      - `slice_vec_match_payload.zrl`: `fn g(a: [V]) { match a[0] { V.Some(x) => {}, _ => {} } }`
+      - `slice_box_if_let.zrl`: `fn g(a: [O]) -> i32 { if let O.Some(b) = a[0] { return *b; } return 0; }`
+      - `slice_vec_try.zrl`: `fn g(a: [Result<Vec<i32>, i32>]) -> Result<i32, i32> { let x = a[0]?; return Result.Ok(1); }`
+      - `slice_vec_tuple_pattern.zrl`: `fn g(a: [(Vec<i32>, i32)]) { let (x, n) = a[0]; }`
+      - `slice_vec_as_argument.zrl`: `fn sink(x: Vec<i32>) {}`, `fn g(a: [Vec<i32>]) { sink(a[0]); }`
+      - `slice_vec_returned.zrl`: `fn g(a: [Vec<i32>]) -> Vec<i32> { return a[0]; }`
+      - `slice_vec_in_struct_literal.zrl`: `fn g(a: [Vec<i32>]) { let s = N { v: a[0], n: 1 }; }`
+      - `slice_vec_assigned.zrl`: `fn g(a: [Vec<i32>]) { let mut x = Vec::<i32>.new(); x = a[0]; }`
+      - `slice_vec_element_to_element.zrl`: `fn g(a: [mut Vec<i32>]) { a[1] = a[0]; }`
+      - `slice_vec_by_value_self.zrl`: `impl N { fn eat(self: N) {} }`, `fn g(a: [N]) { a[0].eat(); }`
+      - `slice_vec_generic.zrl`: `fn first<T>(a: [T]) -> T { return a[0]; }`, `let x = first::<Vec<i32>>(&a);` in `main`
+      - `vec_of_vec_element.zrl`: in `main`, `let mut outer = Vec::<Vec<i32>>.new(); outer.push(inner); let x = outer[0];`
+      - `element_non_copy_read_without_move.zrl` (`// expected exit 0`), the reads that stay accepted, each checked for its value: `let x = &a[0]; return x.as_slice()[0];` on `[Vec<i32>]`; `a[0].push(4); return a[0].len() as i32;` on `[mut Vec<i32>]`; `let n = a[0].n;` on `[N]`; `a[0].free(); a[0] = w;` on `[mut Vec<i32>]`; `match &a[0] { V.Some(x) => { return x.len() as i32; }, V.None => { return 9; } }`; `match a[0] { V.None => { return 9; }, V.Some(_) => { return 0; } }`; `let s = a[0]; return s[0];` on `[[i32]]`; `let r = a[0]; return *r;` on `[&i32]`. If any is refused, stop and report.
+      - In `doc/tasks/future.tm.md`, a **Found** bullet on id:z0021 saying that its slice shape (`let x = s[i]` with `s: &[Box<T>]`) is refused by this task's rule with the message `cannot move out of an array or slice element`, with the test `slice_box_let.zrl`; leave the task where it is.
+    - **Checks:** (`R <file>` is `mkdir -p build/v0rsm && timeout -k 5s 60s build/zbuild -I stdlib=stdlib --cache-dir build/v0rsm/cache -o build/v0rsm/p.bin <file> && { build/v0rsm/p.bin; echo "exit $?"; }`: it prints the first `error:` line of a refused program, or `exit N` of one that built.)
+      - C1: before the change, `R` on `gap_92` (a fault, `exit 139`), on `gap_93` (`exit 77`), on the nineteen reject tests (each `exit 0`: measured in id:cx46y) and on the accept test (`exit 0`); quote each line.
+      - C2: after the change and `make` (no warning), `./scripts/test.sh tests/language/memory/element_move`; quote its `Total:` line (the forty tests of the directory pass).
+      - C3: take each hunk out alone (put its `&& self.type_has_drop(..)` line back), `make`, rerun C2 and quote which tests fail (expected without the first: tests that bind a payload by value, such as `slice_vec_match_payload`, `slice_box_if_let`, `slice_vec_try`; without the second: the others; record what is seen, and a hunk whose removal fails no test is reported). Restore, `make`, rerun C2.
+      - C4: the rewrites of id:pex09 are needed: in `src/check_zir.zrl` put `preds[bj],` back for `&preds[bj],` and `predecessors: Vec<u32>,` back, run `timeout -k 5s 120s build/zoril src/main.zrl -I stdlib=stdlib -I src -I build/gen -o build/v0rsm/main.zil` and quote its error line (expected: `src/check_zir.zrl:` with `cannot move out of an array or slice element`). Restore both lines and `make`.
+      - C5: `sh scripts/run_safety_matrix.sh` (`Mismatches: 0`), `sh scripts/check_safety_figures.sh --all`, `sh scripts/check_safety_model.sh`; quote each verdict line.
+      - C6: `make test`, then `REJECT_DIFF_NO_CACHE=1 make preflight-changed`; quote each `Total:` line and the `reject-diff:` lines, and list every newly refused program (expected: `gap_92` and `gap_93`, each whole-program and under `zbuild`). Any other: stop and report, with the program; do not change it to fit.
+      - C7: commit on `main` (the note says the fuzz record is stale for `src/`), add `**Awaiting review:**` with C2 to C6, `tm done`.
+
+- [ ] +docs +AI-G @main The spec says a closure may not move a part out of a capture, and names the tests id:025c3
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** after id:v0rsm, in the batch the check-in id:48h1s reviews; found by the check-in id:qmms1 (finding 1). It depends on nothing.
+
+    - **Why:** id:613zw made the compiler refuse a move of any part of a closure capture. `doc/spec/surface_syntax.md` §5.2 (_What a closure captures, and how_, the bullet **An owning value is moved**) still gives whole-value examples only, and does not cite the tests.
+    - **Do:** in that bullet, replace `so moving out of a capture (`return v;`, `let w = v;`) or explicitly dropping it (`@drop(v);`) inside the closure is rejected (`cannot move out of a closure capture`; `err_closure_capture_move_out.zrl`, `err_closure_capture_drop_box.zrl`, `err_closure_capture_drop_vec.zrl`)` by `so moving a capture or any part of it out (`return v;`, `let w = v;`, a field or tuple part as in `let s = w.s;`, a payload bound by value by `match`, `if let`, a `let` pattern or `?`) or explicitly dropping it (`@drop(v);`) inside the closure is rejected (`cannot move out of a closure capture`; `err_closure_capture_move_out.zrl`, `err_closure_capture_drop_box.zrl`, `err_closure_capture_drop_vec.zrl`, and `closure_capture_field_moved.zrl`, `closure_capture_tuple_part_moved.zrl`, `closure_capture_struct_pattern_moved.zrl`, `closure_capture_match_payload_moved.zrl`, `closure_capture_if_let_payload_moved.zrl`, `closure_capture_let_pattern_payload_moved.zrl` and `closure_capture_try_payload_moved.zrl` under `tests/language/closures/`)`. Directly after that sentence's closing clause (`: doing so inside one call would leave the environment dangling for the next.`) add `The same holds for a captured value with a `Drop` impl, or a struct, enum or tuple holding one: reading it, matching it by reference and reading its `Copy` parts stay allowed (`tests/language/closures/closure_capture_read_without_move.zrl`).` No other file changes.
+    - **Checks:**
+      - C1: each test the new text names exists: `ls tests/language/closures/closure_capture_field_moved.zrl tests/language/closures/closure_capture_tuple_part_moved.zrl tests/language/closures/closure_capture_struct_pattern_moved.zrl tests/language/closures/closure_capture_match_payload_moved.zrl tests/language/closures/closure_capture_if_let_payload_moved.zrl tests/language/closures/closure_capture_let_pattern_payload_moved.zrl tests/language/closures/closure_capture_try_payload_moved.zrl tests/language/closures/closure_capture_read_without_move.zrl` lists eight files; and `./scripts/test.sh tests/language/closures/closure_capture_*.zrl` passes (quote its `Total:` line).
+      - C2: `git diff --stat HEAD` names `doc/spec/surface_syntax.md` only.
+      - C3: `make test-changed BASE=HEAD` before the commit; quote its `Total:` line.
+      - C4: commit on `main`, add `**Awaiting review:**` with C1 to C3, `tm done`, and stop at the check-in id:48h1s.
+
+- [ ] +safety +review +AI-D @main @checkin Review of the element rewrites, the non-`Copy` element rule (gap_92, gap_93) and the capture spec text id:48h1s
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Depends:** id:pex09, id:v0rsm, id:025c3
+    > **Placed:** directly after the batch it reviews (a refactor the rule needs, a fix to a safety rule, and a spec change), by id:cx46y.
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` on `main` since git:8aff926.
+      - Re-run what each **Awaiting review:** bullet names. One uncached differential over the batch: `REJECT_DIFF_NO_CACHE=1 sh scripts/check_reject_diff.sh 8aff926`; expected newly refused: `gap_92` and `gap_93`, each twice, and nothing else; nothing newly accepted (id:pex09 changes no rule).
+      - id:pex09 changes no behaviour of `zbuild`: a build, a second build that reuses every module, a build after one source is deleted (the `[frozen]` path, whose `deps` are now cloned), and `zbuild --gc`, compared with the binary of git:8aff926.
+      - The id:cx46y probe programs (`build/cx46y/p/*.zrl` on the host that ran it): each `e*` and `b*` program that built is refused, and each `k*` program still exits 0.
+      - Sibling routes not yet probed: a non-`Copy` element read through a raw pointer index in `unsafe` (still allowed, and said so in the spec text?); an element of a `HashMap` or another stdlib container returned by value by its accessor; `for` over a `Vec` by value; a range index (`a[0..1]`) of non-`Copy` elements; a `[mut &mut T]` element reborrowed (`&mut *a[0]`) twice.
+      - The new §7.1 paragraph and the **Use After Move (Linear/Owned)** row say what the compiler does; `doc/SAFETY.md` has no class (N) and its counts match the tree.
 
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
