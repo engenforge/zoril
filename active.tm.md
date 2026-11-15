@@ -66,17 +66,28 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.6s)`. `make preflight-changed`: passed (`Total: 1277 run, 1277 passed, 0 failed, 0 skipped (77.9s)` for checked build). `build/preflight-timings.tsv` `bench` step: `40` before, `81` after (+41s).
       - C5: committed on `main` as git:03937b7; stopping at check-in id:269a6.
 
-- [ ] +bench +review +AI-D @main @checkin Review of the record commit retry and the two small record fixes id:269a6
+- [x] +bench +review +AI-D @main @checkin Review of the record commit retry and the two small record fixes id:269a6
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Depends:** id:h1dj3, id:9d99n
     > **Depends changed (2026-11-15):** id:9d99n (the six-program runtime record) joined the batch.
     > **Placed:** directly after the task it reviews.
+    > **Completed:** 2026-11-15 git:03937b7
 
     - **Checks:**
       - Re-read the queue and `git log -p` on `main` since git:50b1e8f; re-run what the **Awaiting review:** bullet names.
       - The retry hides no loss: a row that is appended and never committed (a lock that stays, a missing identity) still fails the run; a run whose row another run committed passes; eight runs at once.
       - id:9d99n: the six rows of a real run equal what `sh scripts/perf_gap.sh` prints within the noise of two runs; the geometric mean is the rows'; a program whose three builds disagree records nothing; what a wrong pass could hide: a slower program masked by the mean (plant one program 60% slower among six: the mean moves 8%, inside the tolerance; say whether a per-program limit is needed, with the spread of each program over five runs on this host).
+    - **Review (2026-11-15), at git:03937b7:** both tasks do what their text settles; nothing of the batch is reverted. Two defects found, each with a task (id:s72rr, id:2msct), and three matters for the maintainer in `future.tm.md` (id:69svf, id:rdpmh, id:sx4a3).
+      - **Re-run:** `sh scripts/test_bench_threshold_gate.sh` -> 29 `[PASS]` lines, R6, R7, F4 and T1 to T7 among them, last line `All bench threshold gate tests passed.`; `rg -n 'figures_history' AGENTS.md doc/developer_guide.md` -> `AGENTS.md:38`, `doc/developer_guide.md:202`; `make test` -> `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.3s)`; `make preflight-changed` -> exit 0, `Total: 1277 run, 1277 passed, 0 failed, 0 skipped (77.8s)` for the checked build, no mutation targets a changed file, the rejection differential skipped (no checker file differs from git:e5087d4), and its bench step (which is `scripts/bench_threshold_check.sh`, the real run) printed `[NEW]  runtime_geomean_vs_gcc_o2  2.314: this host's baseline has no value for it; ...` and `All performance thresholds within tolerance of baseline.` `git status --short` of the code tree afterwards: only the untracked `.claude/`.
+      - **The retry hides no loss (id:h1dj3)**, probed on scratch records work trees through `records_commit` itself. Eight runs at once: eight exits 0, all eight rows in `HEAD`, a clean status (one commit carried them). A lock that stays (`index.lock` planted): exit 1 after 4 s with `[FAIL] bench records: the row was appended to ... but not committed: fatal: Unable to create ... index.lock`, no row in `HEAD`. No identity (`user.useConfigOnly`, no global or environment configuration): exit 1 after 4 s with `... but not committed: Author identity unknown`, the file left staged. A row another commit already carried: exit 0 and no second commit. The four seconds are the cost of a real failure.
+      - **The six-program record (id:9d99n).** Five runs of `sh scripts/perf_gap.sh --tsv` on a quiet host (load 1.1) against the three recorded runs: Zoril ms `array_loop` 773 to 826 (recorded 784, 810), `fib` 696 to 699, `particles` 614 to 627, `qsort` 461 to 465, `sha` 250 to 252 (recorded 254, 232), `vm` 431 to 434: the recorded rows are what the script prints. The gate row's mean is the rows': 2.323 and 2.362 recomputed from the two recorded runs' rows equal the 18th field of their gate rows. Disagreeing builds: with a `gcc` on `PATH` that builds the sixth program (`vm`) to exit 3, the run prints `perf_gap: vm: exit codes differ (zoril 165, cproc 165, gcc 3)`, exits 1 and writes no file, the five measured programs included (rows are appended only after the last program).
+      - **What the mean hides, and the spread:** in id:69svf, with the figures. In short: the mean's noise over seven runs here is 2.3%; one program's ratio moves up to 16.1% (`array_loop`); one program 60% slower passes (`[OK]  runtime_geomean_vs_gcc_o2  2.537 (baseline 2.346, tol 15%)`, planted through the gate). Whether a limit for each program is added is the maintainer's (a new way for a preflight to fail); the recommendation there is yes at 30%, with the mean tightened to 8%.
+      - **Found 1 (id:s72rr):** a failed instruction count is recorded as an empty field and the run passes; `set -- $(gate_count ...) || exit 1` cannot see the failure. `--gate-record` has the same shape. id:f0zzh does not wait for the fix: it checks its rows for an empty field.
+      - **Found 2 (id:2msct):** `make test-changed` selects neither `bench-threshold-gate` nor `bench-contention` for a change to `scripts/perf_gap.sh` or `scripts/bench_cross_lang.sh`, the scripts those scenarios test.
+      - **For the maintainer:** the `fib` confirmation retry is now reached only by two test cases with a tolerance file of their own (id:rdpmh); the scenario calls git inside `make test` and exits 127 without it, which dates from id:455bt (id:sx4a3).
+      - **Small, no task:** the first recorded run's rows carry `0.1.0-alpha-177-g35bc5f7-dirty` as the version beside commit `03937b7` (the compiler was built before the commit and no compiled file changed; the row is kept as recorded).
+      - **Order (decided here, delegated by the maintainer):** id:s72rr, id:2msct and their check-in id:a55tf are placed after id:f0zzh and not before it: id:f0zzh is a measurement for the deep-thinking session, depends on neither, and would otherwise wait a round for nothing.
 
 - [ ] +bench +measurement +AI-D @main Backfill the six-program runtime record and the instruction counts, and re-record this host's baseline id:f0zzh
     > **Created:** 2026-11-15
@@ -87,6 +98,51 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Do:** with id:tmydc's driver (its text is in that task, in `completed.tm.md`), run id:9d99n's `scripts/perf_gap.sh --record-run --kind backfill` for the same 42 commits (git:7417fdc and the 41 first-parent commits up to git:e5087d4 that changed `src/`, `stdlib/`, `rt/`, `tools/zilc/` or `tools/zbuild/`), today's harness beside each commit's `build/` and `stdlib/`, one at a time on a quiet host, each commit's rows committed on `records` with the measured sha. The instruction counts are exact, so their series shows every commit that changed generated code; the times are today's measurement. Then `sh scripts/bench_cross_lang.sh --record` on `main`'s tip, so this host's baseline carries `runtime_geomean_vs_gcc_o2` and the new measure is gated.
     - **Report in the task:** each commit where a program's instruction count moved, with the count before and after; each step of more than 5% in a program's ratio to gcc; and whether `bench/perf_gap/gate_baseline.tsv`'s two re-recordings line up with the counts.
     - **Checks:** C1 the number of `backfill` rows in `bench/records/runtime_history.tsv` is 42 times 6, or the commits that failed are named with their error; C2 after `--record`, a `sh scripts/bench_threshold_check.sh` run prints `[OK]  runtime_geomean_vs_gcc_o2`, not `[NEW]`; C3 `git status --short` of the code tree is empty.
+    - **Added by the check-in id:269a6 (2026-11-15):** C4 no `backfill` or `baseline` row has an empty `instructions` field (`awk -F'\t' '($7=="backfill"||$7=="baseline") && $13==""' bench/records/runtime_history.tsv | wc -l` prints 0): until id:s72rr a failed count is written as an empty field and the run passes. `scripts/perf_gap.sh --record-run` on its own makes no contention check (its `status` is `ok` unless `RUN_STATUS` says otherwise), so the driver reads the load before each commit and waits for a quiet host.
+
+- [ ] +bench +testinfra +AI-G @main A failed instruction count stops `perf_gap.sh`'s record run and its baseline recording id:s72rr
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Found by:** the check-in id:269a6.
+    > **Placed:** after id:f0zzh, which does not wait for it (ordered by the reviewing session of id:269a6): id:f0zzh checks its own rows for an empty `instructions` field on a host where valgrind works, so this fix blocks nothing.
+    > **Check-in:** reviewed in id:a55tf.
+
+    - **Now:** `scripts/perf_gap.sh` reads an instruction count with `set -- $(gate_count "$n") || exit 1` at three places (`--gate-record`, `--gate-check`, `--record-run`). `gate_count` reports a failure with `fail`, which exits only the command substitution's subshell, and `set` then returns 0, so `|| exit 1` never runs (`sh -c 'f(){ exit 1; }; set -- $(f) || echo caught; echo "status=$?"'` prints `status=0`). Measured at git:03937b7 with a `valgrind` first on `PATH` that prints `valgrind: broken` and exits 2: `PERF_GAP_OUT=<scratch> RUNTIME_HISTORY=<scratch>/rt.tsv sh scripts/perf_gap.sh -n 1 --record-run fib` prints `perf_gap: fib: callgrind reported no instruction count (see ...)`, then `runtime_geomean_vs_gcc_o2 3.593`, exits 0, and the row it wrote ends in an empty `instructions` field. The record then reads as a host without valgrind (where an empty field is the design) although the count failed. `--gate-record` has the same shape: it would write a baseline row with two empty fields and move it over `bench/perf_gap/gate_baseline.tsv`. `--gate-check` fails already, by accident (`[FAIL] <name> exits , baseline <N>`).
+    - **Settled:** at each of the three places, capture first and test the capture's status: `_gc=$(gate_count "$n") || exit 1`, then `set -- $_gc`. Nothing else changes: with no `valgrind` on `PATH` the record run still leaves the field empty and passes (T3).
+    - **Tests** (in `scripts/test_bench_threshold_gate.sh`, beside T1 to T7, with `setup_pg_scratch`): T8, a `valgrind` stub that prints nothing to stderr and exits 2: `--record-run` exits non-zero, its output has `callgrind reported no instruction count`, and `bench/records/runtime_history.tsv` does not exist. T9, the same stub with `--gate-record` and a `bench/perf_gap/gate_baseline.tsv` holding one line `fib`, `1`, `0` (tab-separated): non-zero exit and the file still holds exactly that line.
+    - **Checks:**
+      - C1: before: the two commands of T8 and T9 by hand on a scratch tree; quote each exit status (expected 0 and 0), the row with its empty last field, and the baseline file's content after the run.
+      - C2: after: `sh scripts/test_bench_threshold_gate.sh`; quote the `[PASS]` lines of T3, T8 and T9 and its last line. Put `set -- $(gate_count "$n") || exit 1` back at the `--record-run` place alone and quote T8 failing; the same at the `--gate-record` place for T9; restore.
+      - C3: `sh scripts/perf_gap.sh --gate-check`; quote its six `[PASS]` lines (the real valgrind, nothing changed).
+      - C4: `make test`; quote its `Total:` line. No `src/`, `stdlib/` or `tools/` file changes, so no preflight (`git diff --stat HEAD~1` shows it).
+      - C5: commit on `main`, add `**Awaiting review:**` with C2 to C4, `tm done`.
+
+- [ ] +testinfra +AI-G @main A change to `scripts/perf_gap.sh` or `scripts/bench_cross_lang.sh` selects the scenarios that test them id:2msct
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Found by:** the check-in id:269a6.
+    > **Placed:** after id:s72rr, in the batch the check-in id:a55tf reviews.
+    > **Check-in:** reviewed in id:a55tf.
+
+    - **Now:** `scripts/test_bench_threshold_gate.sh` (the `bench-threshold-gate` scenario) tests `scripts/bench_cross_lang.sh`'s gate and, since git:03937b7, `scripts/perf_gap.sh --record-run`; `scripts/test_bench_contention.sh` (`bench-contention`) tests `scripts/bench_cross_lang.sh` too. The tier table selects neither scenario for a change to those two scripts, so `make test-changed` on such a change runs none of their tests: `sh scripts/select_test_tier.sh --scenarios scripts/perf_gap.sh` and `... scripts/bench_cross_lang.sh` both print an empty line, while `... scripts/bench_threshold_check.sh` prints `bench-threshold-gate`. What the wrong skip hides: a broken gate or record mode, from the author who ran only the scoped tier (`make test` still runs both scenarios).
+    - **Settled:** in `scripts/test_tiers.tsv`, the scenarios column (the seventh) of the `scripts/bench_cross_lang.sh` row becomes `bench-contention bench-threshold-gate` and that of the `scripts/perf_gap.sh` row `bench-threshold-gate`; each row's description names what it now selects. No other row changes.
+    - **Checks:**
+      - C1: before: the two `select_test_tier.sh --scenarios` commands above; quote both (empty) lines.
+      - C2: after: the same two commands; quote `bench-contention bench-threshold-gate` and `bench-threshold-gate`. `sh scripts/select_test_tier.sh --gates scripts/perf_gap.sh` prints what it printed before the change (quote both).
+      - C3: `sh scripts/test_tier_select.sh`; quote its last line. If it holds an expectation for either row, say which and what it was changed to.
+      - C4: `make test-changed BASE=HEAD` with the table edit uncommitted, then `make test`; quote each `Total:` line.
+      - C5: commit on `main`, add `**Awaiting review:**` with C2 to C4, `tm done`, and stop at the check-in id:a55tf.
+
+- [ ] +bench +review +AI-D @main @checkin Review of the instruction-count failure and the two tier rows id:a55tf
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Depends:** id:s72rr, id:2msct
+    > **Placed:** directly after the batch it reviews.
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` on `main` since git:03937b7; re-run what each **Awaiting review:** bullet names.
+      - id:s72rr: the three places are the only ones (`rg -n 'gate_count' scripts/`); a real `valgrind` that crashes midway (kill it) stops the record run with no row; a host without valgrind still records an empty field.
+      - id:2msct: every script the two scenarios run (`rg -o 'scripts/[a-z_/]*\.sh' scripts/test_bench_threshold_gate.sh scripts/test_bench_contention.sh | sort -u`) selects its scenario, `scripts/record_figures.sh` among them.
 
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
