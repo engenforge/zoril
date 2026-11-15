@@ -173,3 +173,9 @@ date	commit	zoril_version	host_id	governor	status	kind	workload	zoril_ms	cproc_m
 2026-11-15-20-35-04	dc006a0	0.1.0-alpha-138-gdc006a0	a52c24a80e04	powersave	ok	backfill	qsort	461	419	357	1.291	42994150
 2026-11-15-20-35-04	dc006a0	0.1.0-alpha-138-gdc006a0	a52c24a80e04	powersave	ok	backfill	sha	254	233	140	1.814	71240882
 2026-11-15-20-35-04	dc006a0	0.1.0-alpha-138-gdc006a0	a52c24a80e04	powersave	ok	backfill	vm	432	332	328	1.317	84900189
+2026-11-15-20-35-46	8d4670b	0.1.0-alpha-139-g8d4670b	a52c24a80e04	powersave	ok	backfill	array_loop	769	769	138	5.572	143420513
+2026-11-15-20-35-46	8d4670b	0.1.0-alpha-139-g8d4670b	a52c24a80e04	powersave	ok	backfill	fib	697	776	192	3.630	7202391
+2026-11-15-20-35-46	8d4670b	0.1.0-alpha-139-g8d4670b	a52c24a80e04	powersave	ok	backfill	particles	574	627	239	2.402	86149532
+2026-11-15-20-35-46	8d4670b	0.1.0-alpha-139-g8d4670b	a52c24a80e04	powersave	ok	backfill	qsort	462	419	359	1.287	42994150
+2026-11-15-20-35-46	8d4670b	0.1.0-alpha-139-g8d4670b	a52c24a80e04	powersave	ok	backfill	sha	250	235	140	1.786	71240882
+2026-11-15-20-35-46	8d4670b	0.1.0-alpha-139-g8d4670b	a52c24a80e04	powersave	ok	backfill	vm	432	331	328	1.317	84900189
