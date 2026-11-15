@@ -2,15 +2,25 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +safety +review +AI-D @provenance @checkin Review of the generic Clone provenance tests (id:z0180) id:n177h
+- [x] +safety +review +AI-D @provenance @checkin Review of the generic Clone provenance tests (id:z0180) id:n177h
     > **Created:** 2026-11-15
     > **Branch:** `provenance`
     > **Depends:** id:z0180
+    > **Completed:** 2026-11-15 git:913bf05
 
     - **Checks (when reviewing id:z0180):**
       - Re-read `doc/tasks/active.tm.md` and `git log -p` since `4deb429` on `provenance`.
       - Re-run C1–C3 from id:z0180 (`./scripts/test.sh` on the four new tests, the default-mode take-out check showing all three refused tests compile without `--provenance`, and `git diff --name-only HEAD~1`).
       - Probe sibling `Clone` / resize / collection-clone routes under `--provenance` (including generic `#[borrows()]` functions in `stdlib/` and `Vec<T>.clone()` on a caller `&Arena` vs local `Vec`), update the queue and next check-in as needed, then run `tm validate doc/tasks/*.tm.md`, `tm done n177h --git <sha>`, and `tm sync`.
+    - **Review (2026-11-15, a reviewing session, `provenance` at git:913bf05, `build/zoril` rebuilt by `make`: "the toolchain is up to date ... zoril 0.1.0-alpha-180-g913bf05"):**
+      - Queue: re-read; `git -C doc/tasks log` since the last look shows only id:z0180's settling, completion and sweep. `git log 4deb429..provenance` is the one commit git:913bf05, four new test files, nothing else.
+      - id:z0180 C1: `./scripts/test.sh <the four tests>` -> `Total: 5 run, 5 passed, 0 failed, 0 skipped (0.1s)` (the fifth item is the `stray-files` gate). C2: the three refused tests without `--provenance` -> `rc=0` each. C3: `git diff --name-only HEAD~1` -> the four test files only. Matches the task's record.
+      - Read the tests: the headers, `EXPECT:` lines and `// flags: --provenance` are right; each refused test has one route.
+      - **Finding: `vec_clone_frame_views_returned_refused.zrl` does not discriminate.** With `v.push(&buf);` taken out (`build/rev_n177h/vt.zrl`) it is still refused with the same message, because a clone of any local `Vec` is refused (the "Nuance" bullet of id:z0180 had seen this and accepted it). The `Option` test does discriminate (its twin `clone_opt_view` is accepted); the `resize` test discriminates (its twin `fill(out, b)` is accepted). Recorded in id:z0084, which is to add the discriminating twin; the test stays as it is (it is correct, only weaker than its name).
+      - **Finding: an over-rejection of safe user code under `--provenance`, the class id:z0084 deferred until safe user code showed it.** Returning a clone of a local `Vec<u8>`, `Vec<[u8]>` holding a parameter's view, or `String`; `Vec<Vec<[u8]>>.resize` with a value holding only a parameter's view (refused inside `stdlib/vec.zrl:399`); a push into a clone of a parameter's `Vec`. The reproducers and the `--emit-origins` line that names the cause (`arena_store = tao`: the clone's storage is `Frame(v)`, the address of the receiver) are in id:z0084. Decision: promote id:z0084 to `active.tm.md` before id:z0089 (it blocks id:z0065; its measurement suggests id:z0090 may then have nothing to do), add it to id:z0065's **Depends**, and settle id:z0090 for either outcome.
+      - Sibling routes probed (scratch programs in `build/rev_n177h/`), each under `--provenance`: a frame view returned through `[u8].clone()` refused (return rule), a parameter's view through it accepted; a generic user `#[borrows()] fn dup<T: Clone>(x: &T) -> T` returning a frame view refused, a parameter's view accepted; a user `impl Clone` declaring `#[borrows()]` on a struct holding a frame view refused (the body's summary wins over the declaration); `Option<Vec<[u8]>>.clone()` of a frame view refused; `extend_from_slice` of a `[[u8]]` holding a frame view, `out.push(o.clone())` of an `Option` holding one, and `Vec.new_in(a)` pushed a frame view, each refused (call store rule); `Vec.new_in(a)` with a parameter's view, cloned and returned, accepted. No route accepts a frame view: no new hole.
+      - Also seen: the call store rule printed twice at one site (`out.push(c[0])`, `c.push(&buf)`, `out.extend_from_slice(&a)`): already id:z0066's C3. The `Args.get`/`Args.next` `#[borrows()]` results are views of the process's arguments, not of a frame: not probed further.
+      - Queue edits: id:z0084 promoted (with `**Branch:** provenance` and `@provenance`) and placed before id:z0089; id:z0065 **Depends** += id:z0084; notes on id:z0086 and id:z0090; next check-in id:7kbpd placed after id:z0090 (depends on id:z0089, id:z0090), and id:z0073 depends on it.
 
 - [ ] +safety +design +AI-D @main DN1 A check on lowered ZIR that every value needing a drop is dropped or moved exactly once on every path, whatever the lowering emitted id:3rata
     > **Created:** 2026-11-14
@@ -139,6 +149,78 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Not yet measured alone:** replacing `ZirLowerer.new`'s `file_path: ""` changes none of the 8 (the other sites still write literals), and id:z0084's experiment alone does not remove them either. Find each site's route first (`--emit-origins` with the target-file filter in `src/driver/module.zrl` removed, as id:z0064's debug compiler did).
     - **Do:** decide whether a `Static` origin reached through a value may be dropped from store targets (a literal is read-only, so storing through it needs `unsafe`), or whether the sites change. A rule removes origins, so the series rule applies, with probes of a `static mut` reached through a value (which must stay a global destination) and a literal beside a `&mut` in one struct. `make test`, `make preflight-changed`, the rejection differential.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+    - **id:z0084 promoted (2026-11-15, the check-in id:n177h):** it now runs directly after this task, so the routing above still holds: this task's rule must not rely on id:z0084's.
+
+- [ ] +safety +tests +AI-D @provenance id:z0084 B1.9d Arena storage is named by the arena an argument reaches, not by the argument's address
+    > **Created:** 2026-11-06
+    > **Branch:** `provenance`
+    > **Found by:** id:z0064 (root (d1)).
+    > **Depends:** id:z0075
+    > **Depends note:** (it decides whether over-rejections are fixed by rules).
+    > **Check-in:** stop for review after it. Accepts more: the rejection differential and the series rule apply.
+    > **Deferred (2026-11-06, by id:z0075):** the root is seen only in code that uses a raw arena (zbuild's manifest parsing, the compiler), which is `unsafe` already; id:z0090 changes zbuild's sites instead, and none of the grid's or the tests' refusals is from it. Take this rule up when safe user code shows the class, with the reproducer below.
+    > **Promoted (2026-11-15, the check-in id:n177h):** safe user code now shows the class (the reproducers in **Safe user code** below), so the deferral's condition is met. Placed before id:z0089 and id:z0090: it blocks id:z0065 (the default flip would refuse these safe programs, and id:z0065 asks that each over-rejection have its own task done first), and it may make id:z0090's zbuild changes unnecessary (its measurement alone took zbuild from 25 warnings to 0), so it runs before that `+AI-G` batch rather than after it.
+
+    - **Safe user code (2026-11-15, the check-in id:n177h, `provenance` at git:913bf05, `build/zoril --provenance -I stdlib=stdlib -o /dev/null`):** each compiles in the default mode and is refused under `--provenance`; none uses `unsafe`.
+      - P1, returning a clone of a local `Vec<u8>` (no view anywhere): `fn mk() -> Vec<u8> { let mut v = Vec::<u8>.new(); v.push(1 as u8); return v.clone(); }` -> `error: provenance: the returned value holds an address of this frame (return rule)`. `--emit-origins` shows the clone's result `_8 O={Frame(_1)} S={Frame(v)}`: its storage is named by `&v`'s own origin, `Frame(v)`, the `arena_store = tao` of **Now**.
+      - P2, the same with `Vec<[u8]>` holding a parameter's view (`fn mk(b: [u8]) -> Vec<[u8]> { let mut v = Vec::<[u8]>.new(); v.push(b); return v.clone(); }`): same error.
+      - P3, a `String` (`let mut s = String.new(); s.push_str("hi"); return s.clone();`): same error.
+      - P4, `Vec<Vec<T>>.resize` with a value holding only a parameter's view (`fn f(out: &mut Vec<Vec<[u8]>>, b: [u8]) { let mut v = Vec::<[u8]>.new(); v.push(b); out.resize(1 as usize, v); }`): refused twice, once inside the standard library: `stdlib/vec.zrl:399:22: error: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)` (`value.clone()` in `resize`, where `value` is a by-value parameter) and at the call (`call store rule`).
+      - P5, pushing into a clone of a parameter's `Vec`: `fn f(v: &Vec<[u8]>) -> Vec<[u8]> { let buf = [42 as u8; 16]; let mut c = v.clone(); c.push(&buf); return c; }` gets a `call store rule` error at `c.push(&buf)` as well as the expected `return rule` error: the push is refused because `c`'s storage is named `Param(0)`.
+    - **Consequence for id:z0180's test:** `tests/language/memory/provenance/vec_clone_frame_views_returned_refused.zrl` is refused for P1's reason, not for the view it holds: take `v.push(&buf)` out and it is still refused. So it does not yet show that a `Vec` clone keeps its elements' origins. `option_clone_frame_view_returned_refused.zrl` does discriminate (its twin `clone_opt_view` is accepted).
+    - **Checks to add when this task is settled:** P1 to P5 accepted (P5 still refused at `return c`, by the return rule only), added as functions of `tests/language/memory/provenance/clone_returned_accepted.zrl` (P5 as a refused test of its own); `vec_clone_frame_views_returned_refused.zrl` still refused, and refused no more with `v.push(&buf)` taken out (quote both); id:z0090's `W | grep -c 'warning: provenance'` before and after this task, quoted, so id:z0090 knows what is left for it.
+
+    - **Now:** `os_call` (`src/check_zir.zrl`) names the storage of an arena-tied result by the arena argument's own origins (`arena_store = tao`), and `os_type_has(.., OS_Q_ARENA_REF)` answers yes for any reference that reaches an `ArenaHeader` through a field: `&mut ZirLowerer` (`arena: *mut ArenaHeader`), `&Vec<..>` (`raw`). So `self.f(&rows)` returning a Vec in `*self.arena` owns `Param(0)` (the struct `self` points at) and `Frame(rows)` (the local Vec). In zbuild, `parse_entry(&cols, arena)`'s result owns `Frame(cols)` (`tools/zbuild/src/manifest.zrl`), which gives all 25 of zbuild's warnings.
+    - **Reduction** (`build/z64/t/d5.zrl`; builds, exits 0; 7 warnings under `--provenance=warn`, 0 with the experiment below):
+
+    ```zoril
+    import "vec.zrl";
+    import "mem_raw.zrl";
+    use vec::Vec;
+    use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
+
+    struct Z { arena: *mut ArenaHeader }
+
+    impl Z {
+        #[borrows()]
+        fn alloc(self: &mut Z, n: usize) -> [mut u32] {
+            return unsafe { @slice(zoril_allocator_alloc(self.arena, ((n + 1 as usize) * 4) as u64) as *mut u32, n) };
+        }
+        #[borrows()]
+        fn expand(self: &mut Z, rows: &Vec<[mut u32]>, again: bool) -> Vec<[mut u32]> {
+            let mut out = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
+            for r in rows.as_slice() { out.push(*r); }
+            return out;
+        }
+        fn walk(self: &mut Z, rows_in: &Vec<[mut u32]>, depth: usize) -> bool {
+            if depth > 3 as usize { return rows_in.len() == 0 as usize; }
+            let rows = self.expand(rows_in, true);
+            let mut same = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
+            for r in rows.as_slice() {
+                let nr = self.alloc(r.len);
+                same.push(nr);
+            }
+            let spec = self.expand(&rows, false);
+            if self.walk(&spec, depth + 1 as usize) { return true; }
+            return self.walk(&same, depth + 1 as usize);
+        }
+        fn top(self: &mut Z) -> bool {
+            let mut rows = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
+            let row = self.alloc(1 as usize);
+            rows.push(row);
+            return self.walk(&rows, 0 as usize);
+        }
+    }
+
+    fn main() -> i32 {
+        let mut z = Z { arena: unsafe { arena_init(65536 as u64) } };
+        if z.top() { return 1; }
+        return 0;
+    }
+    ```
+
+    - **Measured alone (id:z0064, a scratch compiler: in `os_call`'s `in_ties` branch under a body summary, `vs |= arena_store` only when the argument's type is a pointer straight to an `Arena` or `ArenaHeader`, else `vs |= tr`, what the argument reaches):** zbuild 25 to 0; `src` unchanged alone (id:z0085's root keeps its cascade going). A measurement, not a proposed rule: not probed for soundness.
+    - **Do:** state the rule (an arena's storage is what the reference reaches, at the depth where the `Arena`/`ArenaHeader` is) in the design note §3, implement it, and probe the sibling routes per the series rule: the value built inside the callee, returned from a call, packed into a struct beside a view or a raw pointer, an `&Arena` held in a struct field, an `Arena` held by value in a struct passed by reference, and `arena_reset` between the call and a read. `make test`, `make preflight-changed`, the rejection differential, the store grid.
 
 - [ ] +refactor +tests +AI-G @provenance id:z0089 B1.9f `exh_expand_or` pushes a fresh copy of each row it keeps
     > **Created:** 2026-11-06
@@ -163,7 +245,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Branch:** `provenance`
     > **Found by:** id:z0064 (root (d1)).
     > **Depends:** id:0m61c
-    > **Routed by:** id:z0075, to code changes at zbuild's sites; the rule is deferred (id:z0084 in `future.tm.md`).
+    > **Routed by:** id:z0075, to code changes at zbuild's sites; the rule was deferred (id:z0084, promoted 2026-11-15 and placed before this task).
 
     - **Now:** `tools/zbuild` gives 25 warnings under `--provenance=warn` (18 and 4 call store rule, 2 return rule, 1 store rule), all in manifest parsing (`parse_manifest`, `parse_entry`, `write_manifest`, `load_manifest` in `tools/zbuild/src/manifest.zrl`). `parse_entry(&cols, arena)` takes the column `Vec` by reference, and because a `Vec` holds a raw arena pointer, the call rule names its result's arena storage by `&cols`'s address (`Frame(cols)`); what is read out of the result is then an address of this frame.
     - **Do:** change the sites so that no argument whose only tie to the arena is the `Vec`'s pointer names the result's storage. First try passing `cols.as_slice()` (a `[[u8]]`, which reaches no `ArenaHeader`) to `parse_entry`, then the sites the remaining warnings name. Keep the manifest format and behaviour unchanged. If a site cannot be changed without `unsafe`, stop and report: id:z0084's rule comes back instead.
@@ -175,12 +257,25 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `./scripts/test.sh --gate zbuild-diff --gate safety-matrix-zbuild --scenario zbuild-errors --scenario zbuild-link` passes; quote it.
       - C6: `make test` and `make preflight-changed`, each `Total:` line quoted; the completion note says the fuzz record is stale for `tools/zbuild/`.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+    - **After id:z0084 (2026-11-15, the check-in id:n177h):** id:z0084's rule is no longer deferred; it now runs before this task, and its record quotes C1's count after it. Take C1 from the tree as it is then, not the 25 above. If C1 is 0, change no code: complete the task with C1's output, answer C2 to C5 `not run: no warning left to remove`, and run only `make test-changed` for C6. If it is above 0, do **Do** for the sites that are left.
+
+- [ ] +safety +review +AI-D @provenance @checkin Review of `exh_expand_or`'s row copy and zbuild's manifest warnings (id:z0089, id:z0090) id:7kbpd
+    > **Created:** 2026-11-15
+    > **Branch:** `provenance`
+    > **Depends:** id:z0089, id:z0090
+    > **Placed:** after id:z0090 by the check-in id:n177h, to review the `+AI-G` batch id:z0089 and id:z0090 before the next task (id:z0073) starts.
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` since the commit of the last `+AI-D` task before id:z0089.
+      - id:z0089: re-run its C1 and C2 (the two warning counts over `src/main.zrl`) and read the diff (the copy loop and one comment only; `src/` still builds through stage1, `rm build/zoril && make`).
+      - id:z0090: re-run its C1 after id:z0084; if it changed code, its C3 (no new `unsafe`) and C4 (the manifest unchanged, `cmp`).
+      - Probe the sibling sites: the other `out.push(row)`-style pushes of a row read out of a referenced `Vec` in `src/lower_zir/`, and any warning left in `tools/zbuild` under `--provenance=warn`.
 
 - [ ] +safety +decision +AI-D @provenance id:z0073 B1.8b Decide whether storing a raw pointer into a by-value owner's buffer, then dropping the owner, is refused
     > **Created:** 2026-11-05
     > **Branch:** `provenance`
     > **Found by:** the review of id:z0071.
-    > **Depends:** id:0m61c
+    > **Depends:** id:0m61c, id:7kbpd
     > **Note:** Decision first; the fix or the probe is the next step it names.
 
     - **The case:** `struct Buf { data: *mut u8 }` with `Drop` freeing a heap block; `fn keep(out: &mut *mut u8, b: Buf) { *out = b.data; }` and `fn f(out: &mut *mut u8) { let b = Buf.new(); keep(out, b); }` (`tests/language/memory/provenance/addr_edge_by_value_owner_refused.zrl` at `403a092`), and the twin storing `BothPtr { own_v: Vec::<i32>.new(), p: b.data }` (`build/z71r/c2.zrl`). Accepted by the old rules and by `--provenance` at `a1ea096`; the caller's pointer is left dangling once `keep` drops `b`. Only `403a092` refused the first form, through the edge kinds id:z0072 removes.
@@ -278,7 +373,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-05
     > **Branch:** `provenance`
     > **Split from:** id:z0012.
-    > **Depends:** id:z0064, id:z0075, id:z0088, id:z0092, id:z0180, id:z0093, id:z0094, id:z0097, id:z0087, id:z0086, id:z0089, id:z0090, id:z0011, id:z0044, id:z0066
+    > **Depends:** id:z0064, id:z0075, id:z0088, id:z0092, id:z0180, id:z0093, id:z0094, id:z0097, id:z0087, id:z0086, id:z0084, id:z0089, id:z0090, id:z0011, id:z0044, id:z0066
+    > **Depends changed (2026-11-15, the check-in id:n177h):** id:z0084 added: it is the over-rejection of safe user code (a clone of a local `Vec` or `String` returned, `Vec<Vec<T>>.resize`) that this task requires to have its own task done first.
     > **Check-in:** stop for review after it.
     > **Ordering note:** this task only refuses more, and depends in substance only on id:z0064 (the tree must be clean); the maintainer may move it ahead of id:z0011 and id:z0044 to close the escape holes for users sooner. (id:z0084, id:z0085 and id:z0091 are deferred to `future.tm.md`, and id:z0095 and id:z0096 are holes in both modes, not dependencies.)
 
