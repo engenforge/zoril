@@ -572,29 +572,30 @@ measure_runtime_pair() {
 }
 
 append_gate_history_row() {
-    local kind="$1" verdict="$2" clean_tp="$3" inc_ms="$4" ratio="$5" rss="$6"
+    local kind="$1" verdict="$2" clean_tp="$3" inc_ms="$4" ratio="$5" rss="$6" geomean="${7:-}"
     local ts="${RUN_TS:-$(date +%Y-%m-%d-%H-%M-%S)}"
     mkdir -p "$(dirname "$GATE_HISTORY")"
     if [ ! -f "$GATE_HISTORY" ] || [ ! -s "$GATE_HISTORY" ]; then
-        printf 'date\tcommit\tzoril_version\thost_id\thost_os\thost_arch\tcpu_model\tcores\tram_gb\tgovernor\tstatus\tkind\tverdict\tclean_throughput_loc_s\tincremental_rebuild_ms\truntime_ratio_vs_gcc_o2\tpeak_rss_mb_per_kloc\n' > "$GATE_HISTORY"
+        printf 'date\tcommit\tzoril_version\thost_id\thost_os\thost_arch\tcpu_model\tcores\tram_gb\tgovernor\tstatus\tkind\tverdict\tclean_throughput_loc_s\tincremental_rebuild_ms\truntime_ratio_vs_gcc_o2\tpeak_rss_mb_per_kloc\truntime_geomean_vs_gcc_o2\n' > "$GATE_HISTORY"
     elif [ -n "$(tail -c 1 "$GATE_HISTORY" 2>/dev/null)" ]; then
         printf '\n' >> "$GATE_HISTORY"
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$ts" "$ZORIL_COMMIT" "$ZORIL_VERSION" "$HOST_ID" "$HOST_OS" "$HOST_ARCH" "$HOST_CPU" \
         "$HOST_CORES" "$HOST_RAM_GB" "$HOST_GOVERNOR" "$RUN_STATUS" "$kind" "$verdict" \
-        "$clean_tp" "$inc_ms" "$ratio" "$rss" >> "$GATE_HISTORY"
+        "$clean_tp" "$inc_ms" "$ratio" "$rss" "$geomean" >> "$GATE_HISTORY"
 }
 
 check_thresholds_gate() {
     if [ "${RECORDS_SKIP:-0}" -eq 1 ]; then
         return 0
     fi
-    local m_tp m_inc m_rat m_rss
+    local m_tp m_inc m_rat m_rss m_geo
     m_tp=$(awk -F'\t' '$1=="clean_throughput_loc_s" {print $2}' "$METRICS_FILE")
     m_inc=$(awk -F'\t' '$1=="incremental_rebuild_ms" {print $2}' "$METRICS_FILE")
     m_rat=$(awk -F'\t' '$1=="runtime_ratio_vs_gcc_o2" {print $2}' "$METRICS_FILE")
     m_rss=$(awk -F'\t' '$1=="peak_rss_mb_per_kloc" {print $2}' "$METRICS_FILE")
+    m_geo=$(awk -F'\t' '$1=="runtime_geomean_vs_gcc_o2" {print $2}' "$METRICS_FILE")
     [ -n "$m_tp" ] || m_tp=0
     [ -n "$m_inc" ] || m_inc=0
     [ -n "$m_rat" ] || m_rat=0
@@ -625,14 +626,14 @@ check_thresholds_gate() {
         fi
         printf '\nnew host %s (%s, %s cores, %s GB, %s %s): no baseline recorded for it; this run becomes its baseline\n' \
             "$HOST_ID" "$HOST_CPU" "$HOST_CORES" "$HOST_RAM_GB" "$HOST_SYS" "$HOST_ARCH"
-        append_gate_history_row "baseline" "baseline" "$m_tp" "$m_inc" "$m_rat" "$m_rss"
+        append_gate_history_row "baseline" "baseline" "$m_tp" "$m_inc" "$m_rat" "$m_rss" "$m_geo"
         records_commit "$GATE_HISTORY" "$HOST_ID $ZORIL_COMMIT: gate baseline" || return 1
         return 0
     fi
 
-    local tab b_date b_commit b_gov b_tp b_inc b_rat
+    local tab b_date b_commit b_gov b_tp b_inc b_rat b_geo
     tab=$(printf '\t')
-    IFS="$tab" read -r b_date b_commit _ _ _ _ _ _ _ b_gov _ _ _ b_tp b_inc b_rat _ <<EOF
+    IFS="$tab" read -r b_date b_commit _ _ _ _ _ _ _ b_gov _ _ _ b_tp b_inc b_rat _ b_geo <<EOF
 $base_line
 EOF
     printf '\nComparing against baseline of %s, commit %s (host %s):\n' "$b_date" "$b_commit" "$HOST_ID"
@@ -640,8 +641,8 @@ EOF
         printf '  Note: CPU governor differs from baseline (%s vs baseline %s).\n' "$HOST_GOVERNOR" "$b_gov"
     fi
     if [ -n "$last_line" ]; then
-        local l_date l_kind l_tp l_inc l_rat
-        IFS="$tab" read -r l_date _ _ _ _ _ _ _ _ _ _ l_kind _ l_tp l_inc l_rat _ <<EOF
+        local l_date l_kind l_tp l_inc l_rat l_geo
+        IFS="$tab" read -r l_date _ _ _ _ _ _ _ _ _ _ l_kind _ l_tp l_inc l_rat _ l_geo <<EOF
 $last_line
 EOF
         printf '  vs last %s (%s): clean_throughput_loc_s %s (was %s), incremental_rebuild_ms %s (was %s), runtime_ratio_vs_gcc_o2 %s (was %s)\n' \
@@ -657,10 +658,15 @@ EOF
             clean_throughput_loc_s) baseline="$b_tp" ;;
             incremental_rebuild_ms) baseline="$b_inc" ;;
             runtime_ratio_vs_gcc_o2) baseline="$b_rat" ;;
+            runtime_geomean_vs_gcc_o2) baseline="$b_geo" ;;
             *) continue ;;
         esac
         cur=$(awk -F'\t' -v a="$axis" '$1==a {print $2}' "$METRICS_FILE")
         [ -z "$cur" ] && { printf '  ! no measurement for %s\n' "$axis"; continue; }
+        if [ "$axis" = "runtime_geomean_vs_gcc_o2" ] && [ -z "$baseline" ]; then
+            printf '  [NEW]  %-26s %s: this host'\''s baseline has no value for it; re-record the baseline (sh scripts/bench_cross_lang.sh --record)\n' "$axis" "$cur"
+            continue
+        fi
         b=$(awk "BEGIN {print $baseline}")
         c=$(awk "BEGIN {print $cur}")
         t=$(awk "BEGIN {print $tol/100.0}")
@@ -697,7 +703,7 @@ EOF
 
     local verdict="pass"
     [ "$gate_fail" -ne 0 ] && verdict="fail"
-    append_gate_history_row "run" "$verdict" "$m_tp" "$m_inc" "$m_rat" "$m_rss"
+    append_gate_history_row "run" "$verdict" "$m_tp" "$m_inc" "$m_rat" "$m_rss" "$m_geo"
     records_commit "$GATE_HISTORY" "$HOST_ID $ZORIL_COMMIT: gate $verdict" || return 1
 
     if [ "$gate_fail" -ne 0 ]; then
@@ -1469,6 +1475,21 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\truntime_ratio_vs_gcc_o2\tzoril_vs_gcc\tfib(38)x3
 records_commit "$SPEED_HISTORY" "$HOST_ID $ZORIL_COMMIT: speed" || exit 1
 fi
 
+z_runtime_geomean=""
+if [ "$CHECK_THRESHOLDS" -eq 1 ] || [ "$RECORD_BASELINE" -eq 1 ]; then
+    if [ "$RUN_STATUS" = "contended" ] && [ "$RECORD_BASELINE" -eq 1 ] && [ "$FORCE_RUN" -eq 0 ]; then
+        printf '\nERROR: Cannot record baseline on a contended host (status: %s). Re-run on a quiet host or pass --force.\n' "$RUN_STATUS" >&2
+        exit 1
+    fi
+    _pg_kind="run"
+    [ "$RECORD_BASELINE" -eq 1 ] && _pg_kind="baseline"
+    _pg_out=$(RUN_TS="$RUN_TS" ZORIL_COMMIT="$ZORIL_COMMIT" ZORIL_VERSION="$ZORIL_VERSION" \
+        HOST_ID="$HOST_ID" HOST_GOVERNOR="$HOST_GOVERNOR" RUN_STATUS="$RUN_STATUS" \
+        sh "$REPO_ROOT/scripts/perf_gap.sh" --record-run --kind "$_pg_kind") || exit 1
+    printf '%s\n' "$_pg_out"
+    z_runtime_geomean=$(printf '%s\n' "$_pg_out" | awk -F'\t' '$1 == "runtime_geomean_vs_gcc_o2" { print $2; exit }')
+fi
+
 if [ ! -d "$(dirname "$METRICS_FILE")" ]; then
     mkdir -p "$(dirname "$METRICS_FILE")"
 fi
@@ -1477,12 +1498,18 @@ fi
     printf 'incremental_rebuild_ms\t%d\n' "$c_ms_z_edit"
     printf 'runtime_ratio_vs_gcc_o2\t%s\n' "$z_runtime_ratio"
     printf 'peak_rss_mb_per_kloc\t%s\n' "$z_rss_mb_per_kloc"
+    if [ -n "$z_runtime_geomean" ]; then
+        printf 'runtime_geomean_vs_gcc_o2\t%s\n' "$z_runtime_geomean"
+    fi
 } > "$METRICS_FILE"
 printf '\nZoril metrics written to %s:\n' "$METRICS_FILE"
 printf '  clean_throughput_loc_s = %d\n' "$tp_loc_z"
 printf '  incremental_rebuild_ms  = %d\n' "$c_ms_z_edit"
 printf '  runtime_ratio_vs_gcc_o2= %s\n' "$z_runtime_ratio"
 printf '  peak_rss_mb_per_kloc   = %s\n' "$z_rss_mb_per_kloc"
+if [ -n "$z_runtime_geomean" ]; then
+    printf '  runtime_geomean_vs_gcc_o2 = %s\n' "$z_runtime_geomean"
+fi
 if [ "$HOST_GOVERNOR" = "powersave" ]; then
     printf '  note: the CPU governor is powersave, so runtime timings depend on how far the clock\n'
     printf '        has ramped up; runtime_ratio_vs_gcc_o2 measures its two sides interleaved for that.\n'
@@ -1495,7 +1522,7 @@ if [ "$RECORD_BASELINE" -eq 1 ]; then
         exit 1
     fi
     if [ "${RECORDS_SKIP:-0}" -eq 0 ]; then
-        append_gate_history_row "baseline" "baseline" "$tp_loc_z" "$c_ms_z_edit" "$z_runtime_ratio" "$z_rss_mb_per_kloc"
+        append_gate_history_row "baseline" "baseline" "$tp_loc_z" "$c_ms_z_edit" "$z_runtime_ratio" "$z_rss_mb_per_kloc" "$z_runtime_geomean"
         records_commit "$GATE_HISTORY" "$HOST_ID $ZORIL_COMMIT: gate baseline" || exit 1
         printf '\nRecorded baseline row to %s (host %s)\n' "$GATE_HISTORY" "$HOST_ID"
     fi

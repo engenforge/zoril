@@ -45,13 +45,14 @@ write_metrics() {
 }
 
 mkdir -p "$tmp/bench" "$tmp/work" "$tmp/metrics"
+printf 'clean_throughput_loc_s|15|higher_better\nincremental_rebuild_ms|15|lower_better\nruntime_ratio_vs_gcc_o2|15|lower_better\n' > "$tmp/tol_legacy.cfg"
 
 # Case 1: Normal ratio (~3.720) within tolerance (< 4.447) passes cleanly and appends run/pass
 write_header "$tmp/bench/gate_c1.tsv"
 append_row "$tmp/bench/gate_c1.tsv" "2026-11-01-00-00-00" "aaaaaaaaaaaa" "Linux 6.1.0" "performance" "baseline" "baseline" "10000" "100" "3.867" "10.0"
 write_metrics "$tmp/metrics/metrics_pass.tsv" "10000" "100" "3.720" "10.0"
 rc=0
-out="$(BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_c1.tsv" METRICS_FILE="$tmp/metrics/metrics_pass.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
+out="$(TOLERANCES_FILE="$tmp/tol_legacy.cfg" BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_c1.tsv" METRICS_FILE="$tmp/metrics/metrics_pass.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
 expect "normal ratio within tolerance passes" 0 "[OK]  runtime_ratio_vs_gcc_o2"
 if [ "$(awk -F'\t' 'END {print $12 "|" $13}' "$tmp/bench/gate_c1.tsv")" != "run|pass" ]; then
     echo "[FAIL] normal ratio case did not append run/pass row"
@@ -75,7 +76,7 @@ write_header "$tmp/bench/gate_c2.tsv"
 append_row "$tmp/bench/gate_c2.tsv" "2026-11-01-00-00-00" "aaaaaaaaaaaa" "Linux 6.1.0" "performance" "baseline" "baseline" "10000" "100" "3.867" "10.0"
 write_metrics "$tmp/metrics/metrics_slow.tsv" "10000" "100" "5.250" "10.0"
 rc=0
-out="$(RUNTIME_RUNS=3 TMP_DIR="$tmp/work" BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_c2.tsv" METRICS_FILE="$tmp/metrics/metrics_slow.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
+out="$(TOLERANCES_FILE="$tmp/tol_legacy.cfg" RUNTIME_RUNS=3 TMP_DIR="$tmp/work" BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_c2.tsv" METRICS_FILE="$tmp/metrics/metrics_slow.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
 expect "deliberately slowed build fails the gate after confirmation" 1 "confirmation"
 
 # Case 3: Transient noise spike (initial > 4.447, but confirmation measurement passes)
@@ -98,7 +99,7 @@ write_header "$tmp/bench/gate_c3.tsv"
 append_row "$tmp/bench/gate_c3.tsv" "2026-11-01-00-00-00" "aaaaaaaaaaaa" "Linux 6.1.0" "performance" "baseline" "baseline" "10000" "100" "3.867" "10.0"
 write_metrics "$tmp/metrics/metrics_spike.tsv" "10000" "100" "4.600" "10.0"
 rc=0
-out="$(RUNTIME_RUNS=3 TMP_DIR="$tmp/work" BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_c3.tsv" METRICS_FILE="$tmp/metrics/metrics_spike.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
+out="$(TOLERANCES_FILE="$tmp/tol_legacy.cfg" RUNTIME_RUNS=3 TMP_DIR="$tmp/work" BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_c3.tsv" METRICS_FILE="$tmp/metrics/metrics_spike.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
 expect "transient noise spike re-measured and passes gate" 0 "noise retry"
 
 # P1: Only another host's baseline (bbbbbbbbbbbb, twice as good) -> new host aaaaaaaaaaaa, exit 0, appends baseline
@@ -292,7 +293,7 @@ for _r6_p in $_r6_pids; do
     wait "$_r6_p" || _r6_rc=$?
     [ "$_r6_rc" -eq 0 ] || _r6_fail=1
 done
-_r6_rows=$(awk -F'\t' 'NR > 1 && NF == 17 { c++ } END { print c + 0 }' "$r6/bench/records/gate_history.tsv" 2>/dev/null || echo 0)
+_r6_rows=$(awk -F'\t' 'NR > 1 && NF == 18 { c++ } END { print c + 0 }' "$r6/bench/records/gate_history.tsv" 2>/dev/null || echo 0)
 _r6_st=$(git -C "$r6/bench/records" status --porcelain)
 if [ "$_r6_fail" -eq 0 ] && [ "$_r6_rows" -eq 4 ] && [ -z "$_r6_st" ]; then
     echo "[PASS] R6: four concurrent record commits all exit 0 with 4 rows and clean status"
@@ -421,6 +422,236 @@ case "$rc|$_f4_ver" in
     0\|0.1.0-alpha-176-g50b1e8f) echo "[PASS] F4: figures row third field is bare version ($_f4_ver)" ;;
     *) echo "[FAIL] F4: unexpected rc=$rc ver='$_f4_ver'"; errors=$((errors + 1)) ;;
 esac
+
+# T1-T7: scripts/perf_gap.sh --record-run and runtime_geomean_vs_gcc_o2 gate
+PERF_GAP="$(pwd)/scripts/perf_gap.sh"
+
+setup_pg_scratch() {
+    _pg="$1"
+    shift
+    _pg_workloads="$*"
+    setup_scratch_repo "$_pg" with_git
+    cp "$PERF_GAP" "$_pg/scripts/perf_gap.sh"
+    mkdir -p "$_pg/bench/perf_gap" "$_pg/build" "$_pg/stub_bin"
+    for _w in $_pg_workloads; do
+        printf 'const SCALE: i32 = 10; // gate: 5\n' > "$_pg/bench/perf_gap/$_w.zrl"
+        printf 'int main(void) { return 0; }\n' > "$_pg/bench/perf_gap/$_w.c"
+    done
+    cat > "$_pg/build/zoril" << 'EOF'
+#!/bin/sh
+if [ "${1:-}" = "--version" ]; then echo "zoril 0.1.0-test"; exit 0; fi
+out=""
+while [ $# -gt 0 ]; do
+    case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac
+done
+[ -n "$out" ] && printf '%s\n' "$1" > "$out"
+EOF
+    cat > "$_pg/build/zilc" << 'EOF'
+#!/bin/sh
+printf 'zil\n' > "$2"
+EOF
+    : > "$_pg/build/runtime.o"
+    chmod +x "$_pg/build/zoril" "$_pg/build/zilc"
+
+    cat > "$_pg/stub_bin/qbe" << 'EOF'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac
+done
+[ -n "$out" ] && printf 'asm\n' > "$out"
+EOF
+    cat > "$_pg/stub_bin/as" << 'EOF'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac
+done
+[ -n "$out" ] && printf 'obj\n' > "$out"
+EOF
+    cat > "$_pg/stub_bin/ld" << 'EOF'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac
+done
+printf '#!/bin/sh\nexit "${STUB_ZORIL_EXIT:-0}"\n' > "$out"
+chmod +x "$out"
+EOF
+    cat > "$_pg/stub_bin/cproc" << 'EOF'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac
+done
+printf '#!/bin/sh\nexit "${STUB_CPROC_EXIT:-0}"\n' > "$out"
+chmod +x "$out"
+EOF
+    cat > "$_pg/stub_bin/gcc" << 'EOF'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac
+done
+printf '#!/bin/sh\nexit "${STUB_GCC_EXIT:-0}"\n' > "$out"
+chmod +x "$out"
+EOF
+    cat > "$_pg/stub_bin/valgrind" << 'EOF'
+#!/bin/sh
+echo "==123== Collected : 9999" >&2
+exec "$4"
+EOF
+    chmod +x "$_pg/stub_bin/qbe" "$_pg/stub_bin/as" "$_pg/stub_bin/ld" "$_pg/stub_bin/cproc" "$_pg/stub_bin/gcc" "$_pg/stub_bin/valgrind"
+
+    git -C "$_pg" add scripts/perf_gap.sh bench/perf_gap
+    git -C "$_pg" commit -q -m "add perf_gap"
+    git -C "$_pg" worktree add -q --orphan -b records "$_pg/bench/records"
+    git -C "$_pg/bench/records" config user.email "test@example.com"
+    git -C "$_pg/bench/records" config user.name "Test"
+    printf 'init\n' > "$_pg/bench/records/README.md"
+    git -C "$_pg/bench/records" add README.md
+    git -C "$_pg/bench/records" commit -q -m "records init"
+}
+
+make_clean_bin() {
+    _mcb_dst="$1"; _mcb_skip="$2"
+    mkdir -p "$_mcb_dst"
+    _mcb_oldifs="$IFS"; IFS=":"
+    for _mcb_d in $PATH; do
+        [ -d "$_mcb_d" ] || continue
+        for _mcb_f in "$_mcb_d"/*; do
+            [ -e "$_mcb_f" ] || continue
+            _mcb_b="${_mcb_f##*/}"
+            case " $_mcb_skip " in *" $_mcb_b "*) continue ;; esac
+            [ -e "$_mcb_dst/$_mcb_b" ] || ln -s "$_mcb_f" "$_mcb_dst/$_mcb_b" 2>/dev/null || true
+        done
+    done
+    IFS="$_mcb_oldifs"
+}
+
+# T1: a run appends six rows of 13 fields and one commit
+t1="$tmp/t1"
+setup_pg_scratch "$t1" array_loop fib particles qsort sha vm
+rc=0
+out="$(PATH="$t1/stub_bin:$PATH" BENCH_HOST_ID=aaaaaaaaaaaa sh "$t1/scripts/perf_gap.sh" -n 1 --record-run 2>&1)" || rc=$?
+_t1_rows=$(awk -F'\t' 'NR > 1 && NF == 13 { c++ } END { print c + 0 }' "$t1/bench/records/runtime_history.tsv" 2>/dev/null || echo 0)
+_t1_commits=$(git -C "$t1/bench/records" rev-list --count HEAD)
+if [ "$rc" -eq 0 ] && [ "$_t1_rows" -eq 6 ] && [ "$_t1_commits" -eq 2 ] && \
+   git -C "$t1/bench/records" log -1 --pretty=%s | grep -q ': runtime$'; then
+    echo "[PASS] T1: record-run appends 6 rows of 13 fields and 1 commit"
+else
+    echo "[FAIL] T1: rc=$rc rows=$_t1_rows commits=$_t1_commits out=$out"
+    errors=$((errors + 1))
+fi
+
+# T2: printed geometric mean equals the one computed from the rows (ratios 2.000 and 8.000 -> 4.000)
+t2="$tmp/t2"
+setup_pg_scratch "$t2" p1 p2
+cat >> "$t2/scripts/lib/portability.sh" << 'EOF'
+_t2_n=0
+now_ms() {
+    _t2_f="${PERF_GAP_OUT}/t2_cnt"
+    _t2_n=0
+    [ -f "$_t2_f" ] && read -r _t2_n < "$_t2_f"
+    _t2_n=$((_t2_n + 1))
+    printf '%s\n' "$_t2_n" > "$_t2_f"
+    case "$_t2_n" in
+        1) echo 0 ;; 2) echo 200 ;;
+        3) echo 0 ;; 4) echo 100 ;;
+        5) echo 0 ;; 6) echo 150 ;;
+        7) echo 0 ;; 8) echo 800 ;;
+        9) echo 0 ;; 10) echo 100 ;;
+        11) echo 0 ;; 12) echo 400 ;;
+        *) echo 0 ;;
+    esac
+}
+EOF
+rc=0
+out="$(PERF_GAP_OUT="$t2/out" PATH="$t2/stub_bin:$PATH" BENCH_HOST_ID=aaaaaaaaaaaa sh "$t2/scripts/perf_gap.sh" -n 1 --record-run 2>&1)" || rc=$?
+_t2_last=$(printf '%s\n' "$out" | tail -n 1)
+_t2_r1=$(awk -F'\t' 'NR == 2 { print $12 }' "$t2/bench/records/runtime_history.tsv" 2>/dev/null || echo "")
+_t2_r2=$(awk -F'\t' 'NR == 3 { print $12 }' "$t2/bench/records/runtime_history.tsv" 2>/dev/null || echo "")
+if [ "$rc" -eq 0 ] && [ "$_t2_r1" = "2.000" ] && [ "$_t2_r2" = "8.000" ] && \
+   [ "$_t2_last" = "$(printf 'runtime_geomean_vs_gcc_o2\t4.000')" ]; then
+    echo "[PASS] T2: geometric mean of 2.000 and 8.000 is 4.000"
+else
+    echo "[FAIL] T2: rc=$rc r1=$_t2_r1 r2=$_t2_r2 last='$_t2_last'"
+    errors=$((errors + 1))
+fi
+
+# T3: without valgrind on PATH, instructions field is empty and run passes
+t3="$tmp/t3"
+setup_pg_scratch "$t3" fib
+make_clean_bin "$tmp/t3_sysbin" "valgrind"
+_t3_sb="$tmp/t3_sb"; mkdir -p "$_t3_sb"
+for _b in qbe as ld cproc gcc; do cp "$t3/stub_bin/$_b" "$_t3_sb/$_b"; done
+rc=0
+out="$(PATH="$_t3_sb:$tmp/t3_sysbin" BENCH_HOST_ID=aaaaaaaaaaaa sh "$t3/scripts/perf_gap.sh" -n 1 --record-run 2>&1)" || rc=$?
+_t3_nf=$(awk -F'\t' 'NR == 2 { print NF }' "$t3/bench/records/runtime_history.tsv" 2>/dev/null || echo 0)
+_t3_ir=$(awk -F'\t' 'NR == 2 { print $13 }' "$t3/bench/records/runtime_history.tsv" 2>/dev/null || echo "X")
+if [ "$rc" -eq 0 ] && [ "$_t3_nf" -eq 13 ] && [ -z "$_t3_ir" ]; then
+    echo "[PASS] T3: without valgrind, instructions is empty and run passes"
+else
+    echo "[FAIL] T3: rc=$rc nf=$_t3_nf ir='$_t3_ir' out=$out"
+    errors=$((errors + 1))
+fi
+
+# T4: without cproc on PATH, cproc_ms field is empty and run passes
+t4="$tmp/t4"
+setup_pg_scratch "$t4" fib
+make_clean_bin "$tmp/t4_sysbin" "cproc"
+_t4_sb="$tmp/t4_sb"; mkdir -p "$_t4_sb"
+for _b in qbe as ld gcc valgrind; do cp "$t4/stub_bin/$_b" "$_t4_sb/$_b"; done
+rc=0
+out="$(PATH="$_t4_sb:$tmp/t4_sysbin" BENCH_HOST_ID=aaaaaaaaaaaa sh "$t4/scripts/perf_gap.sh" -n 1 --record-run 2>&1)" || rc=$?
+_t4_nf=$(awk -F'\t' 'NR == 2 { print NF }' "$t4/bench/records/runtime_history.tsv" 2>/dev/null || echo 0)
+_t4_cm=$(awk -F'\t' 'NR == 2 { print $10 }' "$t4/bench/records/runtime_history.tsv" 2>/dev/null || echo "X")
+if [ "$rc" -eq 0 ] && [ "$_t4_nf" -eq 13 ] && [ -z "$_t4_cm" ]; then
+    echo "[PASS] T4: without cproc, cproc_ms is empty and run passes"
+else
+    echo "[FAIL] T4: rc=$rc nf=$_t4_nf cm='$_t4_cm' out=$out"
+    errors=$((errors + 1))
+fi
+
+# T5: the gate: baseline 2.000, run 2.400 fails, run 2.200 passes
+write_header_18() {
+    printf 'date\tcommit\tzoril_version\thost_id\thost_os\thost_arch\tcpu_model\tcores\tram_gb\tgovernor\tstatus\tkind\tverdict\tclean_throughput_loc_s\tincremental_rebuild_ms\truntime_ratio_vs_gcc_o2\tpeak_rss_mb_per_kloc\truntime_geomean_vs_gcc_o2\n' > "$1"
+}
+write_header_18 "$tmp/bench/gate_t5.tsv"
+printf '2026-11-01-00-00-00\tabc1234\t0.1.0\taaaaaaaaaaaa\tLinux 6.1.0\tx86_64\tTestCPU\t4\t16\tperformance\tok\tbaseline\tbaseline\t10000\t100\t3.000\t10.0\t2.000\n' >> "$tmp/bench/gate_t5.tsv"
+printf 'clean_throughput_loc_s\t10000\nincremental_rebuild_ms\t100\nruntime_ratio_vs_gcc_o2\t3.000\npeak_rss_mb_per_kloc\t10.0\nruntime_geomean_vs_gcc_o2\t2.400\n' > "$tmp/metrics/metrics_t5_fail.tsv"
+printf 'clean_throughput_loc_s\t10000\nincremental_rebuild_ms\t100\nruntime_ratio_vs_gcc_o2\t3.000\npeak_rss_mb_per_kloc\t10.0\nruntime_geomean_vs_gcc_o2\t2.200\n' > "$tmp/metrics/metrics_t5_pass.tsv"
+rc=0
+out="$(BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_t5.tsv" METRICS_FILE="$tmp/metrics/metrics_t5_fail.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
+rc2=0
+out2="$(BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_t5.tsv" METRICS_FILE="$tmp/metrics/metrics_t5_pass.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc2=$?
+if [ "$rc" -eq 1 ] && printf '%s\n' "$out" | grep -qF '[FAIL] runtime_geomean_vs_gcc_o2' && \
+   [ "$rc2" -eq 0 ] && printf '%s\n' "$out2" | grep -qF '[OK]  runtime_geomean_vs_gcc_o2'; then
+    echo "[PASS] T5: runtime_geomean_vs_gcc_o2 gate fails at 2.400 and passes at 2.200 vs 2.000"
+else
+    echo "[FAIL] T5: rc=$rc rc2=$rc2"
+    errors=$((errors + 1))
+fi
+
+# T6: a 17-field baseline prints [NEW] and passes
+write_header "$tmp/bench/gate_t6.tsv"
+append_row "$tmp/bench/gate_t6.tsv" "2026-11-01-00-00-00" "aaaaaaaaaaaa" "Linux 6.1.0" "performance" "baseline" "baseline" "10000" "100" "3.000" "10.0"
+rc=0
+out="$(BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_t6.tsv" METRICS_FILE="$tmp/metrics/metrics_t5_fail.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
+expect "T6: 17-field baseline prints [NEW] and passes" 0 "[NEW]  runtime_geomean_vs_gcc_o2"
+
+# T7: three builds that exit differently: no row is written and run fails
+t7="$tmp/t7"
+setup_pg_scratch "$t7" fib
+rc=0
+out="$(PATH="$t7/stub_bin:$PATH" STUB_GCC_EXIT=1 BENCH_HOST_ID=aaaaaaaaaaaa sh "$t7/scripts/perf_gap.sh" -n 1 --record-run 2>&1)" || rc=$?
+if [ "$rc" -ne 0 ] && [ ! -e "$t7/bench/records/runtime_history.tsv" ] && \
+   printf '%s\n' "$out" | grep -qF 'exit codes differ'; then
+    echo "[PASS] T7: differing exit codes write no row and fail"
+else
+    echo "[FAIL] T7: rc=$rc exists=$(test -e "$t7/bench/records/runtime_history.tsv" && echo yes || echo no) out=$out"
+    errors=$((errors + 1))
+fi
 
 if [ "$errors" -eq 0 ]; then
     echo "All bench threshold gate tests passed."
