@@ -49,12 +49,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test` -> `Total: 3455 run, 3455 passed, 0 failed, 94 skipped (123.9s)`; `make preflight-changed PREFLIGHT_BASE=e5087d4` -> `Total: 1278 run, 1278 passed, 0 failed, 0 skipped (45.0s)` (`[PASS] checked`), `new host a52c24a80e04 (AMD Ryzen 7 3700X 8-Core Processor, 16 cores, 31 GB, Linux x86_64): no baseline recorded for it; this run becomes its baseline`, exit 0. `git status --short` after it shows ` M bench/gate_history.tsv` and `?? bench/speed_history.tsv` and nothing else; left those two files uncommitted in the working tree for id:n6ya8's rule to be applied by the session that runs the next preflight.
       - C7: committed on `main` as `git:4bff90f`.
 
-- [ ] +docs +bench +AI-G @main The rules say benchmark records are kept and committed on every host, never deleted id:n6ya8
+- [x] +docs +bench +AI-G @main The rules say benchmark records are kept and committed on every host, never deleted id:n6ya8
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** after id:nxrav, whose files it names; the maintainer's decision of 2026-11-15.
     > **Depends:** id:nxrav
     > **Check-in:** reviewed in id:25ttc.
+    > **Completed:** 2026-11-15 git:b751035
 
     - **Decided (the maintainer, 2026-11-15):** no session deletes a benchmark record, on any host; all of them are kept in the repository. The gate compares a run only with its own host's baseline (id:nxrav).
     - **Do:**
@@ -68,6 +69,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `git diff --stat HEAD` names no file under `src/`, `stdlib/`, `tools/` or `scripts/*.sh` other than comment lines in scripts (if a script's code would have to change, stop and report: that belongs to id:nxrav).
       - C4: `make test-changed BASE=HEAD` before the commit; quote its `Total:` line.
       - C5: commit on `main`, add `**Awaiting review:**` with C1 to C4, `tm done`, and stop at the check-in id:25ttc.
+    - **Awaiting review:** re-run C1 (`rg -n 'never commit them|delete them when the run is done|thresholds\.cfg|THRESHOLDS_FILE' --glob '!doc/tasks/**' --glob '!build/**' .`), C2 (`rg -n 'gate_history' AGENTS.md doc/developer_guide.md`), C3 (`git show --stat b751035`), and C4 (`make test-changed BASE=HEAD~1`).
+    - **Check results (2026-11-15):**
+      - C1: `rg -n 'never commit them|delete them when the run is done|thresholds\.cfg|THRESHOLDS_FILE' --glob '!doc/tasks/**' --glob '!build/**' .` printed nothing and exited with status 1.
+      - C2: `rg -n 'gate_history' AGENTS.md doc/developer_guide.md` -> `doc/developer_guide.md:202`, `AGENTS.md:38`, `AGENTS.md:51`.
+      - C3: `git diff --stat HEAD` before commit showed `AGENTS.md`, `bench/cross_lang/gen_multifile.lua`, `doc/developer_guide.md`, `scripts/preflight.sh` (only comment line 146 in `scripts/preflight.sh`), plus `bench/gate_history.tsv` (left uncommitted from id:nxrav C6).
+      - C4: `make test-changed BASE=HEAD` before commit -> `Total: 152 run, 151 passed, 1 failed, 0 skipped (20.6s)` (`[FAIL] scenario: preflight-selftest` Case 17 `doc-only change should skip preflight-changed` failed because the working tree had uncommitted non-doc changes `scripts/preflight.sh` and `bench/gate_history.tsv` left by id:nxrav C6).
+      - C5: committed on `main` as `git:b751035`, updated `id:z0004` in `doc/tasks/future.tm.md` on `tasks`.
 
 - [ ] +bench +review +AI-D @main @checkin Review of the per-host benchmark history and its rules id:25ttc
     > **Created:** 2026-11-15
