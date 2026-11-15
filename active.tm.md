@@ -110,13 +110,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: on committed `git:50b1e8f`: `make test` -> `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.1s)`; `make preflight-changed PREFLIGHT_BASE=8203d21` -> exit 0, `Figures @ 2026-11-15 (50b1e8f): 519 probes, 47930 compiler lines, 4.66%/10.96% density`, `git status --short` printed nothing, `records` commit added: `2da5617 (HEAD -> records) 50b1e8f: figures`.
       - C4: committed on `main` as `git:50b1e8f`.
 
-- [ ] +bench +review +AI-D @main @checkin Review of the records branch and the scripts that commit to it id:ev54n
+- [x] +bench +review +AI-D @main @checkin Review of the records branch and the scripts that commit to it id:ev54n
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Depends:** id:141h5, id:455bt, id:vdk4z
     > **Depends changed (2026-11-15):** id:141h5 and id:vdk4z (the milestone figures and their record) joined the batch.
     > **Placed:** directly after the task it reviews.
     > **Rewritten (2026-11-15):** with id:455bt.
+    > **Completed:** 2026-11-15 git:50b1e8f
 
     - **Checks:**
       - Re-read the queue and `git log -p` on `main` since git:9e79c80, and `git -C bench/records log -p`; re-run what the **Awaiting review:** bullet names.
@@ -125,6 +126,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - The rules in `AGENTS.md` and `doc/developer_guide.md` name the branch, the mount command and who pushes; nothing still asks for a `bench:` commit on a code branch.
       - id:141h5: a compiler change no longer edits a document (a scratch commit that adds a line to `src/` passes `make test-changed` with no document touched); `--milestone` fails on it and names the figure; the one refresh left every milestone figure equal to the tree; no text still tells a task to update a count. What the moved gate could hide, and from whom: a reader of a release's documents seeing a stale figure, so show that `make preflight` fails on a stale figure and that the release steps name the check.
       - id:vdk4z: its row equals what `check_safety_figures.sh` prints, and a second run on the same commit adds none.
+    - **Review (2026-11-15, a reviewing session), of git:0b45934, git:8203d21 and git:50b1e8f (and git:1f9f85c, the rows of id:141h5's preflight, made under the rule of that hour):** the three tasks do what they settle; three small follow-ups, in id:h1dj3.
+      - Re-run at git:50b1e8f: `sh scripts/test_bench_threshold_gate.sh` passes its nineteen cases (`All bench threshold gate tests passed.`); `sh scripts/check_safety_figures.sh --all` and `--milestone` pass every line; `make test` -> `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.1s)`, and it left the code tree and `bench/records` unchanged.
+      - No row was lost in the move: the first commit of `records` (git:26d60b4 there) holds `gate_history.tsv` and `speed_history.tsv` byte for byte as git:1f9f85c had them on `main` (`cmp`), and the later runs are one commit each (`<host> <commit>: gate pass`, `speed`, `density`, `<commit>: figures`).
+      - id:141h5, in a scratch worktree with one line added to `src/main.zrl` and no document touched: `check_safety_figures.sh --all` passes (three `[PASS]` lines, exit 0); `--milestone` fails with `[FAIL] safety-figures: §5 says compiler lines is 47,930; the tree has 47931`, and `make figures-check` fails. `scripts/preflight.sh` runs the milestone check in its full mode only, and `doc/developer_guide.md` names it with `make preflight` before a release. `doc/spec/safety_model.md` no longer states a count of holes; `doc/SAFETY.md` §5 carries the stamp (`as of **0.1.0-alpha-172-g9e79c80** (2026-11-15)`).
+      - The branch not mounted, in that scratch worktree (a git checkout with no `bench/records`): `record_figures.sh`, `record_marker_density.sh` and `bench_threshold_check.sh` each stop with `[FAIL] bench records: the records branch is not mounted at bench/records; run: ...`, the last after 1.1 s, before any measurement, and nothing is written under `bench/`. So a run from a scratch tree fails loudly rather than recording into a tree that is then removed; a caller that wants its row kept names the mounted file with `GATE_HISTORY`.
+      - Two runs at once: finding 1 of id:h1dj3 (no row lost, three false failures).
+      - id:vdk4z: the two rows of `figures_history.tsv` equal what `check_safety_figures.sh` prints for the tree (519 probes, 47930 compiler lines, 4.66% and 10.96%); F2 shows a second run on a clean commit adds none.
+      - The rules name the branch, the mount command and who pushes; no text asks for a `bench:` commit on a code branch (`rg -n 'record the preflight run'` outside the task files prints nothing).
 
 - [ ] +bench +measurement +AI-D @main Rebuild the benchmark history of this host from the commits since the release id:tmydc
     > **Created:** 2026-11-15
@@ -146,6 +155,38 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: `awk -F'\t' '$12=="backfill"' bench/gate_history.tsv | wc -l` equals the number of commits measured; quote both numbers, and any commit that did not build or run, with its error.
       - C3: no `backfill` row is taken as a baseline: after the series and before `--record`, `sh scripts/bench_threshold_check.sh` prints `new host` (or names an earlier real baseline), not a backfill row.
       - C4: `make test-changed BASE=HEAD` on the commit that adds the rows; quote its `Total:` line.
+
+- [ ] +bench +testinfra +AI-G @main A record commit that loses a race is retried, the figures row carries the bare version, and the rule names all four record files id:h1dj3
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** after id:tmydc, which runs one measurement at a time and does not need it; found by the check-in id:ev54n.
+    > **Check-in:** reviewed in id:269a6.
+
+    - **Found by the check-in id:ev54n:**
+      1. Four gate runs started together against one records work tree (a scratch one): all four rows were appended intact and one commit carried them all, but three runs ended with exit 1 and `[FAIL] bench records: the row was appended to ... but not committed: fatal: Unable to create '.../index.lock'` (or `cannot lock ref 'HEAD'`). Two sessions that run a preflight at the same time on one host would each see the bench step fail although nothing was lost.
+      2. `bench/records/figures_history.tsv`'s `zoril_version` column holds `zoril 0.1.0-alpha-176-g50b1e8f`; the other record files hold the second word only (`0.1.0-alpha-176-g50b1e8f`).
+      3. `AGENTS.md`'s bullet **Benchmark records are kept, on every host** and `doc/developer_guide.md` name three record files; `figures_history.tsv` is the fourth.
+    - **Settled:**
+      1. In `records_commit` (`scripts/lib/records.sh`): when `git add` or `git commit` fails, wait one second and try again, up to five times in all. Before each try, and after the last, the row counts as committed when `git -C <dir> status --porcelain -- <file>` prints nothing (another run's commit carried it): return 0 then. Only when the file is still modified after the fifth try is it the `[FAIL] ... appended ... but not committed` line, with git's last message.
+      2. `scripts/record_figures.sh` writes the second word of `build/zoril --version`. The two rows already recorded stay as they are: a record is not rewritten.
+      3. Both documents name `bench/records/figures_history.tsv` beside the other three.
+    - **Tests** (cases beside R1 to R5): R6, four `--force --check-thresholds-only` runs started together (`&`, then `wait`) against one scratch records work tree: every run exits 0, the file has four rows of 17 fields, and `git status --porcelain` there prints nothing. R7, a lock that stays (R4's planted `index.lock`): still exit 1 with `appended ... but not committed`, after the tries. F4, the figures row's third field has no space.
+    - **Checks:**
+      - C1: before: R6 run by hand as the finding describes; quote the exit statuses (expected: one 0 and three 1).
+      - C2: after: the test script; quote the `[PASS]` lines of R6, R7 and F4 and its last line. Take the retry out (one try) and quote R6 failing; take the "already committed" test out and quote what fails; restore.
+      - C3: `rg -n 'figures_history' AGENTS.md doc/developer_guide.md`; quote the line numbers.
+      - C4: `make test`; quote its `Total:` line. No `src/`, `stdlib/` or `tools/` file changes, so no preflight (`git diff --stat HEAD` shows it).
+      - C5: commit on `main`, add `**Awaiting review:**` with C2 to C4, `tm done`, and stop at the check-in id:269a6.
+
+- [ ] +bench +review +AI-D @main @checkin Review of the record commit retry and the two small record fixes id:269a6
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Depends:** id:h1dj3
+    > **Placed:** directly after the task it reviews.
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` on `main` since git:50b1e8f; re-run what the **Awaiting review:** bullet names.
+      - The retry hides no loss: a row that is appended and never committed (a lock that stays, a missing identity) still fails the run; a run whose row another run committed passes; eight runs at once.
 
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
