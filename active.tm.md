@@ -252,12 +252,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Recommendation (the reviewing session's):** remove them: the new measure's noise on this host is 2.3% against a 15% tolerance, so it needs no retry, and code only a test's private configuration reaches reads as a safeguard the gate does not have. If id:69svf adds a limit for each program, its re-run of the one program is the retry's successor and is written there. The `fib` ratio stays measured and recorded.
     - **Decided (the maintainer, 2026-11-15):** the retry is removed, with its two test cases. id:41rnk carries it out (the settled edits are there), reviewed in id:95cy3.
 
-- [ ] +bench +testinfra +AI-G @main The gate no longer carries the `fib` confirmation retry, and its `vs last` line shows the gated mean id:41rnk
+- [x] +bench +testinfra +AI-G @main The gate no longer carries the `fib` confirmation retry, and its `vs last` line shows the gated mean id:41rnk
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Decided by:** the maintainer, 2026-11-15 (id:rdpmh): the retry is removed.
     > **Placed:** after id:rdpmh, the decision it carries out.
     > **Check-in:** reviewed in id:95cy3.
+    > **Completed:** 2026-11-15 git:704a259
 
     - **Now (git:164ba45):** as id:rdpmh describes. `check_thresholds_gate` in `scripts/bench_cross_lang.sh` re-measures only the `runtime_ratio_vs_gcc_o2` axis (the `[RETEST]` branch), which `bench/cross_lang/tolerances.cfg` no longer lists; `scripts/test_bench_threshold_gate.sh` reaches it with `tol_legacy.cfg`. The gate's `vs last` line prints `runtime_ratio_vs_gcc_o2 <now> (was <last>)` and not the gated mean.
     - **Settled:**
@@ -273,6 +274,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `tail -c 1 bench/cross_lang/tolerances.cfg | od -c` shows one newline and `tail -n 1` prints the `runtime_geomean_vs_gcc_o2` line.
       - C5: `make test-changed BASE=HEAD` before the commit (quote that `bench-threshold-gate` and `bench-contention` ran, and its `Total:` line), then `make test`; quote its `Total:` line. No `src/`, `stdlib/` or `tools/` file changes, so no preflight; C3 is the run of the bench step.
       - C6: commit on `main`, add `**Awaiting review:**` with C2 to C5, `tm done`, and stop at the check-in id:95cy3.
+    - **Awaiting review:** `sh scripts/test_bench_threshold_gate.sh`, `rg -n 'RETEST|noise retry|tol_legacy|b_rat' scripts/`, `sh scripts/bench_threshold_check.sh`, `tail -c 1 bench/cross_lang/tolerances.cfg | od -c`, `tail -n 1 bench/cross_lang/tolerances.cfg`, `make test-changed BASE=HEAD~1`, `make test`.
+    - **Completion note:**
+      - C1: before: `sh scripts/test_bench_threshold_gate.sh | grep -c '^\[PASS\]'` printed `31`; `rg -c 'RETEST|noise retry|tol_legacy' scripts/bench_cross_lang.sh scripts/test_bench_threshold_gate.sh` printed `scripts/test_bench_threshold_gate.sh:6` and `scripts/bench_cross_lang.sh:2`.
+      - C2: after: `sh scripts/test_bench_threshold_gate.sh` printed `[PASS] normal run within tolerance passes`, `[PASS] T10: vs last line prints runtime_geomean_vs_gcc_o2 2.200 (was 2.000)`, `[PASS] T11: vs last line prints runtime_geomean_vs_gcc_o2 2.200 (was -) for 17-field row`, `[PASS] T12: runtime_ratio_vs_gcc_o2 in tolerance file is ignored`, `PASS_COUNT=32`, and last line `All bench threshold gate tests passed.`. `rg -n 'RETEST|noise retry|tol_legacy|b_rat' scripts/` printed nothing. Negative checks (each put back alone and restored): `runtime_ratio_vs_gcc_o2` in `vs last` failed T10 with `[FAIL] T10: vs last line prints runtime_geomean_vs_gcc_o2 2.200 (was 2.000): output lacks 'runtime_geomean_vs_gcc_o2 2.200 (was 2.000)'`; restoring the `runtime_ratio_vs_gcc_o2` case arm failed T12 with `[FAIL] T12: rc=1 out=Detected Host:`.
+      - C3: `sh scripts/bench_threshold_check.sh > build/41rnk-run.log 2>&1` printed `  vs last run (2026-11-15-20-56-17): clean_throughput_loc_s 10320 (was 10212), incremental_rebuild_ms 21 (was 22), runtime_geomean_vs_gcc_o2 2.380 (was 2.325)`, `[OK]  clean_throughput_loc_s     10320 (baseline 10356, tol 15%)`, `[OK]  incremental_rebuild_ms     21 (baseline 22, tol 15%)`, `[OK]  runtime_geomean_vs_gcc_o2  2.380 (baseline 2.385, tol 15%)`; `git status --short` showed only `bench/cross_lang/tolerances.cfg`, `scripts/bench_cross_lang.sh`, and `scripts/test_bench_threshold_gate.sh`.
+      - C4: `tail -c 1 bench/cross_lang/tolerances.cfg | od -c` printed `0000000  \n` / `0000001`; `tail -n 1 bench/cross_lang/tolerances.cfg` printed `runtime_geomean_vs_gcc_o2|15|lower_better`.
+      - C5: `make test-changed BASE=HEAD` selected `bench-contention bench-threshold-gate` (`Integration  2 run  2 passed  0 failed  0 skipped`), `Total: 28 run, 28 passed, 0 failed, 0 skipped (42.0s)`. `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.6s)`.
+      - C6: committed on `main` as git:704a259; stopping at check-in id:95cy3.
 
 - [ ] +bench +review +AI-D @main @checkin Review of the removal of the `fib` confirmation retry id:95cy3
     > **Created:** 2026-11-15
