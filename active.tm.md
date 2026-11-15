@@ -207,16 +207,83 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `make test-changed BASE=HEAD` (uncommitted): `Total: 21 run, 21 passed, 0 failed, 0 skipped (8.9s)`. `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.9s)`.
       - C5: committed on `main` as git:164ba45; stopping at check-in id:a55tf.
 
-- [ ] +bench +review +AI-D @main @checkin Review of the instruction-count failure and the two tier rows id:a55tf
+- [x] +bench +review +AI-D @main @checkin Review of the instruction-count failure and the two tier rows id:a55tf
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Depends:** id:s72rr, id:2msct
     > **Placed:** directly after the batch it reviews.
+    > **Completed:** 2026-11-15 git:164ba45
 
     - **Checks:**
       - Re-read the queue and `git log -p` on `main` since git:03937b7; re-run what each **Awaiting review:** bullet names.
       - id:s72rr: the three places are the only ones (`rg -n 'gate_count' scripts/`); a real `valgrind` that crashes midway (kill it) stops the record run with no row; a host without valgrind still records an empty field.
       - id:2msct: every script the two scenarios run (`rg -o 'scripts/[a-z_/]*\.sh' scripts/test_bench_threshold_gate.sh scripts/test_bench_contention.sh | sort -u`) selects its scenario, `scripts/record_figures.sh` among them.
+    - **Review (2026-11-15), at git:164ba45:** both tasks do what their text settles; nothing is reverted. One observation went to `future.tm.md` (id:sgqxe).
+      - **Re-run:** `sh scripts/test_bench_threshold_gate.sh` -> 31 `[PASS]` lines, T3, T8 and T9 among them, last line `All bench threshold gate tests passed.`; `sh scripts/perf_gap.sh --gate-check` -> six `[PASS]` lines (`+0.0%` four times, `qsort +0.2%`, `sha +0.1%`); the two `select_test_tier.sh --scenarios` commands -> `bench-threshold-gate` and `bench-contention bench-threshold-gate`, `--gates scripts/perf_gap.sh` -> `no-new-deps perf-gate portability`; `sh scripts/test_tier_select.sh` -> `test_tier_select: all checks passed`; `make test` -> `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.6s)`.
+      - **A run that does not count:** the first `make test` of this review gave `Total: 3446 run, 3445 passed, 1 failed` (`mutation-self-test`: `Baseline compiler has failing test(s); fix them first: perf-gate`). The cause was this review, not the batch: a probe of `--gate-record fib` with a `valgrind` meant to be killed finished instead and replaced `bench/perf_gap/gate_baseline.tsv` with a one-program file while the suite ran. The file was restored with `git checkout`, `--gate-check` printed its six `[PASS]` lines again, and the run quoted above was made afterwards with nothing else running.
+      - **id:s72rr:** `rg -n 'gate_count' scripts/` shows the definition and the three call sites, all three in the captured form. A real `valgrind` killed at once (`kill -9` from a wrapper on `PATH`): `--record-run fib` prints `perf_gap: fib: callgrind reported no instruction count (see ...)`, exits 1 and writes no file. A host without valgrind still records an empty field (T3). `--gate-record` with a failing count was not probed on the real tree (it writes the tracked baseline); T9 covers it on a scratch tree.
+      - **id:2msct:** of the scripts the two scenarios run, `bench_cross_lang.sh`, `perf_gap.sh` and the two test scripts select their scenario by their rows; `scripts/lib/portability.sh`, `scripts/lib/records.sh` and `scripts/record_figures.sh` select everything (`--tier` prints `all core_infra`, `all core_infra` and `all`); `scripts/env.sh` selects `clean-tree` only, and the scenarios merely source it.
+      - **Seen, in `future.tm.md` (id:sgqxe):** `--gate-record NAME` writes a baseline holding only the named programs, dropping the others' rows (what the probe above did), and a recording that fails leaves `gate_baseline.tsv.tmp` behind.
+      - **The maintainer's answers (2026-11-15)** to the questions of id:269a6 are recorded in id:69svf (no limit for each program) and id:rdpmh (the retry is removed; id:41rnk does it, reviewed in id:95cy3). id:sx4a3 is still open with the maintainer.
+
+- [x] +bench +decision +AI-D @main Decide whether the runtime gate also limits each program's ratio, not only the geometric mean id:69svf
+    > **Created:** 2026-11-15
+    > **Found by:** the check-in id:269a6.
+    > **Placed:** under Evidence and tooling: a decision for the maintainer, blocking nothing in the queue.
+    > **Completed:** 2026-11-15 git:164ba45
+
+    - **Measured (id:269a6, this host, git:03937b7):** seven runs of the six programs (five of `sh scripts/perf_gap.sh --tsv`, two recorded). The geometric mean of the Zoril to gcc ratios stayed within 2.313 to 2.366 (2.3%). Each program's ratio moved more: `array_loop` 5.406 to 6.279 (16.1%, from gcc's side: 129 to 145 ms), `fib` 3.598 to 3.966 (10.2%, one gcc run of 176 ms against 191 to 194), `particles` 2.558 to 2.758 (7.8%), `sha` 1.719 to 1.814 (5.5%), `qsort` 1.275 to 1.295 (1.6%), `vm` 1.308 to 1.320 (0.9%). The Zoril times alone: `array_loop` 773 to 826 ms (6.9%), `sha` 232 to 254 (9.5%), the other four within 2.3%.
+    - **What the mean hides:** one program 60% slower moves the mean by 8.2% (1.6 to the power 1/6), inside the 15% tolerance: with `array_loop`'s time times 1.6 the gate prints `[OK]  runtime_geomean_vs_gcc_o2  2.537 (baseline 2.346, tol 15%)`. One program alone trips the gate only when it is 2.31 times slower (1.15 to the power 6). The instruction-count gate (`perf-gate`, 2% a program, in `make test`) sees such a change wherever it executes more instructions; it does not see one that costs time without instructions (cache behaviour, branch prediction) nor its own stated blind spot (`rep movsb` counted as one instruction), which `scripts/perf_gap.sh`'s header tells the author to "judge by the timing".
+    - **Question for the maintainer:** does the timing gate get a limit for each program as well?
+    - **Recommendation (the reviewing session's):** yes, a loose one, and tighten the mean. (a) Each program's `ratio_vs_gcc` against the same program's row of this host's last `baseline` in `bench/records/runtime_history.tsv`, tolerance 30%: above the 16% this host shows between quiet runs, below the 60% plant. (b) The mean's tolerance from 15% to 8%: its noise here is 2.3%, and at 8% one program 60% slower is at the limit. A limit of 15% a program would fail quiet runs here (`array_loop`). The cost: one more way a preflight fails on a loaded host; a confirmation re-run of the one program that exceeds its limit would cover that. Not decided: the two numbers, and whether the limit compares ratios (noise from gcc's side) or Zoril's times alone (no noise from gcc, but nothing cancels a slow host).
+    - **Corrected by id:f0zzh (2026-11-15), 42 more runs on this host:** the noise is about three times what the seven runs above showed. Over the 42 backfill runs, in which no instruction count moved, a program's ratio ranges over 17% to 23% (`array_loop` 23.0%, `fib` 22.6%, `qsort` 20.6%, `particles` 20.0%, `vm` 18.6%, `sha` 17.1%), single steps reach 17%, and the geometric mean ranges over 7.4% (2.260 to 2.428). Each program's time takes one of two values under the `powersave` governor. So the recommendation above no longer holds as written: a mean tolerance of 8% would fail quiet runs, and a limit of 30% a program leaves little room over 23%. **Recommendation now:** leave the mean at 15%; if a limit for each program is wanted, first remove the two timing states (the `performance` governor for the run, or the minimum of the runs in place of the median: `PERF_GAP_STAT=min` exists), measure the spread again over the same 42 commits' worth of runs, and set the limit from that. Until then the instruction-count gate is the per-program check, and it saw nothing in 42 commits.
+    - **Do, once answered:** settle the numbers in an `+AI-G` task (the limit, T-cases with a baseline of six rows and one program planted over its limit, the limit taken out to watch the case fail), after id:f0zzh, whose `--record` writes the `baseline` rows this compares with.
+    - **Decided (the maintainer, 2026-11-15):** no limit for each program. The gate stays the geometric mean at 15%; the instruction-count gate is the check of each program. Nothing follows from this task.
+
+- [x] +bench +decision +AI-D @main Decide whether the `fib` confirmation retry, which the gate no longer reaches, is removed id:rdpmh
+    > **Created:** 2026-11-15
+    > **Found by:** the check-in id:269a6.
+    > **Placed:** under Evidence and tooling: a decision for the maintainer, blocking nothing in the queue.
+    > **Completed:** 2026-11-15 git:164ba45
+
+    - **Now (git:03937b7):** `bench/cross_lang/tolerances.cfg` no longer lists `runtime_ratio_vs_gcc_o2` (id:9d99n), so the confirmation re-measurement in `check_thresholds_gate` (`scripts/bench_cross_lang.sh`, the `[RETEST]` branch, which runs only for that axis) is reached by no real run. `scripts/test_bench_threshold_gate.sh` keeps its two cases passing (`deliberately slowed build fails the gate after confirmation`, `transient noise spike re-measured and passes gate`) by giving them a tolerance file of their own that still lists the axis (`tol_legacy.cfg`). id:9d99n's design said the retry "goes with the old gate" if it did not fit the new measure; the task kept it and said so.
+    - **Also seen:** the `vs last` line of the gate still prints `runtime_ratio_vs_gcc_o2` and not the gated `runtime_geomean_vs_gcc_o2` (`l_geo` is read and never used); `bench/cross_lang/tolerances.cfg` gained an empty last line (harmless: the reader skips it).
+    - **Question for the maintainer:** remove the retry and its two cases, or keep them for a host that puts the `fib` axis back into its tolerance file?
+    - **Recommendation (the reviewing session's):** remove them: the new measure's noise on this host is 2.3% against a 15% tolerance, so it needs no retry, and code only a test's private configuration reaches reads as a safeguard the gate does not have. If id:69svf adds a limit for each program, its re-run of the one program is the retry's successor and is written there. The `fib` ratio stays measured and recorded.
+    - **Decided (the maintainer, 2026-11-15):** the retry is removed, with its two test cases. id:41rnk carries it out (the settled edits are there), reviewed in id:95cy3.
+
+- [ ] +bench +testinfra +AI-G @main The gate no longer carries the `fib` confirmation retry, and its `vs last` line shows the gated mean id:41rnk
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Decided by:** the maintainer, 2026-11-15 (id:rdpmh): the retry is removed.
+    > **Placed:** after id:rdpmh, the decision it carries out.
+    > **Check-in:** reviewed in id:95cy3.
+
+    - **Now (git:164ba45):** as id:rdpmh describes. `check_thresholds_gate` in `scripts/bench_cross_lang.sh` re-measures only the `runtime_ratio_vs_gcc_o2` axis (the `[RETEST]` branch), which `bench/cross_lang/tolerances.cfg` no longer lists; `scripts/test_bench_threshold_gate.sh` reaches it with `tol_legacy.cfg`. The gate's `vs last` line prints `runtime_ratio_vs_gcc_o2 <now> (was <last>)` and not the gated mean.
+    - **Settled:**
+      1. `scripts/bench_cross_lang.sh`, in `check_thresholds_gate`: the `[RETEST]` arm goes (the `if [ "$ok" -eq 0 ] && [ "$axis" = "runtime_ratio_vs_gcc_o2" ] ...` branch down to its `fi`-side `elif`, which becomes the `if`), and so does the case arm `runtime_ratio_vs_gcc_o2) baseline="$b_rat" ;;`: the axis is not gated, with any tolerance file (a line naming it is skipped like any unknown axis). `b_rat` is then unused: read that field into `_`. `measure_runtime_pair` stays: the `fib` ratio is still measured and written to the metrics file, the gate row and `speed_history.tsv` as today.
+      2. The `vs last` line prints `runtime_geomean_vs_gcc_o2 %s (was %s)` in place of the `runtime_ratio_vs_gcc_o2` pair, from the run's value and the last row's 18th field, each `-` where it is empty.
+      3. `scripts/test_bench_threshold_gate.sh`: cases 2 and 3 (`deliberately slowed build fails the gate after confirmation`, `transient noise spike re-measured and passes gate`) go with their stub programs under `$tmp/work`; case 1 keeps its name's sense with the shipped tolerances (no `TOLERANCES_FILE`) and expects `[OK]  clean_throughput_loc_s`, renamed `normal run within tolerance passes`; `tol_legacy.cfg` goes; the header comment no longer says "noise retry". The two removed cases are removed on the maintainer's decision: their subject no longer exists.
+      4. `bench/cross_lang/tolerances.cfg` loses its empty last line.
+    - **Tests:** T10, beside T5, with `write_header_18` and its 18-field baseline row (mean 2.000) and `metrics_t5_pass.tsv` (2.200) on a history file of its own: the output has `runtime_geomean_vs_gcc_o2 2.200 (was 2.000)`. T11, the same run against a history whose only row has 17 fields (`write_header`, `append_row`): the output has `runtime_geomean_vs_gcc_o2 2.200 (was -)`. T12, a tolerance file that lists `runtime_ratio_vs_gcc_o2|15|lower_better` and a metrics file whose ratio is 5.250 against a baseline of 3.867: exit 0 and no line of the output has `runtime_ratio_vs_gcc_o2` after `[FAIL]` or `[RETEST]`.
+    - **Checks:**
+      - C1: before: `sh scripts/test_bench_threshold_gate.sh | grep -c '^\[PASS\]'` (expected 31) and `rg -c 'RETEST|noise retry|tol_legacy' scripts/bench_cross_lang.sh scripts/test_bench_threshold_gate.sh`; quote both.
+      - C2: after: the test script; quote the `[PASS]` lines of case 1, T10, T11 and T12, the count of `[PASS]` lines (expected 32: 31, less 2, plus 3) and the last line. `rg -n 'RETEST|noise retry|tol_legacy|b_rat' scripts/` prints nothing. Put the `runtime_ratio_vs_gcc_o2` pair back into the `vs last` line and quote T10 failing; put the case arm back and quote T12 failing; restore.
+      - C3: a real run, `sh scripts/bench_threshold_check.sh > build/41rnk-run.log 2>&1`: quote its `vs last` line and its three `[OK]` lines; `git status --short` of the code tree shows only this task's files.
+      - C4: `tail -c 1 bench/cross_lang/tolerances.cfg | od -c` shows one newline and `tail -n 1` prints the `runtime_geomean_vs_gcc_o2` line.
+      - C5: `make test-changed BASE=HEAD` before the commit (quote that `bench-threshold-gate` and `bench-contention` ran, and its `Total:` line), then `make test`; quote its `Total:` line. No `src/`, `stdlib/` or `tools/` file changes, so no preflight; C3 is the run of the bench step.
+      - C6: commit on `main`, add `**Awaiting review:**` with C2 to C5, `tm done`, and stop at the check-in id:95cy3.
+
+- [ ] +bench +review +AI-D @main @checkin Review of the removal of the `fib` confirmation retry id:95cy3
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Depends:** id:41rnk
+    > **Placed:** directly after the task it reviews.
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` on `main` since git:164ba45; re-run what the **Awaiting review:** bullet names.
+      - Nothing else went with the retry: a real `sh scripts/bench_threshold_check.sh` still writes `runtime_ratio_vs_gcc_o2` into the metrics file, the gate row's 16th field and `speed_history.tsv`; `measure_runtime_pair` is still called once.
+      - The gate still fails where it should: T5 unchanged, and a planted run 20% over the baseline's mean through `--check-thresholds-only` exits 1.
 
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
