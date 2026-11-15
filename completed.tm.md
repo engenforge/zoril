@@ -2,6 +2,236 @@
 
 ## 2026-11
 
+- [x] +docs +tests +AI-G @main The spec says a match guard may not move or drop the matched value, and both forms have a test id:4jawf
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** directly after id:3yasf, as a follow-up to the batch it reviewed (finding 5).
+    > **Depends:** id:3yasf
+    > **Check-in:** reviewed with the batch in id:qmms1.
+    > **Completed:** 2026-11-15 git:b671f6d
+
+    - **Now:** git:67f87b0 made `consume_place_if_move` (`src/lower_zir/decl.zrl`) and `lower_drop_intrinsic` (`src/lower_zir/expr.zrl`) refuse a move or an `@drop` of the matched value inside a match guard (`cannot move the matched value in a match guard`). `doc/spec/surface_syntax.md` §5.3 names only assignment and a mutable borrow, and the only test of the new message is the nested match of `tests/language/match/enum_payload_move_used_in_guard.zrl`.
+    - **Do:** no change to `src/`.
+      1. `doc/spec/surface_syntax.md`, the paragraph starting "A `match` arm has the form": replace `nor borrow it mutably (including through a `&mut self` method): the arm's by-value bindings are made before the guard runs, so such a write would drop a value a binding still holds ([`tests/error_reporting/err_match_guard_mutates_scrutinee.zrl`](../../tests/error_reporting/err_match_guard_mutates_scrutinee.zrl)).` with `nor borrow it mutably (including through a `&mut self` method), nor move it or drop it with `@drop`: the arm's by-value bindings are made before the guard runs, so such a write, move or drop would leave a binding holding a value that is dropped a second time ([`tests/error_reporting/err_match_guard_mutates_scrutinee.zrl`](../../tests/error_reporting/err_match_guard_mutates_scrutinee.zrl), [`tests/error_reporting/err_match_guard_moves_scrutinee.zrl`](../../tests/error_reporting/err_match_guard_moves_scrutinee.zrl), [`tests/error_reporting/err_match_guard_drops_scrutinee.zrl`](../../tests/error_reporting/err_match_guard_drops_scrutinee.zrl)).`
+      2. `doc/spec/safety_model.md`, the **Drop Exactly Once** row: replace `and assigning to or mutably borrowing the scrutinee inside a match guard` with `and assigning to, mutably borrowing, moving or dropping the scrutinee inside a match guard`.
+      3. Two tests, each starting with a one-line comment saying what it shows, then `// expected compile fail` and `// EXPECT: cannot move the matched value in a match guard`, then the three lines `struct S { p: i32 }`, `impl Drop for S { fn drop(self: &mut S) {} }`, `enum Q { A(S), B }`:
+    - `tests/error_reporting/err_match_guard_moves_scrutinee.zrl`: `fn take(e: Q) -> bool { return true; }` and `fn main() -> i32 { let e = Q.A(S { p: 1 }); match e { Q.B if take(e) => {}, _ => {} } return 0; }`.
+    - `tests/error_reporting/err_match_guard_drops_scrutinee.zrl`: `fn main() -> i32 { let e = Q.A(S { p: 1 }); match e { Q.A(s) if { @drop(e); true } => {}, _ => {} } return 0; }`.
+    - **Checks:**
+      - C1: `./scripts/test.sh tests/error_reporting/err_match_guard_moves_scrutinee.zrl tests/error_reporting/err_match_guard_drops_scrutinee.zrl`; quote its `Total:` line (2 passed).
+      - C2: take the rule out and watch both fail: in a scratch worktree of `HEAD` under `build/4jawf/` (never in the main tree), delete the two `if self.guard_scrut_overlaps(..) { .. "cannot move the matched value in a match guard" .. }` blocks (`consume_place_if_move` in `src/lower_zir/decl.zrl`, `lower_drop_intrinsic` in `src/lower_zir/expr.zrl`), `make` there, and run C1's command there; quote the two `[FAIL]` lines (expected: each program is then refused with `use of moved value 'e'`, which is not the `EXPECT` text). Remove the worktree.
+      - C3: `git diff --stat HEAD` names only the two spec files and the two tests.
+      - C4: `make test-changed BASE=HEAD` before the commit; quote its `Total:` line.
+      - C5: commit on `main`, add `**Awaiting review:**` with C1, C2 and C4, `tm done`.
+    - **Awaiting review:**
+      - C1: `./scripts/test.sh tests/error_reporting/err_match_guard_moves_scrutinee.zrl tests/error_reporting/err_match_guard_drops_scrutinee.zrl` -> `Total: 3 run, 3 passed, 0 failed, 0 skipped (0.1s)`.
+      - C2: in detached worktree `build/4jawf` with both `guard_scrut_overlaps` blocks removed and rebuilt via `make -j4`, C1 failed with `[FAIL] tests/error_reporting/err_match_guard_drops_scrutinee.zrl (diagnostic mismatch) (15ms)` (`error: use of moved value 'e'`, `error: use of dropped value 'e'`) and `[FAIL] tests/error_reporting/err_match_guard_moves_scrutinee.zrl (diagnostic mismatch) (15ms)` (`error: use of moved value 'e'`). Worktree removed.
+      - C3: also updated `bench/safety_matrix/matrix.md` (and ran `make md-fmt`) because `safety-model` gate requires the **Drop Exactly Once** row in `doc/spec/safety_model.md` and `bench/safety_matrix/matrix.md` to match. Changed files: `doc/spec/surface_syntax.md`, `doc/spec/safety_model.md`, `bench/safety_matrix/matrix.md`, `tests/error_reporting/err_match_guard_moves_scrutinee.zrl`, `tests/error_reporting/err_match_guard_drops_scrutinee.zrl`.
+      - C4: `make test-changed BASE=HEAD` -> `Total: 1603 run, 1603 passed, 0 failed, 100 skipped (50.4s)`.
+      - C5: committed on `main` as `git:b671f6d`.
+
+- [x] +safety +tests +AI-G @main The walk from an enum payload address to its enum has no depth at which it answers "not borrowed" (gap_91) id:yw8h9
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** after id:4jawf, in the batch that follows the check-in id:3yasf, which found it (finding 1).
+    > **Depends:** id:3yasf
+    > **Check-in:** a fix to a safety rule; reviewed in id:qmms1.
+    > **Completed:** 2026-11-15 git:26524b7
+
+    - **Probe:** `bench/safety_matrix/probes/gap_91_nested_enum_payload_moved_out_of_borrow_past_eight_levels.zrl` (`known_gap`, exit 77, git:f63b51c).
+    - **Cause:** `enum_payload_source_borrowed` (`src/check_zir.zrl`) follows `state.enum_aliases` from a payload address back to the enum it was taken from, one hop per nested payload, in `while depth < 8 as usize { .. }`, and ends with `return false;`: past eight hops the answer is "not borrowed", so the move out of `*r` is accepted. An owned enum matched by value 13 levels deep must stay accepted, so the bound cannot simply answer "borrowed": the walk has to reach the enum.
+    - **Settled (2026-11-15, prototyped by a reviewing session with the two later fixes on top; see id:3yasf's record):** bound the walk by the table it reads, and refuse if it is ever exhausted (a chain longer than the table has a cycle, which the lowering never builds).
+
+    ```diff
+             let mut cur = local_id;
+             let mut depth = 0 as usize;
+    -        while depth < 8 as usize {
+    +        let limit = state.enum_aliases.len() + 1 as usize;
+    +        while depth < limit {
+    ```
+
+    - And the function's last statement, after the loop, `return false;` becomes `return true;`. Add to the comment above the function one sentence saying why the bound is the table's length and why running out answers "borrowed" (no task ID in it). Change nothing else in the function: id:613zw rewrites its result type next.
+    - **Do:** the change above; flip the probe (`// expected: compile_reject`, `// EXPECT: cannot move out of borrow`, the `// gap:` and `// observed:` lines removed); remove its Known gaps entry in `doc/spec/safety_model.md` and its sentence in `doc/SAFETY.md` §6 class (N) (the last sentence of the bullet, "A nested pattern more than eight payloads deep .."; the bullet's "three places" becomes "two places"); update the counts (`doc/SAFETY.md` §5.1: `compile_reject` 372 to 373, `known_gap` 50 to 49; §6: 50 to 49; `doc/spec/safety_model.md`: "22 holes" to 21). Three tests under `tests/language/match/`, each with `struct S { p: i32 }`, `impl Drop for S { fn drop(self: &mut S) {} }`, and the thirteen enums `enum E0 { A(S), B }`, `enum E1 { A(E0), B }`, .. `enum E12 { A(E11), B }`; `PAT` is `E12.A(E11.A( .. E0.A(s) .. ))` and `VAL` the same nesting around `S { p: 1 }`:
+      - `enum_deep_nested_move_out_of_ref.zrl` (`// expected compile fail`, `// EXPECT: cannot move out of borrow`): `fn g(r: &E12) { match *r { PAT => {}, _ => {} } }`, `main` builds `VAL` and calls `g(&e)`.
+      - `enum_deep_nested_move_out_of_mut_ref.zrl`: the same with `&mut E12` and `let mut e`.
+      - `enum_deep_nested_owned_move.zrl` (`// expected exit 0`): `fn main() -> i32 { let e = VAL; match e { PAT => {}, _ => {} } return 0; }`.
+    - **Checks:** (`R <file>` below is `mkdir -p build/yw8h9 && timeout -k 5s 60s build/zbuild -I stdlib=stdlib --cache-dir build/yw8h9/cache -o build/yw8h9/p.bin <file> && { build/yw8h9/p.bin; echo "exit $?"; }`: it prints the first `error:` line of a refused program, or `exit N` of one that built.)
+      - C1: before the change, `R` on the probe: `exit 77`; `R` on the two reject tests: each `exit 0`. Quote the three lines.
+      - C2: after the change and `make` (no warning), `./scripts/test.sh tests/language/match/enum_deep_nested_*.zrl tests/language/match/enum_nested_*.zrl`; quote its `Total:` line (5 passed).
+      - C3: take the change out: put `while depth < 8 as usize {` back (leave `return true;`), `make`, run C2's command and quote the `[FAIL]` lines (expected: the owned test, now refused, shows why the bound had to go; then also put `return false;` back, `make`, and quote the two reject tests failing). Restore the change, `make`, and rerun C2 before going on.
+      - C4: `sh scripts/run_safety_matrix.sh` (`Mismatches: 0`), `sh scripts/check_safety_figures.sh --all`, `sh scripts/check_safety_model.sh`; quote each verdict line.
+      - C5: `make test`, then `REJECT_DIFF_NO_CACHE=1 make preflight-changed`; quote each `Total:` line and the `reject-diff:` lines, and list every newly refused program (expected: this probe, whole-program and `zbuild`). Any other newly refused program: stop and report.
+      - C6: commit on `main` (the note says the fuzz record is stale for `src/`), add `**Awaiting review:**` with C2, C4 and C5, `tm done`.
+    - **Awaiting review:**
+      - C1: before the change, `R` on `gap_91` gave `exit 77`, `enum_deep_nested_move_out_of_ref.zrl` gave `exit 0`, and `enum_deep_nested_move_out_of_mut_ref.zrl` gave `exit 0`.
+      - C2: after the change and `make` (no warning), `./scripts/test.sh tests/language/match/enum_deep_nested_*.zrl tests/language/match/enum_nested_*.zrl` -> `Total: 6 run, 6 passed, 0 failed, 0 skipped (0.1s)` (`Selected tests 5 run 5 passed`).
+      - C3: with `depth < 8 as usize` and `return true`, C2 failed with `[FAIL] tests/language/match/enum_deep_nested_owned_move.zrl (compile failed) (16ms)`; with `return false` also restored, C2 failed with `[FAIL] tests/language/match/enum_deep_nested_move_out_of_mut_ref.zrl (expected compile fail, but it compiled) (14ms)` and `[FAIL] tests/language/match/enum_deep_nested_move_out_of_ref.zrl (expected compile fail, but it compiled) (13ms)`. Restored, rebuilt, and reran C2 (`Total: 6 run, 6 passed, 0 failed, 0 skipped (0.1s)`).
+      - C4: `sh scripts/run_safety_matrix.sh` -> `All probes complete: 469/518 passed. Mismatches: 0`; `sh scripts/check_safety_figures.sh --all` -> `[PASS] safety-figures: all 9 §5 figure(s) match the tree ...` (after updating compiler line count 47,890 -> 47,893 in `doc/SAFETY.md` and 41,624 -> 41,625 in `doc/spec/unsafe_policy.md`); `sh scripts/check_safety_model.sh` -> `PASS: safety_model.md is self-consistent.`.
+      - C5: `make test` -> `Total: 3351 run, 3351 passed, 0 failed, 100 skipped (121.5s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` -> `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 12 newly refused, of 69158 programs against c161107f5f95e43c7557e5f44d046856a6bcbbd8` (`gap_83`, `gap_84`, `gap_85`, `gap_86`, `gap_88`, `gap_91` each twice; only `gap_91` is from this commit), `Total: 1230 run, 1230 passed, 0 failed, 0 skipped (44.9s)`.
+      - C6: committed on `main` as `git:26524b7`.
+
+- [x] +safety +tests +AI-G @main A closure may not move a part out of a value it captured (gap_89) id:613zw
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** after id:yw8h9, in the batch that follows the check-in id:3yasf, which found it (finding 2).
+    > **Depends:** id:yw8h9
+    > **Depends note:** the hunks below are written over id:yw8h9's version of `enum_payload_source_borrowed`.
+    > **Check-in:** a fix to a safety rule; reviewed in id:qmms1.
+    > **Completed:** 2026-11-15 git:44ab3e6
+
+    - **Probe:** `bench/safety_matrix/probes/gap_89_payload_moved_out_of_closure_capture.zrl` (`known_gap`, exit 77, git:f63b51c; the compiler of git:e0febf3 accepts it the same way).
+    - **Cause:** inside a closure body a captured value is a local marked `is_capture_alias`, which is not an owner. `check_place_use` (`src/check_zir.zrl`) refuses a move of it only as `if loc.is_capture_alias && place.projections.len == 0 as usize`, so three routes pass: a projection of the alias (`w.s`, `t.0`, a struct or tuple pattern); an enum payload bound through `EnumPayload(alias)` and `Use(*payload_tmp)`, whose base is the payload temporary; and the `consume_place` marker git:67f87b0 emits for the matched enum, which `check_places_consumed` applies without looking at the alias flag.
+    - **Settled (2026-11-15, prototyped with id:760hd's hunks; see id:3yasf's record):** three additions to `src/check_zir.zrl`, one message, `cannot move out of a closure capture` (the one the whole-capture rule has).
+      1. `enum_payload_source_borrowed` becomes `enum_payload_source_refusal`, returning why the move out of the payload address is refused: `0` not refused, `1` its source is borrowed, `2` its source is a closure capture. Every `return false` in it becomes `return 0 as u32`, every `return true` `return 1 as u32` (the one after the loop too), and directly after `let src_loc = &locals[src.base as usize - 1 as usize];` comes `if src_loc.is_capture_alias { return 2 as u32; }`. Its comment says what the three values mean.
+      2. In `check_place_use`:
+
+    ```diff
+                 let is_enum_ptr = self.is_enum_payload_alias(place.base, state);
+    +            let why = if is_enum_ptr {
+    +                self.enum_payload_source_refusal(place.base, state, locals)
+    +            } else {
+    +                0 as u32
+    +            };
+    +            if why == 2 as u32 {
+    +                self.report_error("cannot move out of a closure capture", span);
+    +                return;
+    +            }
+                 let out_of_borrow = loc.name_id != 0 as u32
+                     || (!is_enum_ptr && self.local_holds_borrow(place.base, state))
+    -                || (is_enum_ptr && self.enum_payload_source_borrowed(place.base, state, locals));
+    +                || why == 1 as u32;
+                 if out_of_borrow {
+                     self.report_error("cannot move out of borrow", span);
+                     return;
+                 }
+             }
+    +        if loc.is_capture_alias {
+    +            self.report_error("cannot move out of a closure capture", span);
+    +            return;
+    +        }
+             if self.is_borrowed_by_other(place, state, locals) {
+    ```
+
+    - The new `if loc.is_capture_alias` stands after the pointer block on purpose: a move through a captured reference keeps its `cannot move out of borrow`. The existing whole-capture check above stays as it is.
+    - Part 3. In `check_places_consumed`, directly after `let loc = &locals[p.base as usize - 1 as usize];`: `if loc.is_capture_alias && !loc.is_copy { self.report_error("cannot move out of a closure capture", span); continue; }`.
+    - **Do:** the change; flip the probe (`// expected: compile_reject`, `// EXPECT: cannot move out of a closure capture`); remove its Known gaps entry and, in `doc/SAFETY.md` §6 class (N), the sentence about the closure ("A closure that moves a part out .. only moving the whole capture is refused."; "two places" becomes "one place": reword the bullet's first sentence to fit what is left); counts (`compile_reject` 373 to 374, `known_gap` 49 to 48, in both places; "21 holes" to 20). Tests under `tests/language/closures/`, each `// expected compile fail`, `// EXPECT: cannot move out of a closure capture`, with `struct S { p: i32 }`, `impl Drop for S { fn drop(self: &mut S) {} }` and what it needs of `enum Q { A(S), B }`, `enum E1 { A(S) }`, `struct W { s: S, n: i32 }`, `enum Result<T, E> { Ok(T), Err(E) }`; `main` makes the value, binds the closure to `f` and calls `f();`:
+      - `closure_capture_match_payload_moved.zrl`: `let f = || { match e { Q.A(s) => {}, Q.B => {} } };`
+      - `closure_capture_if_let_payload_moved.zrl`: `let f = || { if let Q.A(s) = e {} };`
+      - `closure_capture_let_pattern_payload_moved.zrl`: `let f = || { let E1.A(s) = e; };`
+      - `closure_capture_tuple_part_moved.zrl`: `let t = (S { p: 1 }, 1); let f = || { let (s, _) = t; };`
+      - `closure_capture_field_moved.zrl`: `let f = || { let x = w.s; };`
+      - `closure_capture_struct_pattern_moved.zrl`: `let f = || { let W { s: s, n: _ } = w; };`
+      - `closure_capture_try_payload_moved.zrl`: `let r = Result::<S, i32>.Ok(S { p: 1 }); let f = || -> Result<i32, i32> { let s = r?; return Result.Ok(1); }; let _ = f();`
+      - `closure_capture_read_without_move.zrl` (`// expected exit 0`), three closures over an `e = Q.A(S { p: 1 })` and a `w`: `|| -> i32 { match e { Q.B => { return 1; }, _ => { return 2; } } }` (2), `|| -> i32 { match &e { Q.A(s) => { return s.p; }, _ => { return 0; } } }` (1), `|| -> i32 { return w.n; }`; `main` returns 0 when each gives its value. If any of the three is refused, stop and report: the rule refuses a read.
+    - **Checks:** (`R <file>` below is `mkdir -p build/613zw && timeout -k 5s 60s build/zbuild -I stdlib=stdlib --cache-dir build/613zw/cache -o build/613zw/p.bin <file> && { build/613zw/p.bin; echo "exit $?"; }`: it prints the first `error:` line of a refused program, or `exit N` of one that built.)
+      - C1: before the change, `R` on the probe (`exit 77`) and on the seven reject tests (each `exit 0`); quote them.
+      - C2: after the change and `make` (no warning), `./scripts/test.sh` on the eight new tests and on the directory holding the existing closure tests (`./scripts/test.sh --filter closure tests`); quote both `Total:` lines.
+      - C3: take each addition out alone, `make`, rerun the eight tests, and quote which fail: without 1's `is_capture_alias` line (expected: the match, `if let`, `let` pattern and `?` tests, or those the marker in 3 does not also catch; record what is seen), without 2's `if loc.is_capture_alias` (expected: the tuple, field and struct pattern tests), without 3. An addition whose removal fails no test: add the test that needs it, or report that none can. Restore, `make`, rerun C2.
+      - C4: `sh scripts/run_safety_matrix.sh` (`Mismatches: 0`), `sh scripts/check_safety_figures.sh --all`, `sh scripts/check_safety_model.sh`; quote each verdict line.
+      - C5: `make test`, then `REJECT_DIFF_NO_CACHE=1 make preflight-changed`; quote each `Total:` line and the `reject-diff:` lines, and list every newly refused program (expected: this probe, twice). Any other: stop and report, with the program.
+      - C6: commit on `main` (the note says the fuzz record is stale for `src/`), add `**Awaiting review:**` with C2 to C5, `tm done`.
+    - **Awaiting review:**
+      - C1: before the change, `R` on `gap_89` gave `exit 77` and on all 7 reject tests gave `exit 0`.
+      - C2: after the change and `make` (no warning), `./scripts/test.sh tests/language/closures/closure_capture_*.zrl` -> `Total: 10 run, 10 passed, 0 failed, 0 skipped (0.1s)` (`Selected tests 9 run 9 passed`); `./scripts/test.sh --filter closure tests` -> `Total: 49 run, 49 passed, 0 failed, 0 skipped (0.3s)` (`Selected tests 48 run 48 passed`). (In `closure_capture_read_without_move.zrl`, used `e1` and `e2` for `f1` and `f2` because both closures capture the enum by value.)
+      - C3: without part 1's `is_capture_alias` line alone, all 8 tests still passed (part 3's `check_places_consumed` catches the same enum-payload routes); without part 2's `if loc.is_capture_alias` alone, `[FAIL] tests/language/closures/closure_capture_field_moved.zrl (expected compile fail, but it compiled) (13ms)`; without part 3 alone, all 8 tests still passed (part 1's `enum_payload_source_refusal` catches the same enum-payload routes; parts 1 and 3 are defense-in-depth on the same `match`/`if let`/`let`/`?` routes). Restored, rebuilt, and reran C2 (`Total: 9 run, 9 passed, 0 failed, 0 skipped (0.1s)`).
+      - C4: `sh scripts/run_safety_matrix.sh` -> `All probes complete: 470/518 passed. Mismatches: 0`; `sh scripts/check_safety_figures.sh --all` -> `[PASS] safety-figures: all 9 §5 figure(s) match the tree ...` (after updating compiler line count 47,893 -> 47,911 in `doc/SAFETY.md` and 41,625 -> 41,643 in `doc/spec/unsafe_policy.md`); `sh scripts/check_safety_model.sh` -> `PASS: safety_model.md is self-consistent.`.
+      - C5: `make test` -> `Total: 3369 run, 3369 passed, 0 failed, 98 skipped (121.9s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` -> `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 14 newly refused, of 69158 programs against c161107f5f95e43c7557e5f44d046856a6bcbbd8` (12 from earlier commits on `main`, plus `gap_89` twice from this commit), `Total: 1238 run, 1238 passed, 0 failed, 0 skipped (45.2s)`.
+      - C6: committed on `main` as `git:44ab3e6`.
+
+- [x] +safety +tests +AI-G @main A value that needs a drop is not moved out of an array or slice element (gap_90) id:760hd
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** after id:613zw, in the batch that follows the check-in id:3yasf, which found it (finding 3).
+    > **Depends:** id:613zw
+    > **Depends note:** it adds a fourth value to `enum_payload_source_refusal`, which id:613zw introduces.
+    > **Check-in:** a fix to a safety rule; reviewed in id:qmms1.
+    > **Completed:** 2026-11-15 git:1cc65c1
+
+    - **Probe:** `bench/safety_matrix/probes/gap_90_drop_value_moved_out_of_array_or_slice_element.zrl` (`known_gap`, exit 77, git:f63b51c; the compiler of git:e0febf3 accepts it the same way).
+    - **Cause:** a by-value read of `a[i]` whose type is not `Copy` is a move, and nothing refuses it. In the lowering, `reject_partial_move` (`src/lower_zir/decl.zrl`) returns at the first projection that is not a field or a tuple index. In `check_place_use` (`src/check_zir.zrl`) a slice local is not a pointer local, so the `cannot move out of borrow` rule does not apply; for a local array the checker marks the whole array moved while the lowering still drops it; and an enum payload address taken from `a[i]` is not read as borrowed.
+    - **Scope, settled (2026-11-15):** this task refuses the read when the value read **needs a drop** (`type_has_drop`), which is the double drop shown. Measured on a prototype: it refuses nothing in `src/`, `stdlib/`, `tools/` or `tests/` (`make test` on the prototype, in id:3yasf's record). The same read of a value that is not `Copy` and needs no drop (a `Vec`, a `Box`, a struct holding one) is `gap_92`; refusing it refuses six sites of the tree, so it is the maintainer's decision, id:v0bwt. Do not widen this task to it: `gap_92` must still be accepted when this task is done (C4).
+    - **Settled change, `src/check_zir.zrl` only** (one message, `cannot move out of an array or slice element`):
+      1. A helper beside `place_has_deref`, with the same body for `PROJ_INDEX`: `fn place_has_index(self: &ZirVerifier, place: &Place) -> bool`.
+      2. In `enum_payload_source_refusal`, directly after id:613zw's `if src_loc.is_capture_alias { return 2 as u32; }`: `if self.place_has_index(&src) { return 3 as u32; }`, and `3` (the source is an array or slice element) added to its comment.
+      3. In `check_place_use`, directly after id:613zw's `if why == 2 as u32 { .. }`:
+
+    ```diff
+    +            if why == 3 as u32
+    +                && self.type_has_drop(self.get_place_type(place, locals), 0 as usize) {
+    +                self.report_error("cannot move out of an array or slice element", span);
+    +                return;
+    +            }
+    ```
+
+    - And directly after id:613zw's `if loc.is_capture_alias { .. }` that follows the pointer block:
+
+    ```diff
+    +        if self.place_has_index(place)
+    +            && self.type_has_drop(self.get_place_type(place, locals), 0 as usize) {
+    +            self.report_error("cannot move out of an array or slice element", span);
+    +            return;
+    +        }
+    ```
+
+    - `reject_partial_move` is left as it is: the checker refuses these, whatever the lowering emitted.
+    - **Do:** the change; flip the probe (`// expected: compile_reject`, `// EXPECT: cannot move out of an array or slice element`); remove its Known gaps entry and its clause in `doc/SAFETY.md` §6 class (N), so that the bullet reads: `- **(N) A `Vec` read twice out of a slice element:** a by-value read of a slice element that is not `Copy` and needs no drop is accepted as a move although the slice still holds the value, so a `Vec` read twice gives two owners of one buffer, and `free()` through one leaves the other dangling ([`gap_92_vec_duplicated_out_of_slice_element.zrl`](../bench/safety_matrix/probes/gap_92_vec_duplicated_out_of_slice_element.zrl)).`; counts (`compile_reject` 374 to 375, `known_gap` 48 to 47, in both places; "20 holes" to 19). In `doc/spec/safety_model.md`'s **Drop Exactly Once** row, after `(`let x = w.d;`) is rejected, since partial moves are not tracked per field;` add ` so is reading such a value by value out of an array or slice element (`let s = a[0];`);`. Tests under `tests/language/memory/` (a new directory `element_move/`), each `// expected compile fail`, `// EXPECT: cannot move out of an array or slice element`, with `struct S { p: i32 }`, `impl Drop for S { fn drop(self: &mut S) {} }` and what it needs of `enum Q { A(S), B }`, `enum E1 { A(S) }`, `struct P { s: S, n: i32 }`, `enum Result<T, E> { Ok(T), Err(E) }`; where a function takes a slice, `main` makes a one-element array and passes `&a`:
+      - `slice_let.zrl`: `fn g(a: [S]) { let s = a[0]; }`
+      - `array_let.zrl`: `let a = [S { p: 1 }]; let s = a[0];` in `main`
+      - `slice_mut_match_payload.zrl`: `fn g(a: [mut Q]) { match a[0] { Q.A(s) => {}, _ => {} } }`
+      - `array_match_payload.zrl`: `let a = [Q.A(S { p: 1 })]; match a[0] { Q.A(s) => {}, _ => {} }`
+      - `slice_if_let.zrl`: `fn g(a: [Q]) { if let Q.A(s) = a[0] {} }`
+      - `slice_let_pattern.zrl`: `fn g(a: [E1]) { let E1.A(s) = a[0]; }`
+      - `slice_try.zrl`: `fn g(a: [Result<S, i32>]) -> Result<i32, i32> { let s = a[0]?; return Result.Ok(1); }`
+      - `slice_tuple_pattern.zrl`: `fn g(a: [(S, i32)]) { let (s, n) = a[0]; }`
+      - `slice_struct_pattern.zrl`: `fn g(a: [P]) { let P { s, n } = a[0]; }`
+      - `slice_match_binding.zrl`: `fn g(a: [S]) { match a[0] { s => {} } }`
+      - `slice_field_of_element.zrl`: `fn g(a: [P]) { let s = a[0].s; }`
+      - `slice_nested_index.zrl`: `fn g(a: [[Q; 1]]) { match a[0][0] { Q.A(s) => {}, _ => {} } }`
+      - `struct_field_array.zrl`: `struct W { a: [Q; 1] }`, `let w = W { a: [Q.A(S { p: 1 })] }; match w.a[0] { Q.A(s) => {}, _ => {} }`
+      - `element_as_argument.zrl`: `fn sink(s: S) {}`, `sink(a[0]);` on a local array
+      - `element_returned.zrl`: `fn pick(a: [S]) -> S { return a[0]; }`
+      - `element_assigned.zrl`: `let mut s = S { p: 2 }; s = a[0];`
+      - `element_in_struct_literal.zrl`: `struct W { s: S }`, `let w = W { s: a[0] };`
+      - `temporary_array_element.zrl`: `fn mk() -> [S; 1] { return [S { p: 1 }]; }`, `let s = mk()[0];`
+      - `vec_element_match_payload.zrl`: `import "vec.zrl"; use vec::Vec;`, `let mut v = Vec::<Q>.new(); v.push(Q.A(S { p: 1 })); match v[0] { Q.A(s) => {}, _ => {} } v.free();`
+      - `element_read_without_move.zrl` (`// expected exit 0`): `fn n_of(a: [P]) -> i32 { let n = a[0].n; return n; }` (a `Copy` field), `fn tag(a: [Q]) -> i32 { match &a[0] { Q.A(s) => { return s.p; }, _ => { return 0; } } }` (a match on a reference to the element), `fn first(a: [i32]) -> i32 { let x = a[0]; return x; }`; `main` returns 0 when each gives its value. If any is refused, stop and report.
+    - **Checks:** (`R <file>` below is `mkdir -p build/760hd && timeout -k 5s 60s build/zbuild -I stdlib=stdlib --cache-dir build/760hd/cache -o build/760hd/p.bin <file> && { build/760hd/p.bin; echo "exit $?"; }`: it prints the first `error:` line of a refused program, or `exit N` of one that built.)
+      - C1: before the change, `R` on the probe (`exit 77`) and on the nineteen reject tests (each builds; quote each line: these are the before-figures).
+      - C2: after the change and `make` (no warning), `./scripts/test.sh tests/language/memory/element_move`; quote its `Total:` line (20 passed).
+      - C3: take each part out alone, `make`, rerun C2, quote which tests fail: without 2's line (expected: the payload tests: `slice_mut_match_payload`, `array_match_payload`, `slice_if_let`, `slice_let_pattern`, `slice_try`, `slice_nested_index`, `struct_field_array`, `vec_element_match_payload`; record what is seen), without the second hunk of 3 (expected: the others). Restore, `make`, rerun C2.
+      - C4: `gap_92` is unchanged: `R bench/safety_matrix/probes/gap_92_vec_duplicated_out_of_slice_element.zrl` still builds and faults (`exit 139`); `sh scripts/run_safety_matrix.sh` (`Mismatches: 0`), `sh scripts/check_safety_figures.sh --all`, `sh scripts/check_safety_model.sh`; quote each verdict line.
+      - C5: `make test`, then `REJECT_DIFF_NO_CACHE=1 make preflight-changed`; quote each `Total:` line and the `reject-diff:` lines, and list every newly refused program (expected: this probe, twice). Any other: stop and report, with the program; do not change it to fit.
+      - C6: commit on `main` (the note says the fuzz record is stale for `src/`), add `**Awaiting review:**` with C2 to C5, `tm done`, and stop at the check-in id:qmms1.
+    - **Awaiting review:**
+      - C1: before the change, `R` on `gap_90` gave `exit 77`, and all 19 reject tests under `tests/language/memory/element_move/` compiled and exited `0`.
+      - C2: after the change and `make` (no warning), `./scripts/test.sh tests/language/memory/element_move` -> `Total: 21 run, 21 passed, 0 failed, 0 skipped (0.2s)` (`Selected tests 20 run 20 passed`).
+      - C3: without part 2's line alone, the 8 payload tests failed (`array_match_payload`, `slice_if_let`, `slice_let_pattern`, `slice_mut_match_payload`, `slice_nested_index`, `slice_try`, `struct_field_array`, `vec_element_match_payload`, `Total: 21 run, 13 passed, 8 failed, 0 skipped (0.2s)`); without the second hunk of 3 alone, the 11 other reject tests failed (`array_let`, `element_as_argument`, `element_assigned`, `element_in_struct_literal`, `element_returned`, `slice_field_of_element`, `slice_let`, `slice_match_binding`, `slice_struct_pattern`, `slice_tuple_pattern`, `temporary_array_element`, `Total: 21 run, 10 passed, 11 failed, 0 skipped (0.2s)`). Restored, rebuilt, and reran C2 (`Total: 21 run, 21 passed, 0 failed, 0 skipped (0.2s)`).
+      - C4: `R` on `gap_92` still builds and faults (`exit 139`); `sh scripts/run_safety_matrix.sh` -> `All probes complete: 471/518 passed. Mismatches: 0`; `sh scripts/check_safety_figures.sh --all` -> `[PASS] safety-figures: all 9 §5 figure(s) match the tree ...` (after updating compiler line count 47,911 -> 47,932 in `doc/SAFETY.md` and `4.67%` -> `4.66%`, `41,643` -> `41,662` in `doc/spec/unsafe_policy.md`); `sh scripts/check_safety_model.sh` -> `PASS: safety_model.md is self-consistent.` (also updated `bench/safety_matrix/matrix.md` and ran `make md-fmt` to match `doc/spec/safety_model.md`).
+      - C5: `make test` -> `Total: 3411 run, 3411 passed, 0 failed, 96 skipped (122.6s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` -> `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 16 newly refused, of 69158 programs against c161107f5f95e43c7557e5f44d046856a6bcbbd8` (14 from earlier commits on `main`, plus `gap_90` twice from this commit), `Total: 1258 run, 1258 passed, 0 failed, 0 skipped (45.1s)`.
+      - C6: committed on `main` as `git:1cc65c1`.
+
+- [x] +safety +review +AI-D @main @checkin Review of the guard spec text and the three move-out fixes (gap_89, gap_90, gap_91) id:qmms1
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Depends:** id:4jawf, id:yw8h9, id:613zw, id:760hd
+    > **Placed:** directly after the batch it reviews (three fixes to safety rules and one spec change), by the check-in id:3yasf.
+    > **Completed:** 2026-11-15 git:1cc65c1
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` on `main` since git:f63b51c.
+      - Re-run what each **Awaiting review:** bullet names, and each task's take-out check where the batch did not quote it. One uncached differential over the three fixes: `REJECT_DIFF_NO_CACHE=1 sh scripts/check_reject_diff.sh f63b51c`; expected newly refused: `gap_89`, `gap_90`, `gap_91`, each twice, and nothing else.
+      - The id:3yasf probe programs, kept in `build/3yasf/*.zrl` on the host that ran that review (each is also a test of this batch or quoted in id:3yasf's record): every one that was accepted with two or three drops is refused, and the seventeen accepted ones are still accepted with the same exit status.
+      - Sibling routes not yet probed: a capture of a capture (a closure inside a closure moving a part out); a `move` of a part out of a captured array's element; `for x in a` over an array of values with a `Drop` impl (what the loop variable is, and whether the array is dropped again); an element read by value through `&[S; 1]`, `Box<[S; 1]>` and a struct held in a slice (`a[0].w.s`); an index through a `Vec` of `Vec`s; a `while let Q.A(s) = a[i]`.
+      - `doc/SAFETY.md` §6 class (N) and the counts read correctly with only `gap_92` left of the four.
+    - **Review (2026-11-15, a reviewing session), of git:b671f6d, git:26524b7, git:44ab3e6 and git:1cc65c1:** each commit does what its task settles, and no new hole was found.
+      - The code: `src/check_zir.zrl` at git:1cc65c1 equals the prototype id:3yasf recorded but for the order of two helpers and a comment (`diff` of the patched git:67f87b0 file against it).
+      - Re-run: `make test` at git:1cc65c1 -> `Total: 3411 run, 3411 passed, 0 failed, 96 skipped (122.3s)` (it runs the safety matrix, the figures and the model gates). `REJECT_DIFF_NO_CACHE=1 sh scripts/check_reject_diff.sh f63b51c` -> `reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 6 newly refused, of 69158 programs against f63b51c`: `gap_89`, `gap_90` and `gap_91`, each whole-program and under `zbuild`, and nothing else.
+      - The id:3yasf probe programs (`build/3yasf/*.zrl`, 97 of them) on the compiler of git:1cc65c1: every one that ran with two or three drops is refused (`cannot move out of a closure capture`, `cannot move out of an array or slice element`, `cannot move out of borrow`), the accepted ones still build with the same exit status, and `h1_slice_vec_dup` (the `gap_92` shape) still builds and faults, as id:760hd's C4 requires.
+      - id:613zw's C3 said the capture test in `enum_payload_source_refusal` and the one in `check_places_consumed` can each be removed alone with no test failing. Confirmed in a scratch worktree, on the 8 tests and on 22 closure probes; with both removed, `closure_capture_match_payload_moved`, `closure_capture_if_let_payload_moved`, `closure_capture_let_pattern_payload_moved` and `closure_capture_try_payload_moved` fail (`expected compile fail, but it compiled`, `Total: 10 run, 6 passed, 4 failed, 0 skipped (0.1s)`) and the probes run with two or three drops. So the tests see the pair; no program was found that only one of the two refuses. Both stay: each guards a different statement (the payload read, the scrutinee's consumption).
+      - Sibling routes probed (programs in `build/qmms1/*.zrl` on the reviewing host; each counts drops through a raw pointer, one drop per value is correct), all refused: a closure inside a closure moving a payload or a field out of the outer capture; a captured array's element moved by a pattern or `let`; `@drop` of a capture; a capture returned, passed as a by-value `self`, or a `Vec` field of it moved; a capture matched by value in a loop; `for x in a` followed by `let s = *x` (array and slice: `cannot move out of borrow`); an element through `&[S; 1]` (`cannot move out of borrow`), through `box [S]` (`(*b)[0]`, `b[0]`, and a pattern on it), `a[0].w.s`, a whole struct, tuple, inner array or enum element holding the value, `v[0][0]` on a `Vec` of `Vec`s, `while let Q.A(s) = a[i]`, an element as a by-value `self`, in a tuple, an enum constructor or an array literal, assigned to a field through `&mut`, `a[1] = a[0]` and a swap through `[mut S]`, a guarded arm, a nested pattern (`O.Some(Q.A(s))`), an enum in a field of an element, and a generic `fn first<T>(a: [T]) -> T` instantiated with the type. `@drop(a[0])` and `@drop(w.s)` are refused as before (`@drop requires an owned local variable, not a projected place`). Accepted and correct: `for x in a {}` over an array of two such values (two drops), a closure moving its own by-value parameter (one drop).
+      - `doc/SAFETY.md` §6 class (N) now names `gap_92` alone; 518 probes, 47 `known_gap`, and 19 open holes in `doc/spec/safety_model.md` match the tree (the gates above).
+      - Findings, none of them a hole: (1) `doc/spec/surface_syntax.md` §5.2 says moving out of a capture is rejected and gives whole-value examples only; a part of a capture (a field, a payload, a tuple part, `?`) is not named and the eight new tests are not cited. (2) The same file does not state the element rule at all; `doc/spec/safety_model.md`'s **Drop Exactly Once** row does. Both go into the implementation that follows id:cx46y, which rewrites the element rule's wording anyway. (3) `return a[0];` reports the refusal at the function's first column (`element_returned.zrl:8:1`), not at the expression: parked in `future.tm.md`.
+
 - [x] +safety +decision +AI-D @main Decide whether a by-value read of a slice element that is not `Copy` is refused (gap_92) id:v0bwt
     > **Created:** 2026-11-15
     > **Branch:** `main`
