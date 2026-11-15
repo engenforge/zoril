@@ -2,12 +2,13 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +safety +AI-G @main Ownership and borrow-move check for enum payloads moved through EnumPayload temporaries (gap_88) id:0tv49
+- [x] +safety +AI-G @main Ownership and borrow-move check for enum payloads moved through EnumPayload temporaries (gap_88) id:0tv49
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Placed:** after id:3rata; found during the id:e7qgj check-in review of id:37p40 and id:a47b8, and depends on id:3rata's design for lowered-ZIR ownership/drop checking.
     > **Depends:** id:3rata
     > **Check-in:** stop for review after it (follows in id:3yasf).
+    > **Completed:** 2026-11-15 git:67f87b0
 
     - **Probe:** `bench/safety_matrix/probes/gap_88_enum_used_after_payload_moved.zrl` (`known_gap`, `exit 77`, recorded in git:62de977).
     - **Cause (found during `id:e7qgj`):**
@@ -32,6 +33,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `make test` passes with zero failures and zero build warnings (`Total:` quoted verbatim).
       - C5: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (clean-tree build, self-hosting fixpoint, mutations, and rejection differential — inspecting every newly refused program and confirming zero unintended refusals) passes.
       - C6: Commit on `main`, append `**Awaiting review:** <C1, C3, C4, C5 commands and key outputs>`, close with `tm done 0tv49 --git <sha>`, and stop at check-in `id:3yasf`.
+    - **Awaiting review:**
+      - C1 (`./scripts/test.sh tests/language/match/enum_*.zrl tests/language/match/move_out_of_call_temp_ref.zrl`): `Total: 12 run, 12 passed, 0 failed, 0 skipped (0.1s)`; `gap_88_enum_used_after_payload_moved.zrl` (`compile_reject`) verified via `sh scripts/run_safety_matrix.sh` (`All probes complete: 468/514 passed. Mismatches: 0`).
+      - C2: `gap_88` failed with `exit 77` on `git:62de977` / `e0febf3` before `emit_consume_place`, `guard_scrut_overlaps`, and `enum_payload_source_borrowed` changes (not re-run by reverting in-tree after `make test` so as not to invalidate the final-edit test run).
+      - C3: `sh scripts/run_safety_matrix.sh` (`All probes complete: 468/514 passed. Mismatches: 0`), `sh scripts/check_safety_figures.sh --all` (`PASS`), `sh scripts/check_safety_model.sh` (`PASS: safety_model.md is self-consistent.`, `Known gaps lists exactly the 46 known_gap probes`).
+      - C4 (`make test`): `Total: 3341 run, 3341 passed, 0 failed, 94 skipped (121.6s)`, zero build warnings.
+      - C5 (`REJECT_DIFF_NO_CACHE=1 make preflight-changed`): passed (clean-tree build, self-hosting fixpoint `gen3.zil vs gen4.zil` identical, mutations, `reject-diff: 0 newly accepted, 10 newly refused, of 69154 programs` — all 10 are the 5 expected gap probes `gap_83`, `gap_84`, `gap_85`, `gap_86`, `gap_88` across whole-program and `zbuild`, checked suite `Total: 1225 run, 1225 passed, 0 failed, 0 skipped (45.2s)`).
+      - C6: committed on `main` as `git:67f87b0`, stopped at check-in `id:3yasf`.
 
 - [ ] +safety +review +AI-D @main @checkin Review of enum payload ownership and borrow-move check (gap_88, id:0tv49) id:3yasf
     > **Created:** 2026-11-15
