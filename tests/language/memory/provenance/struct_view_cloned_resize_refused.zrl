@@ -1,0 +1,20 @@
+// Vec.resize cloning a struct holding a frame view into a caller's Vec is refused (doc/design/provenance.md §3).
+// flags: --provenance
+// EXPECT: the callee stores an address of this frame into memory that outlives it (call store rule)
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+
+struct H { s: [u8] }
+impl Clone for H { fn clone(self: &H) -> H { return H { s: self.s }; } }
+
+fn fill(out: &mut Vec<H>) {
+    let buf = [42 as u8; 16];
+    out.resize(1 as usize, H { s: &buf });
+}
+
+fn main() -> i32 {
+    let mut v: Vec<H> = Vec.new();
+    fill(&mut v);
+    return 0;
+}
