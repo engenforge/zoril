@@ -272,6 +272,51 @@ case "$_r5_c1|$_r5_c2" in
     *) echo "[FAIL] R5: modified tracked file not marked dirty: $_r5_c2"; errors=$((errors + 1)) ;;
 esac
 
+# R6: four concurrent --force --check-thresholds-only runs against one scratch records worktree
+r6="$tmp/r6"
+setup_scratch_repo "$r6" with_git
+git -C "$r6" worktree add -q --orphan -b records "$r6/bench/records"
+git -C "$r6/bench/records" config user.email "test@example.com"
+git -C "$r6/bench/records" config user.name "Test"
+printf 'init\n' > "$r6/bench/records/README.md"
+git -C "$r6/bench/records" add README.md
+git -C "$r6/bench/records" commit -q -m "records init"
+_r6_pids=""
+for _r6_i in 1 2 3 4; do
+    BENCH_HOST_ID=aaaaaaaaaaaa "$r6/scripts/bench_cross_lang.sh" --force --check-thresholds-only > "$tmp/r6_out_$_r6_i" 2>&1 &
+    _r6_pids="$_r6_pids $!"
+done
+_r6_fail=0
+for _r6_p in $_r6_pids; do
+    _r6_rc=0
+    wait "$_r6_p" || _r6_rc=$?
+    [ "$_r6_rc" -eq 0 ] || _r6_fail=1
+done
+_r6_rows=$(awk -F'\t' 'NR > 1 && NF == 17 { c++ } END { print c + 0 }' "$r6/bench/records/gate_history.tsv" 2>/dev/null || echo 0)
+_r6_st=$(git -C "$r6/bench/records" status --porcelain)
+if [ "$_r6_fail" -eq 0 ] && [ "$_r6_rows" -eq 4 ] && [ -z "$_r6_st" ]; then
+    echo "[PASS] R6: four concurrent record commits all exit 0 with 4 rows and clean status"
+else
+    echo "[FAIL] R6: concurrent record commits failed (fail=$_r6_fail rows=$_r6_rows status='$_r6_st')"
+    errors=$((errors + 1))
+fi
+
+# R7: a lock that stays still fails with "appended ... but not committed" after retries
+r7="$tmp/r7"
+setup_scratch_repo "$r7" with_git
+git -C "$r7" worktree add -q --orphan -b records "$r7/bench/records"
+git -C "$r7/bench/records" config user.email "test@example.com"
+git -C "$r7/bench/records" config user.name "Test"
+printf 'init\n' > "$r7/bench/records/README.md"
+git -C "$r7/bench/records" add README.md
+git -C "$r7/bench/records" commit -q -m "records init"
+_r7_gitdir=$(git -C "$r7/bench/records" rev-parse --git-dir)
+touch "$_r7_gitdir/index.lock"
+rc=0
+out="$(BENCH_HOST_ID=aaaaaaaaaaaa "$r7/scripts/bench_cross_lang.sh" --force --check-thresholds-only 2>&1)" || rc=$?
+rm -f "$_r7_gitdir/index.lock"
+expect "R7: persistent lock fails with appended but not committed" 1 "but not committed"
+
 # F1-F3: scripts/record_figures.sh in scratch repositories
 cat > "$tmp/stub_figures.sh" << 'EOF'
 #!/bin/sh
@@ -347,6 +392,34 @@ case "$rc|$rc2|$_f3_lines|$_f3_c3|$_f3_c4" in
         echo "[FAIL] F3: dirty tree test failed (rc=$rc rc2=$rc2 lines=$_f3_lines c3=$_f3_c3 c4=$_f3_c4)"
         errors=$((errors + 1))
         ;;
+esac
+
+# F4: figures row's third field (zoril_version) has no space (second word of --version)
+cat > "$tmp/stub_zoril.sh" << 'EOF'
+#!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+    echo "zoril 0.1.0-alpha-176-g50b1e8f"
+fi
+EOF
+chmod +x "$tmp/stub_zoril.sh"
+f4="$tmp/f4"
+setup_scratch_repo "$f4" with_git
+cp "$REC_FIG" "$f4/scripts/record_figures.sh"
+git -C "$f4" add scripts/record_figures.sh
+git -C "$f4" commit -q -m "add record_figures"
+git -C "$f4" worktree add -q --orphan -b records "$f4/bench/records"
+git -C "$f4/bench/records" config user.email "test@example.com"
+git -C "$f4/bench/records" config user.name "Test"
+printf 'init\n' > "$f4/bench/records/README.md"
+git -C "$f4/bench/records" add README.md
+git -C "$f4/bench/records" commit -q -m "records init"
+rc=0
+out="$(ZORIL_BIN="$tmp/stub_zoril.sh" FIGURES_SCRIPT="$tmp/stub_figures.sh" "$f4/scripts/record_figures.sh" 2>&1)" || rc=$?
+_f4_ver=$(awk -F'\t' 'NR == 2 { print $3 }' "$f4/bench/records/figures_history.tsv" 2>/dev/null || echo "")
+case "$rc|$_f4_ver" in
+    0\|*" "*) echo "[FAIL] F4: zoril_version contains a space: '$_f4_ver'"; errors=$((errors + 1)) ;;
+    0\|0.1.0-alpha-176-g50b1e8f) echo "[PASS] F4: figures row third field is bare version ($_f4_ver)" ;;
+    *) echo "[FAIL] F4: unexpected rc=$rc ver='$_f4_ver'"; errors=$((errors + 1)) ;;
 esac
 
 if [ "$errors" -eq 0 ]; then

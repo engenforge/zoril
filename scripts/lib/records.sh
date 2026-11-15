@@ -59,14 +59,25 @@ records_commit() {
     [ "$_rc_top" = "$_rc_dir" ] || return 0
     [ "$_rc_top" != "$_rc_repo" ] || return 0
 
+    _rc_base=$(basename "$_rc_file")
     _rc_err=""
-    if ! _rc_err=$(git -C "$_rc_dir" add "$(basename "$_rc_file")" 2>&1); then
-        printf '[FAIL] bench records: the row was appended to %s but not committed: %s\n' "$_rc_file" "$_rc_err" >&2
-        return 1
+    _rc_try=0
+    while [ "$_rc_try" -lt 5 ]; do
+        if _rc_st=$(git -C "$_rc_dir" status --porcelain -- "$_rc_base" 2>/dev/null) && [ -z "$_rc_st" ]; then
+            return 0
+        fi
+        if _rc_err=$(git -C "$_rc_dir" add "$_rc_base" 2>&1) && \
+           _rc_err=$(git -C "$_rc_dir" commit -m "$_rc_subj" 2>&1); then
+            return 0
+        fi
+        _rc_try=$((_rc_try + 1))
+        if [ "$_rc_try" -lt 5 ]; then
+            sleep 1
+        fi
+    done
+    if _rc_st=$(git -C "$_rc_dir" status --porcelain -- "$_rc_base" 2>/dev/null) && [ -z "$_rc_st" ]; then
+        return 0
     fi
-    if ! _rc_err=$(git -C "$_rc_dir" commit -m "$_rc_subj" 2>&1); then
-        printf '[FAIL] bench records: the row was appended to %s but not committed: %s\n' "$_rc_file" "$_rc_err" >&2
-        return 1
-    fi
-    return 0
+    printf '[FAIL] bench records: the row was appended to %s but not committed: %s\n' "$_rc_file" "$_rc_err" >&2
+    return 1
 }

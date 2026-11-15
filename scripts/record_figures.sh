@@ -30,9 +30,9 @@ esac
 
 DATE=$(date -u '+%Y-%m-%d')
 if [ -x "${ZORIL_BIN:-}" ]; then
-    ZORIL_VER=$("$ZORIL_BIN" --version 2>/dev/null | head -n1 | tr '\t' ' ') || ZORIL_VER="unknown"
+    ZORIL_VER=$("$ZORIL_BIN" --version 2>/dev/null | awk '{print $2; exit}') || ZORIL_VER="unknown"
 elif [ -x "$REPO_ROOT/build/zoril" ]; then
-    ZORIL_VER=$("$REPO_ROOT/build/zoril" --version 2>/dev/null | head -n1 | tr '\t' ' ') || ZORIL_VER="unknown"
+    ZORIL_VER=$("$REPO_ROOT/build/zoril" --version 2>/dev/null | awk '{print $2; exit}') || ZORIL_VER="unknown"
 else
     ZORIL_VER="unknown"
 fi
