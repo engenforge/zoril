@@ -1,4 +1,2 @@
 # Keep the bootstrap seeds out of GitHub's language statistics: the compiler is src/.
 bootstrap/** linguist-vendored
-bench/gate_history.tsv merge=union
-bench/speed_history.tsv merge=union

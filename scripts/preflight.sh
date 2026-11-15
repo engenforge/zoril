@@ -144,9 +144,8 @@ else
 fi
 
 # The checked build and the git group run BEFORE the bench step on purpose. The bench step
-# appends to bench/*_history.tsv (and writes build/bench/last_zoril_metrics.tsv), which makes the
-# working tree dirty; `clean-tree` and `preflight-selftest` in the git group assert a clean
-# tree. Nothing in the checked suite or git group depends on the bench.
+# writes build/bench/last_zoril_metrics.tsv and commits to bench/records/ (its own worktree, so it
+# no longer dirties the code tree). Nothing in the checked suite or git group depends on the bench.
 CHECKED_CMD="${PREFLIGHT_CHECKED:-./scripts/test_checked.sh}"
 chk_start=$(date +%s)
 $CHECKED_CMD

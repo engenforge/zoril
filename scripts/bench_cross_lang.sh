@@ -14,14 +14,15 @@
 #   - Multi-file project: the same program shape for every language (100 modules x 30 functions by
 #     default), so the compilers are compared on the same work; the regression gate pins its own
 #     size (MF_GATE_MODULES x MF_GATE_FUNCS) and compares against the host's baseline in
-#     bench/gate_history.tsv using tolerances in bench/cross_lang/tolerances.cfg.
+#     bench/records/gate_history.tsv using tolerances in bench/cross_lang/tolerances.cfg.
 #       a) Clean full build (measures compile throughput: LOC/s and RSS)
 #       b) Incremental touch-one-module-and-rebuild
 #   - Scaling sweep: the same shapes at two more sizes, reporting how each compiler's clean build,
 #     rebuild and peak memory grow (full-data runs only)
 #
 # Accepted gap (host_id): two machines with the same CPU model, core count and RAM (two cloud VMs
-# of one shape) share a host_id; id:z0004 measured such VMs within the 15% tolerance of each other.
+# of one shape) share a host_id; two cloud VMs of one shape were measured within the 15% tolerance
+# of each other (2026-11-03).
 #
 # Duration: --update-doc and --record do the whole run (the gate measures only Zoril at its pinned
 # size and takes tens of seconds), which is roughly a hundred clean builds. The script prints that
@@ -32,10 +33,11 @@ set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$REPO_ROOT/scripts/env.sh"
+. "$REPO_ROOT/scripts/lib/records.sh"
 
 BENCH_DIR="$REPO_ROOT/bench/cross_lang"
-SPEED_HISTORY="$REPO_ROOT/bench/speed_history.tsv"
-GATE_HISTORY="${GATE_HISTORY:-$REPO_ROOT/bench/gate_history.tsv}"
+SPEED_HISTORY="${SPEED_HISTORY:-$REPO_ROOT/bench/records/speed_history.tsv}"
+GATE_HISTORY="${GATE_HISTORY:-$REPO_ROOT/bench/records/gate_history.tsv}"
 DOC_PATH="$REPO_ROOT/doc/language/language_comparison.md"
 
 UPDATE_DOC=0
@@ -292,13 +294,13 @@ fi
 ZORIL_BIN="${ZORIL_BIN:-$REPO_ROOT/build/zoril}"
 ZORIL_VERSION=$("$ZORIL_BIN" --version 2>/dev/null | awk '{print $2}')
 [ -n "$ZORIL_VERSION" ] || ZORIL_VERSION="unknown"
-if git_checkout_usable "$REPO_ROOT"; then
-    ZORIL_COMMIT=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    if [ "$ZORIL_COMMIT" != "unknown" ] && [ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]; then
-        ZORIL_COMMIT="${ZORIL_COMMIT}-dirty"
-    fi
-else
-    ZORIL_COMMIT="unknown"
+ZORIL_COMMIT=$(records_repo_commit "$REPO_ROOT")
+
+if [ "$CHECK_THRESHOLDS" -eq 1 ] || [ "$RECORD_BASELINE" -eq 1 ]; then
+    records_check_target "$GATE_HISTORY" || exit 1
+fi
+if [ "${CHECK_THRESHOLDS_ONLY:-0}" -eq 0 ] && [ "${RECORDS_SKIP:-0}" -eq 0 ]; then
+    records_check_target "$SPEED_HISTORY" || exit 1
 fi
 
 # What a publishing run is about to do, and how long the last one took. The duration is recorded
@@ -585,6 +587,9 @@ append_gate_history_row() {
 }
 
 check_thresholds_gate() {
+    if [ "${RECORDS_SKIP:-0}" -eq 1 ]; then
+        return 0
+    fi
     local m_tp m_inc m_rat m_rss
     m_tp=$(awk -F'\t' '$1=="clean_throughput_loc_s" {print $2}' "$METRICS_FILE")
     m_inc=$(awk -F'\t' '$1=="incremental_rebuild_ms" {print $2}' "$METRICS_FILE")
@@ -621,6 +626,7 @@ check_thresholds_gate() {
         printf '\nnew host %s (%s, %s cores, %s GB, %s %s): no baseline recorded for it; this run becomes its baseline\n' \
             "$HOST_ID" "$HOST_CPU" "$HOST_CORES" "$HOST_RAM_GB" "$HOST_SYS" "$HOST_ARCH"
         append_gate_history_row "baseline" "baseline" "$m_tp" "$m_inc" "$m_rat" "$m_rss"
+        records_commit "$GATE_HISTORY" "$HOST_ID $ZORIL_COMMIT: gate baseline" || return 1
         return 0
     fi
 
@@ -692,6 +698,7 @@ EOF
     local verdict="pass"
     [ "$gate_fail" -ne 0 ] && verdict="fail"
     append_gate_history_row "run" "$verdict" "$m_tp" "$m_inc" "$m_rat" "$m_rss"
+    records_commit "$GATE_HISTORY" "$HOST_ID $ZORIL_COMMIT: gate $verdict" || return 1
 
     if [ "$gate_fail" -ne 0 ]; then
         echo "FAIL: performance regression detected against recorded baseline." >&2
@@ -1387,7 +1394,9 @@ if [ "$USE_CMP_CACHE" -eq 1 ]; then
 else
     cp "$DATA_FIB" "$HIST_FIB"; cp "$DATA_ARR" "$HIST_ARR"; cp "$DATA_MF" "$HIST_MF"
 fi
+if [ "${RECORDS_SKIP:-0}" -eq 0 ]; then
 if [ ! -f "$SPEED_HISTORY" ]; then
+    mkdir -p "$(dirname "$SPEED_HISTORY")"
     printf 'date\tcommit\tzoril_version\tzig_version\trust_version\thare_version\tbinary\ttoolchain\tworkload\telapsed_ms\tpeak_rss_kb\tstatus\thost_os\tcpu_model\tcores\tram\tgovernor\tload_1m_start\tload_1m_end\thost_id\n' > "$SPEED_HISTORY"
 fi
 
@@ -1457,6 +1466,8 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\truntime_ratio_vs_gcc_o2\tzoril_vs_gcc\tfib(38)x3
     "$RUN_TS" "$ZORIL_COMMIT" "$ZORIL_VERSION" "$ZIG_VER" "$RUST_VER" "$HARE_VER" "$z_runtime_ratio" "$RUN_STATUS" \
     "$HOST_OS" "$HOST_CPU" "$HOST_CORES" "$HOST_RAM" "$HOST_GOVERNOR" "$HOST_LOAD1M_START" "$HOST_LOAD1M_END" "$HOST_ID" \
     >> "$SPEED_HISTORY"
+records_commit "$SPEED_HISTORY" "$HOST_ID $ZORIL_COMMIT: speed" || exit 1
+fi
 
 if [ ! -d "$(dirname "$METRICS_FILE")" ]; then
     mkdir -p "$(dirname "$METRICS_FILE")"
@@ -1483,8 +1494,11 @@ if [ "$RECORD_BASELINE" -eq 1 ]; then
         printf '\nERROR: Cannot record baseline on a contended host (status: %s). Re-run on a quiet host or pass --force.\n' "$RUN_STATUS" >&2
         exit 1
     fi
-    append_gate_history_row "baseline" "baseline" "$tp_loc_z" "$c_ms_z_edit" "$z_runtime_ratio" "$z_rss_mb_per_kloc"
-    printf '\nRecorded baseline row to %s (host %s)\n' "$GATE_HISTORY" "$HOST_ID"
+    if [ "${RECORDS_SKIP:-0}" -eq 0 ]; then
+        append_gate_history_row "baseline" "baseline" "$tp_loc_z" "$c_ms_z_edit" "$z_runtime_ratio" "$z_rss_mb_per_kloc"
+        records_commit "$GATE_HISTORY" "$HOST_ID $ZORIL_COMMIT: gate baseline" || exit 1
+        printf '\nRecorded baseline row to %s (host %s)\n' "$GATE_HISTORY" "$HOST_ID"
+    fi
 fi
 
 # --check-thresholds: fail if any axis regressed beyond tolerance vs the baseline.

@@ -1,6 +1,6 @@
 #!/bin/sh
 # scripts/record_marker_density.sh — append compiler-wide raw-pointer marker
-# density to bench/marker_density_history.tsv, keyed by date and commit.
+# density to bench/records/marker_density_history.tsv, keyed by date and commit.
 #
 # The safe/unsafe migration is a multi-sprint effort measured in exactly these
 # numbers (deref line density sizes `unsafe { }` blocks; per-fn density sizes
@@ -8,14 +8,21 @@
 # actually gates — see scripts/marker_density.sh's header for why all four are
 # tracked rather than just the deref pair). Without a series nobody can tell
 # progress from noise, so this keeps a running history the way
-# bench/speed_history.tsv does for speed.
+# bench/records/speed_history.tsv does for speed.
 #
 # Wired into `make preflight`. Per-file detail still comes from
 # scripts/marker_density.sh <file.zrl>.
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-HISTORY="$REPO_ROOT/bench/marker_density_history.tsv"
+. "$REPO_ROOT/scripts/env.sh"
+. "$REPO_ROOT/scripts/lib/records.sh"
+HISTORY="${HISTORY:-$REPO_ROOT/bench/records/marker_density_history.tsv}"
+
+records_check_target "$HISTORY" || exit 1
+if [ "${RECORDS_SKIP:-0}" -eq 1 ]; then
+    exit 0
+fi
 
 if [ ! -x "$REPO_ROOT/scripts/marker_density.sh" ]; then
     echo "Error: scripts/marker_density.sh not found." >&2
@@ -23,7 +30,8 @@ if [ ! -x "$REPO_ROOT/scripts/marker_density.sh" ]; then
 fi
 
 DATE="$(date +%Y-%m-%d)"
-COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+COMMIT="$(records_repo_commit "$REPO_ROOT")"
+HOST_ID="$(BENCH_HOST_ID="${BENCH_HOST_ID:-}" sh "$REPO_ROOT/scripts/bench_cross_lang.sh" --print-host-id 2>/dev/null || echo "unknown")"
 
 # Compiler source files that legitimately carry unsafe code.
 FILES=""
@@ -58,6 +66,7 @@ fi
 printf '%s\t%s\t%d\t%d\t%d\t%s\t%d\t%d\t%s\t%d\t%d\n' \
     "$DATE" "$COMMIT" "$(echo $FILES | wc -w)" "$tot_loc" "$tot_marker" "$line_density" \
     "$tot_fn" "$tot_fnw" "$fn_density" "$tot_ptrcast" "$tot_reforge" >> "$HISTORY"
+records_commit "$HISTORY" "$HOST_ID $COMMIT: density" || exit 1
 
 printf 'Marker density @ %s (%s): line %.2f%% (%d/%d), per-fn %.2f%% (%d/%d), ptr-cast %d, ref-forge %d\n' \
     "$DATE" "$COMMIT" "$line_density" "$tot_marker" "$tot_loc" "$fn_density" "$tot_fnw" "$tot_fn" "$tot_ptrcast" "$tot_reforge"

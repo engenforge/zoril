@@ -43,8 +43,6 @@ bootstrap/stage1/*	stage1	runtimes	-	-	-	clean-tree	-	compiled	frozen stage1 sna
 # --- Benchmarks ---
 bench/safety_matrix/*	safety_matrix	safety-matrix safety-matrix-zbuild safety-model route-coverage	-	-	-	cross-module-safety-matrix	-	test	safety matrix probes select safety matrix gates and cross-module scenario
 bench/cross_lang/*	bench_cross_lang	perf-gate portability	-	-	-	bench-contention bench-threshold-gate	-	test	cross language benchmarks select perf-gate and threshold scenarios
-bench/speed_history*	bench_perf	perf-gate	-	-	-	-	-	test	compiler speed history records select perf-gate
-bench/gate_history*	bench_perf	perf-gate	-	-	-	-	-	test	compiler gate history records select perf-gate
 bench/fuzz/*	bench_fuzz	fuzz-record fuzz-fresh	-	-	-	-	-	test	fuzzer corpus and record check selects fuzz-record and fuzz-fresh
 
 # --- Test fixture directories and include roots ---

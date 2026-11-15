@@ -11,7 +11,7 @@
 --
 -- Override every language with --modules / --funcs, or one with --<lang>-modules /
 -- --<lang>-funcs. The regression gate in scripts/bench_cross_lang.sh pins a smaller Zoril size
--- of its own (tolerances in bench/cross_lang/tolerances.cfg, history in bench/gate_history.tsv), and the size sweep in
+-- of its own (tolerances in bench/cross_lang/tolerances.cfg, history in bench/records/gate_history.tsv), and the size sweep in
 -- scripts/bench_cross_lang.sh varies this one.
 
 local default_modules = nil

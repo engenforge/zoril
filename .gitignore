@@ -34,3 +34,5 @@ vgcore.*
 
 # Task files: the orphan `tasks` branch, mounted here as a worktree (AGENTS.md, Working on tasks)
 /doc/tasks/
+# Benchmark and density records: the orphan `records` branch, mounted here as a worktree
+/bench/records/

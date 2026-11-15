@@ -178,6 +178,100 @@ rc=0
 out="$(BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_p8.tsv" METRICS_FILE="$tmp/metrics/metrics_p8.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
 expect "P8: comment, empty line, and malformed row ignored" 0 "[OK]  clean_throughput_loc_s"
 
+setup_scratch_repo() {
+    _sr="$1"
+    mkdir -p "$_sr/scripts/lib" "$_sr/bench/cross_lang" "$_sr/build/bench"
+    cp "$BENCH" "$_sr/scripts/bench_cross_lang.sh"
+    cp "$(pwd)/scripts/env.sh" "$_sr/scripts/env.sh"
+    cp "$(pwd)/scripts/lib/portability.sh" "$_sr/scripts/lib/portability.sh"
+    cp "$(pwd)/scripts/lib/records.sh" "$_sr/scripts/lib/records.sh"
+    cp "$(pwd)/bench/cross_lang/tolerances.cfg" "$_sr/bench/cross_lang/tolerances.cfg"
+    cp "$(pwd)/bench/cross_lang/children_maxrss.c" "$_sr/bench/cross_lang/children_maxrss.c"
+    write_metrics "$_sr/build/bench/last_zoril_metrics.tsv" "10000" "100" "3.000" "10.0"
+    if [ "${2:-with_git}" = "with_git" ]; then
+        git -C "$_sr" init -q
+        git -C "$_sr" config user.email "test@example.com"
+        git -C "$_sr" config user.name "Test"
+        git -C "$_sr" add scripts bench/cross_lang/tolerances.cfg bench/cross_lang/children_maxrss.c
+        git -C "$_sr" commit -q -m "init"
+    fi
+}
+
+# R1: mounted records worktree -> appends one row and commits on records
+r1="$tmp/r1"
+setup_scratch_repo "$r1" with_git
+git -C "$r1" worktree add -q --orphan -b records "$r1/bench/records"
+git -C "$r1/bench/records" config user.email "test@example.com"
+git -C "$r1/bench/records" config user.name "Test"
+printf 'init\n' > "$r1/bench/records/README.md"
+git -C "$r1/bench/records" add README.md
+git -C "$r1/bench/records" commit -q -m "records init"
+rc=0
+out="$(BENCH_HOST_ID=aaaaaaaaaaaa "$r1/scripts/bench_cross_lang.sh" --force --check-thresholds-only 2>&1)" || rc=$?
+expect "R1: mounted records worktree commits row" 0 "new host aaaaaaaaaaaa"
+if [ "$(git -C "$r1/bench/records" rev-list --count HEAD)" -ne 2 ] || \
+   ! git -C "$r1/bench/records" log -1 --pretty=%s | grep -q '^aaaaaaaaaaaa ' || \
+   [ -n "$(git -C "$r1/bench/records" status --porcelain)" ]; then
+    echo "[FAIL] R1: records branch commit or status check failed"
+    errors=$((errors + 1))
+fi
+
+# R2: not mounted in a git checkout -> exit 1, [FAIL] bench records, nothing written under bench/
+r2="$tmp/r2"
+setup_scratch_repo "$r2" with_git
+rc=0
+out="$(BENCH_HOST_ID=aaaaaaaaaaaa "$r2/scripts/bench_cross_lang.sh" --force --check-thresholds-only 2>&1)" || rc=$?
+expect "R2: unmounted records branch fails before measuring" 1 "[FAIL] bench records: the records branch is not mounted"
+if [ -e "$r2/bench/records" ]; then
+    echo "[FAIL] R2: bench/records should not exist"
+    errors=$((errors + 1))
+fi
+
+# R3: no git checkout -> [SKIP] bench records and exit 0
+r3="$tmp/r3"
+setup_scratch_repo "$r3" no_git
+rc=0
+out="$(BENCH_HOST_ID=aaaaaaaaaaaa "$r3/scripts/bench_cross_lang.sh" --force --check-thresholds-only 2>&1)" || rc=$?
+expect "R3: no git checkout skips recording and exits 0" 0 "[SKIP] bench records: no git checkout"
+
+# R4: commit fails (index.lock planted) -> exit 1 and "appended ... but not committed"
+r4="$tmp/r4"
+setup_scratch_repo "$r4" with_git
+git -C "$r4" worktree add -q --orphan -b records "$r4/bench/records"
+git -C "$r4/bench/records" config user.email "test@example.com"
+git -C "$r4/bench/records" config user.name "Test"
+printf 'init\n' > "$r4/bench/records/README.md"
+git -C "$r4/bench/records" add README.md
+git -C "$r4/bench/records" commit -q -m "records init"
+_r4_gitdir=$(git -C "$r4/bench/records" rev-parse --git-dir)
+touch "$_r4_gitdir/index.lock"
+rc=0
+out="$(BENCH_HOST_ID=aaaaaaaaaaaa "$r4/scripts/bench_cross_lang.sh" --force --check-thresholds-only 2>&1)" || rc=$?
+rm -f "$_r4_gitdir/index.lock"
+expect "R4: commit failure reports appended but not committed" 1 "but not committed"
+
+# R5: commit column: untracked file -> no -dirty; modified tracked file -> -dirty
+r5="$tmp/r5"
+setup_scratch_repo "$r5" with_git
+git -C "$r5" worktree add -q --orphan -b records "$r5/bench/records"
+git -C "$r5/bench/records" config user.email "test@example.com"
+git -C "$r5/bench/records" config user.name "Test"
+printf 'init\n' > "$r5/bench/records/README.md"
+git -C "$r5/bench/records" add README.md
+git -C "$r5/bench/records" commit -q -m "records init"
+printf 'untracked\n' > "$r5/untracked_note.txt"
+rc=0
+out="$(BENCH_HOST_ID=aaaaaaaaaaaa "$r5/scripts/bench_cross_lang.sh" --force --check-thresholds-only 2>&1)" || rc=$?
+_r5_c1=$(awk -F'\t' 'END {print $2}' "$r5/bench/records/gate_history.tsv")
+printf '# modified\n' >> "$r5/bench/cross_lang/tolerances.cfg"
+out2="$(BENCH_HOST_ID=aaaaaaaaaaaa "$r5/scripts/bench_cross_lang.sh" --force --check-thresholds-only 2>&1)" || rc=$?
+_r5_c2=$(awk -F'\t' 'END {print $2}' "$r5/bench/records/gate_history.tsv")
+case "$_r5_c1|$_r5_c2" in
+    *-dirty\|*) echo "[FAIL] R5: untracked file marked commit dirty: $_r5_c1"; errors=$((errors + 1)) ;;
+    *\|*-dirty) echo "[PASS] R5: untracked file clean ($_r5_c1), modified tracked file dirty ($_r5_c2)" ;;
+    *) echo "[FAIL] R5: modified tracked file not marked dirty: $_r5_c2"; errors=$((errors + 1)) ;;
+esac
+
 if [ "$errors" -eq 0 ]; then
     echo "All bench threshold gate tests passed."
     exit 0
