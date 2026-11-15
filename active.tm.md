@@ -87,12 +87,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C8: on committed `git:8203d21`: `sh scripts/test_preflight.sh` -> all 30 `[PASS] preflight-selftest` cases passed; `make test` -> `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (122.9s)`; `make preflight-changed PREFLIGHT_BASE=1f9f85c` -> `[PASS] checked`, `All performance thresholds within tolerance of baseline.` (exit 0); `git status --short` on code tree printed nothing; `records` commits added: `ea5bdd5 a52c24a80e04 8203d21: gate pass` and `b4bb4db a52c24a80e04 8203d21: speed`.
       - C9: committed on `main` as `git:8203d21`.
 
-- [ ] +bench +testinfra +AI-G @main Each preflight records the tree's figures on the `records` branch id:vdk4z
+- [x] +bench +testinfra +AI-G @main Each preflight records the tree's figures on the `records` branch id:vdk4z
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** after id:455bt, whose branch and helper it uses; with id:141h5, the other half of the maintainer's decision of 2026-11-15.
     > **Depends:** id:455bt
     > **Check-in:** reviewed in id:ev54n.
+    > **Completed:** 2026-11-15 git:50b1e8f
 
     - **Why:** with id:141h5 the documents carry the figures of the last milestone only. How the figures move between milestones is still worth keeping, as a record.
     - **Settled:** a script `scripts/record_figures.sh` appends one row per run to `bench/records/figures_history.tsv` (a header line, then `date`, `commit`, `zoril_version`, and one column per figure: the nine of `scripts/check_safety_figures.sh --print`, the density values of `--density --print`, the number of probes and the number by each `// expected:` kind), with the commit column as id:455bt settles it, and commits it through id:455bt's helper with the subject `<commit>: figures`. It measures nothing itself: every value comes from `check_safety_figures.sh` (give that script a `--probes --print` if id:141h5 did not). It needs no host id: the figures do not depend on the host. A commit that already has a row is not recorded twice (the last row's `commit` equals this one and has no `-dirty`): the script says `figures: <commit> is already recorded` and exits 0. `scripts/preflight.sh` runs it in both modes, after the bench step; with the branch not mounted it fails as id:455bt's scripts do.
@@ -102,6 +103,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: the test script; quote the `[PASS]` lines of F1 to F3. Take the "already recorded" test out and quote F2 failing; restore.
       - C3: `make test`, then `make preflight-changed`; quote each `Total:` line, `git status --short` of the code tree after it (nothing), and the figures commit it added on `records`.
       - C4: commit on `main`, add `**Awaiting review:**` with C1 to C3, `tm done`, and stop at the check-in id:ev54n.
+    - **Awaiting review:** re-run C1 (`sh scripts/record_figures.sh`, `check_safety_figures.sh --print`, `--density --print`, `--probes --print`), C2 (`sh scripts/test_bench_threshold_gate.sh` and F2 take-out check), and C3 (`make test` and `make preflight-changed PREFLIGHT_BASE=8203d21`).
+    - **Check results (2026-11-15):**
+      - C1: `sh scripts/record_figures.sh` -> `2026-11-15\t8203d21-dirty\tzoril 0.1.0-alpha-175-g8203d21\t30\t6734\t187\t23\t65\t60\t50\t47930\t852\t4.66%\t10.96%\t1943\t41660\t531\t4845\t519\t377\t77\t8\t11\t46`; `git -C bench/records log --oneline -1` -> `10867b2 (HEAD -> records) 8203d21-dirty: figures`; matches `sh scripts/check_safety_figures.sh --print` (`stdlib modules\t30`, `stdlib lines\t6734`, `stdlib \`unsafe { }\` blocks\t187`, `stdlib modules with such a block\t23`, `stdlib \`unsafe fn\` declarations\t65`, `of those, public\t60`, `compiler modules\t50`, `compiler lines\t47930`, `compiler \`unsafe { }\` blocks\t852`), `--density --print` (`src density\t**4.66%**`, `stdlib density\t**10.96%**`, `line counts\t1,943 of 41,660 lines in \`src/\`, 531 of 4,845 in \`stdlib/\``), and `--probes --print` (`probes\t519`, `compile_reject\t377`, `accept\t77`, `runtime_trap\t8`, `runtime_fault\t11`, `known_gap\t46`).
+      - C2: `sh scripts/test_bench_threshold_gate.sh` -> `[PASS] F1: record_figures appends row with matching field count (24) and commits`, `[PASS] F2: second run on same clean commit adds nothing and says already recorded`, `[PASS] F3: dirty tree appends -dirty row each run (2b0c09f-dirty, 2b0c09f-dirty)`, `All bench threshold gate tests passed.`. Take-out of `"already recorded"` check -> `[FAIL] F2: second run on same clean commit failed (rc=0 lines=3 ...)`. Restored and reran (`All bench threshold gate tests passed.`).
+      - C3: on committed `git:50b1e8f`: `make test` -> `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.1s)`; `make preflight-changed PREFLIGHT_BASE=8203d21` -> exit 0, `Figures @ 2026-11-15 (50b1e8f): 519 probes, 47930 compiler lines, 4.66%/10.96% density`, `git status --short` printed nothing, `records` commit added: `2da5617 (HEAD -> records) 50b1e8f: figures`.
+      - C4: committed on `main` as `git:50b1e8f`.
 
 - [ ] +bench +review +AI-D @main @checkin Review of the records branch and the scripts that commit to it id:ev54n
     > **Created:** 2026-11-15
