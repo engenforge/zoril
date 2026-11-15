@@ -138,13 +138,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `make test` -> `Total: 3369 run, 3369 passed, 0 failed, 98 skipped (121.9s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` -> `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 14 newly refused, of 69158 programs against c161107f5f95e43c7557e5f44d046856a6bcbbd8` (12 from earlier commits on `main`, plus `gap_89` twice from this commit), `Total: 1238 run, 1238 passed, 0 failed, 0 skipped (45.2s)`.
       - C6: committed on `main` as `git:44ab3e6`.
 
-- [ ] +safety +tests +AI-G @main A value that needs a drop is not moved out of an array or slice element (gap_90) id:760hd
+- [x] +safety +tests +AI-G @main A value that needs a drop is not moved out of an array or slice element (gap_90) id:760hd
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** after id:613zw, in the batch that follows the check-in id:3yasf, which found it (finding 3).
     > **Depends:** id:613zw
     > **Depends note:** it adds a fourth value to `enum_payload_source_refusal`, which id:613zw introduces.
     > **Check-in:** a fix to a safety rule; reviewed in id:qmms1.
+    > **Completed:** 2026-11-15 git:1cc65c1
 
     - **Probe:** `bench/safety_matrix/probes/gap_90_drop_value_moved_out_of_array_or_slice_element.zrl` (`known_gap`, exit 77, git:f63b51c; the compiler of git:e0febf3 accepts it the same way).
     - **Cause:** a by-value read of `a[i]` whose type is not `Copy` is a move, and nothing refuses it. In the lowering, `reject_partial_move` (`src/lower_zir/decl.zrl`) returns at the first projection that is not a field or a tuple index. In `check_place_use` (`src/check_zir.zrl`) a slice local is not a pointer local, so the `cannot move out of borrow` rule does not apply; for a local array the checker marks the whole array moved while the lowering still drops it; and an enum payload address taken from `a[i]` is not read as borrowed.
@@ -201,6 +202,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `gap_92` is unchanged: `R bench/safety_matrix/probes/gap_92_vec_duplicated_out_of_slice_element.zrl` still builds and faults (`exit 139`); `sh scripts/run_safety_matrix.sh` (`Mismatches: 0`), `sh scripts/check_safety_figures.sh --all`, `sh scripts/check_safety_model.sh`; quote each verdict line.
       - C5: `make test`, then `REJECT_DIFF_NO_CACHE=1 make preflight-changed`; quote each `Total:` line and the `reject-diff:` lines, and list every newly refused program (expected: this probe, twice). Any other: stop and report, with the program; do not change it to fit.
       - C6: commit on `main` (the note says the fuzz record is stale for `src/`), add `**Awaiting review:**` with C2 to C5, `tm done`, and stop at the check-in id:qmms1.
+    - **Awaiting review:**
+      - C1: before the change, `R` on `gap_90` gave `exit 77`, and all 19 reject tests under `tests/language/memory/element_move/` compiled and exited `0`.
+      - C2: after the change and `make` (no warning), `./scripts/test.sh tests/language/memory/element_move` -> `Total: 21 run, 21 passed, 0 failed, 0 skipped (0.2s)` (`Selected tests 20 run 20 passed`).
+      - C3: without part 2's line alone, the 8 payload tests failed (`array_match_payload`, `slice_if_let`, `slice_let_pattern`, `slice_mut_match_payload`, `slice_nested_index`, `slice_try`, `struct_field_array`, `vec_element_match_payload`, `Total: 21 run, 13 passed, 8 failed, 0 skipped (0.2s)`); without the second hunk of 3 alone, the 11 other reject tests failed (`array_let`, `element_as_argument`, `element_assigned`, `element_in_struct_literal`, `element_returned`, `slice_field_of_element`, `slice_let`, `slice_match_binding`, `slice_struct_pattern`, `slice_tuple_pattern`, `temporary_array_element`, `Total: 21 run, 10 passed, 11 failed, 0 skipped (0.2s)`). Restored, rebuilt, and reran C2 (`Total: 21 run, 21 passed, 0 failed, 0 skipped (0.2s)`).
+      - C4: `R` on `gap_92` still builds and faults (`exit 139`); `sh scripts/run_safety_matrix.sh` -> `All probes complete: 471/518 passed. Mismatches: 0`; `sh scripts/check_safety_figures.sh --all` -> `[PASS] safety-figures: all 9 §5 figure(s) match the tree ...` (after updating compiler line count 47,911 -> 47,932 in `doc/SAFETY.md` and `4.67%` -> `4.66%`, `41,643` -> `41,662` in `doc/spec/unsafe_policy.md`); `sh scripts/check_safety_model.sh` -> `PASS: safety_model.md is self-consistent.` (also updated `bench/safety_matrix/matrix.md` and ran `make md-fmt` to match `doc/spec/safety_model.md`).
+      - C5: `make test` -> `Total: 3411 run, 3411 passed, 0 failed, 96 skipped (122.6s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` -> `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 16 newly refused, of 69158 programs against c161107f5f95e43c7557e5f44d046856a6bcbbd8` (14 from earlier commits on `main`, plus `gap_90` twice from this commit), `Total: 1258 run, 1258 passed, 0 failed, 0 skipped (45.1s)`.
+      - C6: committed on `main` as `git:1cc65c1`.
 
 - [ ] +safety +review +AI-D @main @checkin Review of the guard spec text and the three move-out fixes (gap_89, gap_90, gap_91) id:qmms1
     > **Created:** 2026-11-15
