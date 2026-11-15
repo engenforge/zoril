@@ -980,7 +980,9 @@ impl ZirVerifier {
 
     // Whether temporary LOCAL_ID is an enum payload address whose source is borrowed: by a
     // live borrow, or because the source is behind a named reference (a parameter's `&T`,
-    // borrowed from the caller).
+    // borrowed from the caller). The walk is bounded by the alias table's length plus one
+    // because any longer chain must cycle, and running out answers borrowed so a cycle
+    // cannot bypass the check.
     fn enum_payload_source_borrowed(
         self: &mut ZirVerifier,
         local_id: u32,
@@ -989,7 +991,8 @@ impl ZirVerifier {
     ) -> bool {
         let mut cur = local_id;
         let mut depth = 0 as usize;
-        while depth < 8 as usize {
+        let limit = state.enum_aliases.len() + 1 as usize;
+        while depth < limit {
             let mut found = false;
             let mut src = Place {
                 base: 0 as u32,
@@ -1021,7 +1024,7 @@ impl ZirVerifier {
             cur = src.base;
             depth = depth + 1 as usize;
         }
-        return false;
+        return true;
     }
 
     fn get_borrow_base(self: &ZirVerifier, borrower: u32, state: &ZirAnalysisState) -> u32 {

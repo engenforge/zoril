@@ -1,7 +1,6 @@
 // name: A payload nine enum levels deep is moved out of a borrowed enum by a nested pattern
-// expected: known_gap
-// gap: check_zir's enum_payload_source_borrowed follows at most 8 enum_aliases hops from the payload address to the enum it came from and answers "not borrowed" when it runs out, so a nested pattern more than 8 payloads deep on *r moves the innermost payload out of the borrow, and the caller's enum drops it again
-// observed: exit 77
+// expected: compile_reject
+// EXPECT: cannot move out of borrow
 struct S { p: *mut i32 }
 impl Drop for S {
     fn drop(self: &mut S) {
