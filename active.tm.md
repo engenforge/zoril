@@ -70,13 +70,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `make test` -> `Total: 3351 run, 3351 passed, 0 failed, 100 skipped (121.5s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` -> `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 12 newly refused, of 69158 programs against c161107f5f95e43c7557e5f44d046856a6bcbbd8` (`gap_83`, `gap_84`, `gap_85`, `gap_86`, `gap_88`, `gap_91` each twice; only `gap_91` is from this commit), `Total: 1230 run, 1230 passed, 0 failed, 0 skipped (44.9s)`.
       - C6: committed on `main` as `git:26524b7`.
 
-- [ ] +safety +tests +AI-G @main A closure may not move a part out of a value it captured (gap_89) id:613zw
+- [x] +safety +tests +AI-G @main A closure may not move a part out of a value it captured (gap_89) id:613zw
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** after id:yw8h9, in the batch that follows the check-in id:3yasf, which found it (finding 2).
     > **Depends:** id:yw8h9
     > **Depends note:** the hunks below are written over id:yw8h9's version of `enum_payload_source_borrowed`.
     > **Check-in:** a fix to a safety rule; reviewed in id:qmms1.
+    > **Completed:** 2026-11-15 git:44ab3e6
 
     - **Probe:** `bench/safety_matrix/probes/gap_89_payload_moved_out_of_closure_capture.zrl` (`known_gap`, exit 77, git:f63b51c; the compiler of git:e0febf3 accepts it the same way).
     - **Cause:** inside a closure body a captured value is a local marked `is_capture_alias`, which is not an owner. `check_place_use` (`src/check_zir.zrl`) refuses a move of it only as `if loc.is_capture_alias && place.projections.len == 0 as usize`, so three routes pass: a projection of the alias (`w.s`, `t.0`, a struct or tuple pattern); an enum payload bound through `EnumPayload(alias)` and `Use(*payload_tmp)`, whose base is the payload temporary; and the `consume_place` marker git:67f87b0 emits for the matched enum, which `check_places_consumed` applies without looking at the alias flag.
@@ -129,6 +130,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `sh scripts/run_safety_matrix.sh` (`Mismatches: 0`), `sh scripts/check_safety_figures.sh --all`, `sh scripts/check_safety_model.sh`; quote each verdict line.
       - C5: `make test`, then `REJECT_DIFF_NO_CACHE=1 make preflight-changed`; quote each `Total:` line and the `reject-diff:` lines, and list every newly refused program (expected: this probe, twice). Any other: stop and report, with the program.
       - C6: commit on `main` (the note says the fuzz record is stale for `src/`), add `**Awaiting review:**` with C2 to C5, `tm done`.
+    - **Awaiting review:**
+      - C1: before the change, `R` on `gap_89` gave `exit 77` and on all 7 reject tests gave `exit 0`.
+      - C2: after the change and `make` (no warning), `./scripts/test.sh tests/language/closures/closure_capture_*.zrl` -> `Total: 10 run, 10 passed, 0 failed, 0 skipped (0.1s)` (`Selected tests 9 run 9 passed`); `./scripts/test.sh --filter closure tests` -> `Total: 49 run, 49 passed, 0 failed, 0 skipped (0.3s)` (`Selected tests 48 run 48 passed`). (In `closure_capture_read_without_move.zrl`, used `e1` and `e2` for `f1` and `f2` because both closures capture the enum by value.)
+      - C3: without part 1's `is_capture_alias` line alone, all 8 tests still passed (part 3's `check_places_consumed` catches the same enum-payload routes); without part 2's `if loc.is_capture_alias` alone, `[FAIL] tests/language/closures/closure_capture_field_moved.zrl (expected compile fail, but it compiled) (13ms)`; without part 3 alone, all 8 tests still passed (part 1's `enum_payload_source_refusal` catches the same enum-payload routes; parts 1 and 3 are defense-in-depth on the same `match`/`if let`/`let`/`?` routes). Restored, rebuilt, and reran C2 (`Total: 9 run, 9 passed, 0 failed, 0 skipped (0.1s)`).
+      - C4: `sh scripts/run_safety_matrix.sh` -> `All probes complete: 470/518 passed. Mismatches: 0`; `sh scripts/check_safety_figures.sh --all` -> `[PASS] safety-figures: all 9 §5 figure(s) match the tree ...` (after updating compiler line count 47,893 -> 47,911 in `doc/SAFETY.md` and 41,625 -> 41,643 in `doc/spec/unsafe_policy.md`); `sh scripts/check_safety_model.sh` -> `PASS: safety_model.md is self-consistent.`.
+      - C5: `make test` -> `Total: 3369 run, 3369 passed, 0 failed, 98 skipped (121.9s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` -> `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 14 newly refused, of 69158 programs against c161107f5f95e43c7557e5f44d046856a6bcbbd8` (12 from earlier commits on `main`, plus `gap_89` twice from this commit), `Total: 1238 run, 1238 passed, 0 failed, 0 skipped (45.2s)`.
+      - C6: committed on `main` as `git:44ab3e6`.
 
 - [ ] +safety +tests +AI-G @main A value that needs a drop is not moved out of an array or slice element (gap_90) id:760hd
     > **Created:** 2026-11-15
