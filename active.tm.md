@@ -183,12 +183,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `git diff --stat HEAD~1` changed only `scripts/perf_gap.sh` and `scripts/test_bench_threshold_gate.sh` (no `src/`, `stdlib/` or `tools/`). `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.4s)`.
       - C5: committed on `main` as git:3e05dc7.
 
-- [ ] +testinfra +AI-G @main A change to `scripts/perf_gap.sh` or `scripts/bench_cross_lang.sh` selects the scenarios that test them id:2msct
+- [x] +testinfra +AI-G @main A change to `scripts/perf_gap.sh` or `scripts/bench_cross_lang.sh` selects the scenarios that test them id:2msct
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Found by:** the check-in id:269a6.
     > **Placed:** after id:s72rr, in the batch the check-in id:a55tf reviews.
     > **Check-in:** reviewed in id:a55tf.
+    > **Completed:** 2026-11-15 git:164ba45
 
     - **Now:** `scripts/test_bench_threshold_gate.sh` (the `bench-threshold-gate` scenario) tests `scripts/bench_cross_lang.sh`'s gate and, since git:03937b7, `scripts/perf_gap.sh --record-run`; `scripts/test_bench_contention.sh` (`bench-contention`) tests `scripts/bench_cross_lang.sh` too. The tier table selects neither scenario for a change to those two scripts, so `make test-changed` on such a change runs none of their tests: `sh scripts/select_test_tier.sh --scenarios scripts/perf_gap.sh` and `... scripts/bench_cross_lang.sh` both print an empty line, while `... scripts/bench_threshold_check.sh` prints `bench-threshold-gate`. What the wrong skip hides: a broken gate or record mode, from the author who ran only the scoped tier (`make test` still runs both scenarios).
     - **Settled:** in `scripts/test_tiers.tsv`, the scenarios column (the seventh) of the `scripts/bench_cross_lang.sh` row becomes `bench-contention bench-threshold-gate` and that of the `scripts/perf_gap.sh` row `bench-threshold-gate`; each row's description names what it now selects. No other row changes.
@@ -198,6 +199,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `sh scripts/test_tier_select.sh`; quote its last line. If it holds an expectation for either row, say which and what it was changed to.
       - C4: `make test-changed BASE=HEAD` with the table edit uncommitted, then `make test`; quote each `Total:` line.
       - C5: commit on `main`, add `**Awaiting review:**` with C2 to C4, `tm done`, and stop at the check-in id:a55tf.
+    - **Awaiting review:** `sh scripts/select_test_tier.sh --scenarios scripts/perf_gap.sh`, `sh scripts/select_test_tier.sh --scenarios scripts/bench_cross_lang.sh`, `sh scripts/select_test_tier.sh --gates scripts/perf_gap.sh`, `sh scripts/test_tier_select.sh`, `make test-changed BASE=HEAD~1`, `make test`.
+    - **Completion note:**
+      - C1: before: `sh scripts/select_test_tier.sh --scenarios scripts/perf_gap.sh` printed `` (empty line); `sh scripts/select_test_tier.sh --scenarios scripts/bench_cross_lang.sh` printed `` (empty line).
+      - C2: after: `sh scripts/select_test_tier.sh --scenarios scripts/perf_gap.sh` printed `bench-threshold-gate`; `sh scripts/select_test_tier.sh --scenarios scripts/bench_cross_lang.sh` printed `bench-contention bench-threshold-gate`. `sh scripts/select_test_tier.sh --gates scripts/perf_gap.sh` printed `no-new-deps perf-gate portability` both before and after.
+      - C3: `sh scripts/test_tier_select.sh` last line: `test_tier_select: all checks passed` (it held no expectation for either row).
+      - C4: `make test-changed BASE=HEAD` (uncommitted): `Total: 21 run, 21 passed, 0 failed, 0 skipped (8.9s)`. `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.9s)`.
+      - C5: committed on `main` as git:164ba45; stopping at check-in id:a55tf.
 
 - [ ] +bench +review +AI-D @main @checkin Review of the instruction-count failure and the two tier rows id:a55tf
     > **Created:** 2026-11-15
