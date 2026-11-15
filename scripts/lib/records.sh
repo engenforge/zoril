@@ -81,3 +81,23 @@ records_commit() {
     printf '[FAIL] bench records: the row was appended to %s but not committed: %s\n' "$_rc_file" "$_rc_err" >&2
     return 1
 }
+
+# Write a header line to a history file only if it does not exist or is empty.
+# Linked into place rather than written with > because a truncating write deletes
+# a row appended by a concurrent run since the existence test.
+# Accepted gap: an existing empty file is replaced, which two runs can still race
+# on; nothing in the tree creates an empty history file.
+records_header() {
+    _rh_file="$1"
+    mkdir -p "$(dirname "$_rh_file")"
+    _rh_tmp="$_rh_file.hdr.$$"
+    if [ -e "$_rh_file" ]; then
+        [ ! -s "$_rh_file" ] || return 0
+        printf '%s\n' "$2" > "$_rh_tmp"
+        mv -f "$_rh_tmp" "$_rh_file"
+    else
+        printf '%s\n' "$2" > "$_rh_tmp"
+        ln "$_rh_tmp" "$_rh_file" 2>/dev/null || true
+        rm -f "$_rh_tmp"
+    fi
+}

@@ -610,10 +610,56 @@ append_row "$tmp/bench/gate_t12.tsv" "2026-11-01-00-00-00" "aaaaaaaaaaaa" "Linux
 write_metrics "$tmp/metrics/metrics_t12.tsv" "10000" "100" "5.250" "10.0"
 rc=0
 out="$(TOLERANCES_FILE="$tmp/tol_t12.cfg" BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY="$tmp/bench/gate_t12.tsv" METRICS_FILE="$tmp/metrics/metrics_t12.tsv" "$BENCH" --force --check-thresholds-only 2>&1)" || rc=$?
-if [ "$rc" -eq 0 ] && ! printf '%s\n' "$out" | grep -qE '\[(FAIL|RE''TEST)\].*runtime_ratio_vs_gcc_o2'; then
+if [ "$rc" -eq 0 ] && ! printf '%s\n' "$out" | grep -qE '^ *\[[A-Z]+\] +runtime_ratio_vs_gcc_o2'; then
     echo "[PASS] T12: runtime_ratio_vs_gcc_o2 in tolerance file is ignored"
 else
     echo "[FAIL] T12: rc=$rc out=$out"
+    errors=$((errors + 1))
+fi
+
+# H1: records_header writes header when file does not exist and leaves no temp file
+mkdir -p "$tmp/h1"
+( . "$(pwd)/scripts/lib/records.sh"; records_header "$tmp/h1/x.tsv" "a$(printf '\t')b" )
+_h1_exp="$(printf 'a\tb')"
+_h1_got="$(cat "$tmp/h1/x.tsv" 2>/dev/null || true)"
+_h1_n="$(ls -A "$tmp/h1" | wc -l)"
+if [ "$_h1_got" = "$_h1_exp" ] && [ "$_h1_n" -eq 1 ]; then
+    echo "[PASS] H1: records_header creates new file with header and no temp files"
+else
+    echo "[FAIL] H1: got='$_h1_got' files=$_h1_n"
+    errors=$((errors + 1))
+fi
+
+# H2: records_header leaves an existing non-empty file untouched
+mkdir -p "$tmp/h2"
+printf 'a\tb\n1\t2\n' > "$tmp/h2/x.tsv"
+cp "$tmp/h2/x.tsv" "$tmp/h2_orig.tsv"
+( . "$(pwd)/scripts/lib/records.sh"; records_header "$tmp/h2/x.tsv" "c$(printf '\t')d" )
+if cmp -s "$tmp/h2/x.tsv" "$tmp/h2_orig.tsv"; then
+    echo "[PASS] H2: records_header preserves existing non-empty file"
+else
+    echo "[FAIL] H2: existing file modified"
+    errors=$((errors + 1))
+fi
+
+# H3: records_header does not truncate a row appended concurrently before ln
+mkdir -p "$tmp/h3" "$tmp/h3_bin"
+_real_ln="$(command -v ln)"
+cat > "$tmp/h3_bin/ln" << EOF
+#!/bin/sh
+_last=""
+for _a in "\$@"; do _last="\$_a"; done
+printf 'a\tb\nlate row\n' > "\$_last"
+exec "$_real_ln" "\$@"
+EOF
+chmod +x "$tmp/h3_bin/ln"
+( PATH="$tmp/h3_bin:$PATH"; . "$(pwd)/scripts/lib/records.sh"; records_header "$tmp/h3/x.tsv" "a$(printf '\t')b" )
+_h3_lines="$(wc -l < "$tmp/h3/x.tsv" 2>/dev/null || echo 0)"
+_h3_line2="$(sed -n '2p' "$tmp/h3/x.tsv" 2>/dev/null || true)"
+if [ "$_h3_lines" -eq 2 ] && [ "$_h3_line2" = "late row" ]; then
+    echo "[PASS] H3: records_header does not truncate concurrent row"
+else
+    echo "[FAIL] H3: lines=$_h3_lines line2='$_h3_line2'"
     errors=$((errors + 1))
 fi
 

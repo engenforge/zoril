@@ -59,9 +59,7 @@ done
 line_density=$(awk "BEGIN { if ($tot_loc>0) printf \"%.2f\", $tot_marker*100/$tot_loc; else print 0 }")
 fn_density=$(awk "BEGIN { if ($tot_fn>0) printf \"%.2f\", $tot_fnw*100/$tot_fn; else print 0 }")
 
-if [ ! -f "$HISTORY" ]; then
-    printf 'date\tcommit\tfiles\tloc\tmarker_lines\tline_density_pct\tfunctions\tfns_with_marker\tper_fn_density_pct\tptr_cast_sites\tref_forge_sites\n' > "$HISTORY"
-fi
+records_header "$HISTORY" "$(printf 'date\tcommit\tfiles\tloc\tmarker_lines\tline_density_pct\tfunctions\tfns_with_marker\tper_fn_density_pct\tptr_cast_sites\tref_forge_sites')"
 
 printf '%s\t%s\t%d\t%d\t%d\t%s\t%d\t%d\t%s\t%d\t%d\n' \
     "$DATE" "$COMMIT" "$(echo $FILES | wc -w)" "$tot_loc" "$tot_marker" "$line_density" \

@@ -217,10 +217,7 @@ if [ "$RECORD_RUN" -eq 1 ]; then
             "$z" "$c" "$g" "$ratio" "$ir" >> "$rows_file"
     done
     if [ "${RECORDS_SKIP:-0}" -eq 0 ]; then
-        mkdir -p "$(dirname "$RUNTIME_HISTORY")"
-        if [ ! -f "$RUNTIME_HISTORY" ] || [ ! -s "$RUNTIME_HISTORY" ]; then
-            printf 'date\tcommit\tzoril_version\thost_id\tgovernor\tstatus\tkind\tworkload\tzoril_ms\tcproc_ms\tgcc_ms\tratio_vs_gcc\tinstructions\n' > "$RUNTIME_HISTORY"
-        fi
+        records_header "$RUNTIME_HISTORY" "$(printf 'date\tcommit\tzoril_version\thost_id\tgovernor\tstatus\tkind\tworkload\tzoril_ms\tcproc_ms\tgcc_ms\tratio_vs_gcc\tinstructions')"
         cat "$rows_file" >> "$RUNTIME_HISTORY"
         records_commit "$RUNTIME_HISTORY" "$HID $COMMIT: runtime" "$REPO_ROOT" || exit 1
     fi

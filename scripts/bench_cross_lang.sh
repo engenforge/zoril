@@ -574,10 +574,8 @@ measure_runtime_pair() {
 append_gate_history_row() {
     local kind="$1" verdict="$2" clean_tp="$3" inc_ms="$4" ratio="$5" rss="$6" geomean="${7:-}"
     local ts="${RUN_TS:-$(date +%Y-%m-%d-%H-%M-%S)}"
-    mkdir -p "$(dirname "$GATE_HISTORY")"
-    if [ ! -f "$GATE_HISTORY" ] || [ ! -s "$GATE_HISTORY" ]; then
-        printf 'date\tcommit\tzoril_version\thost_id\thost_os\thost_arch\tcpu_model\tcores\tram_gb\tgovernor\tstatus\tkind\tverdict\tclean_throughput_loc_s\tincremental_rebuild_ms\truntime_ratio_vs_gcc_o2\tpeak_rss_mb_per_kloc\truntime_geomean_vs_gcc_o2\n' > "$GATE_HISTORY"
-    elif [ -n "$(tail -c 1 "$GATE_HISTORY" 2>/dev/null)" ]; then
+    records_header "$GATE_HISTORY" "$(printf 'date\tcommit\tzoril_version\thost_id\thost_os\thost_arch\tcpu_model\tcores\tram_gb\tgovernor\tstatus\tkind\tverdict\tclean_throughput_loc_s\tincremental_rebuild_ms\truntime_ratio_vs_gcc_o2\tpeak_rss_mb_per_kloc\truntime_geomean_vs_gcc_o2')"
+    if [ -n "$(tail -c 1 "$GATE_HISTORY" 2>/dev/null)" ]; then
         printf '\n' >> "$GATE_HISTORY"
     fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -1383,10 +1381,7 @@ else
     cp "$DATA_FIB" "$HIST_FIB"; cp "$DATA_ARR" "$HIST_ARR"; cp "$DATA_MF" "$HIST_MF"
 fi
 if [ "${RECORDS_SKIP:-0}" -eq 0 ]; then
-if [ ! -f "$SPEED_HISTORY" ]; then
-    mkdir -p "$(dirname "$SPEED_HISTORY")"
-    printf 'date\tcommit\tzoril_version\tzig_version\trust_version\thare_version\tbinary\ttoolchain\tworkload\telapsed_ms\tpeak_rss_kb\tstatus\thost_os\tcpu_model\tcores\tram\tgovernor\tload_1m_start\tload_1m_end\thost_id\n' > "$SPEED_HISTORY"
-fi
+records_header "$SPEED_HISTORY" "$(printf 'date\tcommit\tzoril_version\tzig_version\trust_version\thare_version\tbinary\ttoolchain\tworkload\telapsed_ms\tpeak_rss_kb\tstatus\thost_os\tcpu_model\tcores\tram\tgovernor\tload_1m_start\tload_1m_end\thost_id')"
 
 while IFS="$(printf '\t')" read -r label tc c_ms c_rss r_ms bin_sz; do
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tfib(38)x3\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
