@@ -58,6 +58,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
 
     - **Do:** reproduce each shape first (`let x = s[i]` with `s: &[Box<T>]`; `let x = *r.f` where `r.f` refers to an owning value); refuse with "cannot move out of borrow"; probes and `Copy` twins. Verification as id:z0019.
     - **Found (2026-11-15, the check-in id:3yasf):** the slice shape is open today for types other than `Box`. A value with a `Drop` impl read by value out of a slice or array element is dropped twice (`gap_90`; id:760hd in `active.tm.md` refuses it, with the message `cannot move out of an array or slice element`), and a `Vec` read twice out of a slice element gives two owners of one buffer (`gap_92`; whether that read is refused is the maintainer's decision, id:v0bwt, which names the `Box` shape of this task). What is left for this task after those two is `let x = *r.f` and whatever id:v0bwt leaves of `s[i]` for a `Box`.
+    - **Found (2026-11-15, id:v0rsm):** its slice shape (`let x = s[i]` with `s: &[Box<T>]`) is refused by id:v0rsm's rule with the message `cannot move out of an array or slice element` (`tests/language/memory/element_move/slice_box_let.zrl`).
 
 - [ ] +safety +tests id:z0022 A11.4 A partial move is detected through `Box` dereferences and array indices
     > **Created:** 2026-11-03

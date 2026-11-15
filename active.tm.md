@@ -30,13 +30,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `grep -n 'let item = all\[\|let method = all\[\|as_slice()\[i\];\|as_slice()\[dep_idxs' tools/zman/src/render.zrl tools/zbuild/src/*.zrl` printed `&` on the right-hand side for `build.zrl:296`, `build.zrl:629`, `manifest.zrl:135`, `manifest.zrl:182` (the other printed lines are `[u8]` slice copies); `grep -n 'preds\[bj\],' src/check_zir.zrl` printed `1974:                        &preds[bj],`.
       - C4: `make test` (`Total: 3411 run, 3411 passed, 0 failed, 98 skipped (122.1s)`) and `make preflight-changed` (`Total: 1258 run, 1258 passed, 0 failed, 0 skipped (45.1s)` for `--checked`; `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 16 newly refused, of 69159 programs against c161107f5f95e43c7557e5f44d046856a6bcbbd8`) both passed.
 
-- [ ] +safety +tests +AI-G @main A value that is not `Copy` is not read by value out of an array or slice element (gap_92, gap_93) id:v0rsm
+- [x] +safety +tests +AI-G @main A value that is not `Copy` is not read by value out of an array or slice element (gap_92, gap_93) id:v0rsm
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** after id:pex09, which it needs; written by id:cx46y from the maintainer's decision id:v0bwt.
     > **Depends:** id:pex09
     > **Depends note:** with this rule the compiler refuses the twelve sites id:pex09 rewrites, so the tree does not build without it.
     > **Check-in:** a fix to a safety rule; reviewed in id:48h1s.
+    > **Completed:** 2026-11-15 git:cb76bfa
 
     - **Probes:** `bench/safety_matrix/probes/gap_92_vec_duplicated_out_of_slice_element.zrl` (`known_gap`, a fault) and `gap_93_mut_ref_duplicated_out_of_slice_element.zrl` (`known_gap`, exit 77, git:8aff926).
     - **Decided (the maintainer, id:v0bwt):** a by-value read of a slice element that is not `Copy` is refused.
@@ -98,6 +99,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `sh scripts/run_safety_matrix.sh` (`Mismatches: 0`), `sh scripts/check_safety_figures.sh --all`, `sh scripts/check_safety_model.sh`; quote each verdict line.
       - C6: `make test`, then `REJECT_DIFF_NO_CACHE=1 make preflight-changed`; quote each `Total:` line and the `reject-diff:` lines, and list every newly refused program (expected: `gap_92` and `gap_93`, each whole-program and under `zbuild`). Any other: stop and report, with the program; do not change it to fit.
       - C7: commit on `main` (the note says the fuzz record is stale for `src/`), add `**Awaiting review:**` with C2 to C6, `tm done`.
+    - **Awaiting review:**
+      - Note: the fuzz record is stale for `src/` (this commit touches `src/check_zir.zrl`).
+      - C1: before the change, `gap_92` faulted (`exit 139`), `gap_93` exited `77`, and all 20 new tests (`19` reject + `1` accept) exited `0`.
+      - C2: after the change and `make` (no warning), `./scripts/test.sh tests/language/memory/element_move`: `Total: 41 run, 41 passed, 0 failed, 0 skipped (0.3s)` (40 tests + `stray-files`).
+      - C3: taking hunk 1 (`why == 3 as u32`) out alone failed 3 tests (`slice_box_if_let.zrl`, `slice_vec_match_payload.zrl`, `slice_vec_try.zrl`, `Total: 41 run, 38 passed, 3 failed, 0 skipped (0.3s)`); taking hunk 2 (`self.place_has_index(place)`) out alone failed the other 16 reject tests (`Total: 41 run, 25 passed, 16 failed, 0 skipped (0.3s)`); after restoring, `Total: 41 run, 41 passed, 0 failed, 0 skipped (0.3s)`.
+      - C4: putting `preds[bj],` and `predecessors: Vec<u32>,` back in `src/check_zir.zrl` and running `build/zoril src/main.zrl` failed with `src/check_zir.zrl:1972:25: error: cannot move out of an array or slice element`.
+      - C5: `sh scripts/run_safety_matrix.sh` -> `All probes complete: 473/519 passed. Mismatches: 0`; `sh scripts/check_safety_figures.sh --all` -> all 4 checks `[PASS]`; `sh scripts/check_safety_model.sh` -> `safety model: 79 rows — 78 proven, 0 GAP (1 N/A)` and `PASS: safety_model.md is self-consistent.`
+      - C6: `make test` -> `Total: 3455 run, 3455 passed, 0 failed, 94 skipped (124.9s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` -> `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 20 newly refused, of 69159 programs against c161107f5f95e43c7557e5f44d046856a6bcbbd8`, `Total: 1278 run, 1278 passed, 0 failed, 0 skipped (45.2s)` (`--checked`). `sh scripts/check_reject_diff.sh HEAD` against `HEAD` (`949e72e`): `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 4 newly refused, of 69159 programs against HEAD` (`gap_92_vec_duplicated_out_of_slice_element.zrl` and `gap_93_mut_ref_duplicated_out_of_slice_element.zrl`, each whole-program and under `zbuild`).
 
 - [ ] +docs +AI-G @main The spec says a closure may not move a part out of a capture, and names the tests id:025c3
     > **Created:** 2026-11-15
