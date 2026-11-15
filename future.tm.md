@@ -617,6 +617,46 @@ Standalone tasks developed and committed directly on `main`:
     - **Reopened (2026-11-03):** the decision depends on id:z0004's measurements, so the task stays open until they exist; the recommendation above is not a decision yet.
     - **Tag (review, 2026-11-07):** a decision is `+AI-D` work (`AGENTS.md`, "Model tags"): this task is taken by an `+AI-D` session or the maintainer, whatever its title line says. The implementation it names under **Not done here** becomes an `+AI-G` task with numbered checks when it is written.
 
+- [ ] +safety +AI-G @main DN1b Mark parameter drop-flag locals with is_drop_flag = true in ZIR lowering id:1a4tv
+    > **Created:** 2026-11-15
+    > **Context:** by id:3rata (DN1).
+    > **Branch:** `main`
+    > **Placed:** in `future.tm.md` under `main` branch items as a follow-up to id:3rata; blocks DN1c (id:h1acv). Awaiting maintainer scheduling into `active.tm.md`.
+
+    - **Found (2026-11-15, during id:3rata):** `define_params` in `src/lower_zir/decl.zrl:1019-1026` allocates parameter drop-flag locals via `self.define_local(0 as *mut Symbol, bool_ty, LOCAL_KIND_LETMUT)` and assigns `self.local_drop_flag[i] = flag`, without setting `self.locals[flag as usize - 1 as usize].is_drop_flag = true` (unlike `define_local` at `src/lower_zir/decl.zrl:658`). Every non-Copy parameter drop flag (including `Drop::drop(self: T)` in `stdlib/io.zrl`, `stdlib/mem.zrl`, `stdlib/fsys.zrl`) lacked `is_drop_flag = true`.
+    - **Do:** in `src/lower_zir/decl.zrl` (`define_params`, right after line 1023), set `self.locals[flag as usize - 1 as usize].is_drop_flag = true;`. Add a unit/compiler test verifying that parameter drop-flag locals on a function taking a `Drop` struct by value have `is_drop_flag == true` in ZIR (or that a function taking a by-value `Drop` parameter passes the DN1 check / `--emit-zil` without treating its parameter drop flag as user storage).
+    - **Checks:**
+      - C1: new test verifying parameter `is_drop_flag = true` passes via `./scripts/test.sh <new_test>` (and fails when the line in `define_params` is taken out).
+      - C2: `make test`, quoting `Total:`.
+      - C3: `make preflight-changed`, quoting fixpoint, clean-tree build, mutations, and `Total:`.
+
+- [ ] +safety +AI-G @main DN1c Add DN1 lowered-ZIR drop/move/destroy invariant verifier in check_zir.zrl id:h1acv
+    > **Created:** 2026-11-15
+    > **Context:** by id:3rata (DN1).
+    > **Branch:** `main`
+    > **Depends:** id:1a4tv
+    > **Placed:** in `future.tm.md` under `main` branch items directly after DN1b (id:1a4tv), as the implementation decided by id:3rata. Awaiting maintainer scheduling into `active.tm.md`.
+
+    - **Why (from id:3rata):** `ZirVerifier`'s ownership lattice checks source-level locals (`place.projections.len == 0`) but does not verify that `ZirStmt.Drop` / `DropIfLive` and drop flags emitted by `src/lower_zir/` drop or move every `!is_copy` / `needs_drop_flag` value on every CFG path.
+    - **Do:** implement the static DN1 drop/move/destroy verifier in `src/check_zir.zrl` as an internal compiler error (diagnostic prefixed `[DN1 Inv-*]` naming the local) so `zoril` refuses any lowered ZIR violating:
+      1. `[DN1 Inv-DoubleDrop]` — `Drop` on a non-live place (`DropIfLive` permitted only under synced live or `!flag_synced` guarding).
+      2. `[DN1 Inv-DropLeak]` — any `!is_copy` local/place (with `Drop` / `DropIfLive` drop flag, excluding `variant_no_drop` / Copy variants) reaching `Ret` neither moved nor dropped.
+      3. `[DN1 Inv-DropDecompose]` — moving or dropping a payload out of a value whose type implements `Drop`.
+      4. `[DN1 Inv-DropBorrowed]` — `Drop` / `DropIfLive` on a place while an active borrow overlaps it (`state.borrows`).
+      Include the five lowering-compatibility rules validated during id:3rata's prototype:
+      - Track `variant_no_drop` (`VariantCheck` branch state + `dn_vcheck_nodrop`) so `lower_try_expr`'s `Assign(flag, 0)` on Copy variants and `Ret(x)` when `ret_ty == op_ty` pass cleanly.
+      - Resolve nested enum payload roots in `dn_projection_root` through intermediate pointer temporaries (`tmp2 -> *tmp1 -> e`, depth < 8) without stopping early on `local_is_pointer(src.base)`.
+      - Retire abandoned speculative `pending_src[k]` when `!self.is_live(k)` (and via `!live_out_of(pred_idx)` on `Branch(flag_e)`'s `else` edge when `flag_synced[owner]`).
+      - Handle `PROJ_DEREF` move in `dn_on_place_move` when `flag == DM_DEAD_0`.
+      - Keep `match *stmt` exhaustive (`ZirStmt.Intrinsic` / `ZirStmt.EndBorrow` explicit, zero wildcard warnings).
+      Also add a planted/unit verifier test (or compiler self-test / unit test invoking a deliberately broken lowered pattern or verifying zero warnings and full-tree acceptance) and measure `src/main.zrl` compile time vs baseline (prototype overhead was `+0.409s` / `+12.9%`, `3.170s` -> `3.579s` median).
+    - **Checks:**
+      - C1: zero compiler build warnings on `make`; self-hosting fixpoint identical across two self-hosted generations (`make preflight-changed`).
+      - C2: unit/regression test exercising the DN1 verifier passes (`./scripts/test.sh <test>`), and taking out each invariant or adding a deliberate lowered-ZIR violation triggers `[DN1 Inv-*]`.
+      - C3: quote median compile time of `timeout -k 5s 30s ./build/zoril --emit-zil -o /dev/null src/main.zrl -I stdlib=stdlib -I src -I build/gen` over 3 runs before and after.
+      - C4: `make test`, quoting `Total:`.
+      - C5: `make preflight-changed`, quoting fixpoint, clean-tree build, mutations, and reject-diff.
+
 ## `testinfra` branch: the test runner in Zoril and test-path portability, paused (from `active.tm.md`, 2026-11-14)
 
 Paused by the maintainer on 2026-11-14 in favour of open soundness holes. These tasks finish replacing `scripts/test.sh`'s parallel pool with `build/ztest` and remove the test path's last non-portable tools (`AGENTS.md`, Portability: `flock`, `mkfifo`, `setsid`, `xargs -P`, `read -t`), then make the runner more convenient. None of them fixes a bug. As paused, `make test` runs `test.sh`'s pool, and `make test RUNNER=ztest` runs the same plan one item at a time. Moved here in their order, with their check-ins and milestone merges.
