@@ -283,22 +283,82 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `make test-changed BASE=HEAD` selected `bench-contention bench-threshold-gate` (`Integration  2 run  2 passed  0 failed  0 skipped`), `Total: 28 run, 28 passed, 0 failed, 0 skipped (42.0s)`. `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.6s)`.
       - C6: committed on `main` as git:704a259; stopping at check-in id:95cy3.
 
-- [ ] +bench +review +AI-D @main @checkin Review of the removal of the `fib` confirmation retry id:95cy3
+- [x] +bench +review +AI-D @main @checkin Review of the removal of the `fib` confirmation retry id:95cy3
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Depends:** id:41rnk
     > **Placed:** directly after the task it reviews.
+    > **Completed:** 2026-11-15 git:704a259
 
     - **Checks:**
       - Re-read the queue and `git log -p` on `main` since git:164ba45; re-run what the **Awaiting review:** bullet names.
       - Nothing else went with the retry: a real `sh scripts/bench_threshold_check.sh` still writes `runtime_ratio_vs_gcc_o2` into the metrics file, the gate row's 16th field and `speed_history.tsv`; `measure_runtime_pair` is still called once.
       - The gate still fails where it should: T5 unchanged, and a planted run 20% over the baseline's mean through `--check-thresholds-only` exits 1.
+    - **Review (2026-11-15), git:704a259, the one commit since git:164ba45:**
+      - The four settled edits are as written: the `[RETEST]` arm and the `runtime_ratio_vs_gcc_o2` case arm are gone from `check_thresholds_gate`, the baseline's and the last row's 16th field are read into `_`, the `vs last` line prints the mean with `-` for an empty side, cases 2 and 3 with their stubs and `tol_legacy.cfg` are gone, and `bench/cross_lang/tolerances.cfg` ends at its last line. Nothing else changed in the three files.
+      - **Awaiting review, re-run:** `rg -n 'RETEST|noise retry|tol_legacy|b_rat' scripts/` prints nothing. `tail -c 1 bench/cross_lang/tolerances.cfg | od -c` prints `0000000  \n`; `tail -n 1` prints `runtime_geomean_vs_gcc_o2|15|lower_better`. `sh scripts/bench_threshold_check.sh > build/95cy3-run.log 2>&1` exits 0: `  vs last run (2026-11-15-22-57-53): clean_throughput_loc_s 10393 (was 10320), incremental_rebuild_ms 22 (was 21), runtime_geomean_vs_gcc_o2 2.376 (was 2.380)`, `[OK]  clean_throughput_loc_s     10393 (baseline 10356, tol 15%)`, `[OK]  incremental_rebuild_ms     22 (baseline 22, tol 15%)`, `[OK]  runtime_geomean_vs_gcc_o2  2.376 (baseline 2.385, tol 15%)`. `make test-changed BASE=HEAD~1` selected everything (an untracked directory of this checkout is in its change set): `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.5s)`. `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.0s)`.
+      - **`sh scripts/test_bench_threshold_gate.sh`, run seven times:** six runs print 32 `[PASS]` lines and exit 0, with `[PASS] normal run within tolerance passes` and the `[PASS]` lines of T5, T10, T11 and T12. The first run printed 31 and `[FAIL] R6: concurrent record commits failed (fail=0 rows=3 status='')`, exit 1. That is not this batch's: the header of a new history file is written with a truncating `>`, which deletes a row another run appended since the test for the file (reproduced without git, 2 of 30 trials). id:at2k3 has the reproducer, the cause and the settled fix.
+      - **Nothing else went with the retry:** the real run above prints `runtime_ratio_vs_gcc_o2= 3.909`, its row of `bench/records/gate_history.tsv` has `3.909` in the 16th field (`run pass 10393 22 3.909 5.119 2.376`, fields 12 to 18, the tabs written here as spaces), and `bench/records/speed_history.tsv` gained its `runtime_ratio_vs_gcc_o2 zoril_vs_gcc fib(38)x3 3.909` row; `rg -n 'measure_runtime_pair "' scripts/bench_cross_lang.sh` prints the one call. The three `records` commits were made (`704a259: speed`, `runtime`, `gate pass`).
+      - **The gate still fails where it should:** T5 is untouched by the diff and passes. Planted through `--check-thresholds-only` with an 18-field baseline of mean 2.000 and a metrics file whose `fib` ratio is 9.000 (baseline 3.000): mean 2.400 prints `[FAIL] runtime_geomean_vs_gcc_o2  2.400 regressed past baseline 2.000 (lower_better, tol 15%)` and exits 1 with a `run fail` row; mean 2.290 prints three `[OK]` lines and exits 0. The tripled `fib` ratio alone fails nothing, as decided in id:rdpmh.
+      - **Sibling routes:** no document or script outside the two edited ones names the retry (`rg -i 're-?measure|confirmation (run|measurement)|noise spike|RETEST'` over the tree finds only unrelated text in `doc/bootstrap/two_stage.md` and `bench/fuzz/`). `RT_PAIR_RATIO` and `m_rat` are still used (the measurement and the row).
+      - **Findings:** (1) T12's pattern spells the removed tag in two halves (`RE''TEST`) so that C2's `rg` prints nothing: the settled text asked for both, and the split keeps the letter of one. id:at2k3 (settled 3) replaces it with a pattern that needs no tag name and is stronger (no verdict line of any tag names the axis). (2) The R6 failure above: id:at2k3. (3) T10 to T12 stand before T6 in the script; order only, nothing to do.
+      - **Plan:** id:at2k3 added before id:sx4a3, which now depends on it; the check-in id:f5mbr reviews both. Nothing moved, re-tagged or re-prioritized. The pull of the `tasks` branch before these edits failed (the remote is not reachable from this machine); the local branch was 66 commits ahead and nothing was rebased.
+
+- [ ] +bench +testinfra +AI-G @main A history file gets its header without truncating a row a concurrent run has appended id:at2k3
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Depends:** id:95cy3
+    > **Check-in:** reviewed in id:f5mbr.
+    > **Found by:** the check-in id:95cy3 (the code dates from id:455bt and id:h1dj3; id:41rnk did not touch it).
+    > **Placed:** before id:sx4a3, which it blocks: id:sx4a3's checks count the `[PASS]` lines of a scenario that this defect fails about one run in seven, and both edit the same scripts.
+
+    - **Now (git:704a259):** `sh scripts/test_bench_threshold_gate.sh` failed once in seven runs on this host, each time alone on the machine but for the last four: `[FAIL] R6: concurrent record commits failed (fail=0 rows=3 status='')`, 31 `[PASS]` lines, exit 1. The scenario is in `make test` (`bench-threshold-gate`), so `make test` fails at that rate.
+    - **Cause (reproduced without git):** `append_gate_history_row` in `scripts/bench_cross_lang.sh` writes the header with `printf ... > "$GATE_HISTORY"` when `[ ! -f "$GATE_HISTORY" ] || [ ! -s "$GATE_HISTORY" ]`. Run A finds no file; run B creates it and appends its row; run A's `>` truncates the file and B's row is gone. The commit retry of id:h1dj3 is not involved (`status=''`, every run exits 0). Reproducer, which is C1:
+    ```sh
+    d=$(mktemp -d); printf 'clean_throughput_loc_s\t10000\nincremental_rebuild_ms\t100\nruntime_ratio_vs_gcc_o2\t3.0\npeak_rss_mb_per_kloc\t10.0\nruntime_geomean_vs_gcc_o2\t2.0\n' > $d/m.tsv
+    bad=0; i=0; while [ $i -lt 100 ]; do i=$((i+1)); rm -f $d/h.tsv
+      for j in 1 2 3 4; do BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY=$d/h.tsv METRICS_FILE=$d/m.tsv sh scripts/bench_cross_lang.sh --force --check-thresholds-only >/dev/null 2>&1 & done; wait
+      n=$(awk -F'\t' 'NR>1 && NF==18{c++} END{print c+0}' $d/h.tsv); h=$(grep -c '^date' $d/h.tsv)
+      [ "$n" -eq 4 ] && [ "$h" -eq 1 ] && [ "$(head -n 1 $d/h.tsv | cut -c1-4)" = date ] || { bad=$((bad+1)); echo "trial $i rows=$n headers=$h"; }
+    done; echo "bad trials: $bad of 100"; rm -rf $d
+    ```
+    - **Measured:** at git:704a259 it printed `bad trials: 2 of 30` (30 trials; `trial 14 rows=3 headers=1`, `trial 16 rows=3 headers=1`). With the header written to `$GATE_HISTORY.hdr.$$` and linked into place (`ln`, which fails where the file exists), tried as a local change and taken out again: `bad trials: 0 of 100`.
+    - **Who it reaches:** a history file that does not exist yet and two runs at once: a new clone's or a new host's first preflights, and every scratch repository of the tests. The real `bench/records/*.tsv` exist, so no recorded row was lost by this (`git -C bench/records log` shows no row removed: nobody rewrites one).
+    - **The same write in four more places** (the route class: a header written with `>` after a test for the file): `scripts/bench_cross_lang.sh` for `$SPEED_HISTORY` (`if [ ! -f "$SPEED_HISTORY" ]`), `scripts/perf_gap.sh` for `$RUNTIME_HISTORY`, `scripts/record_figures.sh` and `scripts/record_marker_density.sh` for `$HISTORY`. Not reproduced for these four; the code has the same shape.
+    - **Settled 1:** `scripts/lib/records.sh` gains `records_header <file> <header line>`, called by all five sites in place of their `if`/`printf ... >` (the `elif` of `append_gate_history_row` that adds a missing last newline stays, as an `if` of its own after the call). Each site passes its header as `"$(printf 'date\tcommit\t...')"` without the trailing `\n`, the field names unchanged.
+    ```sh
+    records_header() {
+        _rh_file="$1"
+        mkdir -p "$(dirname "$_rh_file")"
+        _rh_tmp="$_rh_file.hdr.$$"
+        if [ -e "$_rh_file" ]; then
+            [ ! -s "$_rh_file" ] || return 0
+            printf '%s\n' "$2" > "$_rh_tmp"
+            mv -f "$_rh_tmp" "$_rh_file"
+        else
+            printf '%s\n' "$2" > "$_rh_tmp"
+            ln "$_rh_tmp" "$_rh_file" 2>/dev/null || true
+            rm -f "$_rh_tmp"
+        fi
+    }
+    ```
+    - **Settled 1, the order of its tests:** the test for the file comes first and the test for its content second, in that order: a file another run links in between has content, so it is never replaced. Its header comment says why the header is linked and not written (a truncating write deletes a row appended since the test), and names the accepted gap: a file that exists and is empty is replaced, which two runs can still race on; nothing in the tree creates an empty history file.
+    - **Settled 2:** `scripts/test_bench_threshold_gate.sh`, cases H1 to H3 after T12, with no git (they stay in this script under id:sx4a3). Each sources `scripts/lib/records.sh` in a subshell and calls `records_header "$tmp/h/x.tsv" "a$(printf '\t')b"`. H1: no file before; after, the file is the one line `a<tab>b` and the directory holds no other file. H2: the file holds a header and a row before; after, `cmp` with a copy made before. H3, the planted race: a directory first on `PATH` with an `ln` that appends `late row` to its last argument's file after writing `a<tab>b` there, then runs the real `ln` with the same arguments (found with `command -v ln` before `PATH` changes) and exits with its status; after the call the file's second line is `late row` and its line count is 2.
+    - **Settled 3:** T12's test for the absent lines becomes `grep -qE '^ *\[[A-Z]+\] +runtime_ratio_vs_gcc_o2'` (no verdict line of any tag names the axis), in place of the pattern that spells a removed tag in two halves.
+    - **Settled 4:** `scripts/test_tiers.tsv`: the `scripts/record_figures.sh` and `scripts/record_marker_density.sh` rows keep what they select; nothing is added (a change to `scripts/lib/records.sh` selects everything already: C5 quotes that).
+    - **Checks:**
+      - C1: before: the reproducer above with 100 trials; quote its last line (expected: one or more bad trials; if none in 100, run it once more and quote both). And `sh scripts/test_bench_threshold_gate.sh | grep -c '^\[PASS\]'` (expected 32, or 31 with the R6 line: quote the line).
+      - C2: after: the reproducer; quote `bad trials: 0 of 100`. `sh scripts/test_bench_threshold_gate.sh`: quote the `[PASS]` lines of H1, H2, H3, T12 and R6, the count (expected 35) and the last line. Run the script ten times in a loop and quote each run's count and exit status.
+      - C3: take out alone, quote the failing line, restore: in `records_header`, the `ln` line replaced by `cat "$_rh_tmp" > "$_rh_file"` (H3 fails: the late row is gone); the `[ ! -s "$_rh_file" ] || return 0` line (H2 fails).
+      - C4: `rg -n "> \"\\\$(GATE_HISTORY|SPEED_HISTORY|RUNTIME_HISTORY|HISTORY)\"" scripts/` prints nothing, and `rg -c 'records_header' scripts/bench_cross_lang.sh scripts/perf_gap.sh scripts/record_figures.sh scripts/record_marker_density.sh` prints 2, 1, 1, 1.
+      - C5: `sh scripts/select_test_tier.sh --scenarios scripts/lib/records.sh`; quote the line. `make test-changed BASE=HEAD` before the commit and `make test`; quote each `Total:` line. A real `sh scripts/bench_threshold_check.sh > build/at2k3-run.log 2>&1`: quote its three `[OK]` lines, `git -C bench/records log --oneline | head -3`, and `git -C bench/records status --short` (empty: no `.hdr.` file left), and `head -n 1` of each of `bench/records/gate_history.tsv`, `speed_history.tsv` and `runtime_history.tsv` unchanged against `git -C bench/records show HEAD~3:<file> | head -n 1`. `sh scripts/record_figures.sh` and `sh scripts/record_marker_density.sh` are not run on the real records (they are the milestone's); F1 to F4 cover the first, and for the second quote a run with `HISTORY` naming a file under `build/` if the script takes one, or `not run` and why.
+      - C6: commit on `main`, add `**Awaiting review:**` with C2 to C5, `tm done`. The next task is id:sx4a3; the check-in id:f5mbr reviews both.
 
 - [ ] +testinfra +portability +AI-G @main The `bench-threshold-gate` scenario of `make test` calls git and fails without it id:sx4a3
     > **Created:** 2026-11-15
     > **Branch:** `main`
-    > **Depends:** id:95cy3
-    > **Depends note:** it edits `scripts/test_bench_threshold_gate.sh`, which id:41rnk edits; the check-in id:95cy3 closes that batch.
+    > **Depends:** id:95cy3, id:at2k3
+    > **Depends note:** it edits `scripts/test_bench_threshold_gate.sh`, which id:41rnk edits; the check-in id:95cy3 closes that batch. id:at2k3 (added by the check-in id:95cy3) edits the same scripts and stops the R6 case failing one run in seven, which this task's counts of `[PASS]` lines need.
     > **Check-in:** reviewed in id:f5mbr.
     > **Found by:** the check-in id:269a6 (the cases date from id:455bt; id:h1dj3 and id:9d99n added more of the same kind).
     > **Placed:** under Evidence and tooling: not this batch's defect; the maintainer decides when it is taken (it matters at the next `make dist-check`).
@@ -333,7 +393,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 - [ ] +testinfra +review +AI-D @main @checkin Review of the git-free `bench-threshold-gate` scenario and the `bench-records` scenario id:f5mbr
     > **Created:** 2026-11-15
     > **Branch:** `main`
-    > **Depends:** id:sx4a3
+    > **Depends:** id:at2k3, id:sx4a3
     > **Placed:** directly after the task it reviews.
 
     - **Checks:**
@@ -341,6 +401,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - No case was lost or weakened in the move: every case name of the script before the change appears in one of the two scripts after it, and each moved case's body is unchanged (`git diff` with `--color-moved`).
       - The scenario that stays calls no git by any route: the logging `git` over the whole of `make test` (part 2 of `scripts/check_user_tools.sh`), and from an export without git (part 1).
       - `records_commit`'s early return hides no real commit: a history file under `bench/records/` of a mounted work tree is still committed (R1), and a real `sh scripts/bench_threshold_check.sh` makes its three commits.
+      - id:at2k3: its reproducer prints `bad trials: 0 of 100`, ten runs of `sh scripts/test_bench_threshold_gate.sh` (and of `sh scripts/test_bench_records.sh`, where R6 is after id:sx4a3) all pass, H1 to H3 are still in the scenario that stays and reach no git, and no `.hdr.` file is left in `bench/records/` after a real run. Read the four sites that were not reproduced (`$SPEED_HISTORY`, `$RUNTIME_HISTORY`, the two `$HISTORY`): the header text of each is unchanged, field for field.
 
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
