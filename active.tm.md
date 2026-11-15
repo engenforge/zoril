@@ -45,7 +45,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Checks:**
       - C1: before: `sh scripts/perf_gap.sh` prints its table and `ls bench/records/runtime_history.tsv` fails; quote both.
       - C2: the test script; quote the `[PASS]` lines of T1 to T7 and its last line. Take out alone: the exit-code comparison in record mode (T7), the tolerance line (T5), the `[NEW]` branch (T6); quote what fails; restore.
-      - C3: a real run, `sh scripts/bench_threshold_check.sh > build/-run.log 2>&1`: quote the `[NEW]` line, the six rows it appended, the three commits on `records` (speed, runtime, gate), and `git status --short` of the code tree (nothing). Do not re-record the baseline: that is the next task's.
+      - C3: a real run, `sh scripts/bench_threshold_check.sh > build/runtime-run.log 2>&1`: quote the `[NEW]` line, the six rows it appended, the three commits on `records` (speed, runtime, gate), and `git status --short` of the code tree (nothing). Do not re-record the baseline: that is the next task's.
       - C4: `make test`, then `make preflight-changed`; quote each `Total:` line and the time of the bench step from `build/preflight-timings.tsv` before and after (expected: about 40 s more).
       - C5: commit on `main`, add `**Awaiting review:**` with C2 to C4, `tm done`, and stop at the check-in id:269a6.
 
