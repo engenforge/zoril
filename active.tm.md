@@ -77,11 +77,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `make test-changed BASE=HEAD` before commit -> `Total: 152 run, 151 passed, 1 failed, 0 skipped (20.6s)` (`[FAIL] scenario: preflight-selftest` Case 17 `doc-only change should skip preflight-changed` failed because the working tree had uncommitted non-doc changes `scripts/preflight.sh` and `bench/gate_history.tsv` left by id:nxrav C6).
       - C5: committed on `main` as `git:b751035`, updated `id:z0004` in `doc/tasks/future.tm.md` on `tasks`.
 
-- [ ] +bench +review +AI-D @main @checkin Review of the per-host benchmark history and its rules id:25ttc
+- [x] +bench +review +AI-D @main @checkin Review of the per-host benchmark history and its rules id:25ttc
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Depends:** id:nxrav, id:n6ya8
     > **Placed:** directly after the batch it reviews (a mechanism that decides what a run is compared with, and the rule about its records).
+    > **Completed:** 2026-11-15 git:9e79c80
 
     - **Checks:**
       - Re-read the queue and `git log -p` on `main` since git:e5087d4.
@@ -89,11 +90,53 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - Planted cases beyond P1 to P8: a history whose last line has no newline; a `host_id` of this host only in a `backfill` row (a new host, not a comparison); `--record` on a host with a baseline (a second baseline, used by the next run); a run in a tree without git (`commit` is `unknown`, the run still records); two branches that each appended a row merge without a conflict (`merge=union`, tried in a scratch repository).
       - A wrong skip this mechanism could hide: a regression that passes because the gate took the run for a new host. Show what changes the id on this host (`--print-host-id` with each of the five inputs changed in turn) and that nothing else does.
       - The rules read the same in `AGENTS.md` and `doc/developer_guide.md`, and no text still says to delete a record.
+    - **Review (2026-11-15, a reviewing session), of git:4bff90f and git:b751035:** the mechanism does what id:nxrav settles; three follow-ups, in id:455bt.
+      - Re-run: `sh scripts/test_bench_threshold_gate.sh` passes its eleven cases (`All bench threshold gate tests passed.`); the batch quoted every take-out check (the host filter fails P1, P3 and P4; the `baseline` filter fails P5; "first" for "last" fails P6).
+      - Planted cases beyond P1 to P8, each run with a temporary `GATE_HISTORY`: no history file (a header and a `baseline` row are written, the next run compares with it); a last line with no newline (the new row starts on its own line, every row has 17 fields); this host only in a `backfill` row (`new host`, no comparison); two branches of a scratch repository that each appended a row merge with no conflict and keep both rows.
+      - What changes the host id on this host (`--print-host-id`: `a52c24a80e04`): another core count (`95a3925f679e`) and another architecture (`a2d92354ba3e`) do; another kernel release does not. RAM is rounded to whole GB (31 here, from 31.3), so a host that sits near a half would change id with a small change of `MemTotal`; accepted, this host does not.
+      - The rules: `AGENTS.md` (Running tests and Cloud sessions) and `doc/developer_guide.md` say the same thing, and `rg -n 'never commit them|delete them when the run is done|thresholds\.cfg|THRESHOLDS_FILE'` outside the task files prints nothing.
+      - id:n6ya8's C4 was committed with one failure, `preflight-selftest` case 17. Cause confirmed: `sh scripts/test_preflight.sh` fails that case whenever the working tree holds a change whose tier flag is not `doc`, and the preflight's own uncommitted row in `bench/gate_history.tsv` is one (finding 1 of id:455bt). With the rows committed (git:9e79c80) `make test-changed BASE=HEAD~1` gave `Total: 3455 run, 3455 passed, 0 failed, 94 skipped (122.7s)`.
+      - The rows the batch's preflight left in the working tree were committed as the rule says: git:9e79c80, `bench: record the preflight run for 4bff90f` (this host's first baseline: 10177 LOC/s, 22 ms, ratio 3.930).
+      - id:tmydc now depends on the check-in id:ev54n: its rows should carry the commit column as id:455bt fixes it.
+
+- [ ] +bench +testinfra +AI-G @main A commit of benchmark records needs no preflight of its own, and a record names a clean commit id:455bt
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** before id:tmydc, whose rows it affects; found by the check-in id:25ttc.
+    > **Check-in:** reviewed in id:ev54n.
+
+    - **Found by the check-in id:25ttc:**
+      1. `scripts/test_tiers.tsv` gives `bench/gate_history*` and `bench/speed_history*` the flag `test`. So a commit that only records benchmark rows is a code change to `make preflight-changed`, which runs in full and appends another row to commit, without end; `make test-changed` on such a commit ran everything (git:9e79c80: `Total: 3455 run, 3455 passed, 0 failed, 94 skipped (122.7s)`); and while a preflight's rows are uncommitted, `preflight-selftest` fails its case 17 (`doc-only change should skip preflight-changed`), as id:n6ya8's C4 recorded.
+      2. The `commit` column gets `-dirty` whenever `git status --porcelain` prints anything. An untracked directory of the host and the two history files themselves count, so every row after a host's first uncommitted one says `-dirty` (seen: `b751035-dirty` with only `bench/gate_history.tsv` modified).
+      3. The header comment of `scripts/bench_cross_lang.sh` names a task (`id:z0004`); a source comment says why in words.
+    - **Settled:**
+      1. The two rows of `scripts/test_tiers.tsv` become records: flag `doc`, gates `perf-gate` only, no groups and no scenarios, as the doc rows are written (a positive list). Their description says they are measurement records.
+      2. `-dirty` is added only when a tracked file other than the two history files is modified: `git -C "$REPO_ROOT" status --porcelain --untracked-files=no -- . ':(exclude)bench/gate_history.tsv' ':(exclude)bench/speed_history.tsv'` prints something.
+      3. The comment reads: `two cloud VMs of one shape were measured within the 15% tolerance of each other (2026-11-03)`, with no task ID.
+    - **Checks:**
+      - C1: before the change: `printf 'bench/gate_history.tsv\n' | ./scripts/select_test_tier.sh --flags` prints `test`; quote it.
+      - C2: after it, the same command and the one for `bench/speed_history.tsv` print `doc`; in a scratch clone under `build/` with one commit that appends a line to `bench/gate_history.tsv`, `./scripts/preflight.sh --changed` with `PREFLIGHT_BASE=HEAD~1` prints `[SKIP] preflight-changed: only documentation changed since` and exits 0; quote the line. Take the flag back to `test` and quote the same run going past that line (stop it there); restore.
+      - C3: the commit column. With a modified `bench/gate_history.tsv` and an untracked file in the tree, a `--force --check-thresholds-only` run with `GATE_HISTORY` and `METRICS_FILE` in a temporary directory (as `scripts/test_bench_threshold_gate.sh` does) writes a row whose commit has no `-dirty`; with a tracked file other than the two modified (append a blank line to `README.md`, then `git checkout README.md`) it has `-dirty`. Add both as cases of `scripts/test_bench_threshold_gate.sh` if they can be made without touching the real tree (a scratch clone); otherwise quote the two rows here and say why no test was added.
+      - C4: `rg -n 'id:[a-z0-9]{5}' scripts/bench_cross_lang.sh scripts/bench_threshold_check.sh` prints nothing.
+      - C5: `sh scripts/test_bench_threshold_gate.sh`, `sh scripts/test_preflight.sh` (with the tree clean), then `make test`; quote each verdict line and the `Total:` line.
+      - C6: commit on `main`, add `**Awaiting review:**` with C2 to C5, `tm done`, and stop at the check-in id:ev54n.
+
+- [ ] +bench +review +AI-D @main @checkin Review of the benchmark record tier and the commit column id:ev54n
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Depends:** id:455bt
+    > **Placed:** directly after the task it reviews.
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` on `main` since git:9e79c80; re-run what the **Awaiting review:** bullet names.
+      - What a wrong skip would hide: a change to the harness or the compiler that rides in a commit taken for records only. Show that a commit touching `bench/gate_history.tsv` and any other non-doc file is not skipped by `preflight-changed`.
+      - A real `make preflight-changed` on a code change still appends its rows, and the commit of those rows is then skipped.
 
 - [ ] +bench +measurement +AI-D @main Rebuild the benchmark history of this host from the commits since the release id:tmydc
     > **Created:** 2026-11-15
     > **Branch:** `main`
-    > **Depends:** id:25ttc
+    > **Depends:** id:ev54n
+    > **Depends changed (2026-11-15):** was id:25ttc; the check-in id:25ttc added id:455bt and its check-in before this task, and this task waits for that review.
     > **Placed:** after the check-in id:25ttc: it writes into the history that batch creates. The maintainer's request of 2026-11-15.
     > **Note:** a measurement whose first result (which harness can measure an old commit) decides how the rest is run.
 
