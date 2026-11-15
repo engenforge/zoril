@@ -2,11 +2,12 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +refactor +AI-G @main The compiler, zbuild and zman read a non-`Copy` slice element through a reference, not by value id:pex09
+- [x] +refactor +AI-G @main The compiler, zbuild and zman read a non-`Copy` slice element through a reference, not by value id:pex09
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** after id:cx46y, which measured these sites; before id:v0rsm, which it blocks.
     > **Check-in:** reviewed in id:48h1s.
+    > **Completed:** 2026-11-15 git:949e72e
 
     - **Why:** id:v0rsm refuses a by-value read of an array or slice element that is not `Copy` (the maintainer's decision, id:v0bwt). id:cx46y measured every such read in the tree: twelve, listed here. They are rewritten first, in a commit that builds under today's rule, so that the compiler that carries the new rule can build the tree. No behaviour changes.
     - **The sites and their rewrite** (measured and built in id:cx46y; the same diff is `build/cx46y/rewrites.patch` on the host that ran it, `git apply` it if it is there, otherwise make these edits by hand):
@@ -22,6 +23,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: no by-value read is left at the sites: `grep -n 'let item = all\[\|let method = all\[\|as_slice()\[i\];\|as_slice()\[dep_idxs' tools/zman/src/render.zrl tools/zbuild/src/*.zrl` prints only lines that begin the right-hand side with `&` (quote the output), and `grep -n 'preds\[bj\],' src/check_zir.zrl` prints the `&preds[bj],` line.
       - C4: `make test`, then `make preflight-changed`; quote each `Total:` line. A failure in the `zbuild` tests or scenarios: stop and report, do not change a test to fit.
       - C5: commit on `main` (the note says the fuzz record is stale for `src/` and `tools/zbuild/`), add `**Awaiting review:**` with C1 to C4, `tm done`. There is no take-out check here: the change is a refactor, and id:v0rsm's C4 is the check that fails without it.
+    - **Awaiting review:**
+      - Note: the fuzz record is stale for `src/` and `tools/zbuild/` (this commit touches both).
+      - C1: `make` built with no warning: `Built: the toolchain is up to date in build/ (zoril, zilc, zbuild; zoril 0.1.0-alpha-166-g8aff926-dirty). Next: make test`
+      - C2: `git diff --stat HEAD` named only the five files (`src/check_zir.zrl`, `tools/zbuild/src/build.zrl`, `tools/zbuild/src/main.zrl`, `tools/zbuild/src/manifest.zrl`, `tools/zman/src/render.zrl`, `5 files changed, 29 insertions(+), 32 deletions(-)`).
+      - C3: `grep -n 'let item = all\[\|let method = all\[\|as_slice()\[i\];\|as_slice()\[dep_idxs' tools/zman/src/render.zrl tools/zbuild/src/*.zrl` printed `&` on the right-hand side for `build.zrl:296`, `build.zrl:629`, `manifest.zrl:135`, `manifest.zrl:182` (the other printed lines are `[u8]` slice copies); `grep -n 'preds\[bj\],' src/check_zir.zrl` printed `1974:                        &preds[bj],`.
+      - C4: `make test` (`Total: 3411 run, 3411 passed, 0 failed, 98 skipped (122.1s)`) and `make preflight-changed` (`Total: 1258 run, 1258 passed, 0 failed, 0 skipped (45.1s)` for `--checked`; `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 16 newly refused, of 69159 programs against c161107f5f95e43c7557e5f44d046856a6bcbbd8`) both passed.
 
 - [ ] +safety +tests +AI-G @main A value that is not `Copy` is not read by value out of an array or slice element (gap_92, gap_93) id:v0rsm
     > **Created:** 2026-11-15
