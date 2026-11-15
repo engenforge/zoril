@@ -30,12 +30,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `make test-changed BASE=HEAD` -> `Total: 1603 run, 1603 passed, 0 failed, 100 skipped (50.4s)`.
       - C5: committed on `main` as `git:b671f6d`.
 
-- [ ] +safety +tests +AI-G @main The walk from an enum payload address to its enum has no depth at which it answers "not borrowed" (gap_91) id:yw8h9
+- [x] +safety +tests +AI-G @main The walk from an enum payload address to its enum has no depth at which it answers "not borrowed" (gap_91) id:yw8h9
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** after id:4jawf, in the batch that follows the check-in id:3yasf, which found it (finding 1).
     > **Depends:** id:3yasf
     > **Check-in:** a fix to a safety rule; reviewed in id:qmms1.
+    > **Completed:** 2026-11-15 git:26524b7
 
     - **Probe:** `bench/safety_matrix/probes/gap_91_nested_enum_payload_moved_out_of_borrow_past_eight_levels.zrl` (`known_gap`, exit 77, git:f63b51c).
     - **Cause:** `enum_payload_source_borrowed` (`src/check_zir.zrl`) follows `state.enum_aliases` from a payload address back to the enum it was taken from, one hop per nested payload, in `while depth < 8 as usize { .. }`, and ends with `return false;`: past eight hops the answer is "not borrowed", so the move out of `*r` is accepted. An owned enum matched by value 13 levels deep must stay accepted, so the bound cannot simply answer "borrowed": the walk has to reach the enum.
@@ -61,6 +62,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `sh scripts/run_safety_matrix.sh` (`Mismatches: 0`), `sh scripts/check_safety_figures.sh --all`, `sh scripts/check_safety_model.sh`; quote each verdict line.
       - C5: `make test`, then `REJECT_DIFF_NO_CACHE=1 make preflight-changed`; quote each `Total:` line and the `reject-diff:` lines, and list every newly refused program (expected: this probe, whole-program and `zbuild`). Any other newly refused program: stop and report.
       - C6: commit on `main` (the note says the fuzz record is stale for `src/`), add `**Awaiting review:**` with C2, C4 and C5, `tm done`.
+    - **Awaiting review:**
+      - C1: before the change, `R` on `gap_91` gave `exit 77`, `enum_deep_nested_move_out_of_ref.zrl` gave `exit 0`, and `enum_deep_nested_move_out_of_mut_ref.zrl` gave `exit 0`.
+      - C2: after the change and `make` (no warning), `./scripts/test.sh tests/language/match/enum_deep_nested_*.zrl tests/language/match/enum_nested_*.zrl` -> `Total: 6 run, 6 passed, 0 failed, 0 skipped (0.1s)` (`Selected tests 5 run 5 passed`).
+      - C3: with `depth < 8 as usize` and `return true`, C2 failed with `[FAIL] tests/language/match/enum_deep_nested_owned_move.zrl (compile failed) (16ms)`; with `return false` also restored, C2 failed with `[FAIL] tests/language/match/enum_deep_nested_move_out_of_mut_ref.zrl (expected compile fail, but it compiled) (14ms)` and `[FAIL] tests/language/match/enum_deep_nested_move_out_of_ref.zrl (expected compile fail, but it compiled) (13ms)`. Restored, rebuilt, and reran C2 (`Total: 6 run, 6 passed, 0 failed, 0 skipped (0.1s)`).
+      - C4: `sh scripts/run_safety_matrix.sh` -> `All probes complete: 469/518 passed. Mismatches: 0`; `sh scripts/check_safety_figures.sh --all` -> `[PASS] safety-figures: all 9 §5 figure(s) match the tree ...` (after updating compiler line count 47,890 -> 47,893 in `doc/SAFETY.md` and 41,624 -> 41,625 in `doc/spec/unsafe_policy.md`); `sh scripts/check_safety_model.sh` -> `PASS: safety_model.md is self-consistent.`.
+      - C5: `make test` -> `Total: 3351 run, 3351 passed, 0 failed, 100 skipped (121.5s)`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` -> `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 12 newly refused, of 69158 programs against c161107f5f95e43c7557e5f44d046856a6bcbbd8` (`gap_83`, `gap_84`, `gap_85`, `gap_86`, `gap_88`, `gap_91` each twice; only `gap_91` is from this commit), `Total: 1230 run, 1230 passed, 0 failed, 0 skipped (44.9s)`.
+      - C6: committed on `main` as `git:26524b7`.
 
 - [ ] +safety +tests +AI-G @main A closure may not move a part out of a value it captured (gap_89) id:613zw
     > **Created:** 2026-11-15
