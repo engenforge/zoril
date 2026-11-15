@@ -192,25 +192,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - Sibling routes not yet probed: a capture of a capture (a closure inside a closure moving a part out); a `move` of a part out of a captured array's element; `for x in a` over an array of values with a `Drop` impl (what the loop variable is, and whether the array is dropped again); an element read by value through `&[S; 1]`, `Box<[S; 1]>` and a struct held in a slice (`a[0].w.s`); an index through a `Vec` of `Vec`s; a `while let Q.A(s) = a[i]`.
       - `doc/SAFETY.md` §6 class (N) and the counts read correctly with only `gap_92` left of the four.
 
-- [x] +safety +decision +AI-D @main Decide whether a by-value read of a slice element that is not `Copy` is refused (gap_92) id:v0bwt
-    > **Created:** 2026-11-15
-    > **Branch:** `main`
-    > **Placed:** after the check-in id:qmms1: found by the check-in id:3yasf (finding 4) beside the holes that batch closes, and what it decides is built on id:760hd's rule.
-    > **Depends changed (2026-11-15):** was id:qmms1; removed when the maintainer answered, since the answer needs nothing from that batch. What it leads to, id:cx46y, waits for id:qmms1 instead.
-    > **Note:** a decision for the maintainer; the implementation is the task it names.
-    > **Completed:** 2026-11-15
-    > - Decided by the maintainer: (a), refuse it (the **Decided** bullet below). No code changed and no check was run; `gap_92` stays a `known_gap` probe until id:cx46y's implementation lands.
-
-    - **Probe:** `bench/safety_matrix/probes/gap_92_vec_duplicated_out_of_slice_element.zrl` (`known_gap`, a fault, git:f63b51c): `fn dup(a: [Vec<i32>]) -> i32 { let mut v1 = a[0]; let mut v2 = a[0]; v1.free(); v2.push(7); return v2.as_slice()[0]; }` compiles with no `unsafe` and writes freed memory.
-    - **What is checked today:** the same read through a reference is refused (`fn g(r: &Vec<i32>) { let mut v1 = *r; }`: `cannot move out of borrow`), and out of a local array it moves the whole array (a second `a[0]` is `use of moved value 'a'`). A slice is a borrow too, but `check_place_use` does not read a slice local as a pointer local, so `a[0]` is a move that leaves the slice holding the value. id:760hd refuses it for a value that needs a drop; a `Vec`, a `Box` and a struct holding one need none.
-    - **Measured (2026-11-15, a prototype refusing every by-value read of an element that is not `Copy`, in a scratch worktree of git:67f87b0):** it refuses code the tree has: `src/check_zir.zrl:1971` (in the `merge_states` call), and in `tools/zbuild/src/`: `manifest.zrl:135`, `manifest.zrl:182`, `build.zrl:297`, `build.zrl:630`, `main.zrl:67`, each of the shape `let e = m.entries.as_slice()[i];` with `e` a struct holding `Vec`s or views (the compiler stops at the errors of the first module that fails, so more sites may follow in `stdlib/` and `tests/`; the count is the first thing to measure).
-    - **Question for the maintainer:** is a by-value read of a slice element that is not `Copy` refused, as the read through `&T` is?
-      - **(a) Refuse it** (`cannot move out of borrow`), as for `*r`. The sites read through a reference instead (`let e = &m.entries.as_slice()[i];`) or clone. It closes the hole and makes the slice rule the twin of the reference rule; it refuses programs that compile today, in the tree and in users' code, and `src/`'s site must be rewritten in what the pinned stage1 accepts.
-      - **(b) Leave it accepted** and say in `doc/spec/safety_model.md` that a type that is not `Copy` and has no `Drop` impl may be duplicated out of a slice, so that `free()` on such a handle is outside the guarantee. A change to what the project claims; `Vec.free` and its like would then need `unsafe` or a statement that they are unchecked.
-      - **Recommendation (the reviewing session's):** (a). The rule already holds for `&T`, the slice is its structural twin, and the cost measured so far is six sites with a mechanical rewrite. It also covers the `Box` shape of id:z0021 (`let x = s[i]` with `s: &[Box<T>]`).
-    - **Then:** if (a), an `+AI-D` measurement first (every site in `src/`, `stdlib/`, `tools/` and `tests/` the rule refuses, with the rewrite of each, and whether the local-array form should be refused too rather than move the array), then the `+AI-G` implementation with its numbered checks. If (b), the spec text and an accept test.
-    - **Decided (2026-11-15, the maintainer):** (a). A by-value read of a slice element that is not `Copy` is refused, as the read through `&T` is. The measurement is id:cx46y; the implementation is the task it writes.
-
 - [ ] +safety +measurement +AI-D @main Measure every site a refusal of non-`Copy` by-value slice element reads would refuse, and settle the rule for the implementation (gap_92) id:cx46y
     > **Created:** 2026-11-15
     > **Branch:** `main`
