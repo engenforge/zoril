@@ -61,17 +61,15 @@ fn load_manifest(cache_dir: [u8], arena: *mut ArenaHeader) -> Manifest {
         Err(_) => empty_manifest(arena),
     };
     // Rows store object paths relative to the cache directory (see cache_relative in build.zrl).
-    let mut fixed = unsafe { Vec::<Entry>.new_in_raw(arena) };
+    let entries = m.entries.as_mut_slice();
     let mut i = 0 as usize;
-    while i < m.entries.len() {
-        let mut e = m.entries.as_slice()[i];
-        if e.object.len > 0 && e.object[0] != '/' as u8 {
-            e.object = join_path(cache_dir, e.object, arena);
+    while i < entries.len {
+        let object = entries[i].object;
+        if object.len > 0 && object[0] != '/' as u8 {
+            entries[i].object = join_path(cache_dir, object, arena);
         }
-        fixed.push(e);
         i = i + 1;
     }
-    m.entries = fixed;
     return m;
 }
 

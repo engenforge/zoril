@@ -1971,7 +1971,7 @@ impl ZirVerifier {
                 if bj > 0 as usize {
                     let new_entry = self.merge_states(
                         bj,
-                        preds[bj],
+                        &preds[bj],
                         &block_exit_states,
                         locals_len
                     );
@@ -3762,7 +3762,7 @@ impl ZirVerifier {
     fn merge_states(
         self: &mut ZirVerifier,
         target: usize,
-        predecessors: Vec<u32>,
+        predecessors: &Vec<u32>,
         exit_states: &[*mut ZirAnalysisState],
         locals_len: usize
     ) -> *mut ZirAnalysisState {
