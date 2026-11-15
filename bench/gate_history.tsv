@@ -1,0 +1,1 @@
+date	commit	zoril_version	host_id	host_os	host_arch	cpu_model	cores	ram_gb	governor	status	kind	verdict	clean_throughput_loc_s	incremental_rebuild_ms	runtime_ratio_vs_gcc_o2	peak_rss_mb_per_kloc
