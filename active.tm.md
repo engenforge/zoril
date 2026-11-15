@@ -2,11 +2,12 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +docs +testinfra +AI-G @main The figures the documents quote are checked at milestones, not on every commit id:141h5
+- [x] +docs +testinfra +AI-G @main The figures the documents quote are checked at milestones, not on every commit id:141h5
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** at the top, on the maintainer's decision of 2026-11-15; it depends on nothing, and every compiler commit until it lands still edits three documents.
     > **Check-in:** reviewed in id:ev54n.
+    > **Completed:** 2026-11-15 git:0b45934
 
     - **Measured (2026-11-15, `main`'s 173 commits):** `doc/SAFETY.md` changed in 79 of them, `doc/spec/unsafe_policy.md` in 46 (44 of those by two lines or fewer) and `README.md` in 44 (43 by two lines or fewer): the compiler's line and block counts, the density rows and the probe count, which the `safety-figures` and `safety-model` gates of `make test` compare with the tree on every commit. They are also what conflicts when a series branch merges (three hunks in the merge of git:e5087d4 into `provenance`). Two figures no gate covers have drifted meanwhile: `doc/spec/safety_model.md` says "the 18 holes still open" beside a Known gaps list of 46 entries (46 `known_gap` probes), and `doc/SAFETY.md` §5.3 says the standard library "holds 170 `unsafe { }` blocks" under a table that says 187.
     - **Decided (the maintainer, 2026-11-15):** the figures stop changing on every commit. They are refreshed at significant milestones: at every release at least, and the maintainer is considering the completion of a significant branch of work as well.
@@ -29,6 +30,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `rg -n '18 holes|holds 170' doc README.md` prints nothing; `rg -n 'figures-check|--milestone' AGENTS.md doc/developer_guide.md Makefile scripts/preflight.sh` shows the rule, the target and the preflight step; quote the line numbers.
       - C6: `make test`, then `make preflight-changed`; quote each `Total:` line. The mutation harness names `safety-figures` nowhere as the catcher of a mutant (`rg -n 'safety-figures' scripts/mutation*`); if it does, stop and report.
       - C7: commit on `main`, add `**Awaiting review:**` with C2 to C6, `tm done`.
+    - **Awaiting review:** re-run C2 (scratch `--all` vs `--milestone`), C3 (`--selftest` and take-out checks), C4 (`--milestone` and `check_safety_model.sh`), C5 (`rg` checks), and C6 (`make test` and `make preflight-changed`).
+    - **Check results (2026-11-15):**
+      - C1: before: `sh scripts/check_safety_figures.sh --all` passed; `sh scripts/check_safety_figures.sh --repo build/figures-scratch` printed `[FAIL] safety-figures: §5 says compiler lines is 47,930; the tree has 47932` (exit 1).
+      - C2: on fresh scratch copy with updated docs and added line in `src/main.zrl`: `--all` passed (exit 0); `--milestone` failed (`MILESTONE_EXIT=1`) with `[FAIL] safety-figures: §5 says compiler lines is 47,930; the tree has 47932`.
+      - C3: `sh scripts/check_safety_figures.sh --selftest` -> `[PASS] selftest: a matching table passes, a moved figure is named, a missing table fails, the counting method counts occurrences and declarations, and M1-M5 pass`. Take-out checks: stamp check out failed M2 and M3; probe-count out failed M4; sentence comparison out failed M5. Restored and reran `--selftest` (`[PASS] ... M1-M5 pass`).
+      - C4: `sh scripts/check_safety_figures.sh --milestone` -> all 6 lines `[PASS]` (`selftest`, `"as of" stamp`, `9 §5 figure(s)`, `density rows`, `probe counts ... (519 probes)`, `smoke-suite size`); `sh scripts/check_safety_model.sh` -> `PASS: safety_model.md is self-consistent.`
+      - C5: `rg -n '18 holes|holds 170' doc README.md` printed nothing (exit 1); `rg -n 'figures-check|--milestone' AGENTS.md doc/developer_guide.md Makefile scripts/preflight.sh` -> `scripts/preflight.sh:39`, `Makefile:312-313`, `doc/developer_guide.md:201`, `AGENTS.md:98`.
+      - C6: `make test` -> `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.0s)`; `make preflight-changed PREFLIGHT_BASE=9e79c80` -> `Total: 1277 run, 1277 passed, 0 failed, 0 skipped (44.9s)` (`[PASS] checked`, `All performance thresholds within tolerance of baseline.`, exit 0; bench rows committed separately as `git:1f9f85c`); `rg -n 'safety-figures' scripts/mutation*` printed nothing.
+      - C7: committed on `main` as `git:0b45934`.
 
 - [ ] +bench +testinfra +AI-G @main Benchmark and density records live on a `records` branch of their own, and the scripts commit each run there id:455bt
     > **Created:** 2026-11-15
