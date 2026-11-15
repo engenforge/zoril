@@ -285,6 +285,54 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - Nothing else went with the retry: a real `sh scripts/bench_threshold_check.sh` still writes `runtime_ratio_vs_gcc_o2` into the metrics file, the gate row's 16th field and `speed_history.tsv`; `measure_runtime_pair` is still called once.
       - The gate still fails where it should: T5 unchanged, and a planted run 20% over the baseline's mean through `--check-thresholds-only` exits 1.
 
+- [ ] +testinfra +portability +AI-G @main The `bench-threshold-gate` scenario of `make test` calls git and fails without it id:sx4a3
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Depends:** id:95cy3
+    > **Depends note:** it edits `scripts/test_bench_threshold_gate.sh`, which id:41rnk edits; the check-in id:95cy3 closes that batch.
+    > **Check-in:** reviewed in id:f5mbr.
+    > **Found by:** the check-in id:269a6 (the cases date from id:455bt; id:h1dj3 and id:9d99n added more of the same kind).
+    > **Placed:** under Evidence and tooling: not this batch's defect; the maintainer decides when it is taken (it matters at the next `make dist-check`).
+
+    - **Now (git:03937b7):** `scripts/test_bench_threshold_gate.sh` is the `bench-threshold-gate` scenario of `make test` (`scripts/test_plan.tsv`). Its cases R1, R2, R4 to R7, F4 and T1 to T7 build scratch repositories with `git init`, `git commit` and `git worktree add --orphan` (git 2.42 or later), and the earlier cases reach git through `scripts/bench_cross_lang.sh --check-thresholds-only`. With a `git` first on `PATH` that logs its arguments and exits 127, `sh scripts/test_bench_threshold_gate.sh` exits 127 after its P8 case, 23 git calls logged: under `set -eu` the first `git -C <scratch> init` ends the script. So `make test` from a source tarball on a machine without git fails this scenario, and in a checkout `make test` calls git, both against the rule "`make test` uses no git" (`AGENTS.md`, Portability).
+    - **Not checked:** whether `make dist-check` reports it today (it was not run for this finding).
+    - **Do (a design, then an `+AI-G` task):** the cases whose subject is the records commit (a script whose job is git) move to a script that `make preflight` and `make preflight-changed` run, as `scripts/test_preflight.sh` is; the cases that stay in `make test` (tolerances, per-host baseline lookup, the geometric mean and its gate from a metrics file) reach no git, shown by the logging `git` on `PATH`. Decide first whether `--check-thresholds-only` may call git at all when its history file is outside `bench/records/`.
+    - **Decided (the maintainer, 2026-11-15):** a user who downloads a tarball runs `make test` without git; the cases that need git leave `make test`.
+    - **Promoted and re-tagged (2026-11-15, the reviewing session of id:a55tf):** from `future.tm.md`, after the check-in id:95cy3 because it edits the test script id:41rnk edits; `+AI-D` became `+AI-G` because the design below settles what was open. **Branch:** `main`. **Depends:** id:95cy3 (hard: the same file). Reviewed in the check-in that follows it.
+    - **Why the scenario calls git at all (read at git:164ba45).** Three different reasons, only the first a need:
+      1. *Git is the subject.* R1, R2, R4, R5, R6, R7 test `records_commit`, the mount check and the `-dirty` mark of `scripts/lib/records.sh`; F1 to F4 test `scripts/record_figures.sh`, which commits its row; T1 counts the commit of `perf_gap.sh --record-run`. These cannot run without git.
+      2. *Scaffolding.* T2, T3, T4, T7, T8 and T9 test what `perf_gap.sh` measures and writes, not the commit, but `setup_pg_scratch` gives each a repository and a `records` work tree because the rows go to `bench/records/` by default. With `RUNTIME_HISTORY` naming a plain file they need no repository.
+      3. *The scripts under test ask git for things the case does not use.* `scripts/bench_cross_lang.sh` sets `ZORIL_COMMIT=$(records_repo_commit ...)` on every run, and `records_commit` asks `git rev-parse --show-toplevel` about any history file's directory before it finds there is nothing to commit. So Case 1, P1 to P8, T5 and T6, which only compare numbers in temporary files, call git in a checkout (the 23 logged calls of **Now**), and fall back quietly without it.
+    - **What exists already:** the plan's group `git` (`scripts/test_plan.tsv`: "the group `git` holds the ones that need git") is run by `make preflight` and `make preflight-changed` (`scripts/preflight.sh`: `./scripts/test.sh --quiet --group git`) and not by `make test` (`GROUPS_ALL` in `scripts/test.sh`). `make user-tools` (`scripts/check_user_tools.sh`, part of `make preflight`) is the check of the rule: `make test` from an export without git, and in the checkout with a failing, logging `git` on `PATH`. It was not run for this finding; C1 runs it.
+    - **Settled:**
+      1. A new script `scripts/test_bench_records.sh` and a plan row `scenario bench-records git ./scripts/test_bench_records.sh` (tab-separated, beside the other `git` rows). The cases of reason 1 move there unchanged with the helpers they use (`setup_scratch_repo`, `expect`, the stubs of F1 to F4, `setup_pg_scratch` for T1). T1 stays whole there.
+      2. `scripts/test_bench_threshold_gate.sh` keeps Case 1, P1 to P8, R3 (it is the no-git case), T2 to T9 and what id:41rnk added. Its `setup_pg_scratch` builds a plain directory (no `git init`, no work tree); each T case passes `RUNTIME_HISTORY="$dir/out/runtime_history.tsv"` and reads the rows there. T8 then checks that this file does not exist.
+      3. `scripts/bench_cross_lang.sh`: `ZORIL_COMMIT="${ZORIL_COMMIT:-$(records_repo_commit "$REPO_ROOT")}"`, as `scripts/perf_gap.sh` has it. The cases that stay pass `ZORIL_COMMIT=abc1234`.
+      4. `scripts/lib/records.sh`, `records_commit`: before any git call, return 0 when the file is not under `<root>/bench/records/` (the same `case` as `records_check_target`). R1 to R7 use `<scratch>/bench/records/`, so they are unaffected.
+      5. `scripts/test_tiers.tsv`: a row for `scripts/test_bench_records.sh` selecting `bench-records`; the `scripts/bench_cross_lang.sh` and `scripts/perf_gap.sh` rows add `bench-records` to their scenarios. (`scripts/lib/records.sh` and `scripts/record_figures.sh` select everything already.)
+      6. A case G1 at the end of `scripts/test_bench_threshold_gate.sh`: it runs the whole script again (guarded by an environment variable so it does not recurse) with a `git` first on `PATH` that appends its arguments to a log and exits 127, and passes when that run exits 0 and the log does not exist.
+    - **Checks:**
+      - C1: before: `make user-tools > build/sx4a3-user-tools-before.log 2>&1`; quote its exit status and the lines that name this scenario or git. And `sh scripts/test_bench_threshold_gate.sh` with the logging `git` of **Now** on `PATH`: quote the exit status (expected 127) and the number of logged calls.
+      - C2: after: `sh scripts/test_bench_threshold_gate.sh`; quote the count of `[PASS]` lines, the `[PASS]` line of G1 and the last line. `sh scripts/test_bench_records.sh`; quote the count and the last line. The two counts add up to the count before the change plus one (G1); quote all three numbers.
+      - C3: take out alone, quote G1 failing with the logged call, restore: the early return of `records_commit` (settled 4); the `ZORIL_COMMIT` default (settled 3) together with one case's `ZORIL_COMMIT=abc1234`.
+      - C4: `sh scripts/select_test_tier.sh --scenarios scripts/bench_cross_lang.sh`, `... scripts/perf_gap.sh`, `... scripts/test_bench_records.sh`; quote the three lines. `sh scripts/test_tier_select.sh`; quote its last line.
+      - C5: `./scripts/test.sh --quiet --group git`; quote the `bench-records` line and the `Total:` line.
+      - C6: `make user-tools > build/sx4a3-user-tools.log 2>&1`; quote its exit status and last line. If it fails for a reason that is not this scenario, record the failure verbatim in this task and stop: that is another finding.
+      - C7: `make test`, then `make preflight-changed` (it runs the `git` group and the bench step, which commits through the changed `records_commit`); quote each `Total:` line, and the three `records` commits of the bench step (`git -C bench/records log --oneline | head -4`).
+      - C8: commit on `main`, add `**Awaiting review:**` with C2 to C7, `tm done`, and stop at the check-in.
+
+- [ ] +testinfra +review +AI-D @main @checkin Review of the git-free `bench-threshold-gate` scenario and the `bench-records` scenario id:f5mbr
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Depends:** id:sx4a3
+    > **Placed:** directly after the task it reviews.
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` on `main` since id:95cy3's commit; re-run what the **Awaiting review:** bullet names, `make user-tools` among them.
+      - No case was lost or weakened in the move: every case name of the script before the change appears in one of the two scripts after it, and each moved case's body is unchanged (`git diff` with `--color-moved`).
+      - The scenario that stays calls no git by any route: the logging `git` over the whole of `make test` (part 2 of `scripts/check_user_tools.sh`), and from an export without git (part 1).
+      - `records_commit`'s early return hides no real commit: a history file under `bench/records/` of a mounted work tree is still committed (R1), and a real `sh scripts/bench_threshold_check.sh` makes its three commits.
+
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
