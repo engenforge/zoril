@@ -2,23 +2,55 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +safety +AI-D @main Ownership and borrow-move check for enum payloads moved through EnumPayload temporaries (gap_88) id:0tv49
+- [ ] +safety +AI-G @main Ownership and borrow-move check for enum payloads moved through EnumPayload temporaries (gap_88) id:0tv49
     > **Created:** 2026-11-14
     > **Branch:** `main`
     > **Placed:** after id:3rata; found during the id:e7qgj check-in review of id:37p40 and id:a47b8, and depends on id:3rata's design for lowered-ZIR ownership/drop checking.
     > **Depends:** id:3rata
+    > **Check-in:** stop for review after it (follows in id:3yasf).
 
     - **Probe:** `bench/safety_matrix/probes/gap_88_enum_used_after_payload_moved.zrl` (`known_gap`, `exit 77`, recorded in git:62de977).
     - **Cause (found during `id:e7qgj`):**
       1. **Use-after-move of an enum whose payload was moved out (`gap_88`):** `lower_variant_match` (`src/lower_zir/lower_match.zrl:776-823`) and `lower_try_expr` (`src/lower_zir/expr.zrl:3055-3111`) bind a by-value payload via `let payload_tmp = EnumPayload(scrut_place, ..)` and `Let(binding, Use(*payload_tmp))`. In `src/check_zir.zrl:606-698` (`check_place_use`), `place` is `*payload_tmp` (`place.base == payload_tmp`, a pointer temporary with `loc.is_copy == true`), so `state.ownership[place.base] = OWN_MOVED` never marks the underlying enum `ea.source.base` moved (`consume_place_if_move` only clears its runtime drop flag). As a result, using `e` again after `match e { Q.A(s) => {}, Q.B => {} }`, after `if let Q.A(s) = e {}`, after `let s = e?;`, inside the arm body (`match e { Q.A(s) => { let x = e; }, .. }`), or inside a match guard (`match e { Q.A(s) if { match e { Q.A(s2) => true, Q.B => false } } => {}, .. }`) is accepted and double-drops the payload. Note: `bind_pattern_name` runs in `bind_block` before `arm.guard` and before later sub-patterns in `lower_pattern_seq`, so marking the scrutinee moved at `Let(s, Use(*payload_tmp))` would wrongly reject `read_scrut_ref` in `tests/language/match/match_guard_reads_scrutinee.zrl` and failed-guard / failed-second-element arms in `tests/language/match/match_skipped_parts_dropped.zrl`; the scrutinee is only consumed once the pattern and guard succeed (or at a move-marker statement emitted at that point).
       2. **Multi-hop `enum_payload_source_borrowed` (`src/check_zir.zrl:683-685, 959-979`):** `enum_payload_source_borrowed` walks only one step in `state.enum_aliases` (unlike `id:37p40`'s `enum_payload_borrow_root` at `src/check_zir.zrl:1348-1384`), so a nested enum pattern on a borrow (`fn g(r: &Q2) { match *r { Q2.A(QB.A(b)) => {} _ => {} } }`, or `match e { Q2.A(QB.A(b)) => {} _ => {} }` while `let r = &e;` is live) is not recognised as moving out of a borrow and double-drops `b`.
       3. **Dereference of an unnamed temporary reference (`src/check_zir.zrl:683`):** `let out_of_borrow = loc.name_id != 0 || self.enum_payload_source_borrowed(place.base, state, locals);` assumes any unnamed pointer temporary (`loc.name_id == 0`) is an `EnumPayload` address unless `enum_payload_source_borrowed` says otherwise. When `place` is `*t` for a temporary reference `t = &e` or `t = id_ref(&s0)` (`match *(&e) { Q.A(s) => {} }`, `match *id_ref(&e) { Q.A(s) => {} }`, `let s = *id_ref(&s0);`), `loc.name_id == 0` and `t` is not in `state.enum_aliases`, so `out_of_borrow` is `false` and the move out of the reference is accepted.
+    - **Settled design (2026-11-15):** verified in scratch worktree of `main` (`git:e0febf3`), zero warnings, passing all 1076 `tests/` (`8.3s`) and self-hosting (`--emit-zil` under both baseline/DN1 and self):
+      - `src/lower_zir/decl.zrl`: add `guard_scrut_overlaps(place)` check in `consume_place_if_move` (`"cannot move the matched value in a match guard"`); add `pub fn emit_consume_place(self: &mut ZirLowerer, place: &Place, span: Span)` (skips `base == 0`, `projections.len > 0`, `is_copy`, and emits `ZirStmt.Intrinsic("consume_place", [*place], span)`).
+      - `src/lower_zir/lower_match.zrl`: emit `self.emit_consume_place(&scrut_place, self.get_expr_span(arm.body));` after `self.consume_place_if_move(&scrut_place);`.
+      - `src/lower_zir/stmt.zrl`: emit `self.emit_consume_place(&init_place, span);` after `self.consume_place_if_move(&init_place);`.
+      - `src/lower_zir/expr.zrl`: check `guard_scrut_overlaps` in `lower_drop_intrinsic`; in `lower_try_expr`, emit `emit_consume_place(&val_place, span)` in `error_block` (when `!is_ref && (early.base != val_place.base || early.projections.len != val_place.projections.len)`) and in `success_block` when `!is_ref` (loading non-unit `deref_place` into `val_tmp` for Copy payloads too so `!is_ref` consumes `val_place`).
+      - `src/check_zir.zrl`:
+        - Add `is_enum_payload_alias(local_id, state)`, `local_holds_borrow(local_id, state)`, and `local_is_reference(loc)`.
+        - In `check_place_use`, compute `let is_enum_ptr = self.is_enum_payload_alias(place.base, state);` and check `out_of_borrow = loc.name_id != 0 as u32 || (!is_enum_ptr && self.local_holds_borrow(place.base, state)) || (is_enum_ptr && self.enum_payload_source_borrowed(place.base, state, locals))`. Checking `!is_enum_ptr` keeps `EnumPayload` pointers into owned enums carrying payload borrows (`Option<&mut V>`, `Result<Vec, ...>`, `Result<QB, i32>`) movable by value, while still rejecting `*(&e)` / `*id_ref(&s0)`.
+        - In `enum_payload_source_borrowed`, walk up to 8 `enum_aliases` hops checking `is_borrowed_by_other`, then `(!self.is_enum_payload_alias(src.base, state) || src.projections.len > 1 as usize) && self.local_is_pointer(src_loc) && (src_loc.name_id != 0 as u32 || self.local_holds_borrow(src.base, state) || self.local_is_reference(src_loc))` before following `PROJ_DEREF`.
+        - Handle `ZirStmt.Intrinsic` `"consume_place"` in `check_stmt` (`check_places_consumed`: checks `OWN_UNINIT`, `OWN_DROPPED`, `is_borrowed_by_other`, tolerating already-`OWN_MOVED` from a direct sibling field/whole-local `Use` in the same pattern, and marks `!loc.is_copy` local `OWN_MOVED` / `maybe_live = false`) and skip `places_uses` for `"consume_place"` in `stmt_live_transfer`.
+    - **Do:** apply the changes above in `src/lower_zir/{decl.zrl,lower_match.zrl,stmt.zrl,expr.zrl}` and `src/check_zir.zrl`; flip `bench/safety_matrix/probes/gap_88_enum_used_after_payload_moved.zrl` to `// expected: compile_reject`; add reject tests (`use of moved value` in arm body / match guard / after `if let` / after `let` pattern / after `?` on `!Copy` & `Copy` payloads; `cannot move out of borrow` on `Q2.A(QB.A(b))` via `&Q2` and `&mut Q2`, `match *(&e)`, `let s = *id_ref(&s0)`) and accept tests (non-moving `Q.B` arm reusing `e`, owned enum holding a borrow like `Result<QB, i32>` with `Vec` in `&Arena`, partial non-moving destructure `let (s, _) = t`); and update `doc/SAFETY.md`, `doc/spec/safety_model.md`, `doc/spec/unsafe_policy.md`, `README.md`, and `bench/safety_matrix/matrix.md` for the closed gap.
+    - **Checks:**
+      - C1: `./scripts/test.sh` passes `bench/safety_matrix/probes/gap_88_enum_used_after_payload_moved.zrl` (now `compile_reject`) and all new reject and accept tests covering every route above.
+      - C2: Taking out the `emit_consume_place` / `guard_scrut_overlaps` / `enum_payload_source_borrowed` changes causes `gap_88` and the new rejection tests to fail (`compile_reject` accepted / `exit 77`).
+      - C3: `sh scripts/run_safety_matrix.sh` passes with 0 mismatches; `sh scripts/check_safety_figures.sh --all` and `sh scripts/check_safety_model.sh` pass.
+      - C4: `make test` passes with zero failures and zero build warnings (`Total:` quoted verbatim).
+      - C5: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (clean-tree build, self-hosting fixpoint, mutations, and rejection differential — inspecting every newly refused program and confirming zero unintended refusals) passes.
+      - C6: Commit on `main`, append `**Awaiting review:** <C1, C3, C4, C5 commands and key outputs>`, close with `tm done 0tv49 --git <sha>`, and stop at check-in `id:3yasf`.
+
+- [ ] +safety +review +AI-D @main @checkin Review of enum payload ownership and borrow-move check (gap_88, id:0tv49) id:3yasf
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Depends:** id:0tv49
+    > **Placed:** directly after id:0tv49, to review it (a fix to a safety rule).
+
+    - **Checks:**
+      - Re-read `doc/tasks/active.tm.md` and `git log -p` since `e0febf3` on `main`.
+      - Re-run id:0tv49's **Awaiting review:** commands (`./scripts/test.sh` on `gap_88` and the new tests, `sh scripts/run_safety_matrix.sh`, `sh scripts/check_safety_figures.sh --all`, `sh scripts/check_safety_model.sh`), and inspect `scripts/check_reject_diff.sh`'s newly refused list.
+      - Probe sibling routes: nested struct/field wrapping an enum (`match s.e { Q.A(x) => .. }` and `s.e` consumed vs borrowed), or-patterns with payload bindings (`match e { Q.A(s) | Q.C(s) => .. }`), `while let Q.A(s) = e` using `e` inside/after loop, tuple/struct partial moves (`match (e, s2) { (Q.A(s), _) => .. }`), and `&mut Q` reborrow or chained helper returning `Option<&mut Q>` dereferenced in a match.
+      - Update the queue (`future.tm.md`, next check-in, and dependencies), run `tm validate doc/tasks/*.tm.md`, `tm done 3yasf --git <sha>`, and `tm sync`.
 
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Found by:** id:z0088 (why experiment A was unsound).
-    > **Depends:** id:z0088, id:0m61c, id:z0180, id:n177h
+    > **Depends:** id:z0088, id:0m61c, id:z0180, id:n177h, id:3yasf
+    > **Depends changed (2026-11-15):** added id:3yasf, the check-in of id:0tv49, since the next task after a batch waits for its review.
     > **Check-in:** stop for review after it. **Split here** if the design note and the implementation take more than a session: the design (§3 text and probes) first.
 
     - **Now:** inside a closure body every capture is read as the `Env` flag (`out O={Env}`), which `os_note_edges` turns into an `Unknown` value stored into a global: `|| { *out = routed; }` has the summary `store Unknown -> global`. An owned capture (moved into the environment) is also marked as storage of the body's own frame (`os_stmt`, "an owned capture's storage dies with the closure"), so a view of it cannot leave the body, but a store *into* it is a store into this frame and records no summary edge. A caller applying such a summary sees no store at all: id:z0088's experiment A did, and accepted 1490 unsafe grid cells (all `closure_owned_capture`, e.g. `arena_vec__arena_struct_bundle__direct__closure_owned_capture__frame_ends`, where the closure owns `h` and stores the view `routed` into it).
