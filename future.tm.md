@@ -57,6 +57,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     > **Series:** `Box` drop.
 
     - **Do:** reproduce each shape first (`let x = s[i]` with `s: &[Box<T>]`; `let x = *r.f` where `r.f` refers to an owning value); refuse with "cannot move out of borrow"; probes and `Copy` twins. Verification as id:z0019.
+    - **Found (2026-11-15, the check-in id:3yasf):** the slice shape is open today for types other than `Box`. A value with a `Drop` impl read by value out of a slice or array element is dropped twice (`gap_90`; id:760hd in `active.tm.md` refuses it, with the message `cannot move out of an array or slice element`), and a `Vec` read twice out of a slice element gives two owners of one buffer (`gap_92`; whether that read is refused is the maintainer's decision, id:v0bwt, which names the `Box` shape of this task). What is left for this task after those two is `let x = *r.f` and whatever id:v0bwt leaves of `s[i]` for a `Box`.
 
 - [ ] +safety +tests id:z0022 A11.4 A partial move is detected through `Box` dereferences and array indices
     > **Created:** 2026-11-03
@@ -64,6 +65,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
 
     - **Route:** `reject_partial_move` (`src/lower_zir/decl.zrl`) stops at a `Box` dereference or an array index, so moving a field out of `*b` or `a[i]` and then using or dropping the whole is not refused.
     - **Do:** reproduce first; make the walk follow `Box` dereferences and array indices; probes for each, twins for moving the whole value and for `Copy` fields. Verification as id:z0019.
+    - **Found (2026-11-15, the check-in id:3yasf):** the array-index half is reproduced for a field that needs a drop (`let s = a[0].s;` with `a: [P]`, two drops) and is refused by id:760hd in `active.tm.md`, in `check_zir`'s `check_place_use` rather than in `reject_partial_move`. The `Box` dereference half is left for this task.
 
 - [ ] +safety +tests id:z0023 A11.4b A `Box` cannot be forged with `@ptr_cast` or `@ptr_from_int`
     > **Created:** 2026-11-03
