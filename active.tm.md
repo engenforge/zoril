@@ -100,6 +100,52 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Checks:** C1 the number of `backfill` rows in `bench/records/runtime_history.tsv` is 42 times 6, or the commits that failed are named with their error; C2 after `--record`, a `sh scripts/bench_threshold_check.sh` run prints `[OK]  runtime_geomean_vs_gcc_o2`, not `[NEW]`; C3 `git status --short` of the code tree is empty.
     - **Added by the check-in id:269a6 (2026-11-15):** C4 no `backfill` or `baseline` row has an empty `instructions` field (`awk -F'\t' '($7=="backfill"||$7=="baseline") && $13==""' bench/records/runtime_history.tsv | wc -l` prints 0): until id:s72rr a failed count is written as an empty field and the run passes. `scripts/perf_gap.sh --record-run` on its own makes no contention check (its `status` is `ok` unless `RUN_STATUS` says otherwise), so the driver reads the load before each commit and waits for a quiet host.
 
+    - **The harness trial (2026-11-15):** `DRY=1 sh build/backfill/measure_rt.sh 7417fdc` (nothing recorded): today's `scripts/perf_gap.sh --record-run --kind backfill` runs unchanged beside the release's `build/` and `stdlib/` and gives six rows with a count each, in 107 s with the build: Zoril / cproc / gcc ms and instructions `array_loop` 803 / 780 / 144, 143420513; `fib` 697 / 747 / 192, 7202391; `particles` 626 / 627 / 240, 86149532; `qsort` 464 / 425 / 363, 42994150; `sha` 250 / 261 / 140, 71240882; `vm` 432 / 336 / 331, 84900189; geometric mean 2.323. The six counts equal those of git:03937b7's recorded runs. The series is the 42 commits of id:tmydc (`sort build/backfill/series.txt` equals the `commit` column of the 42 `backfill` rows of `bench/records/gate_history.tsv`). The worktrees are built four at a time first, then measured one at a time; before each measurement the driver waits for a 1-minute load under 1.5.
+    - **The driver** (`build/backfill/measure_rt.sh <sha>`, run from the main tree, one commit at a time when measuring):
+
+    ```sh
+    #!/bin/sh
+    # usage: measure_rt.sh <sha>   (run from the main tree's root; one at a time)
+    # Builds <sha> in a scratch worktree if it is not built yet, then runs today's
+    # scripts/perf_gap.sh --record-run --kind backfill (today's scripts/ and bench/perf_gap/ beside
+    # that tree's build/ and stdlib/) and appends its six rows to bench/records/runtime_history.tsv,
+    # one commit on `records` per measured commit.
+    set -u
+    sha=$1
+    R=$(pwd)
+    B=$R/build/backfill
+    wt=$B/wt-$sha
+    H=$B/h-$sha
+    T=$B/t-$sha
+    if [ ! -x "$wt/build/zilc" ] || [ ! -f "$wt/build/runtime.o" ]; then
+        [ -d "$wt" ] || git worktree add --detach "$wt" "$sha" > "$B/$sha.wt.log" 2>&1 || { echo "$sha: worktree failed"; exit 1; }
+        (cd "$wt" && make > "$B/$sha.make.log" 2>&1) || { echo "$sha: build failed (see $B/$sha.make.log)"; exit 1; }
+    fi
+    [ "${BUILD_ONLY:-0}" -eq 1 ] && { echo "$sha: built"; exit 0; }
+    rm -rf "$H" "$T"; mkdir -p "$H/bench" "$T"
+    cp -R "$R/scripts" "$H/scripts"
+    cp -R "$R/bench/perf_gap" "$H/bench/perf_gap"
+    for f in config.mk config.local.mk config.local.sh; do [ -f "$R/$f" ] && cp "$R/$f" "$H/$f"; done
+    ln -s "$wt/build" "$H/build"
+    ln -s "$wt/stdlib" "$H/stdlib"
+    # a quiet host: wait (up to 5 min) for the 1-minute load to fall under 1.5
+    i=0
+    while [ $i -lt 60 ]; do
+        l=$(cut -d' ' -f1 /proc/loadavg)
+        awk -v l="$l" 'BEGIN { exit !(l < 1.5) }' && break
+        sleep 5; i=$((i + 1))
+    done
+    [ $i -lt 60 ] || { echo "$sha: host not quiet (load $l)"; exit 1; }
+    HOST_ID=a52c24a80e04 ZORIL_COMMIT=$sha RUNTIME_HISTORY=$T/r.tsv sh "$H/scripts/perf_gap.sh" --record-run --kind backfill > "$B/$sha.rt.log" 2>&1
+    rc=$?
+    n=$(awk -F'\t' 'NR>1 && NF==13 && $7=="backfill" && $13!=""' "$T/r.tsv" 2>/dev/null | wc -l)
+    if [ $rc -ne 0 ] || [ "$n" -ne 6 ]; then echo "$sha: perf_gap failed rc=$rc rows=$n (see $B/$sha.rt.log)"; exit 1; fi
+    if [ "${DRY:-0}" -eq 1 ]; then cut -f2,3,6-13 "$T/r.tsv"; tail -1 "$B/$sha.rt.log"; exit 0; fi
+    awk 'NR>1' "$T/r.tsv" >> "$R/bench/records/runtime_history.tsv"
+    git -C "$R/bench/records" add runtime_history.tsv && git -C "$R/bench/records" commit -q -m "a52c24a80e04 $sha: runtime backfill (measured $(date +%Y-%m-%d) with the harness of $(git -C "$R" rev-parse --short HEAD))" || { echo "$sha: records commit failed"; exit 1; }
+    printf '%s load %s %s\n' "$sha" "$l" "$(tail -1 "$B/$sha.rt.log")"
+    ```
+
 - [ ] +bench +testinfra +AI-G @main A failed instruction count stops `perf_gap.sh`'s record run and its baseline recording id:s72rr
     > **Created:** 2026-11-15
     > **Branch:** `main`
