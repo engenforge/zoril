@@ -1,0 +1,7 @@
+date	commit	zoril_version	host_id	governor	status	kind	workload	zoril_ms	cproc_ms	gcc_ms	ratio_vs_gcc	instructions
+2026-11-15-19-13-04	03937b7	0.1.0-alpha-177-g35bc5f7-dirty	a52c24a80e04	powersave	ok	run	array_loop	784	839	145	5.407	143420513
+2026-11-15-19-13-04	03937b7	0.1.0-alpha-177-g35bc5f7-dirty	a52c24a80e04	powersave	ok	run	fib	697	757	192	3.630	7202391
+2026-11-15-19-13-04	03937b7	0.1.0-alpha-177-g35bc5f7-dirty	a52c24a80e04	powersave	ok	run	particles	626	627	239	2.619	86149532
+2026-11-15-19-13-04	03937b7	0.1.0-alpha-177-g35bc5f7-dirty	a52c24a80e04	powersave	ok	run	qsort	466	423	363	1.284	42994150
+2026-11-15-19-13-04	03937b7	0.1.0-alpha-177-g35bc5f7-dirty	a52c24a80e04	powersave	ok	run	sha	254	256	140	1.814	71240882
+2026-11-15-19-13-04	03937b7	0.1.0-alpha-177-g35bc5f7-dirty	a52c24a80e04	powersave	ok	run	vm	432	344	329	1.313	84900189
