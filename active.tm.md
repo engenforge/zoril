@@ -24,15 +24,52 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `make test`; quote its `Total:` line. No `src/`, `stdlib/` or `tools/` file changes, so no preflight (`git diff --stat HEAD` shows it).
       - C5: commit on `main`, add `**Awaiting review:**` with C2 to C4, `tm done`, and stop at the check-in id:269a6.
 
+- [ ] +bench +testinfra +AI-G @main The runtime measure is six programs against `gcc -O2`, recorded per run and gated on their geometric mean id:9d99n
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** after id:h1dj3, in the batch the check-in id:269a6 reviews; the maintainer's request of 2026-11-15.
+    > **Depends:** id:h1dj3
+    > **Depends note:** it commits records through `records_commit`, which id:h1dj3 changes.
+    > **Check-in:** reviewed in id:269a6.
+
+    - **Now:** the benchmark gate's one measure of generated code is `runtime_ratio_vs_gcc_o2`: `fib(38)` against gcc, a single recursive-call program. `scripts/perf_gap.sh` already times six programs (`bench/perf_gap/`: `array_loop`, `fib`, `particles`, `qsort`, `sha`, `vm`) as Zoril, cproc and `gcc -O2` builds and refuses a run whose three builds exit differently, but nothing records what it prints. Measured on this host at git:50b1e8f (median of 5, ms, Zoril / cproc / gcc): `array_loop` 815 / 840 / 142, `fib` 697 / 753 / 192, `particles` 628 / 626 / 224, `qsort` 440 / 420 / 357, `sha` 259 / 233 / 140, `vm` 432 / 329 / 331; the run took 40 s. Zoril to gcc: 5.74, 3.63, 2.80, 1.23, 1.85, 1.31, geometric mean 2.36.
+    - **Decided (the maintainer, 2026-11-15):** the runtime measure takes in these six programs. The instruction-count gate (`perf-gate`) stays in `make test`: it is exact, takes two seconds, and names the commit that made generated code worse.
+    - **Settled design (a reviewing session, 2026-11-15):**
+      - **The record.** `bench/records/runtime_history.tsv`, one row per program per run, with a header: `date`, `commit`, `zoril_version`, `host_id`, `governor`, `status`, `kind` (`run`, `baseline` or `backfill`), `workload`, `zoril_ms`, `cproc_ms`, `gcc_ms`, `ratio_vs_gcc` (three decimals), `instructions` (the gate-size count of `--gate-check`'s method). `cproc_ms` is empty where cproc is not installed and `instructions` where valgrind is not; neither stops the run. Without gcc the step prints `[SKIP] runtime record: gcc is not installed` and records nothing.
+      - **Who writes it.** `scripts/perf_gap.sh --record-run` measures (its timing mode and its instruction count) and appends the rows through `scripts/lib/records.sh`, committing them as `<host_id> <commit>: runtime`; `RUNTIME_HISTORY` in the environment names another file, and `--kind KIND` sets the kind (default `run`). It prints the geometric mean of the six `ratio_vs_gcc` as `runtime_geomean_vs_gcc_o2<TAB><value>` on its last line. `scripts/bench_cross_lang.sh` calls it in a `--check-thresholds` or `--record` run (not in `--check-thresholds-only`), after its own measurements, and writes the value into the metrics file.
+      - **The gate.** `bench/records/gate_history.tsv` gets an 18th column, `runtime_geomean_vs_gcc_o2`; its header line is rewritten once to carry it (a header, not a row; the rows already recorded keep their 17 fields). `bench/cross_lang/tolerances.cfg` gets `runtime_geomean_vs_gcc_o2|15|lower_better` and loses `runtime_ratio_vs_gcc_o2`: the `fib` ratio is still measured and recorded in its column, no longer gated (its retry stays for the new measure only if it applies as it is; if it does not, the retry goes with the old gate, say so). A baseline row with no 18th field does not gate the new measure: the gate prints `[NEW]  runtime_geomean_vs_gcc_o2 <value>: this host's baseline has no value for it; re-record the baseline (sh scripts/bench_cross_lang.sh --record)` and passes that axis. The lookup that skips rows with fewer than 17 fields stays at 17.
+      - **Contention.** The rows carry the run's `status`; a `baseline` is refused on a contended host as today.
+      - **The header of `scripts/perf_gap.sh`** says the gate is "part of `make preflight`"; it is a gate of `make test` (`scripts/test_plan.tsv`). Say that, and why it is there (exact, seconds, names the commit).
+      - **The rules.** `AGENTS.md` and `doc/developer_guide.md` name `runtime_history.tsv` with the other record files; the README of the `records` branch gets its line (a commit on `records`).
+    - **Tests** (in the script that holds R1 to R7; `perf_gap.sh` is given stub programs through `PERF_GAP_OUT` or a scratch tree, never the real `bench/records`): T1 a run appends six rows of 13 fields and one commit; T2 the printed geometric mean equals the one computed from the rows (two programs of ratio 2.000 and 8.000 give 4.000); T3 without valgrind on `PATH` the `instructions` field is empty and the run passes; T4 without cproc the same for `cproc_ms`; T5 the gate: a baseline with 2.000 and a run with 2.400 fails, with 2.200 passes; T6 a 17-field baseline prints `[NEW]` and passes; T7 three builds that exit differently: no row is written and the run fails.
+    - **Checks:**
+      - C1: before: `sh scripts/perf_gap.sh` prints its table and `ls bench/records/runtime_history.tsv` fails; quote both.
+      - C2: the test script; quote the `[PASS]` lines of T1 to T7 and its last line. Take out alone: the exit-code comparison in record mode (T7), the tolerance line (T5), the `[NEW]` branch (T6); quote what fails; restore.
+      - C3: a real run, `sh scripts/bench_threshold_check.sh > build/-run.log 2>&1`: quote the `[NEW]` line, the six rows it appended, the three commits on `records` (speed, runtime, gate), and `git status --short` of the code tree (nothing). Do not re-record the baseline: that is the next task's.
+      - C4: `make test`, then `make preflight-changed`; quote each `Total:` line and the time of the bench step from `build/preflight-timings.tsv` before and after (expected: about 40 s more).
+      - C5: commit on `main`, add `**Awaiting review:**` with C2 to C4, `tm done`, and stop at the check-in id:269a6.
+
 - [ ] +bench +review +AI-D @main @checkin Review of the record commit retry and the two small record fixes id:269a6
     > **Created:** 2026-11-15
     > **Branch:** `main`
-    > **Depends:** id:h1dj3
+    > **Depends:** id:h1dj3, id:9d99n
+    > **Depends changed (2026-11-15):** id:9d99n (the six-program runtime record) joined the batch.
     > **Placed:** directly after the task it reviews.
 
     - **Checks:**
       - Re-read the queue and `git log -p` on `main` since git:50b1e8f; re-run what the **Awaiting review:** bullet names.
       - The retry hides no loss: a row that is appended and never committed (a lock that stays, a missing identity) still fails the run; a run whose row another run committed passes; eight runs at once.
+      - id:9d99n: the six rows of a real run equal what `sh scripts/perf_gap.sh` prints within the noise of two runs; the geometric mean is the rows'; a program whose three builds disagree records nothing; what a wrong pass could hide: a slower program masked by the mean (plant one program 60% slower among six: the mean moves 8%, inside the tolerance; say whether a per-program limit is needed, with the spread of each program over five runs on this host).
+
+- [ ] +bench +measurement +AI-D @main Backfill the six-program runtime record and the instruction counts, and re-record this host's baseline id:f0zzh
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Depends:** id:269a6
+    > **Placed:** after the check-in id:269a6: it uses id:9d99n's record mode. The maintainer's request of 2026-11-15.
+
+    - **Do:** with id:tmydc's driver (its text is in that task, in `completed.tm.md`), run id:9d99n's `scripts/perf_gap.sh --record-run --kind backfill` for the same 42 commits (git:7417fdc and the 41 first-parent commits up to git:e5087d4 that changed `src/`, `stdlib/`, `rt/`, `tools/zilc/` or `tools/zbuild/`), today's harness beside each commit's `build/` and `stdlib/`, one at a time on a quiet host, each commit's rows committed on `records` with the measured sha. The instruction counts are exact, so their series shows every commit that changed generated code; the times are today's measurement. Then `sh scripts/bench_cross_lang.sh --record` on `main`'s tip, so this host's baseline carries `runtime_geomean_vs_gcc_o2` and the new measure is gated.
+    - **Report in the task:** each commit where a program's instruction count moved, with the count before and after; each step of more than 5% in a program's ratio to gcc; and whether `bench/perf_gap/gate_baseline.tsv`'s two re-recordings line up with the counts.
+    - **Checks:** C1 the number of `backfill` rows in `bench/records/runtime_history.tsv` is 42 times 6, or the commits that failed are named with their error; C2 after `--record`, a `sh scripts/bench_threshold_check.sh` run prints `[OK]  runtime_geomean_vs_gcc_o2`, not `[NEW]`; C3 `git status --short` of the code tree is empty.
 
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
