@@ -1,0 +1,21 @@
+// name: A Vec is copied twice out of a slice element, freed through one copy and read through the other
+// expected: known_gap
+// gap: a by-value read of a slice element whose type is not Copy but has no Drop impl (a Vec, a struct holding one) is accepted as a move although the slice still holds the value, so the same element can be read out again; each copy is an owner of the one buffer, and free() through one leaves the other dangling
+// observed: runtime_fault
+import "vec.zrl";
+use vec::Vec;
+
+fn dup(a: [Vec<i32>]) -> i32 {
+    let mut v1 = a[0];
+    let mut v2 = a[0];
+    v1.free();
+    v2.push(7);
+    return v2.as_slice()[0];
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    let a = [v];
+    return dup(&a) - 7;
+}
