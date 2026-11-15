@@ -2,6 +2,34 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
+- [ ] +docs +testinfra +AI-G @main The figures the documents quote are checked at milestones, not on every commit id:141h5
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** at the top, on the maintainer's decision of 2026-11-15; it depends on nothing, and every compiler commit until it lands still edits three documents.
+    > **Check-in:** reviewed in id:ev54n.
+
+    - **Measured (2026-11-15, `main`'s 173 commits):** `doc/SAFETY.md` changed in 79 of them, `doc/spec/unsafe_policy.md` in 46 (44 of those by two lines or fewer) and `README.md` in 44 (43 by two lines or fewer): the compiler's line and block counts, the density rows and the probe count, which the `safety-figures` and `safety-model` gates of `make test` compare with the tree on every commit. They are also what conflicts when a series branch merges (three hunks in the merge of git:e5087d4 into `provenance`). Two figures no gate covers have drifted meanwhile: `doc/spec/safety_model.md` says "the 18 holes still open" beside a Known gaps list of 46 entries (46 `known_gap` probes), and `doc/SAFETY.md` §5.3 says the standard library "holds 170 `unsafe { }` blocks" under a table that says 187.
+    - **Decided (the maintainer, 2026-11-15):** the figures stop changing on every commit. They are refreshed at significant milestones: at every release at least, and the maintainer is considering the completion of a significant branch of work as well.
+    - **Settled design (a reviewing session, 2026-11-15):**
+      - **Milestone figures** are: the §5.3 table of `doc/SAFETY.md` and the two sentences below it that repeat its rows (the standard library's and the compiler's block and module counts); the Zoril density rows and line counts of `doc/spec/unsafe_policy.md` §5; and the probe counts: `doc/SAFETY.md` §5.1's "keeps N probes" with its five counts by expectation, §6's "tracked as N `known_gap` probes", and `README.md`'s "N-probe safety matrix".
+      - **Not figures, unchanged, still checked on every commit:** the Known gaps entries and the §6 class bullets (a hole is listed in the commit that finds or closes it), the matrix rows and the row counts the documents state, the `No row is marked **GAP**` sentence, the binary sizes, the smoke-suite size, and the corpus hashes.
+      - **The stamp.** `doc/SAFETY.md` §5 opens with one line: `The counts in §5 and §6, the density rows of [unsafe_policy.md](spec/unsafe_policy.md) §5 and the README's probe count are as of **<version>** (<YYYY-MM-DD>); they are refreshed at each release, not with each commit, and \`sh scripts/check_safety_figures.sh --milestone\` compares them with the tree.` `<version>` is what `build/zoril --version` prints as its second word on the tree the figures were counted on.
+      - **The gate in `make test`** (`scripts/check_safety_figures.sh --all`, the `safety-figures` gate) no longer compares a milestone figure with the tree. It runs the selftest, `--pages` as today, and a new check that the stamp line is present with a version and a date.
+      - **The milestone check** is `scripts/check_safety_figures.sh --milestone`: the selftest, the §5.3 table against the tree, `--density`, `--pages`, and two new comparisons: the probe counts (files under `bench/safety_matrix/probes/` in all and by their `// expected:` line, against the three places above), and the two §5.3 sentences against the table's rows. It prints one `[FAIL] safety-figures:` line per figure that differs, with the tree's value. `make figures-check` runs it; `make preflight` runs it (the release bar); `make test` and `make preflight-changed` do not.
+      - **The README probe count** leaves `check_document_counts` in `scripts/check_safety_model.sh` (it is now a milestone figure); the row counts and the GAP sentence stay there.
+      - **The unchecked number goes:** `doc/spec/safety_model.md`'s sentence reads `... the holes still open in checked code are routes inside rows the matrix counts as closed, and each is a \`known_gap\` probe listed under [Known gaps](#known-gaps).`, with no count; the list is the count.
+      - **Refreshing** is: run `--milestone`, write the values it names (`--print` and `--density --print` give them), set the stamp, and commit `figures: refresh at <milestone>`. Do it once in this task, so the tree starts consistent: the "170" sentence becomes the table's figure and the stamp is this tree's version and today's date.
+      - **The rules.** `AGENTS.md`: under **Safety claims and evidence**, a bullet saying which figures are milestone figures, that a task does not touch them, that they are refreshed at each release and, when the maintainer asks for it, when a series branch merges into `main`, and that a hole is still listed in the commit that finds or closes it. In **Code branches**, the list of recorded figures a merge recomputes loses `README.md`, `doc/SAFETY.md` and `doc/spec/unsafe_policy.md` (`corpus/zrl_whole_program_zil.sha256` stays), and the sentence about `scripts/check_safety_figures.sh` with `--density --print` moves to the new bullet. In **Known holes carry probes**, "and the line in `doc/SAFETY.md` §6" stays (the class bullet), without a count to update. `doc/developer_guide.md`'s release steps name `make figures-check`.
+    - **Tests** (cases of `scripts/check_safety_figures.sh --selftest`, each on a fixture tree and fixture documents the selftest builds): M1 a table figure that differs from the fixture tree: `--all` passes, `--milestone` fails and names the figure; M2 no stamp line: `--all` fails with `[FAIL] safety-figures: doc/SAFETY.md §5 has no "as of" line`; M3 a stamp with no date: the same failure; M4 a probe count by expectation that differs: `--milestone` fails and names the kind; M5 a §5.3 sentence that differs from its table row: `--milestone` fails.
+    - **Checks:**
+      - C1: before: `sh scripts/check_safety_figures.sh --all` passes; append one line to a scratch copy of the tree's `src/main.zrl` (`--repo` on a copy under `build/figures-scratch/`, never the real file) and quote the `[FAIL]` it prints: today every added line fails the gate.
+      - C2: after: the same scratch copy passes `--all` and fails `--milestone` with `compiler lines`; quote both.
+      - C3: `sh scripts/check_safety_figures.sh --selftest`; quote its line, which names M1 to M5. Take each new check out alone (the stamp check, the probe-count comparison, the sentence comparison) and quote the case that fails; restore.
+      - C4: `sh scripts/check_safety_figures.sh --milestone` on the tree after the one refresh: every line `[PASS]`; quote them. `sh scripts/check_safety_model.sh` passes; quote its last line.
+      - C5: `rg -n '18 holes|holds 170' doc README.md` prints nothing; `rg -n 'figures-check|--milestone' AGENTS.md doc/developer_guide.md Makefile scripts/preflight.sh` shows the rule, the target and the preflight step; quote the line numbers.
+      - C6: `make test`, then `make preflight-changed`; quote each `Total:` line. The mutation harness names `safety-figures` nowhere as the catcher of a mutant (`rg -n 'safety-figures' scripts/mutation*`); if it does, stop and report.
+      - C7: commit on `main`, add `**Awaiting review:**` with C2 to C6, `tm done`.
+
 - [ ] +bench +testinfra +AI-G @main Benchmark and density records live on a `records` branch of their own, and the scripts commit each run there id:455bt
     > **Created:** 2026-11-15
     > **Branch:** `main`
@@ -37,10 +65,27 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C8: `sh scripts/test_preflight.sh` on a clean tree, `make test`, then `make preflight-changed`; quote each verdict or `Total:` line, and `git status --short` of the code tree after the preflight (nothing), and the commits it added on `records`.
       - C9: commit on `main` (one commit: the scripts, the helper, the tests, the removals, the rules), add `**Awaiting review:**` with C2 to C8, `tm done`, and stop at the check-in id:ev54n. Do not push either branch.
 
+- [ ] +bench +testinfra +AI-G @main Each preflight records the tree's figures on the `records` branch id:vdk4z
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** after id:455bt, whose branch and helper it uses; with id:141h5, the other half of the maintainer's decision of 2026-11-15.
+    > **Depends:** id:455bt
+    > **Check-in:** reviewed in id:ev54n.
+
+    - **Why:** with id:141h5 the documents carry the figures of the last milestone only. How the figures move between milestones is still worth keeping, as a record.
+    - **Settled:** a script `scripts/record_figures.sh` appends one row per run to `bench/records/figures_history.tsv` (a header line, then `date`, `commit`, `zoril_version`, and one column per figure: the nine of `scripts/check_safety_figures.sh --print`, the density values of `--density --print`, the number of probes and the number by each `// expected:` kind), with the commit column as id:455bt settles it, and commits it through id:455bt's helper with the subject `<commit>: figures`. It measures nothing itself: every value comes from `check_safety_figures.sh` (give that script a `--probes --print` if id:141h5 did not). It needs no host id: the figures do not depend on the host. A commit that already has a row is not recorded twice (the last row's `commit` equals this one and has no `-dirty`): the script says `figures: <commit> is already recorded` and exits 0. `scripts/preflight.sh` runs it in both modes, after the bench step; with the branch not mounted it fails as id:455bt's scripts do.
+    - **Tests** (`scripts/test_bench_records.sh`, or wherever id:455bt put its cases; a scratch repository each): F1 a run appends a row with as many fields as the header and commits it; F2 a second run on the same clean commit adds nothing and says so; F3 a run on a dirty tree adds a row marked `-dirty`, and so does the next.
+    - **Checks:**
+      - C1: `sh scripts/record_figures.sh` on the tree; quote the row, and `git -C bench/records log --oneline -1`; the row's values equal `sh scripts/check_safety_figures.sh --print` and `--density --print` (quote those).
+      - C2: the test script; quote the `[PASS]` lines of F1 to F3. Take the "already recorded" test out and quote F2 failing; restore.
+      - C3: `make test`, then `make preflight-changed`; quote each `Total:` line, `git status --short` of the code tree after it (nothing), and the figures commit it added on `records`.
+      - C4: commit on `main`, add `**Awaiting review:**` with C1 to C3, `tm done`, and stop at the check-in id:ev54n.
+
 - [ ] +bench +review +AI-D @main @checkin Review of the records branch and the scripts that commit to it id:ev54n
     > **Created:** 2026-11-15
     > **Branch:** `main`
-    > **Depends:** id:455bt
+    > **Depends:** id:141h5, id:455bt, id:vdk4z
+    > **Depends changed (2026-11-15):** id:141h5 and id:vdk4z (the milestone figures and their record) joined the batch.
     > **Placed:** directly after the task it reviews.
     > **Rewritten (2026-11-15):** with id:455bt.
 
@@ -49,6 +94,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - What a wrong skip would hide, and from whom: a run that measured and recorded nothing while its caller saw success. Planted: the branch not mounted during `make preflight-changed` (the preflight fails at the bench step and says how to mount); a run from a scratch worktree under `build/` (its own `bench/records` is missing: it must fail or be given `GATE_HISTORY`, not write into the scratch tree and lose the row with it); two runs at once (both rows committed, or the second fails loudly).
       - No row was lost in the move: the rows of git:9e79c80 are on `records`, byte for byte.
       - The rules in `AGENTS.md` and `doc/developer_guide.md` name the branch, the mount command and who pushes; nothing still asks for a `bench:` commit on a code branch.
+      - id:141h5: a compiler change no longer edits a document (a scratch commit that adds a line to `src/` passes `make test-changed` with no document touched); `--milestone` fails on it and names the figure; the one refresh left every milestone figure equal to the tree; no text still tells a task to update a count. What the moved gate could hide, and from whom: a reader of a release's documents seeing a stale figure, so show that `make preflight` fails on a stale figure and that the release steps name the check.
+      - id:vdk4z: its row equals what `check_safety_figures.sh` prints, and a second run on the same commit adds none.
 
 - [ ] +bench +measurement +AI-D @main Rebuild the benchmark history of this host from the commits since the release id:tmydc
     > **Created:** 2026-11-15
