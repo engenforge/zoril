@@ -2,6 +2,95 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
+- [ ] +bench +testinfra +AI-G @main The benchmark gate keeps every run in a committed history and compares a run only with the baseline of its own host id:nxrav
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** at the top, before id:z0093, on the maintainer's request of 2026-11-15: until it lands, every preflight's measurement is lost and the gate compares a run with itself.
+    > **Check-in:** reviewed in id:25ttc.
+
+    - **Found (2026-11-15):** no benchmark record was ever committed, on any branch. `bench/cross_lang/thresholds.cfg`, `bench/cross_lang/last_zoril_metrics.tsv` and `bench/speed_history.tsv` are untracked and not ignored; `doc/developer_guide.md` says to commit the history, `AGENTS.md` (Cloud sessions) says to delete the files, and sessions on every host deleted them (id:z0161, id:z0166, and the preflight of the merge of git:e5087d4 into `provenance`). With no `thresholds.cfg` the gate records the run as its own baseline and passes. Also: `scripts/bench_cross_lang.sh` reads `"$ZORIL_BIN" --version` but never sets `ZORIL_BIN`, so every row of `bench/speed_history.tsv` has `unknown` for the commit and the version.
+    - **Decided (the maintainer, 2026-11-15):** benchmark records are kept on every host and never deleted; a run is compared with the most recent baseline of the same host, and no record of another host is ever used for a comparison.
+    - **Settled design (a reviewing session, 2026-11-15):**
+      - **Host identity.** `host_id` is the first 12 hex digits of the SHA-256 (the scripts' `sha256_of`, over a temporary file) of the one line `<uname -s>|<uname -m>|<CPU model>|<cores>|<RAM in whole GB>`, built from the values the script already reads (`HOST_CPU`, `HOST_CORES`, `/proc/meminfo`). The kernel release and the CPU governor are not part of it: a kernel update or a governor change must not start a new baseline. Both stay recorded in each row, and the gate prints a note when the governor differs from the baseline row's. `BENCH_HOST_ID` in the environment overrides the computed id (for the tests).
+      - **The record.** `bench/gate_history.tsv`, tracked, append-only, one row per gate run, with a header line: `date`, `commit`, `zoril_version`, `host_id`, `host_os`, `host_arch`, `cpu_model`, `cores`, `ram_gb`, `governor`, `status` (the run's `RUN_STATUS`), `kind` (`baseline`, `run` or `backfill`), `verdict` (`baseline`, `pass` or `fail`), `clean_throughput_loc_s`, `incremental_rebuild_ms`, `runtime_ratio_vs_gcc_o2`, `peak_rss_mb_per_kloc`. `GATE_HISTORY` in the environment names another file (for the tests).
+      - **The baseline of a host** is the last row of the file whose `host_id` is this host's and whose `kind` is `baseline`. A `run` or `backfill` row is never a baseline: comparing with the last run would let a slow drift pass, ten per cent at a time. `--record` appends a `baseline` row (as today it refuses on a contended host without `--force`).
+      - **The gate** (`--check-thresholds`): with no baseline for this host it prints `new host <host_id> (<CPU model>, <cores> cores, <RAM> GB, <uname -s> <uname -m>): no baseline recorded for it; this run becomes its baseline`, appends a `baseline` row and passes (refused on a contended host without `--force`, as today). Otherwise it compares each measure with that baseline within its tolerance, as `check_thresholds_gate` does now (the retry of `runtime_ratio_vs_gcc_o2` is unchanged), names the baseline it used (`baseline of <date>, commit <commit>`), prints the change against the most recent row of this host of any kind for information, appends a `run` row with `pass` or `fail`, and exits as today.
+      - **Tolerances** move to `bench/cross_lang/tolerances.cfg`, tracked: `axis|tolerance_pct|direction`, the three lines the script writes today without their baseline field. `bench/cross_lang/thresholds.cfg` and `THRESHOLDS_FILE` go; nothing reads them afterwards.
+      - **`last_zoril_metrics.tsv`** is one run's scratch: its default becomes `build/bench/last_zoril_metrics.tsv`. `METRICS_FILE` still overrides it.
+      - **`bench/speed_history.tsv`** stays, tracked, with `host_id` added as its last column; its `commit` column is `git rev-parse --short HEAD` with `-dirty` when `git status --porcelain` prints anything (`unknown` only when git or the checkout is missing), and its `zoril_version` column is the second word of `build/zoril --version` of the tree the script runs in. The same two values go into `gate_history.tsv`.
+      - **Merges.** `.gitattributes` gets `bench/gate_history.tsv merge=union` and `bench/speed_history.tsv merge=union`, so two branches that each appended rows merge without a conflict.
+      - **Accepted gap, written in the script's header comment:** two machines with the same CPU model, core count and RAM (two cloud VMs of one shape) share a `host_id`; id:z0004 measured such VMs within the 15% tolerance of each other.
+    - **Do:** the changes above in `scripts/bench_cross_lang.sh` (and the header comment of `scripts/bench_threshold_check.sh`); `scripts/test_tiers.tsv` gets a row for `bench/gate_history*` like the one for `bench/speed_history*`; whatever the `stray-files`, `portability` and `comment-noise` gates ask for the new files. Scripts stay POSIX `sh` and POSIX awk. Do not commit any measurement in this task: the first records are id:tmydc's.
+    - **Tests, in `scripts/test_bench_threshold_gate.sh`** (its three existing cases keep their meaning, on the new files; every case sets `GATE_HISTORY`, `METRICS_FILE` and `BENCH_HOST_ID=aaaaaaaaaaaa` and uses `--force --check-thresholds-only`, which must append its row to `GATE_HISTORY` too). Each planted history is written by the test:
+      - P1, only another host's baseline (`bbbbbbbbbbbb`, every measure twice as good as the run's): exit 0, output has `new host aaaaaaaaaaaa`, and the file's last row has `aaaaaaaaaaaa` and `baseline`.
+      - P2, this host's baseline and a run 30% worse on `clean_throughput_loc_s`: exit 1, `[FAIL] clean_throughput_loc_s`, last row `run` and `fail`.
+      - P3, this host's older baseline that the run fails, then a newer baseline of `bbbbbbbbbbbb` that the run would pass: exit 1.
+      - P4, this host's older baseline that the run passes, then a newer baseline of `bbbbbbbbbbbb` that the run would fail: exit 0.
+      - P5, the drift: this host's baseline 10000, then a `run` row of 9000, and a run of 8200 (within 15% of the last run, 18% under the baseline): exit 1.
+      - P6, two baselines of this host: the later one is used (the run passes the later and fails the earlier: exit 0, and the output names the later one's date).
+      - P7, this host's baseline row with another kernel release in `host_os` and another governor: it is used (exit 0, `[OK]`), and the governor note is printed.
+      - P8, a comment line, an empty line and a row with too few fields before this host's baseline: ignored, exit 0.
+    - **Checks:**
+      - C1: before the change, on this tree: `rm -f bench/cross_lang/thresholds.cfg && sh scripts/bench_threshold_check.sh > build/nxrav-before.log 2>&1; grep -n 'No threshold baseline\|All performance' build/nxrav-before.log` shows the run recorded and passed its own baseline; `cut -f2,3 bench/speed_history.tsv | sort -u` shows `unknown` in both columns. Quote both. Then remove the three untracked files this wrote.
+      - C2: `sh scripts/test_bench_threshold_gate.sh`; quote its last line and the `[PASS]` line of each of P1 to P8 and of the three older cases.
+      - C3: take each safeguard out alone and quote the case that fails: (a) the `host_id` filter of the baseline lookup (expected: P1, P3 or P4); (b) the `kind == baseline` filter (expected: P5); (c) "last" replaced by "first" (expected: P6); (d) the kernel release put into the `host_id` line is not testable through `BENCH_HOST_ID`, so instead show the computed id: `BENCH_HOST_ID= sh scripts/bench_cross_lang.sh --print-host-id` (add this small option) prints the same id when `uname -r` is replaced by a stub on `PATH` that prints another release. Restore each and rerun C2.
+      - C4: a real run on this host, twice: `sh scripts/bench_threshold_check.sh > build/nxrav-run1.log 2>&1` then again into `build/nxrav-run2.log`; the first prints `new host` and appends a `baseline` row, the second names that baseline and appends a `run` row with `pass`; `cut -f2,3 bench/gate_history.tsv bench/speed_history.tsv | sort -u` has no `unknown`; `git status --short` shows `bench/gate_history.tsv` and `bench/speed_history.tsv` and nothing under `bench/cross_lang/`. Quote the lines. Then `git checkout bench/gate_history.tsv` (back to its header-only state) and remove `bench/speed_history.tsv`: this task commits no measurement.
+      - C5: `rg -n 'thresholds\.cfg|THRESHOLDS_FILE' --glob '!doc/tasks/**' --glob '!build/**' .` prints nothing but lines in `AGENTS.md` and `doc/` that id:n6ya8 rewrites (quote it).
+      - C6: `make test`, then `make preflight-changed`; quote each `Total:` line, the gate's lines from the preflight log, and `git status --short` after it (the two history files, modified or new, and nothing else). Leave those two files uncommitted in the working tree for id:n6ya8's rule to be applied by the session that runs the next preflight; say so in the note.
+      - C7: commit on `main` (the script, the test, `tolerances.cfg`, a header-only `bench/gate_history.tsv`, `.gitattributes`, the tier row), add `**Awaiting review:**` with C2 to C6, `tm done`.
+
+- [ ] +docs +bench +AI-G @main The rules say benchmark records are kept and committed on every host, never deleted id:n6ya8
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Placed:** after id:nxrav, whose files it names; the maintainer's decision of 2026-11-15.
+    > **Depends:** id:nxrav
+    > **Check-in:** reviewed in id:25ttc.
+
+    - **Decided (the maintainer, 2026-11-15):** no session deletes a benchmark record, on any host; all of them are kept in the repository. The gate compares a run only with its own host's baseline (id:nxrav).
+    - **Do:**
+      - `AGENTS.md`, **Cloud sessions**: replace the bullet that begins `` `make preflight` writes host-specific benchmark files under `bench/` `` by: `` - `make preflight` and `make preflight-changed` append this run's measurements to `bench/gate_history.tsv` and `bench/speed_history.tsv`, each row with the host it was measured on. A cloud VM is a host like any other: keep the rows and commit them, as under Running tests. ``
+      - `AGENTS.md`, **Running tests**, a new bullet after the `make preflight` bullet: `` - **Benchmark records are kept, on every host.** A preflight appends rows to `bench/gate_history.tsv` and `bench/speed_history.tsv`. Never delete or revert them: commit them in a commit of their own on the branch the run was made on (`bench: record the preflight run for <sha>`), so the history of each host stays in git. The gate compares a run only with the last baseline recorded on the same host (the `host_id` column: CPU model, cores, RAM, OS and architecture); a host it has not seen records its own baseline and says so (`new host ...`), which is the one case where the gate cannot fail. A baseline is re-recorded on purpose with `sh scripts/bench_cross_lang.sh --record`, in a commit that says why. ``
+      - `doc/developer_guide.md`: the bullet `` `make preflight` appends to the benchmark history files under `bench/`; commit those separately ... `` names the two files, says the same rule in one sentence and points to `AGENTS.md`; any other mention of `thresholds.cfg` or `last_zoril_metrics.tsv` in `doc/`, `README.md`, `bench/cross_lang/gen_multifile.lua` and the scripts' comments is brought in line with id:nxrav (`tolerances.cfg`, `bench/gate_history.tsv`, `build/bench/last_zoril_metrics.tsv`).
+      - `doc/tasks/future.tm.md`, id:z0004: a **Changed (2026-11-15)** bullet saying that its "Delete the files the run writes under `bench/`" no longer holds: a cloud run's rows are committed like any other, and with id:nxrav the question it measures is answered from `bench/gate_history.tsv` (rows of the cloud VMs' `host_id`). Leave the task where it is.
+    - **Checks:**
+      - C1: `rg -n 'never commit them|delete them when the run is done|thresholds\.cfg|THRESHOLDS_FILE' --glob '!doc/tasks/**' --glob '!build/**' .` prints nothing; quote the (empty) result and the command's exit status.
+      - C2: `rg -n 'gate_history' AGENTS.md doc/developer_guide.md` shows the new text in both; quote the lines' numbers.
+      - C3: `git diff --stat HEAD` names no file under `src/`, `stdlib/`, `tools/` or `scripts/*.sh` other than comment lines in scripts (if a script's code would have to change, stop and report: that belongs to id:nxrav).
+      - C4: `make test-changed BASE=HEAD` before the commit; quote its `Total:` line.
+      - C5: commit on `main`, add `**Awaiting review:**` with C1 to C4, `tm done`, and stop at the check-in id:25ttc.
+
+- [ ] +bench +review +AI-D @main @checkin Review of the per-host benchmark history and its rules id:25ttc
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Depends:** id:nxrav, id:n6ya8
+    > **Placed:** directly after the batch it reviews (a mechanism that decides what a run is compared with, and the rule about its records).
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` on `main` since git:e5087d4.
+      - Re-run what each **Awaiting review:** bullet names, and id:nxrav's take-out checks where the batch did not quote them.
+      - Planted cases beyond P1 to P8: a history whose last line has no newline; a `host_id` of this host only in a `backfill` row (a new host, not a comparison); `--record` on a host with a baseline (a second baseline, used by the next run); a run in a tree without git (`commit` is `unknown`, the run still records); two branches that each appended a row merge without a conflict (`merge=union`, tried in a scratch repository).
+      - A wrong skip this mechanism could hide: a regression that passes because the gate took the run for a new host. Show what changes the id on this host (`--print-host-id` with each of the five inputs changed in turn) and that nothing else does.
+      - The rules read the same in `AGENTS.md` and `doc/developer_guide.md`, and no text still says to delete a record.
+
+- [ ] +bench +measurement +AI-D @main Rebuild the benchmark history of this host from the commits since the release id:tmydc
+    > **Created:** 2026-11-15
+    > **Branch:** `main`
+    > **Depends:** id:25ttc
+    > **Placed:** after the check-in id:25ttc: it writes into the history that batch creates. The maintainer's request of 2026-11-15.
+    > **Note:** a measurement whose first result (which harness can measure an old commit) decides how the rest is run.
+
+    - **Why:** nothing was recorded between the release (git:7417fdc, 2026-11-02) and id:nxrav. The host is the same one, so the series can be measured again: each row is today's measurement of an old commit, marked `backfill`.
+    - **Do:**
+      - First settle the harness on three commits (git:7417fdc, one from the middle of `git log --first-parent main`, and the commit before id:nxrav): build each in a scratch worktree under `build/backfill/<sha>` (`make` there; never touch `build/zoril` of the main tree), then measure it with today's `scripts/bench_cross_lang.sh` pointed at that tree's compiler and tools if the script allows it, otherwise with that commit's own script, reading its four measures from its metrics file. Record which was used and why; a row measured by an old commit's own harness says so.
+      - Then the series: every first-parent commit of `main` since git:7417fdc that changed `src/`, `stdlib/`, `rt/`, `tools/zilc/` or `tools/zbuild/` (`git log --first-parent --format=%h 7417fdc..<before id:nxrav> -- src stdlib rt tools/zilc tools/zbuild`; count them first, and if a full pass is longer than a night on this host, measure every n-th and then the commits around each step of more than 5% in a measure). One at a time, on a quiet host (the script's own contention check), each appended to `bench/gate_history.tsv` as a `backfill` row with the commit's short sha in `commit`, today's date in `date`, and this host's `host_id`; a `backfill` row is never a baseline (id:nxrav).
+      - Last, the baseline: one run of `sh scripts/bench_cross_lang.sh --record` on `main`'s tip, so the host's baseline is a measurement of the current tree on a quiet host.
+      - Commit the rows in one commit, `bench: backfill this host's history from the release, and record its baseline`, and write in the task where a measure moved by more than 5% between two neighbouring commits, with the commits.
+    - **Checks:**
+      - C1: the three harness trials and the choice, with each trial's four measures.
+      - C2: `awk -F'\t' '$12=="backfill"' bench/gate_history.tsv | wc -l` equals the number of commits measured; quote both numbers, and any commit that did not build or run, with its error.
+      - C3: no `backfill` row is taken as a baseline: after the series and before `--record`, `sh scripts/bench_threshold_check.sh` prints `new host` (or names an earlier real baseline), not a backfill row.
+      - C4: `make test-changed BASE=HEAD` on the commit that adds the rows; quote its `Total:` line.
+
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
@@ -15,6 +104,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Checks:** the store grid's 1490 cells refused by the body's own rules, not by the unknown-call rule (run the grid with id:z0094's pre-scan applied on top, as id:z0088 built it in `build/z88/esrc_ab`, and count 0 unsafe accepted); `closure_env_safe_twin.zrl` accepted; the owned-capture tests (`closure_captures_owning_and_other`, `closure_mutates_owning_capture`, `closure_owned_capture`; reduced in `build/z88/c1.zrl`: a closure that owns a `Vec` and pushes to it) measured. `make test`, `make preflight-changed`, the rejection differential, `sh scripts/run_safety_matrix.sh`.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
     - **Waiting for the maintainer (2026-11-15):** `provenance` (git:913bf05) does not contain the ten commits `main` gained since git:e0febf3, among them git:67f87b0, the work of id:0tv49 whose check-in id:3yasf this task depends on (`git merge-base --is-ancestor 67f87b0 provenance` fails; `git rev-list --count provenance..main` prints 10). Those commits change `src/check_zir.zrl` and `tools/zbuild/`, and close `gap_88` to `gap_93`. **Question:** merge `main` (git:e5087d4) into `provenance` before this task starts? **Recommendation (a reviewing session's):** yes: the series is rebuilt on `main` after each merge anyway, the closure rules this task touches sit beside the capture checks of git:44ab3e6, and the recorded figures are recomputed from the merged tree as the branch rules say. The merge is the maintainer's; nothing was changed on `provenance`.
+    - **Answered (2026-11-15):** the maintainer merged `main` (git:e5087d4) into `provenance` as git:ec0fc1d. The recorded figures in `doc/SAFETY.md` and `doc/spec/unsafe_policy.md` were recomputed from the merged tree; `make test` there gave `Total: 3694 run, 3694 passed, 0 failed, 94 skipped (135.3s)`, and `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=e5087d4` passed: 80 mutations caught, the clean-tree build and fixpoint, `reject-diff: base verdicts: fresh (no cache)` with `0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69159 programs`, and `Total: 1400 run, 1400 passed, 0 failed, 0 skipped (46.7s)` for the checked build. Its benchmark step had no baseline to compare with (id:nxrav). This task is no longer waiting.
 
 - [ ] +safety +tests +AI-D @provenance id:z0094 B1.9a3 A call through a local bound to one known function uses that function's summary
     > **Created:** 2026-11-06
