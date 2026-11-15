@@ -158,12 +158,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `awk -F'\t' '($7=="backfill"||$7=="baseline") && $13==""' bench/records/runtime_history.tsv | wc -l` prints 0.
       - The scratch worktrees under `build/backfill/` were removed; the driver and each commit's logs are kept there.
 
-- [ ] +bench +testinfra +AI-G @main A failed instruction count stops `perf_gap.sh`'s record run and its baseline recording id:s72rr
+- [x] +bench +testinfra +AI-G @main A failed instruction count stops `perf_gap.sh`'s record run and its baseline recording id:s72rr
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Found by:** the check-in id:269a6.
     > **Placed:** after id:f0zzh, which does not wait for it (ordered by the reviewing session of id:269a6): id:f0zzh checks its own rows for an empty `instructions` field on a host where valgrind works, so this fix blocks nothing.
     > **Check-in:** reviewed in id:a55tf.
+    > **Completed:** 2026-11-15 git:3e05dc7
 
     - **Now:** `scripts/perf_gap.sh` reads an instruction count with `set -- $(gate_count "$n") || exit 1` at three places (`--gate-record`, `--gate-check`, `--record-run`). `gate_count` reports a failure with `fail`, which exits only the command substitution's subshell, and `set` then returns 0, so `|| exit 1` never runs (`sh -c 'f(){ exit 1; }; set -- $(f) || echo caught; echo "status=$?"'` prints `status=0`). Measured at git:03937b7 with a `valgrind` first on `PATH` that prints `valgrind: broken` and exits 2: `PERF_GAP_OUT=<scratch> RUNTIME_HISTORY=<scratch>/rt.tsv sh scripts/perf_gap.sh -n 1 --record-run fib` prints `perf_gap: fib: callgrind reported no instruction count (see ...)`, then `runtime_geomean_vs_gcc_o2 3.593`, exits 0, and the row it wrote ends in an empty `instructions` field. The record then reads as a host without valgrind (where an empty field is the design) although the count failed. `--gate-record` has the same shape: it would write a baseline row with two empty fields and move it over `bench/perf_gap/gate_baseline.tsv`. `--gate-check` fails already, by accident (`[FAIL] <name> exits , baseline <N>`).
     - **Settled:** at each of the three places, capture first and test the capture's status: `_gc=$(gate_count "$n") || exit 1`, then `set -- $_gc`. Nothing else changes: with no `valgrind` on `PATH` the record run still leaves the field empty and passes (T3).
@@ -174,6 +175,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `sh scripts/perf_gap.sh --gate-check`; quote its six `[PASS]` lines (the real valgrind, nothing changed).
       - C4: `make test`; quote its `Total:` line. No `src/`, `stdlib/` or `tools/` file changes, so no preflight (`git diff --stat HEAD~1` shows it).
       - C5: commit on `main`, add `**Awaiting review:**` with C2 to C4, `tm done`.
+    - **Awaiting review:** `sh scripts/test_bench_threshold_gate.sh`, `sh scripts/perf_gap.sh --gate-check`, `make test`.
+    - **Completion note:**
+      - C1: before: T8 exited 0 and wrote `2026-11-15-21-25-53\tb118adc\t0.1.0-test\tunknown\tpowersave\tok\trun\tfib\t2\t2\t2\t1.000\t`; T9 exited 0 and overwrote `gate_baseline.tsv` with `# Instructions executed...` / `# Re-record...` / `fib\t\t`.
+      - C2: after: `sh scripts/test_bench_threshold_gate.sh` printed `[PASS] T3: without valgrind, instructions is empty and run passes`, `[PASS] T8: failed instruction count stops --record-run with no row`, `[PASS] T9: failed instruction count stops --gate-record and preserves baseline`, and last line `All bench threshold gate tests passed.`. Negative checks (each restored alone): `--record-run` printed `[FAIL] T8: rc=0 exists=yes out=perf_gap: fib: callgrind reported no instruction count (see build/perf_gap/gate/fib.vg)`; `--gate-record` printed `[FAIL] T9: rc=0 base='# Instructions executed by each workload's Zoril build at gate size (scripts/perf_gap.sh).`. Restored both.
+      - C3: `sh scripts/perf_gap.sh --gate-check` printed `[PASS] array_loop +0.0% instructions`, `[PASS] fib +0.0% instructions`, `[PASS] particles +0.0% instructions`, `[PASS] qsort +0.2% instructions`, `[PASS] sha +0.1% instructions`, `[PASS] vm +0.0% instructions`.
+      - C4: `git diff --stat HEAD~1` changed only `scripts/perf_gap.sh` and `scripts/test_bench_threshold_gate.sh` (no `src/`, `stdlib/` or `tools/`). `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.4s)`.
+      - C5: committed on `main` as git:3e05dc7.
 
 - [ ] +testinfra +AI-G @main A change to `scripts/perf_gap.sh` or `scripts/bench_cross_lang.sh` selects the scenarios that test them id:2msct
     > **Created:** 2026-11-15
