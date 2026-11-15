@@ -2,7 +2,7 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [ ] +safety +tests +AI-G @provenance id:z0180 A generic `Clone` impl's result keeps the borrows of what it clones
+- [x] +safety +tests +AI-G @provenance id:z0180 A generic `Clone` impl's result keeps the borrows of what it clones
     > **Created:** 2026-11-11
     > **Context:** by id:z0173.
     > **Branch:** `provenance` (moved from `main` 2026-11-14)
@@ -10,6 +10,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Depends:** id:0m61c
     > **Branch note:** after the `vecclone` series merges (its probes are git:e7b4d6c on `vecclone`).
     > **Check-in:** stop for review after it (follows in the `@checkin` task directly below).
+    > **Completed:** 2026-11-15 git:913bf05
 
     - **Found (2026-11-11, on `vecclone`; also on its base's stdlib):** `impl<T: Clone> Clone for Vec<T>` and `impl<T: Clone> Clone for Option<T>` declare `#[borrows()]`, so a clone holds no borrow: `return v.clone();` of a local `Vec<[u8]>` holding a view of a stack array, and `return o.clone();` of `Some(s)`, are accepted and read the dead frame (gap_77, gap_78, recorded in git:e7b4d6c: `exit 7` where the frame held 42). Returning `v` itself is refused (`cannot return 'v' a reference into storage owned by this frame`), and so are `s.clone()` of a slice directly (`region escape`), `clone_in`, and a `#[derive(Clone)]` struct holding the view (`region escape: returning a pointer to local stack storage via sret`). The same attribute hid the store from `extend_from_slice`'s summary once it cloned each element (probe 418 accepted); id:z0173 declares `#[stores(slice -> self)]` there instead.
     - **Route class:** a generic `#[borrows()]` impl whose result is built from a `T` that may be a view. Probe every generic `#[borrows()]` function in `stdlib/` (`rg -B3 '#\[borrows\(\)\]' stdlib`), not only `Clone`.
@@ -31,6 +32,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `git diff --name-only HEAD~1` (after commit) shows only the four new test files under `tests/language/memory/provenance/`.
       - C4: `make test-changed` (or `make test-changed BASE=HEAD~1` after commit) passes; quote its `Total:` line.
     - **Awaiting review:** re-run C1–C3 and probe sibling `Clone`/resize/collection-clone routes under `--provenance` (including generic `#[borrows()]` functions in `stdlib/`).
+    - **Checks results:**
+      - C1: `./scripts/test.sh tests/language/memory/provenance/vec_clone_frame_views_returned_refused.zrl tests/language/memory/provenance/option_clone_frame_view_returned_refused.zrl tests/language/memory/provenance/struct_view_cloned_resize_refused.zrl tests/language/memory/provenance/clone_returned_accepted.zrl` -> `Total: 5 run, 5 passed, 0 failed, 0 skipped (0.1s)`.
+      - C2: `for p in tests/language/memory/provenance/vec_clone_frame_views_returned_refused.zrl tests/language/memory/provenance/option_clone_frame_view_returned_refused.zrl tests/language/memory/provenance/struct_view_cloned_resize_refused.zrl; do timeout -k 5s 30s ./build/zoril -I stdlib=stdlib --emit-zil -o /dev/null "$p"; echo "$p rc=$?"; done` -> `rc=0` for all three without `--provenance`.
+      - C3: `git diff --name-only HEAD~1` -> lists only the four new test files under `tests/language/memory/provenance/`.
+      - C4: `make test-changed BASE=HEAD~1` -> `Total: 633 run, 633 passed, 0 failed, 0 skipped (4.4s)`.
 
 - [ ] +safety +review +AI-D @provenance @checkin Review of the generic Clone provenance tests (id:z0180) id:n177h
     > **Created:** 2026-11-15
