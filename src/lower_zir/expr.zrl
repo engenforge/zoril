@@ -691,6 +691,10 @@ impl ZirLowerer {
                     );
                     return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
                 }
+                if self.guard_scrut_overlaps(&val_place) {
+                    self.report_error("cannot move the matched value in a match guard", span);
+                    return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
+                }
                 // Tell the checker this drop is the user's: unlike a scope-exit drop, it
                 // must find the value definitely live. Otherwise `if c { sink(r); }
                 // @drop(r);` drops `r` twice. ZIL lowering ignores the marker.
@@ -3082,6 +3086,11 @@ impl ZirLowerer {
             self.consume_place_if_move(&val_place);
         }
         let early = self.lower_try_early_return(val_place, enum_ty, success_v_idx, span);
+        if !is_ref
+            && (early.base != val_place.base
+                || early.projections.len != val_place.projections.len) {
+            self.emit_consume_place(&val_place, span);
+        }
         self.emit_scope_cleanup(0 as usize, span, early.base, true);
         self.terminate(ZirTerminator.Ret(early));
         self.pop_scope(span);
@@ -3106,15 +3115,19 @@ impl ZirLowerer {
                 projections: @slice(0 as *mut Projection, 0 as usize)
             };
             let deref_place = self.append_deref(&payload_base);
-            if !is_ref && !self.is_copy_type(payload_ty) {
+            if !is_ref {
                 let val_tmp = self.define_local(0 as *mut Symbol, payload_ty, LOCAL_KIND_TMP);
                 self.emit(ZirStmt.Let(val_tmp, ZirRvalue.Use(deref_place), span));
+                self.emit_consume_place(&val_place, span);
                 return Place {
                     base: val_tmp,
                     projections: @slice(0 as *mut Projection, 0 as usize)
                 };
             }
             return deref_place;
+        }
+        if !is_ref {
+            self.emit_consume_place(&val_place, span);
         }
         return Place { base: 0, projections: @slice(0 as *mut Projection, 0 as usize) };
     }

@@ -455,6 +455,7 @@ impl ZirLowerer {
         if pat_moves && !self.pattern_peels_pointer(self.get_type_tag(ty)) {
             self.emit_skipped_drops(skipped.as_slice(), span);
             self.consume_place_if_move(&init_place);
+            self.emit_consume_place(&init_place, span);
         }
     }
 

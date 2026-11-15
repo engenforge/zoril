@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: cannot move out of borrow
+struct S { p: i32 }
+impl Drop for S { fn drop(self: &mut S) {} }
+enum Q { A(S), B }
+
+fn main() -> i32 {
+    let e = Q.A(S { p: 1 });
+    match *(&e) {
+        Q.A(s) => {},
+        Q.B => {},
+    }
+    return 0;
+}

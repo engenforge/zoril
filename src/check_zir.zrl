@@ -680,8 +680,10 @@ impl ZirVerifier {
             // Moving out through a named reference moves out of what it borrows. Through a
             // temporary pointer (a field or payload address) it is a move out of the owner,
             // unless that is borrowed: the source of an enum payload address.
+            let is_enum_ptr = self.is_enum_payload_alias(place.base, state);
             let out_of_borrow = loc.name_id != 0 as u32
-                || self.enum_payload_source_borrowed(place.base, state, locals);
+                || (!is_enum_ptr && self.local_holds_borrow(place.base, state))
+                || (is_enum_ptr && self.enum_payload_source_borrowed(place.base, state, locals));
             if out_of_borrow {
                 self.report_error("cannot move out of borrow", span);
                 return;
@@ -711,6 +713,29 @@ impl ZirVerifier {
         if loc.ty == 0 as u32 { return false; }
         let tag = self.get_type_decl(loc.ty).def.get_tag();
         return is_any_pointer_tag(tag);
+    }
+
+    fn local_is_reference(self: &ZirVerifier, loc: &Local) -> bool {
+        if loc.ty == 0 as u32 { return false; }
+        return is_reference_tag(self.get_type_decl(loc.ty).def.get_tag());
+    }
+
+    fn is_enum_payload_alias(self: &ZirVerifier, local_id: u32, state: &ZirAnalysisState) -> bool {
+        let mut i = 0 as usize;
+        while i < state.enum_aliases.len() {
+            if state.enum_aliases[i].local_id == local_id { return true; }
+            i = i + 1 as usize;
+        }
+        return false;
+    }
+
+    fn local_holds_borrow(self: &ZirVerifier, local_id: u32, state: &ZirAnalysisState) -> bool {
+        let mut i = 0 as usize;
+        while i < state.borrows.len() {
+            if state.borrows[i].borrower == local_id { return true; }
+            i = i + 1 as usize;
+        }
+        return false;
     }
 
     // Whether a borrow that still constrains PLACE overlaps it: one whose borrower is owned and
@@ -962,18 +987,39 @@ impl ZirVerifier {
         state: &ZirAnalysisState,
         locals: [Local]
     ) -> bool {
-        let mut i = 0 as usize;
-        while i < state.enum_aliases.len() {
-            let ea = &state.enum_aliases[i];
-            if ea.local_id == local_id {
-                if self.is_borrowed_by_other(&ea.source, state, locals) { return true; }
-                if ea.source.base == 0 as u32 || ea.source.base > locals.len as u32 {
-                    return false;
+        let mut cur = local_id;
+        let mut depth = 0 as usize;
+        while depth < 8 as usize {
+            let mut found = false;
+            let mut src = Place {
+                base: 0 as u32,
+                projections: @slice(0 as *mut Projection, 0 as usize)
+            };
+            let mut i = 0 as usize;
+            while i < state.enum_aliases.len() {
+                if state.enum_aliases[i].local_id == cur {
+                    src = state.enum_aliases[i].source;
+                    found = true;
+                    break;
                 }
-                let src = &locals[ea.source.base as usize - 1 as usize];
-                return src.name_id != 0 as u32 && self.local_is_pointer(src);
+                i = i + 1 as usize;
             }
-            i = i + 1 as usize;
+            if !found { return false; }
+            if self.is_borrowed_by_other(&src, state, locals) { return true; }
+            if src.base == 0 as u32 || src.base > locals.len as u32 { return false; }
+            let src_loc = &locals[src.base as usize - 1 as usize];
+            if (!self.is_enum_payload_alias(src.base, state) || src.projections.len > 1 as usize)
+                && self.local_is_pointer(src_loc)
+                && (src_loc.name_id != 0 as u32
+                    || self.local_holds_borrow(src.base, state)
+                    || self.local_is_reference(src_loc)) {
+                return true;
+            }
+            if src.projections.len == 0 as usize || src.projections[0].get_tag() != PROJ_DEREF {
+                return false;
+            }
+            cur = src.base;
+            depth = depth + 1 as usize;
         }
         return false;
     }
@@ -1497,6 +1543,36 @@ impl ZirVerifier {
         for p in places { self.check_place_use(p, true, span, state, locals); }
     }
 
+    fn check_places_consumed(
+        self: &mut ZirVerifier,
+        places: [Place],
+        span: Span,
+        state: &mut ZirAnalysisState,
+        locals: [Local]
+    ) {
+        for p in places {
+            if p.base == 0 as u32 || p.base > locals.len as u32 { continue; }
+            let st = state.ownership[p.base as usize];
+            if st == OWN_UNINIT {
+                self.report_var_error("use of uninitialized variable", p.base, "", span, locals);
+                continue;
+            }
+            if st == OWN_DROPPED {
+                self.report_var_error("use of dropped value", p.base, "", span, locals);
+                continue;
+            }
+            if st != OWN_MOVED && self.is_borrowed_by_other(p, state, locals) {
+                self.report_var_error("cannot move borrowed value", p.base, "", span, locals);
+                continue;
+            }
+            let loc = &locals[p.base as usize - 1 as usize];
+            if !loc.is_copy {
+                state.ownership[p.base as usize] = OWN_MOVED;
+                state.maybe_live[p.base as usize] = false;
+            }
+        }
+    }
+
     pub fn verify(self: &mut ZirVerifier) {
         let mut i = 0 as usize;
         while i < self.module.funcs.len {
@@ -1679,7 +1755,11 @@ impl ZirVerifier {
                 self.rv_uses(&rv, set);
             },
             ZirStmt.Drop(pl, _) | ZirStmt.DropIfLive(pl, _) => { self.place_uses(&pl, set); },
-            ZirStmt.Intrinsic(_, args, _) => { self.places_uses(args, set); },
+            ZirStmt.Intrinsic(name_id, args, _) => {
+                if self.intern_table.lookup(name_id) != "consume_place" {
+                    self.places_uses(args, set);
+                }
+            },
             ZirStmt.EndBorrow(_, _) => {},
         }
     }
@@ -2495,8 +2575,11 @@ impl ZirVerifier {
                 self.check_drop(&place, true, span, state, locals);
             },
             ZirStmt.Intrinsic(name_id, args, span) => {
-                if self.intern_table.lookup(name_id) == "explicit_drop" {
+                let name = self.intern_table.lookup(name_id);
+                if name == "explicit_drop" {
                     self.check_explicit_drop(args, span, state, locals);
+                } else if name == "consume_place" {
+                    self.check_places_consumed(args, span, state, locals);
                 } else {
                     self.check_places_moved(args, span, state, locals);
                 }
