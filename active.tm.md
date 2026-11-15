@@ -32,13 +32,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: `git diff --stat HEAD` changed only `AGENTS.md`, `doc/developer_guide.md`, `scripts/lib/records.sh`, `scripts/record_figures.sh`, `scripts/test_bench_threshold_gate.sh` (no `src/`, `stdlib/` or `tools/`). `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.4s)`.
       - C5: committed on `main` as git:35bc5f7.
 
-- [ ] +bench +testinfra +AI-G @main The runtime measure is six programs against `gcc -O2`, recorded per run and gated on their geometric mean id:9d99n
+- [x] +bench +testinfra +AI-G @main The runtime measure is six programs against `gcc -O2`, recorded per run and gated on their geometric mean id:9d99n
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Placed:** after id:h1dj3, in the batch the check-in id:269a6 reviews; the maintainer's request of 2026-11-15.
     > **Depends:** id:h1dj3
     > **Depends note:** it commits records through `records_commit`, which id:h1dj3 changes.
     > **Check-in:** reviewed in id:269a6.
+    > **Completed:** 2026-11-15 git:03937b7
 
     - **Now:** the benchmark gate's one measure of generated code is `runtime_ratio_vs_gcc_o2`: `fib(38)` against gcc, a single recursive-call program. `scripts/perf_gap.sh` already times six programs (`bench/perf_gap/`: `array_loop`, `fib`, `particles`, `qsort`, `sha`, `vm`) as Zoril, cproc and `gcc -O2` builds and refuses a run whose three builds exit differently, but nothing records what it prints. Measured on this host at git:50b1e8f (median of 5, ms, Zoril / cproc / gcc): `array_loop` 815 / 840 / 142, `fib` 697 / 753 / 192, `particles` 628 / 626 / 224, `qsort` 440 / 420 / 357, `sha` 259 / 233 / 140, `vm` 432 / 329 / 331; the run took 40 s. Zoril to gcc: 5.74, 3.63, 2.80, 1.23, 1.85, 1.31, geometric mean 2.36.
     - **Decided (the maintainer, 2026-11-15):** the runtime measure takes in these six programs. The instruction-count gate (`perf-gate`) stays in `make test`: it is exact, takes two seconds, and names the commit that made generated code worse.
@@ -56,13 +57,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: a real run, `sh scripts/bench_threshold_check.sh > build/runtime-run.log 2>&1`: quote the `[NEW]` line, the six rows it appended, the three commits on `records` (speed, runtime, gate), and `git status --short` of the code tree (nothing). Do not re-record the baseline: that is the next task's.
       - C4: `make test`, then `make preflight-changed`; quote each `Total:` line and the time of the bench step from `build/preflight-timings.tsv` before and after (expected: about 40 s more).
       - C5: commit on `main`, add `**Awaiting review:**` with C2 to C4, `tm done`, and stop at the check-in id:269a6.
-    - **Awaiting review:** `sh scripts/test_bench_threshold_gate.sh`, `rg -n 'figures_history' AGENTS.md doc/developer_guide.md`, `make test`.
+    - **Awaiting review:** `sh scripts/test_bench_threshold_gate.sh`, `sh scripts/bench_threshold_check.sh`, `make test`, `make preflight-changed`.
     - **Completion note:**
-      - C1: before: four concurrent `--force --check-thresholds-only` runs against one scratch `records` worktree exited `1 0 1 1` (one succeeded; three failed with `cannot lock ref 'HEAD'` or `Unable to create '.../index.lock': File exists`).
-      - C2: after: `sh scripts/test_bench_threshold_gate.sh` printed `[PASS] R6: four concurrent record commits all exit 0 with 4 rows and clean status`, `[PASS] R7: persistent lock fails with appended but not committed`, `[PASS] F4: figures row third field is bare version (0.1.0-alpha-176-g50b1e8f)`, and last line `All bench threshold gate tests passed.`. With retry removed (`-lt 1`), R6 failed: `[FAIL] R6: concurrent record commits failed (fail=1 rows=4 status='')`. With the "already committed" `status --porcelain` check removed, R6 failed: `[FAIL] R6: concurrent record commits failed (fail=1 rows=4 status='')`. Restored both.
-      - C3: `rg -n 'figures_history' AGENTS.md doc/developer_guide.md` printed `AGENTS.md:38` and `doc/developer_guide.md:202`.
-      - C4: `git diff --stat HEAD` changed only `AGENTS.md`, `doc/developer_guide.md`, `scripts/lib/records.sh`, `scripts/record_figures.sh`, `scripts/test_bench_threshold_gate.sh` (no `src/`, `stdlib/` or `tools/`). `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.4s)`.
-      - C5: committed on `main` as git:35bc5f7.
+      - Note on retry: the `fib` confirmation retry in `scripts/bench_cross_lang.sh` uses `TMP_DIR/fib_zoril` and `TMP_DIR/fib_gcc2` and does not apply as it is to the six-program geometric mean, so it stays with `runtime_ratio_vs_gcc_o2` (no longer in `bench/cross_lang/tolerances.cfg`). Also fixed `median_ms` in `scripts/perf_gap.sh` to set `MED_MS` and `RC` without a subshell so `zrc`/`crc`/`grc` are preserved for the exit-code check.
+      - C1: before: `ls bench/records/runtime_history.tsv` failed (`ls: cannot access 'bench/records/runtime_history.tsv': No such file or directory`), and `sh scripts/perf_gap.sh` printed `array_loop 821/838/143`, `fib 699/742/192`, `particles 628/628/242`, `qsort 467/387/364`, `sha 246/249/140`, `vm 433/341/307`.
+      - C2: `sh scripts/test_bench_threshold_gate.sh` printed `[PASS] T1: record-run appends 6 rows of 13 fields and 1 commit`, `[PASS] T2: geometric mean of 2.000 and 8.000 is 4.000`, `[PASS] T3: without valgrind, instructions is empty and run passes`, `[PASS] T4: without cproc, cproc_ms is empty and run passes`, `[PASS] T5: runtime_geomean_vs_gcc_o2 gate fails at 2.400 and passes at 2.200 vs 2.000`, `[PASS] T6: 17-field baseline prints [NEW] and passes`, `[PASS] T7: differing exit codes write no row and fail`, and last line `All bench threshold gate tests passed.`. Negative checks (each taken out alone and restored): without exit-code comparison in record mode, `[FAIL] T7: rc=0 exists=yes out=runtime_geomean_vs_gcc_o2 1.000`; without the tolerance line, `[FAIL] T5: rc=0 rc2=0`; without the `[NEW]` branch, `[FAIL] T6: 17-field baseline prints [NEW] and passes: exit 1, expected 0`.
+      - C3: `sh scripts/bench_threshold_check.sh > build/runtime-run.log 2>&1` printed `  [NEW]  runtime_geomean_vs_gcc_o2  2.323: this host's baseline has no value for it; re-record the baseline (sh scripts/bench_cross_lang.sh --record)`, appended 6 rows to `bench/records/runtime_history.tsv` (`array_loop` 784/839/145/5.407/143420513, `fib` 697/757/192/3.630/7202391, `particles` 626/627/239/2.619/86149532, `qsort` 466/423/363/1.284/42994150, `sha` 254/256/140/1.814/71240882, `vm` 432/344/329/1.313/84900189), created 3 commits on `records` (`1c200e6` speed, `f1b717a` runtime, `883866c` gate pass; plus `ad085d5` for the header/README), and `git status --short` of the code tree was empty.
+      - C4: `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.6s)`. `make preflight-changed`: passed (`Total: 1277 run, 1277 passed, 0 failed, 0 skipped (77.9s)` for checked build). `build/preflight-timings.tsv` `bench` step: `40` before, `81` after (+41s).
+      - C5: committed on `main` as git:03937b7; stopping at check-in id:269a6.
 
 - [ ] +bench +review +AI-D @main @checkin Review of the record commit retry and the two small record fixes id:269a6
     > **Created:** 2026-11-15
