@@ -126,11 +126,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: `git diff --stat HEAD` named `doc/spec/surface_syntax.md` only (`1 file changed, 1 insertion(+), 1 deletion(-)`).
       - C3: `make test-changed BASE=HEAD` passed: `Total: 134 run, 134 passed, 0 failed, 0 skipped (15.5s)`.
 
-- [ ] +safety +review +AI-D @main @checkin Review of the element rewrites, the non-`Copy` element rule (gap_92, gap_93) and the capture spec text id:48h1s
+- [x] +safety +review +AI-D @main @checkin Review of the element rewrites, the non-`Copy` element rule (gap_92, gap_93) and the capture spec text id:48h1s
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Depends:** id:pex09, id:v0rsm, id:025c3
     > **Placed:** directly after the batch it reviews (a refactor the rule needs, a fix to a safety rule, and a spec change), by id:cx46y.
+    > **Completed:** 2026-11-15 git:e5087d4
 
     - **Checks:**
       - Re-read the queue and `git log -p` on `main` since git:8aff926.
@@ -139,6 +140,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - The id:cx46y probe programs (`build/cx46y/p/*.zrl` on the host that ran it): each `e*` and `b*` program that built is refused, and each `k*` program still exits 0.
       - Sibling routes not yet probed: a non-`Copy` element read through a raw pointer index in `unsafe` (still allowed, and said so in the spec text?); an element of a `HashMap` or another stdlib container returned by value by its accessor; `for` over a `Vec` by value; a range index (`a[0..1]`) of non-`Copy` elements; a `[mut &mut T]` element reborrowed (`&mut *a[0]`) twice.
       - The new §7.1 paragraph and the **Use After Move (Linear/Owned)** row say what the compiler does; `doc/SAFETY.md` has no class (N) and its counts match the tree.
+    - **Review (2026-11-15, a reviewing session), of git:949e72e, git:cb76bfa and git:e5087d4:** each commit does what its task settles, and no new hole was found.
+      - The code: the `src/` and `tools/` lines changed between git:8aff926 and git:e5087d4 are the lines of the prototype id:cx46y measured (`diff` of the two changed-line lists is empty), and the twenty new tests are byte for byte the ones id:cx46y ran.
+      - Re-run at git:e5087d4: `make test` -> `Total: 3455 run, 3455 passed, 0 failed, 94 skipped (235.5s)` (run beside the differential, hence the time). `REJECT_DIFF_NO_CACHE=1 sh scripts/check_reject_diff.sh 8aff926` -> `reject-diff: base verdicts: fresh (no cache); base front end 192 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 4 newly refused, of 69159 programs against 8aff926`: `gap_92` and `gap_93`, each whole-program and under `zbuild`, and nothing else.
+      - id:pex09 changes no behaviour of `zbuild`: a three-module project run through the `zbuild` of git:8aff926 and of git:e5087d4 (`build/48h1s/scn.sh` on the reviewing host: a first build, a rebuild, a comment edit, a body edit, the build after a source is deleted, that build again, `--gc`, each with `-v`, and the manifest and cache listing at the end) prints the same lines but for the directory name and the tools' own hashes: `[compile]` three times, `[up-to-date]` three times, `[early-cutoff]` on both edits, `[frozen]` with the dependents `[up-to-date]` twice, `gc: removed 3 stale rows`, and the program's exit status each time.
+      - The id:cx46y probe programs on the compiler of git:e5087d4: every `e*` and `b*` program is refused (`cannot move out of an array or slice element`; `cannot move out of borrow` or a borrow conflict for the four reference twins; `cannot move out of a closure capture` for the closure), and the eight `k*` programs exit 0.
+      - Sibling routes probed (programs in `build/48h1s/*.zrl`), all refused: an element of an array held in a tuple (`t.0[0]`), of a by-value array parameter, of a returned array (`mk()[0]`), of a slice held in a struct field (`h.s[0]`), a tuple part of an element (`a[0].0`), an element through a reference to a slice (`(*a)[0]`: `cannot move out of borrow`), `for x in o.as_slice()` then `*x`, `*x` on what `Vec.get` returns, and a second `&mut *a[0]` while the first is live (`cannot mutably borrow 'a' more than once`). `*p` and `p[0]` of such a value through a raw pointer are refused inside `unsafe` as well (`cannot move out of borrow`), as before the batch. Accepted and correct: one `&mut *a[0]` used in place, `Vec.pop()` returning the element. The language has no range index and no `for` over a `Vec` by value.
+      - The documents: §7.1's new paragraph and the **Use After Move (Linear/Owned)** row say what the compiler does; `doc/SAFETY.md` has no class (N), 519 probes with 377 `compile_reject` and 46 `known_gap`, and `doc/spec/safety_model.md` counts 18 open holes (the gates in `make test`). §5.2 names the moved parts and the eight tests. id:z0021 carries the note id:v0rsm asked for.
+      - No follow-up task. The local-array form is refused by the same rule, as id:v0rsm settled and the maintainer was told on 2026-11-15.
 
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
