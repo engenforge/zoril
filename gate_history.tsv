@@ -28,3 +28,4 @@ date	commit	zoril_version	host_id	host_os	host_arch	cpu_model	cores	ram_gb	gover
 2026-11-15-18-04-20	6a00117	0.1.0-alpha-123-g6a00117	a52c24a80e04	Linux 7.3.4-arch1-1	x86_64	AMD Ryzen 7 3700X 8-Core Processor	16	31	powersave	ok	backfill	backfill	10356	23	3.968	5.115
 2026-11-15-18-04-57	09824a9	0.1.0-alpha-128-g09824a9	a52c24a80e04	Linux 7.3.4-arch1-1	x86_64	AMD Ryzen 7 3700X 8-Core Processor	16	31	powersave	ok	backfill	backfill	10212	23	3.941	5.116
 2026-11-15-18-06-38	58983a0	0.1.0-alpha-130-g58983a0	a52c24a80e04	Linux 7.3.4-arch1-1	x86_64	AMD Ryzen 7 3700X 8-Core Processor	16	31	powersave	ok	backfill	backfill	10284	23	3.952	5.115
+2026-11-15-18-08-18	7cf8c3e	0.1.0-alpha-131-g7cf8c3e	a52c24a80e04	Linux 7.3.4-arch1-1	x86_64	AMD Ryzen 7 3700X 8-Core Processor	16	31	powersave	ok	backfill	backfill	10248	23	3.935	5.116
