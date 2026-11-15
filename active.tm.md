@@ -2,26 +2,6 @@
 
 Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-TASKMARK-05). The rules for reading this file, placing a new task and the priority flag are under "Working on tasks" in `AGENTS.md`: this file is one queue, and position is the only statement of order.
 
-- [x] +safety +review +AI-D @provenance @checkin Review of the generic Clone provenance tests (id:z0180) id:n177h
-    > **Created:** 2026-11-15
-    > **Branch:** `provenance`
-    > **Depends:** id:z0180
-    > **Completed:** 2026-11-15 git:913bf05
-
-    - **Checks (when reviewing id:z0180):**
-      - Re-read `doc/tasks/active.tm.md` and `git log -p` since `4deb429` on `provenance`.
-      - Re-run C1–C3 from id:z0180 (`./scripts/test.sh` on the four new tests, the default-mode take-out check showing all three refused tests compile without `--provenance`, and `git diff --name-only HEAD~1`).
-      - Probe sibling `Clone` / resize / collection-clone routes under `--provenance` (including generic `#[borrows()]` functions in `stdlib/` and `Vec<T>.clone()` on a caller `&Arena` vs local `Vec`), update the queue and next check-in as needed, then run `tm validate doc/tasks/*.tm.md`, `tm done n177h --git <sha>`, and `tm sync`.
-    - **Review (2026-11-15, a reviewing session, `provenance` at git:913bf05, `build/zoril` rebuilt by `make`: "the toolchain is up to date ... zoril 0.1.0-alpha-180-g913bf05"):**
-      - Queue: re-read; `git -C doc/tasks log` since the last look shows only id:z0180's settling, completion and sweep. `git log 4deb429..provenance` is the one commit git:913bf05, four new test files, nothing else.
-      - id:z0180 C1: `./scripts/test.sh <the four tests>` -> `Total: 5 run, 5 passed, 0 failed, 0 skipped (0.1s)` (the fifth item is the `stray-files` gate). C2: the three refused tests without `--provenance` -> `rc=0` each. C3: `git diff --name-only HEAD~1` -> the four test files only. Matches the task's record.
-      - Read the tests: the headers, `EXPECT:` lines and `// flags: --provenance` are right; each refused test has one route.
-      - **Finding: `vec_clone_frame_views_returned_refused.zrl` does not discriminate.** With `v.push(&buf);` taken out (`build/rev_n177h/vt.zrl`) it is still refused with the same message, because a clone of any local `Vec` is refused (the "Nuance" bullet of id:z0180 had seen this and accepted it). The `Option` test does discriminate (its twin `clone_opt_view` is accepted); the `resize` test discriminates (its twin `fill(out, b)` is accepted). Recorded in id:z0084, which is to add the discriminating twin; the test stays as it is (it is correct, only weaker than its name).
-      - **Finding: an over-rejection of safe user code under `--provenance`, the class id:z0084 deferred until safe user code showed it.** Returning a clone of a local `Vec<u8>`, `Vec<[u8]>` holding a parameter's view, or `String`; `Vec<Vec<[u8]>>.resize` with a value holding only a parameter's view (refused inside `stdlib/vec.zrl:399`); a push into a clone of a parameter's `Vec`. The reproducers and the `--emit-origins` line that names the cause (`arena_store = tao`: the clone's storage is `Frame(v)`, the address of the receiver) are in id:z0084. Decision: promote id:z0084 to `active.tm.md` before id:z0089 (it blocks id:z0065; its measurement suggests id:z0090 may then have nothing to do), add it to id:z0065's **Depends**, and settle id:z0090 for either outcome.
-      - Sibling routes probed (scratch programs in `build/rev_n177h/`), each under `--provenance`: a frame view returned through `[u8].clone()` refused (return rule), a parameter's view through it accepted; a generic user `#[borrows()] fn dup<T: Clone>(x: &T) -> T` returning a frame view refused, a parameter's view accepted; a user `impl Clone` declaring `#[borrows()]` on a struct holding a frame view refused (the body's summary wins over the declaration); `Option<Vec<[u8]>>.clone()` of a frame view refused; `extend_from_slice` of a `[[u8]]` holding a frame view, `out.push(o.clone())` of an `Option` holding one, and `Vec.new_in(a)` pushed a frame view, each refused (call store rule); `Vec.new_in(a)` with a parameter's view, cloned and returned, accepted. No route accepts a frame view: no new hole.
-      - Also seen: the call store rule printed twice at one site (`out.push(c[0])`, `c.push(&buf)`, `out.extend_from_slice(&a)`): already id:z0066's C3. The `Args.get`/`Args.next` `#[borrows()]` results are views of the process's arguments, not of a frame: not probed further.
-      - Queue edits: id:z0084 promoted (with `**Branch:** provenance` and `@provenance`) and placed before id:z0089; id:z0065 **Depends** += id:z0084; notes on id:z0086 and id:z0090; next check-in id:7kbpd placed after id:z0090 (depends on id:z0089, id:z0090), and id:z0073 depends on it.
-
 - [ ] +safety +design +AI-D @main DN1 A check on lowered ZIR that every value needing a drop is dropped or moved exactly once on every path, whatever the lowering emitted id:3rata
     > **Created:** 2026-11-14
     > **Branch:** `main`
