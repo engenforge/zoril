@@ -14,6 +14,7 @@
 # tarball extracted inside some other checkout would otherwise find that one.
 git_checkout_usable() {
     _gcu_dir="$(cd "${1:-.}" 2>/dev/null && pwd -P)" || return 1
+    [ -e "$_gcu_dir/.git" ] || return 1
     command -v git >/dev/null 2>&1 || return 1
     _gcu_top="$(git -C "$_gcu_dir" rev-parse --show-toplevel 2>/dev/null)" || return 1
     [ "$(cd "$_gcu_top" 2>/dev/null && pwd -P)" = "$_gcu_dir" ] || return 1

@@ -294,7 +294,7 @@ fi
 ZORIL_BIN="${ZORIL_BIN:-$REPO_ROOT/build/zoril}"
 ZORIL_VERSION=$("$ZORIL_BIN" --version 2>/dev/null | awk '{print $2}')
 [ -n "$ZORIL_VERSION" ] || ZORIL_VERSION="unknown"
-ZORIL_COMMIT=$(records_repo_commit "$REPO_ROOT")
+ZORIL_COMMIT="${ZORIL_COMMIT:-$(records_repo_commit "$REPO_ROOT")}"
 
 if [ "$CHECK_THRESHOLDS" -eq 1 ] || [ "$RECORD_BASELINE" -eq 1 ]; then
     records_check_target "$GATE_HISTORY" || exit 1

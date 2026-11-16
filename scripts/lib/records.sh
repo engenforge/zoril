@@ -51,6 +51,10 @@ records_commit() {
     _rc_subj="$2"
     _rc_root="${3:-$REPO_ROOT}"
     [ "${RECORDS_SKIP:-0}" -eq 0 ] || return 0
+    case "$_rc_file" in
+        "$_rc_root/bench/records/"*) ;;
+        *) return 0 ;;
+    esac
     _rc_repo=$(cd "$_rc_root" 2>/dev/null && pwd -P) || return 0
     _rc_dir=$(cd "$(dirname "$_rc_file")" 2>/dev/null && pwd -P) || return 0
     command -v git >/dev/null 2>&1 || return 0

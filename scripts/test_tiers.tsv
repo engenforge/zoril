@@ -65,7 +65,7 @@ tests/*	tests	test-strength	-	-	-	-	-	test	individual test files select themselv
 corpus/*	corpus	test-strength stage0c-corpus	-	integration	-	-	-	test	corpus examples select test-strength integration group and stage0c-corpus
 
 # --- Explicit rows for individual scripts ---
-scripts/bench_cross_lang.sh	scripts_bench_cross_lang	perf-gate portability no-new-deps	-	-	-	bench-contention bench-threshold-gate	-	script	cross language benchmark harness selects perf-gate and threshold scenarios
+scripts/bench_cross_lang.sh	scripts_bench_cross_lang	perf-gate portability no-new-deps	-	-	-	bench-contention bench-threshold-gate bench-records	-	script	cross language benchmark harness selects perf-gate, threshold, and records scenarios
 scripts/bench_threshold_check.sh	scripts_bench_threshold_check	portability no-new-deps	-	-	-	bench-threshold-gate	-	script	threshold gate script selects bench-threshold-gate
 scripts/bootstrap_zoril.sh	scripts_bootstrap_zoril	toolchain portability no-new-deps	-	-	-	clean-tree	-	script	bootstrap compilation script selects toolchain gate
 scripts/build_zrl.sh	scripts_build_zrl	toolchain portability no-new-deps	-	-	-	clean-tree	-	script	batch zrl build helper selects toolchain gate
@@ -113,7 +113,7 @@ scripts/fuzz_safe.sh	scripts_fuzz_safe	fuzz-record portability no-new-deps	-	-	-
 scripts/generate_build_info.sh	scripts_generate_build_info	portability no-new-deps	-	-	-	build-info	-	script	build info generator selects build-info scenario
 scripts/man_pages.sh	scripts_man_pages	portability no-new-deps	-	-	-	man-pages	-	script	man page builder selects man-pages scenario
 scripts/marker_density.sh	scripts_marker_density	unsafe-scan portability no-new-deps	-	-	-	-	-	script	raw pointer marker density tool selects unsafe-scan gate
-scripts/perf_gap.sh	scripts_perf_gap	perf-gate portability no-new-deps	-	-	-	bench-threshold-gate	-	script	performance gap check selects perf-gate and bench-threshold-gate
+scripts/perf_gap.sh	scripts_perf_gap	perf-gate portability no-new-deps	-	-	-	bench-threshold-gate bench-records	-	script	performance gap check selects perf-gate, bench-threshold-gate, and bench-records
 scripts/preflight.sh	scripts_preflight	portability no-new-deps	-	-	-	preflight-selftest	-	script	preflight runner script selects preflight-selftest scenario
 scripts/qbe_fingerprint.sh	scripts_qbe_fingerprint	portability no-new-deps	-	-	-	qbe-fingerprint	-	script	qbe backend fingerprint generator selects qbe-fingerprint scenario
 scripts/record_marker_density.sh	scripts_record_marker_density	unsafe-scan portability no-new-deps	-	-	-	-	-	script	marker density census recorder selects unsafe-scan gate
@@ -122,6 +122,7 @@ scripts/run_safety_matrix.sh	scripts_run_safety_matrix	safety-matrix safety-matr
 scripts/selfhost-check.sh	scripts_selfhost_check	portability no-new-deps	-	-	-	preflight-selftest	-	script	self-hosting fixpoint check selects preflight-selftest
 scripts/selfhost_finalize.sh	scripts_selfhost_finalize	portability no-new-deps	-	-	-	preflight-selftest	-	script	self-hosting finalizer selects preflight-selftest
 scripts/test_bench_contention.sh	scripts_test_bench_contention	portability no-new-deps	-	-	-	bench-contention	-	script	bench contention test selects bench-contention scenario
+scripts/test_bench_records.sh	scripts_test_bench_records	portability no-new-deps	-	-	-	bench-records	-	script	bench records test selects bench-records scenario
 scripts/test_bench_step_failed.sh	scripts_test_bench_step_failed	portability no-new-deps	-	-	-	bench-step-failed	-	script	bench failure handler test selects bench-step-failed scenario
 scripts/test_bench_threshold_gate.sh	scripts_test_bench_threshold_gate	portability no-new-deps	-	-	-	bench-threshold-gate	-	script	bench threshold gate test selects bench-threshold-gate
 scripts/test_build_info.sh	scripts_test_build_info	portability no-new-deps	-	-	-	build-info	-	script	build info generator test selects build-info scenario

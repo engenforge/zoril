@@ -107,3 +107,4 @@ scenario	build-info	git	./scripts/test_build_info.sh
 scenario	preflight-selftest	git	./scripts/test_preflight.sh
 scenario	reject-diff-selftest	git	./scripts/test_reject_diff.sh
 scenario	fuzz-tools-git	git	./scripts/test_fuzz_tools_git.sh --quiet
+scenario	bench-records	git	./scripts/test_bench_records.sh
