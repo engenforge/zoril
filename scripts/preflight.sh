@@ -2,8 +2,8 @@
 # scripts/preflight.sh — full or fast pre-merge verification.
 #
 # Usage:
-#   scripts/preflight.sh            full preflight (selfhost + mutation + bench + density + fuzz)
-#   scripts/preflight.sh --changed  fast preflight for changed files (selfhost + mutation --changed + bench)
+#   scripts/preflight.sh            full preflight (selfhost + mutation, calibrate, reject-diff, checked, git group, bench, figures record, store grid, density, fuzz)
+#   scripts/preflight.sh --changed  fast preflight for changed files (selfhost + mutation --changed, calibrate, reject-diff, checked, git group, bench, figures record)
 #
 # Both pre-merge gates run selfhost-check (a clean copy of the tree builds with the DEFAULT
 # rules — the fresh-checkout path — plus the self-hosting fixpoint) in the BACKGROUND,
