@@ -574,12 +574,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Decided (the maintainer, 2026-11-16):** option 1. `make preflight-changed` runs the whole `git` group, as `make preflight` does, and `AGENTS.md` says so.
     - **Completion note:** a decision; no code changed and no check ran for it (git:c41c0f5 is the tree it was made on). The edit, its tests and the two document sentences are settled in id:gc1pd (`+AI-G`, depends on id:27bb4), reviewed in the check-in id:5yrx5; both are placed directly after this task.
 
-- [ ] +testinfra +AI-G @main `preflight-selftest` fails its doc-only case when the checkout holds an untracked file that is not documentation id:0mznn
+- [x] +testinfra +AI-G @main `preflight-selftest` fails its doc-only case when the checkout holds an untracked file that is not documentation id:0mznn
     > **Created:** 2026-11-16
     > **Branch:** `main`
     > **Check-in:** reviewed in id:5yrx5.
     > **Found by:** the check-in id:rbs9z (the case dates from before this batch; neither id:27bb4 nor id:a05hn touched it).
     > **Placed:** before id:gc1pd, which it blocks: id:gc1pd makes `make preflight-changed` run the `git` group, so this failure would then stop every `make preflight-changed` in such a checkout.
+    > **Completed:** 2026-11-16 git:4e53e40
 
     - **Now (git:d405854):** in a checkout that holds an untracked file which `.gitignore` does not name and which is not documentation, `./scripts/test.sh --quiet --group git` fails: `[FAIL] scenario: preflight-selftest (exit 1; ...)`, `Total: 8 run, 7 passed, 1 failed, 0 skipped (101.3s)`. The scenario's log:
     ```
@@ -603,6 +604,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `./scripts/test.sh --quiet --group git > build/0mznn-git-group.log 2>&1; echo rc=$?`, run with the planted file of C1 in place and removed afterwards; quote the `Total:` line (expected `8 run, 8 passed`). If another scenario of the group fails with the planted file, record its failure verbatim in this task and stop: that is another finding.
       - C6: `make test-changed BASE=HEAD` before the commit, and `make test`; quote each `Total:` line.
       - C7: commit on `main`, add `**Awaiting review:**` with C2 to C5, `tm done`. The next task is id:gc1pd; the check-in id:5yrx5 reviews both.
+    - **Awaiting review:** `sh scripts/test_preflight.sh` (with and without an untracked file planted), `git diff --cached --quiet`, `./scripts/test.sh --quiet --group git` (with an untracked file planted).
+    - **Completion note:**
+      - C1: before, with `scripts/zz_untracked_probe.sh` planted: `rc=1`, 29 `[PASS]` lines, `[FAIL] preflight-selftest: doc-only change should skip preflight-changed (rc=1, out=preflight-changed: base 517331cefb758ec400d77b74b0f02464d29b86ad (PREFLIGHT_BASE=517331cefb758ec400d77b74b0f02464d29b86ad)`.
+      - C2: after, with `scripts/zz_untracked_probe.sh` planted: `rc=0`, `[PASS] preflight-selftest: a doc-only change skips preflight-changed`, 30 `[PASS]` lines, last line `[PASS] preflight-selftest: nested runs do not touch default preflight log file (content unchanged)`. Without the planted file: `rc=0`, 30 `[PASS]` lines.
+      - C3: took out `GIT_INDEX_FILE="$tmp/scratch_base_idx"` alone with the planted file: `rc=1`, `[FAIL] preflight-selftest: doc-only change should skip preflight-changed (rc=1, out=preflight-changed: base afb3be9fe73cc3b46d765d521cf71ea4b657ae44 (PREFLIGHT_BASE=afb3be9fe73cc3b46d765d521cf71ea4b657ae44)`; restored.
+      - C4: `git status --short | diff build/0mznn-st-before.txt -` printed nothing; `git diff --cached --quiet` printed `rc=0`.
+      - C5: `./scripts/test.sh --quiet --group git` with `scripts/zz_untracked_probe.sh` planted: `rc=0`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (102.1s)`.
+      - C6: `make test-changed BASE=HEAD`: `Total: 21 run, 21 passed, 0 failed, 0 skipped (9.1s)`. `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.2s)`.
+      - C7: committed on `main` as git:4e53e40.
 
 - [ ] +testinfra +AI-G @main `make preflight-changed` runs the `git` group, as `make preflight` does id:gc1pd
     > **Created:** 2026-11-16
