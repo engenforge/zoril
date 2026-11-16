@@ -411,11 +411,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C7: `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.9s)`. `make preflight-changed`: exit 0, checked build `Total: 1277 run, 1277 passed, 0 failed, 0 skipped (109.9s)`, `git -C bench/records log --oneline | head -4`: `d1df95a c41c0f5: figures`, `e7a2127 a52c24a80e04 c41c0f5: gate pass`, `0a1ec02 a52c24a80e04 c41c0f5: runtime`, `fd5cfc1 a52c24a80e04 c41c0f5: speed`.
       - C8: committed on `main` as git:c41c0f5; stopping at check-in id:f5mbr.
 
-- [ ] +testinfra +review +AI-D @main @checkin Review of the git-free `bench-threshold-gate` scenario and the `bench-records` scenario id:f5mbr
+- [x] +testinfra +review +AI-D @main @checkin Review of the git-free `bench-threshold-gate` scenario and the `bench-records` scenario id:f5mbr
     > **Created:** 2026-11-15
     > **Branch:** `main`
     > **Depends:** id:at2k3, id:sx4a3
     > **Placed:** directly after the task it reviews.
+    > **Completed:** 2026-11-16 git:c41c0f5
 
     - **Checks:**
       - Re-read the queue and `git log -p` on `main` since id:95cy3's commit; re-run what the **Awaiting review:** bullet names, `make user-tools` among them.
@@ -423,6 +424,117 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - The scenario that stays calls no git by any route: the logging `git` over the whole of `make test` (part 2 of `scripts/check_user_tools.sh`), and from an export without git (part 1).
       - `records_commit`'s early return hides no real commit: a history file under `bench/records/` of a mounted work tree is still committed (R1), and a real `sh scripts/bench_threshold_check.sh` makes its three commits.
       - id:at2k3: its reproducer prints `bad trials: 0 of 100`, ten runs of `sh scripts/test_bench_threshold_gate.sh` (and of `sh scripts/test_bench_records.sh`, where R6 is after id:sx4a3) all pass, H1 to H3 are still in the scenario that stays and reach no git, and no `.hdr.` file is left in `bench/records/` after a real run. Read the four sites that were not reproduced (`$SPEED_HISTORY`, `$RUNTIME_HISTORY`, the two `$HISTORY`): the header text of each is unchanged, field for field.
+    - **Review (2026-11-16), git:c41c0f5, the two commits since git:704a259 (git:e97c4cd for id:at2k3, git:c41c0f5 for id:sx4a3):**
+      - **Awaiting review, re-run (all after the last commit; logs under `build/f5mbr/`):** `sh scripts/test_bench_threshold_gate.sh`: 25 `[PASS]` lines, with those of R3, T12, H1, H2, H3 and `[PASS] G1: bench-threshold-gate runs without calling git`, last line `All bench threshold gate tests passed.`, 45s (G1 runs the script a second time). `sh scripts/test_bench_records.sh`: 11 `[PASS]` lines, with those of R1 and R6, last line `All bench records tests passed.`, 19s. Ten runs of each in a loop: `gate run 1` to `gate run 10` all `count=25 rc=0`, `rec run 1` to `rec run 10` all `count=11 rc=0`. `sh scripts/select_test_tier.sh --scenarios` prints `bench-contention bench-records bench-threshold-gate` for `scripts/bench_cross_lang.sh`, `bench-records bench-threshold-gate` for `scripts/perf_gap.sh`, `bench-records` for `scripts/test_bench_records.sh`; `sh scripts/test_tier_select.sh`: `test_tier_select: all checks passed`. `rg -c 'records_header'` prints 2, 1, 1, 1 for the four scripts. `make user-tools`: exit 0, `[PASS] user-tools (checkout): make test invoked git only for scripts/version.sh`, `PASS: user tools gate passed.`. `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.3s)`. `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=704a259`: exit 0, the differential skipped because no checker source differs from the base (`[SKIP] reject-diff: none of src/summary_pass.zrl ... differs from 704a259...`), the checked build `Total: 1277 run, 1277 passed, 0 failed, 0 skipped (109.7s)`, the bench step `[OK]  clean_throughput_loc_s     10212 (baseline 10356, tol 15%)`, `[OK]  incremental_rebuild_ms     21 (baseline 22, tol 15%)`, `[OK]  runtime_geomean_vs_gcc_o2  2.346 (baseline 2.385, tol 15%)`.
+      - **No case lost or weakened in the move:** the 19 distinct `[PASS]` texts of the script at git:e97c4cd are all in one of the two scripts now (13 and 8, G1 new), and the 17 `expect` calls are split 13 and 4 with their arguments unchanged. Every line of the old script that is in neither new one is a comment, or a line of a case that stays whose only change is `ZORIL_COMMIT=abc1234`, `RUNTIME_HISTORY="$dir/out/runtime_history.tsv"` or the path the rows are read from (`sort -u` of the old script against both new ones). `scripts/test_bench_records.sh` adds four lines to what it took: its header comment, two section comments and its last message. `25 + 11 = 35 + 1`.
+      - **The scenario that stays calls no git:** G1 above, and part 2 of `make user-tools` over the whole of `make test`; part 1 (the export without git) passed too.
+      - **`records_commit`'s early return hides no real commit:** R1 passes in `scripts/test_bench_records.sh`, and the bench step of the `make preflight-changed` above made its three commits (`git -C bench/records log --oneline | head -3`: `311c589 a52c24a80e04 c41c0f5: gate pass`, `4eba839 a52c24a80e04 c41c0f5: runtime`, `69ab273 a52c24a80e04 c41c0f5: speed`); `git -C bench/records status --short` is empty and the directory holds no `.hdr.` file. The return compares the path as given with `<root>/bench/records/`, as `records_check_target` does, so a history file named by a relative path into the mount is appended to and not committed (before the change it was). Nothing in the tree names one that way; accepted, the two functions agree.
+      - **id:at2k3:** its reproducer printed `bad trials: 0 of 100` and left only its two files. The five header strings are unchanged but for the trailing `\n` the function now adds: each old `printf 'date...'` string of git:e97c4cd's diff has one new line with the same text (lengths 137, 126, 237, 382, 209).
+      - **Outside the settled text:** id:sx4a3 added `[ -e "$_gcu_dir/.git" ] || return 1` to `git_checkout_usable` (`scripts/lib/portability.sh`) and says so in its note. It changes no answer (the function already required the directory to be the top of a checkout, which has a `.git`), and it is what keeps R3 from calling git; `build-info` and the other callers pass in `make test` and `make user-tools`. Accepted.
+      - **id:at2k3's real run was made before its commit:** its three `records` rows carry `704a259-dirty` (`abe81fb ... 704a259-dirty: gate pass`). They are kept, as every row is; id:a05hn's C6 asks for the run after the commit.
+      - **Findings:**
+        1. `sh scripts/check_clean_tree.sh` fails in a checkout with `bench/records/` mounted, so the `git` group fails and a full `make preflight` stops there. id:sx4a3's C5 quoted the failure and added no task. Not this batch's defect (git:8203d21). id:27bb4.
+        2. `records_header` returns 0 where the link fails and no file exists, and the history file then has rows and no header (reproduced with a failing `ln` on `PATH`). The design is the one the check-in id:95cy3 settled. id:a05hn.
+        3. The moved cases are run by less than the task text said: `make preflight-changed` does not run the `git` group, and a change to `scripts/lib/records.sh` or `scripts/record_figures.sh` selects `--gates`, which leaves the group out. Which command should run them is the maintainer's: id:nsbj8, with the options and a recommendation.
+      - **Plan:** added id:27bb4 and id:a05hn (`+AI-G`), their check-in id:rbs9z, and id:nsbj8 (`+AI-D`, waiting for the maintainer), in that order directly after this task. Nothing moved, re-tagged or re-prioritized. The pull of the `tasks` branch before these edits failed (the remote is not reachable from this machine); nothing was rebased.
+
+- [ ] +testinfra +AI-G @main `check_clean_tree.sh` counts the mounted `bench/records/` work tree as stray build output, which fails the `git` group id:27bb4
+    > **Created:** 2026-11-16
+    > **Branch:** `main`
+    > **Check-in:** reviewed in id:rbs9z.
+    > **Found by:** the check-in id:f5mbr (id:sx4a3's C5 quotes the failure; the cause dates from git:8203d21, which moved the history files to the `records` work tree).
+    > **Placed:** directly after id:f5mbr, as its follow-up.
+
+    - **Now (git:c41c0f5):** in a checkout with the `records` branch mounted at `bench/records/`, as `AGENTS.md` requires, `sh scripts/check_clean_tree.sh` exits 1:
+    ```
+    [FAIL] clean-tree: found stray build output outside build/:
+           source: bench/records/speed_history.tsv
+           source: bench/records/README.md
+           source: bench/records/.gitattributes
+           source: bench/records/figures_history.tsv
+           source: bench/records/runtime_history.tsv
+           source: bench/records/gate_history.tsv
+           source: bench/records/marker_density_history.tsv
+           source: bench/records/.git
+    ```
+    - **Who it reaches:** the script is the `clean-tree` scenario of the group `git` (`scripts/test_plan.tsv`), so `./scripts/test.sh --quiet --group git` fails (`Total: 8 run, 7 passed, 1 failed, 0 skipped (102.4s)`, id:sx4a3's C5), and `scripts/preflight.sh` leaves a full `make preflight` at that step (`[ $git_rc -eq 0 ] || exit $git_rc`), before the bench step. `make test` and `make preflight-changed` do not run the group, so neither shows it. **Not checked:** a full `make preflight` was not run for this finding.
+    - **Cause (read, and the output above):** `.gitignore` has `/bench/records/`, so `git status --ignored --porcelain` prints `!! bench/records/`. `check_git_status` has no exception for it, expands the directory, and counts every file under `bench/*` as a violation. `doc/tasks/` is ignored the same way and is not counted, because `doc/` is not one of the checked directories.
+    - **Settled 1:** `scripts/check_clean_tree.sh`, `check_git_status`: one more exception, after the `bench/cross_lang/*/target` line, with a comment that says why (the `records` branch's work tree is mounted there and has its own status):
+    ```sh
+            bench/records/*|bench/records) continue ;;
+    ```
+    - **Settled 1, its reach:** no `*/bench/records` form: only the mount at the top of the checkout is exempt.
+    - **Settled 2:** the selftest gains a case before "9. Clean repo passes again", in the shape of its neighbours. It appends `/bench/records/` to `$tmp/repo/.gitignore`, makes `$tmp/repo/bench/records/gate_history.tsv`, and requires the check to pass (`[FAIL] selftest: an ignored bench/records/ work tree was flagged as stray`). Then it makes `$tmp/repo/bench/records.o`, requires the check to fail and its log to name `bench/records\.o` (the exception is the directory, not a prefix), and removes that file. The directory stays for case 9.
+    - **Checks:**
+      - C1: before: `sh scripts/check_clean_tree.sh; echo rc=$?`; quote the first line and `rc=1`. `sh scripts/check_clean_tree.sh --selftest`; quote its last line.
+      - C2: after: `sh scripts/check_clean_tree.sh; echo rc=$?`; quote the `[PASS]` line and `rc=0`. `sh scripts/check_clean_tree.sh --selftest`; quote its last line.
+      - C3: take the exception line out, quote the selftest's `[FAIL]` line of the new case, restore.
+      - C4: a stray beside the mount is still found: `touch bench/stray.o; sh scripts/check_clean_tree.sh; echo rc=$?; rm bench/stray.o`; quote the `source: bench/stray.o` line and `rc=1`.
+      - C5: `./scripts/test.sh --quiet --group git > build/27bb4-git-group.log 2>&1; echo rc=$?`; quote the `Total:` line (expected `8 run, 8 passed`). If another scenario of the group fails, record its failure verbatim in this task and stop: that is another finding.
+      - C6: `make test-changed BASE=HEAD` before the commit, and `make test`; quote each `Total:` line.
+      - C7: commit on `main`, add `**Awaiting review:**` with C2 to C5, `tm done`. The next task is id:a05hn; the check-in id:rbs9z reviews both.
+
+- [ ] +bench +testinfra +AI-G @main `records_header` fails when it cannot put the header in place, instead of leaving a history file without one id:a05hn
+    > **Created:** 2026-11-16
+    > **Branch:** `main`
+    > **Check-in:** reviewed in id:rbs9z.
+    > **Found by:** the check-in id:f5mbr, in the design it settled for id:at2k3 (the code is as that task asked).
+    > **Placed:** after id:27bb4, as a follow-up of id:f5mbr; nothing depends on their order.
+
+    - **Now (git:c41c0f5):** `records_header` (`scripts/lib/records.sh`) puts the header of a new history file in place with `ln "$_rh_tmp" "$_rh_file" 2>/dev/null || true`. Where the link fails for a reason other than "the file exists" (a filesystem without hard links), it returns 0 with no file, the caller appends its rows, and the file has rows and no header from then on: the next call finds content and returns. Every reader skips the first line as the header (`NR > 1`), so the first row is never read.
+    - **Reproduced (2026-11-16):** with a `ln` first on `PATH` that prints an error and exits 1:
+    ```sh
+    d=$(mktemp -d); mkdir $d/bin; printf '#!/bin/sh\nexit 1\n' > $d/bin/ln; chmod +x $d/bin/ln
+    ( PATH="$d/bin:$PATH"; . scripts/lib/portability.sh; . scripts/lib/records.sh
+      records_header "$d/h/x.tsv" "a$(printf '\t')b"; echo "records_header rc=$?"; printf '1\t2\n' >> "$d/h/x.tsv" )
+    cat $d/h/x.tsv; ls -A $d/h; rm -rf $d
+    ```
+    - **Its output:** `records_header rc=0`, then the file's one line `1<tab>2`, then `x.tsv`.
+    - **Who it reaches:** nobody on this host (its filesystems link). A checkout on a filesystem without hard links, which the portability goal of `AGENTS.md` includes, would write every new history file without its header and say nothing.
+    - **Settled 1:** in the `else` arm of `records_header`, after `rm -f "$_rh_tmp"`:
+    ```sh
+            [ ! -e "$_rh_file" ] || return 0
+            printf '[FAIL] bench records: cannot create %s with its header (linking a temporary file into place failed)\n' "$_rh_file" >&2
+            return 1
+    ```
+    - **Settled 1, why no fallback:** the link stays the only way the header is put in place (a fallback that writes the file would bring back the truncation id:at2k3 removed). The header comment gains one sentence saying so.
+    - **Settled 2:** the callers stop on it. `scripts/bench_cross_lang.sh`: `records_header "$GATE_HISTORY" ... || return 1` inside `append_gate_history_row`, whose three calls gain `|| return 1` (the two in `check_thresholds_gate`) and `|| exit 1` (the one before `Recorded baseline row`), as the `records_commit` line after each has; `records_header "$SPEED_HISTORY" ... || exit 1`. `scripts/perf_gap.sh`, `scripts/record_figures.sh`, `scripts/record_marker_density.sh`: `|| exit 1`.
+    - **Settled 3:** `scripts/test_bench_threshold_gate.sh`, case H4 after H3, with no git: a directory first on `PATH` with an `ln` that exits 1; in a subshell, source `scripts/lib/records.sh` and call `records_header "$tmp/h4/x.tsv" "a$(printf '\t')b"`, keeping its status and its stderr. It passes when the status is 1, stderr has `[FAIL] bench records: cannot create`, and `$tmp/h4` holds no file (`ls -A` prints nothing).
+    - **Checks:**
+      - C1: before: the reproducer above; quote `records_header rc=0` and the file's content. `sh scripts/test_bench_threshold_gate.sh | grep -c '^\[PASS\]'` (expected 25).
+      - C2: after: the reproducer; quote `records_header rc=1` and the `[FAIL]` line (the `printf ... >>` after it then fails for the missing directory entry or creates the file: quote what `cat` and `ls -A` print). `sh scripts/test_bench_threshold_gate.sh`; quote the `[PASS]` lines of H1 to H4 and G1, the count (expected 26) and the last line. `sh scripts/test_bench_records.sh`; quote the count (expected 11) and the last line.
+      - C3: take out alone, quote H4 failing, restore: the three added lines of settled 1.
+      - C4: a caller stops: `d=$(mktemp -d); mkdir $d/bin; printf '#!/bin/sh\nexit 1\n' > $d/bin/ln; chmod +x $d/bin/ln; printf 'clean_throughput_loc_s\t10000\nincremental_rebuild_ms\t100\nruntime_ratio_vs_gcc_o2\t3.0\npeak_rss_mb_per_kloc\t10.0\nruntime_geomean_vs_gcc_o2\t2.0\n' > $d/m.tsv; PATH="$d/bin:$PATH" ZORIL_COMMIT=abc1234 BENCH_HOST_ID=aaaaaaaaaaaa GATE_HISTORY=$d/h.tsv METRICS_FILE=$d/m.tsv sh scripts/bench_cross_lang.sh --force --check-thresholds-only; echo rc=$?; ls -A $d; rm -rf $d`; quote the `[FAIL]` line, a non-zero `rc`, and that `ls -A` shows no `h.tsv`. Before the change the same command exits 0 and leaves `h.tsv` with one row and no header: quote `head -n 1` of it.
+      - C5: `rg -n 'records_header "' scripts/ --glob '!test_*'`; quote the five lines, each ending in `|| exit 1` or `|| return 1`.
+      - C6: `make test-changed BASE=HEAD` before the commit, and `make test`; quote each `Total:` line. A real `sh scripts/bench_threshold_check.sh > build/a05hn-run.log 2>&1`, made after the commit so its rows carry a clean commit: quote its three `[OK]` lines, `git -C bench/records log --oneline | head -3` and `git -C bench/records status --short` (empty).
+      - C7: commit on `main`, add `**Awaiting review:**` with C2 to C6, `tm done`, and stop at the check-in id:rbs9z.
+
+- [ ] +testinfra +review +AI-D @main @checkin Review of the clean-tree exception for `bench/records/` and the `records_header` failure id:rbs9z
+    > **Created:** 2026-11-16
+    > **Branch:** `main`
+    > **Depends:** id:27bb4, id:a05hn
+    > **Placed:** directly after the tasks it reviews.
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` on `main` since git:c41c0f5; re-run what each **Awaiting review:** bullet names.
+      - id:27bb4: the exception is the mount and nothing wider: plant a stray under `bench/` beside it, one in a `bench/records` of a nested directory (`tests/bench/records/x.o`), and an ignored file in `doc/tasks/`; the first two fail, the third passes as before. `./scripts/test.sh --quiet --group git` passes whole.
+      - id:a05hn: with the failing `ln`, each of the five callers stops with the `[FAIL]` line and writes no row (`perf_gap.sh --record-run` with the stubs of T2, `record_figures.sh` with those of F1, `record_marker_density.sh` with `HISTORY` under `build/`); with the real `ln`, id:at2k3's reproducer still prints `bad trials: 0 of 100`, and H1 to H4 reach no git (G1).
+
+- [ ] +testinfra +decision +AI-D @main Decide which command runs the `git` group scenarios for a change to a file they test id:nsbj8
+    > **Created:** 2026-11-16
+    > **Branch:** `main`
+    > **Found by:** the check-in id:f5mbr.
+    > **Placed:** after the check-in id:rbs9z: a follow-up of id:f5mbr that waits for the maintainer's answer, and whose first option needs id:27bb4 (the group fails in this checkout until then).
+
+    - **Now (git:c41c0f5):** the scenarios of the group `git` (`clean-tree`, `test-changed`, `build-info`, `preflight-selftest`, `reject-diff-selftest`, `fuzz-tools-git`, and since id:sx4a3 `bench-records`) are run whole only by a full `make preflight`. `make test` leaves the group out on purpose (it uses no git). `make preflight-changed` leaves it out too: `scripts/preflight.sh` runs `$GIT_CMD` under `if [ "$changed" -eq 0 ]`, and the timings of the last `make preflight-changed` (`build/preflight-timings.tsv`: mutation, selfhost, calibrate, reject-diff, checked, bench, figures-record) have no `git` step. id:sx4a3's text said `make preflight-changed` runs the group; it does not.
+    - **What `make test-changed` does:** a tier row that names a scenario runs it, whichever group it is in, so a change to `scripts/bench_cross_lang.sh` or `scripts/perf_gap.sh` runs `bench-records`. A row that selects everything does not: `printf 'scripts/lib/records.sh\n' | sh scripts/select_test_tier.sh` prints `--gates`, which is `make test`, without the group. `scripts/record_figures.sh` prints `--gates` too, and `scripts/record_marker_density.sh` names no scenario.
+    - **What that leaves untested until a full `make preflight`:** a change to `records_commit`, `records_check_target`, `records_repo_commit` or `records_header` in `scripts/lib/records.sh`, or to `scripts/record_figures.sh`, runs none of R1, R2, R4 to R7, F1 to F4 and T1. Before id:sx4a3 those cases were in `make test`. The same has always held for the other scenarios of the group and the rows that select everything (a change to `scripts/lib/preflight_base.sh` does not run `preflight-selftest`).
+    - **The question for the maintainer:** which command a contributor runs before a merge runs these scenarios.
+      1. `make preflight-changed` runs the whole `git` group, as `make preflight` does (the `if [ "$changed" -eq 0 ]` around `$GIT_CMD` goes). Cost: the group took 102.4s here (id:sx4a3's C5), on a `make preflight-changed` whose steps took about 280s. Nothing new decides what to skip. It needs id:27bb4 first. `AGENTS.md`'s description of `make preflight-changed` gains the group.
+      2. The selection carries them: rows for `scripts/lib/records.sh`, `scripts/record_figures.sh` and `scripts/record_marker_density.sh` name `bench-records`, and the selector keeps a named scenario of the group beside a run of everything (today `--gates` drops it, and `scripts/test.sh --gates --scenario X` runs the gates and X without the groups). Cheaper per run, but it is a mechanism that decides what not to run: an `+AI-D` design with planted cases first, and it covers only the files someone thought to list.
+      3. Nothing changes: a script whose job is git is tested by `make preflight` (`AGENTS.md`, Portability), and a change to `records_commit` is checked at the next release preflight.
+    - **Recommendation (the reviewing session of id:f5mbr):** option 1. It is one condition removed, it closes the gap for every scenario of the group and not only the records ones, and 100s on a gate that runs once per code change is cheaper than a wrong skip in a selector. Not decided here: it changes what `make preflight-changed` costs and what `AGENTS.md` says it runs, which is the maintainer's.
+    - **After the answer:** an `+AI-G` task with the settled edit and its checks (for option 1: the `git` step in `build/preflight-timings.tsv` of a `make preflight-changed`, a planted failure in `records_commit` that `make preflight-changed` then reports, and the `AGENTS.md` sentence).
 
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
