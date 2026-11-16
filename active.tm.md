@@ -520,11 +520,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - id:27bb4: the exception is the mount and nothing wider: plant a stray under `bench/` beside it, one in a `bench/records` of a nested directory (`tests/bench/records/x.o`), and an ignored file in `doc/tasks/`; the first two fail, the third passes as before. `./scripts/test.sh --quiet --group git` passes whole.
       - id:a05hn: with the failing `ln`, each of the five callers stops with the `[FAIL]` line and writes no row (`perf_gap.sh --record-run` with the stubs of T2, `record_figures.sh` with those of F1, `record_marker_density.sh` with `HISTORY` under `build/`); with the real `ln`, id:at2k3's reproducer still prints `bad trials: 0 of 100`, and H1 to H4 reach no git (G1).
 
-- [ ] +testinfra +decision +AI-D @main Decide which command runs the `git` group scenarios for a change to a file they test id:nsbj8
+- [x] +testinfra +decision +AI-D @main Decide which command runs the `git` group scenarios for a change to a file they test id:nsbj8
     > **Created:** 2026-11-16
     > **Branch:** `main`
     > **Found by:** the check-in id:f5mbr.
     > **Placed:** after the check-in id:rbs9z: a follow-up of id:f5mbr that waits for the maintainer's answer, and whose first option needs id:27bb4 (the group fails in this checkout until then).
+    > **Completed:** 2026-11-16 git:c41c0f5
 
     - **Now (git:c41c0f5):** the scenarios of the group `git` (`clean-tree`, `test-changed`, `build-info`, `preflight-selftest`, `reject-diff-selftest`, `fuzz-tools-git`, and since id:sx4a3 `bench-records`) are run whole only by a full `make preflight`. `make test` leaves the group out on purpose (it uses no git). `make preflight-changed` leaves it out too: `scripts/preflight.sh` runs `$GIT_CMD` under `if [ "$changed" -eq 0 ]`, and the timings of the last `make preflight-changed` (`build/preflight-timings.tsv`: mutation, selfhost, calibrate, reject-diff, checked, bench, figures-record) have no `git` step. id:sx4a3's text said `make preflight-changed` runs the group; it does not.
     - **What `make test-changed` does:** a tier row that names a scenario runs it, whichever group it is in, so a change to `scripts/bench_cross_lang.sh` or `scripts/perf_gap.sh` runs `bench-records`. A row that selects everything does not: `printf 'scripts/lib/records.sh\n' | sh scripts/select_test_tier.sh` prints `--gates`, which is `make test`, without the group. `scripts/record_figures.sh` prints `--gates` too, and `scripts/record_marker_density.sh` names no scenario.
@@ -535,6 +536,42 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       3. Nothing changes: a script whose job is git is tested by `make preflight` (`AGENTS.md`, Portability), and a change to `records_commit` is checked at the next release preflight.
     - **Recommendation (the reviewing session of id:f5mbr):** option 1. It is one condition removed, it closes the gap for every scenario of the group and not only the records ones, and 100s on a gate that runs once per code change is cheaper than a wrong skip in a selector. Not decided here: it changes what `make preflight-changed` costs and what `AGENTS.md` says it runs, which is the maintainer's.
     - **After the answer:** an `+AI-G` task with the settled edit and its checks (for option 1: the `git` step in `build/preflight-timings.tsv` of a `make preflight-changed`, a planted failure in `records_commit` that `make preflight-changed` then reports, and the `AGENTS.md` sentence).
+    - **Decided (the maintainer, 2026-11-16):** option 1. `make preflight-changed` runs the whole `git` group, as `make preflight` does, and `AGENTS.md` says so.
+    - **Completion note:** a decision; no code changed and no check ran for it (git:c41c0f5 is the tree it was made on). The edit, its tests and the two document sentences are settled in id:gc1pd (`+AI-G`, depends on id:27bb4), reviewed in the check-in id:5yrx5; both are placed directly after this task.
+
+- [ ] +testinfra +AI-G @main `make preflight-changed` runs the `git` group, as `make preflight` does id:gc1pd
+    > **Created:** 2026-11-16
+    > **Branch:** `main`
+    > **Depends:** id:27bb4
+    > **Depends note:** the group's `clean-tree` scenario fails in a checkout with `bench/records/` mounted until id:27bb4, and this task makes that failure stop every `make preflight-changed`.
+    > **Check-in:** reviewed in id:5yrx5.
+    > **Decided by:** the maintainer, 2026-11-16, in id:nsbj8 (its option 1).
+    > **Placed:** directly after id:nsbj8, as its follow-up.
+
+    - **Now (git:c41c0f5):** `scripts/preflight.sh` runs `TR_WORK=build/tests-git $GIT_CMD` (`./scripts/test.sh --quiet --group git`) under `if [ "$changed" -eq 0 ]`, between the checked build and the bench step. A `make preflight-changed` therefore runs none of the group's seven scenarios, and a change to `records_commit` (`scripts/lib/records.sh`) is tested by no command short of a full `make preflight` (id:nsbj8 has the detail).
+    - **Settled 1:** `scripts/preflight.sh`: the `if [ "$changed" -eq 0 ]; then` and its `fi` around the git step go; the four lines inside stay as they are, so both modes run the group, record a `git` timing and exit with its status before the bench step. The comment above the checked build already says the group runs before the bench step and stays.
+    - **Settled 2:** `scripts/test_preflight.sh` is itself a scenario of the group (`preflight-selftest`), and its `--changed` cases name no `PREFLIGHT_GIT`, so after settled 1 they would start the real group from inside it. Beside `export PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh"` add `export PREFLIGHT_GIT="$tmp/stub_pass.sh"` with a comment that says why (a nested run must not start the group this script is part of); the cases that name their own `PREFLIGHT_GIT` still override it.
+    - **Settled 3:** two cases in `scripts/test_preflight.sh`, added to its numbered header list. Case 7b, after Case 7: Case 5b's stubs and trace file with `./scripts/preflight.sh --changed`; it passes when the exit status is not 0 and the trace file does not exist (`git failure in --changed mode aborts with non-zero exit and suppresses bench`). Case 9c, after Case 9b: Case 9b's stubs with `--changed` and its own timings file; it passes when the exit status is 0 and the file has a line matching `^[0-9]+<tab>git$`.
+    - **Settled 4, the documents:** `AGENTS.md`, Running tests, the `make preflight-changed` bullet: after "the mutations of the changed files," add "the scenarios that need git (the `git` group of `scripts/test_plan.tsv`),". `doc/developer_guide.md`, Preflight Gates: the `make preflight-changed` line says what it runs in the same words and gives the time C2 measures in place of `~3 minutes`. Nothing else in either file changes.
+    - **Checks:**
+      - C1: before: `sh scripts/test_preflight.sh > build/gc1pd-selftest-before.log 2>&1; echo rc=$?`; quote `rc`, the count of pass lines and the last line. `cat build/preflight-timings.tsv` of the last `make preflight-changed` (no `git` line).
+      - C2: after: `touch build/gc1pd-marker; sh scripts/test_preflight.sh > build/gc1pd-selftest.log 2>&1; echo rc=$?`; quote `rc`, the pass lines of Case 7b and Case 9c, the count (the count of C1 plus 2) and the last line. `find build/tests-git -newer build/gc1pd-marker | head -n 3` prints nothing (no nested run started the real group). Then `make preflight-changed > build/gc1pd-preflight.log 2>&1; echo rc=$?`: quote `rc`, the group's `Total:` line (expected `8 run, 8 passed`), `cat build/preflight-timings.tsv` with its `git` line, and the sum of its seconds against C1's.
+      - C3: take out alone, quote the failing lines, restore: settled 1 (put the `if` back: Case 7b and Case 9c fail).
+      - C4: a planted defect is reported: in `records_commit` add `return 0` as its first line, run `make preflight-changed > build/gc1pd-planted.log 2>&1; echo rc=$?`, quote a non-zero `rc`, the `[FAIL]` line of `bench-records` and that no bench step followed (`rg -c 'vs last run' build/gc1pd-planted.log` prints nothing or 0), then restore and show `git diff --stat -- scripts/lib/records.sh` empty. `git -C bench/records log --oneline | head -1` is the same before and after this check (the planted run recorded nothing).
+      - C5: `rg -n 'git. group' AGENTS.md doc/developer_guide.md`; quote the two new lines. `make test-changed BASE=HEAD` before the commit and `make test`; quote each `Total:` line.
+      - C6: commit on `main`, add `**Awaiting review:**` with C2 to C5, `tm done`, and stop at the check-in id:5yrx5.
+
+- [ ] +testinfra +review +AI-D @main @checkin Review of the `git` group in `make preflight-changed` id:5yrx5
+    > **Created:** 2026-11-16
+    > **Branch:** `main`
+    > **Depends:** id:gc1pd
+    > **Placed:** directly after the task it reviews.
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` on `main` since id:rbs9z's commit; re-run what the **Awaiting review:** bullet names.
+      - No nested run reaches the real group: every `./scripts/preflight.sh` call of `scripts/test_preflight.sh`, the scratch-repository ones of Case 13 on among them, runs with a stub `PREFLIGHT_GIT`.
+      - The planted defect of C4, and one in `scripts/lib/preflight_base.sh` that `preflight-selftest` sees, both stop a `make preflight-changed`; a documentation-only change still prints `[SKIP] preflight-changed: only documentation changed` and runs no group.
+      - The two document sentences say what the script does, and no other sentence of `AGENTS.md` or `doc/developer_guide.md` still says the group runs only in `make preflight`.
 
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
