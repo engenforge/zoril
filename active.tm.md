@@ -738,12 +738,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `make test-changed BASE=HEAD` before the commit: `Total: 21 run, 21 passed, 0 failed, 0 skipped (102.2s)`; it did not name `reject-diff-selftest` in its output (it ran the 21 gates and left the `git` group out), so C1 to C4 are what ran the script.
       - C6: committed on `main` as git:a1358b2.
 
-- [ ] +docs +AI-G @main The descriptions of `make preflight` and `make preflight-changed` say what each runs, and give no time that is not measured id:5w8gt
+- [x] +docs +AI-G @main The descriptions of `make preflight` and `make preflight-changed` say what each runs, and give no time that is not measured id:5w8gt
     > **Created:** 2026-11-16
     > **Branch:** `main`
     > **Check-in:** reviewed in id:z7rjp.
     > **Found by:** the check-in id:5yrx5.
     > **Placed:** after id:072s0, as a follow-up of the check-in id:5yrx5; nothing depends on their order.
+    > **Completed:** 2026-11-16 git:1a03f6b
 
     - **Now (git:6ea3ce5):** three places describe the two gates by less than they run, and one gives a time that cannot be right:
       - `doc/developer_guide.md`, Preflight Gates: `make preflight-changed` is given as `~6 minutes` (measured by id:gc1pd: 379s) and `make preflight`, which runs everything the first does and more, as `~4 minutes`.
@@ -759,6 +760,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: the step names are the script's: `rg -o 'record_step [a-z-]+' scripts/preflight.sh | sort -u`; quote the output and say which step each word of settled 2 stands for.
       - C4: `make test-changed BASE=HEAD` before the commit; quote its `Total:` line. `dprint check doc/developer_guide.md` (or the gate that runs it); quote its result.
       - C5: commit on `main`, add `**Awaiting review:**` with C2 and C3, `tm done`, and stop at the check-in id:z7rjp.
+    - **Awaiting review:** `rg -n '~4 minutes|selfhost \+ mutation' doc/developer_guide.md scripts/preflight.sh Makefile`, `rg -n 'git group' scripts/preflight.sh Makefile`, `rg -n 'takes longer than' doc/developer_guide.md`, `make help-all 2>&1 | rg 'preflight'`, `rg -o 'record_step [a-z-]+' scripts/preflight.sh | sort -u`.
+    - **Completion note:**
+      - C1: before: `rg -n '~4 minutes|selfhost \+ mutation' doc/developer_guide.md scripts/preflight.sh Makefile` printed 5 lines: `Makefile:421` (`## Full pre-merge gate: selfhost + mutation + bench thresholds`), `Makefile:424` (`## Fast pre-merge gate: selfhost + mutations of changed files`), `scripts/preflight.sh:5` (`full preflight (selfhost + mutation + bench + density + fuzz)`), `scripts/preflight.sh:6` (`fast preflight for changed files (selfhost + mutation --changed + bench)`), `doc/developer_guide.md:80` (`(~4 minutes)`).
+      - C2: after: `rg -n '~4 minutes|selfhost \+ mutation' doc/developer_guide.md scripts/preflight.sh Makefile` matched only `scripts/preflight.sh:5` and `:6` (from Settled 2's `selfhost + mutation, ...` and `selfhost + mutation --changed, ...`); `rg -n 'git group' scripts/preflight.sh Makefile` printed `Makefile:424`, `scripts/preflight.sh:5`, `:6`, `:147`, `:149`; `rg -n 'takes longer than' doc/developer_guide.md` printed line 80 (`... It runs everything \`make preflight-changed\` runs, with the full mutation set, and then the store grid, the marker density record and the fuzz tools' check; it takes longer than \`make preflight-changed\`.`); `make help-all 2>&1 | rg 'preflight'` printed `    preflight              Full pre-merge gate: preflight-changed's steps with the full mutation set, plus store grid, density and fuzz` and `    preflight-changed      Fast pre-merge gate: selfhost, mutations of changed files, checked build, git group, bench thresholds`.
+      - C3: `rg -o 'record_step [a-z-]+' scripts/preflight.sh | sort -u` printed `record_step bench`, `record_step calibrate`, `record_step checked`, `record_step density`, `record_step figures`, `record_step figures-record`, `record_step fuzz`, `record_step git`, `record_step mutation`, `record_step reject-diff`, `record_step selfhost`, `record_step store-grid`. Mapping to Settled 2: `selfhost` -> `selfhost`, `mutation` / `mutation --changed` -> `mutation`, `calibrate` -> `calibrate`, `reject-diff` -> `reject-diff`, `checked` -> `checked`, `git group` -> `git`, `bench` -> `bench`, `figures record` -> `figures-record` (with `figures` in full mode's `check_safety_figures.sh --milestone`), `store grid` -> `store-grid`, `density` -> `density`, `fuzz` -> `fuzz`.
+      - C4: `dprint check doc/developer_guide.md` exited 0 (`dprint_rc=0`); `make test-changed BASE=HEAD`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.8s)`.
+      - C5: committed on `main` as git:1a03f6b; stopping at check-in id:z7rjp.
 
 - [ ] +testinfra +review +AI-D @main @checkin Review of the inherited `REJECT_DIFF_NO_CACHE` fix and the preflight descriptions id:z7rjp
     > **Created:** 2026-11-16
