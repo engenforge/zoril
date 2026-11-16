@@ -646,11 +646,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `rg -n 'git. group' AGENTS.md doc/developer_guide.md` printed `doc/developer_guide.md:79` and `AGENTS.md:36`. `make test-changed BASE=HEAD`: `Total: 142 run, 142 passed, 0 failed, 0 skipped (16.0s)`. `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.0s)`.
       - C6: committed on `main` as git:1f88e0b; stopping at check-in id:5yrx5.
 
-- [ ] +testinfra +review +AI-D @main @checkin Review of the `git` group in `make preflight-changed` id:5yrx5
+- [x] +testinfra +review +AI-D @main @checkin Review of the `git` group in `make preflight-changed` id:5yrx5
     > **Created:** 2026-11-16
     > **Branch:** `main`
     > **Depends:** id:0mznn, id:gc1pd
     > **Placed:** directly after the tasks it reviews (id:0mznn was added to them by the check-in id:rbs9z).
+    > **Completed:** 2026-11-16 git:1f88e0b
 
     - **Checks:**
       - Re-read the queue and `git log -p` on `main` since id:rbs9z's commit; re-run what the **Awaiting review:** bullet names.
@@ -658,6 +659,107 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - No nested run reaches the real group: every `./scripts/preflight.sh` call of `scripts/test_preflight.sh`, the scratch-repository ones of Case 13 on among them, runs with a stub `PREFLIGHT_GIT`.
       - The planted defect of C4, and one in `scripts/lib/preflight_base.sh` that `preflight-selftest` sees, both stop a `make preflight-changed`; a documentation-only change still prints `[SKIP] preflight-changed: only documentation changed` and runs no group.
       - The two document sentences say what the script does, and no other sentence of `AGENTS.md` or `doc/developer_guide.md` still says the group runs only in `make preflight`.
+    - **Review (2026-11-16), git:1f88e0b, the two commits since git:d405854 (git:4e53e40 for id:0mznn, git:1f88e0b for id:gc1pd); logs under `build/5yrx5/`:**
+      - **How the runs were made:** this checkout holds an untracked file that is not documentation, and `scratch_base` still copied such files into the object store (id:n6nsr), so the runs made before git:6ea3ce5 had that file's directory named in `.git/info/exclude` (taken out again afterwards). The two real `make preflight-changed` runs were made on git:6ea3ce5, which is id:n6nsr's commit on top of the batch and touches `scripts/test_preflight.sh` only.
+      - **Awaiting review, id:0mznn (at git:1f88e0b):** `sh scripts/test_preflight.sh` with `scripts/zz_untracked_probe.sh` planted: exit 0, 32 `[PASS]` lines, `[PASS] preflight-selftest: a doc-only change skips preflight-changed`; `git status --short` the same before and after, `git diff --cached --quiet` exit 0. Without the planted file: exit 0, 32 `[PASS]` lines. The group with a planted file was not run again: Case 17's mechanism is replaced by id:n6nsr, whose runs cover it.
+      - **Awaiting review, id:gc1pd:** the same two selftest runs show `[PASS] preflight-selftest: git failure in --changed mode aborts with non-zero exit and suppresses bench` and `[PASS] preflight-selftest: preflight --changed records git step timing`. `make preflight-changed PREFLIGHT_BASE=d405854` (at git:6ea3ce5): exit 0, `[SKIP] reject-diff: none of src/summary_pass.zrl ... differs from d405854...`, the checked build `Total: 1277 run, 1277 passed, 0 failed, 0 skipped (109.6s)`, the group `Total: 8 run, 8 passed, 0 failed, 0 skipped (101.3s)`, `[OK]  clean_throughput_loc_s     10356 (baseline 10356, tol 15%)`, `[OK]  incremental_rebuild_ms     21 (baseline 22, tol 15%)`, `[OK]  runtime_geomean_vs_gcc_o2  2.376 (baseline 2.385, tol 15%)`; `build/preflight-timings.tsv`: `2 mutation`, `68 selfhost`, `1 calibrate`, `0 reject-diff`, `127 checked`, `102 git`, `78 bench`, `1 figures-record` (379s); its four commits on `records` are `5f91ddf`, `8dba56b`, `8720e24`, `036a99e` and `git -C bench/records status --short` is empty. `rg -n 'git. group' AGENTS.md doc/developer_guide.md`: `AGENTS.md:36` and `doc/developer_guide.md:79`. `make test`, as `make test-changed BASE=HEAD` at git:1f88e0b with id:n6nsr's edit uncommitted (the untracked file makes it a run of everything): `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.0s)`.
+      - **No nested run reaches the real group:** `scripts/test_preflight.sh` exports `PREFLIGHT_GIT="$tmp/stub_pass.sh"` before its first case and never unsets it (`rg -n 'PREFLIGHT_GIT|env -i|unset PREFLIGHT' scripts/test_preflight.sh`: the export, seven per-case settings, and `unset PREFLIGHT_BASE` in `repo_base`); Case 12's `env -u` removes only `PREFLIGHT_REJECT_BASE` and `PREFLIGHT_BASE`; the cases of Case 13 call `preflight_base` in their scratch repositories, not `scripts/preflight.sh`. `find build/tests-git -newer build/5yrx5/marker` after a selftest run printed nothing.
+      - **Planted defects stop a `--changed` run at the group** (`./scripts/preflight.sh --changed` with `PREFLIGHT_BASE=d405854`, the real group, the selfhost, mutation, calibrate, checked and differential steps as stubs that pass, and the bench and figures steps as stubs that write a trace file):
+        - `return 0` as the first line of `records_commit`: exit 1, `[FAIL] scenario: bench-records (exit 1; ...)`, `Total: 8 run, 7 passed, 1 failed, 0 skipped (101.4s)`, the timings end at `102 git`, no trace file, and the head of `bench/records` unchanged.
+        - `PREFLIGHT_BASE=${PREFLIGHT_BASE:-HEAD}` as the first statement of `preflight_base`: exit 1, `[FAIL] scenario: preflight-selftest (exit 1; ...)`, `Total: 8 run, 7 passed, 1 failed, 0 skipped (101.4s)`, no trace file; `sh scripts/test_preflight.sh` alone shows six `[FAIL]` lines of Case 13 with it.
+        - Both files restored (`git diff --stat` empty). A first plant in `preflight_base`, `-gt 999` for `-gt 0` in the upstream arm, changed no result: the default-branch candidates give the same base in the cases of Case 13. Not followed further.
+      - **A documentation-only change still skips and runs no group:** a line appended to `doc/developer_guide.md` (restored after), `PREFLIGHT_BASE=HEAD`, every step a stub that writes a trace file: `[SKIP] preflight-changed: only documentation changed since 1f88e0b... (PREFLIGHT_BASE=HEAD)`, exit 0, no trace file.
+      - **The variables a preflight is run with, inherited by the group:** `PREFLIGHT_BASE=d405854` (the runs above) and `PREFLIGHT_REJECT_BASE=d405854 sh scripts/test_preflight.sh` (exit 0, 33 `[PASS]` lines at git:6ea3ce5) change no result. `REJECT_DIFF_NO_CACHE=1` does: finding 1.
+      - **The two document sentences:** both say what the script does. No other sentence of `AGENTS.md` or `doc/developer_guide.md` says the group runs only in `make preflight` (`rg -n 'group .?git|--group git|git. group|needs? git'` over both, `CONTRIBUTING.md`, the `Makefile`, `scripts/preflight.sh` and `scripts/test_plan.tsv`). `AGENTS.md`, Portability, "A script whose job is git ... is tested by `make preflight`, which requires git" is still true. Finding 2 is what is stale beside them.
+      - **Findings:**
+        1. `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=d405854`, the command `AGENTS.md` gives for a differential run that a note cites, exits 2 at the group: `[FAIL] scenario: reject-diff-selftest ...`, `FAIL: reject-diff-selftest: a cold run did not store an entry: fresh (no cache); base front end 1 s`, `Total: 8 run, 7 passed, 1 failed, 0 skipped (36.7s)`. The selftest inherits the variable. It is id:gc1pd that makes the documented command reach it. id:072s0.
+        2. `doc/developer_guide.md` now gives `make preflight-changed` as `~6 minutes` beside `make preflight` as `~4 minutes`, and the Usage comment of `scripts/preflight.sh` and the `Makefile` help texts list fewer steps than either mode runs. id:5w8gt.
+        3. `make test-changed` for a change to `scripts/test_preflight.sh` does not run `preflight-selftest` in a checkout with an untracked file that is not documentation: the selection becomes a run of everything, which leaves the group out (the gap id:nsbj8 describes). Since id:gc1pd `make preflight-changed` runs it, so nothing is added for it.
+      - **Plan:** id:n6nsr promoted from `future.tm.md` to directly after this task and done by this session, at the maintainer's request of 2026-11-16 (its payload has the decision). Added after it id:072s0 and id:5w8gt (`+AI-G`) and their check-in id:z7rjp. Nothing else moved, re-tagged or re-prioritized. The pull of the `tasks` branch before these edits failed (the remote is not reachable from this machine); nothing was rebased.
+
+- [ ] +testinfra +decision +AI-D @main Decide whether `preflight-selftest` may copy the checkout's untracked files into the object store id:n6nsr
+    > **Created:** 2026-11-16
+    > **Branch:** `main`
+    > **Found by:** the check-in id:rbs9z, while reading Case 17 of `scripts/test_preflight.sh` for id:0mznn.
+    > **Placed:** in `future.tm.md` under Evidence and tooling: unrelated to the batch that check-in reviewed, and not needed by id:0mznn or id:gc1pd.
+
+    - **Now (git:d405854):** `scratch_base` in `scripts/test_preflight.sh` runs `git add -A` into a scratch index and `git commit-tree`, in the developer's checkout. Every untracked file that `.gitignore` does not name is therefore written into `.git/objects` as a blob, reachable from a commit no ref names, each time the `preflight-selftest` scenario runs (checked: `git cat-file -e $(git hash-object <an untracked file>)` succeeds after a run). The objects are never pushed and `git gc` removes them once they are old enough, but a file a developer keeps untracked on purpose (a note, a local configuration) now has a copy in the object store, readable with the object store's permissions and not the file's.
+    - **The question for the maintainer:** whether a test may do that. Options: (1) accept it and say so in the script's header; (2) `scratch_base` adds tracked changes only (`git add -u`), and the cases that need the untracked files out of the changed set say so another way (Case 17 after id:0mznn relies on the scratch index holding them); (3) the cases that use `scratch_base` run in a scratch repository, as the cases from Case 13 on do.
+    - **Not decided here:** it changes what a test is allowed to do to a developer's checkout.
+    - **Promoted (2026-11-16):** from `future.tm.md` to `active.tm.md`, directly after the check-in id:5yrx5, at the maintainer's request; branch `main`.
+    - **Decided (the maintainer, 2026-11-16):** no. A script or test does not copy a developer's untracked files into the object store, and the copies already made are removed. The maintainer asked the reviewing session of id:5yrx5 to make the change, so the decision and its implementation are this one task.
+    - **Chosen: option 2.** `scratch_base` adds tracked changes only (`git add -u`) and removes its scratch index again. Option 3 (scratch repositories for cases 10 to 19) would also keep tracked changes out of the store, but those cases run the checkout's own `scripts/preflight.sh` against the checkout's own files and would each need a copy of the tree.
+    - **Case 17 after the change:** id:0mznn's scratch index no longer holds the untracked files, so the case passes its run an excludes file of its own holding `*` (`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.excludesFile GIT_CONFIG_VALUE_0=...`): `git ls-files --others --exclude-standard` in `scripts/preflight.sh` then lists nothing, and `git diff --name-only` against the base still lists the one changed document. `scripts/preflight.sh` is not edited.
+    - **Accepted gaps, both in the script's comments:** a git older than 2.31 does not read `GIT_CONFIG_COUNT`, and Case 17 then fails beside an untracked file that is not documentation (this host: `git version 2.56.1`). `scratch_base` still writes into the checkout's object store the blobs of uncommitted changes to tracked files, its one-line blob, a tree and a commit no ref names; `git gc` removes them in time.
+    - **Sibling routes:** `rg -n 'git add -A|git add \.|hash-object -w|commit-tree|write-tree|git stash|read-tree|update-index' scripts tools Makefile` names `scratch_base` alone (and three comments); the other tests that commit do so in scratch repositories (`git -C`).
+    - **Checks:**
+      - C1: the selftest in a checkout with an untracked file that is not documentation, nothing excluded.
+      - C2: each part taken out alone.
+      - C3: no copy is made in the checkout: the blob of the checkout's untracked file is absent from the object store after every run.
+      - C4: `make test-changed BASE=HEAD` before the commit, the `git` group and `make preflight-changed`.
+    - **Removed from this checkout's object store (2026-11-16, before the change):** the one blob that was a copy of an untracked file of this checkout, the 13 commits no ref or reflog named whose trees held it (each `preflight-selftest: base differing in ...`) and their 11 trees, 25 loose objects, each checked to be in the output of `git fsck --unreachable` and deleted as a file. Afterwards `git cat-file -e <blob>` fails, `git fsck --no-dangling` prints nothing and exits 0, and no commit that `git fsck --unreachable` lists has a tree with that path. The other dangling objects (older scratch bases without such a file, dropped stashes, commits from before a rebase) were left. The objects were never reachable from a ref, so no push carried them.
+    - **Completion note:**
+      - C1: `sh scripts/test_preflight.sh`: exit 0, 33 `[PASS]` lines, with `[PASS] preflight-selftest: a doc-only change skips preflight-changed` and `[PASS] preflight-selftest: scratch_base takes tracked changes and copies no untracked file into the object store`.
+      - C2: with `git add -A` back in `scratch_base` (the checkout's untracked directory named in `.git/info/exclude` for that run alone): `[FAIL] preflight-selftest: scratch_base wrote an untracked file into the object store`. With the three `GIT_CONFIG_` settings out of Case 17's run: exit 1, 32 `[PASS]` lines, `[FAIL] preflight-selftest: doc-only change should skip preflight-changed (rc=1, ...`. Restored (`cmp` with the committed text).
+      - C3: `git cat-file -e $(git hash-object <the untracked file>)` fails after C1, after C2's second run, after `make test-changed`, and after both `make preflight-changed` runs of C4; after the last, no commit listed by `git fsck --unreachable` has a tree with that path.
+      - C4: `make test-changed BASE=HEAD` before the commit: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.0s)` (a run of everything, which leaves the `git` group out: C1 and the runs below are what ran the script). After the commit, `make preflight-changed PREFLIGHT_BASE=d405854`: exit 0, the checked build `Total: 1277 run, 1277 passed, 0 failed, 0 skipped (109.6s)`, the group `Total: 8 run, 8 passed, 0 failed, 0 skipped (101.3s)` with 33 `[PASS]` lines in `build/tests-git/scenarios/preflight-selftest.log`, and the three `[OK]` lines the check-in id:5yrx5 quotes. `make test` was not run again after the commit: the commit is the tree of the `make test-changed` run above. The first run, `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=d405854`, exited 2 in `reject-diff-selftest`, which this change does not touch: id:072s0. No file under `src/`, `stdlib/`, `tools/` or `rt/` changed, so the fuzz record is not made stale.
+
+- [ ] +testinfra +AI-G @main `REJECT_DIFF_NO_CACHE=1 make preflight-changed` fails in the `git` group: `reject-diff-selftest` inherits the variable id:072s0
+    > **Created:** 2026-11-16
+    > **Branch:** `main`
+    > **Check-in:** reviewed in id:z7rjp.
+    > **Found by:** the check-in id:5yrx5 (id:gc1pd made `make preflight-changed` run the group; the selftest has read the variable since it was written).
+    > **Placed:** after id:n6nsr, as a follow-up of the check-in id:5yrx5.
+
+    - **Now (git:6ea3ce5):** `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=d405854` exits 2 at the `git` step, before the bench step:
+    ```
+    [FAIL] scenario: reject-diff-selftest (exit 1; log: build/tests-git/scenarios/reject-diff-selftest.log) (31527ms)
+           FAIL: reject-diff-selftest: a cold run did not store an entry: fresh (no cache); base front end 1 s
+    Total: 8 run, 7 passed, 1 failed, 0 skipped (36.7s)
+    ```
+    - **Who it reaches:** every author and reviewer of a checker change. `AGENTS.md` (Safety claims and evidence) says the differential run that a completion note cites is made with `REJECT_DIFF_NO_CACHE=1 make preflight-changed`; since id:gc1pd that command cannot pass. The same command without the variable passes (the check-in id:5yrx5 quotes it). A full `make preflight` with the variable has failed the same way since the selftest got its cache cases.
+    - **Cause (read):** `make` exports the variable to `scripts/preflight.sh`, which starts the group, whose `reject-diff-selftest` scenario is `scripts/test_reject_diff.sh`. Its `crun` runs `scripts/check_reject_diff.sh` through `env ... "$@"` and adds `REJECT_DIFF_NO_CACHE=1` only for the one run that wants it, so the inherited value turns the cache off in every other run, and case 6 (`a cold run did not store an entry`) fails first.
+    - **Settled 1:** `scripts/test_reject_diff.sh`, directly after its `fail()` line: `unset REJECT_DIFF_NO_CACHE`, with a comment that says why (a preflight run made with the variable starts this script, and its cases choose the cache for each run themselves). Nothing else changes; `scripts/check_reject_diff.sh` and `scripts/preflight.sh` are not edited. Not tried: the edit was not made at the check-in.
+    - **Checks:**
+      - C1: before: `REJECT_DIFF_NO_CACHE=1 sh scripts/test_reject_diff.sh > build/072s0-before.log 2>&1; echo rc=$?`; quote `rc=1` and the `[FAIL]` line. `sh scripts/test_reject_diff.sh > build/072s0-plain-before.log 2>&1; echo rc=$?`; quote `rc=0` and the last line.
+      - C2: after: both commands of C1 (logs `build/072s0-after.log`, `build/072s0-plain-after.log`); quote `rc=0` and the last line of each, and `diff build/072s0-after.log build/072s0-plain-after.log` (expected: no difference but times; quote what differs).
+      - C3: take the `unset` line out, quote the `[FAIL]` line of C1 again, restore.
+      - C4: the documented command passes: `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=d405854 > build/072s0-preflight.log 2>&1; echo rc=$?`; quote `rc=0`, the group's `Total:` line (expected `8 run, 8 passed`), the checked build's `Total:` line, the three `[OK]` lines of the bench step and `cat build/preflight-timings.tsv`.
+      - C5: `make test-changed BASE=HEAD` before the commit; quote its `Total:` line. If it does not name the `reject-diff-selftest` scenario in its output (a run of everything leaves the group out), say so: C1 to C4 are then what ran the script.
+      - C6: commit on `main`, add `**Awaiting review:**` with C2 to C4, `tm done`. The next task is id:5w8gt; the check-in id:z7rjp reviews both.
+
+- [ ] +docs +AI-G @main The descriptions of `make preflight` and `make preflight-changed` say what each runs, and give no time that is not measured id:5w8gt
+    > **Created:** 2026-11-16
+    > **Branch:** `main`
+    > **Check-in:** reviewed in id:z7rjp.
+    > **Found by:** the check-in id:5yrx5.
+    > **Placed:** after id:072s0, as a follow-up of the check-in id:5yrx5; nothing depends on their order.
+
+    - **Now (git:6ea3ce5):** three places describe the two gates by less than they run, and one gives a time that cannot be right:
+      - `doc/developer_guide.md`, Preflight Gates: `make preflight-changed` is given as `~6 minutes` (measured by id:gc1pd: 379s) and `make preflight`, which runs everything the first does and more, as `~4 minutes`.
+      - `scripts/preflight.sh`, its Usage comment: `full preflight (selfhost + mutation + bench + density + fuzz)` and `fast preflight for changed files (selfhost + mutation --changed + bench)`.
+      - `Makefile`, the `##` help text of the two targets: `Full pre-merge gate: selfhost + mutation + bench thresholds` and `Fast pre-merge gate: selfhost + mutations of changed files`.
+    - **What the script runs (read at git:6ea3ce5, and the step names of `build/preflight-timings.tsv`):** both modes: `mutation` (of the changed files under `--changed`, the full set otherwise) beside `selfhost`, then `calibrate`, `reject-diff` (skipped when no checker differs from the base), `checked`, `git`, `bench`, `figures-record`. The full mode alone then runs `store-grid`, `density` and `fuzz`.
+    - **Settled 1:** `doc/developer_guide.md`: the `make preflight` line loses `(~4 minutes)` and gains, after its last sentence: `It runs everything make preflight-changed runs, with the full mutation set, and then the store grid, the marker density record and the fuzz tools' check; it takes longer than make preflight-changed.` (with the two command names in backticks). The `make preflight-changed` line is not touched.
+    - **Settled 2:** `scripts/preflight.sh`, the two Usage lines name the steps in the order run: `full preflight (selfhost + mutation, calibrate, reject-diff, checked, git group, bench, figures record, store grid, density, fuzz)` and `fast preflight for changed files (selfhost + mutation --changed, calibrate, reject-diff, checked, git group, bench, figures record)`.
+    - **Settled 3:** `Makefile`, the two `##` texts: `Full pre-merge gate: preflight-changed's steps with the full mutation set, plus store grid, density and fuzz` and `Fast pre-merge gate: selfhost, mutations of changed files, checked build, git group, bench thresholds`.
+    - **Checks:**
+      - C1: before: `rg -n '~4 minutes|selfhost \+ mutation' doc/developer_guide.md scripts/preflight.sh Makefile`; quote the lines (expected five).
+      - C2: after: the same command prints nothing; `rg -n 'git group' scripts/preflight.sh Makefile` and `rg -n 'takes longer than' doc/developer_guide.md`; quote the lines. `make help-all 2>&1 | rg 'preflight'`; quote the two lines, each whole on its line.
+      - C3: the step names are the script's: `rg -o 'record_step [a-z-]+' scripts/preflight.sh | sort -u`; quote the output and say which step each word of settled 2 stands for.
+      - C4: `make test-changed BASE=HEAD` before the commit; quote its `Total:` line. `dprint check doc/developer_guide.md` (or the gate that runs it); quote its result.
+      - C5: commit on `main`, add `**Awaiting review:**` with C2 and C3, `tm done`, and stop at the check-in id:z7rjp.
+
+- [ ] +testinfra +review +AI-D @main @checkin Review of the inherited `REJECT_DIFF_NO_CACHE` fix and the preflight descriptions id:z7rjp
+    > **Created:** 2026-11-16
+    > **Branch:** `main`
+    > **Depends:** id:072s0, id:5w8gt
+    > **Placed:** directly after the tasks it reviews.
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` on `main` since git:6ea3ce5; re-run what each **Awaiting review:** bullet names.
+      - id:072s0: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` passes whole, and its differential, when a checker differs from the base, still prints `reject-diff: base verdicts: fresh (no cache)` (the `unset` is in the selftest only: plant a comment change in `src/check_zir.zrl`, run `REJECT_DIFF_NO_CACHE=1 sh scripts/check_reject_diff.sh HEAD`, restore). The other variables a preflight is run with reach the group's scenarios without changing a result: `PREFLIGHT_BASE` and `PREFLIGHT_REJECT_BASE` (both tried at the check-in id:5yrx5), `REJECT_DIFF_CACHE`, `MUTATION_BASE`.
+      - id:5w8gt: each description names the steps `scripts/preflight.sh` runs in that mode, in order, and no other sentence of `AGENTS.md`, `CONTRIBUTING.md` or `doc/developer_guide.md` gives a time for either gate that no run measured.
 
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
