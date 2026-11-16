@@ -677,11 +677,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
         3. `make test-changed` for a change to `scripts/test_preflight.sh` does not run `preflight-selftest` in a checkout with an untracked file that is not documentation: the selection becomes a run of everything, which leaves the group out (the gap id:nsbj8 describes). Since id:gc1pd `make preflight-changed` runs it, so nothing is added for it.
       - **Plan:** id:n6nsr promoted from `future.tm.md` to directly after this task and done by this session, at the maintainer's request of 2026-11-16 (its payload has the decision). Added after it id:072s0 and id:5w8gt (`+AI-G`) and their check-in id:z7rjp. Nothing else moved, re-tagged or re-prioritized. The pull of the `tasks` branch before these edits failed (the remote is not reachable from this machine); nothing was rebased.
 
-- [ ] +testinfra +decision +AI-D @main Decide whether `preflight-selftest` may copy the checkout's untracked files into the object store id:n6nsr
+- [x] +testinfra +decision +AI-D @main Decide whether `preflight-selftest` may copy the checkout's untracked files into the object store id:n6nsr
     > **Created:** 2026-11-16
     > **Branch:** `main`
     > **Found by:** the check-in id:rbs9z, while reading Case 17 of `scripts/test_preflight.sh` for id:0mznn.
     > **Placed:** in `future.tm.md` under Evidence and tooling: unrelated to the batch that check-in reviewed, and not needed by id:0mznn or id:gc1pd.
+    > **Completed:** 2026-11-16 git:6ea3ce5
 
     - **Now (git:d405854):** `scratch_base` in `scripts/test_preflight.sh` runs `git add -A` into a scratch index and `git commit-tree`, in the developer's checkout. Every untracked file that `.gitignore` does not name is therefore written into `.git/objects` as a blob, reachable from a commit no ref names, each time the `preflight-selftest` scenario runs (checked: `git cat-file -e $(git hash-object <an untracked file>)` succeeds after a run). The objects are never pushed and `git gc` removes them once they are old enough, but a file a developer keeps untracked on purpose (a note, a local configuration) now has a copy in the object store, readable with the object store's permissions and not the file's.
     - **The question for the maintainer:** whether a test may do that. Options: (1) accept it and say so in the script's header; (2) `scratch_base` adds tracked changes only (`git add -u`), and the cases that need the untracked files out of the changed set say so another way (Case 17 after id:0mznn relies on the scratch index holding them); (3) the cases that use `scratch_base` run in a scratch repository, as the cases from Case 13 on do.
