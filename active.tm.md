@@ -793,12 +793,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
         3. `AGENTS.md` (Running tests) and the `make preflight-changed` line of `doc/developer_guide.md` leave the checked build and the benchmark thresholds out of what `make preflight-changed` runs, and `AGENTS.md` gives the thresholds as something `make preflight` adds; both steps run in both modes. A description, not a rule: id:ss1f8, which says so.
       - **Plan:** added after this task id:gv740 and id:ss1f8 (`+AI-G`, each with its text settled) and their check-in id:kbv3f. Nothing moved, re-tagged or re-prioritized, and nothing went to `future.tm.md`. id:z0093, the next task after them, is on `provenance` and does not depend on id:kbv3f: the two follow-ups touch no file its series does. The pull of the `tasks` branch before these edits failed (the remote is not reachable from this machine); nothing was rebased.
 
-- [ ] +testinfra +AI-G @main `reject-diff-selftest` fails when another `REJECT_DIFF_` variable is inherited: clear all seven at its start id:gv740
+- [x] +testinfra +AI-G @main `reject-diff-selftest` fails when another `REJECT_DIFF_` variable is inherited: clear all seven at its start id:gv740
     > **Created:** 2026-11-16
     > **Branch:** `main`
     > **Check-in:** reviewed in id:kbv3f.
     > **Found by:** the check-in id:z7rjp, probing the sibling routes of id:072s0.
     > **Placed:** after id:z7rjp, as a follow-up of that check-in.
+    > **Completed:** 2026-11-16 git:3fcdb0b
 
     - **Now (git:1a03f6b):** `scripts/test_reject_diff.sh` clears `REJECT_DIFF_NO_CACHE` at its start (id:072s0) and no other variable that `scripts/check_reject_diff.sh` reads. Two of them change its result when inherited:
     ```
@@ -818,6 +819,16 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: the selftest writes nothing into an inherited cache directory: `ls -A build/gv740/cache` after C2 prints nothing.
       - C6: `make test-changed BASE=HEAD` before the commit; quote its `Total:` line. The group: `TR_WORK=build/tests-git ./scripts/test.sh --quiet --group git > build/gv740/group.log 2>&1; echo rc=$?`; quote `rc=0` and its `Total:` line (expected `8 run, 8 passed`).
       - C7: commit on `main`, add `**Awaiting review:**` with C2 and C6's group run, `tm done`. The next task is id:ss1f8; the check-in id:kbv3f reviews both.
+
+    - **Awaiting review:** re-run C2 (`REJECT_DIFF_CACHE`, `REJECT_DIFF_PROBES_DIR`, all seven `REJECT_DIFF_*` set, and none) and C6 (`TR_WORK=build/tests-git ./scripts/test.sh --quiet --group git`).
+    - **Checks (git:3fcdb0b on `stream/test1`):**
+      - C1: `REJECT_DIFF_CACHE=$PWD/build/gv740/cache sh scripts/test_reject_diff.sh` -> `rc=1`, `[FAIL] reject-diff-selftest: a newly accepted accept-probe blocked (exit 1)`; `REJECT_DIFF_PROBES_DIR=$PWD/build/gv740/nonexistent sh scripts/test_reject_diff.sh` -> `rc=1`, `[FAIL] reject-diff-selftest: a newly accepted compile_reject probe did not block (exit 0)`.
+      - C2: `REJECT_DIFF_CACHE=$PWD/build/gv740/cache sh scripts/test_reject_diff.sh` -> `rc=0`; `REJECT_DIFF_PROBES_DIR=$PWD/build/gv740/nonexistent sh scripts/test_reject_diff.sh` -> `rc=0`; `REJECT_DIFF_NO_CACHE=1 REJECT_DIFF_CACHE=$PWD/build/gv740/cache REJECT_DIFF_PROBES_DIR=/nonexistent REJECT_DIFF_GRID_DIR=/nonexistent REJECT_DIFF_SAMPLE=1 REJECT_DIFF_SEED=7 REJECT_DIFF_MAKE=false sh scripts/test_reject_diff.sh` -> `rc=0`; `sh scripts/test_reject_diff.sh` -> `rc=0`. Last line of all four: `[PASS] reject-diff-selftest: a newly accepted must-refuse probe blocks unless allowed; accepted-by-design and newly refused programs are listed only; the base verdict cache keys on every input, catches a planted stale entry and stores nothing from a timed-out or killed run`.
+      - C3: `rg -o 'REJECT_DIFF_[A-Z_]+' scripts/check_reject_diff.sh | sort -u` -> `REJECT_DIFF_CACHE`, `REJECT_DIFF_GRID_DIR`, `REJECT_DIFF_MAKE`, `REJECT_DIFF_NO_CACHE`, `REJECT_DIFF_PROBES_DIR`, `REJECT_DIFF_SAMPLE`, `REJECT_DIFF_SEED`; all seven are on the `unset` line.
+      - C4: removed the six added names from `unset` and re-ran C1 -> `[FAIL] reject-diff-selftest: a newly accepted accept-probe blocked (exit 1)` and `[FAIL] reject-diff-selftest: a newly accepted compile_reject probe did not block (exit 0)`; restored (`git diff --stat`: `scripts/test_reject_diff.sh | 4 ++--`).
+      - C5: `ls -A build/gv740/cache` after C2 -> empty output.
+      - C6: `make test-changed BASE=HEAD` -> `Total: 21 run, 21 passed, 0 failed, 0 skipped (100.0s)`; `TR_WORK=build/tests-git ./scripts/test.sh --quiet --group git` -> `rc=0`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (100.0s)`.
+      - C7: committed on `stream/test1` (`3fcdb0b`), added `**Awaiting review:**`, marked done with `tm done`.
 
 - [x] +docs +AI-G @main The descriptions of the two preflight gates name the figures check, the checked build and the benchmark thresholds where each runs id:ss1f8
     > **Created:** 2026-11-16
