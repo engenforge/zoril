@@ -484,12 +484,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test-changed BASE=HEAD` (uncommitted): `Total: 22 run, 22 passed, 0 failed, 0 skipped (9.4s)`. `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.7s)`.
       - C7: committed on `main` as git:7f78a3f.
 
-- [ ] +bench +testinfra +AI-G @main `records_header` fails when it cannot put the header in place, instead of leaving a history file without one id:a05hn
+- [x] +bench +testinfra +AI-G @main `records_header` fails when it cannot put the header in place, instead of leaving a history file without one id:a05hn
     > **Created:** 2026-11-16
     > **Branch:** `main`
     > **Check-in:** reviewed in id:rbs9z.
     > **Found by:** the check-in id:f5mbr, in the design it settled for id:at2k3 (the code is as that task asked).
     > **Placed:** after id:27bb4, as a follow-up of id:f5mbr; nothing depends on their order.
+    > **Completed:** 2026-11-16 git:d405854
 
     - **Now (git:c41c0f5):** `records_header` (`scripts/lib/records.sh`) puts the header of a new history file in place with `ln "$_rh_tmp" "$_rh_file" 2>/dev/null || true`. Where the link fails for a reason other than "the file exists" (a filesystem without hard links), it returns 0 with no file, the caller appends its rows, and the file has rows and no header from then on: the next call finds content and returns. Every reader skips the first line as the header (`NR > 1`), so the first row is never read.
     - **Reproduced (2026-11-16):** with a `ln` first on `PATH` that prints an error and exits 1:
@@ -518,6 +519,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `rg -n 'records_header "' scripts/ --glob '!test_*'`; quote the five lines, each ending in `|| exit 1` or `|| return 1`.
       - C6: `make test-changed BASE=HEAD` before the commit, and `make test`; quote each `Total:` line. A real `sh scripts/bench_threshold_check.sh > build/a05hn-run.log 2>&1`, made after the commit so its rows carry a clean commit: quote its three `[OK]` lines, `git -C bench/records log --oneline | head -3` and `git -C bench/records status --short` (empty).
       - C7: commit on `main`, add `**Awaiting review:**` with C2 to C6, `tm done`, and stop at the check-in id:rbs9z.
+    - **Awaiting review:** `sh scripts/test_bench_threshold_gate.sh`, `sh scripts/test_bench_records.sh`, `rg -n 'records_header "' scripts/ --glob '!test_*'`, `make test`, `sh scripts/bench_threshold_check.sh`.
+    - **Completion note:**
+      - C1: before: reproducer printed `records_header rc=0`, `1<tab>2`, `x.tsv`. `sh scripts/test_bench_threshold_gate.sh | grep -c '^\[PASS\]'` printed `25`.
+      - C2: after: reproducer printed `[FAIL] bench records: cannot create /tmp/tmp.HOEFbYAiP2/h/x.tsv with its header (linking a temporary file into place failed)`, `records_header rc=1`, `1<tab>2`, `x.tsv`. `sh scripts/test_bench_threshold_gate.sh` printed `[PASS] H1: records_header creates new file with header and no temp files`, `[PASS] H2: records_header preserves existing non-empty file`, `[PASS] H3: records_header does not truncate concurrent row`, `[PASS] H4: records_header fails on link error and leaves no file`, `[PASS] G1: bench-threshold-gate runs without calling git`, count `26`, last line `All bench threshold gate tests passed.`. `sh scripts/test_bench_records.sh` printed 11 `[PASS]` lines and last line `All bench records tests passed.`.
+      - C3: with the three added lines of settled 1 removed alone, `sh scripts/test_bench_threshold_gate.sh` printed `[FAIL] H4: rc=0 ls='' err=''`. Restored.
+      - C4: before: `bench_cross_lang.sh --force --check-thresholds-only` with failing `ln` exited `rc=0` and wrote `2026-11-16-03-35-34<tab>abc1234<tab>0.1.0-alpha-183-gc41c0f5-dirty<tab>aaaaaaaaaaaa<tab>Linux 7.3.4-arch1-1<tab>x86_64<tab>AMD Ryzen 7 3700X 8-Core Processor<tab>16<tab>31<tab>powersave<tab>ok<tab>baseline<tab>baseline<tab>10000<tab>100<tab>3.0<tab>10.0<tab>2.0` as line 1 of `h.tsv`. After: printed `[FAIL] bench records: cannot create /tmp/tmp.dLA1nyA4nM/h.tsv with its header (linking a temporary file into place failed)`, `rc=1`, and `ls -A` showed `bin  m.tsv` (no `h.tsv`).
+      - C5: `rg -n 'records_header "' scripts/ --glob '!test_*'` showed all five lines ending in `|| exit 1` or `|| return 1` (`scripts/perf_gap.sh:220`, `scripts/bench_cross_lang.sh:577`, `scripts/bench_cross_lang.sh:1384`, `scripts/record_marker_density.sh:62`, `scripts/record_figures.sh:75`).
+      - C6: `make test-changed BASE=HEAD` (uncommitted): `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.1s)`. `make test` (after commit): `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.2s)`. `sh scripts/bench_threshold_check.sh > build/a05hn-run.log 2>&1` printed `[OK]  clean_throughput_loc_s     10248 (baseline 10356, tol 15%)`, `[OK]  incremental_rebuild_ms     22 (baseline 22, tol 15%)`, `[OK]  runtime_geomean_vs_gcc_o2  2.267 (baseline 2.385, tol 15%)`; `git -C bench/records log --oneline | head -3` showed `3434b32 a52c24a80e04 d405854: gate pass`, `e6fe04e a52c24a80e04 d405854: runtime`, `b4d8126 a52c24a80e04 d405854: speed`; `git -C bench/records status --short` was empty.
+      - C7: committed on `main` as git:d405854; stopping at check-in id:rbs9z.
 
 - [ ] +testinfra +review +AI-D @main @checkin Review of the clean-tree exception for `bench/records/` and the `records_header` failure id:rbs9z
     > **Created:** 2026-11-16
