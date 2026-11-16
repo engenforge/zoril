@@ -574,7 +574,7 @@ measure_runtime_pair() {
 append_gate_history_row() {
     local kind="$1" verdict="$2" clean_tp="$3" inc_ms="$4" ratio="$5" rss="$6" geomean="${7:-}"
     local ts="${RUN_TS:-$(date +%Y-%m-%d-%H-%M-%S)}"
-    records_header "$GATE_HISTORY" "$(printf 'date\tcommit\tzoril_version\thost_id\thost_os\thost_arch\tcpu_model\tcores\tram_gb\tgovernor\tstatus\tkind\tverdict\tclean_throughput_loc_s\tincremental_rebuild_ms\truntime_ratio_vs_gcc_o2\tpeak_rss_mb_per_kloc\truntime_geomean_vs_gcc_o2')"
+    records_header "$GATE_HISTORY" "$(printf 'date\tcommit\tzoril_version\thost_id\thost_os\thost_arch\tcpu_model\tcores\tram_gb\tgovernor\tstatus\tkind\tverdict\tclean_throughput_loc_s\tincremental_rebuild_ms\truntime_ratio_vs_gcc_o2\tpeak_rss_mb_per_kloc\truntime_geomean_vs_gcc_o2')" || return 1
     if [ -n "$(tail -c 1 "$GATE_HISTORY" 2>/dev/null)" ]; then
         printf '\n' >> "$GATE_HISTORY"
     fi
@@ -624,7 +624,7 @@ check_thresholds_gate() {
         fi
         printf '\nnew host %s (%s, %s cores, %s GB, %s %s): no baseline recorded for it; this run becomes its baseline\n' \
             "$HOST_ID" "$HOST_CPU" "$HOST_CORES" "$HOST_RAM_GB" "$HOST_SYS" "$HOST_ARCH"
-        append_gate_history_row "baseline" "baseline" "$m_tp" "$m_inc" "$m_rat" "$m_rss" "$m_geo"
+        append_gate_history_row "baseline" "baseline" "$m_tp" "$m_inc" "$m_rat" "$m_rss" "$m_geo" || return 1
         records_commit "$GATE_HISTORY" "$HOST_ID $ZORIL_COMMIT: gate baseline" || return 1
         return 0
     fi
@@ -683,7 +683,7 @@ EOF
 
     local verdict="pass"
     [ "$gate_fail" -ne 0 ] && verdict="fail"
-    append_gate_history_row "run" "$verdict" "$m_tp" "$m_inc" "$m_rat" "$m_rss" "$m_geo"
+    append_gate_history_row "run" "$verdict" "$m_tp" "$m_inc" "$m_rat" "$m_rss" "$m_geo" || return 1
     records_commit "$GATE_HISTORY" "$HOST_ID $ZORIL_COMMIT: gate $verdict" || return 1
 
     if [ "$gate_fail" -ne 0 ]; then
@@ -1381,7 +1381,7 @@ else
     cp "$DATA_FIB" "$HIST_FIB"; cp "$DATA_ARR" "$HIST_ARR"; cp "$DATA_MF" "$HIST_MF"
 fi
 if [ "${RECORDS_SKIP:-0}" -eq 0 ]; then
-records_header "$SPEED_HISTORY" "$(printf 'date\tcommit\tzoril_version\tzig_version\trust_version\thare_version\tbinary\ttoolchain\tworkload\telapsed_ms\tpeak_rss_kb\tstatus\thost_os\tcpu_model\tcores\tram\tgovernor\tload_1m_start\tload_1m_end\thost_id')"
+records_header "$SPEED_HISTORY" "$(printf 'date\tcommit\tzoril_version\tzig_version\trust_version\thare_version\tbinary\ttoolchain\tworkload\telapsed_ms\tpeak_rss_kb\tstatus\thost_os\tcpu_model\tcores\tram\tgovernor\tload_1m_start\tload_1m_end\thost_id')" || exit 1
 
 while IFS="$(printf '\t')" read -r label tc c_ms c_rss r_ms bin_sz; do
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tfib(38)x3\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -1499,7 +1499,7 @@ if [ "$RECORD_BASELINE" -eq 1 ]; then
         exit 1
     fi
     if [ "${RECORDS_SKIP:-0}" -eq 0 ]; then
-        append_gate_history_row "baseline" "baseline" "$tp_loc_z" "$c_ms_z_edit" "$z_runtime_ratio" "$z_rss_mb_per_kloc" "$z_runtime_geomean"
+        append_gate_history_row "baseline" "baseline" "$tp_loc_z" "$c_ms_z_edit" "$z_runtime_ratio" "$z_rss_mb_per_kloc" "$z_runtime_geomean" || exit 1
         records_commit "$GATE_HISTORY" "$HOST_ID $ZORIL_COMMIT: gate baseline" || exit 1
         printf '\nRecorded baseline row to %s (host %s)\n' "$GATE_HISTORY" "$HOST_ID"
     fi

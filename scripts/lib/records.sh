@@ -88,7 +88,9 @@ records_commit() {
 
 # Write a header line to a history file only if it does not exist or is empty.
 # Linked into place rather than written with > because a truncating write deletes
-# a row appended by a concurrent run since the existence test.
+# a row appended by a concurrent run since the existence test. The link stays
+# the only way the header is put in place, so a failing link fails the call
+# rather than falling back to a truncating write.
 # Accepted gap: an existing empty file is replaced, which two runs can still race
 # on; nothing in the tree creates an empty history file.
 records_header() {
@@ -103,5 +105,8 @@ records_header() {
         printf '%s\n' "$2" > "$_rh_tmp"
         ln "$_rh_tmp" "$_rh_file" 2>/dev/null || true
         rm -f "$_rh_tmp"
+        [ ! -e "$_rh_file" ] || return 0
+        printf '[FAIL] bench records: cannot create %s with its header (linking a temporary file into place failed)\n' "$_rh_file" >&2
+        return 1
     fi
 }

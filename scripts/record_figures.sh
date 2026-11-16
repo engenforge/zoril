@@ -72,7 +72,7 @@ runtime_trap=$(val_of "$probes_out" 'runtime_trap')
 runtime_fault=$(val_of "$probes_out" 'runtime_fault')
 known_gap=$(val_of "$probes_out" 'known_gap')
 
-records_header "$HISTORY" "$(printf 'date\tcommit\tzoril_version\tstdlib_modules\tstdlib_lines\tstdlib_unsafe_blocks\tstdlib_unsafe_modules\tstdlib_unsafe_fns\tstdlib_public_unsafe_fns\tcompiler_modules\tcompiler_lines\tcompiler_unsafe_blocks\tsrc_density\tstdlib_density\tsrc_unsafe_lines\tsrc_total_lines\tstdlib_unsafe_lines\tstdlib_total_lines\tprobes\tcompile_reject\taccept\truntime_trap\truntime_fault\tknown_gap')"
+records_header "$HISTORY" "$(printf 'date\tcommit\tzoril_version\tstdlib_modules\tstdlib_lines\tstdlib_unsafe_blocks\tstdlib_unsafe_modules\tstdlib_unsafe_fns\tstdlib_public_unsafe_fns\tcompiler_modules\tcompiler_lines\tcompiler_unsafe_blocks\tsrc_density\tstdlib_density\tsrc_unsafe_lines\tsrc_total_lines\tstdlib_unsafe_lines\tstdlib_total_lines\tprobes\tcompile_reject\taccept\truntime_trap\truntime_fault\tknown_gap')" || exit 1
 
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$DATE" "$COMMIT" "$ZORIL_VER" \

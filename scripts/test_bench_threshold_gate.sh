@@ -414,6 +414,20 @@ else
     errors=$((errors + 1))
 fi
 
+# H4: records_header fails when linking fails for another reason and leaves no file
+mkdir -p "$tmp/h4" "$tmp/h4_bin"
+printf '#!/bin/sh\nexit 1\n' > "$tmp/h4_bin/ln"
+chmod +x "$tmp/h4_bin/ln"
+_h4_rc=0
+_h4_err=$( ( PATH="$tmp/h4_bin:$PATH"; . "$(pwd)/scripts/lib/records.sh"; records_header "$tmp/h4/x.tsv" "a$(printf '\t')b" ) 2>&1 ) || _h4_rc=$?
+_h4_ls=$(ls -A "$tmp/h4" 2>/dev/null)
+if [ "$_h4_rc" -eq 1 ] && printf '%s' "$_h4_err" | grep -q '\[FAIL\] bench records: cannot create' && [ -z "$_h4_ls" ]; then
+    echo "[PASS] H4: records_header fails on link error and leaves no file"
+else
+    echo "[FAIL] H4: rc=$_h4_rc ls='$_h4_ls' err='$_h4_err'"
+    errors=$((errors + 1))
+fi
+
 # T6: a 17-field baseline prints [NEW] and passes
 write_header "$tmp/bench/gate_t6.tsv"
 append_row "$tmp/bench/gate_t6.tsv" "2026-11-01-00-00-00" "aaaaaaaaaaaa" "Linux 6.1.0" "performance" "baseline" "baseline" "10000" "100" "3.000" "10.0"
