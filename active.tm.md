@@ -438,12 +438,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
         3. The moved cases are run by less than the task text said: `make preflight-changed` does not run the `git` group, and a change to `scripts/lib/records.sh` or `scripts/record_figures.sh` selects `--gates`, which leaves the group out. Which command should run them is the maintainer's: id:nsbj8, with the options and a recommendation.
       - **Plan:** added id:27bb4 and id:a05hn (`+AI-G`), their check-in id:rbs9z, and id:nsbj8 (`+AI-D`, waiting for the maintainer), in that order directly after this task. Nothing moved, re-tagged or re-prioritized. The pull of the `tasks` branch before these edits failed (the remote is not reachable from this machine); nothing was rebased.
 
-- [ ] +testinfra +AI-G @main `check_clean_tree.sh` counts the mounted `bench/records/` work tree as stray build output, which fails the `git` group id:27bb4
+- [x] +testinfra +AI-G @main `check_clean_tree.sh` counts the mounted `bench/records/` work tree as stray build output, which fails the `git` group id:27bb4
     > **Created:** 2026-11-16
     > **Branch:** `main`
     > **Check-in:** reviewed in id:rbs9z.
     > **Found by:** the check-in id:f5mbr (id:sx4a3's C5 quotes the failure; the cause dates from git:8203d21, which moved the history files to the `records` work tree).
     > **Placed:** directly after id:f5mbr, as its follow-up.
+    > **Completed:** 2026-11-16 git:7f78a3f
 
     - **Now (git:c41c0f5):** in a checkout with the `records` branch mounted at `bench/records/`, as `AGENTS.md` requires, `sh scripts/check_clean_tree.sh` exits 1:
     ```
@@ -473,6 +474,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `./scripts/test.sh --quiet --group git > build/27bb4-git-group.log 2>&1; echo rc=$?`; quote the `Total:` line (expected `8 run, 8 passed`). If another scenario of the group fails, record its failure verbatim in this task and stop: that is another finding.
       - C6: `make test-changed BASE=HEAD` before the commit, and `make test`; quote each `Total:` line.
       - C7: commit on `main`, add `**Awaiting review:**` with C2 to C5, `tm done`. The next task is id:a05hn; the check-in id:rbs9z reviews both.
+    - **Awaiting review:** `sh scripts/check_clean_tree.sh`, `sh scripts/check_clean_tree.sh --selftest`, `touch bench/stray.o; sh scripts/check_clean_tree.sh; echo rc=$?; rm bench/stray.o`, `./scripts/test.sh --quiet --group git`.
+    - **Completion note:**
+      - C1: before: `sh scripts/check_clean_tree.sh; echo rc=$?` printed `[FAIL] clean-tree: found stray build output outside build/:` and `rc=1`. `sh scripts/check_clean_tree.sh --selftest` last line: `[PASS] clean-tree: selftest passed`.
+      - C2: after: `sh scripts/check_clean_tree.sh; echo rc=$?` printed `[PASS] clean-tree: repository root and tracked source directories are clean of build artifacts` and `rc=0`. `sh scripts/check_clean_tree.sh --selftest` last line: `[PASS] clean-tree: selftest passed` (selftest tracks `bench/README.md` in `$tmp/repo` so git reports `!! bench/records/` rather than collapsing `bench/`).
+      - C3: with `bench/records/*|bench/records) continue ;;` removed, `sh scripts/check_clean_tree.sh --selftest` printed `[FAIL] selftest: an ignored bench/records/ work tree was flagged as stray`. Restored.
+      - C4: `touch bench/stray.o; sh scripts/check_clean_tree.sh; echo rc=$?; rm bench/stray.o` printed `       source: bench/stray.o` and `rc=1`.
+      - C5: `./scripts/test.sh --quiet --group git > build/27bb4-git-group.log 2>&1; echo rc=$?` exited `rc=0` with `Total: 8 run, 8 passed, 0 failed, 0 skipped (102.0s)`.
+      - C6: `make test-changed BASE=HEAD` (uncommitted): `Total: 22 run, 22 passed, 0 failed, 0 skipped (9.4s)`. `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.7s)`.
+      - C7: committed on `main` as git:7f78a3f.
 
 - [ ] +bench +testinfra +AI-G @main `records_header` fails when it cannot put the header in place, instead of leaving a history file without one id:a05hn
     > **Created:** 2026-11-16
