@@ -529,16 +529,31 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test-changed BASE=HEAD` (uncommitted): `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.1s)`. `make test` (after commit): `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.2s)`. `sh scripts/bench_threshold_check.sh > build/a05hn-run.log 2>&1` printed `[OK]  clean_throughput_loc_s     10248 (baseline 10356, tol 15%)`, `[OK]  incremental_rebuild_ms     22 (baseline 22, tol 15%)`, `[OK]  runtime_geomean_vs_gcc_o2  2.267 (baseline 2.385, tol 15%)`; `git -C bench/records log --oneline | head -3` showed `3434b32 a52c24a80e04 d405854: gate pass`, `e6fe04e a52c24a80e04 d405854: runtime`, `b4d8126 a52c24a80e04 d405854: speed`; `git -C bench/records status --short` was empty.
       - C7: committed on `main` as git:d405854; stopping at check-in id:rbs9z.
 
-- [ ] +testinfra +review +AI-D @main @checkin Review of the clean-tree exception for `bench/records/` and the `records_header` failure id:rbs9z
+- [x] +testinfra +review +AI-D @main @checkin Review of the clean-tree exception for `bench/records/` and the `records_header` failure id:rbs9z
     > **Created:** 2026-11-16
     > **Branch:** `main`
     > **Depends:** id:27bb4, id:a05hn
     > **Placed:** directly after the tasks it reviews.
+    > **Completed:** 2026-11-16 git:d405854
 
     - **Checks:**
       - Re-read the queue and `git log -p` on `main` since git:c41c0f5; re-run what each **Awaiting review:** bullet names.
       - id:27bb4: the exception is the mount and nothing wider: plant a stray under `bench/` beside it, one in a `bench/records` of a nested directory (`tests/bench/records/x.o`), and an ignored file in `doc/tasks/`; the first two fail, the third passes as before. `./scripts/test.sh --quiet --group git` passes whole.
       - id:a05hn: with the failing `ln`, each of the five callers stops with the `[FAIL]` line and writes no row (`perf_gap.sh --record-run` with the stubs of T2, `record_figures.sh` with those of F1, `record_marker_density.sh` with `HISTORY` under `build/`); with the real `ln`, id:at2k3's reproducer still prints `bad trials: 0 of 100`, and H1 to H4 reach no git (G1).
+    - **Review (2026-11-16), git:d405854, the two commits since git:c41c0f5 (git:7f78a3f for id:27bb4, git:d405854 for id:a05hn):**
+      - **Awaiting review, re-run (all after the last commit; logs under `build/rbs9z/`):** `sh scripts/check_clean_tree.sh`: `[PASS] clean-tree: repository root and tracked source directories are clean of build artifacts`, exit 0. `sh scripts/check_clean_tree.sh --selftest`: last line `[PASS] clean-tree: selftest passed`. `touch bench/stray.o; sh scripts/check_clean_tree.sh; echo rc=$?; rm bench/stray.o`: `source: bench/stray.o`, `rc=1`. `sh scripts/test_bench_threshold_gate.sh`: exit 0, 26 `[PASS]` lines, with those of H1 to H4 and `[PASS] G1: bench-threshold-gate runs without calling git`, last line `All bench threshold gate tests passed.`. `sh scripts/test_bench_records.sh`: exit 0, 11 `[PASS]` lines, last line `All bench records tests passed.`. `rg -n 'records_header "' scripts/ --glob '!test_*'`: the five lines of id:a05hn's C5, each ending in `|| exit 1` or `|| return 1`; no other script writes a history header (`rg "printf 'date\\t" scripts --glob '!test_*'` prints the same five). `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (123.2s)`. `sh scripts/bench_threshold_check.sh`: exit 0, `[OK]  clean_throughput_loc_s     10393 (baseline 10356, tol 15%)`, `[OK]  incremental_rebuild_ms     21 (baseline 22, tol 15%)`, `[OK]  runtime_geomean_vs_gcc_o2  2.446 (baseline 2.385, tol 15%)`; `git -C bench/records log --oneline | head -3`: `648f7f7 a52c24a80e04 d405854: gate pass`, `c247af6 a52c24a80e04 d405854: runtime`, `5c5758f a52c24a80e04 d405854: speed`; `git -C bench/records status --short` empty, no `.hdr.` file in the directory.
+      - **`./scripts/test.sh --quiet --group git` did not pass whole here:** `[FAIL] scenario: preflight-selftest (exit 1; log: build/tests/scenarios/preflight-selftest.log)`, `Total: 8 run, 7 passed, 1 failed, 0 skipped (101.3s)`; `clean-tree` and `bench-records` passed. The failure is Case 17 of `scripts/test_preflight.sh`, and its cause is an untracked file in this checkout that is not documentation, not either commit of the batch: with that file's directory named in `.git/info/exclude` (taken out again afterwards) `sh scripts/test_preflight.sh` exits 0 with 30 `[PASS]` lines. id:27bb4's C5 (`8 run, 8 passed`) was made in a checkout without such a file. Finding 1.
+      - **id:27bb4, the exception is the mount and nothing wider:** planted and removed one at a time, each followed by `sh scripts/check_clean_tree.sh; echo rc=$?`: `bench/stray.o` gives `source: bench/stray.o`, `rc=1`; `bench/records.o` gives `source: bench/records.o`, `rc=1`; `tests/bench/records/x.o` (`git status --ignored` prints `!! tests/bench/`) gives `source: tests/bench/records/x.o`, `rc=1`; `doc/tasks/x.o` gives `[PASS]`, `rc=0`, as before the change. A file inside the mount (`bench/records/x.o`) passes: that is the exception as settled, the work tree has its own status. `check_nongit_dir` (a source tarball) needed no twin: it looks only for `*.o`, `*.s`, `*.ssa` and `a.out`, and the history files are none of those.
+      - **id:27bb4, outside the settled text:** the selftest commits a `bench/README.md` in its scratch repository so that git prints `!! bench/records/` and not a collapsed `!! bench/`; the note says so. Accepted: without a tracked file in `bench/` the case would test the expansion of a collapsed directory, not the exception.
+      - **id:a05hn, every caller stops with a failing `ln` first on `PATH`** (an `ln` that exits 1): `perf_gap.sh -n 1 --record-run` with the stubs of T2: exit 1, `[FAIL] bench records: cannot create .../t2/out/runtime_history.tsv with its header (linking a temporary file into place failed)`, no `runtime_history.tsv`. `record_figures.sh` with the stubs of F1: exit 1, the same line for `figures_history.tsv`, `bench/records` holds `.git` and `README.md` only and still one commit. `HISTORY=build/rbs9z/md.tsv sh scripts/record_marker_density.sh`: exit 1, the same line, no file. `bench_cross_lang.sh --force --check-thresholds-only` (id:a05hn's C4): exit 1, the same line after `new host aaaaaaaaaaaa ...`, no `h.tsv`. `SPEED_HISTORY=build/rbs9z/speed.tsv GATE_HISTORY=... RUNTIME_HISTORY=... sh scripts/bench_cross_lang.sh --check-thresholds` (the fifth site, which the task's checks did not run): exit 1, the same line for `speed.tsv` as the last line of output, none of the three files made, and the head of `bench/records` unchanged. The two harnesses for T2 and F1 are the scenario scripts up to the case's own run, with the failing `ln` put on `PATH` for that run (`build/rbs9z/pg.sh`, `build/rbs9z/fig.sh`).
+      - **id:a05hn, the guard taken out:** on a copy of `scripts/lib/records.sh` without its three added lines, H4's call returns 0 with no message and no file (`rc=0 ls='' err=''`), which is what id:a05hn's C3 quotes.
+      - **id:a05hn, with the real `ln`:** id:at2k3's reproducer printed `bad trials: 0 of 100` and left only its two files; G1 above.
+      - **Sibling routes read:** the arm for an existing empty file ends in `mv -f`, whose status is the function's, so a failing `mv` now stops the callers too. A temporary file that cannot be written, or a directory that cannot be made, ends in the same `[FAIL]` line (the link then fails and no file exists); the message says the link failed, which is then not the first cause, but it names the file. Accepted.
+      - **Observation, accepted:** when `records_header` fails, `perf_gap.sh` leaves `runtime_rows.tmp` in its output directory (under `build/`); the next run truncates it (`: > "$rows_file"`), and a failing `records_commit` on the line after left it the same way before this change.
+      - **Findings:**
+        1. `preflight-selftest` Case 17 fails in a checkout that holds an untracked, not ignored file which is not documentation, so the `git` group fails there. Not this batch's defect. It blocks id:gc1pd, which makes `make preflight-changed` run the group: id:0mznn, with the fix settled and tried.
+        2. `scratch_base` in the same script copies the checkout's untracked files into `.git/objects` on every run. Whether a test may do that is the maintainer's: id:n6nsr in `future.tm.md`.
+      - **Plan:** added id:0mznn (`+AI-G`) before id:gc1pd, which now depends on it; the check-in id:5yrx5 now depends on both and has a check for it. Added id:n6nsr (`+AI-D`, a decision for the maintainer) to `future.tm.md` under Evidence and tooling. Nothing moved, re-tagged or re-prioritized. The pull of the `tasks` branch before these edits failed (the remote is not reachable from this machine); nothing was rebased.
 
 - [x] +testinfra +decision +AI-D @main Decide which command runs the `git` group scenarios for a change to a file they test id:nsbj8
     > **Created:** 2026-11-16
@@ -559,11 +574,42 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Decided (the maintainer, 2026-11-16):** option 1. `make preflight-changed` runs the whole `git` group, as `make preflight` does, and `AGENTS.md` says so.
     - **Completion note:** a decision; no code changed and no check ran for it (git:c41c0f5 is the tree it was made on). The edit, its tests and the two document sentences are settled in id:gc1pd (`+AI-G`, depends on id:27bb4), reviewed in the check-in id:5yrx5; both are placed directly after this task.
 
+- [ ] +testinfra +AI-G @main `preflight-selftest` fails its doc-only case when the checkout holds an untracked file that is not documentation id:0mznn
+    > **Created:** 2026-11-16
+    > **Branch:** `main`
+    > **Check-in:** reviewed in id:5yrx5.
+    > **Found by:** the check-in id:rbs9z (the case dates from before this batch; neither id:27bb4 nor id:a05hn touched it).
+    > **Placed:** before id:gc1pd, which it blocks: id:gc1pd makes `make preflight-changed` run the `git` group, so this failure would then stop every `make preflight-changed` in such a checkout.
+
+    - **Now (git:d405854):** in a checkout that holds an untracked file which `.gitignore` does not name and which is not documentation, `./scripts/test.sh --quiet --group git` fails: `[FAIL] scenario: preflight-selftest (exit 1; ...)`, `Total: 8 run, 7 passed, 1 failed, 0 skipped (101.3s)`. The scenario's log:
+    ```
+    [FAIL] preflight-selftest: doc-only change should skip preflight-changed (rc=1, out=preflight-changed: base 070842e... (PREFLIGHT_BASE=070842e...)
+    stub: mutation failed
+
+    stub: selfhost failed
+    preflight-changed: selfhost-check exit 42, mutation-check exit 17 (log: /tmp/tmp.yI8CrodzL6/preflight_scratch.log))
+    ```
+    - **Who it reaches:** any contributor whose checkout has such a file when the group runs (a new script not yet added, a directory a tool leaves at the top of the checkout: `scripts/check_clean_tree.sh` exempts several such directories, `.gitignore` names none of them). Today that is a full `make preflight`, and a `make test-changed` for a change to `scripts/test_preflight.sh` (its tier row names the scenario). After id:gc1pd it is every `make preflight-changed`.
+    - **Cause (reproduced):** Case 17 of `scripts/test_preflight.sh` runs the real `./scripts/preflight.sh --changed` in the checkout, against a base that `scratch_base` builds from the working tree plus one changed document. `scripts/preflight.sh` takes the changed files from `git diff --name-only --no-renames "$PF_BASE"` and `git ls-files --others --exclude-standard`. `scratch_base` puts the untracked files into its base (`git add -A` into a scratch index), so the diff does not list them, but `git ls-files --others` reads the checkout's own index and still does; `sh scripts/select_test_tier.sh --flags` then prints `compiled` in place of `doc`, and nothing is skipped. With the untracked directory named in `.git/info/exclude` (tried and taken out again) `sh scripts/test_preflight.sh` exits 0 with 30 `[PASS]` lines.
+    - **`scripts/preflight.sh` is right and does not change:** an untracked file is part of a change, and a real `make preflight-changed` must not skip for it. The defect is the test's: its result depends on what else is in the developer's checkout.
+    - **Settled 1:** `scratch_base` keeps its scratch index: the `rm -f "$_idx"` after `git write-tree` goes (the one at its start stays, and `$tmp` is removed on exit). Case 17 passes that index to the run it makes: `GIT_INDEX_FILE="$tmp/scratch_base_idx"` beside `PREFLIGHT_BASE="$doc_base"` on the `./scripts/preflight.sh --changed` line, with a comment above the case that says why (the scratch index holds every file of the working tree, so the run sees the one changed document and not what else the checkout holds). No other case gains the variable: only Case 17 expects the doc-only skip, and the skip leaves `scripts/preflight.sh` before it runs anything.
+    - **Settled 1, tried (2026-11-16, by hand with the commands of `scratch_base` and three failing stubs):** with `GIT_INDEX_FILE` set to the scratch index, `./scripts/preflight.sh --changed` printed `[SKIP] preflight-changed: only documentation changed since 02ed7a3...` in this checkout, where without it Case 17 fails as above; the changed set it saw was the one line `doc/tasks/active.tm.md`.
+    - **Accepted gap:** a file created in the checkout between `scratch_base` and the run is still seen. Nothing in the script creates one.
+    - **Checks:**
+      - C1: before, with a planted file: `touch scripts/zz_untracked_probe.sh; sh scripts/test_preflight.sh > build/0mznn-before.log 2>&1; echo rc=$?; rm scripts/zz_untracked_probe.sh`; quote `rc=1`, the first line of the `[FAIL]` of Case 17 and the count of `[PASS]` lines (expected 29).
+      - C2: after, the same command with `build/0mznn-after.log`; quote `rc=0`, `[PASS] preflight-selftest: a doc-only change skips preflight-changed`, the count (expected 30) and the last line. Then once more without the planted file; quote `rc` and the count (expected 30).
+      - C3: take out alone, with the planted file, quote Case 17's `[FAIL]` line, restore: the `GIT_INDEX_FILE=` assignment of settled 1.
+      - C4: the checkout's own index is untouched: `git status --short > build/0mznn-st-before.txt` before C2 and `git status --short | diff build/0mznn-st-before.txt -` after it prints nothing, and `git diff --cached --quiet; echo rc=$?` prints `rc=0` (with the edit to `scripts/test_preflight.sh` not staged).
+      - C5: `./scripts/test.sh --quiet --group git > build/0mznn-git-group.log 2>&1; echo rc=$?`, run with the planted file of C1 in place and removed afterwards; quote the `Total:` line (expected `8 run, 8 passed`). If another scenario of the group fails with the planted file, record its failure verbatim in this task and stop: that is another finding.
+      - C6: `make test-changed BASE=HEAD` before the commit, and `make test`; quote each `Total:` line.
+      - C7: commit on `main`, add `**Awaiting review:**` with C2 to C5, `tm done`. The next task is id:gc1pd; the check-in id:5yrx5 reviews both.
+
 - [ ] +testinfra +AI-G @main `make preflight-changed` runs the `git` group, as `make preflight` does id:gc1pd
     > **Created:** 2026-11-16
     > **Branch:** `main`
-    > **Depends:** id:27bb4
+    > **Depends:** id:27bb4, id:0mznn
     > **Depends note:** the group's `clean-tree` scenario fails in a checkout with `bench/records/` mounted until id:27bb4, and this task makes that failure stop every `make preflight-changed`.
+    > **Depends note (id:0mznn, added by the check-in id:rbs9z):** the group's `preflight-selftest` scenario fails in a checkout that holds an untracked file which is not documentation until id:0mznn, and C2 of this task expects `8 run, 8 passed`.
     > **Check-in:** reviewed in id:5yrx5.
     > **Decided by:** the maintainer, 2026-11-16, in id:nsbj8 (its option 1).
     > **Placed:** directly after id:nsbj8, as its follow-up.
@@ -584,11 +630,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 - [ ] +testinfra +review +AI-D @main @checkin Review of the `git` group in `make preflight-changed` id:5yrx5
     > **Created:** 2026-11-16
     > **Branch:** `main`
-    > **Depends:** id:gc1pd
-    > **Placed:** directly after the task it reviews.
+    > **Depends:** id:0mznn, id:gc1pd
+    > **Placed:** directly after the tasks it reviews (id:0mznn was added to them by the check-in id:rbs9z).
 
     - **Checks:**
       - Re-read the queue and `git log -p` on `main` since id:rbs9z's commit; re-run what the **Awaiting review:** bullet names.
+      - id:0mznn: with an untracked `scripts/zz_untracked_probe.sh` planted, `sh scripts/test_preflight.sh` passes whole and `git status --short` is the same before and after; a real `./scripts/preflight.sh --changed` with that file planted and only a document changed still does not skip (the untracked file counts as a change, as before); no case but Case 17 runs with `GIT_INDEX_FILE` set.
       - No nested run reaches the real group: every `./scripts/preflight.sh` call of `scripts/test_preflight.sh`, the scratch-repository ones of Case 13 on among them, runs with a stub `PREFLIGHT_GIT`.
       - The planted defect of C4, and one in `scripts/lib/preflight_base.sh` that `preflight-selftest` sees, both stop a `make preflight-changed`; a documentation-only change still prints `[SKIP] preflight-changed: only documentation changed` and runs no group.
       - The two document sentences say what the script does, and no other sentence of `AGENTS.md` or `doc/developer_guide.md` still says the group runs only in `make preflight`.
