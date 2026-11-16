@@ -7,6 +7,8 @@
 # listed and does not block. The real differential (a build of the base commit) runs from preflight.
 cd "$(dirname "$0")/.." || exit 2
 fail() { echo "[FAIL] reject-diff-selftest: $1"; exit 1; }
+# A preflight run made with REJECT_DIFF_NO_CACHE=1 starts this script, and its cases choose the cache for each run themselves.
+unset REJECT_DIFF_NO_CACHE
 t=build/reject-diff-selftest
 # The variant copies of the script (cases 7 and 10) sit in scripts/ because the script finds the repository
 # from its own path; a failing case must not leave one in the source tree.
