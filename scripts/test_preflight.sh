@@ -20,6 +20,8 @@
 #   17. A doc-only change skips preflight-changed, reporting [SKIP] and exiting 0.
 #   18. A change to scripts/preflight.sh does not skip preflight-changed.
 #   19. A test-only change does not skip preflight-changed and runs the checked pass.
+#   20. scratch_base, which makes the bases of cases 10 to 19, copies no untracked file into the object
+#       store.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 . scripts/lib/portability.sh
@@ -400,18 +402,22 @@ exit 23
 EOS
 chmod +x "$tmp/stub_fail_reject_diff.sh"
 
-# scratch_base PATH: print a commit of HEAD's tree with PATH replaced by a one-line file, a base that
-# differs from this tree in PATH alone. It is made with a git configuration of its own: under the
-# caller's, `commit-tree` needs an identity and honours commit.gpgsign, and a commit that could not
-# be made left the base empty, so the differential compared the tree with itself.
+# scratch_base PATH: print a commit of the tracked files as they are in the working tree, with PATH
+# replaced by a one-line file: a base that differs from this tree in PATH alone. It is made with a
+# git configuration of its own: under the caller's, `commit-tree` needs an identity and honours
+# commit.gpgsign, and a commit that could not be made left the base empty, so the differential
+# compared the tree with itself.
+# It reads tracked files only (`git add -u`): an untracked file is the developer's own, and `git
+# add -A` wrote a copy of each into the object store, readable there whatever the file's mode.
 scratch_base() {
     _idx="$tmp/scratch_base_idx"
     rm -f "$_idx"
     GIT_INDEX_FILE="$_idx" git read-tree HEAD || return 1
-    GIT_INDEX_FILE="$_idx" git add -A || return 1
+    GIT_INDEX_FILE="$_idx" git add -u || return 1
     _blob=$(printf '// preflight-selftest base\n' | git hash-object -w --stdin) || return 1
     GIT_INDEX_FILE="$_idx" git update-index --add --cacheinfo 100644 "$_blob" "$1" || return 1
     _tree=$(GIT_INDEX_FILE="$_idx" git write-tree) || return 1
+    rm -f "$_idx"
     git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit-tree "$_tree" -p HEAD \
         -m "preflight-selftest: base differing in $1"
 }
@@ -630,11 +636,15 @@ else
 fi
 
 # Case 17: a doc-only change skips preflight-changed (reporting [SKIP] and exiting 0).
-# Run against the scratch index: it holds every file of the working tree, so the run sees
-# the one changed document and not any unrelated untracked files the checkout holds.
+# The run is told to ignore every untracked file (an excludes file of its own, holding `*`), so
+# it sees the one changed document and not what else the checkout holds. A git older than 2.31
+# does not read GIT_CONFIG_COUNT, and the case then fails beside an untracked file that is not
+# documentation.
 if doc_base=$(scratch_base doc/tasks/active.tm.md 2>"$tmp/scratch_base.err") && [ -n "$doc_base" ]; then
     rc=0
-    out=$(GIT_INDEX_FILE="$tmp/scratch_base_idx" PREFLIGHT_BASE="$doc_base" \
+    printf '*\n' > "$tmp/exclude_all"
+    out=$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.excludesFile GIT_CONFIG_VALUE_0="$tmp/exclude_all" \
+          PREFLIGHT_BASE="$doc_base" \
           PREFLIGHT_SELFHOST="$tmp/stub_fail_selfhost.sh" \
           PREFLIGHT_MUTATION="$tmp/stub_fail_mutation.sh" PREFLIGHT_BENCH="$tmp/stub_fail_bench.sh" \
           ./scripts/preflight.sh --changed 2>&1) || rc=$?
@@ -685,6 +695,26 @@ if test_base=$(scratch_base tests/functional/test_dummy_case19.zrl 2>"$tmp/scrat
     fi
 else
     fail "cannot make a base commit for case 19: $(cat "$tmp/scratch_base.err")"
+fi
+
+# Case 20: scratch_base copies no untracked file into the object store. In a scratch repository,
+# so the file and the store are the case's own.
+r="$tmp/repo20"
+mkdir -p "$r"
+g -C "$r" init
+echo a > "$r/f"; g -C "$r" add f; g -C "$r" commit -m one
+echo b > "$r/f"
+echo "untracked $$" > "$r/untracked.txt"
+if c20=$(cd "$r" && scratch_base g 2>"$tmp/scratch_base.err") && [ -n "$c20" ]; then
+    if git -C "$r" cat-file -e "$(git -C "$r" hash-object untracked.txt)" 2>/dev/null; then
+        fail "scratch_base wrote an untracked file into the object store"
+    elif [ "$(git -C "$r" show "$c20:f")" = b ] && [ -z "$(git -C "$r" status --porcelain --untracked-files=no | grep -v '^ M f$')" ]; then
+        pass "scratch_base takes tracked changes and copies no untracked file into the object store"
+    else
+        fail "scratch_base's commit lacks the tracked change, or the index changed (f=$(git -C "$r" show "$c20:f" 2>&1))"
+    fi
+else
+    fail "cannot make a base commit for case 20: $(cat "$tmp/scratch_base.err")"
 fi
 
 # Case 16: nested runs do not touch default timings or log files
