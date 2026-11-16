@@ -365,7 +365,6 @@ scratch_base() {
     _blob=$(printf '// preflight-selftest base\n' | git hash-object -w --stdin) || return 1
     GIT_INDEX_FILE="$_idx" git update-index --add --cacheinfo 100644 "$_blob" "$1" || return 1
     _tree=$(GIT_INDEX_FILE="$_idx" git write-tree) || return 1
-    rm -f "$_idx"
     git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit-tree "$_tree" -p HEAD \
         -m "preflight-selftest: base differing in $1"
 }
@@ -584,9 +583,12 @@ else
 fi
 
 # Case 17: a doc-only change skips preflight-changed (reporting [SKIP] and exiting 0).
+# Run against the scratch index: it holds every file of the working tree, so the run sees
+# the one changed document and not any unrelated untracked files the checkout holds.
 if doc_base=$(scratch_base doc/tasks/active.tm.md 2>"$tmp/scratch_base.err") && [ -n "$doc_base" ]; then
     rc=0
-    out=$(PREFLIGHT_BASE="$doc_base" PREFLIGHT_SELFHOST="$tmp/stub_fail_selfhost.sh" \
+    out=$(GIT_INDEX_FILE="$tmp/scratch_base_idx" PREFLIGHT_BASE="$doc_base" \
+          PREFLIGHT_SELFHOST="$tmp/stub_fail_selfhost.sh" \
           PREFLIGHT_MUTATION="$tmp/stub_fail_mutation.sh" PREFLIGHT_BENCH="$tmp/stub_fail_bench.sh" \
           ./scripts/preflight.sh --changed 2>&1) || rc=$?
     if [ $rc -eq 0 ] && echo "$out" | grep -qF "[SKIP] preflight-changed: only documentation changed since $doc_base"; then
