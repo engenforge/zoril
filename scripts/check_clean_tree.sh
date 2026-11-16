@@ -164,6 +164,33 @@ if [ "${1:-}" = "--selftest" ]; then
     fi
     rm -rf "$tmp/repo/build/fresh-bootstrap"
 
+    # 8b. Ignored bench/records/ work tree is allowed, but bench/records.o is flagged
+    printf '/bench/records/\n' >> "$tmp/repo/.gitignore"
+    mkdir -p "$tmp/repo/bench/records"
+    printf 'bench\n' > "$tmp/repo/bench/README.md"
+    git -C "$tmp/repo" add bench/README.md >/dev/null 2>&1
+    git -C "$tmp/repo" -c commit.gpgsign=false commit -q -m "add bench" >/dev/null 2>&1
+    touch "$tmp/repo/bench/records/gate_history.tsv"
+    if ! "$0" "$tmp/repo" > "$tmp/records.log" 2>&1; then
+        echo "[FAIL] selftest: an ignored bench/records/ work tree was flagged as stray"
+        cat "$tmp/records.log"
+        rm -rf "$tmp"
+        exit 1
+    fi
+    touch "$tmp/repo/bench/records.o"
+    if "$0" "$tmp/repo" > "$tmp/records_o.log" 2>&1; then
+        echo "[FAIL] selftest: bench/records.o was erroneously passed"
+        rm -rf "$tmp"
+        exit 1
+    fi
+    if ! grep -q "bench/records\.o" "$tmp/records_o.log"; then
+        echo "[FAIL] selftest: bench/records.o log did not name bench/records.o:"
+        cat "$tmp/records_o.log"
+        rm -rf "$tmp"
+        exit 1
+    fi
+    rm -f "$tmp/repo/bench/records.o"
+
     # 9. Clean repo passes again
     if ! "$0" "$tmp/repo" > /dev/null 2>&1; then
         echo "[FAIL] selftest: repo not clean after removing test files"
@@ -242,6 +269,8 @@ check_git_status() {
             # Specific bench patterns from .gitignore
             bench/20*|*/bench/20*) continue ;;
             bench/cross_lang/*/target/*|bench/cross_lang/*/target|*/bench/cross_lang/*/target/*|*/bench/cross_lang/*/target) continue ;;
+            # The records branch's work tree is mounted here and has its own status.
+            bench/records/*|bench/records) continue ;;
         esac
         
         # If git collapsed an unexempt ignored directory, expand to individual files
