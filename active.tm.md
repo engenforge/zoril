@@ -614,7 +614,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test-changed BASE=HEAD`: `Total: 21 run, 21 passed, 0 failed, 0 skipped (9.1s)`. `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.2s)`.
       - C7: committed on `main` as git:4e53e40.
 
-- [ ] +testinfra +AI-G @main `make preflight-changed` runs the `git` group, as `make preflight` does id:gc1pd
+- [x] +testinfra +AI-G @main `make preflight-changed` runs the `git` group, as `make preflight` does id:gc1pd
     > **Created:** 2026-11-16
     > **Branch:** `main`
     > **Depends:** id:27bb4, id:0mznn
@@ -623,6 +623,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Check-in:** reviewed in id:5yrx5.
     > **Decided by:** the maintainer, 2026-11-16, in id:nsbj8 (its option 1).
     > **Placed:** directly after id:nsbj8, as its follow-up.
+    > **Completed:** 2026-11-16 git:1f88e0b
 
     - **Now (git:c41c0f5):** `scripts/preflight.sh` runs `TR_WORK=build/tests-git $GIT_CMD` (`./scripts/test.sh --quiet --group git`) under `if [ "$changed" -eq 0 ]`, between the checked build and the bench step. A `make preflight-changed` therefore runs none of the group's seven scenarios, and a change to `records_commit` (`scripts/lib/records.sh`) is tested by no command short of a full `make preflight` (id:nsbj8 has the detail).
     - **Settled 1:** `scripts/preflight.sh`: the `if [ "$changed" -eq 0 ]; then` and its `fi` around the git step go; the four lines inside stay as they are, so both modes run the group, record a `git` timing and exit with its status before the bench step. The comment above the checked build already says the group runs before the bench step and stays.
@@ -636,6 +637,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: a planted defect is reported: in `records_commit` add `return 0` as its first line, run `make preflight-changed > build/gc1pd-planted.log 2>&1; echo rc=$?`, quote a non-zero `rc`, the `[FAIL]` line of `bench-records` and that no bench step followed (`rg -c 'vs last run' build/gc1pd-planted.log` prints nothing or 0), then restore and show `git diff --stat -- scripts/lib/records.sh` empty. `git -C bench/records log --oneline | head -1` is the same before and after this check (the planted run recorded nothing).
       - C5: `rg -n 'git. group' AGENTS.md doc/developer_guide.md`; quote the two new lines. `make test-changed BASE=HEAD` before the commit and `make test`; quote each `Total:` line.
       - C6: commit on `main`, add `**Awaiting review:**` with C2 to C5, `tm done`, and stop at the check-in id:5yrx5.
+    - **Awaiting review:** `sh scripts/test_preflight.sh`, `make preflight-changed`, `rg -n 'git. group' AGENTS.md doc/developer_guide.md`, `make test-changed BASE=HEAD~1`, `make test`.
+    - **Completion note:**
+      - C1: before: `sh scripts/test_preflight.sh` exited `rc=0`, 30 `[PASS]` lines, last line `[PASS] preflight-selftest: nested runs do not touch default preflight log file (content unchanged)`. Prior `build/preflight-timings.tsv` (sum 276s): `1\tmutation`, `66\tselfhost`, `1\tcalibrate`, `0\treject-diff`, `127\tchecked`, `81\tbench`, `0\tfigures-record` (no `git` line).
+      - C2: after: `sh scripts/test_preflight.sh` exited `rc=0`, 32 `[PASS]` lines (30 + 2), including `[PASS] preflight-selftest: git failure in --changed mode aborts with non-zero exit and suppresses bench` and `[PASS] preflight-selftest: preflight --changed records git step timing`, last line `[PASS] preflight-selftest: nested runs do not touch default preflight log file (content unchanged)`; `find build/tests-git -newer build/gc1pd-marker` printed nothing. `make preflight-changed` exited `rc=0`, git group `Total: 8 run, 8 passed, 0 failed, 0 skipped (102.3s)`, `build/preflight-timings.tsv` (sum 379s vs 276s in C1): `2\tmutation`, `66\tselfhost`, `2\tcalibrate`, `0\treject-diff`, `127\tchecked`, `102\tgit`, `79\tbench`, `1\tfigures-record`.
+      - C3: restored `if [ "$changed" -eq 0 ]; then ... fi` in `scripts/preflight.sh` alone: `sh scripts/test_preflight.sh` exited `rc=1` with `[FAIL] preflight-selftest: expected non-zero exit on git failure in --changed mode (rc=0, ...)` and `[FAIL] preflight-selftest: expected preflight --changed to record git timing (rc=0, ...)`; restored.
+      - C4: planted `return 0` as first line of `records_commit`: `make preflight-changed` exited `rc=2` with `[FAIL] scenario: bench-records (exit 1; log: build/tests-git/scenarios/bench-records.log) (9603ms)` and `rg -c 'vs last run'` = `0`; restored `scripts/lib/records.sh` (`git diff --stat -- scripts/lib/records.sh` empty); `git -C bench/records log --oneline | head -1` stayed `47565c3 4e53e40-dirty: figures`.
+      - C5: `rg -n 'git. group' AGENTS.md doc/developer_guide.md` printed `doc/developer_guide.md:79` and `AGENTS.md:36`. `make test-changed BASE=HEAD`: `Total: 142 run, 142 passed, 0 failed, 0 skipped (16.0s)`. `make test`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.0s)`.
+      - C6: committed on `main` as git:1f88e0b; stopping at check-in id:5yrx5.
 
 - [ ] +testinfra +review +AI-D @main @checkin Review of the `git` group in `make preflight-changed` id:5yrx5
     > **Created:** 2026-11-16
