@@ -819,12 +819,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test-changed BASE=HEAD` before the commit; quote its `Total:` line. The group: `TR_WORK=build/tests-git ./scripts/test.sh --quiet --group git > build/gv740/group.log 2>&1; echo rc=$?`; quote `rc=0` and its `Total:` line (expected `8 run, 8 passed`).
       - C7: commit on `main`, add `**Awaiting review:**` with C2 and C6's group run, `tm done`. The next task is id:ss1f8; the check-in id:kbv3f reviews both.
 
-- [ ] +docs +AI-G @main The descriptions of the two preflight gates name the figures check, the checked build and the benchmark thresholds where each runs id:ss1f8
+- [x] +docs +AI-G @main The descriptions of the two preflight gates name the figures check, the checked build and the benchmark thresholds where each runs id:ss1f8
     > **Created:** 2026-11-16
     > **Branch:** `main`
     > **Check-in:** reviewed in id:kbv3f.
     > **Found by:** the check-in id:z7rjp.
     > **Placed:** after id:gv740, as a follow-up of the check-in id:z7rjp; nothing depends on their order.
+    > **Completed:** 2026-11-16 git:c2ee290
 
     - **Now (git:1a03f6b):** id:5w8gt made the edits its text settled, and that text left three things out:
       - The full mode's last step, `figures` (`scripts/check_safety_figures.sh --milestone`, which is `make figures-check`), is named by neither Usage line of `scripts/preflight.sh`, nor by the `Makefile` help text of `preflight`, nor by the `make preflight` line of `doc/developer_guide.md` (Preflight Gates). id:5w8gt's completion note (C3) saw the step.
@@ -843,6 +844,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: the order in settled 4 and 5 is the script's: `rg -o 'record_step [a-z-]+' scripts/preflight.sh`; quote the output (expected `reject-diff` before `checked` before `git` before `bench`, and `figures` last).
       - C4: `git diff --stat` before the commit; quote it (expected four files, `AGENTS.md` with 2 lines changed). `dprint check AGENTS.md doc/developer_guide.md`; quote its result. `make test-changed BASE=HEAD`; quote its `Total:` line.
       - C5: commit on `main`, add `**Awaiting review:**` with C2 and C3, `tm done`, and stop at the check-in id:kbv3f.
+
+    - **Awaiting review:** `rg -n "fuzz\)|density and fuzz|fuzz tools' check|changed in ~6 minutes|benchmark thresholds and the store grid|when the checkers changed\. A preflight" scripts/preflight.sh Makefile doc/developer_guide.md AGENTS.md`, `rg -n 'figures check' scripts/preflight.sh Makefile doc/developer_guide.md AGENTS.md`, `rg -n 'checked build' doc/developer_guide.md AGENTS.md`, `sh scripts/preflight.sh --help | sed -n 4p`, `make help-all 2>&1 | rg ' preflight '`, `rg -o 'record_step [a-z-]+' scripts/preflight.sh`.
+    - **Completion note:**
+      - C1: before: `rg -n ...` matched six lines (`AGENTS.md:36`, `AGENTS.md:37`, `Makefile:421`, `doc/developer_guide.md:79`, `doc/developer_guide.md:80`, `scripts/preflight.sh:5`).
+      - C2: after: old-pattern `rg` printed nothing (exit 1); `rg -n 'figures check' ...` matched `AGENTS.md:37`, `doc/developer_guide.md:80`, `scripts/preflight.sh:5`, `Makefile:421`; `rg -n 'checked build' ...` matched `AGENTS.md:36`, `doc/developer_guide.md:79` (plus lines 90, 126); `sh scripts/preflight.sh --help | sed -n 4p` printed `  scripts/preflight.sh            full preflight (selfhost + mutation, calibrate, reject-diff, checked, git group, bench, figures record, store grid, density, fuzz, figures check)`; `make help-all 2>&1 | rg ' preflight '` printed `    preflight              Full pre-merge gate: preflight-changed's steps with the full mutation set, plus store grid, density, fuzz and the figures check`.
+      - C3: `rg -o 'record_step [a-z-]+' scripts/preflight.sh` printed `90:record_step mutation`, `94:record_step selfhost`, `110:record_step calibrate`, `135:record_step reject-diff`, `142:record_step reject-diff`, `154:record_step checked`, `160:record_step git`, `166:record_step bench`, `172:record_step figures-record`, `179:record_step store-grid`, `185:record_step density`, `192:record_step fuzz`, `199:record_step figures`.
+      - C4: `git diff --stat` showed `AGENTS.md | 4 ++--`, `Makefile | 2 +-`, `doc/developer_guide.md | 4 ++--`, `scripts/preflight.sh | 2 +-` (`4 files changed, 6 insertions(+), 6 deletions(-)`). `dprint check AGENTS.md doc/developer_guide.md` exited 0. `make test-changed BASE=HEAD`: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (131.0s)`.
+      - C5: committed on `stream/test2` as git:c2ee290.
 
 - [ ] +testinfra +review +AI-D @main @checkin Review of the selftest's cleared `REJECT_DIFF_` variables and the completed preflight descriptions id:kbv3f
     > **Created:** 2026-11-16
