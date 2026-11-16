@@ -418,7 +418,7 @@ repro-check: ## Gate: bootstrap from scratch twice and require identical results
 # rules -- the fresh-checkout path -- plus the self-hosting fixpoint) in the BACKGROUND,
 # beside mutation-check, and WAIT for it before the bench step: the bench thresholds refuse a
 # loaded host, so nothing else may still be running when they start.
-preflight: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/ztest build/runtime_hosted.o user-tools ## Full pre-merge gate: preflight-changed's steps with the full mutation set, plus store grid, density and fuzz
+preflight: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/ztest build/runtime_hosted.o user-tools ## Full pre-merge gate: preflight-changed's steps with the full mutation set, plus store grid, density, fuzz and the figures check
 	@./scripts/preflight.sh
 
 preflight-changed: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/ztest build/runtime_hosted.o ## Fast pre-merge gate: selfhost, mutations of changed files, checked build, git group, bench thresholds
