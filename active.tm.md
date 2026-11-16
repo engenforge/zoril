@@ -705,12 +705,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `git cat-file -e $(git hash-object <the untracked file>)` fails after C1, after C2's second run, after `make test-changed`, and after both `make preflight-changed` runs of C4; after the last, no commit listed by `git fsck --unreachable` has a tree with that path.
       - C4: `make test-changed BASE=HEAD` before the commit: `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (124.0s)` (a run of everything, which leaves the `git` group out: C1 and the runs below are what ran the script). After the commit, `make preflight-changed PREFLIGHT_BASE=d405854`: exit 0, the checked build `Total: 1277 run, 1277 passed, 0 failed, 0 skipped (109.6s)`, the group `Total: 8 run, 8 passed, 0 failed, 0 skipped (101.3s)` with 33 `[PASS]` lines in `build/tests-git/scenarios/preflight-selftest.log`, and the three `[OK]` lines the check-in id:5yrx5 quotes. `make test` was not run again after the commit: the commit is the tree of the `make test-changed` run above. The first run, `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=d405854`, exited 2 in `reject-diff-selftest`, which this change does not touch: id:072s0. No file under `src/`, `stdlib/`, `tools/` or `rt/` changed, so the fuzz record is not made stale.
 
-- [ ] +testinfra +AI-G @main `REJECT_DIFF_NO_CACHE=1 make preflight-changed` fails in the `git` group: `reject-diff-selftest` inherits the variable id:072s0
+- [x] +testinfra +AI-G @main `REJECT_DIFF_NO_CACHE=1 make preflight-changed` fails in the `git` group: `reject-diff-selftest` inherits the variable id:072s0
     > **Created:** 2026-11-16
     > **Branch:** `main`
     > **Check-in:** reviewed in id:z7rjp.
     > **Found by:** the check-in id:5yrx5 (id:gc1pd made `make preflight-changed` run the group; the selftest has read the variable since it was written).
     > **Placed:** after id:n6nsr, as a follow-up of the check-in id:5yrx5.
+    > **Completed:** 2026-11-16 git:a1358b2
 
     - **Now (git:6ea3ce5):** `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=d405854` exits 2 at the `git` step, before the bench step:
     ```
@@ -728,6 +729,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: the documented command passes: `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=d405854 > build/072s0-preflight.log 2>&1; echo rc=$?`; quote `rc=0`, the group's `Total:` line (expected `8 run, 8 passed`), the checked build's `Total:` line, the three `[OK]` lines of the bench step and `cat build/preflight-timings.tsv`.
       - C5: `make test-changed BASE=HEAD` before the commit; quote its `Total:` line. If it does not name the `reject-diff-selftest` scenario in its output (a run of everything leaves the group out), say so: C1 to C4 are then what ran the script.
       - C6: commit on `main`, add `**Awaiting review:**` with C2 to C4, `tm done`. The next task is id:5w8gt; the check-in id:z7rjp reviews both.
+    - **Awaiting review:** `REJECT_DIFF_NO_CACHE=1 sh scripts/test_reject_diff.sh`, `sh scripts/test_reject_diff.sh`, `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=d405854`.
+    - **Completion note:**
+      - C1: before: `REJECT_DIFF_NO_CACHE=1 sh scripts/test_reject_diff.sh` exited `rc=1` with `[FAIL] reject-diff-selftest: a cold run did not store an entry: fresh (no cache); base front end 1 s`; plain `sh scripts/test_reject_diff.sh` exited `rc=0` with `[PASS] reject-diff-selftest: a newly accepted must-refuse probe blocks unless allowed; accepted-by-design and newly refused programs are listed only; the base verdict cache keys on every input, catches a planted stale entry and stores nothing from a timed-out or killed run`.
+      - C2: after: `REJECT_DIFF_NO_CACHE=1 sh scripts/test_reject_diff.sh` exited `rc=0` with `[PASS] reject-diff-selftest: a newly accepted must-refuse probe blocks unless allowed; accepted-by-design and newly refused programs are listed only; the base verdict cache keys on every input, catches a planted stale entry and stores nothing from a timed-out or killed run`; plain `sh scripts/test_reject_diff.sh` exited `rc=0` with the same `[PASS]` line; `diff build/072s0-after.log build/072s0-plain-after.log` showed only `0 s` vs `1 s` timing differences.
+      - C3: with `unset REJECT_DIFF_NO_CACHE` removed, `REJECT_DIFF_NO_CACHE=1 sh scripts/test_reject_diff.sh` exited `rc=1` with `[FAIL] reject-diff-selftest: a cold run did not store an entry: fresh (no cache); base front end 0 s`. Restored.
+      - C4: `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=d405854` exited `rc=0`: checked build `Total: 1277 run, 1277 passed, 0 failed, 0 skipped (109.8s)`, `git` group `Total: 8 run, 8 passed, 0 failed, 0 skipped (102.1s)`, bench `[OK]  clean_throughput_loc_s     10284 (baseline 10356, tol 15%)`, `[OK]  incremental_rebuild_ms     21 (baseline 22, tol 15%)`, `[OK]  runtime_geomean_vs_gcc_o2  2.345 (baseline 2.385, tol 15%)`, `build/preflight-timings.tsv`: `1\tmutation`, `67\tselfhost`, `1\tcalibrate`, `0\treject-diff`, `127\tchecked`, `102\tgit`, `79\tbench`, `1\tfigures-record`.
+      - C5: `make test-changed BASE=HEAD` before the commit: `Total: 21 run, 21 passed, 0 failed, 0 skipped (102.2s)`; it did not name `reject-diff-selftest` in its output (it ran the 21 gates and left the `git` group out), so C1 to C4 are what ran the script.
+      - C6: committed on `main` as git:a1358b2.
 
 - [ ] +docs +AI-G @main The descriptions of `make preflight` and `make preflight-changed` say what each runs, and give no time that is not measured id:5w8gt
     > **Created:** 2026-11-16
