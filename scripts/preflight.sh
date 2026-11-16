@@ -154,13 +154,11 @@ chk_rc=$?
 record_step checked $(( $(date +%s) - chk_start ))
 [ $chk_rc -eq 0 ] || exit $chk_rc
 
-if [ "$changed" -eq 0 ]; then
-    git_start=$(date +%s)
-    TR_WORK=build/tests-git $GIT_CMD
-    git_rc=$?
-    record_step git $(( $(date +%s) - git_start ))
-    [ $git_rc -eq 0 ] || exit $git_rc
-fi
+git_start=$(date +%s)
+TR_WORK=build/tests-git $GIT_CMD
+git_rc=$?
+record_step git $(( $(date +%s) - git_start ))
+[ $git_rc -eq 0 ] || exit $git_rc
 
 bench_start=$(date +%s)
 $BENCH_CMD

@@ -7,6 +7,8 @@
 #   3. Dual failure under --changed reports preflight-changed prefix and both codes.
 #   4. --changed passes the flag to mutation-check.
 #   5. Concurrency: selfhost runs in background and is waited on before proceeding.
+#   7b. git failure in --changed mode aborts with non-zero exit and suppresses bench.
+#   9c. preflight --changed records git step timing to PREFLIGHT_TIMINGS.
 #   13. The base of a --changed run (scripts/lib/preflight_base.sh), in scratch repositories: a committed
 #       change with no upstream and no default branch has no base, and the run must say so rather than
 #       pass; a pushed branch (its upstream holds the commits) is measured from its merge base with
@@ -56,6 +58,8 @@ EOF
 
 # Cases 1-9 are about other steps; a real rejection differential would build a second compiler.
 export PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh"
+# A nested run must not start the git group that this script is part of.
+export PREFLIGHT_GIT="$tmp/stub_pass.sh"
 # They run in this checkout, whose state is not theirs to choose: HEAD is a base they always have.
 export PREFLIGHT_BASE=HEAD
 
@@ -270,6 +274,28 @@ else
     fail "expected non-zero exit on bench failure in --changed mode (rc=$rc, out=$out)"
 fi
 
+# Case 7b: git failure in --changed mode aborts and suppresses bench
+rc=0
+trace_file="$tmp/trace_case7b.log"
+out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
+      PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+      PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+      PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
+      PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
+      PREFLIGHT_GIT="$tmp/stub_fail_git.sh" \
+      PREFLIGHT_BENCH="$tmp/stub_track_bench.sh" \
+      PREFLIGHT_TEST_TRACE="$trace_file" \
+      ./scripts/preflight.sh --changed 2>&1) || rc=$?
+if [ $rc -ne 0 ]; then
+    if [ ! -f "$trace_file" ]; then
+        pass "git failure in --changed mode aborts with non-zero exit and suppresses bench"
+    else
+        fail "git failure in --changed mode executed subsequent steps: $(cat "$trace_file")"
+    fi
+else
+    fail "expected non-zero exit on git failure in --changed mode (rc=$rc, out=$out)"
+fi
+
 # Case 8: density failure in full mode aborts and suppresses fuzz
 rc=0
 trace_file="$tmp/trace_case8.log"
@@ -341,6 +367,27 @@ if [ $rc -eq 0 ] && [ -s "$pf_timings" ]; then
     fi
 else
     fail "expected preflight to pass and write timings (rc=$rc, out=$out)"
+fi
+
+# Case 9c: preflight --changed records git step timing to PREFLIGHT_TIMINGS
+pf_timings_changed="$tmp/preflight_timings_changed.tsv"
+rc=0
+out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" \
+      PREFLIGHT_MUTATION="$tmp/stub_pass.sh" \
+      PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
+      PREFLIGHT_CHECKED="$tmp/stub_pass.sh" \
+      PREFLIGHT_REJECT_DIFF="$tmp/stub_pass.sh" \
+      PREFLIGHT_BENCH="$tmp/stub_pass.sh" \
+      PREFLIGHT_GIT="$tmp/stub_pass.sh" \
+      PREFLIGHT_STORE_GRID="$tmp/stub_pass.sh" \
+      PREFLIGHT_DENSITY="$tmp/stub_pass.sh" \
+      PREFLIGHT_FUZZ="$tmp/stub_pass.sh" \
+      PREFLIGHT_TIMINGS="$pf_timings_changed" \
+      ./scripts/preflight.sh --changed 2>&1) || rc=$?
+if [ $rc -eq 0 ] && grep -Eq '^[0-9]+	git$' "$pf_timings_changed"; then
+    pass "preflight --changed records git step timing"
+else
+    fail "expected preflight --changed to record git timing (rc=$rc, out=$out, timings=$(cat "$pf_timings_changed" 2>/dev/null))"
 fi
 
 # Cases 10-11: the rejection differential runs when a checker differs from its base, fails the

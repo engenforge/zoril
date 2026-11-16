@@ -76,7 +76,7 @@ The repository includes several specialized developer tools and targets:
 
 ### Preflight Gates
 
-- **`make preflight-changed`:** Runs self-hosting checks and targeted mutation testing for modified files in ~3 minutes.
+- **`make preflight-changed`:** Runs a clean-tree build, self-hosting checks, targeted mutation testing for modified files, the scenarios that need git (the `git` group of `scripts/test_plan.tsv`), and the rejection differential when the checkers changed in ~6 minutes.
 - **`make preflight`:** Slower comprehensive pre-merge gate (~4 minutes). Verifies bit-for-bit compiler self-hosting fixpoint across 4 generations, executes full mutation checks, and runs performance benchmarks against calibrated thresholds.
 
 ### The Checked Build (`make test-checked`)
