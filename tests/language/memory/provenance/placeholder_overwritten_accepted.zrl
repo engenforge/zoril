@@ -1,0 +1,53 @@
+// A placeholder overwritten before anything reads it: a tuple slot, both fields of a struct, both
+// slots of an array at constant indices, and a whole tuple reassigned. The literal's dead elements
+// add nothing to the local's sets, so a closure storing the new value out is accepted (§3, _Transfer_).
+// flags: --provenance
+// expected exit 5
+struct Two { a: &i32, b: &i32 }
+fn tup(out: &mut &i32, p: &i32) {
+    let seed = 0;
+    let mut t = (&seed, 1);
+    t.0 = p;
+    let c = t.0;
+    let mut cl = || { *out = c; };
+    cl();
+}
+fn fields(out: &mut &i32, p: &i32) {
+    let seed = 0;
+    let mut o = Two { a: &seed, b: &seed };
+    o.b = p;
+    o.a = p;
+    let c = o.b;
+    let mut cl = || { *out = c; };
+    cl();
+}
+fn slots(out: &mut &i32, p: &i32) {
+    let seed = 0;
+    let mut a = [&seed, &seed];
+    a[0] = p;
+    a[1] = p;
+    let c = a[1];
+    let mut cl = || { *out = c; };
+    cl();
+}
+fn whole(out: &mut &i32, p: &i32) {
+    let seed = 0;
+    let mut t = (&seed, 1);
+    t = (p, 2);
+    let c = t.0;
+    let mut cl = || { *out = c; };
+    cl();
+}
+fn main() -> i32 {
+    let y = 1;
+    let mut o = &y;
+    let mut n = 1;
+    tup(&mut o, &y);
+    n = n + *o;
+    fields(&mut o, &y);
+    n = n + *o;
+    slots(&mut o, &y);
+    n = n + *o;
+    whole(&mut o, &y);
+    return n + *o;
+}

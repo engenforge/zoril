@@ -5744,6 +5744,9 @@ pub struct OriginSets {
     pub env_first: [mut u32],
     pub env_n: [mut u32],
     pub env_caps: [mut u32],
+    // Per local built by a literal, a bit for each element overwritten before it is seen
+    // (os_dead_inits).
+    pub dead_init: [mut u64],
 }
 
 const OS_NO_ENV: usize = 0xffffffff;
@@ -7142,6 +7145,235 @@ fn os_env_scan_rv(
     }
 }
 
+fn os_place_names(p: &Place, l: u32) -> bool {
+    if p.base == l { return true; }
+    for pr in p.projections {
+        if let Projection.Index(k) = *pr { if k == l { return true; } }
+    }
+    return false;
+}
+
+// Whether RV reads, or takes the address of, local L anywhere: what ends the window in which an
+// element of L's literal can still be overwritten unseen (os_dead_inits).
+// exhaustive: every rvalue must say which locals it names.
+fn os_rv_names(rv: &ZirRvalue, l: u32) -> bool {
+    match *rv {
+        ZirRvalue.Use(p)
+            | ZirRvalue.Ref(p, _)
+            | ZirRvalue.RefMut(p, _)
+            | ZirRvalue.UnaryOp(_, p)
+            | ZirRvalue.EnumVariant(_, _, p)
+            | ZirRvalue.Cast(p, _)
+            | ZirRvalue.VariantCheck(p, _, _)
+            | ZirRvalue.EnumPayload(p, _, _)
+            | ZirRvalue.Boxed(p)
+            | ZirRvalue.PtrFromInt(p, _)
+            | ZirRvalue.ArrayRepeat(p, _, _) => { return os_place_names(&p, l); },
+        ZirRvalue.BinaryOp(_, a, b) => { return os_place_names(&a, l) || os_place_names(&b, l); },
+        ZirRvalue.CallPtr(f, args) => {
+            if os_place_names(&f, l) { return true; }
+            for a in args { if os_place_names(a, l) { return true; } }
+            return false;
+        },
+        ZirRvalue.Call(_, args)
+            | ZirRvalue.StructLiteral(_, args)
+            | ZirRvalue.Syscall(args)
+            | ZirRvalue.Intrinsic(_, args)
+            | ZirRvalue.Tuple(args)
+            | ZirRvalue.Array(_, args) => {
+            for a in args { if os_place_names(a, l) { return true; } }
+            return false;
+        },
+        ZirRvalue.FuncAddr(_, env) => { return env == l; },
+        ZirRvalue.Const(_, _)
+            | ZirRvalue.Sizeof(_)
+            | ZirRvalue.StringConst(_)
+            | ZirRvalue.GlobalAddr(_)
+            | ZirRvalue.GetEnv => { return false; },
+    }
+}
+
+// The local whose address RV takes, 0 if none: the base of a reference, of an enum payload's
+// address, or a closure's environment pointer.
+fn os_addr_taken(rv: &ZirRvalue) -> u32 {
+    match *rv {
+        ZirRvalue.Ref(p, _) | ZirRvalue.RefMut(p, _) | ZirRvalue.EnumPayload(p, _, _) => {
+            return p.base;
+        },
+        ZirRvalue.FuncAddr(_, env) => { return env; },
+        _ => { return 0 as u32; },
+    }
+}
+
+// The element a one-projection place `L.p` overwrites whole in L's literal of N elements, or N
+// when it is not one: a field (in declaration order, as a struct literal's values are), a tuple
+// slot, or an array slot at an index local that only ever holds one constant (KCONST, KVAL). An
+// index from anything else may be any element.
+fn os_whole_element(
+    module: &ILModule,
+    ty: u32,
+    pr: &Projection,
+    n: usize,
+    kconst: [mut u8],
+    kval: [mut u64]
+) -> usize {
+    match *pr {
+        Projection.TupleIndex(i) => {
+            if (i as usize) < n { return i as usize; }
+        },
+        Projection.Field(name) => {
+            if ty != 0 as u32 && os_type_def_tag(module, ty) == ILTYPE_USER {
+                let uid = module.types[ty as usize - 1 as usize].def.get_User().id;
+                if uid != 0xffffffff as u32 && (uid as usize) < module.typedefs.len() {
+                    if let ILTypeDef.Struct(st) = module.typedefs[uid as usize] {
+                        let mut k = 0 as usize;
+                        while k < st.fields.len && k < n {
+                            if st.fields[k].name == name { return k; }
+                            k = k + 1 as usize;
+                        }
+                    }
+                }
+            }
+        },
+        Projection.Index(x) => {
+            if (x as usize) < kconst.len
+                && kconst[x as usize] == 1 as u8
+                && kval[x as usize] < n as u64 {
+                return kval[x as usize] as usize;
+            }
+        },
+        Projection.Deref => {},
+    }
+    return n;
+}
+
+// Fills dead_init: for a local L built by one `Let` of a tuple, struct or array literal, the
+// elements that a later statement of the same block overwrites whole (`L.f = v`, `L.0 = v`,
+// `L[0] = v`, or `L = v` for all of them) before anything reads L, takes its address or names it
+// as an index. Such an element's value is never seen, so the literal adds nothing of it to L's
+// sets, which are flow-insensitive and would otherwise keep a placeholder's origins for the
+// whole body (§3, _Transfer_). A statement in another block, a loop's back edge, a `&mut` to L
+// or a reborrow all name L or lie outside the window, so they still join the old value in.
+fn os_dead_inits(c: &mut OriginSets, module: &ILModule, func: &ZirFunction) {
+    let nl = c.nl;
+    let locals = (*func).locals;
+    // SAFETY: NL bytes and NL u64 in the body's scratch arena, zeroed before any read.
+    let nlet = unsafe { @slice(zoril_allocator_alloc(c.arena, nl) as *mut u8, nl) };
+    // SAFETY: as above.
+    let kconst = unsafe { @slice(zoril_allocator_alloc(c.arena, nl) as *mut u8, nl) };
+    // SAFETY: as above.
+    let kval = unsafe { @slice(zoril_allocator_alloc(c.arena, nl * 8) as *mut u64, nl) };
+    unsafe {
+        memset(nlet.ptr as *mut u8, 0, nl as u64);
+        memset(kconst.ptr as *mut u8, 0, nl as u64);
+        memset(kval.ptr as *mut u8, 0, (nl * 8) as u64);
+    }
+    // kconst: 1 while every definition seen is the one `Let` of a constant, 2 once another is.
+    // nlet: 3 for a local whose address is taken anywhere, so that no alias made on an earlier
+    // pass through the block can read the element in the window.
+    for b in (*func).blocks {
+        for st in b.statements {
+            match *st {
+                ZirStmt.Let(id, rv, _) => {
+                    if (id as usize) < nl {
+                        if nlet[id as usize] < 2 as u8 {
+                            nlet[id as usize] = nlet[id as usize] + 1 as u8;
+                        }
+                        if let ZirRvalue.Const(v, _) = rv {
+                            if kconst[id as usize] == 0 as u8 {
+                                kconst[id as usize] = 1 as u8;
+                                kval[id as usize] = v;
+                            }
+                        } else {
+                            kconst[id as usize] = 2 as u8;
+                        }
+                    }
+                    let a = os_addr_taken(&rv);
+                    if (a as usize) < nl { nlet[a as usize] = 3 as u8; }
+                },
+                ZirStmt.Assign(p, rv, _) => {
+                    if (p.base as usize) < nl { kconst[p.base as usize] = 2 as u8; }
+                    let a = os_addr_taken(&rv);
+                    if (a as usize) < nl { nlet[a as usize] = 3 as u8; }
+                },
+                ZirStmt.Drop(_, _)
+                    | ZirStmt.DropIfLive(_, _)
+                    | ZirStmt.EndBorrow(_, _)
+                    | ZirStmt.Intrinsic(_, _, _) => {},
+            }
+        }
+    }
+    let mut id = 0 as usize;
+    while id < nl {
+        if nlet[id] != 1 as u8 { kconst[id] = 2 as u8; }
+        id = id + 1 as usize;
+    }
+    for b in (*func).blocks {
+        let sts = b.statements;
+        let mut s = 0 as usize;
+        while s < sts.len {
+            let (l, n) = match sts[s] {
+                ZirStmt.Let(id, ZirRvalue.Tuple(vals), _)
+                    | ZirStmt.Let(id, ZirRvalue.StructLiteral(_, vals), _)
+                    | ZirStmt.Let(id, ZirRvalue.Array(_, vals), _) => (id, vals.len),
+                _ => (0 as u32, 0 as usize),
+            };
+            s = s + 1 as usize;
+            if l == 0 as u32 || l as usize >= nl || nlet[l as usize] != 1 as u8 || n > 64 as usize {
+                continue;
+            }
+            let ty = os_local_ty(locals, l);
+            let mut dead = 0 as u64;
+            let mut t = s;
+            let mut open = true;
+            while open && t < sts.len {
+                match sts[t] {
+                    ZirStmt.Let(k, rv, _) => {
+                        if k == l || os_rv_names(&rv, l) { open = false; }
+                    },
+                    ZirStmt.Assign(p, rv, _) => {
+                        if os_rv_names(&rv, l) {
+                            open = false;
+                        } else if p.base == l && p.projections.len == 0 as usize {
+                            dead = if n == 64 as usize {
+                                0xffffffffffffffff as u64
+                            } else {
+                                ((1 as u64) << (n as u64)) - 1 as u64
+                            };
+                            open = false;
+                        } else if p.base == l && p.projections.len == 1 as usize {
+                            let e = os_whole_element(
+                                module,
+                                ty,
+                                &p.projections[0],
+                                n,
+                                kconst,
+                                kval
+                            );
+                            if e < n {
+                                dead = dead | ((1 as u64) << (e as u64));
+                            } else {
+                                open = false;
+                            }
+                        } else if os_place_names(&p, l) {
+                            open = false;
+                        }
+                    },
+                    ZirStmt.Drop(p, _) | ZirStmt.DropIfLive(p, _) => {
+                        if os_place_names(&p, l) { open = false; }
+                    },
+                    ZirStmt.Intrinsic(_, args, _) => {
+                        for a in args { if os_place_names(a, l) { open = false; } }
+                    },
+                    ZirStmt.EndBorrow(k, _) => { if k == l { open = false; } },
+                }
+                t = t + 1 as usize;
+            }
+            c.dead_init[l as usize] = dead;
+        }
+    }
+}
+
 // The closure rule (§3, _A closure made into a value_): a closure that is not only called through
 // locals of this body (env_of 0) may be called where no caller knows its environment, so the edges
 // of its summary whose value is what the environment reaches are checked where it is made, against
@@ -8172,6 +8404,32 @@ fn os_check_store(
     );
 }
 
+// OS_T_VO/OS_T_VS of a tuple, struct or array literal without the elements DEAD names, as
+// os_rvalue reads the rest (os_dead_inits).
+fn os_live_elements(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    rv: &ZirRvalue,
+    dead: u64
+) {
+    let vo = os_t(c, OS_T_VO);
+    let vs = os_t(c, OS_T_VS);
+    os_clear(c, vo);
+    os_clear(c, vs);
+    let vals = match *rv {
+        ZirRvalue.Tuple(v) | ZirRvalue.StructLiteral(_, v) | ZirRvalue.Array(_, v) => v,
+        _ => @slice(0 as *mut Place, 0 as usize),
+    };
+    let mut k = 0 as usize;
+    while k < vals.len {
+        if k >= 64 as usize || (dead >> (k as u64)) & 1 as u64 == 0 as u64 {
+            let _ = os_read(c, module, locals, &vals[k], vo, vs);
+        }
+        k = k + 1 as usize;
+    }
+}
+
 // exhaustive: every statement must say what it writes into which local's sets.
 fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt) {
     let own = os_t(c, OS_T_OWN);
@@ -8180,7 +8438,16 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
             c.span = span;
             os_clear(c, own);
             os_add_frame(c, own, id);
-            os_rvalue(c, module, locals, &rv, own);
+            let dead = if id != 0 as u32 && (id as usize) < c.nl {
+                c.dead_init[id as usize]
+            } else {
+                0 as u64
+            };
+            if dead == 0 as u64 {
+                os_rvalue(c, module, locals, &rv, own);
+            } else {
+                os_live_elements(c, module, locals, &rv, dead);
+            }
             let ty = os_local_ty(locals, id);
             if id != 0 as u32 && (id as usize) < c.nl && c.cap_bit[id as usize] != 0 as u8 {
                 os_env_to_cap(c, os_t(c, OS_T_VO), id as usize);
@@ -8345,6 +8612,8 @@ pub fn compute_origins_zir(
         // SAFETY: as above.
         env_n: unsafe { @slice(zoril_allocator_alloc(arena, nl * 4) as *mut u32, nl) },
         env_caps: @slice(0 as *mut u32, 0 as usize),
+        // SAFETY: NL u64 in ARENA, as above, zeroed below before any read.
+        dead_init: unsafe { @slice(zoril_allocator_alloc(arena, nl * 8) as *mut u64, nl) },
     };
     unsafe {
         memset(c.edges.ptr as *mut u8, 0, (OS_EDGE_ROWS * 3 * 8) as u64);
@@ -8357,6 +8626,7 @@ pub fn compute_origins_zir(
         memset(c.env_of.ptr as *mut u8, 0, (nl * 4) as u64);
         memset(c.env_first.ptr as *mut u8, 0, (nl * 4) as u64);
         memset(c.env_n.ptr as *mut u8, 0, (nl * 4) as u64);
+        memset(c.dead_init.ptr as *mut u8, 0, (nl * 8) as u64);
     }
     let mut pi = 0 as usize;
     while pi < (*func).params.len {
@@ -8370,6 +8640,7 @@ pub fn compute_origins_zir(
     os_cap_bits(&mut c, module, locals);
     os_known_callees(&mut c, func);
     os_known_envs(&mut c, func);
+    os_dead_inits(&mut c, module, func);
     let ret = 2 as usize * nl;
     let mut more = true;
     while more {

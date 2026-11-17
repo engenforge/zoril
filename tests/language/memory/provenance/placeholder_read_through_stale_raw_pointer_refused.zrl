@@ -1,0 +1,22 @@
+// A tuple built in a loop from a local's address, read through a raw pointer to the previous
+// iteration's tuple before its slot is overwritten: the raw pointer reads the placeholder, so a
+// local whose address is taken anywhere keeps its literal whole (§3, _Transfer_).
+// flags: --provenance
+// EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
+// expected compile fail
+fn bad(out: &mut &i32, p: &i32) {
+    let seed = 0;
+    let first = (p, 0);
+    let mut rp = &first as *(&i32, i32);
+    let mut i = 0;
+    let mut x = p;
+    while i < 2 {
+        let mut t = (&seed, 1);
+        x = unsafe { (*rp).0 };
+        t.0 = p;
+        rp = &t as *(&i32, i32);
+        i = i + 1;
+    }
+    *out = x;
+}
+fn main() -> i32 { let y = 2; let mut o = &y; bad(&mut o, &y); return *o; }
