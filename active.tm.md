@@ -4,6 +4,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Series rule (2026-11-05, from id:z0071):** a precision fix that removes origins from a set (an exemption, a split, a moved-storage drop) is first measured alone, on top of the task it serves, to show it is needed; and it comes with probes of its sibling routes (the value built inside the callee, returned from a call, packed into a struct beside a view or a raw pointer).
 
+**Header rule (2026-11-17):** a header line whose key is more than one word (`Routed by`, `Depends note`, `Depends changed (..)`) is not a field to `tm` but a continuation of the field above it (SPEC-TASKMARK-06 §4.4.2), so directly beneath `Depends:` every `id:` on it becomes a dependency. Keep such a line above `Depends:`, or follow `Depends:` with a one-word field or the blank line.
+
 - [ ] +precision +tests +AI-D @provenance A known closure call tells one capture from another: the summary keeps per-capture bits, mapped at the call to the environment struct's fields id:w17jf
     > **Created:** 2026-11-17
     > **Branch:** `provenance`
@@ -83,7 +85,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Found by:** id:z0064 (root (e)).
-    > **Depends:** id:z0087, id:0m61c
+    > **Depends:** id:0m61c
     > **Check-in:** stop for review after it.
     > **Routed (2026-11-06, by id:z0075):** a rule. id:z0084's rule is deferred, so this one must cover the lowerer's literals without it: `exh_missing` writes literals into a `ByteVec` in `self.arena`, which the call rule names `Param(0)` (`*self`), so the `Static` lands in `*self` and not only in the arena.
 
@@ -93,13 +95,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Do:** decide whether a `Static` origin reached through a value may be dropped from store targets (a literal is read-only, so storing through it needs `unsafe`), or whether the sites change. A rule removes origins, so the series rule applies, with probes of a `static mut` reached through a value (which must stay a global destination) and a literal beside a `&mut` in one struct. `make test`, `make preflight-changed`, the rejection differential.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
     - **id:z0084 promoted (2026-11-15, the check-in id:n177h):** it now runs directly after this task, so the routing above still holds: this task's rule must not rely on id:z0084's.
+    - **Depends changed (2026-11-17, a review of the task list, the maintainer's request):** removed id:z0087. It is the task before this one in the queue, not a blocker: the two rules are separate (an integer result's tie; a `Static` origin among store targets), and the 8 warnings above are counted with id:z0087's change in, which the queue's order gives. Taken before id:z0087, the count to start from is 14, with the six `fmt/` warnings of id:z0087 left over.
 
 - [ ] +safety +tests +AI-D @provenance id:z0084 B1.9d Arena storage is named by the arena an argument reaches, not by the argument's address
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Found by:** id:z0064 (root (d1)).
-    > **Depends:** id:z0075
     > **Depends note:** (it decides whether over-rejections are fixed by rules).
+    > **Depends:** id:z0075
     > **Check-in:** stop for review after it. Accepts more: the rejection differential and the series rule apply.
     > **Deferred (2026-11-06, by id:z0075):** the root is seen only in code that uses a raw arena (zbuild's manifest parsing, the compiler), which is `unsafe` already; id:z0090 changes zbuild's sites instead, and none of the grid's or the tests' refusals is from it. Take this rule up when safe user code shows the class, with the reproducer below.
     > **Promoted (2026-11-15, the check-in id:n177h):** safe user code now shows the class (the reproducers in **Safe user code** below), so the deferral's condition is met. Placed before id:z0089 and id:z0090: it blocks id:z0065 (the default flip would refuse these safe programs, and id:z0065 asks that each over-rejection have its own task done first), and it may make id:z0090's zbuild changes unnecessary (its measurement alone took zbuild from 25 warnings to 0), so it runs before that `+AI-G` batch rather than after it.
@@ -169,8 +172,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Found by:** id:z0064 (root (d2)).
-    > **Depends:** id:0m61c
     > **Routed by:** id:z0075, to a code change at the site; the rule is deferred (id:z0085 in `future.tm.md`).
+    > **Depends:** id:0m61c
 
     - **Now:** `src/lower_zir/exhaust.zrl`, `ZirLowerer::exh_expand_or`: `if !is_or { out.push(row); }` pushes the row slice read out of `rows`. The new rules read a value copied out of a referenced `Vec` as an address into its buffer, and with the function's self-recursion (`return self.exh_expand_or(&out)`) that turns `exh_useful`'s summary into every parameter stored into every parameter and a global: 153 of `src/main.zrl`'s 167 "into a global" warnings under `--provenance=warn`.
     - **Do:** push a fresh copy of the row (`let copy = self.alloc_u32s(row.len);`, copy the elements, `out.push(copy);`), as the or-pattern branch a few lines above does. The rows are read-only pattern lists, so behaviour is unchanged; the cost is one scratch-arena allocation per kept row. A one-line comment says why the copy is there (the origin rules), without a task ID. Plain code: `src/` must build under the pinned stage1.
@@ -187,8 +190,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Found by:** id:z0064 (root (d1)).
-    > **Depends:** id:0m61c, id:z0084
     > **Routed by:** id:z0075, to code changes at zbuild's sites; the rule was deferred (id:z0084, promoted 2026-11-15 and placed before this task).
+    > **Depends:** id:0m61c, id:z0084
 
     - **Now:** `tools/zbuild` gives 25 warnings under `--provenance=warn` (18 and 4 call store rule, 2 return rule, 1 store rule), all in manifest parsing (`parse_manifest`, `parse_entry`, `write_manifest`, `load_manifest` in `tools/zbuild/src/manifest.zrl`). `parse_entry(&cols, arena)` takes the column `Vec` by reference, and because a `Vec` holds a raw arena pointer, the call rule names its result's arena storage by `&cols`'s address (`Frame(cols)`); what is read out of the result is then an address of this frame.
     - **Do:** change the sites so that no argument whose only tie to the arena is the `Vec`'s pointer names the result's storage. First try passing `cols.as_slice()` (a `[[u8]]`, which reaches no `ArenaHeader`) to `parse_entry`, then the sites the remaining warnings name. Keep the manifest format and behaviour unchanged. If a site cannot be changed without `unsafe`, stop and report: id:z0084's rule comes back instead.
@@ -284,8 +287,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Branch:** `provenance`
     > **Check-in:** stop for review after it.
     > **Closes:** `gap_37_local_mutref_field_reset`, `gap_38_param_field_reset`, `gap_39_method_self_field_reset`, `gap_43_box_field_reset`.
-    > **Depends:** id:z0010, id:z0011, id:dhded
     > **Depends changed (2026-11-14, the maintainer, in a review of the plan):** added id:dhded (L1), the liveness model: L1 decides whether this task's per-local borrow is the rule and rewrites its Do and Checks.
+    > **Depends:** id:z0010, id:z0011, id:dhded
 
     - **Scope (narrowed to intra-frame liveness, 2026-11-03):** the frame-escape siblings (`gap_40`–`gap_42` and `gap_45`) are handled by id:z0048/id:z0012's origin sets. This task fixes intra-frame `Arena::reset` / `free` / `@drop` liveness (`ActiveBorrow` in `src/check_zir.zrl`), where a slice written into a local struct's field or a `Box`'s contents through a local `&mut`, through a callee's `&mut` parameter, through `self` in a `&mut self` method, or through `*b` on a `Box` is skipped today (`place_writes_through_pointer`), letting `a.reset()` pass while the field is read afterwards.
     - **Do:** carry the stored value's borrows to the local (or `Box` local) the pointer refers to: for a local `&mut` or `Box` deref, through the pointer's borrow/ownership of that local; for a callee, through id:z0010's pairwise `i -> j` store summary (`#[stores(..)]` checked in id:z0011). Probe the sibling routes: a `&mut` held in a struct field, a reborrow, a closure capturing `&mut w` across `a.reset()`, and a trait method; also verify `gap_44_borrows_attr_reset` is rejected once checked `#[borrows()]` is active.
@@ -312,12 +315,35 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test` and `make preflight-changed`, each `Total:` line quoted.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
 
+- [ ] +safety +review +AI-D @provenance @checkin Review of the provenance diagnostics wording and de-duplication (id:z0066) id:h1yk5
+    > **Created:** 2026-11-17
+    > **Branch:** `provenance`
+    > **Depends:** id:z0066
+    > **Placed:** directly after id:z0066, the `+AI-G` batch it reviews (a review of the task list, the maintainer's request, 2026-11-17: id:z0066 had no check-in, and it changes the checker's diagnostics and the `EXPECT:` lines of provenance tests). id:z0065, the next task that builds on it, depends on this one.
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` of id:z0066's commits.
+      - Re-run id:z0066's C3 (one diagnostic per site and rule at the four sites) and C4 (two rules at one site print both).
+      - No program is accepted that was refused: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` shows 0 newly accepted, and the same count under `--provenance` over `tests/language/memory/provenance/` and the `gap_*` probes before and after (a de-duplication keyed too coarsely must not drop the only error of a function).
+      - Every `EXPECT:` line changed is in the commit message's list (C5), and none changed from one rule's message to another rule's.
+
+- [ ] +audit +safety +measurement +AI-D @provenance Read, by root, the safe store-grid twins the new rules refuse and the default mode accepts id:nc3ym
+    > **Created:** 2026-11-17
+    > **Branch:** `provenance`
+    > **Depends:** id:w17jf
+    > **Placed:** before id:z0065, which it blocks: id:z0065 allows no newly refused twin without a task, and expects each over-rejection to have its own task done first. Found in a review of the task list (the maintainer's request, 2026-11-17). It depends on id:w17jf so that it counts what is left after it.
+
+    - **Now (git:98a1efc on `stream/provenance`):** the default mode's record `bench/fuzz/store_grid_twin_rejections.txt` has 3932 safe twins; id:mr6jm's grid run under `--provenance` (`build/provenance/build/mr6jm/grid/work/twin_rejections.txt`) refuses 6182. `comm` of the two sorted lists: every twin the default refuses the new rules refuse too (0 the other way), and 2250 are refused by the new rules only, so the default flip (id:z0065) would newly refuse them. By destination: `closure_capture_mut` 1180, `closure_owned_capture` 780 (id:w17jf), `deref_out` 130, `field_out` 124, and 6 each of `ten_copies`, `return_val`, `local_field_assigned_out`, `closure_call_mut`, `call_struct_mut`, `call_mut`.
+    - **No task covers 1470 of them.** The 1180 `closure_capture_mut` twins: 118 on each of the ten paths; carriers `string` 640, `closure_local` 480, `elem_ref` 30, `ref_local` 30. The other 290: paths `same_param` 236, `fn_val` 42, `param_65` 6, `store_param_65` 6; carriers `string` 128, `closure_local` 96, `elem_ref` 33, `ref_local` 33; hazards `frame_ends` 130, `drop` 64, `move_owner` 64, `push_growth` 32. id:z0065's accepted refusal (id:z0091's class, 18 cells) matches at most 82 of them by name (`__(same_param|store_param_65)__(deref_out|field_out)__frame_ends`). id:z0075 read the newly refused twins by root on 2026-11-06; id:z0092 to id:z0094 and id:mr6jm changed the closure rules since, and nothing re-read them.
+    - **Do:** after id:w17jf, run the store grid under `--provenance` again, take the twins refused there and absent from the default record, and group them by root (one reduced program and its `--emit-origins` line per root, as id:z0064 did for the tree's warnings). For each root: a real escape the twin generator got wrong (fix the generator); an over-rejection (a task placed before id:z0065, added to its **Depends:**, or the reason it is deferred to `future.tm.md` as a precision bound with a `KNOWN_ISSUES.md` §5 entry for id:z0065 to write); or id:z0091's class (already accepted). A fix is a task of its own, not done here.
+    - **Checks:** C1 the two counts and the `comm` figures after id:w17jf, with the command. C2 every twin refused by the new rules only is assigned to a named root; the roots' counts sum to the total. C3 each root has its reduced program, the diagnostic and the default mode's verdict (built and run: exit 0), quoted here. C4 each root names its task or its recorded bound, and id:z0065's **Depends:** and **Accepted refusal** bullet agree with the list. C5 `tm validate doc/tasks/*.tm.md`.
+
 - [ ] +safety +tests +AI-D @provenance id:z0065 B4a The new rules on by default, beside the old ones
     > **Created:** 2026-11-05
     > **Branch:** `provenance`
     > **Split from:** id:z0012.
-    > **Depends:** id:z0064, id:z0075, id:z0088, id:z0092, id:z0180, id:z0093, id:z0094, id:z0097, id:z0087, id:z0086, id:z0084, id:z0089, id:z0090, id:7kbpd, id:z0011, id:z0044, id:z0066
     > **Depends changed (2026-11-15, the check-in id:n177h):** id:z0084 added: it is the over-rejection of safe user code (a clone of a local `Vec` or `String` returned, `Vec<Vec<T>>.resize`) that this task requires to have its own task done first.
+    > **Depends:** id:z0064, id:z0075, id:z0088, id:z0092, id:z0180, id:z0093, id:z0094, id:z0097, id:z0087, id:z0086, id:z0084, id:z0089, id:z0090, id:7kbpd, id:z0066, id:h1yk5, id:w17jf, id:nc3ym
     > **Check-in:** stop for review after it.
     > **Ordering note:** this task only refuses more, and depends in substance only on id:z0064 (the tree must be clean); the maintainer may move it ahead of id:z0011 and id:z0044 to close the escape holes for users sooner. (id:z0085 and id:z0091 are deferred to `future.tm.md`, and id:z0095 and id:z0096 are holes in both modes, not dependencies.)
 
@@ -328,6 +354,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Accepted refusal (id:z0075, 2026-11-06):** the 18 safe twins refused because an assignment to a local's field keeps the field's old origins (`{ref_local,elem_ref}__{struct_field,tuple_slot,array_slot}__{same_param,store_param_65}__{deref_out,field_out}__frame_ends`) stay refused: add a `KNOWN_ISSUES.md` §5 entry with the reduced program from id:z0091 (`future.tm.md`), the fix that would remove it, and how to rewrite: give the field its final value when the local is built (`let carrier_tup = (src_val, 10);` in place of `(&seed, 10)` then `carrier_tup.0 = src_val;`: no warning, checked on id:z0064's compiler). Any other twin newly refused here needs a task, per the rule above.
     - **Verification:** `make test`, `make preflight-changed` (the differential must show 0 newly accepted; list the newly refused programs), `sh scripts/check_store_grid.sh`, the self-hosting fixpoint. The fuzz record goes stale for `src/`. Stop for review.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+    - **Depends changed (2026-11-17, a review of the task list, the maintainer's request):** removed id:z0011 and id:z0044, which the **Ordering note** above already says are not blockers (this task flips no liveness probe and checks no declaration; its place after them in the queue is unchanged, and the maintainer may still move it). Added id:w17jf and id:nc3ym: the store grid's safe twins that the new rules refuse and the default accepts today (2250 at git:98a1efc, 780 of them id:w17jf's, figures in id:nc3ym) are over-rejections this task requires to have their tasks done first. Added id:h1yk5, the check-in of id:z0066.
     - **When the rules become the default (2026-11-14):** flip the `main` probes the provenance rules close and the old rules do not: `gap_79` and `gap_80` (id:z0183), `gap_77` and `gap_78` (id:z0180), each with its Known gaps entry and `doc/SAFETY.md` §6 sentence, and check the class (K) and (F) probes `gap_59` to `gap_63`, which a by-value-aggregate fix in the old rules closed in part (id:z0183's **Tried** bullet).
 
 - [ ] +safety +tests +AI-D @provenance id:z0074 B4b List every program the old rules refuse and the new rules accept, and read each
@@ -340,6 +367,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Do:** run the new rules alone (a scratch compiler with the old rules' refusals off, as `check_reject_diff.sh` builds its base in a scratch worktree, or a developer flag if one is cheaper; say which) and the default compiler over the rejection differential's program set (69,122 at id:z0071, `tests/`, the safety probes, the store grid twins). List every program refused by the default and accepted by the new rules alone, and read each: a real escape gets a fix or a `known_gap` probe before id:z0012; a safe program is recorded as id:z0012's intended acceptance.
     - **Make it a gate** if it is cheap enough: id:z0012's completion note then lists the same set, empty of unsafe programs.
     - **Known members (from id:z0076, 2026-11-06):** `tests/language/memory/provenance/fresh_store_through_old_rule_refused.zrl`, `heap_block_store_through_old_rule_refused.zrl` and `heap_block_into_global_old_rule_refused.zrl` are refused by the old region rule only: a frame address stored through a `#[fresh]` result or a heap block, the pointer then returned or put into a global. Their expected diagnostic names the old rule, so they fail when it goes; id:z0073 decides what replaces it.
+    - **Correction (2026-11-17, a review of the task list):** id:z0073's decision (2026-11-14) passed these three programs (its case C) to the measurement id:71a06, which comes after this task in the queue. Until it is done they are members of this task's list, recorded as "decided by id:71a06", not read again here.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
 
 - [ ] +safety +measurement +AI-D @provenance B1.8c Measure: a store through a local raw pointer adds the stored value's origins to that local, so a heap block holding a frame address cannot leave the frame id:71a06
@@ -358,8 +386,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 - [ ] +safety +tests +AI-D @provenance id:z0012 B4 Make `--provenance` the default, delete the old classifiers, and fix what the measurement found
     > **Created:** 2026-11-03
     > **Branch:** `provenance`
-    > **Depends:** id:z0011, id:z0044, id:z0065, id:z0063, id:z0073, id:z0074, id:z0075, id:z0096, id:71a06
     > **Depends changed (2026-11-14, the maintainer, by id:z0073's decision):** added id:71a06, which decides case C before the old region rule is deleted.
+    > **Depends:** id:z0011, id:z0044, id:z0065, id:z0063, id:z0073, id:z0074, id:z0075, id:z0096, id:71a06
     > **Check-in:** stop for review after it. **Split here** if the tree needs more than a session of changes.
     > **Split (2026-11-05, from id:z0049's review):** turning the rules on by default beside the old ones is id:z0065 (it only refuses more); this task is now the half that accepts more: delete the old rules and `src/summary_pass.zrl`, with the rejection differential, and the docs and twin lists. The fixes of the measurement are id:z0060 to id:z0063, and the `unsafe fn` exemption item moved to id:z0063, which narrowed it to `Raw`.
 
@@ -373,8 +401,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 - [ ] +audit +safety +AI-G @provenance id:z0045 A reference to a local carrier passed through a `let`, an identity call or a phi is refused
     > **Created:** 2026-11-03
     > **Branch:** `provenance`
-    > **Depends:** id:z0012
     > **Depends note:** (do not edit `src/summary_pass.zrl` before id:z0012 retires it; close with id:z0012). Over-rejection, not a hole; related to id:z0017.
+    > **Depends:** id:z0012
 
     - **Now:** a safe program that hands a callee a reference to a local struct, and stores what the callee returns, is accepted when the reference is written in the call (`take_ref(&c)`) and refused when it first goes through a `let`, an identity function or an `if`. The callee returns the view the struct holds (`c.v`), not a pointer into the struct; the checker reads the result as a pointer into the caller's stack frame. Error: "region escape: returning a pointer to local stack storage via sret".
     - **In the grid:** all 3402 safe twins of the `ref_let`, `ref_identity` and `ref_phi` carriers (1134 each; id:z0041) are refused, and every twin of `ref_direct` is accepted. They are in `bench/fuzz/store_grid_twin_rejections.txt`: `grep -E '__ref_(let|identity|phi)__' bench/fuzz/store_grid_twin_rejections.txt`.
@@ -413,8 +441,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 - [ ] +audit +AI-D @provenance id:z0017 A3.5 Twelve safe store-grid twins are rejected
     > **Created:** 2026-11-03
     > **Branch:** `provenance`
-    > **Depends:** id:z0012
     > **Depends note:** (do not debug `src/summary_pass.zrl` before id:z0012 deletes it). Over-rejection audit, not a hole.
+    > **Depends:** id:z0012
 
     - **Cells (before id:z0012):** `{ref_local,elem_ref}__{struct_field,tuple_slot,array_slot}__{closure,param_65}__call_struct_mut__frame_ends` (12 cells) plus 96 cells exposed by id:z0008 in `bench/fuzz/store_grid_twin_rejections.txt`, rejected today by `src/summary_pass.zrl` ("region escape: storing local stack pointer into caller memory"). Also note the sibling found in id:z0047's review: passing a local struct `RefHolder { r: &c }` by value to `take_holder(h)` retains `Frame(c)` (`os_reach_all`).
     - **Over-rejection from id:z0007 (found in its review, 2026-11-03):** liveness borrows are tracked per local, not per field, so `w.s = v.as_slice(); let x = w.s[0]; a.reset(); return x - 42 + w.t - 3;` is refused at `a.reset()` because `w` stays live for `w.t`.
@@ -426,9 +454,9 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decisions in id:1kaye (`future.tm.md`), 2026-11-13
     > **Branch:** `zil` (new, off `main`; created when ZL1 starts)
-    > **Depends:** id:z0017
     > **Placed:** after the provenance series (`id:z0017`), before ZL2 to ZL6. Nothing in `testinfra` depends on it. ZL4 changes the per-file runner, which `testinfra` rewrites (id:z0139).
 
+    - **Depends changed (2026-11-17, a review of the task list, the maintainer's request):** removed id:z0017. It stated the order (this series after the provenance series), which the task's position states already; nothing in ZL1 to ZL6 needs a provenance task's result, and the series is on a branch of its own off `main`. `tm next` still offers the provenance tasks first; `tm next @zil` now offers this task, so a second session can take the series while the provenance series runs, if the maintainer wants that. To hold it back instead, restore the line.
     - **Why:** `string_const` is to give a `Slice<u8, 'local>` everywhere, as the spec says (id:1kaye, decision 1). Hand-written ZIL then needs `slice_ptr` to get the data pointer back.
     - **Decide, and write into ZL2 to ZL5 as their **Do:** and numbered **Checks:**:** (a) What a slice-typed `string_const` lowers to in zilc's QBE output: a static `{ptr, len}` pair beside the bytes, whose address is the value, or another layout. It must match how the front end's slice slots are laid out (pointer at offset 0, `usize` length at 8, today's `v5` slot in `--emit-zil`). (b) How the front end uses it: copy the pair into the slot, or use the value directly. (c) `slice_ptr`'s syntax, typing and spec entry beside `slice_len` (`doc/spec/intermediate_language.md` §5), and whether the front end's cast-and-load idiom is replaced by it. (d) What the pinned stage1 feeds to which zilc: does any path pass ZIL written by `bootstrap/stage1/` to the new `build/zilc`, `zilc-boot` included? If one does, the new zilc must also accept the old form until a re-pin, which is the maintainer's. (e) Which recorded figures change (`corpus/zrl_whole_program_zil.sha256`, the safety figures) and how each is recomputed.
     - **Also place:** the statement, decided in id:ahd1c, that ZIL is not checked for memory safety (`doc/spec/intermediate_language.md` and `doc/spec/safety_model.md`: the claims cover programs compiled from Zoril source, and zilc catches the common mistakes listed by ZL6). Put it into one of ZL2 to ZL5, or into a task of its own.
