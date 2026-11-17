@@ -224,7 +224,7 @@ How each one is counted: every `.zrl` file under the directory, recursively; **l
 
 ## 6. Known gaps in checked code
 
-The matrix has no row marked `GAP`. The holes that remain open in checked code are tracked as 46 `known_gap` probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes) and listed in the [Known gaps](spec/safety_model.md#known-gaps) table. Ordinary code rarely reaches them: each needs a view of storage the function owns (or a reference to its stack) to be stored or returned through one of the routes below. They are known, and the unified provenance model planned for after the launch is meant to close all of them but class (M), which is a liveness hole and needs a rule of its own. For example, this function is accepted although the arena dies when it returns while `out` keeps the view (class A, [`gap_07_path_same_param.zrl`](../bench/safety_matrix/probes/gap_07_path_same_param.zrl)):
+The matrix has no row marked `GAP`. The holes that remain open in checked code are tracked as 46 `known_gap` probes in [`bench/safety_matrix/probes/`](../bench/safety_matrix/probes) and listed in the [Known gaps](spec/safety_model.md#known-gaps) table. Each needs a view of storage the function owns (or a reference to its stack) to be stored, returned or kept past a free through one of the routes below; some of those routes are ordinary code (§6.1). They are known. The unified provenance model (`--provenance`) closes the escapes. A store through a raw pointer in a struct field (gap_95) and the liveness holes (the reset half of class G, class H and class M) need fixes of their own (§6.1). For example, this function is accepted although the arena dies when it returns while `out` keeps the view (class A, [`gap_07_path_same_param.zrl`](../bench/safety_matrix/probes/gap_07_path_same_param.zrl)):
 
 ```zoril,no-test
 fn stash_pair(p: (&mut [i32], [i32])) { *p.0 = p.1; }
@@ -252,6 +252,34 @@ The open classes:
 - **(K) Owners holding frame views, moved out:** a local `Vec` whose elements are views of a stack array is accepted when it is pushed into the caller's `Vec` ([`gap_59_pushed_vec_holding_frame_views.zrl`](../bench/safety_matrix/probes/gap_59_pushed_vec_holding_frame_views.zrl)), passed by value to a callee that pushes it ([`gap_60_vec_holding_frame_views_moved_to_pushing_callee.zrl`](../bench/safety_matrix/probes/gap_60_vec_holding_frame_views_moved_to_pushing_callee.zrl)), or wrapped in a struct first ([`gap_61_struct_wrapping_vec_of_frame_views_pushed.zrl`](../bench/safety_matrix/probes/gap_61_struct_wrapping_vec_of_frame_views_pushed.zrl)); and a `Vec` a callee builds around a view of a caller-local `Vec`'s buffer is accepted when the callee stores it into the caller's slot ([`gap_63_vec_built_around_param_view_in_callee.zrl`](../bench/safety_matrix/probes/gap_63_vec_built_around_param_view_in_callee.zrl)). A struct that holds a view of a stack array directly is accepted when it is pushed into the caller's `Vec` (`out.push(H { s: s })`), although the bare view is refused ([`gap_79_struct_holding_frame_view_pushed.zrl`](../bench/safety_matrix/probes/gap_79_struct_holding_frame_view_pushed.zrl)).
 - **(L) A generic `Clone` impl that hides what it clones:** `Clone` for `Vec<T>` and `Option<T>` declares `#[borrows()]`, so a clone of a value holding views of a stack array holds no borrow and can be returned ([`gap_77_vec_clone_launders_frame_views.zrl`](../bench/safety_matrix/probes/gap_77_vec_clone_launders_frame_views.zrl), [`gap_78_option_clone_launders_frame_view.zrl`](../bench/safety_matrix/probes/gap_78_option_clone_launders_frame_view.zrl)); so is a user `Clone` impl that copies a view its result does not declare, through `resize` and `extend_from_slice` ([`gap_80_struct_view_cloned_into_callers_vec.zrl`](../bench/safety_matrix/probes/gap_80_struct_view_cloned_into_callers_vec.zrl)). A direct slice clone, `clone_in` and a `#[derive(Clone)]` struct are refused.
 - **(M) A view stored through a parameter, then freed in the same callee:** a borrow is held by a local of the frame, so a view of a `Vec` reached through one parameter, stored into memory a parameter reaches (`*out = v.as_slice()`, `out.push(v.as_slice())`, `p.s = p.a.as_slice()`), is held by nothing in the callee, and a `v.free()` after it is accepted; the caller reads the freed buffer ([`gap_87_view_stored_through_param_outlives_free.zrl`](../bench/safety_matrix/probes/gap_87_view_stored_through_param_outlives_free.zrl)). Unlike the other classes it needs no storage the function owns.
+
+### 6.1 The classes by fix and by how often code meets them
+
+The holes above are not each a problem of their own. Each probe belongs to one of three kinds of hole, and each kind has a single fix:
+
+1. **Escape:** an address of the function's frame, or of storage the function owns, outlives the function. The provenance rules (`--provenance`, designed in the repository's `doc/design/provenance.md`) are this fix. Every probe of classes A, C, D, E, F, I, J, K and L, gap_29 of class B, and the escape half of class G (gap_40, gap_41, gap_42, gap_45) is refused under `--provenance` today, with a provenance error. What is left is making those rules the default without refusing safe programs the default mode accepts. Those refusals are counted on the store grid and in the test programs, and they are read one by one before the switch.
+2. **Invalidation:** a view is read after what it views is freed or its arena is reset, while no local of the frame holds the borrow. This covers the reset half of class G (gap_37, gap_38, gap_39, gap_43), class H and class M, all accepted under `--provenance` too. The fix is a liveness model, which states what holds a borrow when no local does. It is still to be designed. The design has to keep these checks from making ordinary code awkward to write; if a static rule cannot, a run-time check or a rule left to the programmer is the alternative.
+3. **Raw pointer reach:** a store inside an `unsafe` block, through a raw pointer, reaches a global the checker does not see. gap_94 of class C is refused under `--provenance`; gap_95 of class B is not. The fix follows a raw `*mut` field only to what it was set to point at, so a `Vec`'s buffer, which is a raw `*mut` too, does not become a destination of every store. Inside `unsafe`, as in Rust, soundness is the programmer's to keep (§4.1), so this kind matters least.
+
+How often ordinary code meets each class is an estimate from what the route needs, not a measurement:
+
+| Class                       | Kind                 | Code meets it                 | `--provenance`      |
+| --------------------------- | -------------------- | ----------------------------- | ------------------- |
+| (A) one parameter, both     | escape               | rare                          | refused             |
+| (B) unseen destinations     | escape, raw pointer  | occasional; gap_95 `unsafe`   | gap_29 refused      |
+| (C) closures                | escape, raw pointer  | common; rare (gap_47, gap_48) | refused             |
+| (D) payloads, `fn` values   | escape               | occasional; rare (65th)       | refused             |
+| (E) call summary limits     | escape               | occasional; rare (recursion)  | refused             |
+| (F) by-value owners         | escape               | occasional                    | refused             |
+| (G) stores through `&mut`   | escape, invalidation | common (`&mut self`)          | escape half refused |
+| (H) `#[borrows()]`, reset   | invalidation         | occasional                    | accepted            |
+| (I) an `extern` copy        | escape               | common (`extend_from_slice`)  | refused             |
+| (J) `match` on `&` to local | escape               | common                        | refused             |
+| (K) owners of frame views   | escape               | common (`push`)               | refused             |
+| (L) `Clone` laundering      | escape               | common (`clone()`)            | refused             |
+| (M) stored, then freed      | invalidation         | common (`free()`)             | accepted            |
+
+To see where a class stands, compile its probe with and without the flag: `timeout -k 5s 30s build/zoril --provenance <probe> -I stdlib=stdlib -o out.zil` exits 1 with a `provenance:` error for every probe the last column marks refused, and 0 for the others; every probe exits 0 without the flag.
 
 ---
 
