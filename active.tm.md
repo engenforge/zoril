@@ -495,10 +495,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test`: `Total: 3828 run, 3828 passed, 0 failed, 102 skipped (138.3s)`. `make preflight-changed`: `Total: 8 run, 7... ` first run failed only on milestone figures; after `5d8c6a9`: `Total: 8 run, 8 passed, 0 failed, 0 skipped (100.2s)`, reject-diff base verdicts line was cached (not `REJECT_DIFF_NO_CACHE=1`).
       - The fuzz record (`bench/fuzz/README.md`) is stale for `src/`.
 
-- [ ] +tools +tests +AI-G @provenance id:z0090 B1.9g zbuild's manifest parsing gives no warning under `--provenance`
+- [x] +tools +tests +AI-G @provenance id:z0090 B1.9g zbuild's manifest parsing gives no warning under `--provenance`
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Depends:** id:0m61c, id:z0084
+    > **Completed:** 2026-11-17 git:5d8c6a9
 
     - **Found by:** id:z0064 (root (d1)).
     - **Routed by:** id:z0075, to code changes at zbuild's sites; the rule was deferred (id:z0084, promoted 2026-11-15 and placed before this task).
@@ -514,6 +515,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `make test` and `make preflight-changed`, each `Total:` line quoted; the completion note says the fuzz record is stale for `tools/zbuild/`.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
     - **After id:z0084 (2026-11-15, the check-in id:n177h):** id:z0084's rule is no longer deferred; it now runs before this task, and its record quotes C1's count after it. Take C1 from the tree as it is then, not the 25 above. If C1 is 0, change no code: complete the task with C1's output, answer C2 to C5 `not run: no warning left to remove`, and run only `make test-changed` for C6. If it is above 0, do **Do** for the sites that are left.
+
+    - **Completion:** no code change (the task's own rule for C1 = 0, after id:z0084).
+      - C1: `W | grep -c 'warning: provenance'` printed `0` (tree at `5d8c6a9`).
+      - C2 to C5: not run: no warning left to remove.
+      - C6: `make test-changed BASE=HEAD`: `Total: 3828 run, 3828 passed, 0 failed, 102 skipped (138.1s)`. `make preflight-changed` not run: no code changed.
 
 - [ ] +safety +review +AI-D @provenance @checkin Review of `exh_expand_or`'s row copy and zbuild's manifest warnings (id:z0089, id:z0090) id:7kbpd
     > **Created:** 2026-11-15
