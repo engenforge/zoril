@@ -6197,6 +6197,13 @@ fn os_env_to_cap(c: &mut OriginSets, set: usize, id: usize) {
     }
 }
 
+// SET joins what one read through it yields (os_through).
+fn os_add_read(c: &mut OriginSets, set: usize) {
+    let tb = os_t(c, OS_T_B);
+    os_through(c, set, tb);
+    let _ = os_or(c, set, tb);
+}
+
 // Whether sets A and B share a Frame origin.
 fn os_meets_frames(c: &OriginSets, a: usize, b: usize) -> bool {
     let x = a * c.words;
@@ -7048,7 +7055,13 @@ fn os_check_closure_value(
     } else {
         0 as usize
     };
-    let e = if f.params_len >= base { f.params_len - base } else { 0 as usize };
+    // `__env`, the closure's last IL parameter, is index E of a call's arguments: one past the
+    // declared parameters, which are the ones a call through the value passes (lower_rv_call_ptr).
+    let mut e = if f.params_len >= base { f.params_len - base } else { 0 as usize };
+    if e > 0 as usize
+        && type_name_is(c.table.lookup(f.param(f.params_len - 1 as usize).name), "__env") {
+        e = e - 1 as usize;
+    }
     let ao = os_t(c, OS_T_AO);
     let aos = os_t(c, OS_T_AS);
     let place = Place { base: env, projections: @slice(0 as *mut Projection, 0 as usize) };
@@ -7057,6 +7070,7 @@ fn os_check_closure_value(
     let _ = os_read(c, module, locals, &place, ao, aos);
     let _ = os_or(c, ao, aos);
     let tv = os_t(c, OS_T_SV);
+    let tv2 = os_t(c, OS_T_X);
     let ed = os_t(c, OS_T_ED);
     let eo = os_t(c, OS_T_R);
     let es = os_t(c, OS_T_D);
@@ -7110,7 +7124,9 @@ fn os_check_closure_value(
                 let mut j = e;
                 while j < 64 as usize {
                     if (table[row + w] >> (j as u64)) & 1 as u64 != 0 as u64 {
-                        os_dest_reach(c, module, locals, ao, ed);
+                        os_copy(c, tv2, ao);
+                        if j > e { os_add_read(c, tv2); }
+                        os_dest_reach(c, module, locals, tv2, ed);
                         if c.checking && bound && os_external(c, ed) {
                             os_refuse(
                                 c,
@@ -7547,6 +7563,12 @@ fn os_edge_effects(
                     // so the Static of a literal already in a `Vec<[u8]>` is no target.
                     os_clear(c, tm);
                     os_param_origin(c, module, locals, fn_id, args, j, false, tm);
+                    // A capture's bit as a target is the memory the capture's value names, one read
+                    // through its local (os_arg names the local), whatever its type: the reach
+                    // follows what a local holds only for a mutable handle, never a raw pointer.
+                    if w == 2 as usize && c.known_env != OS_NO_ENV && j > c.known_env {
+                        os_add_read(c, tm);
+                    }
                     let sf = os_t(c, OS_T_SF);
                     os_copy(c, sf, tv);
                     os_drop_self_store(c, module, locals, sf, tm);
