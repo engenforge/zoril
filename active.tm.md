@@ -47,6 +47,16 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Route class:** a closure passed as an argument to a callee that calls it (`gap_52`), here with a global destination. Probe the siblings: a `static mut` reached through a captured reference, a closure kept in a struct field, two levels of callers.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
 
+- [ ] +safety +tests +AI-D @provenance A closure storing through a captured raw pointer is checked against what the pointer reaches (gap_94) id:whak5
+    > **Created:** 2026-11-17
+    > **Branch:** `provenance`
+    > **Found by:** id:z0096 (its sibling probe of a global reached through a capture; probe git:4cff970).
+    > **Placed:** directly after id:z0096, a follow-up to it. A soundness hole accepted by both rules; the maintainer may raise it.
+
+    - **Now (git:b722b67):** `bench/safety_matrix/probes/gap_94_closure_store_through_captured_raw_ptr_to_global.zrl` (`let gp = &mut G as *mut *i32; let cl = || { unsafe { *gp = r as *i32; } }; cl();`, `r = &x`) compiles with and without `--provenance`, exit 77. In the body the store's target is the memory capture `gp` points to, `ParamContents` of `gp`'s capture bit; at the known call the caller maps it to `os_dest_reach` of `Frame(gp)` (id:w17jf's pseudo argument; before it, of the environment), which adds `O(L)` only when `L`'s type can hold a mutable handle (`OS_Q_HANDLE`), not for a raw pointer, so `Static` is never a target. Handed to `run` (`build/z96/p/s3.zrl`) it is accepted too, by id:z0096's closure rule for the same reason. Refused: the same store with no closure (`build/z96/p/s3d.zrl`, both rules), through a named function's raw pointer parameter (`s3f.zrl`: there the target is `ParamAddr`, `O(gp)` itself).
+    - **Leads:** (a) at a known closure call and in the closure rule, a contents target of a capture is what that capture's value names, `os_dest_reach` of `os_through(Frame(cj))` (one read, then the reach), not of `Frame(cj)`; (b) count a raw mutable pointer as a mutable handle in `OS_Q_HANDLE` (wider: every destination reach of a local holding one). Measure each: the store grid, the test programs (`build/z96/measure.sh`), the rejection differential; probe a literal-holding capture (`Vec<[u8]>` with `"lit"` pushed) written through, which must stay accepted.
+    - **Checks:** gap_94 flipped (expected and the Known gaps entry, the `doc/SAFETY.md` §6 bullet), its sibling handed to `run` refused, `make test`, `make preflight-changed`, the rejection differential.
+
 - [ ] +precision +tests +AI-D @provenance id:z0097 An edge into a `fn` argument's environment does not make a `fn` item a global destination
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
