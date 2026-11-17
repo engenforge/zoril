@@ -1,0 +1,12 @@
+// A `fn` value received as a parameter, called with a local's address: what its environment
+// reaches is the caller's, so the call may store the address there (§3, _Calls through a `fn`
+// value_).
+// flags: --provenance
+// EXPECT: unknown-call store rule
+// expected compile fail
+fn leak(f: fn(&i32)) {
+    let x = 1;
+    f(&x);
+}
+fn ignore(r: &i32) { }
+fn main() -> i32 { leak(ignore); return 0; }

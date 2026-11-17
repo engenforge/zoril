@@ -6710,10 +6710,35 @@ fn os_unknown_arg(
         return;
     }
     os_clear(c, ta);
-    let _ = os_read(c, module, locals, callee, ta, ta);
+    let _ = os_read(c, module, locals, callee, ta, tas);
+    os_clear(c, tas);
     let w = ta * c.words + OS_W_FLAGS;
     c.buf[w] = c.buf[w] & !ORIGIN_STATIC;
+    os_env_frames_only(c, module, locals, ta);
     os_through(c, ta, tao);
+}
+
+// Takes out of SET, the origins of a `fn` value, every Frame(L) whose L is not a tuple. A `fn`
+// value made in this frame points at its environment, which is always a tuple local
+// (build_closure_env's `&env`), so another Frame in it is a field-insensitive set's spill (a tuple
+// parameter's summary storing `p.0` into itself) or the storage the local holding the value owns,
+// neither of which the call can reach. What the environment holds is still followed from Frame(E).
+fn os_env_frames_only(c: &mut OriginSets, module: &ILModule, locals: [Local], set: usize) {
+    let mut id = 1 as usize;
+    while id < c.nl {
+        if os_has_frame(c, set, id) {
+            let ty = os_local_ty(locals, id as u32);
+            let mut keep = ty == 0 as u32;
+            if !keep {
+                if let ILType.Tuple(_) = module.types[ty as usize - 1 as usize].def { keep = true; }
+            }
+            if !keep {
+                let w = set * c.words + OS_W_FRAME + id / 64 as usize;
+                c.buf[w] = c.buf[w] & !((1 as u64) << ((id % 64 as usize) as u64));
+            }
+        }
+        id = id + 1 as usize;
+    }
 }
 
 // What a call to a callee with no usable summary (a `fn` value, a body not read yet) does to the

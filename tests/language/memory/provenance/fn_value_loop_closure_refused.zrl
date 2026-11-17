@@ -1,0 +1,20 @@
+// A closure built in a loop, each time capturing a reborrow of a `&mut` parameter and a local's
+// address, kept in a struct field and called after the loop: the environment reaches both, so the
+// call is refused (§3, _Calls through a `fn` value_).
+// flags: --provenance
+// EXPECT: unknown-call store rule
+// expected compile fail
+struct H { f: fn() }
+fn leak(out: &mut &i32) {
+    let x = 1;
+    let r = &x;
+    let mut i = 0;
+    let mut h = H { f: || { } };
+    while i < 3 {
+        let o2: &mut &i32 = &mut *out;
+        h = H { f: || { *o2 = r; } };
+        i = i + 1;
+    }
+    h.f();
+}
+fn main() -> i32 { let y = 2; let mut p = &y; leak(&mut p); return *p; }
