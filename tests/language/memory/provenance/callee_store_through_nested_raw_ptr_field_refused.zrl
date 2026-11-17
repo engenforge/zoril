@@ -1,0 +1,14 @@
+// The same store with the struct holding the raw pointer nested in another struct.
+// flags: --provenance
+// expected compile fail
+// EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
+static mut G: *i32 = 0 as *i32;
+struct S { p: *mut *i32 }
+struct T { s: S, n: i32 }
+fn put(t: &T, r: &i32) { unsafe { *t.s.p = r as *i32; } }
+fn main() -> i32 {
+    let x = 77;
+    let t = T { s: S { p: &mut G as *mut *i32 }, n: 1 };
+    put(&t, &x);
+    return 0;
+}

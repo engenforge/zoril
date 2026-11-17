@@ -5673,7 +5673,8 @@ const OS_Q_HANDLE: usize = 1;
 const OS_Q_FRESH: usize = 2;
 const OS_Q_ARENA_REF: usize = 3;
 const OS_Q_REF_HANDLE: usize = 4;
-const OS_Q_COUNT: usize = 5;
+const OS_Q_LOOSE_RAW: usize = 5;
+const OS_Q_COUNT: usize = 6;
 
 // The rules of §3: off, refusing, or warning only (`--provenance=warn`).
 pub const PROVENANCE_OFF: u32 = 0;
@@ -6072,7 +6073,9 @@ fn os_owns(c: &mut OriginSets, module: &ILModule, ty: u32) -> bool {
 // so a call returning one owns fresh storage; OS_Q_ARENA_REF, whether it reaches an `Arena` through
 // a pointer or a slice (an `Arena` or `ArenaHeader` held by value answers no, though its header is
 // one); OS_Q_REF_HANDLE, whether it can hold a mutable handle other than a `fn` value, or a raw
-// `*mut` pointer. An unknown type answers yes.
+// `*mut` pointer; OS_Q_LOOSE_RAW, whether it holds by value a raw `*mut` pointer that is not part
+// of an owner (a standard collection or a Drop type, whose raw pointers point into what it owns),
+// not looking behind a reference or a slice. An unknown type answers yes.
 fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool {
     if ty == 0 as u32 || ty as usize > module.types.len() { return true; }
     let m = q * c.nt + ty as usize;
@@ -6091,13 +6094,24 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
         },
         ILType.Ptr(x) | ILType.RawPtr(x) | ILType.RawPtrMut(x) => {
             let raw_mut = module.types[ty as usize - 1 as usize].def.get_tag() == ILTYPE_RAWPTRMUT;
-            if raw_mut && q == OS_Q_REF_HANDLE {
+            if raw_mut && q == OS_Q_LOOSE_RAW {
+                // An arena's raw form (`*mut ArenaHeader`, `Vec.new_in_raw(arena)`) points at an
+                // arena, which owns what is written through it: no `static mut` to lead a store to.
+                yes = true;
+                if x != 0 as u32 && x as usize <= module.types.len() {
+                    if let ILType.User(pu) = module.types[x as usize - 1 as usize].def {
+                        if type_name_is(c.table.lookup(pu.name), "ArenaHeader") { yes = false; }
+                    }
+                }
+            } else if raw_mut && q == OS_Q_REF_HANDLE {
                 // What a raw mutable pointer points to may be written through it, a global as
                 // well (`&mut G as *mut T`): no reason to take Static out of what a type holding
                 // one holds.
                 yes = true;
             } else if q == OS_Q_ARENA_REF {
                 yes = os_type_has(c, module, x, OS_Q_ARENA);
+            } else if q == OS_Q_LOOSE_RAW {
+                yes = false;
             } else {
                 yes = q != OS_Q_FRESH && os_type_has(c, module, x, q);
             }
@@ -6110,6 +6124,7 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
                 || (q == OS_Q_ARENA_REF && os_type_has(c, module, sl.element, OS_Q_ARENA))
                 || (q != OS_Q_FRESH
                     && q != OS_Q_ARENA_REF
+                    && q != OS_Q_LOOSE_RAW
                     && os_type_has(c, module, sl.element, q));
         },
         ILType.Fn(_) => { yes = q == OS_Q_HANDLE; },
@@ -6133,6 +6148,13 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
                 yes = false;
             } else if q == OS_Q_FRESH && os_has_drop(c, module, u.name) {
                 yes = true;
+            } else if q == OS_Q_LOOSE_RAW
+                && (type_name_is(c.table.lookup(u.name), "Vec")
+                    || type_name_is(c.table.lookup(u.name), "String")
+                    || type_name_is(c.table.lookup(u.name), "ByteVec")
+                    || type_name_is(c.table.lookup(u.name), "HashMap")
+                    || os_has_drop(c, module, u.name)) {
+                yes = false;
             } else {
                 match module.typedefs[u.id as usize] {
                     ILTypeDef.Struct(st) => {
@@ -6161,9 +6183,14 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
 // to a fixpoint. Following O(L) for every type would refuse `v.push(arena_str)` after
 // `v.push("lit")` put Static in O(v). When L's only handles are `fn` values and it holds no raw
 // `*mut` pointer, O(L) adds no Static: a `fn` value names no memory but its environment, and a
-// `fn` item's Static is its code. A
-// capture alias's slot is the environment's memory, so a Frame of one adds ParamContents(`__env`)
-// (§3, _Closure environments_).
+// `fn` item's Static is its code. When L holds a raw `*mut` pointer and no mutable handle, the
+// pointer not part of an owner (OS_Q_LOOSE_RAW), only the Static in O(L) is added: it may name a
+// `static mut`. The rest of
+// O(L) is what the memory it points to holds, not where it points, and following it would make a
+// store through it a store into those values. An owner's raw pointers (a `Vec`'s buffer, an
+// `Arena`'s header) point into what it owns, S(L), so a `static`'s address one of its elements
+// holds is no destination of a push. A capture alias's slot is the environment's memory, so a
+// Frame of one adds ParamContents(`__env`) (§3, _Closure environments_).
 fn os_dest_reach(c: &mut OriginSets, module: &ILModule, locals: [Local], src: usize, dst: usize) {
     os_copy(c, dst, src);
     let mut more = true;
@@ -6174,6 +6201,11 @@ fn os_dest_reach(c: &mut OriginSets, module: &ILModule, locals: [Local], src: us
             if os_has_frame(c, dst, id) {
                 if os_or(c, dst, c.nl + id) { more = true; }
                 let lty = os_local_ty(locals, id as u32);
+                if !os_type_has(c, module, lty, OS_Q_HANDLE)
+                    && os_type_has(c, module, lty, OS_Q_LOOSE_RAW)
+                    && c.buf[id * c.words + OS_W_FLAGS] & ORIGIN_STATIC != 0 as u64 {
+                    os_add_flag(c, dst, ORIGIN_STATIC);
+                }
                 if os_type_has(c, module, lty, OS_Q_HANDLE) {
                     let held = os_t(c, OS_T_DR);
                     os_copy(c, held, id);

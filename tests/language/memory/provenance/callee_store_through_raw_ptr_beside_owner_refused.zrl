@@ -1,0 +1,15 @@
+// The same store with the raw pointer beside a Vec in one struct: the struct owns storage, but the pointer is not part of the Vec, so the global stays a target.
+// flags: --provenance
+// expected compile fail
+// EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
+import "vec.zrl";
+use vec::Vec;
+static mut G: *i32 = 0 as *i32;
+struct S { v: Vec<i32>, p: *mut *i32 }
+fn put(s: &S, r: &i32) { unsafe { *s.p = r as *i32; } }
+fn main() -> i32 {
+    let x = 77;
+    let s = S { v: Vec::<i32>.new(), p: &mut G as *mut *i32 };
+    put(&s, &x);
+    return 0;
+}

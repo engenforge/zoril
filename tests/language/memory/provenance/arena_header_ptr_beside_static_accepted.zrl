@@ -1,0 +1,30 @@
+// A struct holding an arena's raw form (`*mut ArenaHeader`) beside a `static`'s address: the raw
+// pointer points at an arena, not at a `static mut`, so a callee that builds a Vec in that arena
+// and pushes a view of the caller's array into the caller's Vec stores nothing into a global.
+// flags: --provenance
+// expected exit 0
+import "mem.zrl";
+import "mem_raw.zrl";
+import "vec.zrl";
+use mem::{Arena, arena_raw};
+use mem_raw::ArenaHeader;
+use vec::Vec;
+
+static K: i32 = 5;
+
+struct Ctx { k: &i32, arena: *mut ArenaHeader }
+
+fn fill(ctx: &Ctx, out: &mut Vec<[i32]>, s: [i32]) {
+    let mut tmp = unsafe { Vec::<[i32]>.new_in_raw(ctx.arena) };
+    tmp.push(s);
+    out.push(tmp.as_slice()[0]);
+}
+
+fn main() -> i32 {
+    let a = Arena.new(4096).unwrap();
+    let ctx = Ctx { k: &K, arena: unsafe { arena_raw(&a) } };
+    let data = [37, 1];
+    let mut out = Vec::<[i32]>.new_in(&a);
+    fill(&ctx, &mut out, &data);
+    return out[0][0] + *ctx.k - 42;
+}
