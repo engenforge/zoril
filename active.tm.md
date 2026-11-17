@@ -4,13 +4,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Series rule (2026-11-05, from id:z0071):** a precision fix that removes origins from a set (an exemption, a split, a moved-storage drop) is first measured alone, on top of the task it serves, to show it is needed; and it comes with probes of its sibling routes (the value built inside the callee, returned from a call, packed into a struct beside a view or a raw pointer).
 
-- [ ] +precision +tests +AI-D @provenance A known closure call that stores into an owned capture checks what the other captures hold, not the owned capture's own storage id:mr6jm
+- [x] +precision +tests +AI-D @provenance A known closure call that stores into an owned capture checks what the other captures hold, not the owned capture's own storage id:mr6jm
     > **Created:** 2026-11-17
     > **Branch:** `provenance`
     > **Found by:** id:z0093 and id:z0094 (the store grid's `closure_owned_capture` twins).
     > **Depends:** id:z0094
     > **Placed:** directly after id:z0094, a follow-up to it. Not a soundness hole: every cell it names is refused by the base too, so it may also sit later in the series; the maintainer decides. It is `+AI-D`: a choice between the two leads below.
-    > **Claimed:** 2026-11-17 provenance
+    > **Completed:** 2026-11-17 git:98a1efc
 
     - **Now (git:603c5ee):** with known callees, the store grid under `--provenance` still refuses all 3300 `closure_owned_capture` safe twins, as the base did (`build/provenance/build/z94/grid/work/twin_rejections.txt`; 200 per carrier). Example `arena_vec__arena_struct_bundle__direct__closure_owned_capture__arena_reset.twin`: the closure does `h = OwnedHolder { s: routed, .. }` with `routed` a view of the caller's parameter arena; its summary is `store ParamContents(1) -> ParamContents(1) global` (an edge into an owned capture is a global one, §3 _A closure body's summary is stated over `__env`_), and at the known call the caller checks everything the environment reaches, `O(env) ∪ S(env)` of the env struct, which holds the moved `Vec`'s storage `Frame(_20)` beside `Param(0)`: "the callee stores an address of this frame into a global (call store rule)".
     - **The cause:** the summary folds every capture's own bit into one `ParamContents(__env)` (`os_fold_env`), so the caller cannot tell `routed` (another capture) from `h`'s own storage, which the body has already left out of the edge.
@@ -24,6 +24,16 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Store grid under `--provenance`** (`build/mr6jm/grid`, compiler `build/mr6jm/zoril.new` = git:98a1efc): 0 unsafe cells accepted (`work/actual_names.txt` empty). Safe twins refused 6182 against id:z0094's 8702: 2520 accepted again, 0 newly refused, all `closure_owned_capture` (3300 → 780). The 780 left: 480 `closure_local`, 150 `elem_ref`, 150 `ref_local` carriers (all ten paths 78 each; 460 `frame_ends`, 160 `drop`, 160 `move_owner`); e.g. `ref_local__direct__direct__closure_owned_capture__frame_ends.twin`: the holder starts as `OwnedHolder { s: &dummy_seed, .. }`, so the environment holds a frame address that is `h`'s own contents, which the body left out of the edge but the one `ParamContents(__env)` cannot tell from `routed`'s: lead (a). The modular step stopped as on every `--provenance` grid run (`store-grid-modular: 125 entr(ies) ... no longer hold`).
     - **Test programs** (`build/mr6jm/measure.sh`, z64's method): 720 compile by default (719 at id:z0094, plus the new accepted test); warning programs 14, warnings 91, roots `src/main.zrl` 199, zbuild 21, zilc 0, zman 0: all as at id:z0094.
     - **Sibling routes:** the 93 `gap_*` probes under `--provenance`, base and git:98a1efc: the same verdict each.
+
+    - **Completion (2026-11-17), the work commit git:98a1efc on `stream/provenance`** (above git:603c5ee; not yet on `provenance` or pushed). The checks the task names:
+        - _The grid's 3300 twins and 0 unsafe cells:_ 0 unsafe accepted; `closure_owned_capture` twins refused 3300 → 780, 0 newly refused anywhere (above; the 780 are id:w17jf).
+        - _`closure_captures_owning_and_other.zrl`:_ `--provenance=warn` 0 warnings and `--provenance` rc=0 with both git:603c5ee and git:98a1efc (it is not a store into an owned capture from another capture, so no change).
+        - _Probes:_ owned storage into another owned capture (`a1`, refused, in the body), a view of an owned capture returned through a known call (`a2`, refused by the return rule), and the others above; safeguards taken out make the accepted test fail.
+        - _`make test`_ (after the last edit): `Total: 3724 run, 3724 passed, 0 failed, 94 skipped (133.7s)`.
+        - _`make preflight-changed` and the rejection differential:_ `PREFLIGHT_FIGURES=true REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=603c5ee`, rc=0: "All mutations caught."; the gen3/gen4 fixpoint; `[PASS] fuzz-calibrate: all 23 calibration programs are in their fixed state (21 refused, 2 accepted with one drop)`; `reject-diff: base verdicts: fresh (no cache)` and `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69159 programs` (the rule acts only under `--provenance`; the programs it newly accepts there are the grid's 2520 twins, generated safe programs, not read one by one, and the probes and test above, which were read: none stores or returns a frame address); checked build `Total: 1415 run, 1415 passed, 0 failed, 0 skipped (107.4s)`; git group `Total: 8 run, 8 passed, 0 failed, 0 skipped (99.7s)`; "All performance thresholds within tolerance of baseline."; the `[MISSED]`/`[DETECTED]` record identical to id:z0094's run. The `PREFLIGHT_FIGURES` stub as in id:z0093/id:z0094 (id:xh0jq).
+        - _`sh scripts/run_safety_matrix.sh`:_ `All probes complete: 473/519 passed. Mismatches: 0`. Sibling routes: the 93 `gap_*` probes, same verdicts.
+    - **Stale:** `bench/fuzz/README.md`'s fuzz record (a change to `src/`). Milestone figures not touched.
+    - **Check-in:** none: an `+AI-D` task, reviewed by the session that did it (AGENTS.md), with the reproducers and sibling routes above.
 
 - [ ] +precision +tests +AI-D @provenance A known closure call tells one capture from another: the summary keeps per-capture bits, mapped at the call to the environment struct's fields id:w17jf
     > **Created:** 2026-11-17
