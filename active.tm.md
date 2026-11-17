@@ -65,11 +65,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `make test-changed BASE=HEAD` -> `Total: 21 run, 21 passed, 0 failed, 0 skipped (8.7s)`; `TR_WORK=build/tests-git ./scripts/test.sh --quiet --group git` -> `rc=0`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (100.1s)`.
       - C6: committed as git:eac1f70 on `main`.
 
-- [ ] +docs +AI-G @main The preflight descriptions name the calibration and figures-record steps, the `preflight-changed` help names the differential, and its time is the measured one id:8wvxb
+- [x] +docs +AI-G @main The preflight descriptions name the calibration and figures-record steps, the `preflight-changed` help names the differential, and its time is the measured one id:8wvxb
     > **Created:** 2026-11-17
     > **Branch:** `main`
     > **Found by:** the check-in id:kbv3f, reviewing id:ss1f8.
     > **Placed:** after id:9pnp4, as a follow-up of the check-in id:kbv3f; nothing depends on their order.
+    > **Completed:** 2026-11-17
 
     - **Now (git:49f4654):** `scripts/preflight.sh` runs `calibrate` (`scripts/check_fuzz_calibrate.sh`, `make fuzz-calibrate`) after the mutations and `figures-record` (`scripts/record_figures.sh`, a row of `bench/records/figures_history.tsv`) after the bench step, in both modes (`rg -o 'record_step [a-z-]+' scripts/preflight.sh`), and its Usage lines name both. The `make preflight-changed` bullet of `AGENTS.md` (Running tests) and line of `doc/developer_guide.md` (Preflight Gates) name neither; the `##` text of `preflight-changed` in the `Makefile` names neither, nor the rejection differential.
     - **Measured (this host, 16 cores):** id:ss1f8 gave 379 s at git:1a03f6b with the differential skipped. id:kbv3f's run at git:49f4654 (`REJECT_DIFF_CACHE=<dir> make preflight-changed PREFLIGHT_BASE=d405854`, differential skipped) took about 8.5 minutes from start to end; its `build/preflight-timings.tsv` gave `mutation 2`, `selfhost 68`, `calibrate 2`, `reject-diff 0`, `checked 126`, `git 100`, `bench 198`, `figures-record 2`. The ~6 minutes in `doc/developer_guide.md` is the lower of the two; C1 measures it again.
@@ -83,6 +84,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: after: the same command prints nothing; `rg -n 'calibration' AGENTS.md doc/developer_guide.md Makefile` and `rg -n 'figures record' AGENTS.md doc/developer_guide.md Makefile`; quote the lines. `make help-all 2>&1 | rg ' preflight-changed '`; quote it whole.
       - C4: `git diff --stat` before the commit (expected three files, one line each); `dprint check AGENTS.md doc/developer_guide.md`; `make test-changed BASE=HEAD`; quote each result and the `Total:` line.
       - C5: commit on `main`, add `**Awaiting review:**` with C1's `wall=` and C3, `tm done`, and stop at the check-in that follows.
+    - **Awaiting review:** C1 `wall=384` (N=6, M=10); re-run C3 (`rg -n 'calibration' AGENTS.md doc/developer_guide.md Makefile`, `rg -n 'figures record' AGENTS.md doc/developer_guide.md Makefile`, `make help-all 2>&1 | rg ' preflight-changed '`).
+    - **Completion (2026-11-17, git:150ba73):**
+      - C1: `rc=0 wall=384` -> N=6, M=10; `[SKIP] reject-diff: none of src/summary_pass.zrl src/check_zir.zrl src/verify.zrl src/main.zrl src/interface_print.zrl src/driver src/lower_zir src/parser src/parser.zrl src/ast.zrl stdlib differs from d405854686b0e79529cc9194b1745aa202d936ab (PREFLIGHT_BASE=d405854; PREFLIGHT_REJECT_BASE=<commit> compares with another base)`.
+      - C2: `AGENTS.md:36`, `doc/developer_guide.md:79`, `Makefile:424` matched.
+      - C3: old-pattern `rg` matches only `doc/developer_guide.md:79` (because N=6 kept `~6 minutes`); `rg -n 'calibration' AGENTS.md doc/developer_guide.md Makefile` matches `Makefile:424`, `AGENTS.md:36`, `doc/developer_guide.md:79`; `rg -n 'figures record' AGENTS.md doc/developer_guide.md Makefile` matches `Makefile:424`, `AGENTS.md:36`, `doc/developer_guide.md:79`; `make help-all 2>&1 | rg ' preflight-changed '` -> `    preflight-changed      Fast pre-merge gate: selfhost, mutations of changed files, calibration, reject-diff, checked build, git group, bench thresholds, figures record`.
+      - C4: `git diff --stat`: `AGENTS.md | 2 +-`, `Makefile | 2 +-`, `doc/developer_guide.md | 2 +-` (`3 files changed, 3 insertions(+), 3 deletions(-)`); `dprint check AGENTS.md doc/developer_guide.md` -> exit 0; `make test-changed BASE=HEAD` -> `Total: 3453 run, 3453 passed, 0 failed, 94 skipped (122.7s)`.
+      - C5: committed as git:150ba73 on `main`.
 
 - [ ] +testinfra +review +AI-D @main @checkin Review of the preflight-selftest's cache-free case 15 and the preflight-changed step descriptions id:7rfmj
     > **Created:** 2026-11-17
