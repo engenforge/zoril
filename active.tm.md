@@ -60,12 +60,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Stale:** `bench/fuzz/README.md`'s fuzz record (a change to `src/`). Milestone figures, probe counts included, not touched.
     - **Check-in:** the header asks for one; AGENTS.md: an `+AI-D` task needs none of its own, the reproducers and sibling routes above are its review.
 
-- [ ] +safety +tests +AI-D @provenance A closure storing through a captured raw pointer is checked against what the pointer reaches (gap_94) id:whak5
+- [x] +safety +tests +AI-D @provenance A closure storing through a captured raw pointer is checked against what the pointer reaches (gap_94) id:whak5
     > **Created:** 2026-11-17
     > **Branch:** `provenance`
     > **Found by:** id:z0096 (its sibling probe of a global reached through a capture; probe git:4cff970).
     > **Placed:** directly after id:z0096, a follow-up to it. A soundness hole accepted by both rules; the maintainer may raise it.
-    > **Claimed:** 2026-11-17 provenance
+    > **Completed:** 2026-11-17 git:84799b9
 
     - **Now (git:b722b67):** `bench/safety_matrix/probes/gap_94_closure_store_through_captured_raw_ptr_to_global.zrl` (`let gp = &mut G as *mut *i32; let cl = || { unsafe { *gp = r as *i32; } }; cl();`, `r = &x`) compiles with and without `--provenance`, exit 77. In the body the store's target is the memory capture `gp` points to, `ParamContents` of `gp`'s capture bit; at the known call the caller maps it to `os_dest_reach` of `Frame(gp)` (id:w17jf's pseudo argument; before it, of the environment), which adds `O(L)` only when `L`'s type can hold a mutable handle (`OS_Q_HANDLE`), not for a raw pointer, so `Static` is never a target. Handed to `run` (`build/z96/p/s3.zrl`) it is accepted too, by id:z0096's closure rule for the same reason. Refused: the same store with no closure (`build/z96/p/s3d.zrl`, both rules), through a named function's raw pointer parameter (`s3f.zrl`: there the target is `ParamAddr`, `O(gp)` itself).
     - **Leads:** (a) at a known closure call and in the closure rule, a contents target of a capture is what that capture's value names, `os_dest_reach` of `os_through(Frame(cj))` (one read, then the reach), not of `Frame(cj)`; (b) count a raw mutable pointer as a mutable handle in `OS_Q_HANDLE` (wider: every destination reach of a local holding one). Measure each: the store grid, the test programs (`build/z96/measure.sh`), the rejection differential; probe a literal-holding capture (`Vec<[u8]>` with `"lit"` pushed) written through, which must stay accepted.
@@ -76,6 +76,16 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Probes** (`build/z96/p/`): `gap_94`, `s3k` (direct call) and `s3` (handed to `run`) accepted → refused; `g64`, `s5` as at id:z0096. A captured `&mut` to a local `Vec<[u8]>` holding `"lit"`, a local view pushed through it (`l1.zrl`), and the same with `&a` in place of the literal (`l2.zrl`) are refused by the base already (git:e7e4fa9, the same lines; the closure rule adds its line on the statement the base refuses), so this change adds no refusal there; that over-refusal predates it.
     - **Safeguard taken out** (`build/z96/noread`, no `os_add_read`): `known_callee_closure_store_through_raw_ptr_refused.zrl` and `closure_value_store_through_raw_ptr_refused.zrl` are accepted.
     - **gap_94 stays `known_gap`:** the old rules still accept it, as `gap_64`; its Known gaps entry now names the `--provenance` test, and `doc/SAFETY.md` §6 is unchanged (the default build is still open).
+
+    - **Completion (2026-11-17), the work commit git:84799b9 on `stream/provenance`** (above git:b584f41; not yet on `provenance` or pushed). The checks the task names:
+        - _gap_94:_ refused under `--provenance` (`known_callee_closure_store_through_raw_ptr_refused.zrl`); not flipped, since the old rules still accept it (the default build exits 77, as recorded): its Known gaps entry names the `--provenance` test; `doc/SAFETY.md` §6 unchanged.
+        - _Its sibling handed to `run`:_ refused by the closure rule (`closure_value_store_through_raw_ptr_refused.zrl`).
+        - _The store grid under `--provenance`_ (`build/wh/grid`): 0 unsafe cells accepted; twins refused 4822, as at id:z0096, 0 newly refused. _Test programs_ (`build/wh/measure.sh`): 722, warning programs 14, warnings 91, roots unchanged.
+        - _`make test`_ (the tree of git:84799b9): `Total: 3742 run, 3742 passed, 0 failed, 96 skipped (134.8s)`.
+        - _`make preflight-changed` and the rejection differential:_ `PREFLIGHT_FIGURES=true REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=b584f41`, rc=0: "All mutations caught."; `[PASS] fuzz-calibrate: all 23 calibration programs are in their fixed state (21 refused, 2 accepted with one drop)`; `reject-diff: base verdicts: fresh (no cache)` and `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69160 programs`; checked build `Total: 1424 run, 1424 passed, 0 failed, 0 skipped (107.7s)`; git group `Total: 8 run, 8 passed, 0 failed, 0 skipped (99.7s)`; "All performance thresholds within tolerance of baseline."; the safety record identical to id:z0096's run.
+        - _`sh scripts/run_safety_matrix.sh`:_ `All probes complete: 473/520 passed. Mismatches: 0`. Sibling routes: the 94 `gap_*` probes under `--provenance`, git:b584f41 and git:84799b9: one verdict changed, `gap_94` (accepted → refused).
+    - **Stale:** `bench/fuzz/README.md`'s fuzz record (a change to `src/`). Milestone figures not touched.
+    - **Check-in:** none: an `+AI-D` task, reviewed by the session that did it, with the reproducers and sibling routes above.
 
 - [ ] +precision +tests +AI-D @provenance id:z0097 An edge into a `fn` argument's environment does not make a `fn` item a global destination
     > **Created:** 2026-11-06
