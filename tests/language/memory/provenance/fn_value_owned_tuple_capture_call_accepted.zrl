@@ -1,0 +1,15 @@
+// A closure owning a tuple of a `fn` item and a `Vec`, calling through the tuple's `fn` element:
+// the tuple's own storage is the environment's, but the call's environment is what the `fn`
+// value holds, so the call does not reach the buffer the tuple owns (§3, _Calls through a `fn`
+// value_).
+// flags: --provenance
+// expected exit 7
+import "vec.zrl";
+use vec::Vec;
+fn seven() -> i32 { return 7; }
+fn run() -> i32 {
+    let mut h = (seven, Vec::<i32>.new());
+    let mut cl = || -> i32 { return (h.0)(); };
+    return cl();
+}
+fn main() -> i32 { return run(); }
