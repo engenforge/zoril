@@ -431,3 +431,9 @@ date	commit	zoril_version	host_id	governor	status	kind	workload	zoril_ms	cproc_m
 2026-11-17-17-12-54	94c0ed2	0.1.0-alpha-232-g94c0ed2	a52c24a80e04	powersave	ok	run	qsort	455	421	363	1.253	42994176
 2026-11-17-17-12-54	94c0ed2	0.1.0-alpha-232-g94c0ed2	a52c24a80e04	powersave	ok	run	sha	252	233	140	1.800	71240906
 2026-11-17-17-12-54	94c0ed2	0.1.0-alpha-232-g94c0ed2	a52c24a80e04	powersave	ok	run	vm	433	342	330	1.312	84900189
+2026-11-17-18-28-49	c4e1bb5	0.1.0-alpha-233-gc4e1bb5	a52c24a80e04	powersave	ok	run	array_loop	818	833	144	5.681	143420513
+2026-11-17-18-28-49	c4e1bb5	0.1.0-alpha-233-gc4e1bb5	a52c24a80e04	powersave	ok	run	fib	697	742	194	3.593	7202391
+2026-11-17-18-28-49	c4e1bb5	0.1.0-alpha-233-gc4e1bb5	a52c24a80e04	powersave	ok	run	particles	626	628	240	2.608	86149532
+2026-11-17-18-28-49	c4e1bb5	0.1.0-alpha-233-gc4e1bb5	a52c24a80e04	powersave	ok	run	qsort	464	420	362	1.282	42994176
+2026-11-17-18-28-49	c4e1bb5	0.1.0-alpha-233-gc4e1bb5	a52c24a80e04	powersave	ok	run	sha	252	247	140	1.800	71240906
+2026-11-17-18-28-49	c4e1bb5	0.1.0-alpha-233-gc4e1bb5	a52c24a80e04	powersave	ok	run	vm	430	332	312	1.378	84900189
