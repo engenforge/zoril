@@ -26,38 +26,85 @@
 #
 # Usage: check_safety_figures.sh [--print] [--repo DIR] [--doc FILE]
 #        check_safety_figures.sh --density [--print] [--policy FILE]   (unsafe_policy.md §5 density rows)
-#        check_safety_figures.sh --pages                                (example-application size, smoke-suite size)
-#        check_safety_figures.sh --all                                  (selftest, §5, density, pages: the gate)
+#        check_safety_figures.sh --probes [--print]                     (safety matrix probe counts)
+#        check_safety_figures.sh --stamp [--doc FILE]                   (doc/SAFETY.md §5 "as of" stamp)
+#        check_safety_figures.sh --pages                                (smoke-suite size)
+#        check_safety_figures.sh --all                                  (selftest, stamp, pages: the make test gate)
+#        check_safety_figures.sh --milestone                            (selftest, stamp, §5, density, probes, pages: release check)
 #        check_safety_figures.sh --selftest
 # Exit: 0 every figure matches, 1 a figure differs or the table is missing, 2 usage.
 set -u
 
 SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 REPO=$(cd "$(dirname "$0")/.." && pwd)
+REPO_ARG=""
 DOC=""
+DOC_ARG=""
 PRINT=0
 DENSITY=0
 PAGES=0
+PROBES=0
+STAMP=0
+ALL=0
+MILESTONE=0
 POLICY=""
 SELFTEST=0
 
-die() { echo "usage: $0 [--print] [--repo DIR] [--doc FILE] | --selftest" >&2; exit 2; }
+die() { echo "usage: $0 [--print] [--repo DIR] [--doc FILE] | --all | --milestone | --selftest" >&2; exit 2; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --print) PRINT=1; shift ;;
-        --all) rc=0; for a in --selftest "" --density --pages; do "$0" $a || rc=1; done; exit $rc ;;
+        --all) ALL=1; shift ;;
+        --milestone) MILESTONE=1; shift ;;
+        --stamp) STAMP=1; shift ;;
+        --probes) PROBES=1; shift ;;
         --density) DENSITY=1; shift ;;
         --pages) PAGES=1; shift ;;
         --policy) [ $# -ge 2 ] || die; POLICY=$2; shift 2 ;;
-        --repo) [ $# -ge 2 ] || die; REPO=$2; shift 2 ;;
-        --doc) [ $# -ge 2 ] || die; DOC=$2; shift 2 ;;
+        --repo) [ $# -ge 2 ] || die; REPO=$2; REPO_ARG="$2"; shift 2 ;;
+        --doc) [ $# -ge 2 ] || die; DOC=$2; DOC_ARG="$2"; shift 2 ;;
         --selftest) SELFTEST=1; shift ;;
-        -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
         *) die ;;
     esac
 done
 [ -n "$DOC" ] || DOC="$REPO/doc/SAFETY.md"
+
+run_sub() {
+    if [ -n "$REPO_ARG" ] && [ -n "$DOC_ARG" ]; then
+        "$0" --repo "$REPO_ARG" --doc "$DOC_ARG" "$@"
+    elif [ -n "$REPO_ARG" ]; then
+        "$0" --repo "$REPO_ARG" "$@"
+    elif [ -n "$DOC_ARG" ]; then
+        "$0" --doc "$DOC_ARG" "$@"
+    else
+        "$0" "$@"
+    fi
+}
+
+if [ "$ALL" -eq 1 ]; then
+    rc=0
+    if [ "${SAFETY_FIGURES_IN_SELFTEST:-0}" -eq 0 ]; then
+        run_sub --selftest || rc=1
+    fi
+    run_sub --stamp || rc=1
+    run_sub --pages || rc=1
+    exit $rc
+fi
+
+if [ "$MILESTONE" -eq 1 ]; then
+    rc=0
+    if [ "${SAFETY_FIGURES_IN_SELFTEST:-0}" -eq 0 ]; then
+        run_sub --selftest || rc=1
+    fi
+    run_sub --stamp || rc=1
+    run_sub || rc=1
+    run_sub --density || rc=1
+    run_sub --probes || rc=1
+    run_sub --pages || rc=1
+    exit $rc
+fi
 
 # A figure is checked where its source is in the tree. The public export carries neither the example
 # application (not yet published) nor AGENTS.md, so those figures are not computed there instead of being
@@ -152,11 +199,97 @@ if [ "$SELFTEST" -eq 1 ]; then
         *) echo "[FAIL] selftest: density counted \"$got\", expected 5 of 7 lines in \`src/\`"; fail=1 ;;
     esac
 
+    # M1-M5: milestone figures, stamp, probe counts, and §5.3 prose sentences.
+    mkdir -p "$tmp/m1/src" "$tmp/m1/stdlib" "$tmp/m1/doc/spec" "$tmp/m1/bench/safety_matrix/probes" "$tmp/m1/tests"
+    printf 'fn a() {}\n' > "$tmp/m1/stdlib/one.zrl"
+    printf 'unsafe fn s() { unsafe { x(); } }\n' > "$tmp/m1/stdlib/two.zrl"
+    printf 'let a = unsafe { b() };\n' > "$tmp/m1/src/main.zrl"
+    printf '// expected: compile_reject\nfn f() {}\n' > "$tmp/m1/bench/safety_matrix/probes/p1.zrl"
+    printf '// expected: accept\nfn g() {}\n' > "$tmp/m1/bench/safety_matrix/probes/p2.zrl"
+    printf '// expected: known_gap\nfn h() {}\n' > "$tmp/m1/bench/safety_matrix/probes/p3.zrl"
+    printf 'tests/a.zrl\n' > "$tmp/m1/tests/smoke.list"
+    printf '(`tests/smoke.list`, 1 tests\n' > "$tmp/m1/AGENTS.md"
+    printf 'and the 3-probe safety matrix across 1 rows.\n' > "$tmp/m1/README.md"
+    "$SELF" --repo "$tmp/m1" --density --print | cut -f2 > "$tmp/m1/doc/spec/unsafe_policy.md"
+    write_m1_doc() {
+        {
+            echo '# Doc'
+            echo
+            echo '## 5. The testing behind this'
+            echo
+            echo 'The counts in §5 and §6, the density rows of [unsafe_policy.md](spec/unsafe_policy.md) §5 and the README'"'"'s probe count are as of **0.1.0** (2026-11-15); they are refreshed at each release.'
+            echo
+            echo 'The repository keeps 3 probes in `bench/safety_matrix/probes/`, each recording its expectation in its first lines: **1 `compile_reject`**, **1 `accept`**, **0 `runtime_trap`**, **0 `runtime_fault`**, and **1 `known_gap`**.'
+            echo
+            echo '| Figure | Value |'
+            echo '| --- | --- |'
+            "$SELF" --repo "$tmp/m1" --print | awk -F'\t' '{printf "| %s | %s |\n", $1, $2}'
+            echo
+            echo '- **The standard library** holds 1 `unsafe { }` blocks in 1 of its 2 modules.'
+            echo '- **The compiler** is 1 modules of Zoril, with 1 `unsafe { }` blocks.'
+            echo
+            echo '## 6. Known gaps'
+            echo
+            echo 'tracked as 1 `known_gap` probes'
+        } > "$tmp/m1/doc/SAFETY.md"
+    }
+    write_m1_doc
+    if ! out=$(SAFETY_FIGURES_IN_SELFTEST=1 "$SELF" --repo "$tmp/m1" --milestone 2>&1); then
+        echo "[FAIL] selftest: matching milestone fixture failed"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
+    fi
+
+    # M1: a table figure that differs from the fixture tree: --all passes, --milestone fails and names the figure.
+    printf 'fn added() {}\n' >> "$tmp/m1/src/main.zrl"
+    if ! out=$(SAFETY_FIGURES_IN_SELFTEST=1 "$SELF" --repo "$tmp/m1" --all 2>&1); then
+        echo "[FAIL] selftest M1: --all failed on moved table figure"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
+    fi
+    out=$(SAFETY_FIGURES_IN_SELFTEST=1 "$SELF" --repo "$tmp/m1" --milestone 2>&1)
+    if [ $? -eq 0 ] || ! printf '%s' "$out" | grep -q 'compiler lines'; then
+        echo "[FAIL] selftest M1: --milestone did not fail naming compiler lines"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
+    fi
+    write_m1_doc
+    # Update policy line count after adding line to src/main.zrl
+    "$SELF" --repo "$tmp/m1" --density --print | cut -f2 > "$tmp/m1/doc/spec/unsafe_policy.md"
+
+    # M2: no stamp line -> --all fails with exact message.
+    grep -v 'as of \*\*' "$tmp/m1/doc/SAFETY.md" > "$tmp/m1/doc/SAFETY.md.nostamp"
+    mv "$tmp/m1/doc/SAFETY.md.nostamp" "$tmp/m1/doc/SAFETY.md"
+    out=$(SAFETY_FIGURES_IN_SELFTEST=1 "$SELF" --repo "$tmp/m1" --all 2>&1)
+    if [ $? -eq 0 ] || ! printf '%s' "$out" | grep -qF '[FAIL] safety-figures: doc/SAFETY.md §5 has no "as of" line'; then
+        echo "[FAIL] selftest M2: missing stamp did not fail with expected message"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
+    fi
+
+    # M3: stamp with no date -> same failure.
+    write_m1_doc
+    sed 's/ (2026-11-15)//' "$tmp/m1/doc/SAFETY.md" > "$tmp/m1/doc/SAFETY.md.nodate"
+    mv "$tmp/m1/doc/SAFETY.md.nodate" "$tmp/m1/doc/SAFETY.md"
+    out=$(SAFETY_FIGURES_IN_SELFTEST=1 "$SELF" --repo "$tmp/m1" --all 2>&1)
+    if [ $? -eq 0 ] || ! printf '%s' "$out" | grep -qF '[FAIL] safety-figures: doc/SAFETY.md §5 has no "as of" line'; then
+        echo "[FAIL] selftest M3: stamp without date did not fail with expected message"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
+    fi
+    write_m1_doc
+
+    # M4: a probe count by expectation that differs -> --milestone fails and names the kind.
+    printf '// expected: accept\nfn g2() {}\n' > "$tmp/m1/bench/safety_matrix/probes/p4.zrl"
+    out=$(SAFETY_FIGURES_IN_SELFTEST=1 "$SELF" --repo "$tmp/m1" --milestone 2>&1)
+    if [ $? -eq 0 ] || ! printf '%s' "$out" | grep -q 'accept'; then
+        echo "[FAIL] selftest M4: --milestone did not fail naming accept"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
+    fi
+    rm -f "$tmp/m1/bench/safety_matrix/probes/p4.zrl"
+
+    # M5: a §5.3 sentence that differs from its table row -> --milestone fails.
+    sed 's/holds 1 `unsafe { }` blocks/holds 99 `unsafe { }` blocks/' "$tmp/m1/doc/SAFETY.md" > "$tmp/m1/doc/SAFETY.md.bad"
+    mv "$tmp/m1/doc/SAFETY.md.bad" "$tmp/m1/doc/SAFETY.md"
+    out=$(SAFETY_FIGURES_IN_SELFTEST=1 "$SELF" --repo "$tmp/m1" --milestone 2>&1)
+    if [ $? -eq 0 ] || ! printf '%s' "$out" | grep -q '§5\.3'; then
+        echo "[FAIL] selftest M5: --milestone did not fail on mismatched §5.3 sentence"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
+    fi
+
     if [ "$fail" -ne 0 ]; then
         echo "FAIL: the safety-figures check does not behave as its own documentation says."
         exit 1
     fi
-    echo "[PASS] selftest: a matching table passes, a moved figure is named, a missing table fails, and the counting method counts occurrences and declarations"
+    echo "[PASS] selftest: a matching table passes, a moved figure is named, a missing table fails, the counting method counts occurrences and declarations, and M1-M5 pass"
     exit 0
 fi
 
@@ -220,6 +353,76 @@ EOF
     echo "[PASS] safety-figures: the src/ and stdlib/ density rows of unsafe_policy.md §5 match the tree (Rust rows are a one-time measurement)"
     exit 0
 fi
+if [ "$STAMP" -eq 1 ]; then
+    if [ ! -f "$DOC" ]; then
+        echo "[FAIL] safety-figures: $DOC does not exist"
+        exit 1
+    fi
+    if ! grep -Eq 'as of \*\*[^*]+\*\* \([0-9]{4}-[0-9]{2}-[0-9]{2}\)' "$DOC"; then
+        echo '[FAIL] safety-figures: doc/SAFETY.md §5 has no "as of" line'
+        exit 1
+    fi
+    echo '[PASS] safety-figures: doc/SAFETY.md §5 carries an "as of" stamp'
+    exit 0
+fi
+
+probe_counts() {
+    _pdir="$REPO/bench/safety_matrix/probes"
+    _tot=$(find "$_pdir" -maxdepth 1 -type f -name '*.zrl' 2>/dev/null | wc -l | tr -d ' ')
+    _cr=0; _acc=0; _rt=0; _rf=0; _kg=0
+    if [ "$_tot" -gt 0 ]; then
+        eval "$(awk '/^\/\/ expected:/ { c[$3]++ } END {
+            printf "_cr=%d _acc=%d _rt=%d _rf=%d _kg=%d\n",
+                c["compile_reject"]+0, c["accept"]+0, c["runtime_trap"]+0, c["runtime_fault"]+0, c["known_gap"]+0
+        }' "$_pdir"/*.zrl)"
+    fi
+    printf 'probes\t%s\n' "$_tot"
+    printf 'compile_reject\t%s\n' "$_cr"
+    printf 'accept\t%s\n' "$_acc"
+    printf 'runtime_trap\t%s\n' "$_rt"
+    printf 'runtime_fault\t%s\n' "$_rf"
+    printf 'known_gap\t%s\n' "$_kg"
+}
+
+if [ "$PROBES" -eq 1 ]; then
+    if [ "$PRINT" -eq 1 ]; then probe_counts; exit 0; fi
+    bad=0
+    eval "$(probe_counts | awk -F'\t' '{printf "p_%s=%s\n", $1, $2}')"
+    if [ ! -f "$DOC" ]; then
+        echo "[FAIL] safety-figures: $DOC does not exist"
+        exit 1
+    fi
+    have=$(grep -oE 'keeps [0-9]+ probes' "$DOC" | head -n1 | grep -oE '[0-9]+' || true)
+    if [ "$have" != "$p_probes" ]; then
+        echo "[FAIL] safety-figures: §5.1 says keeps ${have:-missing} probes; the tree has $p_probes"
+        bad=1
+    fi
+    for kind_pair in "compile_reject:$p_compile_reject" "accept:$p_accept" "runtime_trap:$p_runtime_trap" "runtime_fault:$p_runtime_fault" "known_gap:$p_known_gap"; do
+        kind=${kind_pair%%:*}
+        want=${kind_pair#*:}
+        have=$(grep -oE "\*\*[0-9]+ \`$kind\`\*\*" "$DOC" | head -n1 | grep -oE '[0-9]+' || true)
+        if [ "$have" != "$want" ]; then
+            echo "[FAIL] safety-figures: §5.1 says ${have:-missing} $kind probes; the tree has $want"
+            bad=1
+        fi
+    done
+    have=$(grep -oE 'tracked as [0-9]+ `known_gap` probes' "$DOC" | head -n1 | grep -oE '[0-9]+' || true)
+    if [ "$have" != "$p_known_gap" ]; then
+        echo "[FAIL] safety-figures: §6 says tracked as ${have:-missing} known_gap probes; the tree has $p_known_gap"
+        bad=1
+    fi
+    if [ -f "$REPO/README.md" ]; then
+        have=$(grep -oE '[0-9]+-probe safety matrix' "$REPO/README.md" | head -n1 | grep -oE '^[0-9]+' || true)
+        if [ "$have" != "$p_probes" ]; then
+            echo "[FAIL] safety-figures: README says ${have:-missing}-probe safety matrix; the tree has $p_probes"
+            bad=1
+        fi
+    fi
+    [ "$bad" -ne 0 ] && exit 1
+    echo "[PASS] safety-figures: all probe counts in doc/SAFETY.md (§5.1, §6) and README.md match the tree ($p_probes probes)"
+    exit 0
+fi
+
 if [ "$PAGES" -eq 1 ]; then
     bad=0
     checked=""
@@ -301,6 +504,35 @@ while IFS='|' read -r _ label _ rest; do
 done <<EOF
 $(grep -E '^\| *[^|]+ *\|' "$DOC" | sed -n '/^| *Figure *|/,/^$/p')
 EOF
+
+# Check the two §5.3 prose sentences against the table's rows when present.
+tbl_val() {
+    awk -v want="$1" -F'|' '
+        function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+        trim($2) == want { v = trim($3); gsub(/,/, "", v); print v; exit }
+    ' "$DOC"
+}
+if grep -qF -- '**The standard library** holds ' "$DOC"; then
+    s_line=$(grep -F -- '**The standard library** holds ' "$DOC" | head -n1)
+    s_nums=$(printf '%s\n' "$s_line" | sed -n 's/.*holds \([0-9][0-9]*\) `unsafe { }` blocks in \([0-9][0-9]*\) of its \([0-9][0-9]*\) modules.*/\1 \2 \3/p')
+    t_b=$(tbl_val 'stdlib `unsafe { }` blocks')
+    t_bm=$(tbl_val 'stdlib modules with such a block')
+    t_m=$(tbl_val 'stdlib modules')
+    if [ "$s_nums" != "$t_b $t_bm $t_m" ]; then
+        echo "[FAIL] safety-figures: §5.3 stdlib prose says ($s_nums); table has ($t_b $t_bm $t_m)"
+        bad=1
+    fi
+fi
+if grep -qF -- '**The compiler** is ' "$DOC"; then
+    c_line=$(grep -F -- '**The compiler** is ' "$DOC" | head -n1)
+    c_nums=$(printf '%s\n' "$c_line" | sed -n 's/.*is \([0-9][0-9]*\) modules of Zoril, with \([0-9][0-9]*\) `unsafe { }` blocks.*/\1 \2/p')
+    t_cm=$(tbl_val 'compiler modules')
+    t_cb=$(tbl_val 'compiler `unsafe { }` blocks')
+    if [ "$c_nums" != "$t_cm $t_cb" ]; then
+        echo "[FAIL] safety-figures: §5.3 compiler prose says ($c_nums); table has ($t_cm $t_cb)"
+        bad=1
+    fi
+fi
 
 if [ "$bad" -ne 0 ]; then
     echo "FAIL: doc/SAFETY.md §5.3 does not match the tree ($checked figure(s) compared)."

@@ -882,7 +882,6 @@ check_stdlib_raw_ptr_deref
 # reader sees first, and the reason this check exists is that "four open gaps" outlived two of the
 # holes it counted: a count that drifts is invisible until someone reads it next to the matrix.
 check_document_counts() {
-    probe_files=$(ls "$REPO_ROOT"/bench/safety_matrix/probes/*.zrl 2>/dev/null | wc -l | tr -d ' ')
     readme="$REPO_ROOT/README.md"
     stab="$REPO_ROOT/doc/STABILITY.md"
     vision="$REPO_ROOT/doc/vision/why_zoril.md"
@@ -890,10 +889,6 @@ check_document_counts() {
     n=$(grep -oE '[0-9]+-row safety matrix' "$readme" | head -n1 | grep -oE '^[0-9]+' || true)
     if [ "$n" = "$total" ]; then ok "README row count ($n) matches the matrix"
     else note "README says $n rows; the matrix has $total"; fi
-
-    n=$(grep -oE '[0-9]+-probe safety matrix' "$readme" | head -n1 | grep -oE '^[0-9]+' || true)
-    if [ "$n" = "$probe_files" ]; then ok "README probe count ($n) matches bench/safety_matrix/probes/"
-    else note "README says $n probes; the probe directory holds $probe_files"; fi
 
     # The gap statement, in both directions: a closed gap must not still be claimed, and an open one
     # must not be hidden behind a stale sentence.

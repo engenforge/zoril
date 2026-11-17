@@ -2,8 +2,8 @@
 # scripts/preflight.sh — full or fast pre-merge verification.
 #
 # Usage:
-#   scripts/preflight.sh            full preflight (selfhost + mutation + bench + density + fuzz)
-#   scripts/preflight.sh --changed  fast preflight for changed files (selfhost + mutation --changed + bench)
+#   scripts/preflight.sh            full preflight (selfhost + mutation, calibrate, reject-diff, checked, git group, bench, figures record, store grid, density, fuzz, figures check)
+#   scripts/preflight.sh --changed  fast preflight for changed files (selfhost + mutation --changed, calibrate, reject-diff, checked, git group, bench, figures record)
 #
 # Both pre-merge gates run selfhost-check (a clean copy of the tree builds with the DEFAULT
 # rules — the fresh-checkout path — plus the self-hosting fixpoint) in the BACKGROUND,
@@ -36,6 +36,8 @@ BENCH_CMD="${PREFLIGHT_BENCH:-./scripts/bench_threshold_check.sh}"
 STORE_GRID_CMD="${PREFLIGHT_STORE_GRID:-./scripts/check_store_grid.sh}"
 DENSITY_CMD="${PREFLIGHT_DENSITY:-./scripts/record_marker_density.sh}"
 FUZZ_CMD="${PREFLIGHT_FUZZ:-./scripts/fuzz_safe.sh}"
+FIGURES_CMD="${PREFLIGHT_FIGURES:-./scripts/check_safety_figures.sh --milestone}"
+FIGURES_REC_CMD="${PREFLIGHT_FIGURES_REC:-./scripts/record_figures.sh}"
 GIT_CMD="${PREFLIGHT_GIT:-./scripts/test.sh --quiet --group git}"
 LOG="${PREFLIGHT_LOG:-build/preflight-selfhost.log}"
 TIMINGS="${PREFLIGHT_TIMINGS:-build/preflight-timings.tsv}"
@@ -143,9 +145,8 @@ else
 fi
 
 # The checked build and the git group run BEFORE the bench step on purpose. The bench step
-# appends to bench/*_history.tsv and rewrites bench/cross_lang/last_zoril_metrics.tsv, which makes the
-# working tree dirty; `clean-tree` and `preflight-selftest` in the git group assert a clean
-# tree. Nothing in the checked suite or git group depends on the bench.
+# writes build/bench/last_zoril_metrics.tsv and commits to bench/records/ (its own worktree, so it
+# no longer dirties the code tree). Nothing in the checked suite or git group depends on the bench.
 CHECKED_CMD="${PREFLIGHT_CHECKED:-./scripts/test_checked.sh}"
 chk_start=$(date +%s)
 $CHECKED_CMD
@@ -153,19 +154,23 @@ chk_rc=$?
 record_step checked $(( $(date +%s) - chk_start ))
 [ $chk_rc -eq 0 ] || exit $chk_rc
 
-if [ "$changed" -eq 0 ]; then
-    git_start=$(date +%s)
-    TR_WORK=build/tests-git $GIT_CMD
-    git_rc=$?
-    record_step git $(( $(date +%s) - git_start ))
-    [ $git_rc -eq 0 ] || exit $git_rc
-fi
+git_start=$(date +%s)
+TR_WORK=build/tests-git $GIT_CMD
+git_rc=$?
+record_step git $(( $(date +%s) - git_start ))
+[ $git_rc -eq 0 ] || exit $git_rc
 
 bench_start=$(date +%s)
 $BENCH_CMD
 bench_rc=$?
 record_step bench $(( $(date +%s) - bench_start ))
 [ $bench_rc -eq 0 ] || exit $bench_rc
+
+fig_rec_start=$(date +%s)
+$FIGURES_REC_CMD
+fig_rec_rc=$?
+record_step figures-record $(( $(date +%s) - fig_rec_start ))
+[ $fig_rec_rc -eq 0 ] || exit $fig_rec_rc
 
 if [ "$changed" -eq 0 ]; then
     sg_start=$(date +%s)
@@ -187,4 +192,10 @@ if [ "$changed" -eq 0 ]; then
     record_step fuzz $(( $(date +%s) - fuzz_start ))
     rm -rf "$fuzz_findings"
     [ $fuzz_rc -eq 0 ] || exit $fuzz_rc
+
+    fig_start=$(date +%s)
+    $FIGURES_CMD
+    fig_rc=$?
+    record_step figures $(( $(date +%s) - fig_start ))
+    [ $fig_rc -eq 0 ] || exit $fig_rc
 fi

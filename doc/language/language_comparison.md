@@ -297,4 +297,4 @@ On today's measured tree:
 
 ## Benchmark Status & Harness
 
-The cross-language benchmarks are automated in `scripts/bench_cross_lang.sh` (POSIX shell & Lua), measuring Zoril alongside release binaries of Zig, Rust, Hare, and GCC/Clang across all four axes (compile time, compile peak RSS, runtime, and binary size). Results from each run are appended to `bench/speed_history.tsv` with compiler version tracking (use `--record` or `--update-doc` to force re-measuring comparison toolchains and updating the document tables). Run `scripts/bench_cross_lang.sh --update-doc` to refresh the measured tables above.
+The cross-language benchmarks are automated in `scripts/bench_cross_lang.sh` (POSIX shell & Lua), measuring Zoril alongside release binaries of Zig, Rust, Hare, and GCC/Clang across all four axes (compile time, compile peak RSS, runtime, and binary size). Results from each run are appended to `bench/records/speed_history.tsv` with compiler version tracking (use `--record` or `--update-doc` to force re-measuring comparison toolchains and updating the document tables). Run `scripts/bench_cross_lang.sh --update-doc` to refresh the measured tables above.
