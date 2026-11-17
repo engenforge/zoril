@@ -119,11 +119,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Stale:** `bench/fuzz/README.md`'s fuzz record (a change to `src/`). Milestone figures not touched.
     - **Check-in:** none: an `+AI-D` task, reviewed by the session that did it, with the reproducers and sibling routes above.
 
-- [ ] +safety +tests +AI-D @provenance A store through a raw pointer a callee reaches in a struct field reaches the global it points to (gap_95) id:95w4z
+- [x] +safety +tests +AI-D @provenance A store through a raw pointer a callee reaches in a struct field reaches the global it points to (gap_95) id:95w4z
     > **Created:** 2026-11-17
     > **Branch:** `provenance`
     > **Depends:** id:z0086
-    > **Claimed:** 2026-11-17 provenance
+    > **Completed:** 2026-11-17 git:94c0ed2
 
     - **Found by:** id:z0097 (probe git:b892899).
     - **Placed:** directly after id:z0097, a follow-up to it. A soundness hole accepted by both rules; the maintainer may raise it.
@@ -155,6 +155,23 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Blocked (2026-11-17):** on id:z0086, added to **Depends:**. Next step after it: apply the patch with `Static` replaced by z0086's global-only origin, then `./scripts/test.sh tests/language` (expect 481 passed), gap_95 refused, the store grid against 4822 twins, `build/z97/measure.sh` against 28 warnings, `make test`, `REJECT_DIFF_NO_CACHE=1 make preflight-changed`. No code is committed for this task yet.
 
     - **Unblocked (2026-11-17, id:z0086 at git:27a3d81):** literals and `fn` items are `Rodata` now, no destination. The recorded patch, applied in a scratch copy (`build/provenance/build/z86/z_95`), refuses gap_95 and newly refuses nothing in `tests/language`. Next: apply it on the branch and run this task's checks.
+
+    - **Done as decided (lead (a), measure first), with what the measurements showed:** following all of `O(L)` through a raw `*mut` has no information to read (Measured, above). So `os_dest_reach` adds only the `Static` in `O(L)`, and only when `L` holds no mutable handle and holds a raw `*mut` that is not part of an owner. That is a new type query, `OS_Q_LOOSE_RAW`: a raw `*mut` held by value, not inside a standard collection or a `Drop` type, not behind a reference or a slice, and not a `*mut ArenaHeader`. Three findings shaped it:
+        - _Literals:_ id:z0086 made them `Rodata`, which removed the 6 refusals the patch had.
+        - _Ownership:_ testing ownership on the whole struct (`!os_owns`) let a raw pointer beside a `Vec` in one struct through (`build/provenance/build/w4z/sib/s_owner_beside.zrl`, accepted). With no ownership test at all, a `static`'s address pushed into one arena `Vec` puts `Static` in the arena's `O`, so every `Vec` in that arena became a global destination (`arena_unwrap_static_then_push_accepted.zrl` refused at 17:5 and 19:5). Hence a per-type query.
+        - _The arena's raw form:_ zbuild's `BuildCtx { .., arena: *mut ArenaHeader }`, whose string fields hold `Static`, gave 3 new warnings (`tools/zbuild/src/main.zrl:224`, `:250`, `:252`, "the callee stores an address of this frame into memory that outlives it (call store rule)"). A `*mut ArenaHeader` points at an arena, so it is not loose. With that, zbuild is back to 21. Bound: a `*mut ArenaHeader` to a `static mut` arena header is not followed, which needs `unsafe` to build.
+    - **gap_95 stays `known_gap`:** the default mode still accepts it, as with gap_94. Its Known gaps entry now says it is refused under `--provenance`, and `doc/SAFETY.md` §6.1 (kind 3 and the class (B) row) says so too. No probe count was touched.
+
+    - **Completion:** git:94c0ed2 (one commit): `os_dest_reach` and `OS_Q_LOOSE_RAW` in `src/check_zir.zrl`; the design note's _Destination reach_; `doc/SAFETY.md`; `doc/spec/safety_model.md`; mutations M166 to M168. Five tests in `tests/language/memory/provenance/`: `callee_store_through_raw_ptr_field_refused` (gap_95's program), `callee_store_through_raw_ptr_beside_owner_refused`, `callee_store_through_nested_raw_ptr_field_refused`, `callee_store_through_raw_ptr_field_local_accepted` (the raw pointer names a local slot), and `arena_header_ptr_beside_static_accepted`.
+    - **Checks** (this task's list):
+        - gap_95 refused under `--provenance` with a test: "the callee stores an address of this frame into memory that outlives it (call store rule)" at 12:5.
+        - `vec_push_lit_no_static_s.zrl` and `dest_reach_vec_push_twin.zrl` still accepted, in `./scripts/test.sh tests/language`: `Total: 490 run, 490 passed, 0 failed, 0 skipped (2.7s)`.
+        - `make test`: `Total: 3770 run, 3770 passed, 0 failed, 100 skipped (136.7s)`.
+        - `PREFLIGHT_FIGURES=true REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=27a3d81`, rc=0: "All mutations caught."; `[PASS] fuzz-calibrate: all 23 calibration programs are in their fixed state (21 refused, 2 accepted with one drop)`; `reject-diff: base verdicts: fresh (no cache)`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69162 programs against 27a3d81...` (the rule acts under `--provenance` only); checked build `Total: 1438 run, 1438 passed, 0 failed, 0 skipped (107.7s)`; git group `Total: 8 run, 8 passed, 0 failed, 0 skipped (99.7s)`; "All performance thresholds within tolerance of baseline."; the safety record unchanged.
+        - The store grid under `--provenance` (`build/provenance/build/w4z/run_all.sh`, git:94c0ed2's compiler): 0 unsafe cells accepted, twins refused 4694 as at id:z0086, 0 accepted again, 0 newly refused. `build/z97/measure.sh`: test-program warnings 17 (unchanged); roots `src/main.zrl` 199 (an identical list), zbuild 21, zilc 0, zman 0.
+    - **Take-outs** (scratch copies `build/provenance/build/w4z/s_{nostep,noown}`): with the step removed, gap_95's test and the beside-owner test are accepted; with owners counted as loose, `arena_unwrap_static_then_push_accepted` is refused. Without the `ArenaHeader` exemption (the build before it, `build/w4z/zoril.new` of the first commit), `arena_header_ptr_beside_static_accepted` is refused at 28:5. M166, M167 and M168 are these three, all caught.
+    - **Sibling routes probed:** nested struct (refused), raw pointer beside an owner (refused), raw pointer to a local slot (accepted), a summary whose stored value is a parameter passed `&K` (accepted, `build/w4z/sib/s_param_view_twin.zrl`). An earlier preflight run of the first commit failed `unsafe-scan` on two of the new tests (a redundant `unsafe` around `&mut G as *mut *i32`). They were fixed before this run.
+    - `PREFLIGHT_FIGURES=true` stubs the milestone-figures check (id:xh0jq). The fuzz record `bench/fuzz/README.md` is stale after this `src/` change. **Check-in:** none (`+AI-D`); reproducers and siblings re-run above.
 
 - [x] +audit +safety +measurement +AI-D @provenance Read, by root, the safe store-grid twins the new rules refuse and the default mode accepts id:nc3ym
     > **Created:** 2026-11-17
