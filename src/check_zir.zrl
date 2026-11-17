@@ -5626,8 +5626,6 @@ const OS_W_FLAGS: usize = 2;
 const OS_W_FRAME: usize = 3;
 pub const ORIGIN_STATIC: u64 = 1;
 pub const ORIGIN_UNKNOWN: u64 = 2;
-// A closure body's environment (GetEnv): the caller's, so it outlives the call like a Param.
-pub const ORIGIN_ENV: u64 = 4;
 // An address `@ptr_from_int` made, which the programmer vouched for in `unsafe` code (§3, _Raw
 // operations_). In a value it is exempt from the return and store rules (os_frame_bound); as memory
 // it is outside the frame (os_external), so a frame address stored through it is still refused.
@@ -5653,7 +5651,12 @@ const OS_T_X: usize = 16;
 const OS_T_EV: usize = 17;
 const OS_T_ED: usize = 18;
 const OS_T_AH: usize = 19;
-const OS_TEMPS: usize = 20;
+// Frame(L) for every capture alias L of a closure body, set once and never cleared.
+const OS_T_CAP: usize = 20;
+const OS_T_SF: usize = 21;
+// The Frame(L) of OS_T_CAP whose type owns storage: the owned captures.
+const OS_T_OWNCAP: usize = 22;
+const OS_TEMPS: usize = 23;
 
 // The questions os_type_has answers about a type.
 const OS_Q_ARENA: usize = 0;
@@ -5703,6 +5706,13 @@ pub struct OriginSets {
     // The store edges of this body, for its summary (§3, _The summary_): per stored-value code
     // (OS_EDGE_ROWS), the targets' ParamAddr bits, ParamContents bits, and OS_EDGE_GLOBAL.
     pub edges: [mut u64],
+    // In a closure body, the index of `__env`, the last parameter (one past the declared ones:
+    // lower_rv_call_ptr passes the environment after the arguments). GetEnv is ParamAddr of it.
+    pub env_param: usize,
+    // Per local, the ParamContents bit past env_param that stands for what the environment holds
+    // for that capture alias inside the body, 0 for none (os_cap_bits). The summary folds each
+    // into ParamContents(env_param) (os_fold_env).
+    pub cap_bit: [mut u8],
 }
 
 const OS_EDGE_STATIC: usize = 128;
@@ -5784,9 +5794,15 @@ fn os_add_param(c: &mut OriginSets, set: usize, i: usize) {
     c.buf[w] = c.buf[w] | ((1 as u64) << (bit as u64));
 }
 
+fn os_add_contents(c: &mut OriginSets, set: usize, i: usize) {
+    let bit = if i < 63 as usize { i } else { 63 as usize };
+    let w = set * c.words + OS_W_CONTENTS;
+    c.buf[w] = c.buf[w] | ((1 as u64) << (bit as u64));
+}
+
 // DST = what is stored in the memory SRC names: for each Frame(L), the addresses L holds and the
 // storage L owns, which is reached through L too; memory reached through parameter i, by its own
-// value (ParamAddr) or deeper (ParamContents), holds ParamContents(i); Static, Env and Unknown
+// value (ParamAddr) or deeper (ParamContents), holds ParamContents(i); Static and Unknown
 // memory holds only more of the same origin. This is the read-through rule that settles the design
 // note's open question (§3).
 fn os_through(c: &mut OriginSets, src: usize, dst: usize) {
@@ -6095,7 +6111,8 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
 // DST = the destination SRC names, with its reach (§3, _Destination reach_): each Frame(L) in it
 // adds the storage L owns, S(L), and, when L's type can hold a mutable handle, what L holds, O(L),
 // to a fixpoint. Following O(L) for every type would refuse `v.push(arena_str)` after
-// `v.push("lit")` put Static in O(v).
+// `v.push("lit")` put Static in O(v). A capture alias's slot is the environment's memory, so a
+// Frame of one adds ParamContents(`__env`) (§3, _Closure environments_).
 fn os_dest_reach(c: &mut OriginSets, module: &ILModule, locals: [Local], src: usize, dst: usize) {
     os_copy(c, dst, src);
     let mut more = true;
@@ -6113,10 +6130,103 @@ fn os_dest_reach(c: &mut OriginSets, module: &ILModule, locals: [Local], src: us
             id = id + 1 as usize;
         }
     }
+    if os_meets_frames(c, dst, os_t(c, OS_T_CAP)) { os_add_contents(c, dst, c.env_param); }
+}
+
+// Fills OS_T_CAP, OS_T_OWNCAP and cap_bit for the capture aliases of a closure body. Each capture
+// gets its own ParamContents bit past `__env`, so the body can tell what one capture holds from what
+// another does: a store into an owned capture of anything but its own contents is an edge into a
+// global (os_note_edges). Past bit 62 a capture keeps ParamContents(`__env`) and no bit of its own,
+// which only refuses more at the caller.
+fn os_cap_bits(c: &mut OriginSets, module: &ILModule, locals: [Local]) {
+    let cap = os_t(c, OS_T_CAP);
+    let owncap = os_t(c, OS_T_OWNCAP);
+    let mut next = c.env_param + 1 as usize;
+    let mut li = 1 as usize;
+    while li < c.nl {
+        if locals[li - 1 as usize].is_capture_alias {
+            os_add_frame(c, cap, li as u32);
+            if os_owns(c, module, locals[li - 1 as usize].ty) {
+                os_add_frame(c, owncap, li as u32);
+            }
+            if next < 63 as usize {
+                c.cap_bit[li] = next as u8;
+                next = next + 1 as usize;
+            }
+        }
+        li = li + 1 as usize;
+    }
+}
+
+// In SET, the value capture alias ID was loaded from the environment: ParamContents(`__env`)
+// becomes the capture's own bit.
+fn os_env_to_cap(c: &mut OriginSets, set: usize, id: usize) {
+    let w = set * c.words + OS_W_CONTENTS;
+    let e = (1 as u64) << (c.env_param as u64);
+    if c.buf[w] & e != 0 as u64 {
+        c.buf[w] = (c.buf[w] & !e) | ((1 as u64) << (c.cap_bit[id] as u64));
+    }
+}
+
+// ParamContents BITS as the summary states them: every capture's own bit is ParamContents(`__env`),
+// all a caller can map, since it passes the environment as one argument.
+fn os_fold_env(c: &OriginSets, bits: u64) -> u64 {
+    if c.env_param >= 62 as usize { return bits; }
+    let low = ((1 as u64) << ((c.env_param + 1 as usize) as u64)) - 1 as u64;
+    let hi = bits & !low & !((1 as u64) << 63 as u64);
+    if hi == 0 as u64 { return bits; }
+    return (bits & !hi) | ((1 as u64) << (c.env_param as u64));
+}
+
+// Whether sets A and B share a Frame origin.
+fn os_meets_frames(c: &OriginSets, a: usize, b: usize) -> bool {
+    let x = a * c.words;
+    let y = b * c.words;
+    let mut k = OS_W_FRAME;
+    while k < c.words {
+        if c.buf[x + k] & c.buf[y + k] != 0 as u64 { return true; }
+        k = k + 1 as usize;
+    }
+    return false;
+}
+
+// Takes out of VAL the storage of an owned capture that a store writes back into the same capture:
+// DEST, the memory the store names before its reach, is that one capture (Frame(L) alone, L a
+// capture alias whose type holds no mutable handle, so the store reaches nothing beyond L's slot
+// and the storage L owns). That is `v.push(x)` on a closure's owned `Vec` v: the buffer stays the
+// environment's, as a local `Vec`'s stays this frame's. Stored anywhere else, an owned capture's
+// storage is still an address of this frame (§3, _Closure environments_).
+fn os_drop_self_store(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    val: usize,
+    dest: usize
+) {
+    let d = dest * c.words;
+    if c.buf[d + OS_W_ADDR] | c.buf[d + OS_W_CONTENTS] | c.buf[d + OS_W_FLAGS] != 0 as u64 {
+        return;
+    }
+    let mut id = 0 as usize;
+    let mut k = OS_W_FRAME;
+    while k < c.words {
+        let fr = c.buf[d + k];
+        if fr != 0 as u64 {
+            if id != 0 as usize || fr & (fr - 1 as u64) != 0 as u64 { return; }
+            let mut b = 0 as usize;
+            while (fr >> (b as u64)) & 1 as u64 == 0 as u64 { b = b + 1 as usize; }
+            id = (k - OS_W_FRAME) * 64 as usize + b;
+        }
+        k = k + 1 as usize;
+    }
+    if id == 0 as usize || !os_has_frame(c, os_t(c, OS_T_CAP), id) { return; }
+    if os_type_has(c, module, os_local_ty(locals, id as u32), OS_Q_HANDLE) { return; }
+    let w = val * c.words + OS_W_FRAME + id / 64 as usize;
+    c.buf[w] = c.buf[w] & !((1 as u64) << ((id % 64 as usize) as u64));
 }
 
 // Whether a destination with origins SET outlives this frame: it has any origin but this frame's
-// Frame origins (a Param, Static, Env or Unknown).
+// Frame origins (a Param, Static or Unknown).
 fn os_external(c: &OriginSets, set: usize) -> bool {
     let d = set * c.words;
     return c.buf[d + OS_W_ADDR] != 0 as u64
@@ -6167,22 +6277,43 @@ fn os_frame_bound(c: &OriginSets, set: usize) -> bool {
 
 // Records that a value with origins VAL is stored into the memory MEM names, as edges of this
 // body's summary: each parameter origin of the value against each parameter origin of the memory.
-// Memory that is Static, Env or Unknown is a global; a Frame or Env origin of the value reads as
-// Unknown, which is what the caller has to assume. Frame memory is this frame's and no edge.
+// Memory that is Static or Unknown is a global; a Frame origin of the value reads as Unknown,
+// which is what the caller has to assume, except a capture alias's: what an owned capture owns
+// is reached through the environment, ParamContents(`__env`), and the rules have already refused
+// it everywhere but back into its own capture (os_drop_self_store). Frame memory is this frame's
+// and no edge. A capture's own bit is stated as ParamContents(`__env`) (os_fold_env).
 fn os_note_edges(c: &mut OriginSets, val: usize, mem: usize) {
     let m = mem * c.words;
     let t_addr = c.buf[m + OS_W_ADDR];
-    let t_contents = c.buf[m + OS_W_CONTENTS];
+    let t_contents = os_fold_env(c, c.buf[m + OS_W_CONTENTS]);
     let t_flags = if c.buf[m + OS_W_FLAGS] != 0 as u64 { OS_EDGE_GLOBAL } else { 0 as u64 };
     if t_addr == 0 as u64 && t_contents == 0 as u64 && t_flags == 0 as u64 { return; }
+    // An owned capture outlives the frame (§3, the store rule), so what the memory may take from
+    // anywhere but the capture itself (its own bit, its own storage) goes into a global too.
+    let owncap = os_t(c, OS_T_OWNCAP) * c.words;
+    let mut own_bits = 0 as u64;
+    let mut og = 0 as u64;
+    let mut id = 1 as usize;
+    while id < c.nl {
+        if os_has_frame(c, mem, id) && os_has_frame(c, os_t(c, OS_T_OWNCAP), id) {
+            og = OS_EDGE_GLOBAL;
+            if c.cap_bit[id] != 0 as u8 {
+                own_bits = own_bits | ((1 as u64) << (c.cap_bit[id] as u64));
+            }
+        }
+        id = id + 1 as usize;
+    }
+    let e = if c.env_param < 63 as usize { c.env_param } else { 63 as usize };
     let v = val * c.words;
     let mut i = 0 as usize;
     while i < 64 as usize {
         if (c.buf[v + OS_W_ADDR] >> (i as u64)) & 1 as u64 != 0 as u64 {
-            os_note_edge_row(c, i, t_addr, t_contents, t_flags);
+            os_note_edge_row(c, i, t_addr, t_contents, t_flags | og);
         }
         if (c.buf[v + OS_W_CONTENTS] >> (i as u64)) & 1 as u64 != 0 as u64 {
-            os_note_edge_row(c, 64 as usize + i, t_addr, t_contents, t_flags);
+            let row = if i > e && i < 63 as usize { e } else { i };
+            let g = if (own_bits >> (i as u64)) & 1 as u64 != 0 as u64 { 0 as u64 } else { og };
+            os_note_edge_row(c, 64 as usize + row, t_addr, t_contents, t_flags | g);
         }
         i = i + 1 as usize;
     }
@@ -6190,13 +6321,22 @@ fn os_note_edges(c: &mut OriginSets, val: usize, mem: usize) {
     if vf & ORIGIN_STATIC != 0 as u64 {
         os_note_edge_row(c, OS_EDGE_STATIC, t_addr, t_contents, t_flags);
     }
-    let mut unknown = vf & (ORIGIN_UNKNOWN | ORIGIN_ENV) != 0 as u64;
+    let mut unknown = vf & ORIGIN_UNKNOWN != 0 as u64;
+    let mut env_own = false;
+    let mut env_other = false;
+    let cap = os_t(c, OS_T_CAP) * c.words;
     let mut k = OS_W_FRAME;
-    while k < c.words && !unknown {
-        if c.buf[v + k] != 0 as u64 { unknown = true; }
+    while k < c.words {
+        let fr = c.buf[v + k];
+        if fr & !c.buf[cap + k] != 0 as u64 { unknown = true; }
+        let own = c.buf[m + k] & c.buf[owncap + k];
+        if fr & c.buf[cap + k] & own != 0 as u64 { env_own = true; }
+        if fr & c.buf[cap + k] & !own != 0 as u64 { env_other = true; }
         k = k + 1 as usize;
     }
-    if unknown { os_note_edge_row(c, OS_EDGE_UNKNOWN, t_addr, t_contents, t_flags); }
+    if env_own { os_note_edge_row(c, 64 as usize + e, t_addr, t_contents, t_flags); }
+    if env_other { os_note_edge_row(c, 64 as usize + e, t_addr, t_contents, t_flags | og); }
+    if unknown { os_note_edge_row(c, OS_EDGE_UNKNOWN, t_addr, t_contents, t_flags | og); }
 }
 
 fn os_note_edge_row(c: &mut OriginSets, row: usize, t_addr: u64, t_contents: u64, t_flags: u64) {
@@ -6522,8 +6662,11 @@ fn os_unknown_call_effects(
                 while j < nargs && !refused {
                     os_unknown_arg(c, module, locals, args, callee, j);
                     let _ = os_or(c, tao, tas);
+                    let sf = os_t(c, OS_T_SF);
+                    os_copy(c, sf, tv);
+                    os_drop_self_store(c, module, locals, sf, tao);
                     os_dest_reach(c, module, locals, tao, td);
-                    if os_external(c, td) {
+                    if os_frame_bound(c, sf) && os_external(c, td) {
                         os_refuse(
                             c,
                             "a call with no store summary may store an address of this frame into memory that outlives it (unknown-call store rule)"
@@ -6693,8 +6836,11 @@ fn os_summary_store_effects(
                         if target {
                             let _ = os_arg(c, module, locals, fn_id, args, j);
                             let _ = os_or(c, tao, tas);
+                            let sf = os_t(c, OS_T_SF);
+                            os_copy(c, sf, tv);
+                            os_drop_self_store(c, module, locals, sf, tao);
                             os_dest_reach(c, module, locals, tao, td);
-                            if os_external(c, td) {
+                            if os_frame_bound(c, sf) && os_external(c, td) {
                                 os_refuse(
                                     c,
                                     "the callee stores an address of this frame into memory that outlives it (call store rule)"
@@ -6870,9 +7016,16 @@ fn os_edge_effects(
                     // so the Static of a literal already in a `Vec<[u8]>` is no target.
                     os_clear(c, tm);
                     os_param_origin(c, module, locals, fn_id, args, j, false, tm);
+                    let sf = os_t(c, OS_T_SF);
+                    os_copy(c, sf, tv);
+                    os_drop_self_store(c, module, locals, sf, tm);
                     os_dest_reach(c, module, locals, tm, ed);
                     if w == 2 as usize { os_copy(c, tm, ed); }
-                    if c.checking && bound && !refused && os_external(c, ed) {
+                    if c.checking
+                        && bound
+                        && !refused
+                        && os_frame_bound(c, sf)
+                        && os_external(c, ed) {
                         os_refuse(
                             c,
                             "the callee stores an address of this frame into memory that outlives it (call store rule)"
@@ -6957,7 +7110,7 @@ pub fn store_origin_summary(
     let rs = r + c.words;
     let mut flags = c.buf[r + OS_W_FLAGS] & (ORIGIN_STATIC | ORIGIN_RAW);
     let mut fresh = c.buf[rs + OS_W_FLAGS] & ORIGIN_UNKNOWN != 0 as u64;
-    if c.buf[r + OS_W_FLAGS] & (ORIGIN_UNKNOWN | ORIGIN_ENV) != 0 as u64 {
+    if c.buf[r + OS_W_FLAGS] & ORIGIN_UNKNOWN != 0 as u64 {
         flags = flags | ORIGIN_UNKNOWN;
     }
     let mut k = OS_W_FRAME;
@@ -7008,7 +7161,7 @@ pub fn store_origin_summary(
         }
     }
     let addr = old.os_ret_addr | c.buf[r + OS_W_ADDR];
-    let contents = old.os_ret_contents | c.buf[r + OS_W_CONTENTS];
+    let contents = old.os_ret_contents | os_fold_env(c, c.buf[r + OS_W_CONTENTS]);
     flags = flags | old.os_ret_flags;
     fresh = fresh || old.os_ret_fresh;
     if addr != old.os_ret_addr
@@ -7283,7 +7436,7 @@ fn os_rvalue(c: &mut OriginSets, module: &ILModule, locals: [Local], rv: &ZirRva
                 os_add_flag(c, vo, ORIGIN_STATIC);
             }
         },
-        ZirRvalue.GetEnv => { os_add_flag(c, vo, ORIGIN_ENV); },
+        ZirRvalue.GetEnv => { os_add_param(c, vo, c.env_param); },
         ZirRvalue.StringConst(_) | ZirRvalue.GlobalAddr(_) => {
             os_add_flag(c, vo, ORIGIN_STATIC);
         },
@@ -7332,6 +7485,10 @@ fn os_check_store(
     let td = os_t(c, OS_T_D);
     if crossed {
         let dm = os_t(c, OS_T_DM);
+        let sf = os_t(c, OS_T_SF);
+        os_copy(c, sf, vo);
+        os_drop_self_store(c, module, locals, sf, dm);
+        if !os_frame_bound(c, sf) { return; }
         os_dest_reach(c, module, locals, dm, td);
         if !os_external(c, td) { return; }
     } else if base == 0 as u32
@@ -7355,6 +7512,10 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
             os_add_frame(c, own, id);
             os_rvalue(c, module, locals, &rv, own);
             let ty = os_local_ty(locals, id);
+            if id != 0 as u32 && (id as usize) < c.nl && c.cap_bit[id as usize] != 0 as u8 {
+                os_env_to_cap(c, os_t(c, OS_T_VO), id as usize);
+                os_env_to_cap(c, os_t(c, OS_T_VS), id as usize);
+            }
             // An owned capture's storage dies with the closure, whatever the frame does (§3).
             if id != 0 as u32
                 && (id as usize) <= locals.len
@@ -7385,7 +7546,16 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
             // An integer stored records no summary edge (§3, _The summary as built_): a callee's
             // bookkeeping (`arena.offset = .. + size`) is no address of what it was computed from,
             // and making a pointer of an integer needs `unsafe`, which answers for the round trip.
-            if crossed
+            // A capture alias's slot is the environment's memory, so a store into it is an edge
+            // too (§3, _Closure environments_).
+            let into_env = !crossed
+                && (pl.base as usize) < c.nl
+                && os_has_frame(c, os_t(c, OS_T_CAP), pl.base as usize);
+            if into_env {
+                os_clear(c, dm);
+                os_add_frame(c, dm, pl.base);
+            }
+            if (crossed || into_env)
                 && (ty == 0 as u32 || os_carries(c, module, ty))
                 && (ty == 0 as u32 || os_type_def_tag(module, ty) != ILTYPE_PRIMITIVE) {
                 let ev = os_t(c, OS_T_EV);
@@ -7485,6 +7655,9 @@ pub fn compute_origins_zir(
                 OS_EDGE_ROWS * 3 as usize
             )
         },
+        env_param: (*func).params.len,
+        // SAFETY: NL bytes in ARENA, the body's scratch arena, zeroed below before any read.
+        cap_bit: unsafe { @slice(zoril_allocator_alloc(arena, nl) as *mut u8, nl) },
     };
     unsafe {
         memset(c.edges.ptr as *mut u8, 0, (OS_EDGE_ROWS * 3 * 8) as u64);
@@ -7492,6 +7665,7 @@ pub fn compute_origins_zir(
         memset(c.carries_memo.ptr as *mut u8, 0, nt as u64);
         memset(c.owns_memo.ptr as *mut u8, 0, nt as u64);
         memset(c.q_memo.ptr as *mut u8, 0, (OS_Q_COUNT * nt) as u64);
+        memset(c.cap_bit.ptr as *mut u8, 0, nl as u64);
     }
     let mut pi = 0 as usize;
     while pi < (*func).params.len {
@@ -7502,6 +7676,7 @@ pub fn compute_origins_zir(
         }
         pi = pi + 1 as usize;
     }
+    os_cap_bits(&mut c, module, locals);
     let ret = 2 as usize * nl;
     let mut more = true;
     while more {
@@ -7555,6 +7730,17 @@ fn os_print_local(id: usize, locals: [Local], table: &InternTable) {
     }
 }
 
+// The capture alias whose own ParamContents bit is BIT (os_cap_bits), 0 for none.
+fn os_cap_of_bit(c: &OriginSets, bit: usize) -> usize {
+    if bit <= c.env_param || bit >= 63 as usize { return 0 as usize; }
+    let mut id = 1 as usize;
+    while id < c.nl {
+        if c.cap_bit[id] as usize == bit { return id; }
+        id = id + 1 as usize;
+    }
+    return 0 as usize;
+}
+
 fn os_print_set(c: &OriginSets, set: usize, locals: [Local], table: &InternTable) {
     let mut out = stdout();
     let base = set * c.words;
@@ -7567,9 +7753,15 @@ fn os_print_set(c: &OriginSets, set: usize, locals: [Local], table: &InternTable
             if (c.buf[base + w] >> (i as u64)) & 1 as u64 != 0 as u64 {
                 if !first { print(", "); }
                 first = false;
-                print(if w == OS_W_ADDR { "Param(" } else { "ParamContents(" });
-                let _ = write_u64(&mut out, i as u64);
-                if i == 63 as usize { print("+"); }
+                let cap = if w == OS_W_CONTENTS { os_cap_of_bit(c, i) } else { 0 as usize };
+                if cap != 0 as usize {
+                    print("Env(");
+                    os_print_local(cap, locals, table);
+                } else {
+                    print(if w == OS_W_ADDR { "Param(" } else { "ParamContents(" });
+                    let _ = write_u64(&mut out, i as u64);
+                    if i == 63 as usize { print("+"); }
+                }
                 print(")");
             }
             i = i + 1 as usize;
@@ -7592,11 +7784,6 @@ fn os_print_set(c: &OriginSets, set: usize, locals: [Local], table: &InternTable
         if !first { print(", "); }
         first = false;
         print("Static");
-    }
-    if flags & ORIGIN_ENV != 0 as u64 {
-        if !first { print(", "); }
-        first = false;
-        print("Env");
     }
     if flags & ORIGIN_RAW != 0 as u64 {
         if !first { print(", "); }

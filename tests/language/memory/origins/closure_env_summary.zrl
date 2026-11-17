@@ -1,0 +1,16 @@
+// A closure body's summary is stated over its `__env` parameter, the last one: storing one capture
+// through another is an edge from what the environment reaches into it, which a caller applying
+// the summary can map to the environment it passed (§3, _A closure body's summary is stated over
+// `__env`_). Read as an `Env` flag, it was `store Unknown -> global`.
+// ORIGINS: _closure_0 store ParamContents(0) -> ParamContents(0)
+// expected exit 0
+fn safe(out: &mut [i32], view: [i32]) {
+    let mut cl = || { *out = view; };
+    cl();
+}
+fn main() -> i32 {
+    let data = [42, 0];
+    let mut d: [i32] = @slice(0 as *i32, 0);
+    safe(&mut d, &data);
+    return d[0] - 42;
+}

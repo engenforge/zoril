@@ -1,6 +1,6 @@
-// An owned capture's storage dies with the closure, so inside the body the capture owns Frame(itself)
-// (and Env, which it was read from: a superset).
-// ORIGINS: _closure_0 v O={Env} S={Frame(v), Env}
+// An owned capture's storage dies with the closure, so inside the body the capture owns Frame(itself),
+// as well as what it was read from, Env(v), what the environment holds for `v` (a superset).
+// ORIGINS: _closure_0 v O={Env(v)} S={Env(v), Frame(v)}
 // expected exit 0
 import "vec.zrl";
 use vec::Vec;
