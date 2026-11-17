@@ -120,6 +120,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Branch:** `provenance`
     > **Found by:** id:z0097 (probe git:b892899).
     > **Placed:** directly after id:z0097, a follow-up to it. A soundness hole accepted by both rules; the maintainer may raise it.
+    > **Claimed:** 2026-11-17 provenance
 
     - **Now:** `bench/safety_matrix/probes/gap_95_callee_store_through_raw_ptr_field_to_global.zrl` compiles with and without `--provenance`, exit 77. `put`'s summary stores `Param(1)` into `ParamContents(0)`; at the caller, `os_dest_reach` of `Frame(s)` follows `O(s)` only when `S` can hold a mutable handle (`OS_Q_HANDLE`), and a raw `*mut` pointer is none, so `Static` (the global `s.p` points to) is never a target. id:whak5 fixed the closure-capture form by reading one level through a capture's local; a named callee's parameter reaching a struct has no such read.
     - **Ruled out:** counting a raw `*mut` as a handle in `OS_Q_HANDLE` refuses 13 tests (a `Vec`'s buffer is a `*mut`: every `Vec` then follows what it holds, the literal case `os_dest_reach`'s comment names).
