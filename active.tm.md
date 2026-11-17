@@ -181,12 +181,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - C5: `tm validate doc/tasks/*.tm.md`, three `[PASS]` lines.
     - Not run: `make test` and `make preflight-changed`, since no compiled code changed. The fuzz record is unaffected.
 
-- [ ] +safety +design +AI-D @provenance L1 A liveness model: what holds a borrow when no local does, stated as the design note states origins id:dhded
+- [x] +safety +design +AI-D @provenance L1 A liveness model: what holds a borrow when no local does, stated as the design note states origins id:dhded
     > **Created:** 2026-11-14
     > **Branch:** `provenance`
     > **Depends:** id:0m61c
     > **Check-in:** none of its own (`+AI-D`); the maintainer reads the design before L2 starts.
-    > **Claimed:** 2026-11-17 provenance
+    > **Completed:** 2026-11-17 git:bdfcac6
 
     - **Placed:** before id:z0044, which it blocks: id:z0044 extends the per-local borrow set, and this task decides whether that set is the model. Found in a review of the plan (the maintainer's request, 2026-11-14).
 
@@ -212,6 +212,18 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
         - _p6, `Arena.reset` through a `&mut Arena` parameter, with the view stored through another parameter_ (`p6_arena_param.zrl`). Refused at the caller: 11:15 "cannot mutably borrow 'a' while it is already borrowed", because `v` (made in `a`) holds a borrow of `a` across the call. So the caller of an invalidating callee is protected when a local still holds the source.
         - _p7, the view stored before the callee, and the callee only invalidating_ (`p7_kill_after.zrl`: `put(&mut s, &v)` with `fn put(out: &mut [i32], v: &Vec<i32>) { *out = v.as_slice(); }`, then `kill(&mut v)` with `fn kill(v: &mut Vec<i32>) { v.free(); }`, then `s[0]`). **Accepted by both rules, runs 77.** This is a new route: gap_38's shape (a callee writes through a `&mut` parameter, here into a local slice, not a field) with the view made inside the callee from another argument, and a free in place of a reset. It becomes probe gap_96.
         - _For comparison, locals today:_ `let s = v.as_slice(); v.push(1);`, `v.free()` in place of the push, and the same through a `&mut Vec` parameter (`q_param_free_local.zrl`) are all refused, "cannot mutably borrow 'v' while it is already borrowed". Any `&mut` use is the invalidation, so "takes `&mut`" is enough when the holder is known.
+
+    - **Measurement (item 6, 2026-11-17):** the scratch rule is a copy of `src/` (`build/provenance/build/dh/srcx/`, a patch to `check_assign`'s second through-pointer arm and `borrow_counts`; not committed). A write through a parameter gives the stored value's borrows to that parameter, and `borrow_counts` keeps them live until return, under the strict tier. Built with `sh scripts/build_zrl.sh build/dh/zoril.scratch build/dh/srcx/main.zrl -I stdlib=stdlib -I build/dh/srcx -I build/gen --runtime-first`, measured with `sh build/dh/measure.sh` (every program of `tests/` and `stdlib/` the default `build/zoril` compiles, and the tool roots). Result: 755 programs, **0 refused**, apart from 9 `warning:` lines that matched the word "error" in their file names. `src/main.zrl`: 126 errors from 13 stores: `src/driver/types.zrl:864` (42), `src/verify.zrl:275` (27), `src/driver/module.zrl:692` (18), `src/resolve.zrl:720` (10), `src/verify.zrl:1441` (8), `src/check_zir.zrl:2082` (7, a raw pointer `live_row` result), and 7 more, 8 of the 13 being `self.file_path = self.intern_table.lookup(..)`. `tools/zilc`: 16 from `self.module_name = self.intern_table.lookup(m_id)` (`zil_parse.zrl:2106`). Each is "cannot mutably borrow 'self' while it is already borrowed" (121) or "cannot assign to .. because it is borrowed" (4), or a scope end (1). None of the 142 lines is a release (`grep -E '\.(free|reset|reset_to|destroy)\(|@drop'` over them: 0). `grep -rn -E '\.(free|reset|reset_to|destroy)\(' src tools/zilc/src` finds only a comment. That fixed the release tier.
+    - **Census (item 3):** `build/dh/srcc/` instruments each site where a value that holds a borrow gets no holder (`CENSUS <site>` on stderr), built as `build/dh/zoril.census` and run over the same programs plus `src/main.zrl` (`build/dh/census/all.txt`). By program: write through a pointer (`check_assign`) 31 and 25; destination holds no reference 104; destination is a raw pointer 27. The liveness probes: `gap_37`, `gap_43`, `gap_87`, p4 and p7 fire the through-pointer sites; `gap_38`, `gap_39` and `gap_44` fire none (a call transfers no borrow, and `#[borrows()]` is trusted). What each answers under the model is in the design note §3.1, item 3.
+    - **Plan edits:** added id:bfcvm (L2a, the `releases` fact) before id:kqp9n. id:kqp9n is now holders one and two, with **Do:** and C1 to C7. id:z0044 is now holder three, with **Do:** and C1 to C6; its Depends gain id:bfcvm and id:kqp9n and lose id:z0011, which only `gap_44` needed, and `gap_44` is id:z0011's. `gap_96` (git:bdfcac6) is closed by id:z0044.
+
+    - **Completion:** the design is `doc/design/provenance.md` §3.1, with §4's rows for `gap_37`, `gap_38`, `gap_39`, `gap_43`, `gap_87` and `gap_96`, in git:bdfcac6. The same commit adds probe `gap_96`, with its Known gaps entry, its `doc/SAFETY.md` §6 class (G) text, and §6.1 updated to say the model is designed, not built. No compiled code changed: the scratch and census compilers are copies under `build/`.
+    - C1: the seven probes and their results are under **Probes** above: p1, p2, p3 and p6 refused, p4 and p7 accepted and run 77, and p5 accepted and run 42 for every N.
+    - C2: §3.1 answers items 1 to 6 in numbered paragraphs, and §4 has a row for each liveness gap: `gap_37`, `gap_38`, `gap_39` and `gap_43` in one row, then `gap_87`, `gap_96`, and `gap_44` (Z-0011's row, unchanged).
+    - C3: quoted under **Measurement** above, with its commands.
+    - C4: id:kqp9n and id:z0044 each have a **Do:** and numbered **Checks:** following §3.1, with take-out checks (id:kqp9n C6, id:z0044 C5). id:bfcvm has C1 to C5, with take-out check C4.
+    - Checks run after the last edit: `make test-changed BASE=HEAD` (the doc and safety tiers, with the new probe untracked at the time) `Total: 3750 run, 3750 passed, 0 failed, 100 skipped (135.4s)`, and again after the last wording change `Total: 3750 run, 3750 passed, 0 failed, 100 skipped (135.6s)`. `sh scripts/run_safety_matrix.sh`: "All probes complete: 473/522 passed. Mismatches: 0" with `gap_96` in place. `sh scripts/check_safety_model.sh`: "PASS: safety_model.md is self-consistent." Not run: `make test` and `make preflight-changed`, since no `src/`, `stdlib/` or `tools/` file changed.
+    - The maintainer reads the design before L2 starts (this task's **Check-in:** line).
 
 - [ ] +safety +tests +AI-D @provenance id:z0086 B1.9e A literal held by a value does not make what the value reaches a global destination
     > **Created:** 2026-11-06
@@ -460,10 +472,26 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
     - **Added by id:z0073's decision (the maintainer, 2026-11-14):** case B there. A safe function whose `unsafe` block writes a value that can hold a reference or a slice through a raw pointer (one it was given, or one an argument holds: `unsafe { *self.p = r; }`) must declare `#[stores(..)]` naming the argument stored and the one it is stored into, or it is a compile error; the declaration is then a trusted claim (`doc/SAFETY.md` §4.2) and the caller applies the call store rule to it. It is one rule with the bare-`extern` rule of the **Blind spot** bullet above: a safe function may not hide a store behind an operation the checker cannot read. Probe: `put` with and without the declaration (`build/z76/cx.zrl` in id:z0076's text), a caller passing `&x` of a local with `g` reaching outside the frame (refused once declared), the same store of a plain integer (no declaration needed), and the count of functions in `stdlib/`, `src/` and `tools/` that newly need a declaration, measured before the rule is made an error. If that count makes this task more than a session, split the rule into a task of its own directly after this one.
 
+- [ ] +safety +tests +AI-D @provenance L2a A call summary records which arguments the callee may release id:bfcvm
+    > **Created:** 2026-11-17
+    > **Branch:** `provenance`
+    > **Depends:** id:dhded
+    > **Placed:** directly before id:kqp9n (L2), which it blocks: L2's release tier conflicts only with a release, and it learns of a release from this fact.
+
+    - **Design:** `doc/design/provenance.md` §3.1, item 2 (git:bdfcac6). The summary gets one new fact, `releases i`: the callee may release storage argument `i` reaches. It is computed from bodies, as the store edges are. A body releases `i` when it calls a releasing primitive on memory whose origins include `ParamAddr(i)` or `ParamContents(i)`, or calls a function whose summary releases an argument carrying them. A call through a `fn` value with no known callee releases everything its arguments and environment reach.
+    - **Decide first, and record here:** how the releasing primitives are marked. They are `zoril_allocator_free` (`stdlib/mem_raw.zrl`, the only call to it in `stdlib/` is `Vec.free`) and the arena's reset and free (`stdlib/mem.zrl`: find each body that ends an arena's allocations). Either a trusted attribute on those few bodyless or `unsafe` items, as `#[fresh]` is (§3, _Raw operations_), or something else the design note's rules allow; no list of names in the checker. An `extern` releases nothing unless it is marked.
+    - **Do:** compute `releases` in the origin pass (every mode: `os_pass_pending` runs with the rules off by default), keep it through a recursive cycle's fixpoint, write it into the `.zri` beside the store edges, and print it with `--emit-origins` (`releases 0`). Nothing reads it yet, so no program's verdict changes.
+    - **Checks:**
+        - C1: golden tests under `tests/language/memory/origins/` whose `--emit-origins` shows `releases 0` for `Vec.free`, for each arena reset and free, for `fn kill(v: &mut Vec<i32>) { v.free(); }`, and for a two-level wrapper of `kill`; and no `releases` for `Vec.push` (growth keeps the old buffer: `Vec.grow_to` frees nothing), a getter, and `fn put(out: &mut [i32], v: &Vec<i32>) { *out = v.as_slice(); }`.
+        - C2: a recursive pair, one member freeing its argument, where both members' summaries release it.
+        - C3: a `.zri` round trip under `tests/modular/iface_attrs/`: a module's releasing function, imported, prints the same `releases` as when compiled whole-program.
+        - C4: take the primitives' mark out and watch C1's `Vec.free` golden fail; take the cycle step out and watch C2 fail.
+        - C5: no verdict changes: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, quoting the `Total:` lines and `reject-diff: base verdicts: fresh (no cache)` with 0 newly accepted and 0 newly refused.
+
 - [ ] +safety +tests +AI-D @provenance L2 A view stored through a parameter keeps what it views borrowed for the rest of the body (gap_87) id:kqp9n
     > **Created:** 2026-11-14
     > **Branch:** `provenance`
-    > **Depends:** id:dhded
+    > **Depends:** id:dhded, id:bfcvm
     > **Check-in:** stop for review after it: a fix to a safety rule.
 
     - **Placed:** after L1 (id:dhded), which settles its rule, and before id:z0044, its caller-side twin.
@@ -478,11 +506,26 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Route class:** a view of what a parameter reaches, stored into what a parameter reaches, then invalidated in the same body. id:z0044 does not close it as written: it carries the borrow "to the local the pointer refers to", and here there is none.
     - **Not ready:** L1 writes this task's **Do:** and numbered **Checks:**. They include: `gap_87` flipped to `compile_reject` with its Known gaps entry and `doc/SAFETY.md` §6 class (M) removed; the three sibling forms above as `compile_reject` probes; an accepted twin for each (the store with no later invalidation; the invalidation before the store); the fix taken out and `gap_87` watched to run (exit 77); the rejection differential with every newly refused program listed; `make test` and `make preflight-changed`, each `Total:` quoted.
 
+    - **Ready (2026-11-17, L1 = id:dhded):** the **Not ready** bullet above is answered by `doc/design/provenance.md` §3.1 (git:bdfcac6). This task is holders one and two (the in-body half). id:z0044 is holder three (the caller's half).
+    - **Closes (from L1):** `gap_87`, and from id:z0044's former list `gap_37` and `gap_43`, which are in-body (a local `&mut` and a `Box`).
+    - **Do:**
+        1. In `check_assign`'s two arms for a write through a pointer (`place_writes_through_pointer`; L1's census found no other in-body site), read the destination reach of the written place from the function's origin sets. The origin pass runs on every body in every mode (`os_pass_pending`), so the sets exist without `--provenance`; check that they are computed before the borrow checker runs on the body, and make them so if not.
+        2. Holder one: for each `Frame(L)` in the reach, `L` receives the value's borrows, as `w.s = ..` gives them to `w` (the same propagation, `direct` false). These are strict-tier borrows: any `&mut` use of the borrowed place conflicts, as today.
+        3. Holder two: a `Param`, `Static`, `Raw` or `Unknown` origin in the reach gives the value's borrows to the frame's outside holder, live until return. These are release-tier borrows: only a release conflicts. A release is a call whose summary releases an argument reaching the borrowed place (id:bfcvm), an `@drop`, or a move or whole overwrite of the owner. Mark the tier on the borrow (a field of `ActiveBorrow`), so that `borrow_counts` and the conflict checks can tell the two apart.
+    - **Checks:**
+        - C1: `gap_87` refused, with its expectation flipped to `compile_reject`, its Known gaps entry removed and class (M) removed from `doc/SAFETY.md` §6 and §6.1 (no probe count touched).
+        - C2: `gap_37` and `gap_43` refused and flipped the same way; class (G)'s text keeps only the routes still open.
+        - C3: `compile_reject` probes for L1's p4 (the trait method, `build/provenance/build/dh/p4_trait.zrl`), `out.push(v.as_slice()); v.free();`, and the one-parameter `p.s = p.a.as_slice(); p.a.free();`.
+        - C4: accepted twins as tests, each built and run with its exit quoted. The store with no later release; the release before the store; `*out = v.as_slice(); v.push(1);` (release tier: growth is no release); and the field read before `a.reset()` for `gap_37` and `gap_43`. Plus a refused strict-tier twin: `let r = &mut w; r.s = v.as_slice(); v.push(1); w.s[0]`, refused as `w.s = v.as_slice()` is today.
+        - C5: the compiler builds as before. `make` succeeds with `src/`'s and zilc's 14 intern-table stores accepted (`self.file_path = self.intern_table.lookup(..)`, which L1's strict scratch refused 142 times), and `build/z97/measure.sh` reports no new error in `tests/` or `stdlib/`.
+        - C6: take holder two out and watch `gap_87` build and run 77. Take the tier out (count every borrow as strict) and watch C5's build fail on the first intern-table store.
+        - C7: `make test`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` with `reject-diff: base verdicts: fresh (no cache)` quoted, and every newly refused program listed with its reason. This rule acts in the default mode too, so `main`'s behaviour changes when the branch merges; say so in the completion note.
+
 - [ ] +safety +tests +AI-D @provenance id:z0044 B0.1 A value stored into a local's field through a pointer to the local keeps its borrow
     > **Created:** 2026-11-03
     > **Branch:** `provenance`
     > **Check-in:** stop for review after it.
-    > **Depends:** id:z0010, id:z0011, id:dhded
+    > **Depends:** id:z0010, id:dhded, id:bfcvm, id:kqp9n
 
     - **Closes:** `gap_37_local_mutref_field_reset`, `gap_38_param_field_reset`, `gap_39_method_self_field_reset`, `gap_43_box_field_reset`.
     - **Depends changed (2026-11-14, the maintainer, in a review of the plan):** added id:dhded (L1), the liveness model: L1 decides whether this task's per-local borrow is the rule and rewrites its Do and Checks.
@@ -493,6 +536,18 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Probes:** `gap_37`, `gap_38`, `gap_39` and `gap_43` flip to `compile_reject`, with an accepted twin for each (the field is read before `a.reset()`). Check the over-rejection recorded on id:z0017 does not grow.
     - **Verification:** `make test`, `make preflight-changed`, the rejection differential; `bench/fuzz/README.md` stays stale for `src/`. Stop for review.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+    - **Rewritten by L1 (id:dhded, 2026-11-17; design `doc/design/provenance.md` §3.1, git:bdfcac6):** this task is now holder three, the caller's half. The in-body routes moved to L2 (id:kqp9n): `gap_37` (a local `&mut`) and `gap_43` (a `Box`). The **Do:** and **Probes:** above are superseded by the two bullets below, and the `summary_pass.zrl` note above stands.
+    - **Closes (from L1):** `gap_38`, `gap_39`, `gap_96` (found by L1), and `gap_87`'s two-callee form (`fill(h, v); kill(v);`). `gap_44` is id:z0011's: the `#[borrows()]` it trusts is a declaration checked against the body, not a holder. So this task no longer depends on id:z0011 (**Depends changed** below).
+    - **Do:** at a call, for each store edge `i -> j` of the callee's summary, every local whose `Frame` the destination reach of argument `j` has receives the borrows argument `i` carries. When the edge stores what `i` reaches, each also receives a borrow of the place argument `i` refers to. A target outside the caller's frame goes to the caller's outside holder (L2). All of these are release-tier borrows (L2's mark): they conflict only with a release, so a self-edge `i -> i` (`p.lex(); p.lex();`) is accepted, and `p.lex(); p.free_all();` with `p` still read is refused when `free_all` releases `p`. A call through a `fn` value with no known callee counts as storing every argument into every other, as the escape rules count it.
+    - **Checks:**
+        - C1: `gap_38`, `gap_39` and `gap_96` refused, each flipped to `compile_reject`, with its Known gaps entry removed and class (G)'s text in `doc/SAFETY.md` §6 and §6.1 updated (no probe count touched).
+        - C2: `gap_87`'s two-callee form as a `compile_reject` probe (`fn both(h: &mut H, v: &mut Vec<i32>) { fill(h, v); kill(v); }`).
+        - C3: accepted twins as tests, built and run with their exits quoted. `put(&mut s, &v); v.push(1); s[0]` (release tier); `put(&mut s, &v); kill(&mut v);` with `s` not read after; a method storing a view of `self`'s own `Vec` into `self`, called twice; and the reset before the call for `gap_38`.
+        - C4: the measurement L1 left to this task: the programs of `tests/`, `stdlib/` and the four tool roots the base accepts and this refuses, read one by one in the completion note. The design's claim is that the release tier refuses none that are safe.
+        - C5: take the summary step out and watch `gap_96` build and run 77; make the borrows strict and watch C3's method-called-twice twin be refused.
+        - C6: `make test`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` with `reject-diff: base verdicts: fresh (no cache)` quoted and each newly refused program listed. This acts in the default mode, as L2 does.
+    - **Depends changed (2026-11-17, L1):** added id:kqp9n (L2, for the outside holder and the tier mark) and id:bfcvm (`releases`). Removed id:z0011, which this task needed only for `gap_44`; `gap_44` is id:z0011's own.
 
 - [ ] +diagnostics +AI-G @provenance id:z0066 B3.9 Provenance diagnostics name the origin they found, once per site
     > **Created:** 2026-11-05
