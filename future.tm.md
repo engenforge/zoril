@@ -240,6 +240,28 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Inherited at id:kbv3f with no change of result** (each of `check_clean_tree.sh`, `test_test_changed.sh`, `test_build_info.sh`, `test_bench_records.sh`, `test_preflight.sh` exit 0 with all set): `TR_JOBS=1 TR_FILTER=zzznomatch TR_FAIL_FAST=1 TR_VERBOSE=1 TR_QUIET=1 TR_TIMEOUT=1 TR_EXCLUDE=zzz TR_WORK=<dir> BENCH_FORCE=1 BENCH_COMPILE_RUNS=1 BENCH_HOST_ID=planted RECORDS_SKIP=1 FUZZ_FINDINGS=/nonexistent FUZZ_STAGE=/nonexistent FUZZ_GEN=/nonexistent PREFLIGHT_BASE=HEAD~5`.
     - **To decide:** whether a scenario clears every variable its callees read that is not a user option (as `scripts/test_reject_diff.sh` now does for `REJECT_DIFF_`), or only the documented ones; the answer then becomes one `+AI-G` task per scenario.
 
+- [ ] +testinfra +AI-G `preflight-selftest` case 15 asserts that its differential ran without the cache id:fe7z0
+    > **Created:** 2026-11-17
+    > **Found by:** the check-in id:7rfmj, taking the fix of id:9pnp4 out.
+    > **Placed:** in `future.tm.md`: the fix of id:9pnp4 holds today; this only makes its loss visible. It needs a `**Branch:**` line (`main`) when it is promoted.
+
+    - **Now (git:150ba73):** with `REJECT_DIFF_NO_CACHE=1` removed from case 15 of `scripts/test_preflight.sh`, the script still exits 0 with all 33 `[PASS]` lines, and the stand-ins' entry is back (`ls -A build/reject-diff-cache` -> `72ddac29dc6cfc9ca8acf06fc967dc3abb6529fe905cd271f5d2ea927404f65c`). Nothing in `make preflight-changed` sees the fix go.
+    - **Settled:** in case 15, the condition `&& echo "$out" | grep -qF "[PASS] reject-diff: 0 newly accepted"; then` becomes `&& echo "$out" | grep -qF "[PASS] reject-diff: 0 newly accepted" \` followed by the line `        && echo "$out" | grep -qF "reject-diff: base verdicts: fresh (no cache)"; then` (`scripts/check_reject_diff.sh` prints that line when the cache is off). Nothing else changes.
+    - **Checks:**
+      - C1: before: `sh scripts/test_preflight.sh > build/fe7z0-before.log 2>&1; echo rc=$?; rg -c '^\[PASS\]' build/fe7z0-before.log`; quote `rc=0` and the count (33).
+      - C2: after: the same command; quote `rc=0`, the same count, and `ls -A build/reject-diff-cache` showing no new entry.
+      - C3: take `REJECT_DIFF_NO_CACHE=1` out of case 15 on a copy (`awk '{ sub(/out=\$\(REJECT_DIFF_NO_CACHE=1 /, "out=$(") ; print }' scripts/test_preflight.sh > scripts/.tp_fe7z0.sh; sh scripts/.tp_fe7z0.sh`); quote the `[FAIL]` line of case 15 and a non-zero exit; remove the copy and the entry it wrote.
+      - C4: `make test-changed BASE=HEAD` and `TR_WORK=build/tests-git ./scripts/test.sh --quiet --group git`; quote each `Total:` line.
+
+- [ ] +testinfra +AI-D The benchmark comparison cache replays a failed row without its `[FAIL]`, `array_loop.zig` does not compile under zig 0.17.1, and the `preflight-changed` time in the guide is the warm-cache one id:jak7k
+    > **Created:** 2026-11-17
+    > **Found by:** the check-in id:7rfmj, whose preflight ran in a worktree with no `build/bench/compare/`.
+    > **Placed:** in `future.tm.md`: the threshold gate reads only Zoril's and gcc's rows, so no verdict is wrong.
+
+    - **Now (git:150ba73, zig 0.17.1):** with nothing cached, the bench step of `make preflight-changed` prints `[FAIL] zig did not succeed (exit 1)` for `zig build-exe -O ReleaseFast ... bench/cross_lang/array_loop/array_loop.zig` (`array_loop.zig:2:34: error: binary operator '*' has whitespace on one side, but not the other`, at `var a: [4096]i32 = [_]i32{0} ** 4096;`), then `[WARN] comparison rows skipped (their steps failed, see the [FAIL] lines above): zig`, and still writes `build/bench/compare/<key>/complete` (`scripts/bench_cross_lang.sh`, "Cache this run's rows": `complete` asks only that the five tools are on `PATH`). The next run replays the failed row as `Zig (ReleaseFast)   : (cached) compile     -1 ms (RSS   0.0 MB) | run     -1 ms | bin       0 B` with neither the `[FAIL]` nor the `[WARN]` (the main checkout's `build/8wvxb/preflight.log`, line 187, against `build/kbv3f/preflight.log`, which has the `[FAIL]`).
+    - **The time:** the bench step took 198 s with the cache cold (this review, `wall=488`; id:kbv3f's run, about 8.5 minutes); id:8wvxb's C1 gave `wall=384` with it warm. `doc/developer_guide.md` says ~6 minutes and does not say which.
+    - **To decide:** (1) whether a run with a failed comparison row is stored as `complete`, or the failure is replayed with its `[WARN]`; a wrong skip here hides a broken benchmark source from whoever reads the comparison rows of a preflight (`--update-doc` and `--record` run in full and would show it). (2) The fix of `array_loop.zig` for zig 0.17, and which zig versions the sources are meant for. (3) Whether the guide gives both times. Each answer becomes an `+AI-G` task.
+
 ## Types, diagnostics and the standard library
 
 - [ ] +generics +types id:z0032 G1 `impl<T: Copy> Source<T> for S` fails to bind `T` when it appears only in the trait's arguments
