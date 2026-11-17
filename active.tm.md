@@ -15,6 +15,65 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - id:gv740: `REJECT_DIFF_CACHE=<a new directory> make preflight-changed PREFLIGHT_BASE=d405854` passes whole and leaves that directory without an entry from the selftest's stand-in compilers; the variables of the other scenarios of the `git` group that a preflight user could set (`FUZZ_`, `BENCH_`, `TR_` names: `rg -o '\$\{?[A-Z][A-Z_]+' scripts/test_fuzz_tools_git.sh scripts/test_bench_records.sh scripts/test_test_changed.sh scripts/test_build_info.sh scripts/check_clean_tree.sh | sort | uniq -c`) change no result.
       - id:ss1f8: each description agrees with `scripts/preflight.sh`, the two `AGENTS.md` bullets changed in nothing but what a gate runs, and the times in `doc/developer_guide.md` are the measured ones.
 
+- [ ] +testinfra +AI-G @main `preflight-selftest` case 15 stores its stand-in compilers' base verdicts in the reject-diff cache: run it with the cache off and clear inherited `REJECT_DIFF_` variables id:9pnp4
+    > **Created:** 2026-11-17
+    > **Branch:** `main`
+    > **Found by:** the check-in id:kbv3f, probing the sibling routes of id:gv740.
+    > **Placed:** after id:kbv3f, as a follow-up of that check-in.
+
+    - **Now (git:49f4654):** case 15 of `scripts/test_preflight.sh` (the `preflight-selftest` scenario of the `git` group) calls `./scripts/check_reject_diff.sh --probes-only --change HEAD HEAD` with a stand-in `make` whose `zoril` accepts every program, without `--bins`, so the cache is on. It stores the stand-ins' base verdicts (every probe `0`) as an entry: in `REJECT_DIFF_CACHE` when that is inherited, and in `build/reject-diff-cache/` on every run otherwise.
+      ```
+      $ rm -rf build/kbv3f/tp2; REJECT_DIFF_CACHE=$PWD/build/kbv3f/tp2 sh scripts/test_preflight.sh > build/kbv3f/tp2.log 2>&1; echo rc=$?; ls -A build/kbv3f/tp2
+      rc=0
+      72ddac29dc6cfc9ca8acf06fc967dc3abb6529fe905cd271f5d2ea927404f65c
+      ```
+      `REJECT_DIFF_CACHE=<new dir> make preflight-changed PREFLIGHT_BASE=d405854` left the same entry (id:kbv3f).
+    - **Why it is not a wrong verdict (read):** the key holds `sha256_of "$BASE_DIR/build/zoril"` (`scripts/check_reject_diff.sh`, the `KEY=` block), and the stand-in's hash is not a real compiler's, so no real run is served the entry. What it costs: one stray entry per probes tree in the user's cache directory, and a `preflight-selftest` that writes outside its own scratch directory.
+    - **Inherited and tried at id:kbv3f (each exit 0, result unchanged):** `REJECT_DIFF_PROBES_DIR=/nonexistent`; `REJECT_DIFF_NO_CACHE=1 REJECT_DIFF_CACHE=<dir> REJECT_DIFF_GRID_DIR=/nonexistent REJECT_DIFF_SAMPLE=1 REJECT_DIFF_SEED=7` (no entry written). The cases other than 15 pass `PREFLIGHT_REJECT_DIFF` stand-ins and do not reach `check_reject_diff.sh`.
+    - **Settled 1:** in `scripts/test_preflight.sh`, directly after the `GIT_CONFIG_` unset loop near the top, add
+      ```
+      # A preflight run made with a REJECT_DIFF_ variable set starts this script; case 15 chooses its own.
+      unset REJECT_DIFF_NO_CACHE REJECT_DIFF_CACHE REJECT_DIFF_PROBES_DIR REJECT_DIFF_GRID_DIR REJECT_DIFF_SAMPLE REJECT_DIFF_SEED REJECT_DIFF_MAKE
+      ```
+    - **Settled 2:** in case 15, `out=$(REJECT_DIFF_MAKE="$tmp/stub_make.sh" ./scripts/check_reject_diff.sh` becomes `out=$(REJECT_DIFF_NO_CACHE=1 REJECT_DIFF_MAKE="$tmp/stub_make.sh" ./scripts/check_reject_diff.sh`, and the comment above the case gains the sentence `The stand-ins' verdicts are not a compiler's, so the run keeps them out of the cache.` Nothing else changes.
+    - **Checks:**
+      - C1: before: `mkdir -p build/9pnp4`, then the command of **Now** with `build/9pnp4/` for `build/kbv3f/`; quote `rc=0` and the entry name. Then `rm -rf build/reject-diff-cache.9pnp4 && mv build/reject-diff-cache build/reject-diff-cache.9pnp4 2>/dev/null; sh scripts/test_preflight.sh > build/9pnp4/default-before.log 2>&1; echo rc=$?; ls -A build/reject-diff-cache`; quote `rc=0` and the entry name.
+      - C2: after: the two commands of C1 again (`rm -rf build/reject-diff-cache` before the second); quote `rc=0` and that `ls -A` prints nothing for each. Then restore the user's cache: `rm -rf build/reject-diff-cache && mv build/reject-diff-cache.9pnp4 build/reject-diff-cache`.
+      - C3: case 15 still runs: `rg -F 'builds a base the seed refuses through stage1' build/9pnp4/*.log`; quote the `[PASS]` line of the after runs.
+      - C4: take settled 2 out (keep settled 1), rerun the second command of C1, and quote the entry that comes back; restore (`git diff --stat`: `scripts/test_preflight.sh` only).
+      - C5: `make test-changed BASE=HEAD`; quote its `Total:` line. `TR_WORK=build/tests-git ./scripts/test.sh --quiet --group git > build/9pnp4/group.log 2>&1; echo rc=$?`; quote `rc=0` and its `Total:` line (expected `8 run, 8 passed`).
+      - C6: commit on `main`, add `**Awaiting review:**` with C2 and C5's group run, `tm done`; the check-in id:7rfmj reviews it.
+
+- [ ] +docs +AI-G @main The preflight descriptions name the calibration and figures-record steps, the `preflight-changed` help names the differential, and its time is the measured one id:8wvxb
+    > **Created:** 2026-11-17
+    > **Branch:** `main`
+    > **Found by:** the check-in id:kbv3f, reviewing id:ss1f8.
+    > **Placed:** after id:9pnp4, as a follow-up of the check-in id:kbv3f; nothing depends on their order.
+
+    - **Now (git:49f4654):** `scripts/preflight.sh` runs `calibrate` (`scripts/check_fuzz_calibrate.sh`, `make fuzz-calibrate`) after the mutations and `figures-record` (`scripts/record_figures.sh`, a row of `bench/records/figures_history.tsv`) after the bench step, in both modes (`rg -o 'record_step [a-z-]+' scripts/preflight.sh`), and its Usage lines name both. The `make preflight-changed` bullet of `AGENTS.md` (Running tests) and line of `doc/developer_guide.md` (Preflight Gates) name neither; the `##` text of `preflight-changed` in the `Makefile` names neither, nor the rejection differential.
+    - **Measured (this host, 16 cores):** id:ss1f8 gave 379 s at git:1a03f6b with the differential skipped. id:kbv3f's run at git:49f4654 (`REJECT_DIFF_CACHE=<dir> make preflight-changed PREFLIGHT_BASE=d405854`, differential skipped) took about 8.5 minutes from start to end; its `build/preflight-timings.tsv` gave `mutation 2`, `selfhost 68`, `calibrate 2`, `reject-diff 0`, `checked 126`, `git 100`, `bench 198`, `figures-record 2`. The ~6 minutes in `doc/developer_guide.md` is the lower of the two; C1 measures it again.
+    - **The `AGENTS.md` edit describes and adds no rule.**
+    - **Settled 1:** `AGENTS.md`, the `make preflight-changed` bullet: `the mutations of the changed files, the rejection differential when the checkers changed,` becomes `the mutations of the changed files, the fuzzer's calibration programs, the rejection differential when the checkers changed,`, and `and the cross-language benchmark thresholds.` becomes `the cross-language benchmark thresholds, and the safety figures record.` No other sentence changes.
+    - **Settled 2:** `doc/developer_guide.md`, the `make preflight-changed` line: `targeted mutation testing for modified files, the rejection differential` becomes ``targeted mutation testing for modified files, the fuzzer's calibration programs (`make fuzz-calibrate`), the rejection differential``, and `and the benchmark thresholds, in ~6 minutes (~10 when the differential runs).` becomes ``the benchmark thresholds and the safety figures record (`bench/records/figures_history.tsv`), in ~N minutes (~M when the differential runs).``, where N is C1's wall time rounded to the nearest minute and M is N + 4 (the differential's 248 s of the check-in id:z7rjp).
+    - **Settled 3:** `Makefile`, the `##` text of `preflight-changed`: `Fast pre-merge gate: selfhost, mutations of changed files, calibration, reject-diff, checked build, git group, bench thresholds, figures record`.
+    - **Checks:**
+      - C1: the time, before any edit, on a quiet host: `mkdir -p build/8wvxb; s=$(date +%s); make preflight-changed PREFLIGHT_BASE=d405854 > build/8wvxb/preflight.log 2>&1; echo rc=$? wall=$(( $(date +%s) - s ))`; quote `rc=0`, `wall=` and the `[SKIP] reject-diff` line (the differential must be skipped), and N.
+      - C2: before: `rg -n "the mutations of the changed files, the rejection|modified files, the rejection|~6 minutes|changed files, checked build" AGENTS.md doc/developer_guide.md Makefile`; quote the lines (expected three: `AGENTS.md:36`, `doc/developer_guide.md:79`, `Makefile:424`).
+      - C3: after: the same command prints nothing; `rg -n 'calibration' AGENTS.md doc/developer_guide.md Makefile` and `rg -n 'figures record' AGENTS.md doc/developer_guide.md Makefile`; quote the lines. `make help-all 2>&1 | rg ' preflight-changed '`; quote it whole.
+      - C4: `git diff --stat` before the commit (expected three files, one line each); `dprint check AGENTS.md doc/developer_guide.md`; `make test-changed BASE=HEAD`; quote each result and the `Total:` line.
+      - C5: commit on `main`, add `**Awaiting review:**` with C1's `wall=` and C3, `tm done`, and stop at the check-in that follows.
+
+- [ ] +testinfra +review +AI-D @main @checkin Review of the preflight-selftest's cache-free case 15 and the preflight-changed step descriptions id:7rfmj
+    > **Created:** 2026-11-17
+    > **Branch:** `main`
+    > **Depends:** id:9pnp4, id:8wvxb
+    > **Placed:** directly after the tasks it reviews.
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` on `main` since git:49f4654; re-run what each **Awaiting review:** bullet names.
+      - id:9pnp4: `REJECT_DIFF_CACHE=<a new directory> make preflight-changed PREFLIGHT_BASE=d405854` passes whole and leaves that directory empty, and a `sh scripts/test_preflight.sh` run adds no entry to `build/reject-diff-cache/`; no other scenario of the `git` group reaches `scripts/check_reject_diff.sh` without `--bins` or `REJECT_DIFF_NO_CACHE=1` (`rg -n 'check_reject_diff' scripts/test_*.sh scripts/check_*.sh`).
+      - id:8wvxb: each description agrees with `scripts/preflight.sh`'s steps in both modes, the `AGENTS.md` bullet changed in nothing but what a gate runs, and the time is C1's.
+
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
@@ -506,4 +565,3 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Why:** ZIL is not checked for memory safety, but zilc should catch the mistakes that are easy to see in ZIL as designed and that happen most often (the maintainer, id:ahd1c).
     - **Do:** list candidate checks, each with a three-line ZIL program that shows the mistake, and say for each whether ZIL as written carries what the check needs. Candidates to start from: a value used after a `move` or `drop` in the same function, a `drop` twice, a `slice_load`/`slice_store` with no dominating `bounds_check` (spec §6.3), the address of an `alloc 'local` returned or stored into a global, a `slice_len` or `slice_ptr` on a value that is not a slice, a `syscall` with an argument count its stub does not take, and a block with no terminator. Corpus mistakes count as evidence of what is common: id:1kaye's string over-read is one. Rank them by how often they would fire and how simple they are, and split each chosen check into an `+AI-G` task with its own numbered **Checks:** and a take-out.
     - **Checks:** C1: every candidate has its program and its answer here, with the zilc output today (`timeout -k 5s 30s build/zilc <file>`). C2: the chosen checks are tasks, placed after this one, with a check-in after them.
-

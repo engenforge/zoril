@@ -231,6 +231,15 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Now (git:164ba45):** `sh scripts/perf_gap.sh --gate-record fib` writes the two comment lines and the `fib` row to `bench/perf_gap/gate_baseline.tsv.tmp` and moves it over `bench/perf_gap/gate_baseline.tsv`, so the other five programs' rows are gone and `--gate-check` then prints `[FAIL] <name> has no baseline` for each (seen in id:a55tf's review; restored from git). Since id:s72rr a recording whose count fails exits 1 before the move and leaves `gate_baseline.tsv.tmp` in the tree.
     - **Do:** with named programs, `--gate-record` rewrites only their rows and keeps the others in place; with none it records all, as today. The `.tmp` file is removed when the recording fails. Cases beside T9 on a scratch tree: a baseline of two programs, `--gate-record` of one, the other's row unchanged; the take-out check for each. Not ready to start: its **Checks:** are written when it is promoted.
 
+- [ ] +testinfra +AI-D `fuzz-tools-git` fails when `FUZZ_STAGE` or `FUZZ_GEN` is inherited: decide whether the scenarios of the `git` group clear internal hand-off variables id:5q6tg
+    > **Created:** 2026-11-17
+    > **Found by:** the check-in id:kbv3f, planting the variables a preflight user could set into each scenario of the `git` group.
+    > **Placed:** in `future.tm.md`: neither variable is named for users, so no documented use reaches it.
+
+    - **Now (git:49f4654):** `FUZZ_STAGE=/nonexistent sh scripts/test_fuzz_tools_git.sh` and `FUZZ_GEN=/nonexistent sh scripts/test_fuzz_tools_git.sh` each exit 1 (`FAIL: check_fuzz_record.sh --release failed`; under `FUZZ_STAGE`: `[FAIL] an empty record is clean: exit 2, expected 0; no line matching 'holds no program'`); without them it exits 0. `FUZZ_STAGE` is `scripts/fuzz_jobs.sh`'s hand-off to its workers and `FUZZ_GEN` a test hook of `scripts/fuzz_safe.sh` (`rg -n 'FUZZ_STAGE|FUZZ_GEN' scripts`); neither is in a header's user options or in `doc/`.
+    - **Inherited at id:kbv3f with no change of result** (each of `check_clean_tree.sh`, `test_test_changed.sh`, `test_build_info.sh`, `test_bench_records.sh`, `test_preflight.sh` exit 0 with all set): `TR_JOBS=1 TR_FILTER=zzznomatch TR_FAIL_FAST=1 TR_VERBOSE=1 TR_QUIET=1 TR_TIMEOUT=1 TR_EXCLUDE=zzz TR_WORK=<dir> BENCH_FORCE=1 BENCH_COMPILE_RUNS=1 BENCH_HOST_ID=planted RECORDS_SKIP=1 FUZZ_FINDINGS=/nonexistent FUZZ_STAGE=/nonexistent FUZZ_GEN=/nonexistent PREFLIGHT_BASE=HEAD~5`.
+    - **To decide:** whether a scenario clears every variable its callees read that is not a user option (as `scripts/test_reject_diff.sh` now does for `REJECT_DIFF_`), or only the documented ones; the answer then becomes one `+AI-G` task per scenario.
+
 ## Types, diagnostics and the standard library
 
 - [ ] +generics +types id:z0032 G1 `impl<T: Copy> Source<T> for S` fails to bind `T` when it appears only in the trait's arguments
