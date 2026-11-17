@@ -472,6 +472,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Depends:** id:0m61c
+    > **Claimed:** 2026-11-17 stream/provenance
 
     - **Found by:** id:z0064 (root (d2)).
     - **Routed by:** id:z0075, to a code change at the site; the rule is deferred (id:z0085 in `future.tm.md`).
@@ -486,6 +487,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: `./scripts/test.sh --filter 'exhaust|unreachable' tests` passes; quote its `Total:` line.
       - C6: `make test` and `make preflight-changed`, each `Total:` line quoted; the completion note says the fuzz record is stale for `src/`.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+    - **Finding (2026-11-17):** change committed (see `git log --grep 'Task: id:z0089'`). C1: 193 and 168. C2: 183 and 14. C3, C4 (no warnings), C5 (`Total: 7 run, 7 passed, 0 failed, 0 skipped`) pass. `make test`: `Total: 3828 run, 3828 passed, 0 failed, 102 skipped (137.5s)`. `make preflight-changed`: `Total: 8 run, 7 passed, 1 failed` — the one failure is the `preflight-selftest` scenario, whose log shows only `safety-figures` mismatches (§5.3 rows, density, probe counts 519 vs 523 / 46 vs 50): milestone figures, not touched by this change. Not complete until the maintainer says whether to ignore or refresh them. Next: `make preflight-changed` again after that is settled.
 
 - [ ] +tools +tests +AI-G @provenance id:z0090 B1.9g zbuild's manifest parsing gives no warning under `--provenance`
     > **Created:** 2026-11-06
