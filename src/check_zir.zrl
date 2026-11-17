@@ -5985,6 +5985,52 @@ fn os_carries(c: &mut OriginSets, module: &ILModule, ty: u32) -> bool {
     return yes;
 }
 
+// Whether a value of type TY holds a pointer, slice, box or `fn` value at any depth; an unknown
+// type, a type variable or nesting past 32 levels counts as one.
+fn os_holds_pointer(module: &ILModule, ty: u32, depth: usize) -> bool {
+    if ty == 0 as u32 || ty as usize > module.types.len() || depth > 32 as usize { return true; }
+    match module.types[ty as usize - 1 as usize].def {
+        ILType.Primitive(_) | ILType.FD(_) | ILType.IORing => { return false; },
+        ILType.Ptr(_)
+            | ILType.PtrMut(_)
+            | ILType.RawPtr(_)
+            | ILType.RawPtrMut(_)
+            | ILType.Boxed(_)
+            | ILType.BoxedMut(_)
+            | ILType.Slice(_)
+            | ILType.Fn(_)
+            | ILType.Var(_) => { return true; },
+        ILType.Array(a) => { return os_holds_pointer(module, a.element, depth + 1 as usize); },
+        ILType.Tuple(elems) => {
+            for e in elems {
+                if os_holds_pointer(module, *e, depth + 1 as usize) { return true; }
+            }
+            return false;
+        },
+        ILType.User(u) => {
+            if u.id == 0xffffffff as u32 || u.id as usize >= module.typedefs.len() { return true; }
+            match module.typedefs[u.id as usize] {
+                ILTypeDef.Struct(st) => {
+                    for f in st.fields {
+                        if os_holds_pointer(module, f.ty, depth + 1 as usize) { return true; }
+                    }
+                    return false;
+                },
+                ILTypeDef.Enum(en) => {
+                    for v in en.variants {
+                        if v.payload != 0 as u32
+                            && os_holds_pointer(module, v.payload, depth + 1 as usize) {
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+                ILTypeDef.Fn(_) => { return true; },
+            }
+        },
+    }
+}
+
 // Whether user type NAME implements Drop: a function `NAME::drop` exists.
 fn os_has_drop(c: &OriginSets, module: &ILModule, name: u32) -> bool {
     if name == 0 as u32 { return false; }
@@ -8187,10 +8233,11 @@ fn os_call(
     // A callee of no result type (ret_ty 0, unit) hands back no address.
     let result_carries = ret_ty != 0 as u32 && os_carries(c, module, ret_ty);
     // An integer read through a parameter (`self.len` in `Vec.len`) is no address of it, and the
-    // field-insensitive sets cannot tell it from a pointer field, so for an integer result a body
+    // field-insensitive sets cannot tell it from a pointer field, so for a result holding only
+    // integers at any depth (`usize`, `Option<usize>` from `Vec.pop`, a struct of counts) a body
     // summary's ParamContents ties do not count; its ParamAddr ties (`p as usize`) do. Making an
     // address of an integer needs `unsafe` either way.
-    if body && result_carries && os_type_def_tag(module, ret_ty) == ILTYPE_PRIMITIVE {
+    if body && result_carries && !os_holds_pointer(module, ret_ty, 0 as usize) {
         ties = 0 as u64;
     }
     let mut i = 0 as usize;

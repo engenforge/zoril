@@ -1,0 +1,16 @@
+// A struct of a count and a slice read through a reference to a tuple holding a local view: the
+// slice field keeps the result tied to what the callee reads, so storing it out is refused (§3,
+// _Scalars, casts and `extern`_).
+// flags: --provenance
+// EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
+// expected compile fail
+struct Pair { n: usize, s: [i32] }
+fn pick(t: &([i32], usize)) -> Pair { return Pair { n: t.1, s: t.0 }; }
+fn bad(out: &mut [i32]) {
+    let a = [1, 2, 3];
+    let v: [i32] = &a;
+    let t = (v, 0 as usize);
+    let q = pick(&t);
+    *out = q.s;
+}
+fn main() -> i32 { let b = [0, 0, 0]; let w: [i32] = &b; let mut o = w; bad(&mut o); return o[0]; }

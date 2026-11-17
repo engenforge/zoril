@@ -1,0 +1,29 @@
+// An integer popped from a local `Vec<usize>` (an `Option<usize>`) and written into a caller's
+// `Vec`: a result holding only integers is not tied to what the callee reads through its
+// arguments, so the `Vec`'s buffer does not reach the caller (§3, _Scalars, casts and `extern`_).
+// flags: --provenance
+// expected exit 0
+
+import "vec.zrl";
+use vec::Vec;
+
+struct Cmd { text: [u8], width: usize }
+
+#[borrows()]
+fn at0(cmds: &Vec<Cmd>) -> Cmd { let r = cmds.as_slice()[0]; return Cmd { text: r.text, width: r.width }; }
+
+fn measure(cmds: &mut Vec<Cmd>) {
+    let mut widths = Vec::<usize>.new();
+    widths.push(3 as usize);
+    let w = match widths.pop() { Option.Some(x) => x, Option.None => 0 as usize };
+    let mut c = at0(cmds);
+    c.width = w;
+    cmds.set(0 as usize, c);
+}
+
+fn main() -> i32 {
+    let mut cmds: Vec<Cmd> = Vec.new();
+    cmds.push(Cmd { text: "ab", width: 0 as usize });
+    measure(&mut cmds);
+    return cmds.as_slice()[0].width as i32 - 3;
+}
