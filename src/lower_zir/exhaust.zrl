@@ -272,7 +272,14 @@ impl ZirLowerer {
                     _ => {},
                 }
             }
-            if !is_or { out.push(row); }
+            if !is_or {
+                // A row read out of a referenced Vec is an address into its buffer; a fresh
+                // copy keeps the recursion from tying every parameter to every other.
+                let copy = self.alloc_u32s(row.len);
+                let mut k = 0 as usize;
+                while k < row.len { copy[k] = row[k]; k = k + 1 as usize; }
+                out.push(copy);
+            }
             r = r + 1 as usize;
         }
         // Alternatives can themselves be or-patterns.
