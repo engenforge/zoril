@@ -186,6 +186,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Branch:** `provenance`
     > **Depends:** id:0m61c
     > **Check-in:** none of its own (`+AI-D`); the maintainer reads the design before L2 starts.
+    > **Claimed:** 2026-11-17 provenance
 
     - **Placed:** before id:z0044, which it blocks: id:z0044 extends the per-local borrow set, and this task decides whether that set is the model. Found in a review of the plan (the maintainer's request, 2026-11-14).
 
