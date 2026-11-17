@@ -1,13 +1,13 @@
 // name: A closure storing a frame address through a captured raw pointer to a global
 // expected: known_gap
-// gap: let gp = &mut G as *mut *i32; let cl = || { unsafe { *gp = r as *i32; } }; cl(); with r = &x for a local x is accepted, with and without --provenance, and the global keeps a dead frame's address: the closure body's store goes into the memory its capture gp points to, a ParamContents bit of the capture, and the caller maps it to what the capture's local reaches by its destination reach, which follows what a local holds only for a type holding a mutable handle, never a raw pointer's pointee, so Static is lost; the same store with no closure (*gp = r as *i32) and through a named function's raw pointer parameter are refused by both rules; route class: a store through a captured raw pointer (a destination reached through a capture)
+// gap: let gp = &mut G as *mut *i32; let cl = || { *gp = r as *i32 }; cl(); (the store in an unsafe block) with r = &x for a local x is accepted, with and without --provenance, and the global keeps a dead frame's address: the closure body's store goes into the memory its capture gp points to, a ParamContents bit of the capture, and the caller maps it to what the capture's local reaches by its destination reach, which follows what a local holds only for a type holding a mutable handle, never a raw pointer's pointee, so Static is lost; the same store with no closure (*gp = r as *i32) and through a named function's raw pointer parameter are refused by both rules; route class: a store through a captured raw pointer (a destination reached through a capture)
 // observed: exit 77
 static mut G: *i32 = 0 as *i32;
 fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
 fn stash() {
     let x = 42;
     let r = &x;
-    let gp = unsafe { &mut G as *mut *i32 };
+    let gp = &mut G as *mut *i32;
     let cl = || { unsafe { *gp = r as *i32; } };
     cl();
 }
