@@ -35,6 +35,9 @@ for _v in $(env 2>/dev/null | sed -n 's/^\(GIT_CONFIG_[KEY|VALUE].*\)=.*/\1/p');
     unset "$_v"
 done
 
+# A preflight run made with a REJECT_DIFF_ variable set starts this script; case 15 chooses its own.
+unset REJECT_DIFF_NO_CACHE REJECT_DIFF_CACHE REJECT_DIFF_PROBES_DIR REJECT_DIFF_GRID_DIR REJECT_DIFF_SAMPLE REJECT_DIFF_SEED REJECT_DIFF_MAKE
+
 if ! ./scripts/check_deps.sh --required-only preflight >/dev/null 2>&1; then
     echo "[SKIP] preflight-selftest: preflight dependencies not satisfied"
     exit 0
@@ -611,6 +614,7 @@ fi
 # Case 15: the seed compiler refusing the base source (a stricter rule) must not stop the differential.
 # The stand-in make refuses while build/zoril is the seed copied in, and builds stand-in tools once the
 # differential has removed it to build through stage1; the stand-ins accept every program.
+# The stand-ins' verdicts are not a compiler's, so the run keeps them out of the cache.
 cat << 'EOS' > "$tmp/stub_make.sh"
 #!/bin/sh
 if [ -f build/zoril ] && ! grep -q 'stand-in zoril' build/zoril 2>/dev/null; then
@@ -624,7 +628,7 @@ EOS
 chmod +x "$tmp/stub_make.sh"
 if [ -x build/zoril ] && [ -f build/zilc ] && [ -f build/runtime.o ]; then
     rc=0
-    out=$(REJECT_DIFF_MAKE="$tmp/stub_make.sh" ./scripts/check_reject_diff.sh --probes-only --change HEAD HEAD 2>&1) || rc=$?
+    out=$(REJECT_DIFF_NO_CACHE=1 REJECT_DIFF_MAKE="$tmp/stub_make.sh" ./scripts/check_reject_diff.sh --probes-only --change HEAD HEAD 2>&1) || rc=$?
     if [ $rc -eq 0 ] && echo "$out" | grep -qF "building its compiler through stage1" \
         && echo "$out" | grep -qF "[PASS] reject-diff: 0 newly accepted"; then
         pass "the differential builds a base the seed refuses through stage1, and still runs"
