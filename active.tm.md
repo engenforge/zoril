@@ -230,6 +230,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Branch:** `provenance`
     > **Depends:** id:0m61c
     > **Check-in:** stop for review after it.
+    > **Claimed:** 2026-11-17 provenance
 
     - **Found by:** id:z0064 (root (e)).
     - **Routed (2026-11-06, by id:z0075):** a rule. id:z0084's rule is deferred, so this one must cover the lowerer's literals without it: `exh_missing` writes literals into a `ByteVec` in `self.arena`, which the call rule names `Param(0)` (`*self`), so the `Static` lands in `*self` and not only in the arena.
