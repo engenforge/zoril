@@ -1,9 +1,10 @@
 // An owned capture outlives the frame (the store rule), so a closure storing another capture's
 // value into it records an edge into the environment (`env`): a caller applying the summary refuses
 // a frame address there, as it would one stored into a global, but records no global edge of its
-// own. The two captures have bits of their own in the body, folded into ParamContents(`__env`) in
-// the summary (§3, _A closure body's summary is stated over `__env`_).
-// ORIGINS: _closure_0 store ParamContents(0) -> ParamContents(0) env
+// own. The two captures have bits of their own in the body and in the summary: `view` (2) is stored
+// into the environment's slot (0) and what `h` (1) reaches (§3, _A closure body's summary is stated
+// over `__env`_).
+// ORIGINS: _closure_0 store ParamContents(2) -> ParamContents(0) ParamContents(1) env
 // expected exit 0
 import "vec.zrl";
 use vec::Vec;

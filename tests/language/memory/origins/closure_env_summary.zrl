@@ -1,8 +1,9 @@
-// A closure body's summary is stated over its `__env` parameter, the last one: storing one capture
-// through another is an edge from what the environment reaches into it, which a caller applying
-// the summary can map to the environment it passed (§3, _A closure body's summary is stated over
-// `__env`_). Read as an `Env` flag, it was `store Unknown -> global`.
-// ORIGINS: _closure_0 store ParamContents(0) -> ParamContents(0)
+// A closure body's summary is stated over its `__env` parameter, the last one, and a bit for each
+// capture past it: storing one capture (`view`, 2) through another (`out`, 1) is an edge from what
+// the one holds into what the other reaches, which a caller applying the summary maps to the
+// environment tuple's fields (§3, _A closure body's summary is stated over `__env`_). Read as an
+// `Env` flag, it was `store Unknown -> global`.
+// ORIGINS: _closure_0 store ParamContents(2) -> ParamContents(1)
 // expected exit 0
 fn safe(out: &mut [i32], view: [i32]) {
     let mut cl = || { *out = view; };

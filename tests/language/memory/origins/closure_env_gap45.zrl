@@ -1,8 +1,9 @@
 // gap_45: the closure call's environment holds `r` (Frame(w)) and `s` (a Frame(a) view); the closure
-// is a known callee, so its summary (store what the environment holds into it) gives O(w) Frame(a)
-// (§3, _Calls through a known callee_), and `*out = w.s` is refused. The call is refused as well:
-// the arena it stores into reaches memory outside the frame.
-// ORIGINS: stash w O={Frame(_3), Frame(a), Frame(w)} S={}
+// is a known callee, so its summary (store what capture `s` holds through capture `r`) gives O(w)
+// Frame(a), and not `w`'s own address, which only `r` holds (§3, _Calls through a known callee_);
+// `*out = w.s` is refused. The call is refused as well: the arena it stores into reaches memory
+// outside the frame.
+// ORIGINS: stash w O={Frame(_3), Frame(a)} S={}
 // flags: --provenance
 // EXPECT: store rule
 // expected compile fail
