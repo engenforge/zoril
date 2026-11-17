@@ -340,6 +340,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Branch:** `provenance`
     > **Depends:** id:z0075, id:z0094, id:0m61c
     > **Check-in:** stop for review after it.
+    > **Claimed:** 2026-11-17 provenance
 
     - **Found by:** id:z0064 (root (f)).
     - **Routed (2026-11-06, by id:z0075):** a rule, though only `src` shows the class (6 warnings): it adds a type fact (an integer holds no address), the cheapest of the rules to state, and the exemption for a primitive result exists already.
