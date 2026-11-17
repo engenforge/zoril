@@ -1,0 +1,49 @@
+// A raw arena held in a struct field, and Vecs in it passed by reference to methods that build
+// new Vecs in the same arena: a result's storage is the arena the argument reaches (the `raw`
+// field's target for a `&Vec`), not the argument's own address, so nothing read from the
+// results is an address of this frame (§3, _Details the transfer needs_).
+// flags: --provenance
+// expected exit 0
+import "vec.zrl";
+import "mem_raw.zrl";
+use vec::Vec;
+use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
+
+struct Z { arena: *mut ArenaHeader }
+
+impl Z {
+    #[borrows()]
+    fn alloc(self: &mut Z, n: usize) -> [mut u32] {
+        return unsafe { @slice(zoril_allocator_alloc(self.arena, ((n + 1 as usize) * 4) as u64) as *mut u32, n) };
+    }
+    #[borrows()]
+    fn expand(self: &mut Z, rows: &Vec<[mut u32]>, again: bool) -> Vec<[mut u32]> {
+        let mut out = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
+        for r in rows.as_slice() { out.push(*r); }
+        return out;
+    }
+    fn walk(self: &mut Z, rows_in: &Vec<[mut u32]>, depth: usize) -> bool {
+        if depth > 3 as usize { return rows_in.len() == 0 as usize; }
+        let rows = self.expand(rows_in, true);
+        let mut same = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
+        for r in rows.as_slice() {
+            let nr = self.alloc(r.len);
+            same.push(nr);
+        }
+        let spec = self.expand(&rows, false);
+        if self.walk(&spec, depth + 1 as usize) { return true; }
+        return self.walk(&same, depth + 1 as usize);
+    }
+    fn top(self: &mut Z) -> bool {
+        let mut rows = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
+        let row = self.alloc(1 as usize);
+        rows.push(row);
+        return self.walk(&rows, 0 as usize);
+    }
+}
+
+fn main() -> i32 {
+    let mut z = Z { arena: unsafe { arena_init(65536 as u64) } };
+    if z.top() { return 1; }
+    return 0;
+}

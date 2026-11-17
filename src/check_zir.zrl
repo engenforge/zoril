@@ -5665,7 +5665,11 @@ const OS_T_SF: usize = 21;
 const OS_T_OWNCAP: usize = 22;
 // os_dest_reach's own scratch set.
 const OS_T_DR: usize = 23;
-const OS_TEMPS: usize = 24;
+// os_arena_at_depths: its result, and its own two scratch sets.
+const OS_T_ARENA: usize = 24;
+const OS_T_AR1: usize = 25;
+const OS_T_AR2: usize = 26;
+const OS_TEMPS: usize = 27;
 
 // The questions os_type_has answers about a type.
 const OS_Q_ARENA: usize = 0;
@@ -6028,6 +6032,159 @@ fn os_holds_pointer(module: &ILModule, ty: u32, depth: usize) -> bool {
                 ILTypeDef.Fn(_) => { return true; },
             }
         },
+    }
+}
+
+// Whether TY holds an `Arena` or `ArenaHeader` in place, crossing no pointer.
+fn os_arena_inline(module: &ILModule, table: &InternTable, ty: u32, depth: usize) -> bool {
+    if ty == 0 as u32 || ty as usize > module.types.len() || depth > 32 as usize { return true; }
+    match module.types[ty as usize - 1 as usize].def {
+        ILType.Array(a) => {
+            return os_arena_inline(module, table, a.element, depth + 1 as usize);
+        },
+        ILType.Tuple(elems) => {
+            for e in elems {
+                if os_arena_inline(module, table, *e, depth + 1 as usize) { return true; }
+            }
+            return false;
+        },
+        ILType.User(u) => {
+            if u.id == 0xffffffff as u32 || u.id as usize >= module.typedefs.len() { return true; }
+            if type_name_is(table.lookup(u.name), "Arena")
+                || type_name_is(table.lookup(u.name), "ArenaHeader") {
+                return true;
+            }
+            match module.typedefs[u.id as usize] {
+                ILTypeDef.Struct(st) => {
+                    for f in st.fields {
+                        if os_arena_inline(module, table, f.ty, depth + 1 as usize) { return true; }
+                    }
+                    return false;
+                },
+                ILTypeDef.Enum(en) => {
+                    for v in en.variants {
+                        if v.payload != 0 as u32
+                            && os_arena_inline(module, table, v.payload, depth + 1 as usize) {
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+                ILTypeDef.Fn(_) => { return false; },
+            }
+        },
+        ILType.Primitive(_)
+            | ILType.FD(_)
+            | ILType.IORing
+            | ILType.Fn(_)
+            | ILType.Ptr(_)
+            | ILType.PtrMut(_)
+            | ILType.RawPtr(_)
+            | ILType.RawPtrMut(_)
+            | ILType.Boxed(_)
+            | ILType.BoxedMut(_)
+            | ILType.Slice(_) => { return false; },
+        ILType.Var(_) => { return true; },
+    }
+}
+
+// The numbers of pointers a value of type TY must follow to reach memory holding an `Arena` or
+// `ArenaHeader` in place, as bits (bit k: k pointers; `&Arena` is bit 1, `&Vec<T>` bit 2, since a
+// `Vec` holds its arena's address in `raw`). Bit 63: a path longer than eight, a type variable or
+// an unknown type.
+fn os_arena_depths(module: &ILModule, table: &InternTable, ty: u32, depth: usize) -> u64 {
+    if ty == 0 as u32 || ty as usize > module.types.len() || depth > 32 as usize {
+        return (1 as u64) << 63;
+    }
+    match module.types[ty as usize - 1 as usize].def {
+        ILType.Ptr(x) | ILType.PtrMut(x) | ILType.RawPtr(x) | ILType.RawPtrMut(x) => {
+            let mut m = if os_arena_inline(module, table, x, 0 as usize) {
+                2 as u64
+            } else {
+                0 as u64
+            };
+            let inner = os_arena_depths(module, table, x, depth + 1 as usize);
+            let deep = inner & ((1 as u64) << 63);
+            let shifted = (inner & !((1 as u64) << 63)) << 1;
+            m = m | deep | (shifted & ((1 as u64) << 9) - 1 as u64);
+            if shifted >> 9 != 0 as u64 { m = m | ((1 as u64) << 63); }
+            return m;
+        },
+        ILType.Boxed(x) | ILType.BoxedMut(x) => {
+            return os_arena_depths(module, table, x, depth + 1 as usize);
+        },
+        ILType.Slice(sl) => {
+            let mut m = if os_arena_inline(module, table, sl.element, 0 as usize) {
+                2 as u64
+            } else {
+                0 as u64
+            };
+            let inner = os_arena_depths(module, table, sl.element, depth + 1 as usize);
+            let deep = inner & ((1 as u64) << 63);
+            let shifted = (inner & !((1 as u64) << 63)) << 1;
+            m = m | deep | (shifted & ((1 as u64) << 9) - 1 as u64);
+            if shifted >> 9 != 0 as u64 { m = m | ((1 as u64) << 63); }
+            return m;
+        },
+        ILType.Array(a) => {
+            return os_arena_depths(module, table, a.element, depth + 1 as usize);
+        },
+        ILType.Tuple(elems) => {
+            let mut m = 0 as u64;
+            for e in elems { m = m | os_arena_depths(module, table, *e, depth + 1 as usize); }
+            return m;
+        },
+        ILType.User(u) => {
+            if u.id == 0xffffffff as u32 || u.id as usize >= module.typedefs.len() {
+                return (1 as u64) << 63;
+            }
+            // The pointers inside an arena lead to its blocks, C memory, not to another arena.
+            if type_name_is(table.lookup(u.name), "Arena")
+                || type_name_is(table.lookup(u.name), "ArenaHeader") {
+                return 0 as u64;
+            }
+            let mut m = 0 as u64;
+            match module.typedefs[u.id as usize] {
+                ILTypeDef.Struct(st) => {
+                    for f in st.fields {
+                        m = m | os_arena_depths(module, table, f.ty, depth + 1 as usize);
+                    }
+                },
+                ILTypeDef.Enum(en) => {
+                    for v in en.variants {
+                        if v.payload != 0 as u32 {
+                            m = m | os_arena_depths(module, table, v.payload, depth + 1 as usize);
+                        }
+                    }
+                },
+                ILTypeDef.Fn(_) => {},
+            }
+            return m;
+        },
+        ILType.Var(_) => { return (1 as u64) << 63; },
+        ILType.Primitive(_) | ILType.FD(_) | ILType.IORing | ILType.Fn(_) => { return 0 as u64; },
+    }
+}
+
+// OS_T_ARENA = the memory the arenas lie in, for an argument holding SRC with DEPTHS as
+// os_arena_depths gives them: for bit k, what SRC reaches through k - 1 more pointers; for bit 63,
+// SRC and all it reaches.
+fn os_arena_at_depths(c: &mut OriginSets, src: usize, depths: u64) {
+    let out = os_t(c, OS_T_ARENA);
+    let cur = os_t(c, OS_T_AR1);
+    let nxt = os_t(c, OS_T_AR2);
+    os_clear(c, out);
+    if depths & ((1 as u64) << 63) != 0 as u64 {
+        os_reach_all(c, src, out);
+        return;
+    }
+    os_copy(c, cur, src);
+    let mut k = 1 as usize;
+    while k <= 8 as usize {
+        if (depths >> (k as u64)) & 1 as u64 != 0 as u64 { let _ = os_or(c, out, cur); }
+        os_through(c, cur, nxt);
+        os_copy(c, cur, nxt);
+        k = k + 1 as usize;
     }
 }
 
@@ -8256,12 +8413,19 @@ fn os_call(
                 // An argument that holds its arena by value (`unwrap` of a `Result<Arena, _>`)
                 // names the arena's storage by what it owns, S; what it holds, O, is what that
                 // storage holds (a literal a callee put in the arena), never storage.
-                let arena_store = if aty != 0 as u32
+                let mut arena_store = if aty != 0 as u32
                     && !os_type_has(c, module, aty, OS_Q_ARENA_REF) {
                     tas
                 } else {
                     tao
                 };
+                if arena && arena_store == tao && aty != 0 as u32 {
+                    let depths = os_arena_depths(module, c.table, aty, 0 as usize);
+                    if depths != 2 as u64 && depths != 0 as u64 {
+                        os_arena_at_depths(c, tao, depths);
+                        arena_store = os_t(c, OS_T_ARENA);
+                    }
+                }
                 if in_storage {
                     // A body summary's Param(i) is what argument i holds. An owner passed by value
                     // (`id(v)`, `o.unwrap()`) moves the storage it owns into the call, so that
