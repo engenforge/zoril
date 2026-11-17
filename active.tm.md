@@ -27,11 +27,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - **Records:** the preflight committed `dbf0b94 a52c24a80e04 49f4654: gate pass` and `4a04729 49f4654: figures` on `records`; not pushed from this session (`hom` unreachable).
       - **Verdict:** id:gv740's fix is correct and complete for the script it names; its check-in check fails through a sibling scenario, which id:9pnp4 closes. id:ss1f8 is correct as far as it goes; id:8wvxb finishes it.
 
-- [ ] +testinfra +AI-G @main `preflight-selftest` case 15 stores its stand-in compilers' base verdicts in the reject-diff cache: run it with the cache off and clear inherited `REJECT_DIFF_` variables id:9pnp4
+- [x] +testinfra +AI-G @main `preflight-selftest` case 15 stores its stand-in compilers' base verdicts in the reject-diff cache: run it with the cache off and clear inherited `REJECT_DIFF_` variables id:9pnp4
     > **Created:** 2026-11-17
     > **Branch:** `main`
     > **Found by:** the check-in id:kbv3f, probing the sibling routes of id:gv740.
     > **Placed:** after id:kbv3f, as a follow-up of that check-in.
+    > **Completed:** 2026-11-17
 
     - **Now (git:49f4654):** case 15 of `scripts/test_preflight.sh` (the `preflight-selftest` scenario of the `git` group) calls `./scripts/check_reject_diff.sh --probes-only --change HEAD HEAD` with a stand-in `make` whose `zoril` accepts every program, without `--bins`, so the cache is on. It stores the stand-ins' base verdicts (every probe `0`) as an entry: in `REJECT_DIFF_CACHE` when that is inherited, and in `build/reject-diff-cache/` on every run otherwise.
       ```
@@ -55,6 +56,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: take settled 2 out (keep settled 1), rerun the second command of C1, and quote the entry that comes back; restore (`git diff --stat`: `scripts/test_preflight.sh` only).
       - C5: `make test-changed BASE=HEAD`; quote its `Total:` line. `TR_WORK=build/tests-git ./scripts/test.sh --quiet --group git > build/9pnp4/group.log 2>&1; echo rc=$?`; quote `rc=0` and its `Total:` line (expected `8 run, 8 passed`).
       - C6: commit on `main`, add `**Awaiting review:**` with C2 and C5's group run, `tm done`; the check-in id:7rfmj reviews it.
+    - **Awaiting review:** re-run C2 (`REJECT_DIFF_CACHE=$PWD/build/9pnp4/tp2-after sh scripts/test_preflight.sh` and `sh scripts/test_preflight.sh` with a clean `build/reject-diff-cache`) and C5's group run (`TR_WORK=build/tests-git ./scripts/test.sh --quiet --group git`).
+    - **Completion (2026-11-17, git:eac1f70):**
+      - C1: `tp2 rc=0` (`ls -A build/9pnp4/tp2` -> `72ddac29dc6cfc9ca8acf06fc967dc3abb6529fe905cd271f5d2ea927404f65c`); `default-before rc=0` (`ls -A build/reject-diff-cache` -> `72ddac29dc6cfc9ca8acf06fc967dc3abb6529fe905cd271f5d2ea927404f65c`).
+      - C2: `tp2-after rc=0` (`ls: cannot access 'build/9pnp4/tp2-after': No such file or directory`); `default-after rc=0` (`ls: cannot access 'build/reject-diff-cache': No such file or directory`); restored `build/reject-diff-cache` from backup.
+      - C3: `rg -F 'builds a base the seed refuses through stage1' build/9pnp4/*.log` -> `27:[PASS] preflight-selftest: the differential builds a base the seed refuses through stage1, and still runs` in both `tp2-after.log` and `default-after.log`.
+      - C4: with settled 2 removed (settled 1 kept), `c4 rc=0`, `ls -A build/reject-diff-cache` -> `72ddac29dc6cfc9ca8acf06fc967dc3abb6529fe905cd271f5d2ea927404f65c`; restored (`git diff --stat`: `scripts/test_preflight.sh | 6 +++++-`).
+      - C5: `make test-changed BASE=HEAD` -> `Total: 21 run, 21 passed, 0 failed, 0 skipped (8.7s)`; `TR_WORK=build/tests-git ./scripts/test.sh --quiet --group git` -> `rc=0`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (100.1s)`.
+      - C6: committed as git:eac1f70 on `main`.
 
 - [ ] +docs +AI-G @main The preflight descriptions name the calibration and figures-record steps, the `preflight-changed` help names the differential, and its time is the measured one id:8wvxb
     > **Created:** 2026-11-17
