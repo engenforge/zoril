@@ -391,6 +391,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Branch:** `provenance`
     > **Depends:** id:z0075
     > **Check-in:** stop for review after it. Accepts more: the rejection differential and the series rule apply.
+    > **Claimed:** 2026-11-17 provenance
 
     - **Found by:** id:z0064 (root (d1)).
     - **Depends note:** (it decides whether over-rejections are fixed by rules).
