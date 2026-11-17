@@ -283,6 +283,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 - [ ] +safety +tests +AI-D @provenance A call through a `fn` value stores only what its arguments and its own environment reach id:4by24
     > **Created:** 2026-11-17
     > **Branch:** `provenance`
+    > **Claimed:** 2026-11-17 provenance
 
     - **Found by:** id:nc3ym (root R3).
     - **Placed:** directly before id:z0065, which it blocks: id:z0065 newly refuses the safe twins below, and each over-rejection needs its own task done first.
@@ -756,7 +757,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       3. List each route class added in the series and whether `scripts/fuzz/gen.lua` covers it (id:z0013's **Generator debt**). Add a task for each missing generator feature, placed before the renewal.
       4. The fuzz renewal is the maintainer's: a session takes the machine for hours (id:z0003). Ask the maintainer to start it, and record the request here.
     - **Checks:** C1 every §4 row names its closing probe or its open task, and `rg -n '\(open\)' doc/design/provenance.md` prints only rows with an open task. C2 `sh scripts/check_store_grid.sh` summary quoted, with 0 unsafe accepted. C3 `rg -l 'expected: known_gap' bench/safety_matrix/probes` lists no escape or liveness probe, quoted. C4 the route-class list with its generator coverage, and the tasks it added. C5 `make test-changed`, its `Total:` line quoted. C6 `tm validate --strict doc/tasks/*.tm.md` prints no warning.
-
 
 - [ ] +zil +decision +AI-D @zil ZL1 Settle the slice form of string_const and the slice_ptr opcode, and check what the pinned stage1 feeds zilc id:m6vm3
     > **Created:** 2026-11-13
