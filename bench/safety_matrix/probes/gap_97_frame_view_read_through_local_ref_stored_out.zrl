@@ -1,0 +1,19 @@
+// name: A frame view read through a local reference to a local struct, stored out of the frame
+// expected: known_gap
+// gap: let s = S { v: &x }; let r = &s; *out = r.v; is accepted without --provenance, and *out keeps the dead frame's address: the default rules do not follow a read through a reference to a local aggregate back to the frame view the aggregate holds, while *out = s.v is refused; refused under --provenance (the store rule); route class: a frame view read through a pointer to a local aggregate (a struct field, a tuple slot or an array element; through a local reference, a reborrow, or a callee's reference parameter), stored out or returned
+// observed: exit 77
+struct S { v: &i32 }
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn escape_storer(out: &mut &i32) {
+    let x = 42;
+    let s = S { v: &x };
+    let r = &s;
+    *out = r.v;
+}
+fn main() -> i32 {
+    let seed = 0;
+    let mut dest_val: &i32 = &seed;
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    return *dest_val;
+}
