@@ -1,0 +1,18 @@
+// name: A callee storing a frame address through a raw pointer to a global held in a struct field
+// expected: known_gap
+// gap: put(&s, &x) with struct S { p: *mut *i32 }, s.p = &mut G as *mut *i32 and fn put(s: &S, r: &i32) storing r through s.p (in an unsafe block) is accepted with and without --provenance, and the global keeps a dead frame's address: put's summary stores Param(1) into what s reaches, and the caller maps that to the destination reach of s, which follows what a local holds only for a mutable handle, and a raw *mut pointer is none (counting it as one would make every Vec follow what it holds), so the global is never a target; the same store through a raw pointer parameter is refused; route class: a store through a raw pointer held by a value a callee reaches (gap_94's class, for a named callee)
+// observed: exit 77
+static mut G: *i32 = 0 as *i32;
+struct S { p: *mut *i32 }
+fn put(s: &S, r: &i32) { unsafe { *s.p = r as *i32; } }
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn stash() {
+    let x = 42;
+    let s = S { p: &mut G as *mut *i32 };
+    put(&s, &x);
+}
+fn main() -> i32 {
+    stash();
+    let _ = clobber_stack();
+    return unsafe { *G };
+}
