@@ -5719,7 +5719,11 @@ pub struct OriginSets {
     pub known_fn: [mut u32],
     // The body's scratch arena, for the argument lists of calls through a known callee.
     pub arena: *mut ArenaHeader,
+    // During a call through a known closure, the index of its `__env` argument, else OS_NO_ENV.
+    pub known_env: usize,
 }
+
+const OS_NO_ENV: usize = 0xffffffff;
 
 const OS_KNOWN_NONE: u32 = 0xffffffff;
 const OS_KNOWN_ENV: u32 = 0x80000000;
@@ -5728,6 +5732,10 @@ const OS_EDGE_STATIC: usize = 128;
 const OS_EDGE_UNKNOWN: usize = 129;
 const OS_EDGE_ROWS: usize = 130;
 const OS_EDGE_GLOBAL: u64 = 1;
+// The target may be an owned capture of the closure (§3, _A closure body's summary is stated
+// over `__env`_): the caller's environment, which outlives the call but is a local of the frame
+// that made the closure, so the caller refuses a frame address there and records no global edge.
+const OS_EDGE_ENV: u64 = 2;
 
 fn os_t(c: &OriginSets, k: usize) -> usize { return 2 as usize * c.nl + 2 as usize + k; }
 
@@ -6305,7 +6313,7 @@ fn os_note_edges(c: &mut OriginSets, val: usize, mem: usize) {
     let mut id = 1 as usize;
     while id < c.nl {
         if os_has_frame(c, mem, id) && os_has_frame(c, os_t(c, OS_T_OWNCAP), id) {
-            og = OS_EDGE_GLOBAL;
+            og = OS_EDGE_ENV;
             if c.cap_bit[id] != 0 as u8 {
                 own_bits = own_bits | ((1 as u64) << (c.cap_bit[id] as u64));
             }
@@ -6805,7 +6813,9 @@ fn os_known_call(
         i = i + 1 as usize;
     }
     all[args.len] = *callee;
+    c.known_env = args.len;
     os_call(c, module, locals, fid, all, owner);
+    c.known_env = OS_NO_ENV;
     return true;
 }
 
@@ -7108,9 +7118,21 @@ fn os_edge_effects(
                 os_moved_storage(c, moved, os_t(c, OS_T_AO), os_t(c, OS_T_AS));
             }
             os_drop_moved_storage(c, tv, os_t(c, OS_T_AO), os_t(c, OS_T_AS));
+            // What the environment owns by an owner moved into it is no value a closure stores:
+            // its body refuses an owned capture's storage everywhere but back into that capture,
+            // where it is a Frame origin of the capture, not ParamContents(`__env`).
+            if code >= 64 as usize && pidx == c.known_env {
+                let eo = os_t(c, OS_T_R);
+                let es = os_t(c, OS_T_D);
+                os_clear(c, eo);
+                os_clear(c, es);
+                os_through_split(c, os_t(c, OS_T_AO), eo, es);
+                os_drop_moved_storage(c, tv, eo, es);
+            }
         }
         let bound = os_frame_bound(c, tv);
-        if table[row + 3 as usize] & OS_EDGE_GLOBAL != 0 as u64 {
+        let gflags = table[row + 3 as usize];
+        if gflags & (OS_EDGE_GLOBAL | OS_EDGE_ENV) != 0 as u64 {
             if c.checking && bound && !refused {
                 os_refuse(
                     c,
@@ -7118,6 +7140,8 @@ fn os_edge_effects(
                 );
                 refused = true;
             }
+        }
+        if gflags & OS_EDGE_GLOBAL != 0 as u64 {
             os_clear(c, ed);
             os_add_flag(c, ed, ORIGIN_STATIC);
             os_note_edges(c, tv, ed);
@@ -7779,6 +7803,7 @@ pub fn compute_origins_zir(
         // SAFETY: NL u32 in ARENA, as above, zeroed below before any read.
         known_fn: unsafe { @slice(zoril_allocator_alloc(arena, nl * 4) as *mut u32, nl) },
         arena: arena,
+        known_env: OS_NO_ENV,
     };
     unsafe {
         memset(c.edges.ptr as *mut u8, 0, (OS_EDGE_ROWS * 3 * 8) as u64);
@@ -7984,6 +8009,7 @@ pub fn print_origins(c: &OriginSets, func: &ZirFunction, module: &ILModule, tabl
                 w = w + 1 as usize;
             }
             if c.edges[e + 2 as usize] & OS_EDGE_GLOBAL != 0 as u64 { print(" global"); }
+            if c.edges[e + 2 as usize] & OS_EDGE_ENV != 0 as u64 { print(" env"); }
             print("\n");
         }
         r = r + 1 as usize;
