@@ -1,6 +1,6 @@
-// A stored value grows the target's S only by what it owns: `v.push("lit")` puts Static in O(v),
+// A stored value grows the target's S only by what it owns: `v.push("lit")` puts Rodata in O(v),
 // never in S(v) (§3, _Details the transfer needs_).
-// ORIGINS: main v O={Static} S={Frame(_1)}
+// ORIGINS: main v O={Rodata} S={Frame(_1)}
 // flags: --provenance
 // expected exit 0
 import "vec.zrl";

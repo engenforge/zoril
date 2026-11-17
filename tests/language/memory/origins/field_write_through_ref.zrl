@@ -1,5 +1,5 @@
 // A write through a local reference lands in the local it points to.
-// ORIGINS: f w O={Param(0), Static} S={}
+// ORIGINS: f w O={Param(0), Rodata} S={}
 // expected exit 0
 struct W { s: [u8], t: i32 }
 fn f(view: [u8]) -> i32 {

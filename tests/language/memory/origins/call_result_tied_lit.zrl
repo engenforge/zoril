@@ -1,5 +1,5 @@
-// A tied "lit" (Static) cannot reach an `Arena`, so it puts no Static in the owning result's S.
-// ORIGINS: main v O={Static} S={Frame(_2)}
+// A tied "lit" (Rodata) cannot reach an `Arena`, so it puts no Rodata in the owning result's S.
+// ORIGINS: main v O={Rodata} S={Frame(_2)}
 // flags: --provenance
 // expected exit 0
 import "vec.zrl";

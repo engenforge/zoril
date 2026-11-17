@@ -1,0 +1,16 @@
+// A `fn` item's code is read-only data like a literal: beside a `&mut` in one struct it does not
+// make what the struct reaches a global.
+// flags: --provenance
+// expected exit 0
+fn seven() -> i32 { return 7; }
+struct W { f: fn() -> i32, out: &mut [i32] }
+fn inner(out: &mut [i32], data: [i32]) {
+    let w = W { f: seven, out: out };
+    *w.out = data;
+}
+fn main() -> i32 {
+    let data = [35, 7];
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    inner(&mut s, &data);
+    return s[0] + seven() - 42;
+}

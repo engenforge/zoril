@@ -1,0 +1,15 @@
+// A literal beside a `&mut` in one struct does not make what the struct reaches a global: the
+// caller's own view stored into the caller's own slot is accepted.
+// flags: --provenance
+// expected exit 0
+struct W { name: [u8], out: &mut [i32] }
+fn inner(out: &mut [i32], data: [i32]) {
+    let w = W { name: "lit", out: out };
+    *w.out = data;
+}
+fn main() -> i32 {
+    let data = [42, 7];
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    inner(&mut s, &data);
+    return s[0] - 42;
+}

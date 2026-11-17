@@ -1,0 +1,13 @@
+// A literal beside a raw pointer to a `static mut` in one struct: the literal is read-only data,
+// the global is not, so a frame address stored through the pointer is still refused.
+// flags: --provenance
+// expected compile fail
+// EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
+static mut GP: *i32 = 0 as *i32;
+struct H { p: *mut *i32, name: [u8] }
+fn main() -> i32 {
+    let x = 5;
+    let h = H { p: unsafe { &mut GP as *mut *i32 }, name: "lit" };
+    unsafe { *h.p = &x as *i32; }
+    return h.name.len as i32 - 3;
+}

@@ -5630,6 +5630,13 @@ pub const ORIGIN_UNKNOWN: u64 = 2;
 // operations_). In a value it is exempt from the return and store rules (os_frame_bound); as memory
 // it is outside the frame (os_external), so a frame address stored through it is still refused.
 pub const ORIGIN_RAW: u64 = 8;
+// An address of read-only data: a string literal or a `fn` item's code. In a value it is outside
+// the frame, as Static is; as memory it is no destination, since nothing stores into it without
+// `unsafe`, so a literal a value holds does not make what the value reaches a global (§3,
+// _Scalars, casts and `extern`_). A `static`'s address stays Static: it may be a `static mut`.
+pub const ORIGIN_RODATA: u64 = 16;
+// The flags that make memory a destination outside the frame.
+const OS_FLAGS_MEMORY: u64 = ORIGIN_STATIC | ORIGIN_UNKNOWN | ORIGIN_RAW;
 
 const OS_T_M: usize = 0;
 const OS_T_DM: usize = 1;
@@ -5745,7 +5752,8 @@ const OS_KNOWN_ENV: u32 = 0x80000000;
 
 const OS_EDGE_STATIC: usize = 128;
 const OS_EDGE_UNKNOWN: usize = 129;
-const OS_EDGE_ROWS: usize = 130;
+const OS_EDGE_RODATA: usize = 130;
+const OS_EDGE_ROWS: usize = 131;
 const OS_EDGE_GLOBAL: u64 = 1;
 // The target may be an owned capture of the closure (§3, _A closure body's summary is stated
 // over `__env`_): the caller's environment, which outlives the call but is a local of the frame
@@ -6266,7 +6274,8 @@ fn os_drop_self_store(
     dest: usize
 ) {
     let d = dest * c.words;
-    if c.buf[d + OS_W_ADDR] | c.buf[d + OS_W_CONTENTS] | c.buf[d + OS_W_FLAGS] != 0 as u64 {
+    if c.buf[d + OS_W_ADDR] | c.buf[d + OS_W_CONTENTS] | (c.buf[d + OS_W_FLAGS] & OS_FLAGS_MEMORY)
+        != 0 as u64 {
         return;
     }
     let mut id = 0 as usize;
@@ -6293,7 +6302,7 @@ fn os_external(c: &OriginSets, set: usize) -> bool {
     let d = set * c.words;
     return c.buf[d + OS_W_ADDR] != 0 as u64
         || c.buf[d + OS_W_CONTENTS] != 0 as u64
-        || c.buf[d + OS_W_FLAGS] != 0 as u64;
+        || c.buf[d + OS_W_FLAGS] & OS_FLAGS_MEMORY != 0 as u64;
 }
 
 // Whether a value with origins SET may not leave this frame: it has a Frame or an Unknown origin.
@@ -6348,7 +6357,11 @@ fn os_note_edges(c: &mut OriginSets, val: usize, mem: usize) {
     let m = mem * c.words;
     let t_addr = c.buf[m + OS_W_ADDR];
     let t_contents = c.buf[m + OS_W_CONTENTS];
-    let t_flags = if c.buf[m + OS_W_FLAGS] != 0 as u64 { OS_EDGE_GLOBAL } else { 0 as u64 };
+    let t_flags = if c.buf[m + OS_W_FLAGS] & OS_FLAGS_MEMORY != 0 as u64 {
+        OS_EDGE_GLOBAL
+    } else {
+        0 as u64
+    };
     if t_addr == 0 as u64 && t_contents == 0 as u64 && t_flags == 0 as u64 { return; }
     // An owned capture outlives the frame (§3, the store rule), so what the memory may take from
     // anywhere but the capture itself (its own bit, its own storage) goes into a global too.
@@ -6381,6 +6394,9 @@ fn os_note_edges(c: &mut OriginSets, val: usize, mem: usize) {
     let vf = c.buf[v + OS_W_FLAGS];
     if vf & ORIGIN_STATIC != 0 as u64 {
         os_note_edge_row(c, OS_EDGE_STATIC, t_addr, t_contents, t_flags);
+    }
+    if vf & ORIGIN_RODATA != 0 as u64 {
+        os_note_edge_row(c, OS_EDGE_RODATA, t_addr, t_contents, t_flags);
     }
     let mut unknown = vf & ORIGIN_UNKNOWN != 0 as u64;
     let mut env_own = false;
@@ -7543,6 +7559,8 @@ fn os_edge_effects(
             os_param_origin(c, module, locals, fn_id, args, code - 64 as usize, true, tv);
         } else if code == OS_EDGE_STATIC {
             os_add_flag(c, tv, ORIGIN_STATIC);
+        } else if code == OS_EDGE_RODATA {
+            os_add_flag(c, tv, ORIGIN_RODATA);
         } else {
             os_add_flag(c, tv, ORIGIN_UNKNOWN);
         }
@@ -7703,7 +7721,7 @@ pub fn store_origin_summary(
     }
     let r = 2 as usize * c.nl * c.words;
     let rs = r + c.words;
-    let mut flags = c.buf[r + OS_W_FLAGS] & (ORIGIN_STATIC | ORIGIN_RAW);
+    let mut flags = c.buf[r + OS_W_FLAGS] & (ORIGIN_STATIC | ORIGIN_RAW | ORIGIN_RODATA);
     let mut fresh = c.buf[rs + OS_W_FLAGS] & ORIGIN_UNKNOWN != 0 as u64;
     if c.buf[r + OS_W_FLAGS] & ORIGIN_UNKNOWN != 0 as u64 {
         flags = flags | ORIGIN_UNKNOWN;
@@ -8029,13 +8047,12 @@ fn os_rvalue(c: &mut OriginSets, module: &ILModule, locals: [Local], rv: &ZirRva
             } else if env != 0 as u32 {
                 os_add_flag(c, vo, ORIGIN_UNKNOWN);
             } else {
-                os_add_flag(c, vo, ORIGIN_STATIC);
+                os_add_flag(c, vo, ORIGIN_RODATA);
             }
         },
         ZirRvalue.GetEnv => { os_add_param(c, vo, c.env_param); },
-        ZirRvalue.StringConst(_) | ZirRvalue.GlobalAddr(_) => {
-            os_add_flag(c, vo, ORIGIN_STATIC);
-        },
+        ZirRvalue.StringConst(_) => { os_add_flag(c, vo, ORIGIN_RODATA); },
+        ZirRvalue.GlobalAddr(_) => { os_add_flag(c, vo, ORIGIN_STATIC); },
         ZirRvalue.Const(_, _) | ZirRvalue.Sizeof(_) | ZirRvalue.VariantCheck(_, _, _) => {},
     }
 }
@@ -8404,6 +8421,11 @@ fn os_print_set(c: &OriginSets, set: usize, locals: [Local], table: &InternTable
         first = false;
         print("Static");
     }
+    if flags & ORIGIN_RODATA != 0 as u64 {
+        if !first { print(", "); }
+        first = false;
+        print("Rodata");
+    }
     if flags & ORIGIN_RAW != 0 as u64 {
         if !first { print(", "); }
         first = false;
@@ -8491,6 +8513,8 @@ fn os_print_edge_code(code: usize) {
     let mut out = stdout();
     if code == OS_EDGE_STATIC {
         print("Static");
+    } else if code == OS_EDGE_RODATA {
+        print("Rodata");
     } else if code == OS_EDGE_UNKNOWN {
         print("Unknown");
     } else {
