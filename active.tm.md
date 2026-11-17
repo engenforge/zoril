@@ -123,6 +123,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-17
     > **Branch:** `provenance`
     > **Depends:** id:z0086
+    > **Claimed:** 2026-11-17 provenance
 
     - **Found by:** id:z0097 (probe git:b892899).
     - **Placed:** directly after id:z0097, a follow-up to it. A soundness hole accepted by both rules; the maintainer may raise it.
