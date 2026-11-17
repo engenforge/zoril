@@ -468,11 +468,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Stale:** `bench/fuzz/README.md`'s fuzz record (a change to `src/`). Milestone figures not touched.
     - **Check-in:** none: an `+AI-D` task, reviewed by the session that did it, with the probes above.
 
-- [ ] +refactor +tests +AI-G @provenance id:z0089 B1.9f `exh_expand_or` pushes a fresh copy of each row it keeps
+- [x] +refactor +tests +AI-G @provenance id:z0089 B1.9f `exh_expand_or` pushes a fresh copy of each row it keeps
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Depends:** id:0m61c
-    > **Claimed:** 2026-11-17 stream/provenance
+    > **Completed:** 2026-11-17 git:5d8c6a9
 
     - **Found by:** id:z0064 (root (d2)).
     - **Routed by:** id:z0075, to a code change at the site; the rule is deferred (id:z0085 in `future.tm.md`).
@@ -489,6 +489,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
 
     - **Finding (2026-11-17):** change committed (see `git log --grep 'Task: id:z0089'`). C1: 193 and 168. C2: 183 and 14. C3, C4 (no warnings), C5 (`Total: 7 run, 7 passed, 0 failed, 0 skipped`) pass. `make test`: `Total: 3828 run, 3828 passed, 0 failed, 102 skipped (137.5s)`. `make preflight-changed`: `Total: 8 run, 7 passed, 1 failed` — the one failure is the `preflight-selftest` scenario, whose log shows only `safety-figures` mismatches (§5.3 rows, density, probe counts 519 vs 523 / 46 vs 50): milestone figures, not touched by this change. Not complete until the maintainer says whether to ignore or refresh them. Next: `make preflight-changed` again after that is settled.
+
+    - **Completion:** code in `1033c46` (the copy) and `5d8c6a9` (preflight no longer runs the milestone figures check, which failed `preflight-selftest`; `make figures-check` stays the by-hand milestone check).
+      - C1: 193 warnings, 168 `into a global` (expected 195/167). C2: 183 and 14 (expected 185/14; drops of 10 and 154). C3: `git diff --stat` named only `src/lower_zir/exhaust.zrl` (8 insertions, 1 deletion). C4: `rm build/zoril && make`, then `make`: no `warning:` lines. C5: `Total: 7 run, 7 passed, 0 failed, 0 skipped (0.1s)`.
+      - C6: `make test`: `Total: 3828 run, 3828 passed, 0 failed, 102 skipped (138.3s)`. `make preflight-changed`: `Total: 8 run, 7... ` first run failed only on milestone figures; after `5d8c6a9`: `Total: 8 run, 8 passed, 0 failed, 0 skipped (100.2s)`, reject-diff base verdicts line was cached (not `REJECT_DIFF_NO_CACHE=1`).
+      - The fuzz record (`bench/fuzz/README.md`) is stale for `src/`.
 
 - [ ] +tools +tests +AI-G @provenance id:z0090 B1.9g zbuild's manifest parsing gives no warning under `--provenance`
     > **Created:** 2026-11-06
