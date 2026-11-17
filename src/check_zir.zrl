@@ -7026,6 +7026,109 @@ fn os_env_scan_rv(
     }
 }
 
+// The closure rule (§3, _A closure made into a value_): a closure that is not only called through
+// locals of this body (env_of 0) may be called where no caller knows its environment, so the edges
+// of its summary whose value is what the environment reaches are checked where it is made, against
+// the environment ENV (the pointer FuncAddr carries), and recorded as this body's own edges, since
+// a call of the closure anywhere is a store this body caused. The flow-insensitive sets already
+// hold what any later call writes into that environment. An edge whose value is a declared
+// parameter is checked where the argument is passed, by the store rules of the body that calls
+// the closure.
+fn os_check_closure_value(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    fid: u32,
+    env: u32
+) {
+    if fid as usize >= module.functions.len() { return; }
+    let f = &module.functions[fid as usize];
+    let base = if f.params_len > 0 as usize && f.param(0).name == c.sret_name {
+        1 as usize
+    } else {
+        0 as usize
+    };
+    let e = if f.params_len >= base { f.params_len - base } else { 0 as usize };
+    let ao = os_t(c, OS_T_AO);
+    let aos = os_t(c, OS_T_AS);
+    let place = Place { base: env, projections: @slice(0 as *mut Projection, 0 as usize) };
+    os_clear(c, ao);
+    os_clear(c, aos);
+    let _ = os_read(c, module, locals, &place, ao, aos);
+    let _ = os_or(c, ao, aos);
+    let tv = os_t(c, OS_T_SV);
+    let ed = os_t(c, OS_T_ED);
+    let eo = os_t(c, OS_T_R);
+    let es = os_t(c, OS_T_D);
+    os_clear(c, eo);
+    os_clear(c, es);
+    os_through_split(c, ao, eo, es);
+    if !f.os_known {
+        // No summary yet: what the closure stores is not known, so its environment may not hold
+        // an address of this frame at all.
+        os_through_plus(c, ao, tv);
+        os_drop_moved_storage(c, tv, eo, es);
+        if c.checking && os_frame_bound(c, tv) {
+            os_refuse(
+                c,
+                "a closure whose stores are not known yet holds an address of this frame (closure rule)"
+            );
+        }
+        return;
+    }
+    // SAFETY: the closure's own summary table, os_edge_rows rows of four u64 in the main arena
+    // (store_origin_summary).
+    let table = unsafe { @slice(f.os_edges, f.os_edge_rows * 4 as usize) };
+    let mut r = 0 as usize;
+    while r < f.os_edge_rows {
+        let row = r * 4 as usize;
+        let code = table[row] as usize;
+        let contents = code >= 64 as usize && code < 128 as usize;
+        let pidx = if contents { code - 64 as usize } else { code };
+        if code < 128 as usize && pidx >= e {
+            if contents {
+                os_through_plus(c, ao, tv);
+                os_drop_moved_storage(c, tv, eo, es);
+            } else {
+                os_copy(c, tv, ao);
+            }
+            let bound = os_frame_bound(c, tv);
+            if table[row + 3 as usize] & OS_EDGE_GLOBAL != 0 as u64 {
+                if c.checking && bound {
+                    os_refuse(
+                        c,
+                        "the closure made here stores an address of this frame into a global when it is called (closure rule)"
+                    );
+                    return;
+                }
+                os_clear(c, ed);
+                os_add_flag(c, ed, ORIGIN_STATIC);
+                os_note_edges(c, tv, ed);
+            }
+            let mut w = 1 as usize;
+            while w <= 2 as usize {
+                let mut j = e;
+                while j < 64 as usize {
+                    if (table[row + w] >> (j as u64)) & 1 as u64 != 0 as u64 {
+                        os_dest_reach(c, module, locals, ao, ed);
+                        if c.checking && bound && os_external(c, ed) {
+                            os_refuse(
+                                c,
+                                "the closure made here stores an address of this frame into memory that outlives it when it is called (closure rule)"
+                            );
+                            return;
+                        }
+                        os_note_edges(c, tv, ed);
+                    }
+                    j = j + 1 as usize;
+                }
+                w = w + 1 as usize;
+            }
+        }
+        r = r + 1 as usize;
+    }
+}
+
 // A call through a known callee (os_known_callees) applies that function's summary, as a direct
 // call does (os_call); a closure gets the callee value, its environment's address, as `__env`, its
 // last argument (lower_rv_call_ptr). Whether it was one.
@@ -7954,6 +8057,11 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
                 os_add_frame(c, vs, id);
             }
             os_store(c, module, locals, id, false, ty);
+            if let ZirRvalue.FuncAddr(fid, env) = rv {
+                if env != 0 as u32 && (id as usize) < c.nl && c.env_of[id as usize] == 0 as u32 {
+                    os_check_closure_value(c, module, locals, fid, env);
+                }
+            }
         },
         ZirStmt.Assign(pl, rv, span) => {
             c.span = span;

@@ -1,0 +1,17 @@
+// The closure stores the address its maker was handed into the global: the maker's summary records
+// that store, as a call of the closure anywhere is one it caused, so `main` handing it a local's
+// address is refused (§3, _A closure made into a value_).
+// flags: --provenance
+// EXPECT: provenance: the callee stores an address of this frame into a global (call store rule)
+// expected compile fail
+static mut G: *i32 = 0 as *i32;
+fn run(f: fn() -> unit) { f(); }
+fn stash(p: &i32) {
+    let r = p;
+    run(|| { G = r as *i32; });
+}
+fn main() -> i32 {
+    let y = 1;
+    stash(&y);
+    return 0;
+}
