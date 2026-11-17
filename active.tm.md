@@ -313,6 +313,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Check-in:** stop for review after it.
+    > **Claimed:** 2026-11-17 provenance
 
     - **Found by:** id:z0075 (the grid's newly refused twins, read by root).
     - **Deferred (2026-11-06, by id:z0075):** accepted as a precision bound for now (id:z0065 records it in `KNOWN_ISSUES.md` §5); a removal rule, so it waits until the series' other rules are in.
