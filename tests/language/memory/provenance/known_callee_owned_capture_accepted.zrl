@@ -1,0 +1,14 @@
+// A closure that owns a `Vec` and pushes to it, called twice through a known callee: its summary
+// stores the capture's own storage back into it, so both calls are accepted (§3, _Calls through a
+// known callee_).
+// flags: --provenance
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    let mut cl = || -> i32 { v.push(2); return v.len() as i32; };
+    let _ = cl();
+    return cl() - 3;
+}

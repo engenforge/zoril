@@ -5713,7 +5713,16 @@ pub struct OriginSets {
     // for that capture alias inside the body, 0 for none (os_cap_bits). The summary folds each
     // into ParamContents(env_param) (os_fold_env).
     pub cap_bit: [mut u8],
+    // Per local, the function every `FuncAddr` assigned to it names (its index plus one, with
+    // OS_KNOWN_ENV set when it carries an environment), 0 when none is, OS_KNOWN_NONE when it can
+    // name more than one (os_known_callees).
+    pub known_fn: [mut u32],
+    // The body's scratch arena, for the argument lists of calls through a known callee.
+    pub arena: *mut ArenaHeader,
 }
+
+const OS_KNOWN_NONE: u32 = 0xffffffff;
+const OS_KNOWN_ENV: u32 = 0x80000000;
 
 const OS_EDGE_STATIC: usize = 128;
 const OS_EDGE_UNKNOWN: usize = 129;
@@ -6692,6 +6701,114 @@ fn os_unknown_call_effects(
     }
 }
 
+// Fills known_fn: a local is a known callee when every value the body assigns to it, directly or by
+// a plain copy of another known local, is a `FuncAddr` of one function (§3, _Calls through a
+// known callee_). A reference taken to it (shared too: a cast makes it writable in `unsafe`), a
+// write into a projection of it, or any other value makes it OS_KNOWN_NONE, so a local a callee
+// could reassign through a pointer is never known. Order does not matter, as the sets do not. A
+// copy of a local joins nothing until that local is known; once no round changes anything, a copy
+// of a local still not known (a parameter, a call's result) makes the copy unknown (STRICT).
+fn os_known_callees(c: &mut OriginSets, func: &ZirFunction) {
+    let mut strict = false;
+    let mut more = true;
+    while more || !strict {
+        if !more { strict = true; }
+        more = false;
+        for b in (*func).blocks {
+            for st in b.statements {
+                match *st {
+                    ZirStmt.Let(id, rv, _) => {
+                        if os_known_def(c, id, &rv, strict) { more = true; }
+                    },
+                    ZirStmt.Assign(p, rv, _) => {
+                        if p.projections.len == 0 as usize {
+                            if os_known_def(c, p.base, &rv, strict) { more = true; }
+                        } else {
+                            if os_known_set(c, p.base, OS_KNOWN_NONE) { more = true; }
+                            if os_known_refs(c, &rv) { more = true; }
+                        }
+                    },
+                    ZirStmt.Drop(_, _)
+                        | ZirStmt.DropIfLive(_, _)
+                        | ZirStmt.EndBorrow(_, _)
+                        | ZirStmt.Intrinsic(_, _, _) => {},
+                }
+            }
+        }
+    }
+}
+
+// Joins V into known_fn[ID]; whether it changed.
+fn os_known_set(c: &mut OriginSets, id: u32, v: u32) -> bool {
+    if id == 0 as u32 || id as usize >= c.nl || v == 0 as u32 { return false; }
+    let old = c.known_fn[id as usize];
+    let new = if old == 0 as u32 || old == v { v } else { OS_KNOWN_NONE };
+    if new == old { return false; }
+    c.known_fn[id as usize] = new;
+    return true;
+}
+
+// A reference to a local makes it unknown: whatever holds the reference may write it.
+fn os_known_refs(c: &mut OriginSets, rv: &ZirRvalue) -> bool {
+    return match *rv {
+        ZirRvalue.Ref(p, _) | ZirRvalue.RefMut(p, _) => os_known_set(c, p.base, OS_KNOWN_NONE),
+        _ => false,
+    };
+}
+
+fn os_known_def(c: &mut OriginSets, id: u32, rv: &ZirRvalue, strict: bool) -> bool {
+    let refs = os_known_refs(c, rv);
+    let v = match *rv {
+        ZirRvalue.FuncAddr(fid, env) => {
+            (fid + 1 as u32) | (if env != 0 as u32 { OS_KNOWN_ENV } else { 0 as u32 })
+        },
+        ZirRvalue.Use(p) => {
+            if p.projections.len == 0 as usize && p.base as usize < c.nl {
+                let k = c.known_fn[p.base as usize];
+                if strict && k == 0 as u32 { OS_KNOWN_NONE } else { k }
+            } else {
+                OS_KNOWN_NONE
+            }
+        },
+        _ => OS_KNOWN_NONE,
+    };
+    return os_known_set(c, id, v) || refs;
+}
+
+// A call through a known callee (os_known_callees) applies that function's summary, as a direct
+// call does (os_call); a closure gets the callee value, its environment's address, as `__env`, its
+// last argument (lower_rv_call_ptr). Whether it was one.
+fn os_known_call(
+    c: &mut OriginSets,
+    module: &ILModule,
+    locals: [Local],
+    callee: &Place,
+    args: [Place],
+    owner: usize
+) -> bool {
+    if callee.projections.len != 0 as usize || callee.base as usize >= c.nl { return false; }
+    let k = c.known_fn[callee.base as usize];
+    if k == 0 as u32 || k == OS_KNOWN_NONE { return false; }
+    let fid = (k & !OS_KNOWN_ENV) - 1 as u32;
+    if fid as usize >= module.functions.len() { return false; }
+    if k & OS_KNOWN_ENV == 0 as u32 {
+        os_call(c, module, locals, fid, args, owner);
+        return true;
+    }
+    let n = args.len + 1 as usize;
+    // SAFETY: N Places in the body's scratch arena, which outlives the call; every one is written
+    // before the slice is read.
+    let all = unsafe { @slice(zoril_allocator_alloc(c.arena, n * sizeof(Place)) as *mut Place, n) };
+    let mut i = 0 as usize;
+    while i < args.len {
+        all[i] = args[i];
+        i = i + 1 as usize;
+    }
+    all[args.len] = *callee;
+    os_call(c, module, locals, fid, all, owner);
+    return true;
+}
+
 // The result of a call through a `fn` value into OS_T_VO/OS_T_VS (§3, _Calls through a `fn`
 // value_): the body was checked by these rules where it was made, so its result holds only what
 // its arguments and its environment reach, and Static. An owning result is fresh storage of this
@@ -7419,6 +7536,7 @@ fn os_rvalue(c: &mut OriginSets, module: &ILModule, locals: [Local], rv: &ZirRva
         },
         ZirRvalue.Call(fn_id, args) => { os_call(c, module, locals, fn_id, args, owner); },
         ZirRvalue.CallPtr(callee, args) => {
+            if os_known_call(c, module, locals, &callee, args, owner) { return; }
             os_note_unknown(c, UNKNOWN_FN_VALUE);
             let nargs = args.len + 1 as usize;
             os_unknown_call_effects(c, module, locals, args, &callee, nargs, ORIGIN_STATIC);
@@ -7658,6 +7776,9 @@ pub fn compute_origins_zir(
         env_param: (*func).params.len,
         // SAFETY: NL bytes in ARENA, the body's scratch arena, zeroed below before any read.
         cap_bit: unsafe { @slice(zoril_allocator_alloc(arena, nl) as *mut u8, nl) },
+        // SAFETY: NL u32 in ARENA, as above, zeroed below before any read.
+        known_fn: unsafe { @slice(zoril_allocator_alloc(arena, nl * 4) as *mut u32, nl) },
+        arena: arena,
     };
     unsafe {
         memset(c.edges.ptr as *mut u8, 0, (OS_EDGE_ROWS * 3 * 8) as u64);
@@ -7666,6 +7787,7 @@ pub fn compute_origins_zir(
         memset(c.owns_memo.ptr as *mut u8, 0, nt as u64);
         memset(c.q_memo.ptr as *mut u8, 0, (OS_Q_COUNT * nt) as u64);
         memset(c.cap_bit.ptr as *mut u8, 0, nl as u64);
+        memset(c.known_fn.ptr as *mut u8, 0, (nl * 4) as u64);
     }
     let mut pi = 0 as usize;
     while pi < (*func).params.len {
@@ -7677,6 +7799,7 @@ pub fn compute_origins_zir(
         pi = pi + 1 as usize;
     }
     os_cap_bits(&mut c, module, locals);
+    os_known_callees(&mut c, func);
     let ret = 2 as usize * nl;
     let mut more = true;
     while more {

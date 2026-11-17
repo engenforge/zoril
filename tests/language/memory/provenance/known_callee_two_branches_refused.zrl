@@ -1,0 +1,15 @@
+// A local assigned a closure on each of two branches is no known callee (§3, _Calls through a
+// known callee_). The two store in opposite directions: known as the first, the call would only
+// store the parameter's view into a local; through the second it stores the frame view into the
+// caller's memory, which the unknown-call rule refuses.
+// flags: --provenance
+// EXPECT: unknown-call store rule
+// expected compile fail
+fn f(out: &mut [i32], c: bool) {
+    let data = [1, 2];
+    let mut lv: [i32] = &data;
+    let mut cl = |o: &mut [i32], v: &mut [i32]| { *o = *v; };
+    if c { cl = |o: &mut [i32], v: &mut [i32]| { *v = *o; }; }
+    cl(&mut lv, out);
+}
+fn main() -> i32 { return 0; }

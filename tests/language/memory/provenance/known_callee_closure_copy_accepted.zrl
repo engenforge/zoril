@@ -1,0 +1,15 @@
+// The safe twin of gap_11 through a copy of the closure local: a known callee, whose summary stores
+// one parameter's view into another, so the call is accepted (§3, _Calls through a known callee_).
+// flags: --provenance
+// expected exit 0
+fn f(out: &mut [i32], view: [i32]) {
+    let mut cl = || { *out = view; };
+    let mut cl2 = cl;
+    cl2();
+}
+fn main() -> i32 {
+    let data = [42];
+    let mut d: [i32] = @slice(0 as *i32, 0);
+    f(&mut d, &data);
+    return d[0] - 42;
+}
