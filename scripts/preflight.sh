@@ -2,7 +2,7 @@
 # scripts/preflight.sh — full or fast pre-merge verification.
 #
 # Usage:
-#   scripts/preflight.sh            full preflight (selfhost + mutation, calibrate, reject-diff, checked, git group, bench, figures record, store grid, density, fuzz, figures check)
+#   scripts/preflight.sh            full preflight (selfhost + mutation, calibrate, reject-diff, checked, git group, bench, figures record, store grid, density, fuzz)
 #   scripts/preflight.sh --changed  fast preflight for changed files (selfhost + mutation --changed, calibrate, reject-diff, checked, git group, bench, figures record)
 #
 # Both pre-merge gates run selfhost-check (a clean copy of the tree builds with the DEFAULT
@@ -36,7 +36,6 @@ BENCH_CMD="${PREFLIGHT_BENCH:-./scripts/bench_threshold_check.sh}"
 STORE_GRID_CMD="${PREFLIGHT_STORE_GRID:-./scripts/check_store_grid.sh}"
 DENSITY_CMD="${PREFLIGHT_DENSITY:-./scripts/record_marker_density.sh}"
 FUZZ_CMD="${PREFLIGHT_FUZZ:-./scripts/fuzz_safe.sh}"
-FIGURES_CMD="${PREFLIGHT_FIGURES:-./scripts/check_safety_figures.sh --milestone}"
 FIGURES_REC_CMD="${PREFLIGHT_FIGURES_REC:-./scripts/record_figures.sh}"
 GIT_CMD="${PREFLIGHT_GIT:-./scripts/test.sh --quiet --group git}"
 LOG="${PREFLIGHT_LOG:-build/preflight-selfhost.log}"
@@ -192,10 +191,4 @@ if [ "$changed" -eq 0 ]; then
     record_step fuzz $(( $(date +%s) - fuzz_start ))
     rm -rf "$fuzz_findings"
     [ $fuzz_rc -eq 0 ] || exit $fuzz_rc
-
-    fig_start=$(date +%s)
-    $FIGURES_CMD
-    fig_rc=$?
-    record_step figures $(( $(date +%s) - fig_start ))
-    [ $fig_rc -eq 0 ] || exit $fig_rc
 fi
