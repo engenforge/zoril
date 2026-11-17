@@ -1,0 +1,19 @@
+// A struct holding a `fn` value beside a raw `*mut` pointer to a global keeps the global in its
+// destination reach: what the pointer points to may be written through it (§3, _Destination
+// reach_).
+// flags: --provenance
+// EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
+// expected compile fail
+static mut G: *i32 = 0 as *i32;
+fn nop() {}
+struct S { p: *mut *i32, f: fn() -> unit }
+fn put(s: &S, r: &i32) { unsafe { *s.p = r as *i32; } }
+fn stash() {
+    let x = 42;
+    let s = S { p: &mut G as *mut *i32, f: nop };
+    put(&s, &x);
+}
+fn main() -> i32 {
+    stash();
+    return 0;
+}

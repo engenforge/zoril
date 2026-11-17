@@ -5656,14 +5656,17 @@ const OS_T_CAP: usize = 20;
 const OS_T_SF: usize = 21;
 // The Frame(L) of OS_T_CAP whose type owns storage: the owned captures.
 const OS_T_OWNCAP: usize = 22;
-const OS_TEMPS: usize = 23;
+// os_dest_reach's own scratch set.
+const OS_T_DR: usize = 23;
+const OS_TEMPS: usize = 24;
 
 // The questions os_type_has answers about a type.
 const OS_Q_ARENA: usize = 0;
 const OS_Q_HANDLE: usize = 1;
 const OS_Q_FRESH: usize = 2;
 const OS_Q_ARENA_REF: usize = 3;
-const OS_Q_COUNT: usize = 4;
+const OS_Q_REF_HANDLE: usize = 4;
+const OS_Q_COUNT: usize = 5;
 
 // The rules of §3: off, refusing, or warning only (`--provenance=warn`).
 pub const PROVENANCE_OFF: u32 = 0;
@@ -6060,7 +6063,8 @@ fn os_owns(c: &mut OriginSets, module: &ILModule, ty: u32) -> bool {
 // field types); OS_Q_FRESH, whether it is or contains by value a box or a type implementing Drop,
 // so a call returning one owns fresh storage; OS_Q_ARENA_REF, whether it reaches an `Arena` through
 // a pointer or a slice (an `Arena` or `ArenaHeader` held by value answers no, though its header is
-// one). An unknown type answers yes.
+// one); OS_Q_REF_HANDLE, whether it can hold a mutable handle other than a `fn` value, or a raw
+// `*mut` pointer. An unknown type answers yes.
 fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool {
     if ty == 0 as u32 || ty as usize > module.types.len() { return true; }
     let m = q * c.nt + ty as usize;
@@ -6073,11 +6077,18 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
         ILType.Primitive(_) | ILType.FD(_) | ILType.IORing => {},
         ILType.PtrMut(x) => {
             yes = q == OS_Q_HANDLE
+                || q == OS_Q_REF_HANDLE
                 || (q == OS_Q_ARENA && os_type_has(c, module, x, q))
                 || (q == OS_Q_ARENA_REF && os_type_has(c, module, x, OS_Q_ARENA));
         },
         ILType.Ptr(x) | ILType.RawPtr(x) | ILType.RawPtrMut(x) => {
-            if q == OS_Q_ARENA_REF {
+            let raw_mut = module.types[ty as usize - 1 as usize].def.get_tag() == ILTYPE_RAWPTRMUT;
+            if raw_mut && q == OS_Q_REF_HANDLE {
+                // What a raw mutable pointer points to may be written through it, a global as
+                // well (`&mut G as *mut T`): no reason to take Static out of what a type holding
+                // one holds.
+                yes = true;
+            } else if q == OS_Q_ARENA_REF {
                 yes = os_type_has(c, module, x, OS_Q_ARENA);
             } else {
                 yes = q != OS_Q_FRESH && os_type_has(c, module, x, q);
@@ -6087,7 +6098,7 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
             yes = q == OS_Q_FRESH || os_type_has(c, module, x, q);
         },
         ILType.Slice(sl) => {
-            yes = (q == OS_Q_HANDLE && sl.mutable)
+            yes = ((q == OS_Q_HANDLE || q == OS_Q_REF_HANDLE) && sl.mutable)
                 || (q == OS_Q_ARENA_REF && os_type_has(c, module, sl.element, OS_Q_ARENA))
                 || (q != OS_Q_FRESH
                     && q != OS_Q_ARENA_REF
@@ -6140,8 +6151,11 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
 // DST = the destination SRC names, with its reach (§3, _Destination reach_): each Frame(L) in it
 // adds the storage L owns, S(L), and, when L's type can hold a mutable handle, what L holds, O(L),
 // to a fixpoint. Following O(L) for every type would refuse `v.push(arena_str)` after
-// `v.push("lit")` put Static in O(v). A capture alias's slot is the environment's memory, so a
-// Frame of one adds ParamContents(`__env`) (§3, _Closure environments_).
+// `v.push("lit")` put Static in O(v). When L's only handles are `fn` values and it holds no raw
+// `*mut` pointer, O(L) adds no Static: a `fn` value names no memory but its environment, and a
+// `fn` item's Static is its code. A
+// capture alias's slot is the environment's memory, so a Frame of one adds ParamContents(`__env`)
+// (§3, _Closure environments_).
 fn os_dest_reach(c: &mut OriginSets, module: &ILModule, locals: [Local], src: usize, dst: usize) {
     os_copy(c, dst, src);
     let mut more = true;
@@ -6151,9 +6165,15 @@ fn os_dest_reach(c: &mut OriginSets, module: &ILModule, locals: [Local], src: us
         while id < c.nl {
             if os_has_frame(c, dst, id) {
                 if os_or(c, dst, c.nl + id) { more = true; }
-                if os_type_has(c, module, os_local_ty(locals, id as u32), OS_Q_HANDLE)
-                    && os_or(c, dst, id) {
-                    more = true;
+                let lty = os_local_ty(locals, id as u32);
+                if os_type_has(c, module, lty, OS_Q_HANDLE) {
+                    let held = os_t(c, OS_T_DR);
+                    os_copy(c, held, id);
+                    if !os_type_has(c, module, lty, OS_Q_REF_HANDLE) {
+                        let fw = held * c.words + OS_W_FLAGS;
+                        c.buf[fw] = c.buf[fw] & !ORIGIN_STATIC;
+                    }
+                    if os_or(c, dst, held) { more = true; }
                 }
             }
             id = id + 1 as usize;
@@ -6195,6 +6215,22 @@ fn os_env_to_cap(c: &mut OriginSets, set: usize, id: usize) {
     if c.buf[w] & e != 0 as u64 {
         c.buf[w] = (c.buf[w] & !e) | ((1 as u64) << (c.cap_bit[id] as u64));
     }
+}
+
+// Whether argument J of a call to FN_ID is a declared parameter of a `fn` type.
+fn os_fn_param(c: &OriginSets, module: &ILModule, fn_id: u32, j: usize) -> bool {
+    if fn_id as usize >= module.functions.len() || j >= 63 as usize { return false; }
+    if c.known_env != OS_NO_ENV && j >= c.known_env { return false; }
+    let f = &module.functions[fn_id as usize];
+    let base = if f.params_len > 0 as usize && f.param(0).name == c.sret_name {
+        1 as usize
+    } else {
+        0 as usize
+    };
+    if j + base >= f.params_len { return false; }
+    let ty = f.param(j + base).ty;
+    if ty == 0 as u32 || ty as usize > module.types.len() { return false; }
+    return os_type_def_tag(module, ty) == ILTYPE_FN;
 }
 
 // SET joins what one read through it yields (os_through).
@@ -7568,6 +7604,12 @@ fn os_edge_effects(
                     // follows what a local holds only for a mutable handle, never a raw pointer.
                     if w == 2 as usize && c.known_env != OS_NO_ENV && j > c.known_env {
                         os_add_read(c, tm);
+                    }
+                    // A `fn` value names no memory but its environment: a `fn` item's Static is
+                    // its code, which nothing stores into (§3, _Calls through a `fn` value_).
+                    if os_fn_param(c, module, fn_id, j) {
+                        let fw = tm * c.words + OS_W_FLAGS;
+                        c.buf[fw] = c.buf[fw] & !ORIGIN_STATIC;
                     }
                     let sf = os_t(c, OS_T_SF);
                     os_copy(c, sf, tv);
