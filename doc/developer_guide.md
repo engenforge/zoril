@@ -76,7 +76,7 @@ The repository includes several specialized developer tools and targets:
 
 ### Preflight Gates
 
-- **`make preflight-changed`:** Runs a clean-tree build, self-hosting checks, targeted mutation testing for modified files, the rejection differential when the checkers changed, the checked build (`make test-checked`), the scenarios that need git (the `git` group of `scripts/test_plan.tsv`), and the benchmark thresholds, in ~6 minutes (~10 when the differential runs).
+- **`make preflight-changed`:** Runs a clean-tree build, self-hosting checks, targeted mutation testing for modified files, the fuzzer's calibration programs (`make fuzz-calibrate`), the rejection differential when the checkers changed, the checked build (`make test-checked`), the scenarios that need git (the `git` group of `scripts/test_plan.tsv`), the benchmark thresholds and the safety figures record (`bench/records/figures_history.tsv`), in ~6 minutes (~10 when the differential runs).
 - **`make preflight`:** Slower comprehensive pre-merge gate. Verifies bit-for-bit compiler self-hosting fixpoint across 4 generations, executes full mutation checks, and runs performance benchmarks against calibrated thresholds. It runs everything `make preflight-changed` runs, with the full mutation set, and then the store grid, the marker density record, a short run of the safe-program fuzzer and the milestone figures check (`make figures-check`); it takes longer than `make preflight-changed`.
 
 ### The Checked Build (`make test-checked`)

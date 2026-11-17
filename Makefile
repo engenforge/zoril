@@ -421,7 +421,7 @@ repro-check: ## Gate: bootstrap from scratch twice and require identical results
 preflight: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/ztest build/runtime_hosted.o user-tools ## Full pre-merge gate: preflight-changed's steps with the full mutation set, plus store grid, density, fuzz and the figures check
 	@./scripts/preflight.sh
 
-preflight-changed: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/ztest build/runtime_hosted.o ## Fast pre-merge gate: selfhost, mutations of changed files, checked build, git group, bench thresholds
+preflight-changed: $(TARGET) $(ZILC) build/runtime.o build/zbuild build/ztest build/runtime_hosted.o ## Fast pre-merge gate: selfhost, mutations of changed files, calibration, reject-diff, checked build, git group, bench thresholds, figures record
 	@./scripts/preflight.sh --changed
 
 ##@ Testing
