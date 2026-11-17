@@ -4,6 +4,19 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Series rule (2026-11-05, from id:z0071):** a precision fix that removes origins from a set (an exemption, a split, a moved-storage drop) is first measured alone, on top of the task it serves, to show it is needed; and it comes with probes of its sibling routes (the value built inside the callee, returned from a call, packed into a struct beside a view or a raw pointer).
 
+- [ ] +testinfra +tests +AI-G @main `preflight-selftest` stubs the milestone figures check, so a change to `src/` between milestones passes it id:xh0jq
+    > **Created:** 2026-11-17
+    > **Branch:** `main`
+    > **Found by:** id:z0093 (its `make preflight-changed` on `provenance`).
+    > **Placed:** at the top of `active.tm.md`: a harness fix of under a session with no dependency. It blocks a clean `preflight-changed` for every `src/` change between milestones, on every branch.
+
+    - **Now:** `scripts/test_preflight.sh` exports `PREFLIGHT_FIGURES_REC` as a stub but not `PREFLIGHT_FIGURES`, so its full-mode case "expected preflight to pass and write timings" runs the real `./scripts/check_safety_figures.sh --milestone` (`scripts/preflight.sh:39`, run at `:197`). The milestone figures are refreshed only at milestones (AGENTS.md, Safety claims), so after any change to `src/` line counts the case fails: on `provenance` at git:0ba0cab, `[FAIL] preflight-selftest: expected preflight to pass and write timings`, with `[FAIL] safety-figures: §5 says compiler lines is 50,389; the tree has 50576` and the `unsafe_policy.md` density lines, in `build/tests-git/scenarios/preflight-selftest.log`. With `PREFLIGHT_FIGURES` set to a stub in the environment, `sh scripts/test_preflight.sh` passes (33 `[PASS]`, no `[FAIL]`).
+    - **Do:** export `PREFLIGHT_FIGURES="$tmp/stub_pass.sh"` beside `PREFLIGHT_FIGURES_REC` in `scripts/test_preflight.sh`.
+    - **Checks:**
+        - C1: in a tree whose figures do not match (any `src/` change, e.g. append a blank comment-free line count change in a scratch worktree, or on `provenance` at git:0ba0cab), `sh scripts/test_preflight.sh` before the change prints the `[FAIL]` line above, and after it exits 0 with no `[FAIL]`.
+        - C2: take the export out again and watch C1's `[FAIL]` come back.
+        - C3: `make test` and `make test-changed`; no compiled code changes, so no `preflight-changed` is needed beyond the git group (`make test-changed BASE=HEAD~1` selects it).
+
 - [ ] +safety +tests +AI-D @provenance id:z0093 B1.9a2 A closure body's summary is stated over its `__env` parameter
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
