@@ -1,0 +1,30 @@
+// The twin of raw_ptr_from_dropped_owner_accepted.zrl with the raw pointer stored beside an owned
+// `Vec` in one struct: the struct owns the `Vec`, not what `p` points to, so the store is accepted and
+// `p` dangles once `keep` drops `b`. Only a dereference of `p`, inside `unsafe`, could reach the block.
+// flags: --provenance
+// expected exit 0
+import "mem_raw.zrl";
+import "vec.zrl";
+use vec::Vec;
+struct Buf { data: *mut u8 }
+impl Buf {
+    fn new() -> Buf {
+        // SAFETY: a fresh 16-byte heap block, freed once by drop.
+        return Buf { data: unsafe { mem_raw::heap_alloc(16 as u64) } };
+    }
+}
+impl Drop for Buf {
+    fn drop(self: &mut Buf) {
+        // SAFETY: the block new allocated, freed once.
+        unsafe { mem_raw::heap_free(self.data as *u8, 16 as u64); }
+    }
+}
+struct BothPtr { own_v: Vec<i32>, p: *mut u8 }
+fn keep_both(out: &mut BothPtr, b: Buf) { *out = BothPtr { own_v: Vec::<i32>.new(), p: b.data }; }
+fn f(out: &mut BothPtr) { let b = Buf.new(); keep_both(out, b); }
+fn main() -> i32 {
+    let mut s = BothPtr { own_v: Vec::<i32>.new(), p: 0 as *mut u8 };
+    f(&mut s);
+    if s.p == 0 as *mut u8 { return 1; }
+    return 0;
+}
