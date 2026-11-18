@@ -729,6 +729,21 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Revised by the decision of 2026-11-18** (id:z0011, **Decision**): the seven `&self`- or elision-default sites (`bufio.zrl:36`, `:234`, `iter.zrl:26`, `string.zrl:186`, `:326`, `vec.zrl:155`, and the generic `Self` of `map`) need no edit. Since git:21658fa their body's ties are inferred, so the seven added `#[borrows(..)]` lines of the patch above are dropped. What is left: delete `#[borrows()]` from `Clone for String`, `Option<T>` and `[T]` (free; closes gap_99); change `read_to_end_sized_raw`'s declaration to `#[borrows(arena)]` (a tier-2 contract equal to the body; free); delete `Vec.clone`'s and fix `tools/zbuild/src/main.zrl:110` (closes gap_77); mark `Args.get`/`Args.next` `#[unsafe(borrows())]` with a `// SAFETY:` line (id:akapm). Re-run C1 on these edits before asking the maintainer to approve the `pub` changes.
     - **Depends changed (2026-11-18):** added id:akapm, for the `Args` pair.
 
+    - **Measurement scripts** (from id:z0011's session, 2026-11-18; `build/z11/` is scratch). Copy each into `build/` and run it from the repository root. `site.sh NAME FILE LINE EDIT` applies one edit to a scratch copy of `stdlib/` (`del` removes the `#[borrows()]` within two lines above LINE, `rep:<attr>` replaces it, any other text is inserted before LINE). Then it counts default-build refusals over the roots and the test programs that compile by default. `cost.sh ZORIL OUTDIR [STDLIB]` counts the same for a whole compiler. Both read `build/z11/m_base/tests_compiled.txt`. Regenerate that file with the `tests_compiled.txt` loop of `build/z97/measure.sh`: every `tests/**/*.zrl` that is not `*_lib.zrl`, has no `// @skip:`, and compiles with its `// flags:`.
+    ```sh
+    # cost.sh
+    R=$(pwd); Z=$1; O=$2; S=${3:-stdlib}; mkdir -p $O; : > $O/refused.txt
+    for root in src/main.zrl tools/zilc/src/main.zrl tools/zbuild/src/main.zrl tools/zman/src/main.zrl tools/ztest/src/main.zrl; do
+      timeout -k 5 180 $Z -I stdlib=$S -I $(dirname $root) -I src -I build/gen --emit-zil -o /dev/null $root > $O/root.log 2>&1 || grep error $O/root.log | sed "s|^|ROOT $root: |" >> $O/refused.txt
+    done
+    while read -r tf; do
+      fl=$(sed -n 's|^// flags: ||p' $tf | head -1)
+      timeout -k 5 30 $Z -I stdlib=$S -I $(dirname $tf) $fl --emit-zil -o /dev/null $tf > /dev/null 2>$O/t.err || grep -m1 error $O/t.err | sed "s|^|$tf: |" >> $O/refused.txt
+    done < build/z11/m_base/tests_compiled.txt
+    echo "$O $(grep -c '' $O/refused.txt)"
+    ```
+    For one site: `cp -r stdlib build/z11/sites/N/stdlib`, make the edit there, then `sh build/cost.sh build/zoril build/z11/sites/N/out build/z11/sites/N/stdlib`.
+
 
 - [ ] +safety +tests +AI-D @provenance B3b The `#[borrows(..)]` declarations and `&self` defaults of `src/` and `tools/` that name less than the body returns are removed, widened or made explicit exemptions id:mrdtf
     > **Created:** 2026-11-18
@@ -886,7 +901,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - **Store grid re-recorded:** git:4ef0cf0 removes exactly the 2538 cells the differential reported (class report 51 -> 35: the method, self_method and trait_method paths and the call_method carrier). git:1e1805c removes 106 entries of `store_grid_modular_prov_twin_rejections.txt` that were already stale before this change: recorded with e14d03d's compiler, which changes only that file. The fuzz record is stale after this `src/` change (`bench/fuzz/README.md`).
       - **A gap the design accepts, beside the cycle rule:** a body lowered while a cycle is open, which calls a member that has finished but is still waiting for the fixpoint, reads that member's ties through `os_in_cycle` (all arguments). The origin rules of such a body still read the member's partial summary. That predates this change, and is noted for id:z0065's measurement.
     - **Depends changed (2026-11-18):** added id:akapm, the tier-3 form the remaining narrowings need.
-    - **Left here (tier 2):** a declaration narrower than the body is refused (the patch above, `os_check_ties`, reduced to the `has_borrows` branch); the `#[stores]` wider-contract change and the `err_stores_attribute_false.zrl` expectation (stop and report). These land after id:mztqb and id:mrdtf. gap_44 and gap_99 flip when the tree's narrowings are settled.
+    - **Left here (tier 2):** a declaration narrower than the body is refused (the patch above, `os_check_ties`, reduced to the `has_borrows` branch); the `#[stores]` wider-contract change and the `err_stores_attribute_false.zrl` expectation (stop and report). These land after id:mztqb and id:mrdtf. gap_44 and gap_99 flip when the tree's narrowings are settled. The **Patch** above predates git:21658fa (it adds `os_check_ties` where `os_infer_ties` now stands), so it no longer applies: write the tier-2 check fresh as one more branch of `os_infer_ties` (a function with `has_borrows` whose body ties are not all in `ret_ties`), refusing under `--provenance` as the patch did.
 
 
 - [ ] +safety +tests +AI-D @provenance B3c A safe function may not hide a store behind a bare `extern` or a raw-pointer write: it declares `#[stores(..)]` id:f81f3
