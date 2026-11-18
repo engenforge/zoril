@@ -116,7 +116,7 @@ sha256_check() {
 }
 
 nproc_count() {
-    _np_res=$((unset OMP_NUM_THREADS OMP_THREAD_LIMIT; nproc) 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+    _np_res=$( (unset OMP_NUM_THREADS OMP_THREAD_LIMIT; nproc) 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
     # Check cgroup root CPU quota where present (Linux cgroup v2 / v1, e.g. podman / docker --cpus).
     # Note: reads root cgroup (/sys/fs/cgroup); nested host cgroups without their own namespace are unread.
     if [ -f /sys/fs/cgroup/cpu.max ]; then
