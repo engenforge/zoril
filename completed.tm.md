@@ -1,5 +1,22 @@
 # Completed Archive
 
+- [x] +safety +bootstrap +AI-G @provenance B3b0 The frozen stage1 parses `#[unsafe(borrows(..))]` as it parses `#[borrows(..)]` (a recorded parser-only backport) id:mkz92
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+    > **Completed:** 2026-11-18 git:92bce83
+
+    - **Decided by:** the maintainer, 2026-11-18: backport the parse into the frozen stage1 rather than re-pin (a re-pin needs a release that carries git:e9726d2 and a hand port of `src/`, about 51,900 lines, to the stage0-C dialect).
+    - **Placed:** before id:mrdtf, which it blocks: id:mrdtf, id:cmg8n, id:jzq16 and id:zfeg9 write `#[unsafe(borrows(..))]` exemptions in `src/` and `tools/zilc/src/`, which `build/zoril-stage1` compiles (id:mrdtf's **Finding** of 2026-11-18).
+    - **Do:** in `bootstrap/stage1/src/parser.zrl`'s attribute loop, accept `unsafe(` before the attribute name and its `)` after the attribute, and read the inner `borrows(..)` exactly as a plain `#[borrows(..)]`. Stage1 runs no tier-2 body check, so it needs no trusted flag; refusing `unsafe(..)` around another attribute stays the current compiler's (`tests/error_reporting/err_unsafe_attr_not_borrows.zrl`), which also compiles all of `src/`. Record it under **Recorded backports** in `bootstrap/stage1/README.md` and in `doc/bootstrap/two_stage.md` §3. `bootstrap/stage1/PIN` is unchanged.
+    - **Checks:** C1: before, `timeout -k 5s 30s build/zoril-stage1 -I stdlib=stdlib --emit-zil -o /dev/null build/mrdtf/ua.zrl` prints `ua.zrl:2:3: error: expected identifier, but found unsafe` (the program is quoted in id:mrdtf's **Finding**); after `make build/zoril-stage1`, it exits 0. C2: the same with `#[unsafe(borrows(s, t))]` on a two-parameter function, followed by a `#[must_use]` line, exits 0. C3: with the change taken out of a scratch copy of the stage1 parser, C1 fails again (the before-figure). C4: `make selfhost-build-check` passes. C5: `make test` (`Total:` with 0 failed) and `make preflight-changed`.
+    - **Completion (2026-11-18, git:92bce83):** `bootstrap/stage1/src/parser.zrl`'s attribute loop takes `unsafe(` before the attribute name and `)` after it and reads the inner `borrows(..)` as a plain one; recorded in `bootstrap/stage1/README.md` (**Recorded backports**) and `doc/bootstrap/two_stage.md` §3. `make build/zoril-stage1` printed no warning (`grep -c 'warning:'` on its log: 0).
+      - C1: before (the old binary kept as `build/mrdtf/zoril-stage1.before`): `build/mrdtf/ua.zrl:2:3: error: expected identifier, but found unsafe`, rc=1; after, `build/zoril-stage1 -I stdlib=stdlib --emit-zil -o /dev/null build/mrdtf/ua.zrl` rc=0.
+      - C2: `build/mrdtf/uc.zrl` (`#[unsafe(borrows(s, t))]` then `#[must_use]` on `fn f(s: &S, t: &S) -> [u8]`, returning `s.a` or `t.a`): before `uc.zrl:2:3: error: expected identifier, but found unsafe`, after rc=0.
+      - C3: the change taken out is the old binary, built from git:cd7e10d's parser: C1 and C2 fail on it as quoted above.
+      - C4: `make selfhost-build-check`: `[2] generation 2 — stage1 compiles src/` `ok — 601262 lines`, `PASS (build only — fixpoint not checked)`.
+      - C5: `make test`: `Total: 3858 run, 3858 passed, 0 failed, 102 skipped (140.6s)` (a first run, made while the commit was being written, failed `incremental` and `tool-versions` on the version stamp changing mid-run; rerun on the clean tree). `make preflight-changed` exit 0: `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, `[PASS] fuzz-calibrate: all 23 calibration programs are in their fixed state (21 refused, 2 accepted with one drop)`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 2548 newly refused, of 69167 programs against a484d11487430a4f709006c069b68454b476b98a` (the base is the branch's merge base with `main`, 57 commits back; the refusals are the series' earlier work, and this change compiles nothing differently in `build/zoril`), `All performance thresholds within tolerance of baseline.`
+      - No change to `src/`, `stdlib/`, `tools/` or `rt/`, so the fuzz record is not made stale by it.
+
 - [x] +testinfra +AI-G @provenance `make preflight` runs the milestone figures check again, and the preflight self-test stubs it id:837pd
     > **Created:** 2026-11-18
     > **Branch:** `provenance`
