@@ -911,44 +911,19 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - Principle 1, not met as first written. Decision (2) assumes every place a local points into is a borrow it holds, but the open liveness gaps break that (P9). Today the tie to the referent covers for them. Fix: H3 (id:mqh84) now depends on id:z0044 (holder three, which closes gap_96) and id:kqp9n (holders one and two, gap_87 and gap_37). Both are placed later in the queue, so H3 cannot start where it stands. Reordering is the maintainer's: either move H3 after them, or keep H1 and H2 here (they change no verdict) and move H3 alone. P9 is a check for H3.
       - Principle 4, partly met. The `#[unsafe(borrows(*self))]` trust is marked in the source. But decision (3)'s rule, that a reference or slice read from the referent points only into what it holds, is also an obligation on every `unsafe` block that writes a view into a value's own storage without a borrow. Fix for H1: write that obligation in `doc/spec/unsafe_policy.md` and `doc/SAFETY.md` §4, beside the raw-pointer rules, so a reviewer of an `unsafe` block can check it.
       - Principles 2 and 3 are met: users write nothing, and the one annotation is on two stdlib functions. Principle 5 is met: the `// SAFETY:` line is checked by a script, never read by the compiler. Principle 6 is met: the accepted programs are what Rust accepts for a clone, and the attribute follows Rust's `#[unsafe(..)]` form. Principle 7 is met: there is no run-time cost, and the analysis grows by one word per set and one mask per summary; that cost is H1's to measure (compile time in `make preflight-changed`).
+    - **The maintainer's decision (2026-11-18), against the end of `doc/design/provenance.md`:** a short step back is taken for the plan's sake. Probe 307 stays `compile_reject` (principle 1: a correct program refused while the analysis is imprecise; it is not on the store grid, the plan's definition of done). The decision above stands as the design, with its order changed: H1 (id:bfd1z) becomes a measurement before id:mrdtf, counting how many of id:z0011's 97 sites a held tie would free by inference (`Lexer.text_from` is the held shape). H2 (id:42ae2), H3 (id:mqh84) and the check-in id:22qty move to directly after id:z0044, since H3 needs id:z0044 and id:kqp9n (P9), and a trusted form and summary bit added before id:z0011 and id:z0012 are more for those to check and carry over. If H1's count is small, those three move to `future.tm.md`, to resume after id:z0012. The approval of `Vec.empty_like` and the `*self` form stays with H2's **Stop and report first**.
+    - **Completion (2026-11-18):** a decision task; no code changed, so there is no code commit and no test run. C1 to C3: not run here; they are H3's (id:mqh84) checks C1, C3 and C4, by the split above. The findings' figures were each run with `build/zoril` at git:cd7e10d, as quoted in Findings 1 and 2 and under **Planted cases** (P1 to P5, P9 refused today; `p9_direct.zrl` exit 139). `tm validate --strict doc/tasks/*.tm.md` passes.
 
-- [ ] +safety +precision +AI-D @provenance H1 The origin sets track which parameter contents may be owned by the referent, and each summary records the parameters its result is tied to only through what they hold id:bfd1z
+- [ ] +safety +precision +AI-D @provenance H1 The origin sets track which parameter contents may be owned by the referent, and the count of id:z0011's sites a held tie would free decides where the series goes id:bfd1z
     > **Created:** 2026-11-18
     > **Branch:** `provenance`
     > **Depends:** id:2sdmk
 
-    - **Placed:** directly after id:2sdmk, whose decision (3) it implements; H2 and H3 follow it.
+    - **Placed:** directly after id:2sdmk, whose decision (3) it implements, and before id:mrdtf (B3b), whose cost it may change. H2 and H3 were moved after id:z0044 (the maintainer's decision of 2026-11-18, recorded in id:2sdmk).
+    - **Reframed as a measurement (the maintainer's decision, 2026-11-18):** `doc/design/provenance.md` §5 names the 82 `#[borrows()]` narrowings id:z0011 has to prove or make exemptions, such as `Lexer.text_from`, "a view of source text in the compilation's arena". That is the held shape: the result points into what the lexer holds (its stored slice), not into the lexer. So before id:mrdtf turns each such site into a reviewed `unsafe` exemption, this task counts how many of id:z0011's 97 sites (**Measured** in id:z0011, `build/z97/measure.sh`) a held tie would justify by inference. The count decides: if it is large, the maintainer may bring H2 and H3 forward, or have id:mrdtf wait for them; if it is small, the series (H2, H3, id:22qty) moves to `future.tm.md`, to resume after id:z0012. The word is committed only if the count justifies the series; otherwise its patch is saved in this task's text (AGENTS.md, "Measurements and local changes") and nothing lands.
     - **Why `+AI-D`:** every write of `OS_W_CONTENTS` in `src/check_zir.zrl` has to be read to decide whether it writes `OS_W_OWNED` too (an audit), and a missed one is a wrong acceptance in H3.
     - **Scope:** the word, the two clearing rules, the held call, `ILFunction.os_ret_held` and its `--emit-origins` line, and the design note's paragraph in `doc/design/provenance.md` §3, with the obligation on `unsafe` code in `doc/spec/unsafe_policy.md` and `doc/SAFETY.md` §4 (id:2sdmk, principle 4). The borrow checker does not read it yet, so no program changes verdict.
-    - **Checks:** C1: `build/zoril --emit-origins build/2sdmk/shapes.zrl` prints a held line for `hd` and none for `sl` (P1's shape) or `cl` (the arena is a raw read until H2). C2: P2's `S::clone` has no held bit, `[T].clone` and `Option<u8>.clone` have one. C3: with the type test in `os_through` taken out (every read writes `ParamOwned`), C1's `hd` loses its bit; with the clear on a reference read written as a clear on every read, `sl` gains one (the check sees the defect). C4: P6 written as a test, and its body gets no held bit. C5: `make test` unchanged (`Total:` with 0 failed), `make preflight-changed`, and the rejection differential 0 newly accepted and 0 newly refused.
-
-- [ ] +safety +precision +AI-G @provenance H2 `#[unsafe(borrows(*self))]` declares a result tied only to what the referent holds; the interface carries it; Vec and String clones use it id:42ae2
-    > **Created:** 2026-11-18
-    > **Branch:** `provenance`
-    > **Depends:** id:bfd1z
-
-    - **Placed:** after id:bfd1z, whose `ret_held` it sets by declaration; id:2sdmk's decision (4).
-    - **Stop and report first:** `Vec.empty_like` is a new `pub` stdlib method and `Clone for Vec<T>`'s body changes; both wait for the maintainer's approval of id:2sdmk.
-    - **Scope:** the parser accepts `*self` (and `*p` for a reference parameter `p`) only inside `#[unsafe(borrows(..))]`, setting the parameter's `ret_held` bit as well as its `ret_ties` bit; the interface writers keep the form and write a `ret_held` `#[summary]` key; `scripts/check_safety_comments.sh` requires a `// SAFETY:` line above it as for the other `#[unsafe(..)]`; `doc/spec/surface_syntax.md` and `doc/spec/unsafe_policy.md` name it. Stdlib: `Vec.empty_like` with the declaration, `Clone for Vec<T>` rewritten on it with no `unsafe`, `Clone for String` with the declaration.
-    - **Checks:** C1: `tests/error_reporting/` tests: `*self` in a plain `#[borrows(..)]` refused, `*x` for a by-value parameter refused. C2: `--emit-origins` on `build/2sdmk/shapes.zrl` shows a held bit for `cl` (`Vec<[u8]>`) and none for `Vec<S>.clone` (P2). C3: `tests/modular/iface_attrs/` case: the `.zri` of a module with the declaration has `ret_held`, and an importer reads it (the key removed from the `.zri` by hand: the importer's held bit is gone). C4: `make test`, `make preflight-changed`, rejection differential with no newly accepted program (the borrow checker does not read `ret_held` until H3).
-
-- [ ] +safety +precision +AI-G @provenance H3 A call tied to an argument only through what its referent holds borrows what the referent holds, not the referent, so probe 307 is accepted id:mqh84
-    > **Created:** 2026-11-18
-    > **Branch:** `provenance`
-    > **Depends:** id:42ae2, id:z0044, id:kqp9n
-
-    - **Placed:** after id:42ae2; id:2sdmk's decision (2), and id:2sdmk's checks C1 to C3.
-    - **Scope:** `inherit_rv_borrows`'s `Call` arm reads the callee's `ret_held`, as decision (2) says; P1 to P8 of id:2sdmk become tests (`tests/language/memory/` or probes) with their expected verdicts; probe 307 flipped to `accept`.
-    - **Checks:** C1: probe 307 `accept`; gap_77, P1, P2, P3, P5, P6, P8 and P9 refused, each as a test. C2: with the copy of the referent's borrows taken out (the direct borrow dropped, nothing copied), P3 and P5 are accepted (the check sees the defect); restored, refused. C3: P7: `sh scripts/run_safety_matrix.sh` with 0 mismatches, and the `safety-matrix-zbuild` and `zbuild-diff` gates pass. C4: `make test`, `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, every newly accepted program listed with its reason.
-    - **Ends with a check-in:** the `@checkin` task after it reviews H2 and H3.
-
-- [ ] +safety +AI-D @provenance @checkin Check-in: review H2 and H3 (the trusted held declaration, and the caller rule that frees probe 307) id:22qty
-    > **Created:** 2026-11-18
-    > **Branch:** `provenance`
-    > **Depends:** id:42ae2, id:mqh84
-
-    - **Placed:** directly after id:mqh84, the batch it reviews (H2, H3; H1 is `+AI-D` and closes itself).
-    - **Review:** re-run H3's C1 to C3 and P1 to P8 of id:2sdmk; probe the sibling routes: a held tie through a trait call resolved per instance, a `Box` receiver, a field receiver (`s.v.clone()`), a `match` binding receiver, and an import whose `.zri` has no `ret_held` key.
+    - **Checks:** C1: `build/zoril --emit-origins build/2sdmk/shapes.zrl` prints a held line for `hd` and none for `sl` (P1's shape) or `cl` (the arena is a raw read until H2). C2: P2's `S::clone` has no held bit, `[T].clone` and `Option<u8>.clone` have one. C3: with the type test in `os_through` taken out (every read writes `ParamOwned`), C1's `hd` loses its bit; with the clear on a reference read written as a clear on every read, `sl` gains one (the check sees the defect). C4: P6 written as a test, and its body gets no held bit. C5: if the word is committed, `make test` unchanged (`Total:` with 0 failed), `make preflight-changed`, and the rejection differential 0 newly accepted and 0 newly refused; if not, `not run`, with the patch in the task text. C6: for each of id:z0011's 97 sites (by root: `src/main.zrl`, zbuild, zilc, zman, and the 13 stdlib sites), whether the body's result tie to the narrowed parameter is held (no `ParamAddr`, no `ParamOwned` in `O(ret)` or `S(ret)`), with the counts per root, the held sites listed by `file:line`, and a sample of five non-held sites with the reason (an `unsafe` body, a raw read, a non-held callee). The before-figure is id:z0011's: 97 distinct sites, 85 under `src/main.zrl`. C7: the recommendation that follows from C6, for the maintainer.
 
 - [ ] +safety +tests +AI-D @provenance B3b The `#[borrows(..)]` declarations and `&self` defaults of `src/` and `tools/` that name less than the body returns are removed, widened or made explicit exemptions id:mrdtf
     > **Created:** 2026-11-18
@@ -1195,6 +1170,37 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
         - C5: take the summary step out and watch `gap_96` build and run 77; make the borrows strict and watch C3's method-called-twice twin be refused.
         - C6: `make test`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` with `reject-diff: base verdicts: fresh (no cache)` quoted and each newly refused program listed. This acts in the default mode, as L2 does.
     - **Depends changed (2026-11-17, L1):** added id:kqp9n (L2, for the outside holder and the tier mark) and id:bfcvm (`releases`). Removed id:z0011, which this task needed only for `gap_44`; `gap_44` is id:z0011's own.
+
+- [ ] +safety +precision +AI-G @provenance H2 `#[unsafe(borrows(*self))]` declares a result tied only to what the referent holds; the interface carries it; Vec and String clones use it id:42ae2
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+    > **Depends:** id:bfd1z
+
+    - **Placed:** after id:bfd1z, whose `ret_held` it sets by declaration; id:2sdmk's decision (4).
+    - **Moved (2026-11-18, the maintainer's decision):** from directly after id:bfd1z to directly after id:z0044, with H3 and the check-in id:22qty. H3 cannot land before id:z0044 and id:kqp9n (P9 of id:2sdmk), and a trusted form and summary bit added before id:z0011 and id:z0012 are more for those to check and carry over. H2 stays tied to H3, so it moves with it. If id:bfd1z's count is small, the three move to `future.tm.md` instead.
+    - **Stop and report first:** `Vec.empty_like` is a new `pub` stdlib method and `Clone for Vec<T>`'s body changes; both wait for the maintainer's approval of id:2sdmk.
+    - **Scope:** the parser accepts `*self` (and `*p` for a reference parameter `p`) only inside `#[unsafe(borrows(..))]`, setting the parameter's `ret_held` bit as well as its `ret_ties` bit; the interface writers keep the form and write a `ret_held` `#[summary]` key; `scripts/check_safety_comments.sh` requires a `// SAFETY:` line above it as for the other `#[unsafe(..)]`; `doc/spec/surface_syntax.md` and `doc/spec/unsafe_policy.md` name it. Stdlib: `Vec.empty_like` with the declaration, `Clone for Vec<T>` rewritten on it with no `unsafe`, `Clone for String` with the declaration.
+    - **Checks:** C1: `tests/error_reporting/` tests: `*self` in a plain `#[borrows(..)]` refused, `*x` for a by-value parameter refused. C2: `--emit-origins` on `build/2sdmk/shapes.zrl` shows a held bit for `cl` (`Vec<[u8]>`) and none for `Vec<S>.clone` (P2). C3: `tests/modular/iface_attrs/` case: the `.zri` of a module with the declaration has `ret_held`, and an importer reads it (the key removed from the `.zri` by hand: the importer's held bit is gone). C4: `make test`, `make preflight-changed`, rejection differential with no newly accepted program (the borrow checker does not read `ret_held` until H3).
+
+- [ ] +safety +precision +AI-G @provenance H3 A call tied to an argument only through what its referent holds borrows what the referent holds, not the referent, so probe 307 is accepted id:mqh84
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+    > **Depends:** id:42ae2, id:z0044, id:kqp9n
+
+    - **Placed:** after id:42ae2; id:2sdmk's decision (2), and id:2sdmk's checks C1 to C3.
+    - **Moved (2026-11-18, the maintainer's decision):** with id:42ae2, to after id:z0044; its blockers id:z0044 and id:kqp9n are now before it (see id:42ae2).
+    - **Scope:** `inherit_rv_borrows`'s `Call` arm reads the callee's `ret_held`, as decision (2) says; P1 to P8 of id:2sdmk become tests (`tests/language/memory/` or probes) with their expected verdicts; probe 307 flipped to `accept`.
+    - **Checks:** C1: probe 307 `accept`; gap_77, P1, P2, P3, P5, P6, P8 and P9 refused, each as a test. C2: with the copy of the referent's borrows taken out (the direct borrow dropped, nothing copied), P3 and P5 are accepted (the check sees the defect); restored, refused. C3: P7: `sh scripts/run_safety_matrix.sh` with 0 mismatches, and the `safety-matrix-zbuild` and `zbuild-diff` gates pass. C4: `make test`, `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, every newly accepted program listed with its reason.
+    - **Ends with a check-in:** the `@checkin` task after it reviews H2 and H3.
+
+- [ ] +safety +AI-D @provenance @checkin Check-in: review H2 and H3 (the trusted held declaration, and the caller rule that frees probe 307) id:22qty
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+    > **Depends:** id:42ae2, id:mqh84
+
+    - **Placed:** directly after id:mqh84, the batch it reviews (H2, H3; H1 is `+AI-D` and closes itself).
+    - **Moved (2026-11-18, the maintainer's decision):** with id:42ae2 and id:mqh84, to stay directly after the batch it reviews.
+    - **Review:** re-run H3's C1 to C3 and P1 to P8 of id:2sdmk; probe the sibling routes: a held tie through a trait call resolved per instance, a `Box` receiver, a field receiver (`s.v.clone()`), a `match` binding receiver, and an import whose `.zri` has no `ret_held` key.
 
 - [ ] +diagnostics +AI-G @provenance id:z0066 B3.9 Provenance diagnostics name the origin they found, once per site
     > **Created:** 2026-11-05
