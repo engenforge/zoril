@@ -25,13 +25,20 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Decision (2026-11-18, the maintainer):** agents never run the documentation-figures checks (line counts, density, probe counts); only the maintainer runs them right before a release or at their discretion. Functional checks may run in `make preflight` at any time. So `5d8c6a9` stays: the revert and the stub are not done. Only the `doc/developer_guide.md:201` fix remains, plus `AGENTS.md` naming `make figures-check` as the release step.
     - **Completion:** `9fe102e`. C1 to C4: not run: nothing reverted and no stub added. C5: `make test-changed BASE=HEAD`: `Total: 3828 run, 3828 passed, 0 failed, 102 skipped (138.2s)`.
 
-- [ ] +testinfra +review +AI-D @provenance @checkin Review of the restored preflight figures step (id:837pd) id:yf17t
+- [x] +testinfra +review +AI-D @provenance @checkin Review of the restored preflight figures step (id:837pd) id:yf17t
     > **Created:** 2026-11-18
     > **Branch:** `provenance`
     > **Depends:** id:837pd
+    > **Completed:** 2026-11-18 git:c125594
 
     - **Placed:** after id:837pd by the check-in id:7kbpd, to review it before the queue goes on.
     - **Checks:** re-run id:837pd's C2 and C3 (including the run with the stub taken out), and check that every `PREFLIGHT_*` command variable in `scripts/preflight.sh` has a stub in `scripts/test_preflight.sh` (`grep -o 'PREFLIGHT_[A-Z_]*:-' scripts/preflight.sh` against `grep -o 'PREFLIGHT_[A-Z_]*=' scripts/test_preflight.sh`), so that the next step added cannot make the self-test run the real thing.
+
+    - **Review (2026-11-18), tree at `c125594` (the branch with `main` merged):**
+      - **Queue:** re-read. 837pd ended as the maintainer decided: documentation-figure checks are never run by agents or by preflight, only by the maintainer before a release. The branch's own `5d8c6a9` and `9fe102e` were dropped for `main`'s `5c44f2b` (id:xh0jq), which makes the same change and adds the stub; their citations were remapped to `5c44f2b`. 837pd's C1 to C4 (revert, stub, stub removal) no longer apply.
+      - **Checks re-run:** `grep -c FIGURES_CMD scripts/preflight.sh` prints `0`; the only figures step left is `PREFLIGHT_FIGURES_REC` (a record, no comparison with the docs). Every `PREFLIGHT_*:-` variable of `preflight.sh` (14) appears as a `PREFLIGHT_*=` in `test_preflight.sh`: `comm -23` of the two lists is empty. `sh scripts/test_preflight.sh`: 0 `[FAIL]` lines. `./scripts/test.sh --scenario preflight-selftest`: `Total: 2 run, 2 passed, 0 failed, 0 skipped (5.5s)`. `make test` on the merge: `Total: 3828 run, 3828 passed, 0 failed, 102 skipped (138.6s)`.
+      - **Not run:** the stub-removal run (no step is left unstubbed to remove). `make preflight-changed` on the merge commit.
+      - **Plan:** unchanged. No task added, moved, re-tagged or re-prioritized.
 
 - [x] +precision +tests +AI-D @provenance A known closure call tells one capture from another: the summary keeps per-capture bits, mapped at the call to the environment struct's fields id:w17jf
     > **Created:** 2026-11-17
