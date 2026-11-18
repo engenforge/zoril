@@ -398,9 +398,17 @@ impl Parser {
         while self.is_kind(TokenKind.Hash) {
             self.next_token();
             self.expect(Token.LBracket);
+            // #[unsafe(borrows(..))]: read as #[borrows(..)]. Only the current compiler checks a
+            // declaration against its body, so the trust the `unsafe` marks means nothing here
+            // (stage1/README.md, the backport).
+            let trusted = self.is_kind(TokenKind.KUnsafe);
+            if trusted {
+                self.next_token();
+                self.expect(Token.LParen);
+            }
             let name_id = self.cur.token.get_ident_id();
             self.expect(Token.Ident(0 as u32));
-            
+
             let name = unsafe { (*self.lexer.intern_table).lookup(name_id) };
             if is_str_eq(name, "must_use") {
                 attr.must_use = true;
@@ -480,7 +488,8 @@ impl Parser {
                     self.expect(Token.RParen);
                 }
             }
-            
+            if trusted { self.expect(Token.RParen); }
+
             self.expect(Token.RBracket);
         }
         return attr;
