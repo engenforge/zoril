@@ -927,6 +927,641 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Scope:** the word, the two clearing rules, the held call, `ILFunction.os_ret_held` and its `--emit-origins` line, and the design note's paragraph in `doc/design/provenance.md` §3, with the obligation on `unsafe` code in `doc/spec/unsafe_policy.md` and `doc/SAFETY.md` §4 (id:2sdmk, principle 4). The borrow checker does not read it yet, so no program changes verdict.
     - **Checks:** C1: `build/zoril --emit-origins build/2sdmk/shapes.zrl` prints a held line for `hd` and none for `sl` (P1's shape) or `cl` (the arena is a raw read until H2). C2: P2's `S::clone` has no held bit, `[T].clone` and `Option<u8>.clone` have one. C3: with the type test in `os_through` taken out (every read writes `ParamOwned`), C1's `hd` loses its bit; with the clear on a reference read written as a clear on every read, `sl` gains one (the check sees the defect). C4: P6 written as a test, and its body gets no held bit. C5: if the word is committed, `make test` unchanged (`Total:` with 0 failed), `make preflight-changed`, and the rejection differential 0 newly accepted and 0 newly refused; if not, `not run`, with the patch in the task text. C6: for each of id:z0011's 97 sites (by root: `src/main.zrl`, zbuild, zilc, zman, and the 13 stdlib sites), whether the body's result tie to the narrowed parameter is held (no `ParamAddr`, no `ParamOwned` in `O(ret)` or `S(ret)`), with the counts per root, the held sites listed by `file:line`, and a sample of five non-held sites with the reason (an `unsafe` body, a raw read, a non-held callee). The before-figure is id:z0011's: 97 distinct sites, 85 under `src/main.zrl`. C7: the recommendation that follows from C6, for the maintainer.
 
+    - **Built (2026-11-18, on `stream/provenance` at git:cd7e10d; scratch in `build/bfd1z/`, untracked):** the word as id:2sdmk's decision (3) states it, as the patch under **Patch: the word** below (7 files, 206 lines added). It was built as `build/zoril` with `make` (no warning), checked (C1 to C4), and taken out again: the tree is at git:cd7e10d and `build/zoril` was rebuilt from it.
+      - _Layout:_ `OS_W_OWNED` is word 3 (`OS_W_FLAGS` 2, the Frame words from 4). It is written wherever ParamContents is (`os_add_contents`, `os_env_to_cap`, `os_through_split`, `os_through`), so it stays a subset of ParamContents and no rule's answer changes (`os_is_empty`, `os_external` and the edges read ParamContents, not the word).
+      - _The read rule (`os_owned_read`):_ a value that may own (`os_may_own`: a raw pointer, a box, a `fn` value, a 64-bit integer, a type parameter or an unknown type, or an aggregate holding one by value) read from memory gets ParamAddr | ParamOwned of that memory. A reference, a slice or an aggregate made only of them gets none. `os_read` applies it with the value's type, and `os_walk` with the type of the pointer at each step (`&T` none, `*T` and a `Vec`'s buffer the owning read). Every other `os_through` (the reach, unknown calls, the environment, the arena depths) keeps the owning read.
+      - _The held call:_ in `os_call`'s tie arm, for a callee whose `os_ret_held` has bit i (not in `os_ret_addr`, not `os_in_cycle`), the first read through the argument is the non-owning one (`os_through_plus_held`).
+      - _The summary:_ `ILFunction.os_ret_owned` joins ParamAddr and ParamOwned of O(ret) and S(ret). It is every bit when the body has an `unsafe` block or is an `unsafe fn` (`ZirFunction.has_unsafe`, set by the lowerer, also for a body lowered inside an `unsafe` block), calls an `extern`, or returns an Unknown, Raw or Frame origin. `os_ret_held` = `os_ret_contents & !os_ret_addr & !os_ret_owned`. An import reads every bit unheld (the `.zri` key is H2's). `--emit-origins` prints `  held ParamContents(i)` after the `return` line when the pass's held mask is not 0. The set lines are unchanged, so the `// ORIGINS:` goldens do not see the word.
+    - **Finding A, integers must stay owning reads:** a plain `as` cast turns an integer into a pointer with no Raw origin (`lower_cast` emits `ZirRvalue.Cast`, and only `@ptr_from_int` adds Raw). `subslice` does exactly that (`stdlib/core0.zrl:38`, `(s.ptr as usize + start) as *mut u8`), and its body ties the result to all three arguments. So an owned address kept in an integer field, read by a held-looking body and passed to such a callee, would come back as a pointer into owned storage with nothing in the sets to show it. That is why `os_may_own` answers yes for a 64-bit integer. It costs `fmt/doc.zrl:78` (`DocCmd` has integer fields) and `Lexer.text_from`, whose `(self.pos - start)` reaches `subslice`'s length.
+    - **Finding B, P9's class inside one body (for H3):** a body that stores a view of the referent's own buffer into the referent and reads it back, `t.names.push(t.buf.as_slice()); return *t.names.get(0).unwrap();`, gets a held bit: the slice read from `t.names` is non-owning by the rule. That is decision (2)'s invariant: the caller has to hold a borrow of `t.buf` in `t`, which is id:z0044's to record (P9). No safeguard was added for it here. H3's P9 check should include this one-body form beside the two-function one.
+    - **Finding C, `@slice`'s length:** `@slice(p, n)` lowers to a slice `StructLiteral` of `[p, n]`, so the slice holds `n`'s origins. A read of a slice's `.len` already carries none (`os_walk`'s `walk_len`). Reading only `p` there (variant L, patch below) frees one more site, `Lexer.text_from`. It is a separate precision change that makes the rules accept more (fewer origins in every `@slice` result), so it needs the rejection differential and is not part of this task.
+    - **C6, the sites (`build/bfd1z/measure.sh`, the report patch below, over the five roots and the 743 test programs of `build/mztqb/m_base/tests_compiled.txt`; every root compiles):** a site is a function whose body ties its result to a parameter that its `#[borrows(..)]` (82 sites), `#[unsafe(borrows(..))]` (2) or elision default (14, the ties `os_infer_ties` adds) leaves out, with the type tests of id:z0011's check. There are **98 distinct sites** (id:z0011's figure was 97). 84 are in `src/` and `tools/`, the same as id:mztqb's 84, and 14 are in stdlib and the tests' own declarations.
+      - _By root:_ `src/main.zrl` 81 sites (1 of them stdlib), 5 held; zbuild 6 (4 stdlib), 0 held; zilc 6, 0 held; zman 1 (stdlib), 0; ztest 1 (stdlib), 0; the test programs 14 (8 stdlib), 0.
+      - _Held (5):_ `src/check_zir.zrl:4049` `ZirVerifier::type_decl_copy`, `src/lower_zir/utils.zrl:536` `ZirLowerer::type_decl_copy`, `src/mono.zrl:1056` `Monomorphizer::instance_type_params`, `:1072` `instance_type_args`, `:1133` `resolve_in_impl`, each for `self`.
+      - _Not held, by reason:_ 51 have an `unsafe` block or an `extern` call (42 in `src/`, 1 in zilc), which inference may not read by design. 18 return ParamAddr, an address into the referent itself, which no held tie would free (`src/lexer.zrl:43`, `src/lower_zir/decl.zrl:744`, `:1094`, `src/lower_zir/expr.zrl:176`, `:1518`, `:1545`, `:2679`, `:2691`, `:2718`, `:3796`, `src/lower_zir/utils.zrl:657`, `:3493`, and in stdlib and tests `bufio.zrl:36`, `:234`, `iter.zrl:26`, `lib_ties.zrl:10`, `inferred_ties_safe_twins_accepted.zrl:11`, `:14`). 21 have ParamOwned (an owning read: a raw pointer such as the lowerer's arena, a `Vec`'s buffer, an integer, or a callee that is not held). 3 are mixed by instance (`expr.zrl:3143`, `lower_match.zrl:1077`, `src/main.zrl:676`).
+      - _The 13 stdlib sites of id:z0011:_ none is a site to free now. `Clone for Vec<T>`, `String`, `Option<T>` and `[T]` lost their `#[borrows()]` (git:4241f2c, git:cd7e10d). `read_to_end_sized_raw` declares `#[borrows(arena)]`. `Args.get` and `Args.next` are trusted (`args.zrl:47`: the body has `unsafe`; `:87`: ParamOwned through `get`). The seven elision-default ones (`bufio.zrl:36`, `:234`, `iter.zrl:26`, `string.zrl:186`, `:326`, `vec.zrl:155`, and `map`'s `Self`) are inferred since git:21658fa, and none is held (three ParamAddr, three `unsafe`).
+      - _Five non-held sites with the reason:_ `src/lexer.zrl:43` `Lexer.new`, `#[borrows(source)]` leaving out `table`: the result stores `table as *mut InternTable`, ParamAddr; a real tie, so an exemption. `src/check_zir.zrl:1475` `place_in_arena`: `unsafe` allocation in `self.arena`. `src/lower_zir/exhaust.zrl:97` `exh_ctor_field_types`: `self.alloc_u32s(..)` allocates through the raw `self.arena`, an owning read. That is H2's trusted shape (the arena is held), not inference. `src/fmt/doc.zrl:78` `cmd_at`: `self.cmds.as_slice()[i]` reads a `DocCmd` whose integer fields make it an owning read (Finding A). `src/lexer.zrl:241` `Lexer.text_from`: the length `(self.pos - start)` is an integer read through `self`, and `subslice` ties its result to it (Findings A and C).
+      - _Upper bounds:_ variant L (Finding C) gives 6 held; variant I, integers as non-owning reads (unsound by Finding A; only a ceiling), gives 10 (L's 6 plus `fmt/doc.zrl:78`, `parser/decl.zrl:359`, `zil_parse.zrl:843` and the test's own `popped_integer_carries_no_address_accepted.zrl:13`).
+    - **C7, the recommendation:** the count is small: 5 of the 84 `src/` and `tools/` sites (6 with Finding C, 10 at the unsound ceiling). 51 are `unsafe` bodies and 18 point into the referent itself, which a held tie cannot free whatever its rule. So by the maintainer's decision of 2026-11-18 (in id:2sdmk), id:42ae2, id:mqh84 and id:22qty move to `future.tm.md`, to resume after id:z0012, and the word is not committed. id:mrdtf goes ahead without them. Its five held sites, and `text_from` if Finding C lands, are the ones H2 and H3 would later free by inference; until then they are exemptions like the rest. When H2 resumes, it starts by applying the patch below, since H2's `ret_held` bit is this word's.
+    - **Measurement scripts** (copy into `build/bfd1z/`, run from the repository root). `mk.sh SRCDIR OUT` builds a scratch compiler from a copy of `src/` with `build/zoril` (the `as` warning `0x8000000000000000 shortened to 0x0` it prints is in id:mztqb's scratch build too, not in `make`'s). `measure.sh ZORIL OUT` collects the `HELDSITE` lines; `bysite.sh OUT` groups them by `file:line`. For C6: `cp -r src build/bfd1z/src_m`, apply the word and the report patch there, `mk.sh build/bfd1z/src_m build/bfd1z/zoril.m`, `measure.sh build/bfd1z/zoril.m build/bfd1z/m`, `bysite.sh build/bfd1z/m`. Variants L and I are applied on top of `src_m`.
+    ```sh
+    # mk.sh
+    S=$1; O=$2
+    timeout -k 5s 300s build/zoril -I stdlib=stdlib -I "$S" -I build/gen --emit-zil -o "$O.zil" "$S/main.zrl" > "$O.log" 2>&1 || { echo "zoril failed"; tail -5 "$O.log"; exit 1; }
+    timeout -k 5s 300s build/zilc "$O.zil" "$O.ssa" >> "$O.log" 2>&1 || { echo "zilc failed"; exit 1; }
+    qbe -o "$O.s" "$O.ssa" && as -o "$O.o" "$O.s" && ld -o "$O" "$O.o" build/runtime.o || exit 1
+    echo "built $O"
+    # measure.sh
+    Z=$1; O=$2; mkdir -p $O; : > $O/sites.txt
+    for root in src/main.zrl tools/zilc/src/main.zrl tools/zbuild/src/main.zrl tools/zman/src/main.zrl tools/ztest/src/main.zrl; do
+      timeout -k 5 300 $Z -I stdlib=stdlib -I $(dirname $root) -I src -I build/gen --emit-zil -o /dev/null $root > $O/root.log 2>&1
+      echo "$root rc=$?" >> $O/roots_rc.txt
+      grep HELDSITE $O/root.log | sed "s|^|ROOT $root: |" >> $O/sites.txt
+    done
+    while read -r tf; do
+      fl=$(sed -n 's|^// flags: ||p' $tf | head -1)
+      timeout -k 5 30 $Z -I stdlib=stdlib -I $(dirname $tf) $fl --emit-zil -o /dev/null $tf > /dev/null 2>$O/t.err
+      grep HELDSITE $O/t.err | sed "s|^|TEST $tf: |" >> $O/sites.txt
+    done < build/mztqb/m_base/tests_compiled.txt
+    echo "$O $(grep -c '' $O/sites.txt)"
+    # bysite.sh
+    D=$1
+    sed 's/^[A-Z]* [^ ]*: //' $D/sites.txt | sed 's/:\([0-9]*\):[0-9]*: warning: HELDSITE/:\1 /' | sort -u > $D/distinct.txt
+    awk '{split($1,a,":"); site=a[1]":"a[2]; k=$2; st=($NF=="held=yes")?"held":$NF; key=site" "k; if(!(key in s)) {s[key]=st; order[++n]=key} else if (s[key]!=st && index(s[key],st)==0) s[key]=s[key]","st} END{for(i=1;i<=n;i++) print order[i], s[order[i]]}' $D/distinct.txt | sort > $D/bysite.txt
+    ```
+    - **Patch: the report** (`build/bfd1z/report.patch`, on top of the word; it prints a `HELDSITE` warning per site in any mode):
+    ```diff
+    --- a/src/check_zir.zrl	2026-11-18 21:00:14.931752854 +0000
+    +++ b/src/check_zir.zrl	2026-11-18 21:03:10.155552509 +0000
+    @@ -8449,8 +8449,61 @@
+     // A body in a recursive cycle gets its ties once the cycle's summaries are final, after the
+     // borrow checks of the cycle's own bodies ran; those read a call into the cycle as tied to every
+     // argument instead (inherit_rv_borrows, ILFunction.os_in_cycle).
+    +// Scratch (id:bfd1z measurement only): each result tie a declaration or the elision default
+    +// leaves out, and whether it is held.
+    +fn os_held_report(c: &mut OriginSets, module: &ILModule, f: &ILFunction) {
+    +    if f.from_interface || f.is_extern { return; }
+    +    if f.params_len > 0 as usize
+    +        && type_name_is(c.table.lookup(f.param(f.params_len - 1 as usize).name), "__env") {
+    +        return;
+    +    }
+    +    if f.ret_ty != 0 as u32 && !module.type_holds_reference(f.ret_ty, 0 as usize) { return; }
+    +    let base = if f.params_len > 0 as usize && f.param(0).name == c.sret_name { 1 as usize } else { 0 as usize };
+    +    let missing = os_body_ties(c, module, f) & !f.ret_ties;
+    +    let mut i = 0 as usize;
+    +    while i < 63 as usize {
+    +        if (missing >> (i as u64)) & 1 as u64 != 0 as u64 && i + base < f.params_len
+    +            && module.type_holds_reference(f.param(i + base).ty, 0 as usize) {
+    +            let bit = (1 as u64) << (i as u64);
+    +            diag_start(c.file, f.decl_span, "warning");
+    +            eprint("HELDSITE ");
+    +            eprint(if f.has_borrows { if f.borrows_trusted { "trusted" } else { "borrows" } } else { "default" });
+    +            eprint(" fn=");
+    +            eprint(c.table.lookup(f.name));
+    +            eprint(" param=");
+    +            eprint(c.table.lookup(f.param(i + base).name));
+    +            if f.os_ret_held & bit != 0 as u64 {
+    +                eprint(" held=yes\n");
+    +            } else {
+    +                eprint(" held=no reason=");
+    +                let r = 2 as usize * c.nl;
+    +                let o = r * c.words;
+    +                let s = o + c.words;
+    +                if c.held_spoiled {
+    +                    eprint("unsafe-or-extern");
+    +                } else if (c.buf[o + OS_W_FLAGS] | c.buf[s + OS_W_FLAGS]) & ORIGIN_UNKNOWN != 0 as u64 {
+    +                    eprint("unknown-origin");
+    +                } else if (c.buf[o + OS_W_FLAGS] | c.buf[s + OS_W_FLAGS]) & ORIGIN_RAW != 0 as u64 {
+    +                    eprint("raw-origin");
+    +                } else if f.os_ret_owned == 0xffffffffffffffff as u64 && f.os_in_cycle {
+    +                    eprint("cycle");
+    +                } else if f.os_ret_owned == 0xffffffffffffffff as u64 {
+    +                    eprint("frame-or-earlier-pass");
+    +                } else if (c.buf[o + OS_W_ADDR] | c.buf[s + OS_W_ADDR]) & bit != 0 as u64 {
+    +                    eprint("param-addr");
+    +                } else {
+    +                    eprint("param-owned");
+    +                }
+    +                eprint("\n");
+    +            }
+    +        }
+    +        i = i + 1 as usize;
+    +    }
+    +}
+    +
+     pub fn os_infer_ties(c: &mut OriginSets, module: &mut ILModule, idx: usize) {
+         let f = module.functions[idx];
+    +    os_held_report(c, module, &f);
+         if f.has_borrows || f.from_interface || f.is_extern { return; }
+         if f.params_len > 0 as usize
+             && type_name_is(c.table.lookup(f.param(f.params_len - 1 as usize).name), "__env") {
+    ```
+    - **Patch: variant L** (`build/bfd1z/variant_L.patch`, on top of the report) **and variant I** (`variant_I.patch`):
+    ```diff
+    --- build/bfd1z/src_m/check_zir.zrl	2026-11-18 21:03:10.155552509 +0000
+    +++ build/bfd1z/src_L/check_zir.zrl	2026-11-18 21:05:14.689542958 +0000
+    @@ -8764,6 +8764,10 @@
+                 let _ = os_read(c, module, locals, &a, vo, vs);
+                 let _ = os_read(c, module, locals, &b, vo, vs);
+             },
+    +        ZirRvalue.StructLiteral(sty, args) if sty != 0 as u32 && sty as usize <= module.types.len()
+    +            && os_type_def_tag(module, sty) == ILTYPE_SLICE && args.len == 2 as usize => {
+    +            let _ = os_read(c, module, locals, &args[0], vo, vs);
+    +        },
+             ZirRvalue.StructLiteral(_, args)
+                 | ZirRvalue.Tuple(args)
+                 | ZirRvalue.Array(_, args)
+    --- build/bfd1z/src_m/check_zir.zrl	2026-11-18 21:03:10.155552509 +0000
+    +++ build/bfd1z/src_I/check_zir.zrl	2026-11-18 21:05:14.692346418 +0000
+    @@ -6292,7 +6292,7 @@
+                 | ILType.BoxedMut(_)
+                 | ILType.Fn(_)
+                 | ILType.Var(_) => { yes = true; },
+    -        ILType.Primitive(_) => { yes = os_carries(c, module, ty); },
+    +        ILType.Primitive(_) => {},
+             ILType.Array(a) => { yes = os_may_own(c, module, a.element); },
+             ILType.Tuple(elems) => {
+                 for e in elems {
+    ```
+    - **Patch: the word** (`build/bfd1z/word.patch`, against git:cd7e10d; `git apply --check` passes there):
+    ```diff
+    diff --git a/src/check_zir.zrl b/src/check_zir.zrl
+    index a6af5c4..074c751 100644
+    --- a/src/check_zir.zrl
+    +++ b/src/check_zir.zrl
+    @@ -5627,13 +5627,20 @@ pub fn compute_ret_storage_zir(
+     //
+     // A set is `words` u64s in `buf`: word OS_W_ADDR holds ParamAddr(i), what argument i itself holds,
+     // and OS_W_CONTENTS ParamContents(i), the memory reached through it (§3, _The summary_; bit 63
+    -// stands for parameter 63 and every later one), word OS_W_FLAGS the ORIGIN_* flags, and the rest
+    -// Frame(L) by local id. Set k = L is O(L), k = nl + L is S(L), k = 2 * nl and 2 * nl + 1 the
+    -// return value's O and S, and the OS_T_* temporaries follow.
+    +// stands for parameter 63 and every later one), word OS_W_FLAGS the ORIGIN_* flags, word
+    +// OS_W_OWNED ParamOwned(i), and the rest Frame(L) by local id. Set k = L is O(L), k = nl + L is
+    +// S(L), k = 2 * nl and 2 * nl + 1 the return value's O and S, and the OS_T_* temporaries follow.
+    +//
+    +// ParamOwned(i) is a subset of ParamContents(i): the address may point into argument i's referent
+    +// or into storage the referent owns, not only into what the referent holds as a borrow (§3, _Held
+    +// ties_). No rule reads it; it decides the summary's held ties (os_held_ties). It is written with
+    +// every ParamContents, except by a read of a value that cannot own storage (os_may_own) and by a
+    +// call whose tie is held, which is what keeps the subset strict where it is.
+     const OS_W_ADDR: usize = 0;
+     const OS_W_CONTENTS: usize = 1;
+     const OS_W_FLAGS: usize = 2;
+    -const OS_W_FRAME: usize = 3;
+    +const OS_W_OWNED: usize = 3;
+    +const OS_W_FRAME: usize = 4;
+     pub const ORIGIN_STATIC: u64 = 1;
+     pub const ORIGIN_UNKNOWN: u64 = 2;
+     // An address `@ptr_from_int` made, which the programmer vouched for in `unsafe` code (§3, _Raw
+    @@ -5761,6 +5768,12 @@ pub struct OriginSets {
+         // Per local built by a literal, a bit for each element overwritten before it is seen
+         // (os_dead_inits).
+         pub dead_init: [mut u64],
+    +    // os_may_own, memoised as carries_memo is.
+    +    pub may_own_memo: [mut u8],
+    +    // The body can hide an owned pointer from the sets: it has an `unsafe` block, is an `unsafe
+    +    // fn`, or calls an `extern` (a copy through `memcpy`, a raw write). Its result gets no held
+    +    // tie (os_held_ties).
+    +    pub held_spoiled: bool,
+     }
+     
+     const OS_NO_ENV: usize = 0xffffffff;
+    @@ -5856,18 +5869,35 @@ fn os_add_contents(c: &mut OriginSets, set: usize, i: usize) {
+         let bit = if i < 63 as usize { i } else { 63 as usize };
+         let w = set * c.words + OS_W_CONTENTS;
+         c.buf[w] = c.buf[w] | ((1 as u64) << (bit as u64));
+    +    let o = set * c.words + OS_W_OWNED;
+    +    c.buf[o] = c.buf[o] | ((1 as u64) << (bit as u64));
+    +}
+    +
+    +// The ParamOwned bits of a value of a type that can own (OWNING) read from the memory at word
+    +// offset S: the referent itself (ParamAddr) and what it owns. What memory the referent only
+    +// borrows holds points into more of what it borrows. A value that cannot own (a reference, a
+    +// slice) read from any of it points into what the referent holds as a borrow (§3, _Held ties_):
+    +// that is the invariant the store and push rules keep, and `unsafe` code must keep
+    +// (doc/spec/unsafe_policy.md §3).
+    +fn os_owned_read(c: &OriginSets, s: usize, owning: bool) -> u64 {
+    +    if !owning { return 0 as u64; }
+    +    return c.buf[s + OS_W_ADDR] | c.buf[s + OS_W_OWNED];
+     }
+     
+     // DST = what is stored in the memory SRC names: for each Frame(L), the addresses L holds and the
+     // storage L owns, which is reached through L too; memory reached through parameter i, by its own
+     // value (ParamAddr) or deeper (ParamContents), holds ParamContents(i); Static and Unknown
+     // memory holds only more of the same origin. This is the read-through rule that settles the design
+    -// note's open question (§3).
+    -fn os_through(c: &mut OriginSets, src: usize, dst: usize) {
+    +// note's open question (§3). The value read may be of any type.
+    +fn os_through(c: &mut OriginSets, src: usize, dst: usize) { os_through_as(c, src, dst, true); }
+    +
+    +// os_through of a value that can own storage (OWNING) or cannot (os_owned_read).
+    +fn os_through_as(c: &mut OriginSets, src: usize, dst: usize, owning: bool) {
+         os_clear(c, dst);
+         let s = src * c.words;
+         let d = dst * c.words;
+         c.buf[d + OS_W_CONTENTS] = c.buf[s + OS_W_ADDR] | c.buf[s + OS_W_CONTENTS];
+    +    c.buf[d + OS_W_OWNED] = os_owned_read(c, s, owning);
+         c.buf[d + OS_W_FLAGS] = c.buf[s + OS_W_FLAGS];
+         let mut id = 1 as usize;
+         while id < c.nl {
+    @@ -5882,14 +5912,18 @@ fn os_through(c: &mut OriginSets, src: usize, dst: usize) {
+     // The value read from the memory SRC names, kept apart as a direct read keeps it (§3: S(src) when
+     // L is moved or copied from src): DST_O gets what each Frame(L) holds, DST_S what it owns. A move
+     // out of a payload or a box then stays an owner instead of becoming a borrow of its source.
+    -fn os_through_split(c: &mut OriginSets, src: usize, dst_o: usize, dst_s: usize) {
+    +// OWNING is os_through_as's.
+    +fn os_through_split(c: &mut OriginSets, src: usize, dst_o: usize, dst_s: usize, owning: bool) {
+         let s = src * c.words;
+         let o = dst_o * c.words;
+         let d = dst_s * c.words;
+         let contents = c.buf[s + OS_W_ADDR] | c.buf[s + OS_W_CONTENTS];
+    +    let owned = os_owned_read(c, s, owning);
+         c.buf[o + OS_W_CONTENTS] = c.buf[o + OS_W_CONTENTS] | contents;
+    +    c.buf[o + OS_W_OWNED] = c.buf[o + OS_W_OWNED] | owned;
+         c.buf[o + OS_W_FLAGS] = c.buf[o + OS_W_FLAGS] | c.buf[s + OS_W_FLAGS];
+         c.buf[d + OS_W_CONTENTS] = c.buf[d + OS_W_CONTENTS] | contents;
+    +    c.buf[d + OS_W_OWNED] = c.buf[d + OS_W_OWNED] | owned;
+         c.buf[d + OS_W_FLAGS] = c.buf[d + OS_W_FLAGS] | c.buf[s + OS_W_FLAGS];
+         let mut id = 1 as usize;
+         while id < c.nl {
+    @@ -5912,6 +5946,18 @@ fn os_through_plus(c: &mut OriginSets, src: usize, dst: usize) {
+         }
+     }
+     
+    +// os_through_plus for a callee whose result is held for this argument (ILFunction.os_ret_held):
+    +// the first read yields what the referent holds as a borrow, which owns nothing of it, and the
+    +// reads after it follow from there. What a Frame(L) the argument names holds comes as it is.
+    +fn os_through_plus_held(c: &mut OriginSets, src: usize, dst: usize) {
+    +    os_through_as(c, src, dst, false);
+    +    let tb = os_t(c, OS_T_B);
+    +    loop {
+    +        os_through(c, dst, tb);
+    +        if !os_or(c, dst, tb) { break; }
+    +    }
+    +}
+    +
+     // DST = SRC and everything reached through it.
+     fn os_reach_all(c: &mut OriginSets, src: usize, dst: usize) {
+         let tc = os_t(c, OS_T_C);
+    @@ -6226,6 +6272,59 @@ fn os_has_drop(c: &OriginSets, module: &ILModule, name: u32) -> bool {
+     // of the four standard-library collections designated as owners until they get a Drop of their own,
+     // or contains an owning type by value. A raw pointer, a reference, a slice and a function value own
+     // nothing. An unknown type owns.
+    +// Whether a value of type TY, read from memory, may point into storage that memory's owner owns
+    +// (os_owned_read): it holds by value a raw pointer, a box, a `fn` value, an integer that can carry
+    +// an address, or a type not known yet. A reference or a slice cannot (§3, _Held ties_), and
+    +// neither can a value made only of them. An unknown type can.
+    +fn os_may_own(c: &mut OriginSets, module: &ILModule, ty: u32) -> bool {
+    +    if ty == 0 as u32 || ty as usize > module.types.len() { return true; }
+    +    let memo = c.may_own_memo[ty as usize];
+    +    if memo != 0 as u8 { return memo != 1 as u8; }
+    +    // A cycle closes only through a pointer or a box, which answer for themselves; a cycle met
+    +    // while being asked answers yes, the strict side.
+    +    c.may_own_memo[ty as usize] = 3 as u8;
+    +    let mut yes = false;
+    +    match module.types[ty as usize - 1 as usize].def {
+    +        ILType.Ptr(_) | ILType.PtrMut(_) | ILType.Slice(_) | ILType.FD(_) | ILType.IORing => {},
+    +        ILType.RawPtr(_)
+    +            | ILType.RawPtrMut(_)
+    +            | ILType.Boxed(_)
+    +            | ILType.BoxedMut(_)
+    +            | ILType.Fn(_)
+    +            | ILType.Var(_) => { yes = true; },
+    +        ILType.Primitive(_) => { yes = os_carries(c, module, ty); },
+    +        ILType.Array(a) => { yes = os_may_own(c, module, a.element); },
+    +        ILType.Tuple(elems) => {
+    +            for e in elems {
+    +                if os_may_own(c, module, *e) { yes = true; }
+    +            }
+    +        },
+    +        ILType.User(u) => {
+    +            if u.id == 0xffffffff as u32 || u.id as usize >= module.typedefs.len() {
+    +                yes = true;
+    +            } else {
+    +                match module.typedefs[u.id as usize] {
+    +                    ILTypeDef.Struct(st) => {
+    +                        for f in st.fields {
+    +                            if os_may_own(c, module, f.ty) { yes = true; }
+    +                        }
+    +                    },
+    +                    ILTypeDef.Enum(en) => {
+    +                        for v in en.variants {
+    +                            if v.payload != 0 as u32 && os_may_own(c, module, v.payload) {
+    +                                yes = true;
+    +                            }
+    +                        }
+    +                    },
+    +                    ILTypeDef.Fn(_) => { yes = true; },
+    +                }
+    +            }
+    +        },
+    +    }
+    +    c.may_own_memo[ty as usize] = if yes { 2 as u8 } else { 1 as u8 };
+    +    return yes;
+    +}
+    +
+     fn os_owns(c: &mut OriginSets, module: &ILModule, ty: u32) -> bool {
+         if ty == 0 as u32 || ty as usize > module.types.len() { return true; }
+         let memo = c.owns_memo[ty as usize];
+    @@ -6466,8 +6565,12 @@ fn os_cap_bits(c: &mut OriginSets, module: &ILModule, locals: [Local]) {
+     // In SET, the value capture alias ID was loaded from the environment: ParamContents(`__env`)
+     // becomes the capture's own bit.
+     fn os_env_to_cap(c: &mut OriginSets, set: usize, id: usize) {
+    -    let w = set * c.words + OS_W_CONTENTS;
+         let e = (1 as u64) << (c.env_param as u64);
+    +    let mut w = set * c.words + OS_W_CONTENTS;
+    +    if c.buf[w] & e != 0 as u64 {
+    +        c.buf[w] = (c.buf[w] & !e) | ((1 as u64) << (c.cap_bit[id] as u64));
+    +    }
+    +    w = set * c.words + OS_W_OWNED;
+         if c.buf[w] & e != 0 as u64 {
+             c.buf[w] = (c.buf[w] & !e) | ((1 as u64) << (c.cap_bit[id] as u64));
+         }
+    @@ -6772,7 +6875,10 @@ fn os_walk(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place) ->
+             }
+             if steps_in {
+                 if crossed {
+    -                os_through(c, tm, ta);
+    +                // The pointer read is of type TY: a reference or a slice leads into what the
+    +                // memory's owner borrows, a raw pointer may lead into what it owns.
+    +                let owning = os_may_own(c, module, ty);
+    +                os_through_as(c, tm, ta, owning);
+                     os_copy(c, tm, ta);
+                 } else {
+                     let _ = os_or(c, tm, p.base as usize);
+    @@ -6862,10 +6968,11 @@ fn os_read(
+         let tm = os_t(c, OS_T_M);
+         let ta = os_t(c, OS_T_A);
+         os_clear(c, ta);
+    +    let owning = os_may_own(c, module, ty);
+         if os_owns(c, module, ty) {
+    -        os_through_split(c, tm, dst_o, dst_s);
+    +        os_through_split(c, tm, dst_o, dst_s, owning);
+         } else {
+    -        os_through_split(c, tm, dst_o, ta);
+    +        os_through_split(c, tm, dst_o, ta, owning);
+         }
+         return ty;
+     }
+    @@ -7630,7 +7737,7 @@ fn os_check_closure_value(
+         let es = os_t(c, OS_T_D);
+         os_clear(c, eo);
+         os_clear(c, es);
+    -    os_through_split(c, ao, eo, es);
+    +    os_through_split(c, ao, eo, es, true);
+         if !f.os_known {
+             // No summary yet: what the closure stores is not known, so its environment may not hold
+             // an address of this frame at all.
+    @@ -7845,7 +7952,7 @@ fn os_arg_read(
+         os_copy(c, ta, tao);
+         os_clear(c, tao);
+         os_clear(c, tas);
+    -    os_through_split(c, ta, tao, tas);
+    +    os_through_split(c, ta, tao, tas, os_may_own(c, module, pty));
+         return pty;
+     }
+     
+    @@ -8088,7 +8195,7 @@ fn os_edge_effects(
+                     let es = os_t(c, OS_T_D);
+                     os_clear(c, eo);
+                     os_clear(c, es);
+    -                os_through_split(c, os_t(c, OS_T_AO), eo, es);
+    +                os_through_split(c, os_t(c, OS_T_AO), eo, es, true);
+                     os_drop_moved_storage(c, tv, eo, es);
+                 }
+             }
+    @@ -8192,6 +8299,29 @@ pub fn zir_open_call_depth(module: &ILModule, func: &ZirFunction) -> u32 {
+         return low;
+     }
+     
+    +// The parameters this pass's result, set R (O; R + 1 is S), may point into other than through
+    +// what their referents hold as a borrow (§3, _Held ties_): ParamAddr and ParamOwned in O or S.
+    +// Every parameter when the sets cannot see all the result may point into: a body that can hide an
+    +// owned pointer (held_spoiled), an Unknown or Raw origin, or a Frame one (Unknown to a caller).
+    +fn os_unheld(c: &OriginSets, r: usize) -> u64 {
+    +    let o = r * c.words;
+    +    let s = o + c.words;
+    +    let all = 0xffffffffffffffff as u64;
+    +    if c.held_spoiled { return all; }
+    +    if (c.buf[o + OS_W_FLAGS] | c.buf[s + OS_W_FLAGS]) & (ORIGIN_UNKNOWN | ORIGIN_RAW) != 0 as u64 {
+    +        return all;
+    +    }
+    +    let mut k = OS_W_FRAME;
+    +    while k < c.words {
+    +        if c.buf[o + k] != 0 as u64 { return all; }
+    +        k = k + 1 as usize;
+    +    }
+    +    return c.buf[o + OS_W_ADDR]
+    +        | c.buf[o + OS_W_OWNED]
+    +        | c.buf[s + OS_W_ADDR]
+    +        | c.buf[s + OS_W_OWNED];
+    +}
+    +
+     // This body's summary, written to its function for the calls after it (§3, _The summary_): the
+     // parameter origins of the result's O, its Static and Unknown (a Frame origin is Unknown to a
+     // caller), whether the result's S is fresh storage (a Frame or Unknown origin), and the store
+    @@ -8277,10 +8407,14 @@ pub fn store_origin_summary(
+         }
+         let addr = old.os_ret_addr | c.buf[r + OS_W_ADDR];
+         let contents = old.os_ret_contents | c.buf[r + OS_W_CONTENTS];
+    +    // A function declared with no summary starts with every bit unheld (an import keeps that).
+    +    let old_owned = if old.os_known { old.os_ret_owned } else { 0 as u64 };
+    +    let owned = old_owned | os_unheld(c, 2 as usize * c.nl);
+         flags = flags | old.os_ret_flags;
+         fresh = fresh || old.os_ret_fresh;
+         if addr != old.os_ret_addr
+             || contents != old.os_ret_contents
+    +        || owned != old.os_ret_owned
+             || flags != old.os_ret_flags
+             || fresh != old.os_ret_fresh {
+             grew = true;
+    @@ -8289,6 +8423,8 @@ pub fn store_origin_summary(
+         f.os_known = true;
+         f.os_ret_addr = addr;
+         f.os_ret_contents = contents;
+    +    f.os_ret_owned = owned;
+    +    f.os_ret_held = contents & !addr & !owned;
+         f.os_ret_flags = flags;
+         f.os_ret_fresh = fresh;
+         f.os_edges = out;
+    @@ -8383,9 +8519,11 @@ fn os_call(
+         let mut ret_fresh = false;
+         let mut edges = 0 as *mut u64;
+         let mut edge_rows = 0 as usize;
+    +    let mut held = 0 as u64;
+         if known {
+             let f = &module.functions[fn_id as usize];
+             bare_extern = f.is_extern && !f.has_summary;
+    +        if f.is_extern { c.held_spoiled = true; }
+             known = f.storage_known || bare_extern;
+             storage = f.ret_storage;
+             ties = f.ret_ties;
+    @@ -8417,6 +8555,9 @@ fn os_call(
+                 ret_fresh = f.os_ret_fresh;
+                 edges = f.os_edges;
+                 edge_rows = f.os_edge_rows;
+    +            // A summary still growing in a recursive cycle is read as held nowhere: its held
+    +            // ties may shrink as the cycle's fixpoint grows it.
+    +            held = if f.os_in_cycle { 0 as u64 } else { f.os_ret_held };
+                 from_mask = 0 as u64;
+                 to_mask = 0 as u64;
+             }
+    @@ -8502,7 +8643,11 @@ fn os_call(
+                     }
+                     if in_ties {
+                         // ParamContents(i) is what is reached through the argument, whatever its type.
+    -                    if body || aty != 0 as u32 && is_reference_tag(os_type_def_tag(module, aty)) {
+    +                    let held_i = i < 63 as usize && (held >> (i as u64)) & 1 as u64 != 0 as u64;
+    +                    if body && held_i && !in_storage {
+    +                        os_through_plus_held(c, tao, tr);
+    +                    } else if body
+    +                        || aty != 0 as u32 && is_reference_tag(os_type_def_tag(module, aty)) {
+                             os_through_plus(c, tao, tr);
+                         } else {
+                             os_reach_all(c, tao, tr);
+    @@ -8887,12 +9032,16 @@ pub fn compute_origins_zir(
+             env_caps: @slice(0 as *mut u32, 0 as usize),
+             // SAFETY: NL u64 in ARENA, as above, zeroed below before any read.
+             dead_init: unsafe { @slice(zoril_allocator_alloc(arena, nl * 8) as *mut u64, nl) },
+    +        // SAFETY: NT bytes in ARENA, as carries_memo, zeroed below before any read.
+    +        may_own_memo: unsafe { @slice(zoril_allocator_alloc(arena, nt) as *mut u8, nt) },
+    +        held_spoiled: (*func).has_unsafe,
+         };
+         unsafe {
+             memset(c.edges.ptr as *mut u8, 0, (OS_EDGE_ROWS * 3 * 8) as u64);
+             memset(c.buf.ptr as *mut u8, 0, (nsets * words * 8) as u64);
+             memset(c.carries_memo.ptr as *mut u8, 0, nt as u64);
+             memset(c.owns_memo.ptr as *mut u8, 0, nt as u64);
+    +        memset(c.may_own_memo.ptr as *mut u8, 0, nt as u64);
+             memset(c.q_memo.ptr as *mut u8, 0, (OS_Q_COUNT * nt) as u64);
+             memset(c.cap_bit.ptr as *mut u8, 0, nl as u64);
+             memset(c.known_fn.ptr as *mut u8, 0, (nl * 4) as u64);
+    @@ -9082,6 +9231,23 @@ pub fn print_origins(c: &OriginSets, func: &ZirFunction, module: &ILModule, tabl
+         print(" S=");
+         os_print_set(c, 2 as usize * c.nl + 1 as usize, locals, table);
+         print("\n");
+    +    // The held ties of this pass's result (store_origin_summary's os_ret_held, before the join).
+    +    let r = 2 as usize * c.nl;
+    +    let held = c.buf[r * c.words + OS_W_CONTENTS] & !os_unheld(c, r);
+    +    if held != 0 as u64 {
+    +        print("  held");
+    +        let mut i = 0 as usize;
+    +        while i < 64 as usize {
+    +            if (held >> (i as u64)) & 1 as u64 != 0 as u64 {
+    +                print(" ParamContents(");
+    +                let _ = write_u64(&mut out, i as u64);
+    +                if i == 63 as usize { print("+"); }
+    +                print(")");
+    +            }
+    +            i = i + 1 as usize;
+    +        }
+    +        print("\n");
+    +    }
+         // The store edges of the summary, one line per stored value (§3, _The summary_).
+         let mut r = 0 as usize;
+         while r < OS_EDGE_ROWS {
+    diff --git a/src/driver/module.zrl b/src/driver/module.zrl
+    index 02a48a0..6b16bd9 100644
+    --- a/src/driver/module.zrl
+    +++ b/src/driver/module.zrl
+    @@ -1082,6 +1082,9 @@ impl Driver {
+                 os_ret_contents: if has_os { os[1] } else { 0 as u64 },
+                 os_ret_flags: if has_os { os[2] } else { 0 as u64 },
+                 os_ret_fresh: has_os && os[3] != 0 as u64,
+    +            // An interface carries no held ties (§3, _Held ties_): none is read, the strict side.
+    +            os_ret_owned: 0xffffffffffffffff as u64,
+    +            os_ret_held: 0 as u64,
+                 os_edges: os_edges,
+                 os_edge_rows: os_rows,
+                 os_depth: 0 as u32,
+    diff --git a/src/il_cfg.zrl b/src/il_cfg.zrl
+    index 7069f7c..0e5ba44 100644
+    --- a/src/il_cfg.zrl
+    +++ b/src/il_cfg.zrl
+    @@ -160,6 +160,13 @@ pub struct ILFunction {
+         pub os_ret_contents: u64,
+         pub os_ret_flags: u64,
+         pub os_ret_fresh: bool,
+    +    // The parameters the result may point into other than through what their referents hold as
+    +    // a borrow (ParamAddr, ParamOwned), every bit when the body cannot tell; and the held ties,
+    +    // `os_ret_contents` less those (§3, _Held ties_). Read by a call's result (a held tie gives
+    +    // what the referent holds, nothing it owns); no borrow rule reads them yet, and an import
+    +    // has none.
+    +    pub os_ret_owned: u64,
+    +    pub os_ret_held: u64,
+         pub os_edges: *mut u64,
+         pub os_edge_rows: usize,
+         // While this body is being lowered, its depth on the driver's lowering stack (1 for the
+    diff --git a/src/lower_zir/decl.zrl b/src/lower_zir/decl.zrl
+    index 8d152e1..26399dd 100644
+    --- a/src/lower_zir/decl.zrl
+    +++ b/src/lower_zir/decl.zrl
+    @@ -136,6 +136,8 @@ pub struct ZirLowerer {
+         pub is_void_main: bool,
+         pub current_literal_comment: u32, // ambient: the AST-level literal comment for the statement currently being lowered, 0 if none
+         pub unsafe_depth: u32,
+    +    // The function being lowered has an `unsafe` block (ZirFunction.has_unsafe).
+    +    pub saw_unsafe: bool,
+         // Nonzero while a scope's defers are being lowered; `defer_scope_depth` is the scope being
+         // exited, so a loop entered inside the `defer` (deeper) may still `break`.
+         pub defer_depth: u32,
+    @@ -202,6 +204,7 @@ impl ZirLowerer {
+                 is_void_main: false,
+                 current_literal_comment: 0 as u32,
+                 unsafe_depth: 0 as u32,
+    +            saw_unsafe: false,
+                 defer_depth: 0 as u32,
+                 defer_scope_depth: 0 as usize,
+                 file_path: "",
+    @@ -946,6 +949,9 @@ impl ZirLowerer {
+         #[borrows()]
+         pub fn lower_function(self: &mut ZirLowerer, f: &FnDecl, mangled_name: u32) -> ZirFunction {
+             let prev_unsafe_depth = self.unsafe_depth;
+    +        let prev_saw_unsafe = self.saw_unsafe;
+    +        // A body lowered inside an `unsafe` block (a closure's) may use what that block allows.
+    +        self.saw_unsafe = f.is_unsafe || self.unsafe_depth > 0 as u32;
+             if f.is_unsafe {
+                 self.unsafe_depth = self.unsafe_depth + 1 as u32;
+             }
+    @@ -1004,6 +1010,8 @@ impl ZirLowerer {
+             // handing them out as slices is the boundary where they become safe, bounds-checked
+             // storage for the rest of the pipeline.
+             self.unsafe_depth = prev_unsafe_depth;
+    +        let has_unsafe = self.saw_unsafe;
+    +        self.saw_unsafe = prev_saw_unsafe;
+             return ZirFunction {
+                 name: mangled_name,
+                 params: unsafe { @slice(self.locals.as_ptr(), f.params.len) },
+    @@ -1016,6 +1024,7 @@ impl ZirLowerer {
+                 } else {
+                     Span { start: 0, end: 0, line: 0, col: 0 }
+                 },
+    +            has_unsafe: has_unsafe,
+             };
+         }
+     
+    diff --git a/src/lower_zir/expr.zrl b/src/lower_zir/expr.zrl
+    index f8d744d..7bad4dc 100644
+    --- a/src/lower_zir/expr.zrl
+    +++ b/src/lower_zir/expr.zrl
+    @@ -3554,6 +3554,7 @@ impl ZirLowerer {
+             // they do not switch off any other verification, per doc/spec/unsafe_policy.md §2.
+             if b.is_unsafe {
+                 self.unsafe_depth = self.unsafe_depth + 1 as u32;
+    +            self.saw_unsafe = true;
+             }
+     
+             let stmts = b.stmts;
+    diff --git a/src/zir.zrl b/src/zir.zrl
+    index 3b6ae52..94cc4d1 100644
+    --- a/src/zir.zrl
+    +++ b/src/zir.zrl
+    @@ -501,6 +501,9 @@ pub struct ZirFunction {
+         pub ret_ty: u32,
+         pub doc_comment: u32,
+         pub span: Span,
+    +    // The body has an `unsafe` block or is an `unsafe fn`: what it points into may be hidden from
+    +    // the origin sets (check_zir::OriginSets.held_spoiled).
+    +    pub has_unsafe: bool,
+     }
+     
+     pub struct ZirModule {
+    diff --git a/tools/zilc/src/zil_parse.zrl b/tools/zilc/src/zil_parse.zrl
+    index 4e0042d..40877dc 100644
+    --- a/tools/zilc/src/zil_parse.zrl
+    +++ b/tools/zilc/src/zil_parse.zrl
+    @@ -670,6 +670,8 @@ impl ZilParser {
+                     os_ret_contents: 0 as u64,
+                     os_ret_flags: 0 as u64,
+                     os_ret_fresh: false,
+    +                os_ret_owned: 0xffffffffffffffff as u64,
+    +                os_ret_held: 0 as u64,
+                     os_edges: 0 as *mut u64,
+                     os_edge_rows: 0 as usize,
+                     os_depth: 0 as u32,
+    ```
+
 - [ ] +safety +tests +AI-D @provenance B3b The `#[borrows(..)]` declarations and `&self` defaults of `src/` and `tools/` that name less than the body returns are removed, widened or made explicit exemptions id:mrdtf
     > **Created:** 2026-11-18
     > **Branch:** `provenance`
