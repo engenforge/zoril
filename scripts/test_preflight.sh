@@ -370,6 +370,11 @@ if [ $rc -eq 0 ] && [ -s "$pf_timings" ]; then
     else
         fail "preflight timings missing steps:$missing_steps (got: $(cat "$pf_timings"))"
     fi
+    if grep -Eq "^[0-9]+	figures$" "$pf_timings"; then
+        fail "preflight full mode must not run figures step (got: $(cat "$pf_timings"))"
+    else
+        pass "preflight full mode has no figures step"
+    fi
 else
     fail "expected preflight to pass and write timings (rc=$rc, out=$out)"
 fi
