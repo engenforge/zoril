@@ -21,6 +21,45 @@ Rules id:z0075 deferred: each root is seen today only in the tree's own code (ch
 
     - **From the check-in id:7kbpd (2026-11-18):** id:z0089 worked around this rule's absence with a copy in `ZirLowerer::exh_expand_or` (`1033c46`). When this rule lands, take the copy out again (`out.push(row)`) and check that `src/main.zrl` stays at 14 "into a global" warnings under `--provenance=warn`. The comment above the copy says "A row read out of a referenced Vec is an address into its buffer". That is how the rules read it, not what the program does (the row points into the lowerer's arena), so if the copy stays it should say "the provenance rules read ...".
 
+- [ ] +safety +precision +AI-G @provenance H2 `#[unsafe(borrows(*self))]` declares a result tied only to what the referent holds; the interface carries it; Vec and String clones use it id:42ae2
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+    > **Depends:** id:bfd1z
+
+    - **Placed:** after id:bfd1z, whose `ret_held` it sets by declaration; id:2sdmk's decision (4).
+    - **Moved (2026-11-18, the maintainer's decision):** from directly after id:bfd1z to directly after id:z0044, with H3 and the check-in id:22qty. H3 cannot land before id:z0044 and id:kqp9n (P9 of id:2sdmk), and a trusted form and summary bit added before id:z0011 and id:z0012 are more for those to check and carry over. H2 stays tied to H3, so it moves with it. If id:bfd1z's count is small, the three move to `future.tm.md` instead.
+    - **Stop and report first:** `Vec.empty_like` is a new `pub` stdlib method and `Clone for Vec<T>`'s body changes; both wait for the maintainer's approval of id:2sdmk.
+    - **Scope:** the parser accepts `*self` (and `*p` for a reference parameter `p`) only inside `#[unsafe(borrows(..))]`, setting the parameter's `ret_held` bit as well as its `ret_ties` bit; the interface writers keep the form and write a `ret_held` `#[summary]` key; `scripts/check_safety_comments.sh` requires a `// SAFETY:` line above it as for the other `#[unsafe(..)]`; `doc/spec/surface_syntax.md` and `doc/spec/unsafe_policy.md` name it. Stdlib: `Vec.empty_like` with the declaration, `Clone for Vec<T>` rewritten on it with no `unsafe`, `Clone for String` with the declaration.
+    - **Checks:** C1: `tests/error_reporting/` tests: `*self` in a plain `#[borrows(..)]` refused, `*x` for a by-value parameter refused. C2: `--emit-origins` on `build/2sdmk/shapes.zrl` shows a held bit for `cl` (`Vec<[u8]>`) and none for `Vec<S>.clone` (P2). C3: `tests/modular/iface_attrs/` case: the `.zri` of a module with the declaration has `ret_held`, and an importer reads it (the key removed from the `.zri` by hand: the importer's held bit is gone). C4: `make test`, `make preflight-changed`, rejection differential with no newly accepted program (the borrow checker does not read `ret_held` until H3).
+
+    - **Deferred (2026-11-18, by the maintainer's decision recorded in id:2sdmk):** id:bfd1z counted 5 held sites among the 84 of `src/` and `tools/`, which is small, so H2, H3 and id:22qty move to `future.tm.md`, to resume after id:z0012.
+    - **Start from id:bfd1z's patch:** the word and `ILFunction.os_ret_held` this task sets by declaration were not committed. Apply id:bfd1z's **Patch: the word** first, re-run its C1 to C4, and write the design note paragraph and the `unsafe` obligation that id:bfd1z's scope named. Also read its Findings A to C.
+
+- [ ] +safety +precision +AI-G @provenance H3 A call tied to an argument only through what its referent holds borrows what the referent holds, not the referent, so probe 307 is accepted id:mqh84
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+    > **Depends:** id:42ae2, id:z0044, id:kqp9n
+
+    - **Placed:** after id:42ae2; id:2sdmk's decision (2), and id:2sdmk's checks C1 to C3.
+    - **Moved (2026-11-18, the maintainer's decision):** with id:42ae2, to after id:z0044; its blockers id:z0044 and id:kqp9n are now before it (see id:42ae2).
+    - **Scope:** `inherit_rv_borrows`'s `Call` arm reads the callee's `ret_held`, as decision (2) says; P1 to P8 of id:2sdmk become tests (`tests/language/memory/` or probes) with their expected verdicts; probe 307 flipped to `accept`.
+    - **Checks:** C1: probe 307 `accept`; gap_77, P1, P2, P3, P5, P6, P8 and P9 refused, each as a test. C2: with the copy of the referent's borrows taken out (the direct borrow dropped, nothing copied), P3 and P5 are accepted (the check sees the defect); restored, refused. C3: P7: `sh scripts/run_safety_matrix.sh` with 0 mismatches, and the `safety-matrix-zbuild` and `zbuild-diff` gates pass. C4: `make test`, `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, every newly accepted program listed with its reason.
+    - **Ends with a check-in:** the `@checkin` task after it reviews H2 and H3.
+
+    - **Deferred (2026-11-18, by the maintainer's decision recorded in id:2sdmk):** id:bfd1z counted 5 held sites among the 84 of `src/` and `tools/`, which is small, so H2, H3 and id:22qty move to `future.tm.md`, to resume after id:z0012.
+    - **Check to add:** id:bfd1z's Finding B, P9's class inside one body, beside P9.
+
+- [ ] +safety +AI-D @provenance @checkin Check-in: review H2 and H3 (the trusted held declaration, and the caller rule that frees probe 307) id:22qty
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+    > **Depends:** id:42ae2, id:mqh84
+
+    - **Placed:** directly after id:mqh84, the batch it reviews (H2, H3; H1 is `+AI-D` and closes itself).
+    - **Moved (2026-11-18, the maintainer's decision):** with id:42ae2 and id:mqh84, to stay directly after the batch it reviews.
+    - **Review:** re-run H3's C1 to C3 and P1 to P8 of id:2sdmk; probe the sibling routes: a held tie through a trait call resolved per instance, a `Box` receiver, a field receiver (`s.v.clone()`), a `match` binding receiver, and an import whose `.zri` has no `ret_held` key.
+
+    - **Deferred (2026-11-18, by the maintainer's decision recorded in id:2sdmk):** id:bfd1z counted 5 held sites among the 84 of `src/` and `tools/`, which is small, so H2, H3 and id:22qty move to `future.tm.md`, to resume after id:z0012.
+
 ## The `Box` drop series (id:z0019 to id:z0028)
 
 Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.md` §5): a leak, which does not break memory safety. The series makes a `Box` free its allocation and drop its contents at scope end without ever shipping a free that some route can observe. **Invariants for every task in it:** (1) the leak stays the default until id:z0028; the freeing code is built behind an off-by-default option, `--box-free` (`zoril` and `zbuild`), so the tree is releasable after every task; (2) the routes that would observe a freed `Box` are closed first (id:z0019 to id:z0023), each a `+safety` change with probes, accepted twins and the rejection differential; (3) each task ends open with an `Awaiting review` bullet and is fix-reviewed by another model before the next starts; (4) the two drop predicates, `type_needs_drop_internal` (`src/lower_zir/utils.zrl`) and `zil_type_needs_drop` (`src/lower_zir_to_zil.zrl`), change together; (5) build warning-free under stage1 (`make preflight-changed`), keep the `if absent_type { return false; }` lines of both predicates textually intact (mutation anchors), add no `zoril_*` symbol in `src/` (`scripts/check_runtimes.sh`), and regenerate `corpus/zrl_whole_program_zil.sha256` in a commit of its own when output changes. **Order:** id:z0019 to id:z0023 in any order; then id:z0024 to id:z0028 in sequence.
