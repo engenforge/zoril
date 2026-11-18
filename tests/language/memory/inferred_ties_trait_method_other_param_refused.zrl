@@ -1,0 +1,24 @@
+// expected compile fail
+// EXPECT: cannot mutably borrow 'a' while it is already borrowed
+// The trait form: an impl of a trait method whose body returns its other argument, called
+// on the concrete type.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+trait Pick { fn pick(self: &Self, x: [u8]) -> [u8]; }
+struct S { k: i32 }
+impl Pick for S {
+    fn pick(self: &S, x: [u8]) -> [u8] { return x; }
+}
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v = Vec::<u8>.new_in(&a);
+    v.push(42 as u8);
+    let s = S { k: 1 };
+    let r = s.pick(v.as_slice());
+    a.reset();
+    let mut v2 = Vec::<u8>.new_in(&a);
+    v2.push(77 as u8);
+    return r[0] as i32;
+}

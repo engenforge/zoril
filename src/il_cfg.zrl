@@ -117,10 +117,14 @@ pub struct ILFunction {
     pub storage_known: bool,
     pub summary_ret_stack: bool,
     // Which parameters a returned reference/pointer may point into (bit i = parameter i,
-    // counted without sret/env): `#[borrows(...)]` if given, else Rust's elision rules.
-    // Consulted by the borrow checker and the region-escape verifier at each call.
+    // counted without sret/env): `#[borrows(...)]` if given, else Rust's elision rules, with the
+    // body's own ties added to the latter (check_zir::os_infer_ties). Consulted by the borrow
+    // checker and the region-escape verifier at each call.
     pub ret_ties: u64,
     pub has_borrows: bool,
+    // The body added ties to the elision default: the interface writes them out as
+    // `#[borrows(..)]`, since an importer would derive only the default from the signature.
+    pub ties_inferred: bool,
     // This function is (or is the imported interface of) the standard library's
     // `mem::Arena::{mark, reset_to}`, whose lifecycle the borrow checker exempts from the epoch
     // check (`src/check_zir.zrl`). Decided by `Driver.declare_function` from where the declaration
@@ -159,6 +163,9 @@ pub struct ILFunction {
     // outermost); 0 otherwise. A call to a function with a depth and no summary yet is a call into
     // a recursive cycle: it takes an empty summary until the cycle's fixpoint.
     pub os_depth: u32,
+    // A body of a recursive cycle whose root has not finished: its summary, and the ties
+    // os_infer_ties adds from it, are final only after Driver.os_fixpoint.
+    pub os_in_cycle: bool,
     // The declared result is a raw pointer. The IL type does not say (`&T` and `*T` share
     // `Ptr`), and a call's result needs it: `*f()` on a raw result needs `unsafe`.
 }

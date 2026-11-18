@@ -2444,21 +2444,22 @@ impl ZirLowerer {
                     let param_base = self.call_param_base(func_idx, span);
                     self.check_arg_count(func_idx, param_base, args.len, false, span);
                     let params_len = self.module.functions[func_idx as usize].params_len;
+                    // The converted arguments go into a second vector: a value read out of
+                    // `lowered` keeps its borrow, so writing it back with `set` is refused.
+                    let mut checked = unsafe {
+                        Vec::<Place>.with_capacity_in_raw(self.arena, args.len)
+                    };
                     for ai in 0 as usize..args.len {
-                        if param_base + ai >= params_len { break; }
+                        let arg = lowered.as_slice()[ai];
+                        if param_base + ai >= params_len {
+                            checked.push(arg);
+                            continue;
+                        }
                         let param_ty = self.call_param_type(func_idx, param_base + ai);
-                        self.check_raw_arg_is_marked(
-                            func_idx,
-                            param_base + ai,
-                            &lowered.as_slice()[ai],
-                            span
-                        );
-                        lowered.set(
-                            ai,
-                            self.check_arg_against(lowered.as_slice()[ai], param_ty, span)
-                        );
+                        self.check_raw_arg_is_marked(func_idx, param_base + ai, &arg, span);
+                        checked.push(self.check_arg_against(arg, param_ty, span));
                     }
-                    return self.emit_direct_call(func_idx, lowered.as_slice(), span);
+                    return self.emit_direct_call(func_idx, checked.as_slice(), span);
                 },
                 CalleeLookup.Rejected => { return self.no_place(); },
                 CalleeLookup.NotDirect => {},

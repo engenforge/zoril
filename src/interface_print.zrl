@@ -252,8 +252,9 @@ impl InterfacePrinter {
         }
         self.write(")]\n");
         // An explicit #[borrows(..)] is part of the signature's contract: importers check
-        // their calls against it. (The default rule is derived from the signature itself.)
-        if unsafe { (*p_f).has_borrows } {
+        // their calls against it. The default rule is derived from the signature itself, so ties
+        // the body added to it are written out the same way.
+        if unsafe { (*p_f).has_borrows || (*p_f).ties_inferred } {
             self.write(indent);
             self.write("#[borrows(");
             let ties = unsafe { (*p_f).ret_ties };

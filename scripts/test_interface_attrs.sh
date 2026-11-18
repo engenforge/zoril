@@ -51,6 +51,14 @@ grep -q '^type HiddenAlias ' "$dir/lib.zri" || fail "the interface wrote a priva
 grep -q '^#\[must_use\]$' "$dir/lib.zri" && grep -A1 '^#\[must_use\]$' "$dir/lib.zri" | grep -q '^pub struct Token' \
     || fail "the interface lost #[must_use] on struct Token" "$dir/lib.zri"
 
+# Ties a body adds to the elision default are written out, and a method the default covers gets none.
+run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -c --emit-interface -o "$dir/lib_ties.zri" "$src/lib_ties.zrl" > "$dir/emit_ties.log" 2>&1 \
+    || fail "lib_ties.zrl's interface was not written" "$dir/emit_ties.log"
+grep -B1 'fn pick(' "$dir/lib_ties.zri" | grep -qF '#[borrows(self, x)]' \
+    || fail "the interface lost the ties pick's body adds to the default" "$dir/lib_ties.zri"
+grep -B1 'fn view(' "$dir/lib_ties.zri" | grep -qF '#[borrows(' \
+    && fail "the interface wrote #[borrows] on view, whose ties are the default" "$dir/lib_ties.zri"
+
 for prog in "$src"/accept_*.zrl "$src"/reject_*.zrl "$src"/private_*.zrl; do
     [ -f "$prog" ] || continue
     name=$(basename "$prog" .zrl)

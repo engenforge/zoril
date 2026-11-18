@@ -1,7 +1,7 @@
 // name: Arena reset after a trait impl's unannotated &self method returns its other parameter
-// expected: known_gap
-// gap: the trait form of gap_100: Pick.pick(self: &Self, x: [u8]) -> [u8] is implemented by a body returning x, and the &self default ties the result to self alone, so a.reset() is accepted while s.pick(v.as_slice()) is read, and the read sees the arena's next allocation; route class: an elision default narrower than the body's ties, on a trait method
-// observed: exit 77
+// expected: compile_reject
+// Was a known gap: the trait form of gap_100: Pick.pick(self: &Self, x: [u8]) -> [u8] is implemented by a body returning x, and the &self default ties the result to self alone, so a.reset() is accepted while s.pick(v.as_slice()) is read, and the read sees the arena's next allocation; route class: an elision default narrower than the body's ties, on a trait method
+// Refused: a function with no #[borrows(..)] has its body's ties added to the elision default, so the result keeps the argument's borrow.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

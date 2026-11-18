@@ -1,0 +1,21 @@
+// expected compile fail
+// EXPECT: cannot mutably borrow 'a' while it is already borrowed
+// A `&self` method returning a struct that holds its other argument.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct S { k: i32 }
+struct W { s: [u8], n: i32 }
+impl S { fn wrap(self: &S, x: [u8]) -> W { return W { s: x, n: self.k }; } }
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v = Vec::<u8>.new_in(&a);
+    v.push(42 as u8);
+    let s = S { k: 1 };
+    let r = s.wrap(v.as_slice());
+    a.reset();
+    let mut v2 = Vec::<u8>.new_in(&a);
+    v2.push(77 as u8);
+    return r.s[0] as i32;
+}

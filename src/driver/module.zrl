@@ -1065,6 +1065,7 @@ impl Driver {
                 || (f.is_extern && !f.is_export)
                 || (f.body != 0 as ExprId && !lowers_body),
             has_borrows: f.has_borrows,
+            ties_inferred: false,
             // How the borrow checker identifies the arena lifecycle primitives; decided here from
             // where the declaration was loaded from, never from a user file's name
             // (doc/spec/modular_compilation.md).
@@ -1083,6 +1084,7 @@ impl Driver {
             os_edges: os_edges,
             os_edge_rows: os_rows,
             os_depth: 0 as u32,
+            os_in_cycle: false,
         });
     }
 
@@ -1271,6 +1273,10 @@ impl Driver {
             e.func_idx as usize,
             &mut origins
         );
+        if check {
+            check_zir::os_infer_ties(&mut origins, self.module, e.func_idx as usize);
+            self.module.get_function_mut(e.func_idx as usize).os_in_cycle = false;
+        }
         if check && self.emit_origins && e.source_file == self.target_source_file {
             check_zir::print_origins(&origins, &e.zir, self.module, self.intern_table);
         }
@@ -1357,7 +1363,12 @@ impl Driver {
             self.builder.current_func_idx as usize,
             &mut origins
         );
+        if !in_cycle {
+            let idx = self.builder.current_func_idx as usize;
+            check_zir::os_infer_ties(&mut origins, self.module, idx);
+        }
         if in_cycle {
+            self.module.get_function_mut(self.builder.current_func_idx as usize).os_in_cycle = true;
             self.os_pending.push(OsPending {
                 func_idx: self.builder.current_func_idx as u32,
                 zir: zir_func,
