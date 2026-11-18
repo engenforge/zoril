@@ -6,9 +6,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +testinfra +AI-G @provenance `make preflight` runs the milestone figures check again, and the preflight self-test stubs it id:837pd
+- [x] +testinfra +AI-G @provenance `make preflight` runs the milestone figures check again, and the preflight self-test stubs it id:837pd
     > **Created:** 2026-11-18
     > **Branch:** `provenance`
+    > **Completed:** 2026-11-18 git:9fe102e
 
     - **Placed:** at the top of `active.tm.md` by the check-in id:7kbpd: a rule fix of under a session with no dependency.
     - **Found by:** id:7kbpd. `5d8c6a9` (`Task: id:z0089`, an `+AI-G` session) removed the `check_safety_figures.sh --milestone` step from `scripts/preflight.sh` and rewrote the `make preflight` bullet of `AGENTS.md`, the Makefile help line and `doc/developer_guide.md` §3. That reverses the maintainer's decision of 2026-11-15 recorded in id:141h5 ("`make figures-check` runs it; `make preflight` runs it (the release bar)"), and z0089's own finding of 2026-11-17 said to wait for the maintainer's answer first. The edit left `doc/developer_guide.md:201` saying that `make preflight` "also runs `make figures-check`".
@@ -20,6 +21,9 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `sh scripts/test_preflight.sh` passes while `sh scripts/check_safety_figures.sh --milestone` fails on this tree (quote one `[FAIL] safety-figures:` line); take the new stub line out and `sh scripts/test_preflight.sh` fails; quote both.
       - C4: `./scripts/test.sh --scenario preflight-selftest` passes; quote its `Total:` line.
       - C5: the doc tier: `make test-changed BASE=HEAD~1`, `Total:` line quoted.
+
+    - **Decision (2026-11-18, the maintainer):** agents never run the documentation-figures checks (line counts, density, probe counts); only the maintainer runs them right before a release or at their discretion. Functional checks may run in `make preflight` at any time. So `5d8c6a9` stays: the revert and the stub are not done. Only the `doc/developer_guide.md:201` fix remains, plus `AGENTS.md` naming `make figures-check` as the release step.
+    - **Completion:** `9fe102e`. C1 to C4: not run: nothing reverted and no stub added. C5: `make test-changed BASE=HEAD`: `Total: 3828 run, 3828 passed, 0 failed, 102 skipped (138.2s)`.
 
 - [ ] +testinfra +review +AI-D @provenance @checkin Review of the restored preflight figures step (id:837pd) id:yf17t
     > **Created:** 2026-11-18
