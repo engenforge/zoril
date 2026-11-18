@@ -1,0 +1,19 @@
+// name: A frame view in an aggregate passed by value, stored out of the frame by the callee
+// expected: known_gap
+// gap: keep(out, Carrier { v: &x }) with fn keep(out: &mut &i32, c: Carrier) { *out = c.v; } is accepted without --provenance, and *out keeps the dead frame's address: the default call store rule does not see the frame view a by-value struct argument holds, while *out = c.v in the frame itself, and returning c.v from the callee, are refused; refused under --provenance (the call store rule); route class: a frame view held by an aggregate (a struct, a nested struct, a tuple, an array; a method's by-value self) passed by value to a callee that stores it or the whole aggregate out
+// observed: exit 77
+struct Carrier { v: &i32 }
+fn keep(out: &mut &i32, c: Carrier) { *out = c.v; }
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn escape_storer(out: &mut &i32) {
+    let x = 42;
+    let c = Carrier { v: &x };
+    keep(out, c);
+}
+fn main() -> i32 {
+    let seed = 0;
+    let mut dest_val: &i32 = &seed;
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    return *dest_val;
+}
