@@ -93,11 +93,13 @@ fn run_gc_only(opts: &Options, cwd: [u8], arena: *mut ArenaHeader) -> i32 {
         ),
     };
     let mut manifest = load_manifest(opts.cache_dir, arena);
+    // Pruning saves the manifest's own tool rows, so the context needs none: a clone of them
+    // would keep `manifest` borrowed across the prune that rewrites it.
     let ctx = BuildCtx {
         opts: opts.clone(),
         tools: Tools {
             compiler: "", zilc: "", qbe: "", asm_tool: "", ld: "", cc: "",
-            recs: manifest.tools.clone(), toolchain_id: manifest.toolchain,
+            recs: unsafe { Vec::<ToolRec>.new_in_raw(arena) }, toolchain_id: manifest.toolchain,
         },
         cache_dir: opts.cache_dir,
         iface_dir: join_path(opts.cache_dir, "iface", arena),

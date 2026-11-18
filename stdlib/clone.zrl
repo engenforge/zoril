@@ -11,9 +11,9 @@ use string::String;
 use vec::Vec;
 
 // Clones each element into a new Vec on the same allocator.
+// The clone keeps `self` borrowed while it lives, since its elements may hold what self's hold.
 impl<T: Clone> Clone for Vec<T> {
     // Creates an explicit duplicate copy of the value.
-    #[borrows()]
     fn clone(self: &Vec<T>) -> Vec<T> {
         // SAFETY: the pointer is the arena `self` (a live Vec) allocates from, and `new_in_raw`
         // only records it.
