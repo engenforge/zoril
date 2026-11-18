@@ -748,6 +748,128 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     ```
     For one site: `cp -r stdlib build/z11/sites/N/stdlib`, make the edit there, then `sh build/cost.sh build/zoril build/z11/sites/N/out build/z11/sites/N/stdlib`.
 
+    - **Re-measured (2026-11-18, on `stream/provenance` at git:e9726d2, which parses `#[unsafe(borrows(..))]`; no stdlib file changed):** the revised edits applied to scratch copies of `stdlib/` (`build/mztqb/stdlib`: the free edits; `stdlib_vec`: and `Vec.clone`'s declaration removed; `stdlib_args2`: and `Args.get`, `Args.next` marked; patch below). The test list is regenerated (`build/mztqb/m_base/tests_compiled.txt`, 743 programs, was 739), and counted by `build/mztqb/cost.sh` (id:z0011's `cost.sh`, with the list as an argument and an extra flags argument).
+      - **C1, default-build refusals** (`build/zoril`, base 0): free edits 0; plus removing `Vec.clone`'s 1: `tools/zbuild/src/main.zrl:110:35: error: cannot mutably borrow 'manifest' while it is already borrowed`; plus the `Args` pair marked: still that 1, nothing more. **The zbuild fix:** `run_gc_only`'s `BuildCtx` takes `recs: manifest.tools.clone()`, which nothing on the gc path reads (`prune_manifest`, `save_manifest`, which writes `m_in`'s own tools, and `collect_garbage` read no `ctx.tools`). Giving it `recs: unsafe { Vec::<ToolRec>.new_in_raw(arena) }`, as the build path at `main.zrl:193` does, makes zbuild compile in the default build with every edit (`rc=0`).
+      - **Tier-2 check (scratch):** id:z0011's patch no longer applies, so the check was written fresh as `os_check_declared_ties`, called from `os_infer_ties` for a function with `has_borrows` (patch below; `build/mztqb/zoril.t2`). It skips `borrows_trusted`, closures, `extern`s and imports, and does not check bodies in a recursive cycle. `--provenance=warn` over the roots and the 743 tests: 136 warnings with today's stdlib, at `args.zrl:46` (5), `:85` (3), `clone.zrl:17` (5), `:35` (1), `core.zrl:242` (2), `:258` (2), `file.zrl:144` (32), the rest in `src/` and `tools/`. With `stdlib_args2`, no warning is at a stdlib site; the 84 left are in the roots' own `src/`/`tools/` declarations (id:mrdtf). The seven elision-default sites of the first measurement (`bufio`, `iter`, `string`, `vec`) no longer appear: their ties are inferred since git:21658fa.
+      - **Found: a trusted declaration does not reach its callers under `--provenance`.** With only `Args.get` marked, `Args.next` (which returns `self.get(..)`) is still reported: `args.zrl:87:9: warning: provenance: #[borrows(..)] leaves out 'self'`. `os_call` builds a call's result from the callee's body summary (`os_ret_addr`/`os_ret_contents`) when it has one, so the summary's tie to `self` passes through the trusted declaration. Marking `Args.next` too clears it (0 warnings for `tests/stdlib/test_stdlib_args_from_runtime.zrl`). id:z0011 should decide whether a `borrows_trusted` callee's result reads `ret_ties` instead of its body ties at the call (the design note's "the compiler trusts it" suggests so); until then each caller that forwards a trusted result needs its own mark.
+      - **C2 (probes, default build, `build/z11/run.sh` with `STD=`):** today `gap_77` exit 7, `gap_78` exit 7, `gap_99` exit 77, `gap_44` exit 77; with `stdlib_args2`, `gap_77` refused (`cannot return 'v' a reference into storage owned by this frame (a collection, a box or an arena)`), `gap_99` refused (`cannot mutably borrow 'a' while it is already borrowed`), `gap_78` still exit 7 (it flips with id:z0065, as measured before), `gap_44` still exit 77 (a user declaration, as expected). Not flipped yet: no stdlib file has changed.
+      - **C3:** `ZORIL_CC=build/mztqb/zoril.t2 ZORIL_STDLIB=build/mztqb/stdlib_args2 ./scripts/test.sh tests/language tests/stdlib tests/error_reporting`: `Total: 1077 run, 1075 passed, 2 failed, 0 skipped (8.0s)`. The two are the tests' own declarations, not stdlib sites: `arena_named_through_vec_reference_accepted.zrl:16:5` and `:20:5`, `popped_integer_carries_no_address_accepted.zrl:13:1` (id:z0011's, whose texts change; stop and report there). With today's stdlib: `Total: 1077 run, 1074 passed, 3 failed, 0 skipped (8.0s)`; the third, `clone_returned_accepted.zrl`, fails at `stdlib/clone.zrl:17:5`, `core.zrl:258:5`, `core.zrl:242:5`.
+      - **Stage1:** `build/zoril-stage1 -I stdlib=build/mztqb/stdlib_args2 -I src -I build/gen --emit-zil src/main.zrl` exits 0 with the same diagnostics as against `stdlib/`. `args.zrl` is in neither `src/`'s nor zilc's closure, so stage1 never reads the new attribute; zbuild and ztest, which import it, are built by `build/zoril`.
+      - **Proposal for the maintainer (each changes a `pub` contract):** (1) delete `#[borrows()]` from `Clone for String`, `Clone for Option<T>`, `Clone for [T]`, and write `read_to_end_sized_raw`'s as `#[borrows(arena)]`: no refusal, and flip `gap_99`. (2) Delete `Vec.clone`'s `#[borrows()]` with the zbuild gc fix above in the same commit: closes `gap_77`. (3) Mark `Args.get` and `Args.next` `#[unsafe(borrows())]`, each with a `// SAFETY:` line, as in the patch; `Args.next` needs its own mark until id:z0011 settles the finding above. The `// SAFETY:` line sits inside the doc-comment block above the attribute, so check `make man-gen` and `scripts/test_man_pages.sh` when the edit is made (and move it if the man page prints it).
+      - **Stopped for the check-in (2026-11-18):** no stdlib file is changed; the three proposals above wait for the maintainer's approval of the `pub` changes.
+      - **Stdlib edits** (`build/mztqb/edits.diff`, against git:e9726d2; the zbuild line is the one above):
+    ```diff
+    --- a/stdlib/args.zrl
+    +++ b/stdlib/args.zrl
+    @@ -42,7 +42,9 @@
+         }
+     
+         // Returns the argument at index as a byte slice, or None if index is out of bounds.
+    -    #[borrows()]
+    +    // SAFETY: the slice is an argument string in process memory, read through argv, which outlives
+    +    // every Args; the analysis ties it to self because the address is read through self.argv.
+    +    #[unsafe(borrows())]
+         pub fn get(self: &Args, index: usize) -> Option<[u8]> {
+             // Compare in `usize`: `index as i32` truncated, so an index at or above 2^31 became a
+             // small (or negative) i32, passed the guard and then read the wrong argument, or past the
+    @@ -80,8 +82,10 @@
+             return self.index < self.argc;
+         }
+     
+    -    #[borrows()]
+         // Yields the next argument as a byte slice, or None when all arguments have been consumed.
+    +    // SAFETY: the result is what Args.get returns, an argument string in process memory that
+    +    // outlives every Args.
+    +    #[unsafe(borrows())]
+         pub fn next(self: &mut Args) -> Option<[u8]> {
+             if self.index >= self.argc {
+                 return Option.None;
+    --- a/stdlib/clone.zrl
+    +++ b/stdlib/clone.zrl
+    @@ -13,7 +13,6 @@
+     // Clones each element into a new Vec on the same allocator.
+     impl<T: Clone> Clone for Vec<T> {
+         // Creates an explicit duplicate copy of the value.
+    -    #[borrows()]
+         fn clone(self: &Vec<T>) -> Vec<T> {
+             // SAFETY: the pointer is the arena `self` (a live Vec) allocates from, and `new_in_raw`
+             // only records it.
+    @@ -31,7 +30,6 @@
+     // String's own arena via the raw escape hatch (an `&Arena` is not available here).
+     impl Clone for String {
+         // Creates an explicit duplicate copy of the value.
+    -    #[borrows()]
+         fn clone(self: &String) -> String {
+             // SAFETY: the pointer is the arena `self` (a live String) allocates from, and
+             // `clone_in_raw` only records it.
+    --- a/stdlib/core.zrl
+    +++ b/stdlib/core.zrl
+    @@ -238,7 +238,6 @@
+     
+     impl<T: Clone> Clone for Option<T> {
+         // Creates an explicit duplicate copy of the value.
+    -    #[borrows()]
+         fn clone(self: &Option<T>) -> Option<T> {
+             // Matched through the reference: `T` may own storage, so `match *self` would move it out
+             // of the borrow. The ergonomic binding is `&T`, which `clone` copies.
+    @@ -254,7 +253,6 @@
+     // and a `Vec` clone then duplicates its elements rather than sharing them.
+     impl<T: Clone> Clone for [T] {
+         // Creates an explicit duplicate copy of the value.
+    -    #[borrows()]
+         fn clone(self: &[T]) -> [T] {
+             return *self;
+         }
+    --- a/stdlib/file.zrl
+    +++ b/stdlib/file.zrl
+    @@ -140,7 +140,7 @@
+     // CALLER OBLIGATION: arena must be valid and initialized.
+     //
+     // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    -#[borrows()]
+    +#[borrows(arena)]
+     pub unsafe fn read_to_end_sized_raw<R: Read>(
+         r: &mut R,
+         initial_cap: u64,
+    ```
+    - **Scratch tier-2 check** (`build/mztqb/mztqb-tier2-scratch.patch`, `diff -r` of `src/` at git:e9726d2; built with `build/zoril -I stdlib=stdlib -I src -I build/gen --emit-zil`, then `build/zilc`, `qbe`, `as`, `ld` with `build/runtime.o`):
+    ```diff
+    diff -r ../../src/check_zir.zrl src/check_zir.zrl
+    8315a8316,8340
+    > // Scratch tier-2 check (mztqb measurement only): a plain #[borrows(..)] narrower than the body.
+    > fn os_check_declared_ties(c: &mut OriginSets, module: &ILModule, f: &ILFunction) {
+    >     if c.rules == PROVENANCE_OFF || f.borrows_trusted || f.from_interface || f.is_extern { return; }
+    >     if f.params_len > 0 as usize
+    >         && type_name_is(c.table.lookup(f.param(f.params_len - 1 as usize).name), "__env") {
+    >         return;
+    >     }
+    >     if f.ret_ty != 0 as u32 && !module.type_holds_reference(f.ret_ty, 0 as usize) { return; }
+    >     let base = if f.params_len > 0 as usize && f.param(0).name == c.sret_name { 1 as usize } else { 0 as usize };
+    >     let missing = os_body_ties(c, module, f) & !f.ret_ties;
+    >     let mut i = 0 as usize;
+    >     while i < 63 as usize {
+    >         if (missing >> (i as u64)) & 1 as u64 != 0 as u64 && i + base < f.params_len
+    >             && module.type_holds_reference(f.param(i + base).ty, 0 as usize) {
+    >             diag_start(c.file, f.decl_span, if c.rules == PROVENANCE_WARN { "warning" } else { "error" });
+    >             eprint("provenance: #[borrows(..)] leaves out '");
+    >             eprint(c.table.lookup(f.param(i + base).name));
+    >             eprint("', which the result may point into; a declaration may name more than the body returns, never less\n");
+    >             c.errors = c.errors + 1 as u32;
+    >             return;
+    >         }
+    >         i = i + 1 as usize;
+    >     }
+    > }
+    > 
+    8317a8343
+    >     if f.has_borrows { os_check_declared_ties(c, module, &f); }
+    diff -r ../../src/driver/module.zrl src/driver/module.zrl
+    1278a1279
+    >             if origins.errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON { self.had_error = true; }
+    1369a1371
+    >             if origins.errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON { self.had_error = true; }
+    ```
+
 - [ ] +safety +tests +AI-D @provenance B3b The `#[borrows(..)]` declarations and `&self` defaults of `src/` and `tools/` that name less than the body returns are removed, widened or made explicit exemptions id:mrdtf
     > **Created:** 2026-11-18
     > **Branch:** `provenance`
@@ -905,6 +1027,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - **A gap the design accepts, beside the cycle rule:** a body lowered while a cycle is open, which calls a member that has finished but is still waiting for the fixpoint, reads that member's ties through `os_in_cycle` (all arguments). The origin rules of such a body still read the member's partial summary. That predates this change, and is noted for id:z0065's measurement.
     - **Depends changed (2026-11-18):** added id:akapm, the tier-3 form the remaining narrowings need.
     - **Left here (tier 2):** a declaration narrower than the body is refused (the patch above, `os_check_ties`, reduced to the `has_borrows` branch); the `#[stores]` wider-contract change and the `err_stores_attribute_false.zrl` expectation (stop and report). These land after id:mztqb and id:mrdtf. gap_44 and gap_99 flip when the tree's narrowings are settled. The **Patch** above predates git:21658fa (it adds `os_check_ties` where `os_infer_ties` now stands), so it no longer applies: write the tier-2 check fresh as one more branch of `os_infer_ties` (a function with `has_borrows` whose body ties are not all in `ret_ties`), refusing under `--provenance` as the patch did.
+    - **Found by id:mztqb (2026-11-18):** a `#[unsafe(borrows(..))]` callee's trust does not reach its callers under `--provenance`. `os_call` builds the call's result from the callee's body summary, so `Args.next`, which returns `self.get(..)` of a trusted `Args.get`, is still tied to `self` and needs a mark of its own. **Decide here:** whether the call reads a `borrows_trusted` callee's `ret_ties` instead of its body ties (reproducer and counts under id:mztqb's **Re-measured**).
 
 - [ ] +safety +tests +AI-D @provenance B3c A safe function may not hide a store behind a bare `extern` or a raw-pointer write: it declares `#[stores(..)]` id:f81f3
     > **Created:** 2026-11-18
