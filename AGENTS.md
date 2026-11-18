@@ -1,6 +1,6 @@
 # Agent instructions
 
-Guidance for any AI agent working on Zoril. Read this, `CONTRIBUTING.md` and `doc/developer_guide.md` before changing anything. This file is the single, tool-neutral source of agent guidance: do not add files specific to one AI tool or one forge.
+Guidance for any AI agent working on Zoril. Read this, `CONTRIBUTING.md` and `doc/developer_guide.md` before changing anything. Check every decision about language syntax or compiler design against the design principles in `doc/vision/why_zoril.md`. This file is the single, tool-neutral source of agent guidance: do not add files specific to one AI tool or one forge.
 
 ## Compilers, runtimes and dialects
 

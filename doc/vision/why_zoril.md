@@ -14,6 +14,20 @@
 
 ---
 
+## Design Principles
+
+The goals above, stated as the rules a decision about syntax or compiler design is checked against. When two of them pull apart, the earlier one wins.
+
+1. **Safety before convenience.** When the analysis cannot decide, the compiler refuses. A correct program may be refused while the analysis is imprecise; an unsafe one is never accepted to save effort. Precision improves later, each step backed by the rejection differential (`scripts/check_reject_diff.sh`).
+2. **No ownership notation in ordinary code.** What a function body proves is inferred, across modules through the summaries in each `.zri`. Annotations are optional.
+3. **The notation falls on library authors, not on their users.** An author may write a checked contract, for a stable API, or a trusted narrowing, to spare users a false refusal. Users of the library write neither.
+4. **Trust is spelled `unsafe` in the source.** Anything the compiler takes on faith is marked at the point of trust (an `unsafe` block, an `unsafe fn`, `#[unsafe(..)]`), so it can be found, counted and reviewed.
+5. **Comments never change compilation.** `// SAFETY:` comments are a review convention, checked by this repository's scripts, never read by the compiler.
+6. **Familiar to Rust developers** wherever that does not conflict with the principles above.
+7. **A small, inspectable toolchain, with one build configuration and zero run-time overhead** for the checks the compiler can prove.
+
+---
+
 ## 1. What Zoril Is Exploring
 
 Systems languages make different, well-reasoned trade-offs. Rust and Zig, built on LLVM, offer broad language features, mature ecosystems, and highly optimized code; the size of those toolchains reflects how much they do. Small toolchains such as cproc and Hare, built on QBE, show how much a compact, readable compiler can achieve.
