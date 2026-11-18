@@ -601,10 +601,32 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Found, not this task's (2026-11-18):** the frame twin is accepted by the default rules, and so is its reference form: `fn keep(out: &mut &i32, c: Carrier) { *out = c.v; }` called as `keep(out, Carrier { v: &x })`, exit 77 after a clobber; also a tuple, an array, a nested struct, a method's by-value `self`, a `let` copy or a destructuring pattern in the callee, and `*out = c` whole (`build/provenance/build/z73/s_*.zrl`, `r_*.zrl`, `gapA.zrl`). `*out = c.v` in the frame and a callee returning `c.v` (`gap_14`) are refused. The same on `main`'s `build/zoril` (main at git:a484d11). All refused under `--provenance`. A public-side hole: `known_gap` probe `gap_98` with its Known gaps entry and class (O) in `doc/SAFETY.md` §6 (git:43b8f17); id:z0065 flips it (bullet added there).
     - **Completion (2026-11-18):** the work is git:5ca36fb (tests and spec text); git:43b8f17 is the probe found on the way. C1: `./scripts/test.sh tests/language/memory/provenance/raw_ptr_*.zrl` (under the tests' `--provenance` flag) `Total: 5 run, 5 passed, 0 failed, 0 skipped (0.1s)`; the two accepted tests with their `// flags:` line removed (`build/z73/*_default.zrl`, the default mode) `Total: 3 run, 3 passed, 0 failed, 0 skipped (0.1s)`, each `[PASS]` at exit 0. C2: `sh scripts/check_safety_model.sh` `PASS: safety_model.md is self-consistent.`; `sh scripts/run_safety_matrix.sh` `All probes complete: 473/524 passed. Mismatches: 0` (`gap_98` reported `[SKIP]`, known gap). C3: `make test-changed BASE=HEAD~2` after both commits: `Total: 3834 run, 3834 passed, 0 failed, 104 skipped (137.7s)`. No compiled code changed (`src/`, `stdlib/`, `tools/` untouched), so `make test` and `make preflight-changed` were not run and the fuzz record is not made stale. Milestone figures not touched (the probe counts in `doc/SAFETY.md` §5.1, §6 and `README.md` are not updated for `gap_98`).
 
+- [ ] +safety +tests +AI-D @provenance B3a The standard library's `#[borrows(..)]` declarations and `&self` defaults that name less than the body returns are settled id:mztqb
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+    > **Check-in:** stop and report before changing a `pub` stdlib signature.
+
+    - **Split from:** id:z0011, by its measurement of 2026-11-18 (see **Measured** there): its check cannot land while the standard library's own declarations fail it, since every `--provenance` program that lowers one is refused.
+    - **Placed:** before id:z0011, which it blocks.
+    - **Sites (13):** listed under id:z0011's **Stdlib sites**. Three are open holes in the default build: `Clone for Vec<T>` (gap_77), `Clone for Option<T>` (gap_78) and `Clone for [T]` (gap_99).
+    - **Do:** for each site, apply id:z0011's patch to a scratch compiler, then choose among: (a) remove the declaration, so the default or the body's ties hold; (b) widen it (`#[borrows(self, arena)]`); (c) keep the narrow result with an explicit, reviewed `unsafe` interior and a `// SAFETY:` comment. For each choice, count what it newly refuses in `src/`, `tools/` and `tests/` in the default build (the narrowed tie is what let those callers through), and put the counts and the proposed choice to the maintainer before any edit. `iter.zrl:26` (`map`, a by-value `Self`) is an over-report: decide whether `compute_ret_ties` should count a `Self` or type-parameter parameter as holding a reference, or whether the check skips it.
+    - **Checks:** C1: per site, the default-build refusals in `src/`, `tools/`, `tests/` before and after the chosen edit. C2: `gap_77`, `gap_78`, `gap_99` refused by the default build once their impls are fixed (flip each probe, remove its Known gaps entry and its class text in `doc/SAFETY.md` §6). C3: `ZORIL_CC=<scratch> ./scripts/test.sh tests/language tests/stdlib` with id:z0011's patch applied has no failure caused by a stdlib site. C4: `make test`, `make preflight-changed` with the rejection differential (`REJECT_DIFF_NO_CACHE=1`).
+
+- [ ] +safety +tests +AI-D @provenance B3b The `#[borrows(..)]` declarations and `&self` defaults of `src/` and `tools/` that name less than the body returns are removed, widened or made explicit exemptions id:mrdtf
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+    > **Depends:** id:mztqb
+
+    - **Split from:** id:z0011, by its measurement of 2026-11-18: 85 sites in `src/main.zrl`'s closure, and in `tools/` 11 for zbuild, 8 for zilc and 2 for zman (stdlib sites included in those counts). The 12 `&self`-default sites include `src/check_zir.zrl:83`, `src/fmt/doc.zrl:221`, `src/lower_zir/expr.zrl:176` and `:2678`, and `src/parser/decl.zrl:333`.
+    - **Placed:** before id:z0011, which it blocks (the self-hosting compiler is checked by its own rules). Depends on id:mztqb because the stdlib choices change what `src/` callers are refused.
+    - **Size:** likely more than one session. Before starting, split it by directory (`src/lower_zir/` has 33 sites, `src/mono.zrl` 9), each part with its own checks.
+    - **Constraint:** `src/` must still build under the pinned stage1 and the previous `build/zoril`, so a widened declaration or an `unsafe` interior has to be accepted by both. A removed `#[borrows()]` usually makes callers keep a borrow they did not keep before, so measure each removal by the default-build refusals in `src/` first.
+    - **Checks:** per part, `build/z97/measure.sh <scratch with id:z0011's patch>` shows that part's sites gone, with none added elsewhere; `make test`; `make preflight-changed`.
+
 - [ ] +safety +tests +AI-D @provenance id:z0011 B3 Declarations are checked against the body: `#[borrows(..)]`, `#[stores(..)]`, the `&self` default
     > **Created:** 2026-11-03
     > **Branch:** `provenance`
-    > **Depends:** id:z0049, id:z0064, id:0m61c
+    > **Depends:** id:z0049, id:z0064, id:0m61c, id:mztqb, id:mrdtf
     > **Check-in:** stop for review after it.
 
     - **Rule (Decision 1):** a declaration may list more than the body proves (a wider public contract), never less. For a function with a body the effective ties and stores are the union of what the body proves and any declaration (id:z0010 already sums them); a declaration that claims less than the body is a compile error, the narrowing rule of `CHANGELOG.md`'s pre-1.0 note. The `&self` elision default and the declarations apply as written to bodyless items (`extern`, trait signatures, `.zri` imports). Each of the tree's 82 `#[borrows()]` declarations (such as `Lexer.text_from`) is either proved unnecessary by id:z0010's `ParamAddr`/`ParamContents` summary and removed, or converted into an explicit, reviewed `unsafe` interior with a `// SAFETY:` comment, listed with its decision in the commit. **Stop and report** before changing a `pub` stdlib signature.
@@ -613,6 +635,139 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Blind spot not covered by this check (from id:z0049's review, 2026-11-05):** a body that copies through a bare `extern` proves no store, so a declaration can never be "narrower than the body" there (id:z0060's `extend_from_slice` route). Add a rule here or in a task of its own: a safe function that passes a pointer derived from a parameter to an `extern` with no declared effect must declare its own `#[stores]`/`#[borrows]` (or the `extern` declares its effect). Probe it with id:z0060's reproducer with id:z0060's fix taken out.
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
     - **Added by id:z0073's decision (the maintainer, 2026-11-14):** case B there. A safe function whose `unsafe` block writes a value that can hold a reference or a slice through a raw pointer (one it was given, or one an argument holds: `unsafe { *self.p = r; }`) must declare `#[stores(..)]` naming the argument stored and the one it is stored into, or it is a compile error; the declaration is then a trusted claim (`doc/SAFETY.md` §4.2) and the caller applies the call store rule to it. It is one rule with the bare-`extern` rule of the **Blind spot** bullet above: a safe function may not hide a store behind an operation the checker cannot read. Probe: `put` with and without the declaration (`build/z76/cx.zrl` in id:z0076's text), a caller passing `&x` of a local with `g` reaching outside the frame (refused once declared), the same store of a plain integer (no declaration needed), and the count of functions in `stdlib/`, `src/` and `tools/` that newly need a declaration, measured before the rule is made an error. If that count makes this task more than a session, split the rule into a task of its own directly after this one.
+    - **Measured (2026-11-18, on `stream/provenance` at git:5ca36fb):** the check below (`os_check_ties`, patch under **Patch**), built as `build/z11/zoril.new`, refuses under `--provenance` every function whose final body summary ties its result to a parameter `ret_ties` leaves out. The body ties are the ones `os_call` reads: `os_ret_addr`, plus `os_ret_contents` unless the result holds only integers (`os_holds_pointer`). Both sides are limited to types that can hold a reference (`ILModule.type_holds_reference`, raw pointers included), as `inherit_rv_borrows` is, so `grow_cap(cap: usize) -> usize` is not refused. Closures (a trailing `__env`), `extern` items and `.zri` imports are skipped. It runs after `store_origin_summary` for a body outside a cycle, and in `os_fixpoint`'s checking pass for one inside a cycle. `--provenance=warn` makes the refusal a warning.
+      - Probes (`build/z11/run.sh`; default build, then `build/z11/zoril.new --provenance`): `gap_44` exit 77, then refused at its `text_from` ("#[borrows(..)] leaves out 'self' ..."); `gap_30` refused, then refused at `launder` by the new check; `selfpass` (unannotated `pick(self: &S, x: [u8]) -> [u8] { return x; }`, then an arena reset) exit 77, then refused ("the result may point into 'x', which the `&self` default does not tie it to"); the trait form `traitpass`, the same; `s.clone()` of a slice, then a reset, exit 77, then refused at `stdlib/core.zrl:258`. These three new holes are probes `gap_99`, `gap_100`, `gap_101` (git:e14d03d), and they stay `known_gap` until the rule is on by default (id:z0065, id:z0012). A generic `id<T>(x: T) -> T` and `v.iter().map(f)` are refused by the default build already.
+      - **Counts (`build/z97/measure.sh`, `--provenance=warn`):** 97 distinct sites. Roots: `src/main.zrl` 85 (183 provenance warnings, 268 with the check); zbuild 11, zilc 8, zman 2 (stdlib sites counted again for each root). Test programs: 58 warnings, all at stdlib sites. 12 of the sites are the `&self` default (`src/check_zir.zrl:83`, `src/fmt/doc.zrl:221`, `src/lower_zir/expr.zrl:176` and `:2678`, `src/parser/decl.zrl:333`, and 7 in stdlib); the rest are `#[borrows(..)]` declarations.
+      - **Stdlib sites (13; each changes a `pub` contract, so the maintainer decides first):** `args.zrl:46` `Args.get`, `:85` `Args.next`; `bufio.zrl:36` `BufWriter.with_capacity`, `:234` `BufReader.with_capacity` (`inner` by value, a type parameter); `clone.zrl:17` `Clone for Vec<T>` (gap_77), `:35` `Clone for String`; `core.zrl:242` `Clone for Option<T>` (gap_78), `:258` `Clone for [T]` (gap_99); `file.zrl:144` `read_to_end_sized_raw`; `iter.zrl:26` `Iterator.map` (by-value `Self`: an over-report, since the default build refuses that route); `string.zrl:186` `String.clone_in_raw`, `:326` `split_raw`; `vec.zrl:155` `Vec.clone_in_raw`. The last three are `unsafe fn`s whose result is tied to a raw `arena: *mut ArenaHeader` that the `&self` default leaves out.
+      - **Tests the check breaks** (`ZORIL_CC=build/z11/zoril.new ./scripts/test.sh tests/language tests/stdlib tests/error_reporting`: `Total: 1068 run, 1063 passed, 5 failed, 0 skipped (7.9s)`), all `// flags: --provenance` tests under `tests/language/memory/provenance/`: `arena_named_through_vec_reference_accepted` (its own two `#[borrows()]`, lines 16 and 20), `clone_returned_accepted` (`core.zrl`, `clone.zrl`), `popped_integer_carries_no_address_accepted` (its own `#[borrows()] fn at0`, whose `Cmd` result holds `text`), `unsafe_fn_summary_accepted` and `unsafe_fn_summary_cycle_accepted` (`string.zrl:326`). So the check cannot land before the stdlib sites are settled, and the two tests' own declarations change their text (stop and report, per `AGENTS.md`).
+      - **Not done in this session:** the `#[stores]` wider-contract change (`err_stores_attribute_false.zrl`), the bare-`extern` and raw-store rule (case B), and the 85 `src/` and the `tools/` sites. Split into tasks: id:mztqb, id:mrdtf before this one, and id:f81f3 after it.
+      - **Patch** (`build/z11/z0011-check.patch`, against git:5ca36fb; apply with `git apply`):
+    ```diff
+    diff --git a/src/check_zir.zrl b/src/check_zir.zrl
+    index 86da7c2..2d969a6 100644
+    --- a/src/check_zir.zrl
+    +++ b/src/check_zir.zrl
+    @@ -8286,6 +8286,72 @@ pub fn store_origin_summary(
+         return grew;
+     }
+     
+    +// The parameters FUNC's result may point into by its final body summary, as a call reads them
+    +// (os_call): its ParamAddr ties, and its ParamContents ties unless the result holds only integers.
+    +fn os_body_ties(c: &mut OriginSets, module: &ILModule, f: &ILFunction) -> u64 {
+    +    if f.ret_ty == 0 as u32 || !os_carries(c, module, f.ret_ty) { return 0 as u64; }
+    +    if !os_holds_pointer(module, f.ret_ty, 0 as usize) { return f.os_ret_addr; }
+    +    return f.os_ret_addr | f.os_ret_contents;
+    +}
+    +
+    +// `#[borrows(..)]` and the `&self` default are checked against the body (§3, _Checked
+    +// contracts_): a call's borrows (inherit_rv_borrows) and every importer read `ret_ties`, so a
+    +// result tied in the body to a parameter `ret_ties` leaves out would end that borrow while the
+    +// result still points into it. A declaration may be wider than the body, never narrower. A
+    +// closure's ties are its environment's, which no declaration names. A rule of `--provenance`,
+    +// beside the others until they are the default. Returns the refusals.
+    +pub fn os_check_ties(c: &mut OriginSets, module: &ILModule, idx: usize, span: Span) -> u32 {
+    +    let f = &module.functions[idx];
+    +    if c.rules == PROVENANCE_OFF || f.from_interface || f.is_extern { return 0 as u32; }
+    +    if f.params_len > 0 as usize
+    +        && type_name_is(c.table.lookup(f.param(f.params_len - 1 as usize).name), "__env") {
+    +        return 0 as u32;
+    +    }
+    +    // A borrow is held only by a value whose type can hold a reference (inherit_rv_borrows), so
+    +    // an integer result or argument carries none, whatever address its bits may hold.
+    +    if f.ret_ty != 0 as u32 && !module.type_holds_reference(f.ret_ty, 0 as usize) {
+    +        return 0 as u32;
+    +    }
+    +    let missing = os_body_ties(c, module, f) & !f.ret_ties;
+    +    if missing == 0 as u64 { return 0 as u32; }
+    +    let base = if f.params_len > 0 as usize && f.param(0).name == c.sret_name {
+    +        1 as usize
+    +    } else {
+    +        0 as usize
+    +    };
+    +    let mut i = 0 as usize;
+    +    while i < 63 as usize {
+    +        if (missing >> (i as u64)) & 1 as u64 != 0 as u64
+    +            && i + base < f.params_len
+    +            && module.type_holds_reference(f.param(i + base).ty, 0 as usize) {
+    +            let name = c.table.lookup(f.param(i + base).name);
+    +            diag_start(c.file, span, if c.rules == PROVENANCE_WARN { "warning" } else { "error" });
+    +            eprint("provenance: ");
+    +            if f.has_borrows {
+    +                eprint("#[borrows(..)] leaves out '");
+    +                eprint(name);
+    +                eprint("', which the result may point into; ");
+    +                eprint("a declaration may name more than the body returns, never less\n");
+    +            } else if f.ret_ties == 1 as u64 && i != 0 as usize {
+    +                eprint("the result may point into '");
+    +                eprint(name);
+    +                eprint("', which the `&self` default does not tie it to; add `#[borrows(self, ");
+    +                eprint(name);
+    +                eprint(")]`\n");
+    +            } else {
+    +                // A by-value `Self` or type parameter, whose declared type showed no reference.
+    +                eprint("the result may point into '");
+    +                eprint(name);
+    +                eprint("', which the elision default does not tie it to; ");
+    +                eprint("add `#[borrows(..)]` naming it\n");
+    +            }
+    +            return 1 as u32;
+    +        }
+    +        i = i + 1 as usize;
+    +    }
+    +    return 0 as u32;
+    +}
+    +
+     // A direct call's result, into OS_T_VO and OS_T_VS, from the callee's summary: an argument in
+     // `ret_storage` gives its own origins (the result points into it); one in `ret_ties` gives what is
+     // reached through it when it is a reference, and itself and what it reaches otherwise. An owning
+    diff --git a/src/driver/module.zrl b/src/driver/module.zrl
+    index 9a602f3..d5e31b4 100644
+    --- a/src/driver/module.zrl
+    +++ b/src/driver/module.zrl
+    @@ -1271,6 +1271,14 @@ impl Driver {
+                 e.func_idx as usize,
+                 &mut origins
+             );
+    +        if check {
+    +            let span = self.module.functions[e.func_idx as usize].decl_span;
+    +            let refused =
+    +                check_zir::os_check_ties(&mut origins, self.module, e.func_idx as usize, span);
+    +            if refused > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
+    +                self.had_error = true;
+    +            }
+    +        }
+             if check && self.emit_origins && e.source_file == self.target_source_file {
+                 check_zir::print_origins(&origins, &e.zir, self.module, self.intern_table);
+             }
+    @@ -1357,6 +1365,14 @@ impl Driver {
+                 self.builder.current_func_idx as usize,
+                 &mut origins
+             );
+    +        if !in_cycle {
+    +            let idx = self.builder.current_func_idx as usize;
+    +            let span = self.module.functions[idx].decl_span;
+    +            let refused = check_zir::os_check_ties(&mut origins, self.module, idx, span);
+    +            if refused > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
+    +                self.had_error = true;
+    +            }
+    +        }
+             if in_cycle {
+                 self.os_pending.push(OsPending {
+                     func_idx: self.builder.current_func_idx as u32,
+    ```
+    - **Depends changed (2026-11-18, by this task's measurement):** added id:mztqb and id:mrdtf, the declarations the check refuses; it cannot land before them.
+    - **Left here:** apply the patch; add tests under `tests/language/memory/provenance/` (a narrowing `#[borrows()]` refused, a wider one accepted, a `&self` method returning a view of `self` accepted, the `&self` default passing another parameter refused, its trait form refused); the `#[stores]` wider-contract change and the `err_stores_attribute_false.zrl` expectation (stop and report it); `make test`, `make preflight-changed` with the differential. `gap_44`, `gap_99`, `gap_100` and `gap_101` flip when the rule is on by default (id:z0065, id:z0012), not here.
+
+
+- [ ] +safety +tests +AI-D @provenance B3c A safe function may not hide a store behind a bare `extern` or a raw-pointer write: it declares `#[stores(..)]` id:f81f3
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+
+    - **Split from:** id:z0011, whose **Blind spot** bullet (id:z0049's review) and **Added by id:z0073's decision** bullet (case B, the maintainer, 2026-11-14) describe one rule: a safe function may not hide a store behind an operation the checker cannot read. Split off because id:z0011's ties check and its 13 + 85 sites fill a session already. The task text there allows this ("If that count makes this task more than a session, split the rule into a task of its own directly after this one").
+    - **Placed:** directly after id:z0011, as that bullet asks.
+    - **Rule:** a safe function that passes a pointer derived from a parameter to an `extern` that declares no effect, or whose `unsafe` block writes a value that can hold a reference or a slice through a raw pointer (one it was given, or one an argument holds: `unsafe { *self.p = r; }`), must declare `#[stores(..)]` (or `#[borrows(..)]`) naming what it stores and where, or it is a compile error. The declaration is then a trusted claim (`doc/SAFETY.md` §4.2), and the caller applies the call store rule to it.
+    - **Probes:** id:z0060's reproducer with id:z0060's fix taken out; `put` with and without the declaration (`build/z76/cx.zrl` in id:z0076's text); a caller passing `&x` of a local where `g` reaches outside the frame (refused once declared); the same store of a plain integer (no declaration needed).
+    - **Measure first:** count the functions in `stdlib/`, `src/` and `tools/` that newly need a declaration, with the rule as a warning, before making it an error.
 
 - [ ] +safety +tests +AI-D @provenance L2a A call summary records which arguments the callee may release id:bfcvm
     > **Created:** 2026-11-17
