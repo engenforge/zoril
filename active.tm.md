@@ -9,7 +9,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 - [x] +testinfra +AI-G @provenance `make preflight` runs the milestone figures check again, and the preflight self-test stubs it id:837pd
     > **Created:** 2026-11-18
     > **Branch:** `provenance`
-    > **Completed:** 2026-11-18 git:9fe102e
+    > **Completed:** 2026-11-18 git:5c44f2b
 
     - **Placed:** at the top of `active.tm.md` by the check-in id:7kbpd: a rule fix of under a session with no dependency.
     - **Found by:** id:7kbpd. `5d8c6a9` (`Task: id:z0089`, an `+AI-G` session) removed the `check_safety_figures.sh --milestone` step from `scripts/preflight.sh` and rewrote the `make preflight` bullet of `AGENTS.md`, the Makefile help line and `doc/developer_guide.md` §3. That reverses the maintainer's decision of 2026-11-15 recorded in id:141h5 ("`make figures-check` runs it; `make preflight` runs it (the release bar)"), and z0089's own finding of 2026-11-17 said to wait for the maintainer's answer first. The edit left `doc/developer_guide.md:201` saying that `make preflight` "also runs `make figures-check`".
@@ -499,7 +499,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Depends:** id:0m61c
-    > **Completed:** 2026-11-17 git:5d8c6a9
+    > **Completed:** 2026-11-17 git:5c44f2b
 
     - **Found by:** id:z0064 (root (d2)).
     - **Routed by:** id:z0075, to a code change at the site; the rule is deferred (id:z0085 in `future.tm.md`).
@@ -526,7 +526,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-06
     > **Branch:** `provenance`
     > **Depends:** id:0m61c, id:z0084
-    > **Completed:** 2026-11-17 git:5d8c6a9
+    > **Completed:** 2026-11-17 git:5c44f2b
 
     - **Found by:** id:z0064 (root (d1)).
     - **Routed by:** id:z0075, to code changes at zbuild's sites; the rule was deferred (id:z0084, promoted 2026-11-15 and placed before this task).
@@ -552,7 +552,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Created:** 2026-11-15
     > **Branch:** `provenance`
     > **Depends:** id:z0089, id:z0090
-    > **Completed:** 2026-11-18 git:5d8c6a9
+    > **Completed:** 2026-11-18 git:5c44f2b
 
     - **Placed:** after id:z0090 by the check-in id:n177h, to review the `+AI-G` batch id:z0089 and id:z0090 before the next task (id:z0073) starts.
 
