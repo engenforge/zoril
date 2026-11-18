@@ -153,7 +153,8 @@ impl Parser {
 
     // `(A, B, ..)`, the `(` being the current token.
     // The list is built in the parser's arena, so a caller may keep it across its own calls.
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     fn parse_type_list(self: &mut Parser) -> [TypeId] {
         self.expect(Token.LParen);
         let mut types = unsafe { Vec::<TypeId>.new_in_raw(self.arena) };

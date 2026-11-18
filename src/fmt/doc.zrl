@@ -74,7 +74,8 @@ impl Doc {
     // here puts the borrow in a scope that ends at this return. (`let c: DocCmd = ...as_slice()[i]`
     // does not copy: reading an aggregate through a borrowed place is itself a borrow.)
     // A plain copy: the caller may set it back while its own borrow is live.
-    #[borrows()]
+    // SAFETY: TEXT is a view the doc holds (of source or arena), not its own storage.
+    #[unsafe(borrows())]
     fn cmd_at(self: &Doc, i: usize) -> DocCmd {
         let c_ref = self.cmds.as_slice()[i];
         return DocCmd { kind: c_ref.kind, text: c_ref.text, width: c_ref.width };
@@ -145,7 +146,7 @@ impl Doc {
     }
 
     // The document laid out, every line without trailing spaces, ending in one newline.
-    #[borrows()]
+    #[borrows(arena)]
     #[stores(arena -> arena)]
     pub fn render(self: &mut Doc, arena: *mut ArenaHeader) -> [u8] {
         self.measure();
@@ -218,6 +219,7 @@ impl Doc {
     }
 
     // For each DOC_GROUP command, the index of its DOC_END (others: 0).
+    #[borrows(arena)]
     fn group_ends(self: &Doc, arena: *mut ArenaHeader) -> Vec<usize> {
         let mut ends = unsafe { Vec::<usize>.new_in_raw(arena) };
         ends.resize(self.cmds.len(), 0 as usize);

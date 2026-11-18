@@ -76,7 +76,7 @@ src/mono.zrl	1550	138	57	7
 src/pair_map.zrl	67	5	3	3
 src/parser.zrl	380	23	6	13
 src/parser/base.zrl	55	15	8	3
-src/parser/decl.zrl	817	35	22	3
+src/parser/decl.zrl	947	53	26	5
 src/parser/expr.zrl	722	47	30	5
 src/parser/module.zrl	353	51	27	6
 src/parser/pattern.zrl	235	10	7	2

@@ -56,7 +56,8 @@ pub struct Attribute {
 impl Parser {
     // The `#[...]` attributes before a declaration, and its doc comment (`cur_comment`, captured
     // when the declaration's first token was lexed: the lexer has since read one token further).
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     fn parse_attributes(self: &mut Parser) -> Attribute {
         let mut attr = Attribute {
             has_borrows: false,
@@ -173,7 +174,8 @@ impl Parser {
     // `(a, b)` / `()`: `#[borrows]`'s parameter names, checked against the function's
     // parameters when it is lowered. The names are copied into the arena, so the result borrows
     // nothing from the parser.
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     fn parse_name_list(self: &mut Parser) -> [u32] {
         let mut names = unsafe { Vec::<u32>.new_in_raw(self.arena) };
         self.expect(Token.LParen);
@@ -321,7 +323,8 @@ impl Parser {
     // `<T, U: Bound + Other>`, or none.
     // The result is built in the parser's arena, where it lives as long as the AST: a caller may
     // hold it across further `&mut self` calls.
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     fn parse_type_params(self: &mut Parser) -> [TypeParam] {
         let mut params = unsafe { Vec::<TypeParam>.new_in_raw(self.arena) };
         if !self.is_kind(TokenKind.Less) { return params.as_slice(); }
@@ -356,6 +359,7 @@ impl Parser {
         return true;
     }
 
+    #[borrows(self, attr)]
     fn parse_fn_decl(
         self: &mut Parser,
         is_pub: bool,
@@ -500,7 +504,8 @@ impl Parser {
 
     // `(a: A, mut b: B, self, ...)`: the parameters, and whether the list ends in `...`. A
     // bare `self` has its type from the `impl`.
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     fn parse_param_list(self: &mut Parser) -> ([Param], bool) {
         self.expect(Token.LParen);
         let mut params = unsafe { Vec::<Param>.new_in_raw(self.arena) };
@@ -949,7 +954,8 @@ impl Parser {
     }
 
     // A declaration is built in the arena, so holding one does not keep the parser borrowed.
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     pub fn parse_declaration(self: &mut Parser) -> Decl {
         let attr = self.parse_attributes();
         let is_pub = self.eat_pub();

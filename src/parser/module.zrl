@@ -77,7 +77,8 @@ fn zri_recorded_module(source: [u8], path: [u8]) -> [u8] {
 
 impl Parser {
     // The file's bytes are arena storage, not a view of the parser.
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     fn read_file_to_string(self: &mut Parser, path: [u8]) -> [u8] {
         return match unsafe { read_file_raw(path, self.arena) } {
             Ok(s) => s,
