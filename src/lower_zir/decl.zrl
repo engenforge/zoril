@@ -69,6 +69,11 @@ pub struct SkippedPart {
 }
 
 pub struct ZirLowerer {
+    // The scratch arena a body is lowered into; persistent_arena is the compilation's. Neither is
+    // the lowerer's: it never resets either, and the driver resets the scratch one only once the
+    // lowerer is gone (run_body_passes_in_scratch). So a result allocated in them, or read out of
+    // the module's or the AST's arena data, needs no borrow of the lowerer: the claim each
+    // `#[unsafe(borrows())]` in the lowerer makes.
     pub arena: *mut ArenaHeader,
     pub persistent_arena: *mut ArenaHeader,
     pub resolver: &mut Resolver,
@@ -943,7 +948,8 @@ impl ZirLowerer {
 
     // The function's blocks and locals are allocated in the module's arena, which outlives
     // this lowerer; nothing in the result points into `self`.
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn lower_function(self: &mut ZirLowerer, f: &FnDecl, mangled_name: u32) -> ZirFunction {
         let prev_unsafe_depth = self.unsafe_depth;
         if f.is_unsafe {

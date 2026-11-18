@@ -1073,7 +1073,8 @@ impl ZirLowerer {
 
     // A tuple or struct pattern looks through a reference to the value it points at.
     // The result is a Place of scratch-arena data, like lower_expr's.
-    #[borrows(place)]
+    // SAFETY: what is not PLACE's is lowerer arena data (append_projection; ZirLowerer.arena).
+    #[unsafe(borrows(place))]
     fn pattern_through_ref(self: &mut ZirLowerer, place: Place, ty: u32) -> PatternTarget {
         let tag = self.get_type_tag(ty);
         if self.pattern_peels_pointer(tag) {
@@ -1170,7 +1171,8 @@ impl ZirLowerer {
         return self.get_type_decl(ty).def.get_Tuple().len;
     }
 
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     fn alloc_places(self: &mut ZirLowerer, n: usize) -> [mut Place] {
         return unsafe {
             @slice(
@@ -1180,7 +1182,8 @@ impl ZirLowerer {
         };
     }
 
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn alloc_u32s(self: &mut ZirLowerer, n: usize) -> [mut u32] {
         return unsafe {
             @slice(zoril_allocator_alloc(self.arena, (n + 1 as usize) * 4) as *mut u32, n)

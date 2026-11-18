@@ -532,7 +532,8 @@ impl ZirLowerer {
 
     // A copy of TY_ID's declaration: a value in the caller's frame, so it may be held across
     // further `&mut self` calls. Validates the id exactly as get_type_decl does.
-    #[borrows()]
+    // SAFETY: the result is the module's type data or lowerer arena data (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn type_decl_copy(self: &mut ZirLowerer, ty_id: u32) -> ILTypeDecl {
         return *self.get_type_decl(ty_id);
     }
@@ -641,7 +642,8 @@ impl ZirLowerer {
     // when the whole expression is built: the later operand's statements (`r.len()`, a block
     // that frees through `r`) run after the move, as they do in the source, and the borrow checker
     // sees them in that order. A literal or a plain name cannot observe the move and needs none.
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn lower_operand(
         self: &mut ZirLowerer,
         exprs: [ExprId],
@@ -1480,7 +1482,8 @@ impl ZirLowerer {
     // The trait type arguments of `impl<..> Trait<Args> for Target` where Target
     // matches ty_id, resolved with the impl's own type parameters bound from ty_id.
     // Empty when no such impl exists or a parameter cannot be bound.
-    #[borrows()]
+    // SAFETY: the result is the module's type data or lowerer arena data (ZirLowerer.arena).
+    #[unsafe(borrows())]
     fn trait_impl_type_args(
         self: &mut ZirLowerer,
         trait_name: u32,
@@ -1763,7 +1766,8 @@ impl ZirLowerer {
     // The type arguments of a call of generic function DECL_ID, read off its arguments, its
     // bounds, and last the type its result is expected to have (EXPECTED_RET, 0 for none):
     // `let o: Option<u64> = none()` gives T = u64.
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn infer_generic_type_args_for_fn(
         self: &mut ZirLowerer,
         decl_id: u32,
@@ -1814,7 +1818,8 @@ impl ZirLowerer {
     // The type arguments of generic method F called as `x.f(ARGS)`, read off the arguments
     // (F's first parameter is the receiver) and F's bounds. Empty, reported, when one cannot
     // be inferred.
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn infer_method_type_args(
         self: &mut ZirLowerer,
         f: &FnDecl,
@@ -1840,7 +1845,8 @@ impl ZirLowerer {
 
     // What `infer_method_type_args` reads off ARGS (an argument with no place gives nothing),
     // 0 for each type argument they do not decide.
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn read_method_type_args(self: &mut ZirLowerer, f: &FnDecl, args: [Place]) -> [u32] {
         let mut inferred = unsafe {
             Vec::<u32>.with_capacity_in_raw(self.arena, f.type_params.len)
@@ -1869,7 +1875,8 @@ impl ZirLowerer {
         return false;
     }
 
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn infer_generic_type_args_for_enum_variant(
         self: &mut ZirLowerer,
         decl_id: u32,
@@ -1921,7 +1928,8 @@ impl ZirLowerer {
     }
 
     // The result is a fresh arena list, not a view of the lowerer.
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn infer_generic_type_args_for_struct(
         self: &mut ZirLowerer,
         decl_id: u32,
@@ -2352,7 +2360,8 @@ impl ZirLowerer {
     // buffer, so growing it is the unsafe interior of this function: a raw copy,
     // a raw store past the copied tail, and the slice that hands both back as
     // safe storage.
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn append_projection(self: &mut ZirLowerer, pl: &Place, proj: Projection) -> Place {
         let new_len = pl.projections.len + 1 as usize;
         let new_projs = unsafe {
@@ -2416,7 +2425,8 @@ impl ZirLowerer {
         }
     }
 
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn append_deref(self: &mut ZirLowerer, pl: &Place) -> Place {
         return self.append_projection(pl, Projection.Deref);
     }

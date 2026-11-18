@@ -192,7 +192,8 @@ impl ZirLowerer {
 
     // A Place is a base local and an arena projection list: no result points into the lowerer, so
     // a caller may hold one across further `&mut self` calls.
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn lower_expr(self: &mut ZirLowerer, expr_id: ExprId, expected_ty: u32) -> Place {
         let place = self.lower_expr_internal(expr_id, expected_ty);
         // Span of the expression just lowered, for diagnostics raised while consuming its value.
@@ -934,7 +935,8 @@ impl ZirLowerer {
         return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
     }
 
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn lower_expr_internal(self: &mut ZirLowerer, expr_id: ExprId, expected_ty: u32) -> Place {
         let expr_val: Expr = self.resolver.ast.exprs[expr_id as usize];
         let span = self.get_expr_span(expr_id);
@@ -2095,7 +2097,8 @@ impl ZirLowerer {
 
     // The type arguments of generic enum U_ORIG for a variant built with no explicit ones: the
     // expected type's, when it is an instance of U_ORIG, else inferred from the payload.
-    #[borrows()]
+    // SAFETY: the result is the module's type data or lowerer arena data (ZirLowerer.arena).
+    #[unsafe(borrows())]
     fn enum_type_args_from_context(
         self: &mut ZirLowerer,
         u_orig: u32,
@@ -3141,7 +3144,8 @@ impl ZirLowerer {
     // type wrote past the slot when `e` was larger and reinterpreted the payload when the error
     // types differed (probes gap_68 to gap_70). The result points into no lowerer storage, as
     // `lower_expr`'s does.
-    #[borrows()]
+    // SAFETY: what is not VAL_PLACE's is lowerer arena data (ZirLowerer.arena).
+    #[unsafe(borrows(val_place))]
     fn lower_try_early_return(
         self: &mut ZirLowerer,
         val_place: Place,
