@@ -173,6 +173,7 @@ impl ZirLowerer {
     // VAL as the value of a field of type FIELD_TY: an array reference becomes a slice, and a
     // value of another type converts implicitly (or is an error), as for `let` and arguments.
     // A non-Copy value is moved into the struct.
+    #[borrows(self, val)]
     fn struct_field_value(self: &mut ZirLowerer, val: Place, field_ty: u32, span: Span) -> Place {
         if field_ty == 0 as u32 || val.base == 0 as u32 { return val; }
         let val_src_ty = self.get_place_type(&val);
@@ -1514,7 +1515,7 @@ impl ZirLowerer {
     // information either way (an integer and a float, a signed and an unsigned of one width)
     // is an error. A shift's count is not of the shifted type and is left alone.
     // The result is a pair of arena Places, like lower_expr's.
-    #[borrows()]
+    #[borrows(lhs, rhs)]
     fn unify_numeric_operands(
         self: &mut ZirLowerer,
         op: u32,
@@ -1541,7 +1542,7 @@ impl ZirLowerer {
 
     // A compound assignment's right side, converted to the target's type as an assignment's
     // is: implicitly when nothing is lost, else an error. A shift count is left alone.
-    #[borrows()]
+    #[borrows(rhs)]
     fn convert_compound_rhs(
         self: &mut ZirLowerer,
         op: u32,
@@ -2676,6 +2677,7 @@ impl ZirLowerer {
 
     // ARG passed to a parameter of type PARAM_TY: converted where an implicit conversion is
     // allowed (or an array passed as a slice), a mismatch reported, and a moved value consumed.
+    #[borrows(self, arg)]
     fn check_arg_against(self: &mut ZirLowerer, arg: Place, param_ty: u32, span: Span) -> Place {
         let converted = self.convert_value_to(arg, param_ty, span);
         let result = self.reborrow_arg(converted, param_ty, span);
@@ -2687,7 +2689,7 @@ impl ZirLowerer {
     // callee then holds the referent borrowed, so a later mutation through `a` conflicts while
     // that borrow is live (task 2i). A reference built for this call (`f(&mut x)`) is already such
     // a borrow and is passed as it is, which is why a temporary source is skipped.
-    #[borrows()]
+    #[borrows(arg)]
     fn reborrow_arg(self: &mut ZirLowerer, arg: Place, param_ty: u32, span: Span) -> Place {
         if arg.base == 0 as u32 || param_ty == 0 as u32 { return arg; }
         if arg.base as usize > self.locals.len() { return arg; }
@@ -2714,7 +2716,7 @@ impl ZirLowerer {
     // array element, an enum payload - so none of them can turn an integer into a reference with
     // a cast nobody wrote.
     // The result is a Place of arena data, like lower_expr's.
-    #[borrows()]
+    #[borrows(arg)]
     fn convert_value_to(self: &mut ZirLowerer, arg: Place, param_ty: u32, span: Span) -> Place {
         // A `&[T; N]` where a slice is expected (a `fn` type's parameter) is that slice.
         let mut result = self.coerce_array_ref_to_slice(
@@ -3791,7 +3793,7 @@ impl ZirLowerer {
     // One branch's VALUE (at SPAN) as the type TY of the `if` or `match` (WHAT) it ends: a
     // primitive converts implicitly where a `let` would let it; any other difference is an
     // error. (Merging two `Option` instances unchecked copied one layout into the other.)
-    #[borrows()]
+    #[borrows(value)]
     pub fn branch_value_as(
         self: &mut ZirLowerer,
         value: Place,

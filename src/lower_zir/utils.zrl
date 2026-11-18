@@ -653,7 +653,7 @@ impl ZirLowerer {
         return self.pin_moved_operand(place, later);
     }
 
-    #[borrows()]
+    #[borrows(place)]
     pub fn pin_moved_operand(self: &mut ZirLowerer, place: Place, later_observes: bool) -> Place {
         if !later_observes { return place; }
         if place.base == 0 as u32 || place.base as usize > self.locals.len() { return place; }
@@ -3489,7 +3489,7 @@ impl ZirLowerer {
 
     // `&a` / `&mut a` stored where a slice is expected becomes the slice itself; other places
     // are returned unchanged. The result is arena data, like lower_expr's.
-    #[borrows()]
+    #[borrows(place)]
     pub fn coerce_array_ref_to_slice(
         self: &mut ZirLowerer,
         place: Place,

@@ -737,7 +737,7 @@ impl ZirLowerer {
     // drops run, so the local itself is still dropped. A non-copy projection is a partial move and
     // keeps excluding its base, as before.
     // The result place is arena data, so the caller may keep it across its own calls.
-    #[borrows()]
+    #[borrows(ret_place)]
     pub fn materialize_return(self: &mut ZirLowerer, ret_place: Place, span: Span) -> Place {
         if ret_place.base == 0 as u32 || ret_place.projections.len == 0 as usize {
             return ret_place;
@@ -1081,7 +1081,7 @@ impl ZirLowerer {
     // declared type RESOLVED_RET; with none declared, an error if it is a value; a `main`
     // with no result type returns 0.
     // The result place is arena data, so the caller may keep it across its own calls.
-    #[borrows()]
+    #[borrows(body)]
     fn function_result(
         self: &mut ZirLowerer,
         body: Place,
