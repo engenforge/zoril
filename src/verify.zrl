@@ -549,7 +549,8 @@ impl Verifier {
 
     // Each function's direct callees, as (start offsets with one extra end entry, callee indices).
     // Arena mirrors of the call graph, not views of the verifier.
-    #[borrows()]
+    // SAFETY: the result is in the compilation's arena, which is never reset.
+    #[unsafe(borrows())]
     fn callee_lists(self: &mut Verifier) -> ([mut u32], [u32]) {
         let nf = self.module.functions.len();
         let starts = unsafe {
@@ -1600,7 +1601,8 @@ impl Verifier {
     // Which blocks (by position) lie in a loop: from the target of a jump or branch back to
     // an earlier block through the block that jumps.
     // A fresh arena array of flags, held across the second pass's `&mut self` calls.
-    #[borrows()]
+    // SAFETY: the result is in the compilation's arena, which is never reset.
+    #[unsafe(borrows(func))]
     fn loop_blocks(self: &mut Verifier, func: &ILFunction) -> [mut bool] {
         let in_loop = unsafe {
             @slice(zoril_allocator_alloc(self.arena, func.blocks_len) as *mut bool, func.blocks_len)

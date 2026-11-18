@@ -79,6 +79,7 @@ pub struct ZirAnalysisState {
 }
 
 impl ZirAnalysisState {
+    #[borrows(arena)]
     #[stores(arena -> arena)]
     pub fn clone(
         self: &ZirAnalysisState,
@@ -1426,7 +1427,8 @@ impl ZirVerifier {
     // nested payloads. The whole enum stands for the payload part, which no projection names.
     // Base 0 when PLACE is not such a place. The result is always a copy in the scratch arena,
     // so it holds no borrow of PLACE, STATE or the verifier.
-    #[borrows()]
+    // SAFETY: the result is scratch-arena data, reset only once the verifier is gone.
+    #[unsafe(borrows())]
     fn enum_payload_borrow_root(
         self: &mut ZirVerifier,
         place: &Place,
@@ -1471,7 +1473,8 @@ impl ZirVerifier {
 
     // PL, with one more `Deref` projection when DEREF, its projections copied into the verifier's
     // scratch arena, so the result does not point into the verifier.
-    #[borrows()]
+    // SAFETY: the result is scratch-arena data, reset only once the verifier is gone.
+    #[unsafe(borrows())]
     fn place_in_arena(self: &mut ZirVerifier, pl: &Place, deref: bool) -> Place {
         let new_len = if deref { pl.projections.len + 1 as usize } else { pl.projections.len };
         if new_len == 0 as usize {
@@ -2041,7 +2044,8 @@ impl ZirVerifier {
 
     // Each block's predecessors: the blocks whose terminator can reach it. Scratch-arena lists, so
     // holding the result does not keep the verifier borrowed.
-    #[borrows()]
+    // SAFETY: the result is scratch-arena data, reset only once the verifier is gone.
+    #[unsafe(borrows())]
     fn predecessors(self: &mut ZirVerifier, func: &ZirFunction) -> [mut Vec<u32>] {
         let n = (*func).blocks.len;
         let preds = unsafe {
@@ -4045,7 +4049,8 @@ impl ZirVerifier {
 
     // A copy of the declaration, for a caller that keeps it across its own `&mut self` calls: the
     // borrowed result of `get_type_decl` would keep the verifier borrowed throughout.
-    #[borrows()]
+    // SAFETY: a copy of the module's type data, in the compilation's arena.
+    #[unsafe(borrows())]
     fn type_decl_copy(self: &mut ZirVerifier, ty_id: u32) -> ILTypeDecl {
         return *self.get_type_decl(ty_id);
     }
@@ -8796,7 +8801,7 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
 // Frame(itself) (§5: a by-value `Vec` is this frame's). The sets keep TABLE for the dump and
 // nothing of MODULE or FUNC (their buffers are in ARENA), so the driver can write the body's
 // summary into MODULE while they are live.
-#[borrows(table)]
+#[borrows(table, arena, file, func)]
 pub fn compute_origins_zir(
     arena: *mut ArenaHeader,
     module: &ILModule,

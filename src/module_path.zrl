@@ -340,7 +340,7 @@ fn include_root_of(
 
 // The result's paths are copied into `arena` or are slices of `entry_file` / `root_opt`;
 // nothing in it points into `inc_ids`.
-#[borrows(entry_file, root_opt)]
+#[borrows(entry_file, root_opt, arena, table)]
 #[stores(arena -> arena)]
 pub fn module_resolution_new(
     entry_file: [u8],
@@ -406,7 +406,7 @@ pub fn module_resolution_new(
 }
 
 // The identity is a slice of `abs_file` (relative to a root), never of `mr`.
-#[borrows(abs_file)]
+#[borrows(abs_file, arena)]
 #[stores(arena -> arena)]
 pub fn derive_module_identity(
     mr: &ModuleResolution,
