@@ -611,6 +611,112 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Sites (13):** listed under id:z0011's **Stdlib sites**. Three are open holes in the default build: `Clone for Vec<T>` (gap_77), `Clone for Option<T>` (gap_78) and `Clone for [T]` (gap_99).
     - **Do:** for each site, apply id:z0011's patch to a scratch compiler, then choose among: (a) remove the declaration, so the default or the body's ties hold; (b) widen it (`#[borrows(self, arena)]`); (c) keep the narrow result with an explicit, reviewed `unsafe` interior and a `// SAFETY:` comment. For each choice, count what it newly refuses in `src/`, `tools/` and `tests/` in the default build (the narrowed tie is what let those callers through), and put the counts and the proposed choice to the maintainer before any edit. `iter.zrl:26` (`map`, a by-value `Self`) is an over-report: decide whether `compute_ret_ties` should count a `Self` or type-parameter parameter as holding a reference, or whether the check skips it.
     - **Checks:** C1: per site, the default-build refusals in `src/`, `tools/`, `tests/` before and after the chosen edit. C2: `gap_77`, `gap_78`, `gap_99` refused by the default build once their impls are fixed (flip each probe, remove its Known gaps entry and its class text in `doc/SAFETY.md` §6). C3: `ZORIL_CC=<scratch> ./scripts/test.sh tests/language tests/stdlib` with id:z0011's patch applied has no failure caused by a stdlib site. C4: `make test`, `make preflight-changed` with the rejection differential (`REJECT_DIFF_NO_CACHE=1`).
+    - **Measured (2026-11-18, C1; no stdlib file changed):** for each site, the one edit applied to a scratch copy of `stdlib/` (`build/z11/site.sh`), then every root (`src/`, zilc, zbuild, zman, ztest) and the 739 test programs that compile by default (`build/z11/m_base/tests_compiled.txt`) compiled by the default build (`build/zoril` at git:e14d03d). Default-build refusals per edit (base 0):
+      - Free (0 refused), and the edit also clears id:z0011's check (`build/z11/zoril.new --provenance=warn` over the same tests with all of them applied: no stdlib site left among these): remove `#[borrows()]` from `Clone for String` (`clone.zrl:35`), `Clone for Option<T>` (`core.zrl:242`) and `Clone for [T]` (`core.zrl:258`); widen `read_to_end_sized_raw` to `#[borrows(arena)]` (`file.zrl:144`; removing it instead refuses 27, all at `file.zrl:209`, since `r` is then tied to the result: "cannot return 'f' ..."); add `#[borrows(inner)]` to both `with_capacity` (`bufio.zrl:36`, `:234`), `#[borrows(self, f)]` to `Iterator.map` (`iter.zrl:26`; `#[borrows(self)]` alone leaves out `f`), and `#[borrows(self, arena)]` to `String.clone_in_raw`, `split_raw` and `Vec.clone_in_raw` (`string.zrl:186`, `:326`, `vec.zrl:155`). The widened ones are what the body already returns, so callers keep the borrow they keep today in effect.
+      - Costly: removing `Args.get`'s `#[borrows()]` (`args.zrl:46`) refuses 3: stdlib's own `Args.next` (`args.zrl:89`, "cannot assign to 'self.index' because it is borrowed"), so zbuild and 2 tests. Removing `Args.next`'s (`args.zrl:85`) refuses zbuild at `tools/zbuild/src/options.zrl:184` ("cannot borrow 'args' while it is mutably borrowed"). Removing `Vec.clone`'s (`clone.zrl:17`, gap_77) refuses zbuild at `tools/zbuild/src/main.zrl:110` ("cannot mutably borrow 'manifest' while it is already borrowed").
+      - **The `Args` pair is an imprecision, not a narrowing:** `Args.get` builds its slice from an address it reads through the raw `self.argv` (process memory, outliving every `Args`), but pointer-width integers keep their origins, so the body summary ties the result to `self`. So a correct `#[borrows()]` is refused. This is the case the rule's "explicit, reviewed `unsafe` interior" is for, but no mechanism for it exists yet: an `unsafe` block does not drop origins, and only `@ptr_from_int` yields `Raw`. **Decision needed:** how an exemption is written (for example, the slice built with `@ptr_from_int`, or an `unsafe`-only attribute the check accepts with a `// SAFETY:` comment).
+      - **`Vec.clone` (gap_77):** removing the declaration closes gap_77 in the default build ("cannot return 'v' a reference into storage owned by this frame") and costs one zbuild site, which would need a change in `tools/` (`collect_garbage(&ctx, &manifest)` while a clone of the manifest's data is live).
+      - **Probes with the free edits** (`STD=build/z11/sites/combined build/z11/run.sh build/zoril ...`): `gap_99` is refused by the default build ("cannot mutably borrow 'a' while it is already borrowed"), so it can flip in this task. `gap_78` is still accepted (exit 7). The old return rule does not see the frame view through the call, while `--provenance` refuses it (the return rule) with or without the edit, so gap_78 flips with id:z0065, not here. `gap_44` (a user `#[borrows()]`) is unchanged, as expected.
+      - **Proposal for the maintainer:** (1) apply the free edits (patch below; it changes `pub` stdlib contracts: three `Clone` impls lose `#[borrows()]`, and seven functions gain a wider `#[borrows(..)]`), and flip gap_99; (2) remove `Vec.clone`'s declaration and fix zbuild's `main.zrl:110` in the same change, closing gap_77; (3) settle the exemption mechanism for `Args.get`/`Args.next` first, as its own `+AI-D` decision.
+      - **Patch for (1)** (`build/z11/mztqb-zero-cost.patch`, against git:e14d03d):
+    ```diff
+    --- a/stdlib/bufio.zrl
+    +++ b/stdlib/bufio.zrl
+    @@ -33,6 +33,7 @@
+         }
+     
+         // Creates a new BufWriter wrapping inner with the specified buffer capacity.
+    +    #[borrows(inner)]
+         pub fn with_capacity(inner: W, cap: usize) -> BufWriter<W> {
+             let mut buf = Vec::<u8>.with_capacity(cap);
+             buf.resize(cap, 0 as u8);
+    @@ -230,6 +231,7 @@
+             return BufReader::<R>.with_capacity(inner, DEFAULT_BUF_READER_CAPACITY);
+         }
+     
+    +    #[borrows(inner)]
+         // Creates a new BufReader wrapping inner with the specified buffer capacity.
+         pub fn with_capacity(inner: R, cap: usize) -> BufReader<R> {
+             let mut buf = Vec::<u8>.with_capacity(cap);
+    --- a/stdlib/clone.zrl
+    +++ b/stdlib/clone.zrl
+    @@ -31,7 +31,6 @@
+     // String's own arena via the raw escape hatch (an `&Arena` is not available here).
+     impl Clone for String {
+         // Creates an explicit duplicate copy of the value.
+    -    #[borrows()]
+         fn clone(self: &String) -> String {
+             // SAFETY: the pointer is the arena `self` (a live String) allocates from, and
+             // `clone_in_raw` only records it.
+    --- a/stdlib/core.zrl
+    +++ b/stdlib/core.zrl
+    @@ -238,7 +238,6 @@
+     
+     impl<T: Clone> Clone for Option<T> {
+         // Creates an explicit duplicate copy of the value.
+    -    #[borrows()]
+         fn clone(self: &Option<T>) -> Option<T> {
+             // Matched through the reference: `T` may own storage, so `match *self` would move it out
+             // of the borrow. The ergonomic binding is `&T`, which `clone` copies.
+    @@ -254,7 +253,6 @@
+     // and a `Vec` clone then duplicates its elements rather than sharing them.
+     impl<T: Clone> Clone for [T] {
+         // Creates an explicit duplicate copy of the value.
+    -    #[borrows()]
+         fn clone(self: &[T]) -> [T] {
+             return *self;
+         }
+    --- a/stdlib/file.zrl
+    +++ b/stdlib/file.zrl
+    @@ -140,7 +140,7 @@
+     // CALLER OBLIGATION: arena must be valid and initialized.
+     //
+     // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    -#[borrows()]
+    +#[borrows(arena)]
+     pub unsafe fn read_to_end_sized_raw<R: Read>(
+         r: &mut R,
+         initial_cap: u64,
+    --- a/stdlib/iter.zrl
+    +++ b/stdlib/iter.zrl
+    @@ -23,6 +23,7 @@
+         fn next(self: &mut Self) -> Option<Self::Item>;
+     
+         // Returns an iterator adapter that applies f to each element.
+    +    #[borrows(self, f)]
+         fn map<U>(self: Self, f: fn(Self::Item) -> U) -> Map<Self, U> {
+             return Map { inner: self, f: f };
+         }
+    --- a/stdlib/string.zrl
+    +++ b/stdlib/string.zrl
+    @@ -183,6 +183,7 @@
+         // The same-arena clone the `Clone` impl in clone.zrl needs: it holds only the raw header the
+         // String already allocates from, not an `&Arena`.
+         // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    +    #[borrows(self, arena)]
+         pub unsafe fn clone_in_raw(self: &String, arena: *mut ArenaHeader) -> String {
+             return String { vec: self.vec.clone_in_raw(arena) };
+         }
+    @@ -322,6 +323,7 @@
+         //
+         // CALLER OBLIGATION: arena must be valid and initialized.
+         //
+    +    #[borrows(self, arena)]
+         // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+         pub unsafe fn split_raw(self: &[u8], delim: u8, arena: *mut ArenaHeader) -> Vec<[u8]> {
+             let mut res = Vec::<[u8]>.new_in_raw(arena);
+    --- a/stdlib/vec.zrl
+    +++ b/stdlib/vec.zrl
+    @@ -152,6 +152,7 @@
+         // CALLER OBLIGATION: arena must be valid and initialized.
+         //
+         // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
+    +    #[borrows(self, arena)]
+         pub unsafe fn clone_in_raw(self: &Vec<T>, arena: *mut ArenaHeader) -> Vec<T> {
+             if self.len == 0 as usize { return Vec::<T>.new_in_raw(arena); }
+             let bytes = size_of_n(self.len, sizeof(T));
+    ```
+
 
 - [ ] +safety +tests +AI-D @provenance B3b The `#[borrows(..)]` declarations and `&self` defaults of `src/` and `tools/` that name less than the body returns are removed, widened or made explicit exemptions id:mrdtf
     > **Created:** 2026-11-18
