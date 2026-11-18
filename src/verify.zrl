@@ -255,10 +255,12 @@ impl Verifier {
     fn check_borrows_claim(self: &mut Verifier, func: &ILFunction) {
         self.storage_facts(func, true);
     }
-    // `#[stores(p -> q)]` is checked against the body's computed masks: a declared source the body
-    // never stores, or a declared target that receives nothing, is an error in its own module. A
-    // `pub fn` that stores a reference parameter without declaring it warns, naming the attribute
-    // to add - a contract callers cannot see is what the declaration is for.
+    // `#[stores(p -> q)]` is checked against the body's computed masks: it may declare more than
+    // the body stores (a wider public contract; `--provenance`'s call store rule holds callers to
+    // it, the default build reads the body's stores), never less, so a store the
+    // body makes and the declaration leaves out is an error in its own module. A `pub fn` that
+    // stores a reference parameter without declaring it warns, naming the attribute to add - a
+    // contract callers cannot see is what the declaration is for.
     fn check_stores_claims(self: &mut Verifier) {
         let saved_file_path = self.file_path;
         let mut warned_spans = unsafe { Vec::<Span>.new_in_raw(self.arena) };
@@ -284,14 +286,7 @@ impl Verifier {
             if declared {
                 let from = unsafe { (*p_f).stores_declared_from };
                 let to = unsafe { (*p_f).stores_declared_to };
-                if (from & !stored) != 0 as u64 {
-                    self.report_error("#[stores] names a parameter this body does not store", span);
-                } else if (to & !targets) != 0 as u64 {
-                    self.report_error(
-                        "#[stores] names a target this body does not store into",
-                        span
-                    );
-                } else if (stored & !from) != 0 as u64 {
+                if (stored & !from) != 0 as u64 {
                     let hidden = self.hidden_param_count(unsafe { &*p_f });
                     let mut u = 0 as usize;
                     while u < 63 as usize {

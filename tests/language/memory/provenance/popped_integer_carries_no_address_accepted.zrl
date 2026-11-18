@@ -9,7 +9,8 @@ use vec::Vec;
 
 struct Cmd { text: [u8], width: usize }
 
-#[borrows()]
+// SAFETY: `text` is a static string's view the Vec holds, not the Vec's own storage.
+#[unsafe(borrows())]
 fn at0(cmds: &Vec<Cmd>) -> Cmd { let r = cmds.as_slice()[0]; return Cmd { text: r.text, width: r.width }; }
 
 fn measure(cmds: &mut Vec<Cmd>) {

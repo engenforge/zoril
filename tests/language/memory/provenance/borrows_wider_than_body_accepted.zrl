@@ -1,0 +1,15 @@
+// A `#[borrows(..)]` may name more than the body returns: `view` declares it may return a view of
+// `t` as well, a wider public contract its callers keep (§3, _Checked contracts_, tier 2).
+// flags: --provenance
+// expected exit 0
+
+struct S { a: [u8] }
+
+#[borrows(s, t)]
+fn view(s: &S, t: &S) -> [u8] { return s.a; }
+
+fn main() -> i32 {
+    let s = S { a: "hi" };
+    let t = S { a: "x" };
+    return view(&s, &t).len as i32 - 2;
+}

@@ -1276,7 +1276,10 @@ impl Driver {
             &mut origins
         );
         if check {
-            check_zir::os_infer_ties(&mut origins, self.module, e.func_idx as usize);
+            let refused = check_zir::os_infer_ties(&mut origins, self.module, e.func_idx as usize);
+            if refused > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
+                self.had_error = true;
+            }
             self.module.get_function_mut(e.func_idx as usize).os_in_cycle = false;
         }
         if check && self.emit_origins && e.source_file == self.target_source_file {
@@ -1367,7 +1370,10 @@ impl Driver {
         );
         if !in_cycle {
             let idx = self.builder.current_func_idx as usize;
-            check_zir::os_infer_ties(&mut origins, self.module, idx);
+            if check_zir::os_infer_ties(&mut origins, self.module, idx) > 0 as u32
+                && self.provenance == check_zir::PROVENANCE_ON {
+                self.had_error = true;
+            }
         }
         if in_cycle {
             self.module.get_function_mut(self.builder.current_func_idx as usize).os_in_cycle = true;

@@ -12,11 +12,13 @@ use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
 struct Z { arena: *mut ArenaHeader }
 
 impl Z {
-    #[borrows()]
+    // SAFETY: the result is in `self.arena`, which no borrow of `self` guards.
+    #[unsafe(borrows())]
     fn alloc(self: &mut Z, n: usize) -> [mut u32] {
         return unsafe { @slice(zoril_allocator_alloc(self.arena, ((n + 1 as usize) * 4) as u64) as *mut u32, n) };
     }
-    #[borrows()]
+    // SAFETY: the result is in `self.arena`, which no borrow of `self` guards.
+    #[unsafe(borrows())]
     fn expand(self: &mut Z, rows: &Vec<[mut u32]>, again: bool) -> Vec<[mut u32]> {
         let mut out = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
         for r in rows.as_slice() { out.push(*r); }

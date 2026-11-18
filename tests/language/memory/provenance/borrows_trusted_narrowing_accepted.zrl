@@ -1,0 +1,18 @@
+// `#[unsafe(borrows(..))]` is trusted as written where it names less than the body returns
+// (§3, _Checked contracts_, tier 3): the author vouches that `view`'s result, a static string's
+// view the struct holds, needs no borrow of `s`.
+// flags: --provenance
+// expected exit 0
+
+struct S { a: [u8] }
+
+// SAFETY: every S in this program holds a string literal, which outlives it.
+#[unsafe(borrows())]
+fn view(s: &S) -> [u8] { return s.a; }
+
+fn main() -> i32 {
+    let mut s = S { a: "hi" };
+    let v = view(&s);
+    s.a = "abc";
+    return v.len as i32 - 2;
+}

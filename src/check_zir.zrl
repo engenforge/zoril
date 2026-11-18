@@ -8313,22 +8313,25 @@ fn os_body_ties(c: &mut OriginSets, module: &ILModule, f: &ILFunction) -> u64 {
 // _Checked contracts_): a call's borrows read `ret_ties` (inherit_rv_borrows), so a result the
 // body ties to a parameter the default leaves out (a `&self` method returning its other
 // argument) would otherwise end that borrow while the result still points into it. The ties only
-// grow, so no program the default refuses is accepted. A declaration is the author's contract and
-// is left as written here. A closure's ties are its environment's, which no declaration names.
+// grow, so no program the default refuses is accepted. A `#[borrows(..)]` is the author's contract
+// and is left as written: it may name more than the body returns, never less, so under
+// `--provenance` one that leaves out a body tie is refused (tier 2). `#[unsafe(borrows(..))]` is
+// trusted as written (tier 3). A closure's ties are its environment's, which no declaration names.
 // A body in a recursive cycle gets its ties once the cycle's summaries are final, after the
 // borrow checks of the cycle's own bodies ran; those read a call into the cycle as tied to every
-// argument instead (inherit_rv_borrows, ILFunction.os_in_cycle).
-pub fn os_infer_ties(c: &mut OriginSets, module: &mut ILModule, idx: usize) {
+// argument instead (inherit_rv_borrows, ILFunction.os_in_cycle). Returns the refusals.
+pub fn os_infer_ties(c: &mut OriginSets, module: &mut ILModule, idx: usize) -> u32 {
     let f = module.functions[idx];
-    if f.has_borrows || f.from_interface || f.is_extern { return; }
+    if f.borrows_trusted || f.from_interface || f.is_extern { return 0 as u32; }
+    if f.has_borrows && c.rules == PROVENANCE_OFF { return 0 as u32; }
     if f.params_len > 0 as usize
         && type_name_is(c.table.lookup(f.param(f.params_len - 1 as usize).name), "__env") {
-        return;
+        return 0 as u32;
     }
     // A borrow is held only by a value whose type can hold a reference (inherit_rv_borrows), so
     // an integer result or argument carries none, whatever address its bits may hold.
     if f.ret_ty != 0 as u32 && !module.type_holds_reference(f.ret_ty, 0 as usize) {
-        return;
+        return 0 as u32;
     }
     let base = if f.params_len > 0 as usize && f.param(0).name == c.sret_name {
         1 as usize
@@ -8347,10 +8350,34 @@ pub fn os_infer_ties(c: &mut OriginSets, module: &mut ILModule, idx: usize) {
         }
         i = i + 1 as usize;
     }
-    if missing == 0 as u64 { return; }
+    if missing == 0 as u64 { return 0 as u32; }
+    if f.has_borrows { return os_refuse_narrowing(c, &f, base, missing); }
     let p = module.get_function_mut(idx);
     p.ret_ties = p.ret_ties | missing;
     p.ties_inferred = true;
+    return 0 as u32;
+}
+
+// One refusal per parameter in MISSING, at F's declaration: its `#[borrows(..)]` leaves out a tie
+// the body makes. The caller holds no borrow of that argument while the result points into it.
+fn os_refuse_narrowing(c: &mut OriginSets, f: &ILFunction, base: usize, missing: u64) -> u32 {
+    let kind = if c.rules == PROVENANCE_WARN { "warning" } else { "error" };
+    let mut n = 0 as u32;
+    let mut i = 0 as usize;
+    while i < 63 as usize {
+        if (missing >> (i as u64)) & 1 as u64 != 0 as u64 {
+            c.errors = c.errors + 1 as u32;
+            n = n + 1 as u32;
+            diag_start(c.file, f.decl_span, kind);
+            eprint("provenance: #[borrows(..)] leaves out '");
+            eprint(c.table.lookup(f.param(i + base).name));
+            eprint("', which the result may point into; a declaration may name more than ");
+            eprint("the body returns, never less ");
+            eprint("(a reviewed narrowing is `#[unsafe(borrows(..))]`)\n");
+        }
+        i = i + 1 as usize;
+    }
+    return n;
 }
 
 // A direct call's result, into OS_T_VO and OS_T_VS, from the callee's summary: an argument in

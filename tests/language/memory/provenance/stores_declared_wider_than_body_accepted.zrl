@@ -1,0 +1,18 @@
+// A `#[stores(..)]` may declare a store the body does not make: a wider public contract is always
+// safe, since callers assume more (§3, _Checked contracts_). Only a store the body makes and the
+// declaration leaves out is an error (`err_undeclared_stores_param.zrl`).
+// flags: --provenance
+// expected exit 0
+
+struct H { p: &i32 }
+
+#[stores(x -> h)]
+fn put(h: &mut H, x: &i32) {}
+
+static G: i32 = 7;
+
+fn main() -> i32 {
+    let mut h = H { p: &G };
+    put(&mut h, &G);
+    return *h.p - 7;
+}

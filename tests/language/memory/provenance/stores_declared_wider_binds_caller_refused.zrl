@@ -1,0 +1,24 @@
+// A wider `#[stores(..)]` binds its callers as if the body made the store: passing an address of
+// this frame where `put` declares it stores into longer-lived memory is refused, though `put`'s
+// body stores nothing (§3, _Checked contracts_).
+// flags: --provenance
+// EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
+// expected compile fail
+
+struct H { p: &i32 }
+
+#[stores(x -> h)]
+fn put(h: &mut H, x: &i32) {}
+
+static G: i32 = 7;
+
+fn keep(h: &mut H) {
+    let local = 5;
+    put(h, &local);
+}
+
+fn main() -> i32 {
+    let mut h = H { p: &G };
+    keep(&mut h);
+    return *h.p;
+}

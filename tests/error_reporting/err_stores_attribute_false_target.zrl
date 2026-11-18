@@ -1,5 +1,7 @@
 // expected compile fail
-// EXPECT: error: #[stores] names a target this body does not store into
+// EXPECT: error: this function stores into the target 'h1' where #[stores] does not declare it; add `-> h1` to `#[stores]`
+// The declared target `h2` is a wider contract, which is allowed; the store into `h1` is not
+// declared.
 
 struct H { p: &i32 }
 
