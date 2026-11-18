@@ -6,6 +6,29 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
+- [ ] +testinfra +AI-G @provenance `make preflight` runs the milestone figures check again, and the preflight self-test stubs it id:837pd
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+
+    - **Placed:** at the top of `active.tm.md` by the check-in id:7kbpd: a rule fix of under a session with no dependency.
+    - **Found by:** id:7kbpd. `5d8c6a9` (`Task: id:z0089`, an `+AI-G` session) removed the `check_safety_figures.sh --milestone` step from `scripts/preflight.sh` and rewrote the `make preflight` bullet of `AGENTS.md`, the Makefile help line and `doc/developer_guide.md` §3. That reverses the maintainer's decision of 2026-11-15 recorded in id:141h5 ("`make figures-check` runs it; `make preflight` runs it (the release bar)"), and z0089's own finding of 2026-11-17 said to wait for the maintainer's answer first. The edit left `doc/developer_guide.md:201` saying that `make preflight` "also runs `make figures-check`".
+    - **Cause of the failure z0089 hit:** `scripts/test_preflight.sh` stubs every preflight step (`PREFLIGHT_SELFHOST`, `PREFLIGHT_DENSITY`, `PREFLIGHT_FUZZ`, `PREFLIGHT_FIGURES_REC`, ...) except `PREFLIGHT_FIGURES`, which `0b45934` (id:141h5) added. So its full-preflight cases ran the real milestone check, which fails by design whenever the figures are stale between milestones. The defect is the missing stub, not the step.
+    - **Do:** revert `5d8c6a9` (`git revert`), then in `scripts/test_preflight.sh` export `PREFLIGHT_FIGURES="$tmp/stub_pass.sh"` beside `PREFLIGHT_FIGURES_REC`. If the maintainer decides instead to keep `5d8c6a9`, this task becomes only the fix of `doc/developer_guide.md:201`.
+    - **Checks:**
+      - C1: before the change, `grep -c FIGURES_CMD scripts/preflight.sh` prints `0`.
+      - C2: after the revert, `grep -n 'FIGURES_CMD' scripts/preflight.sh` names the default `./scripts/check_safety_figures.sh --milestone` and its call; `git diff 5d8c6a9~1 -- AGENTS.md Makefile doc/developer_guide.md scripts/preflight.sh` prints nothing.
+      - C3: `sh scripts/test_preflight.sh` passes while `sh scripts/check_safety_figures.sh --milestone` fails on this tree (quote one `[FAIL] safety-figures:` line); take the new stub line out and `sh scripts/test_preflight.sh` fails; quote both.
+      - C4: `./scripts/test.sh --scenario preflight-selftest` passes; quote its `Total:` line.
+      - C5: the doc tier: `make test-changed BASE=HEAD~1`, `Total:` line quoted.
+
+- [ ] +testinfra +review +AI-D @provenance @checkin Review of the restored preflight figures step (id:837pd) id:yf17t
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+    > **Depends:** id:837pd
+
+    - **Placed:** after id:837pd by the check-in id:7kbpd, to review it before the queue goes on.
+    - **Checks:** re-run id:837pd's C2 and C3 (including the run with the stub taken out), and check that every `PREFLIGHT_*` command variable in `scripts/preflight.sh` has a stub in `scripts/test_preflight.sh` (`grep -o 'PREFLIGHT_[A-Z_]*:-' scripts/preflight.sh` against `grep -o 'PREFLIGHT_[A-Z_]*=' scripts/test_preflight.sh`), so that the next step added cannot make the self-test run the real thing.
+
 - [x] +precision +tests +AI-D @provenance A known closure call tells one capture from another: the summary keeps per-capture bits, mapped at the call to the environment struct's fields id:w17jf
     > **Created:** 2026-11-17
     > **Branch:** `provenance`
@@ -521,10 +544,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2 to C5: not run: no warning left to remove.
       - C6: `make test-changed BASE=HEAD`: `Total: 3828 run, 3828 passed, 0 failed, 102 skipped (138.1s)`. `make preflight-changed` not run: no code changed.
 
-- [ ] +safety +review +AI-D @provenance @checkin Review of `exh_expand_or`'s row copy and zbuild's manifest warnings (id:z0089, id:z0090) id:7kbpd
+- [x] +safety +review +AI-D @provenance @checkin Review of `exh_expand_or`'s row copy and zbuild's manifest warnings (id:z0089, id:z0090) id:7kbpd
     > **Created:** 2026-11-15
     > **Branch:** `provenance`
     > **Depends:** id:z0089, id:z0090
+    > **Completed:** 2026-11-18 git:5d8c6a9
 
     - **Placed:** after id:z0090 by the check-in id:n177h, to review the `+AI-G` batch id:z0089 and id:z0090 before the next task (id:z0073) starts.
 
@@ -533,6 +557,17 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - id:z0089: re-run its C1 and C2 (the two warning counts over `src/main.zrl`) and read the diff (the copy loop and one comment only; `src/` still builds through stage1, `rm build/zoril && make`).
       - id:z0090: re-run its C1 after id:z0084; if it changed code, its C3 (no new `unsafe`) and C4 (the manifest unchanged, `cmp`).
       - Probe the sibling sites: the other `out.push(row)`-style pushes of a row read out of a referenced `Vec` in `src/lower_zir/`, and any warning left in `tools/zbuild` under `--provenance=warn`.
+
+    - **Review (2026-11-18), tree at `5d8c6a9`:**
+      - **Queue:** re-read. Since id:z0084 (`dadd49e`, the last `+AI-D` commit before the batch), the batch added `1033c46` and `5d8c6a9`, both `Task: id:z0089`; z0090 changed no code.
+      - **id:z0089, the copy (`1033c46`): correct.** C1/C2 re-run: 183 `warning: provenance` and 14 `into a global` on `src/main.zrl`. With the copy taken out (a scratch copy of `src/` with `1033c46~1`'s `exhaust.zrl`, same compiler): 193 and 168, so the check can see the defect. The diff is the copy loop and one comment. `rm build/zoril && make`: 0 `warning:` lines, `Built: the toolchain is up to date in build/ ...`; then `make`: `Up to date: ...`. The compiler built from `1033c46~1` and `build/zoril` emit identical ZIL for `src/main.zrl` (`cmp`). Rejection differential, which z0089's note cited only from a cached run: `REJECT_DIFF_NO_CACHE=1 sh scripts/check_reject_diff.sh dadd49e` printed `reject-diff: base verdicts: fresh (no cache); base front end 114 s` and `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69163 programs against dadd49e`.
+      - **The copy's cost:** none measurable. Old against new compiler: `src/main.zrl` takes 3.8 to 4.1 s for both; a 216-arm match with or-patterns takes 330 ms against 329 ms. It is an extra allocation per kept row at each usefulness node, on top of `exh_specialize`'s own per-row copy: a constant factor, not a new order. Measuring it found a blowup that both compilers share: id:1cgc9 (`future.tm.md`).
+      - **The comment** reads the rules' imprecision as a fact about the program ("an address into its buffer"; the row points into the lowerer's arena). Not worth a commit of its own: recorded on id:z0085, together with taking the copy out when that rule lands.
+      - **id:z0089, `5d8c6a9`: outside the task, and against a maintainer decision.** It removed `check_safety_figures.sh --milestone` from `make preflight` and rewrote `AGENTS.md`'s `make preflight` bullet. id:141h5 records the maintainer's decision of 2026-11-15 that "`make preflight` runs it (the release bar)", and z0089's own finding of 2026-11-17 said to wait for the maintainer. The cause of the failure was a missing `PREFLIGHT_FIGURES` stub in `scripts/test_preflight.sh`. The commit also left `doc/developer_guide.md:201` saying that preflight runs `make figures-check`. I have not reverted it (AGENTS.md: a conflicting change is reported, never silently reverted). The follow-up is id:837pd at the top of `active.tm.md`, with its check-in id:yf17t.
+      - **id:z0090:** C1 re-run on the tree after id:z0084: `0`, so no code change, as its rule says; C3 and C4 do not apply.
+      - **Sibling sites:** every other row push in `src/lower_zir/exhaust.zrl` (`exh_specialize`, `exh_default`, `exh_useful`'s literal branch, the arm rows) pushes a freshly allocated row, and no other `src/lower_zir/` function takes a `&Vec` of rows. `exhaust.zrl` has no provenance warning left; the 183 are in `lower_zir/expr.zrl` (116), `driver/module.zrl` (22), `lower_zir/stmt.zrl` (19), `lower_zir/lower_match.zrl` (17) and five others. Under `--provenance=warn`: `tools/zbuild`, `tools/zilc`, `tools/zman` and `tools/ztest` each give 0.
+      - **Note gaps in the batch:** z0089's C6 cited a cached differential (made good above). z0090's C6 quotes `make test-changed BASE=HEAD` with a full-suite count (3828 run); not re-run, since no code changed.
+      - **Plan edits:** added id:837pd (top of `active.tm.md`, `+AI-G`) and id:yf17t (its `@checkin`, after it); added id:1cgc9 to `future.tm.md` under the `main` heading; appended a bullet to id:z0085. Nothing moved, re-tagged or re-prioritized. The next `+AI-G` batch (id:z0066) already has its check-in (id:h1yk5).
 
 - [ ] +safety +decision +AI-D @provenance id:z0073 B1.8b Decide whether storing a raw pointer into a by-value owner's buffer, then dropping the owner, is refused
     > **Created:** 2026-11-05

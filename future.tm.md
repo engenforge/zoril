@@ -19,6 +19,8 @@ Rules id:z0075 deferred: each root is seen today only in the tree's own code (ch
     - **Measured alone (id:z0064, a copy of `src/` with the same fresh copy at `exhaust.zrl:275`):** 195 to 185, and "into a global" 167 to 14; `exh_useful`'s summary becomes `ParamContents(0) -> Param(0) ParamContents(0)`.
     - **Decide first, then do:** a rule that adds knowledge (a tie by depth, or by type: a `[mut u32]` element cannot address a buffer of `[mut u32]` headers without `unsafe`), or the one-line code change at the site (id:z0075 says which route). A rule removes origins in effect, so the series rule and the rejection differential apply; probe a result that does point into the buffer (`fn first(v: &Vec<i32>) -> &i32 { return &v.as_slice()[0]; }`, then the `Vec` dropped or pushed to), which must keep it. `make test`, `make preflight-changed`, the store grid.
 
+    - **From the check-in id:7kbpd (2026-11-18):** id:z0089 worked around this rule's absence with a copy in `ZirLowerer::exh_expand_or` (`1033c46`). When this rule lands, take the copy out again (`out.push(row)`) and check that `src/main.zrl` stays at 14 "into a global" warnings under `--provenance=warn`. The comment above the copy says "A row read out of a referenced Vec is an address into its buffer". That is how the rules read it, not what the program does (the row points into the lowerer's arena), so if the copy stays it should say "the provenance rules read ...".
+
 ## The `Box` drop series (id:z0019 to id:z0028)
 
 Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.md` §5): a leak, which does not break memory safety. The series makes a `Box` free its allocation and drop its contents at scope end without ever shipping a free that some route can observe. **Invariants for every task in it:** (1) the leak stays the default until id:z0028; the freeing code is built behind an off-by-default option, `--box-free` (`zoril` and `zbuild`), so the tree is releasable after every task; (2) the routes that would observe a freed `Box` are closed first (id:z0019 to id:z0023), each a `+safety` change with probes, accepted twins and the rejection differential; (3) each task ends open with an `Awaiting review` bullet and is fix-reviewed by another model before the next starts; (4) the two drop predicates, `type_needs_drop_internal` (`src/lower_zir/utils.zrl`) and `zil_type_needs_drop` (`src/lower_zir_to_zil.zrl`), change together; (5) build warning-free under stage1 (`make preflight-changed`), keep the `if absent_type { return false; }` lines of both predicates textually intact (mutation anchors), add no `zoril_*` symbol in `src/` (`scripts/check_runtimes.sh`), and regenerate `corpus/zrl_whole_program_zil.sha256` in a commit of its own when output changes. **Order:** id:z0019 to id:z0023 in any order; then id:z0024 to id:z0028 in sequence.
@@ -748,6 +750,20 @@ Standalone tasks developed and committed directly on `main`:
       - C3: quote median compile time of `timeout -k 5s 30s ./build/zoril --emit-zil -o /dev/null src/main.zrl -I stdlib=stdlib -I src -I build/gen` over 3 runs before and after.
       - C4: `make test`, quoting `Total:`.
       - C5: `make preflight-changed`, quoting fixpoint, clean-tree build, mutations, and reject-diff.
+
+- [ ] +diagnostics +AI-D A `match` of about a thousand arms aborts the compiler: the exhaustiveness checks take quadratic time and exhaust the 4 GiB arena id:1cgc9
+    > **Created:** 2026-11-18
+
+    - **Found by:** id:7kbpd, while measuring the cost of id:z0089's row copy (the copy changes neither figure: the compiler built from `1033c46~1` gives the same times and the same abort).
+    - **Now:** a `match` over a `(E, E, E, E, E)` tuple, `E` a six-variant enum, with one arm per `(E.a, E.b, E.c, E.d, _)` and a final `_`, compiles in 189 ms at 200 arms, 726 ms at 400 and 2689 ms at 800. At all 1296 arms the compiler aborts (exit 134) after 5.8 s with `ArenaHeader overflow (capacity: 4294967296, offset: 4294962240, requested: 6484)`. With or-patterns in two columns (`(E.a, E.b | E.c, E.d, _, E.A | E.B | E.C)`), 800 arms already abort. A generated `match` (a lexer or opcode table) of this size is plausible, and the abort is not a diagnostic.
+    - **Reproducer** (POSIX `sh`; `N` arms, then `timeout 300 build/zoril -I stdlib=stdlib -o /tmp/u.out /tmp/u.zrl`):
+      ```
+      N=1296; { echo 'enum E { A, B, C, D, F, G }'; echo 'fn f(x: (E, E, E, E, E)) -> i32 {'; echo '    match x {'
+      i=0; for a in A B C D F G; do for b in A B C D F G; do for c in A B C D F G; do for d in A B C D F G; do
+      [ $i -lt $N ] && echo "        (E.$a, E.$b, E.$c, E.$d, _) => 1,"; i=$((i+1)); done; done; done; done
+      echo '        _ => 0,'; echo '    }'; echo '}'; echo 'fn main() -> i32 { return f((E.A, E.B, E.C, E.D, E.F)); }'; } > /tmp/u.zrl
+      ```
+    - **Lead, not yet verified:** `warn_unreachable_arms` runs `exh_useful` once per arm against every arm before it, and each call specialises (copies) every row at every level in `self.arena`, which is never reclaimed during a function's lowering. So both the time and the memory grow with arms² × columns. Diagnose first: measure where the arena goes (per pass: `warn_unreachable_arms`, `lint_wildcard_arm`, `check_match_exhaustiveness`), then decide between a scratch arena reset per arm, sharing unchanged row tails, and a size limit past which the check gives up quietly (as `depth > 32` already does). The provenance rules constrain `src/lower_zir/exhaust.zrl` (see id:z0089 and id:z0085).
 
 ## `testinfra` branch: the test runner in Zoril and test-path portability, paused (from `active.tm.md`, 2026-11-14)
 
