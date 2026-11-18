@@ -84,3 +84,4 @@ date	commit	zoril_version	host_id	host_os	host_arch	cpu_model	cores	ram_gb	gover
 2026-11-17-19-59-18	dadd49e	0.1.0-alpha-238-gdadd49e	a52c24a80e04	Linux 7.3.4-arch1-1	x86_64	AMD Ryzen 7 3700X 8-Core Processor	16	31	powersave	ok	run	pass	9868	22	3.931	5.795	2.299
 2026-11-17-21-06-10	5d8c6a9	0.1.0-alpha-240-g5d8c6a9	a52c24a80e04	Linux 7.3.4-arch1-1	x86_64	AMD Ryzen 7 3700X 8-Core Processor	16	31	powersave	ok	run	pass	9935	23	3.979	5.801	2.354
 2026-11-18-14-26-30	3cf6b86	0.1.0-alpha-252-g3cf6b86	a52c24a80e04	Linux 7.3.4-arch1-1	x86_64	AMD Ryzen 7 3700X 8-Core Processor	16	31	powersave	ok	run	pass	9902	22	3.860	5.803	2.372
+2026-11-18-15-49-40	e9726d2	0.1.0-alpha-253-ge9726d2	a52c24a80e04	Linux 7.3.4-arch1-1	x86_64	AMD Ryzen 7 3700X 8-Core Processor	16	31	powersave	ok	run	pass	10037	23	4.042	5.827	2.351
