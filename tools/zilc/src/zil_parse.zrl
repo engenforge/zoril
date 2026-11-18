@@ -654,6 +654,7 @@ impl ZilParser {
                 // the state that would be conservative if it ever did.
                 storage_known: false,
                 has_borrows: false,
+                borrows_trusted: false,
                 ties_inferred: false,
                 // ZIL is post-borrow-checking: the arena lifecycle attributes decided their
                 // exemption in the front end and nothing here reads them.

@@ -1065,6 +1065,7 @@ impl Driver {
                 || (f.is_extern && !f.is_export)
                 || (f.body != 0 as ExprId && !lowers_body),
             has_borrows: f.has_borrows,
+            borrows_trusted: f.borrows_trusted,
             ties_inferred: false,
             // How the borrow checker identifies the arena lifecycle primitives; decided here from
             // where the declaration was loaded from, never from a user file's name

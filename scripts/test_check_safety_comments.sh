@@ -112,6 +112,41 @@ EOF
 run "$tmp/clean"
 expect "a file with no unsafe blocks passes" 0 "all 0 stdlib unsafe blocks"
 
+# 8. A trusted `#[unsafe(borrows(..))]` states why, like a block.
+mkdir -p "$tmp/trusted"
+cat > "$tmp/trusted/g.zrl" <<'EOF'
+impl Args {
+    // Returns the argument at i.
+    // SAFETY: the bytes are process memory, which outlives every Args.
+    #[unsafe(borrows())]
+    pub fn get(self: &Args, i: usize) -> [u8] { return self.at(i); }
+}
+EOF
+run "$tmp/trusted"
+expect "a commented #[unsafe(borrows(..))] passes" 0 "all 1 stdlib unsafe blocks"
+
+# 9. ... and fails without the comment, naming its line.
+mkdir -p "$tmp/untrusted"
+cat > "$tmp/untrusted/h.zrl" <<'EOF'
+impl Args {
+    // Returns the argument at i.
+    #[unsafe(borrows())]
+    pub fn get(self: &Args, i: usize) -> [u8] { return self.at(i); }
+}
+EOF
+run "$tmp/untrusted"
+expect "an uncommented #[unsafe(borrows(..))] fails" 1 "h.zrl:3:"
+
+# 10. The attribute's comment does not cover a block in the function it marks.
+mkdir -p "$tmp/attrrun"
+cat > "$tmp/attrrun/i.zrl" <<'EOF'
+// SAFETY: the bytes are process memory.
+#[unsafe(borrows())]
+pub fn get(p: *u8) -> u8 { return unsafe { *p }; }
+EOF
+run "$tmp/attrrun"
+expect "the attribute's comment does not cover the body's block" 1 "i.zrl:3:"
+
 if [ "$errors" -ne 0 ]; then
     echo "FAIL: $errors case(s) failed."
     exit 1

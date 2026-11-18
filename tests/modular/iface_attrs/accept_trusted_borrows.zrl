@@ -1,0 +1,17 @@
+// expected exit 84
+// `#[unsafe(borrows())]` crosses a `.zri` as written: the results of `label` and `gen_trusted` are
+// tied to no argument, so the owners can be reassigned while the results are read.
+import "lib.zrl";
+import "lib_ties.zrl";
+use lib::gen_trusted;
+use lib_ties::Picker;
+
+fn main() -> i32 {
+    let mut p = Picker.new(@slice(0 as *u8, 0 as usize));
+    let s = p.label();
+    p = Picker.new(@slice(0 as *u8, 0 as usize));
+    let mut n = 1 as i32;
+    let g = gen_trusted::<i32>(&n);
+    n = 2 as i32;
+    return s[0] as i32 + g[0] as i32 + n - 2 as i32;
+}

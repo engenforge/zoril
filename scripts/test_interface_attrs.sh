@@ -58,6 +58,10 @@ grep -B1 'fn pick(' "$dir/lib_ties.zri" | grep -qF '#[borrows(self, x)]' \
     || fail "the interface lost the ties pick's body adds to the default" "$dir/lib_ties.zri"
 grep -B1 'fn view(' "$dir/lib_ties.zri" | grep -qF '#[borrows(' \
     && fail "the interface wrote #[borrows] on view, whose ties are the default" "$dir/lib_ties.zri"
+# A trusted narrowing keeps its `unsafe` on a summarized method and on a generic body alike.
+grep -B1 'fn label(' "$dir/lib_ties.zri" | grep -qF '#[unsafe(borrows())]' \
+    || fail "the interface lost #[unsafe(borrows())] on label" "$dir/lib_ties.zri"
+has_attr gen_trusted '#[unsafe(borrows())]' || fail "the interface lost #[unsafe(borrows())] on gen_trusted" "$dir/lib.zri"
 
 for prog in "$src"/accept_*.zrl "$src"/reject_*.zrl "$src"/private_*.zrl; do
     [ -f "$prog" ] || continue

@@ -15,3 +15,11 @@ impl Picker {
     // Returns a view `self` holds: the default already covers it.
     pub fn view(self: &Picker) -> [u8] { return self.data; }
 }
+
+impl Picker {
+    // A trusted narrowing: the `&self` default would tie the result to `self`, and the interface
+    // keeps the `unsafe` form, so an importer trusts it the same way.
+    // SAFETY: the result is a string literal, which outlives every Picker.
+    #[unsafe(borrows())]
+    pub fn label(self: &Picker) -> [u8] { return "*"; }
+}

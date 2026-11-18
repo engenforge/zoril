@@ -256,7 +256,8 @@ impl InterfacePrinter {
         // the body added to it are written out the same way.
         if unsafe { (*p_f).has_borrows || (*p_f).ties_inferred } {
             self.write(indent);
-            self.write("#[borrows(");
+            let trusted = unsafe { (*p_f).has_borrows && (*p_f).borrows_trusted };
+            self.write(if trusted { "#[unsafe(borrows(" } else { "#[borrows(" });
             let ties = unsafe { (*p_f).ret_ties };
             let sret_name = self.table.intern("__sret");
             let env_name = self.table.intern("__env");
@@ -276,7 +277,7 @@ impl InterfacePrinter {
                 }
                 pi = pi + 1 as usize;
             }
-            self.write(")]\n");
+            self.write(if trusted { "))]\n" } else { ")]\n" });
         }
     }
 
@@ -287,14 +288,14 @@ impl InterfacePrinter {
     fn write_declared_contracts(self: &InterfacePrinter, f: &FnDecl, indent: [u8]) {
         if f.has_borrows {
             self.write(indent);
-            self.write("#[borrows(");
+            self.write(if f.borrows_trusted { "#[unsafe(borrows(" } else { "#[borrows(" });
             let mut i = 0 as usize;
             while i < f.borrows.len {
                 if i > 0 as usize { self.write(", "); }
                 self.write_ident(f.borrows[i]);
                 i = i + 1 as usize;
             }
-            self.write(")]\n");
+            self.write(if f.borrows_trusted { "))]\n" } else { ")]\n" });
         }
         if f.has_stores {
             self.write(indent);

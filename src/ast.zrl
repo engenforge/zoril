@@ -599,6 +599,9 @@ pub struct FnDecl {
     // (`#[borrows()]`: into none of them). Without it, Rust's elision rules decide.
     pub has_borrows: bool,
     pub borrows: [u32], // parameter names
+    // `#[unsafe(borrows(..))]`: the author vouches for `borrows`, so it is trusted where it names
+    // less than the body returns, which a plain `#[borrows(..)]` may not (doc/design/provenance.md §3).
+    pub borrows_trusted: bool,
     // `#[stores(p -> q)]`: the body stores p's own storage into q's memory (`q` is `self` when
     // the arrow is left out, and `static` for a global). Checked against the computed masks when
     // the body is verified (src/verify.zrl); a `pub fn` that stores a reference parameter without

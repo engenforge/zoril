@@ -21,6 +21,10 @@ pub fn gen_must_use<T>(x: T) -> T { return x; }
 #[borrows(b)]
 pub fn gen_borrows<T>(a: &T, b: &T) -> &T { return b; }
 
+// SAFETY: the result is a string literal, which outlives every argument.
+#[unsafe(borrows())]
+pub fn gen_trusted<T>(a: &T) -> [u8] { return "*"; }
+
 #[stores(val -> dst)]
 pub fn gen_stores<T>(val: &T, dst: &mut Holder<T>) { dst.r = val; }
 

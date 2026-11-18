@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_unsafe_attr_not_borrows.zrl:5:10: error: only #[borrows(..)] can be marked unsafe
+// A trusted narrowing is the one claim `unsafe(..)` marks; a `#[stores(..)]` is checked against the
+// body and has nothing to trust.
+#[unsafe(stores(a))]
+fn put(a: &i32) {}
+fn main() -> i32 { return 0; }
