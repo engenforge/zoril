@@ -140,7 +140,7 @@ pub fn read_to_end_sized<R: Read>(r: &mut R, initial_cap: u64, a: &Arena) -> Res
 // CALLER OBLIGATION: arena must be valid and initialized.
 //
 // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
-#[borrows()]
+#[borrows(arena)]
 pub unsafe fn read_to_end_sized_raw<R: Read>(
     r: &mut R,
     initial_cap: u64,

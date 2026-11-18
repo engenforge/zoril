@@ -31,7 +31,6 @@ impl<T: Clone> Clone for Vec<T> {
 // String's own arena via the raw escape hatch (an `&Arena` is not available here).
 impl Clone for String {
     // Creates an explicit duplicate copy of the value.
-    #[borrows()]
     fn clone(self: &String) -> String {
         // SAFETY: the pointer is the arena `self` (a live String) allocates from, and
         // `clone_in_raw` only records it.

@@ -1,6 +1,6 @@
 // name: Option.clone of an Option holding a view of this frame is returned
 // expected: known_gap
-// gap: impl<T: Clone> Clone for Option<T> declares #[borrows()], so the clone of Some(s), s a view of a stack array, holds no borrow; returning it is accepted and the caller reads the dead frame
+// gap: Clone for Option<T> declares no #[borrows()], so o.clone() is tied to the local o by the &self default, but the default build's return rule does not follow that tie to the view of a stack array o holds: the clone of Some(s) is returned and the caller reads the dead frame; returning o itself is refused, and so is the clone under --provenance (return rule)
 // observed: exit 7
 import "core.zrl";
 import "clone.zrl";
