@@ -6,39 +6,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [x] +safety +spec +AI-D @provenance B3e Decide the notation for an `extern`'s store effect (`*s -> d`, trusted) in the surface syntax spec id:yp1er
-    > **Created:** 2026-11-19
-    > **Branch:** `provenance`
-    > **Depends:** id:f81f3
-    > **Completed:** 2026-11-19 git:a9b60aa
-
-    - **Placed:** directly after id:77rr6, before the stage 1 task it blocks (id:f81f3's decision 2).
-    - **Decide and write into `doc/spec/surface_syntax.md`** (§2.5 and the `#[stores(..)]` paragraph, near line 763), with `doc/design/provenance.md` following:
-      1. _The form:_ `*s -> d` says that what `s` points to is stored into what `d` points to. Settle whether `**s` or `*s -> *d` is needed, and whether `static` may be a target or a source, as in `#[stores(p -> static)]`.
-      2. _The spelling of trust:_ `#[unsafe(stores(..))]` on an `extern`, since no body checks it (principle 4). Today `build/zoril` refuses it: `only #[borrows(..)] can be marked unsafe` (id:f81f3's F8). Settle what a plain `#[stores(..)]` on an `extern` means from now on: refused, or a warning that names the `unsafe` spelling.
-      3. _"Stores nothing":_ how an `extern` that takes pointers and keeps none says so (`#[unsafe(stores())]`?), so that stage 2 can refuse an undeclared `extern` without false refusals of `memset` and the like.
-      4. _What a caller applies:_ the call store rule over `O(*s)`, the contents origins of the argument, into `d`'s destination reach (`os_dest_reach`). State it for the default build as well: stage 1's refusal in the default build or only under `--provenance`. The decision of id:f81f3 leaves this open. Record the choice and why.
-      5. _The `.zri`:_ what `interface_print.zrl` writes for the new form, so that `tests/modular/iface_attrs/` can check a round trip.
-      6. _Stage 1's rule, in words with its boundary:_ which `extern` calls are refused when undeclared ("two or more pointer parameters, and an argument whose origins hold a parameter or frame bit"), with the reason that the boundary moves in stage 2.
-    - **Constraint (F8):** `stdlib/mem_raw.zrl` is in `src/`'s stage1 closure. Stage1 accepts `#[unsafe(stores(*src -> dest))]` on an `extern` and does not check it. Re-check that any other spelling chosen here parses under `build/zoril-stage1`.
-    - **Output:** the spec text committed, and **Checks:** written into id:716bm and id:eb38n, each a command and its expected output, with a fix-out check. Stage 1 is not ready to start without them.
-    - **Checks:** C1, the spec change committed, and the doc tier passing (`make test-changed BASE=HEAD~1`). C2, each of items 1 to 6 is answered in the spec or design note, cited by section. C3, the spelling chosen parses under `build/zoril-stage1` (rc=0, a three-line file as in F8).
-
-    - **Moved (2026-11-19, the maintainer's request to group `+AI-G` work):** from between id:77rr6 and id:716bm to before id:77rr6. It depends on nothing in id:77rr6, and with it first, id:77rr6, id:716bm and id:eb38n run as one `+AI-G` batch.
-
-    - **Completion (2026-11-19, git:a9b60aa):** the decision is in `doc/design/provenance.md` §3, as a new paragraph, _Store effects of an `extern`_, after _Scalars, casts and `extern`_. It answers items 1 to 6, and id:716bm and id:eb38n now carry the **Do:** and numbered **Checks:** that build it.
-      - _Deviation from the task text:_ `doc/spec/surface_syntax.md` was not edited. The spec describes what the compiler does, and none of this is built, so a spec sentence saying the call is refused would be a safety claim made before its probe (AGENTS.md, Safety claims and evidence). The exact spec edits are id:716bm's Do 6 and id:eb38n's C8, committed with the code.
-      - _Found while deciding:_ the declaration needs no new caller machinery. A pair is exactly one summary edge row, and `os_edge_effects` already reads those for bodies. The rows, from `--emit-origins` on a scratch body (`build/yp1/rows_keep.zrl`, quoted in id:716bm's C2): `*s -> d` is `store ParamContents(1) -> Param(0)` (`fn cp(d: *mut &i32, s: *&i32) { unsafe { *d = *s; } }`), and `s -> d` is `store Param(1) -> Param(0)` (`fn st(d: *mut *i32, s: *i32) { unsafe { *d = s; } }`). The paragraph of 2026-11-03 in the design note, which says a safe caller cannot hand an `extern` a frame address, is refuted by gap_103. The new paragraph says so instead of rewriting the old one.
-      - _Decided here, beyond the maintainer's two decisions:_
-        - item 4, only `--provenance` reads the `*s` pairs and refuses (the staging of decision 1);
-        - stage 2 counts 64-bit integer parameters and variadic tails as able to carry an address, since a cast keeps origins;
-        - a call through an `extern "C" fn` value is refused as an undeclared `extern` in stage 2;
-        - `err_unsafe_attr_not_borrows.zrl`'s `EXPECT:` changes in id:716bm.
-      - C1: git:a9b60aa. `make test-changed BASE=HEAD` before the commit: `Total: 3871 run, 3871 passed, 0 failed, 106 skipped (139.7s)`.
-      - C2: items 1 to 6 are the bullets _The pairs_ (1), _The declaration_ (2), _The pairs_' last sentence (3), _What a caller applies_ and _Which builds_ (4), _The interface_ (5) and _The refusal, in two stages_ (6).
-      - C3: `build/zoril-stage1 -I stdlib=stdlib --emit-zil -o /dev/null` on `#[unsafe(stores(*src -> dest))]` above `extern fn memcpy(dest: *mut u8, src: *u8, size: u64) -> *mut u8;` and a `main`: `stage1 rc=0`, re-run 2026-11-19.
-      - No compiled code changed, so `make test`, `make preflight-changed` and the fuzz record do not apply.
-
 - [ ] +safety +tests +AI-G @provenance B3d A raw-pointer write through a loose raw local reaches the caller's parameter targets under `--provenance` id:77rr6
     > **Created:** 2026-11-19
     > **Branch:** `provenance`
