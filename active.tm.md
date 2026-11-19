@@ -6,10 +6,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +docs +AI-G @provenance D5 Deduplicate benchmark tables across zero_overhead.md, language_comparison.md, and why_zoril.md and add a documentation map to README.md id:vgm5x
+- [x] +docs +AI-G @provenance D5 Deduplicate benchmark tables across zero_overhead.md, language_comparison.md, and why_zoril.md and add a documentation map to README.md id:vgm5x
     > **Created:** 2026-11-19
     > **Branch:** `provenance`
     > **Depends:** id:rtnbw
+    > **Completed:** 2026-11-19 git:b2a05e5
 
     - **Placed:** directly after `id:rtnbw` (`D4`), before `id:0m832` (`D6`).
     - **Why:** Cross-language execution-speed (`fib(38)`, `array_loop`) and `zbuild` multi-file compile-throughput tables are duplicated across three files: `doc/language/language_comparison.md` (300L / 3,669W, the file `scripts/bench_cross_lang.sh --update-doc` and `scripts/run_safety_matrix.sh --update-doc` write to), `doc/zero_overhead.md` §3 (101L / 1,388W), and `doc/vision/why_zoril.md` §3.A–B (129L / 2,066W). When benchmarks are re-recorded, only `doc/language/language_comparison.md` is updated automatically, leaving the copies in `zero_overhead.md` and `why_zoril.md` to drift. In addition, after consolidating `doc/language/` and `doc/bootstrap/` in `D1`–`D4`, `README.md` needs a structured documentation map so readers can discover the four documentation tiers.
@@ -28,6 +29,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3, links and user-path scenarios: `sh scripts/check_md_links.sh .`, `sh scripts/check_md_tables.sh`, `sh scripts/test_readme_snippets.sh`, `sh scripts/test_getting_started.sh`, and `sh scripts/test_user_paths.sh` all exit 0.
       - C4, negative / take-out check: temporarily break one link in `README.md`'s new `## Documentation` section, run `sh scripts/check_md_links.sh .`, confirm it exits 1 naming the broken link in `README.md`, and restore it.
       - C5: `make test-changed BASE=HEAD~1` passes; quote its `Total:` line.
+    - **Awaiting review:** re-run C1 (`find doc/language` and `find doc/bootstrap`), C2 (`grep -cE '14,094|3,912|732'` and `wc -l -w`), C3 (`check_md_links.sh` on clean tracked tree, `check_md_tables.sh`, `test_readme_snippets.sh`, `test_getting_started.sh`, `test_user_paths.sh`), C4 (break one link in `README.md` `## Documentation` and confirm `check_md_links.sh` exits 1), and C5 (`make test-changed BASE=HEAD~1`).
+    - **Completion (2026-11-19, git:b2a05e5):** committed on `stream/provenance` (`build/provenance`, on top of `git:74b0d3a`), also allowlisting `doc/tools/*` and `doc/design/*` in `scripts/test_getting_started.sh` for `README.md`'s `doc/tools/fmt.md` and `doc/design/provenance.md` links.
+      - C1: `find doc/language -type f` printed only `doc/language/language_comparison.md`; `find doc/bootstrap -type f` printed only `doc/bootstrap/two_stage.md`.
+      - C2: `grep -cE '14,094|3,912|732' doc/zero_overhead.md doc/vision/why_zoril.md` printed `doc/zero_overhead.md:0` and `doc/vision/why_zoril.md:0`; `wc -l -w doc/zero_overhead.md doc/vision/why_zoril.md README.md` -> `74 1017 doc/zero_overhead.md`, `128 2017 doc/vision/why_zoril.md`, `379 2874 README.md`.
+      - C3: `sh scripts/check_md_links.sh` on a clean `git ls-files` export (`[PASS] all relative markdown links resolve`), `sh scripts/check_md_tables.sh` (`[PASS] md-tables: no table is wider than 140 characters`), `sh scripts/test_readme_snippets.sh` (`[PASS] readme-snippets: Zoril Fibonacci and defer snippets compiled and passed`, `[PASS] readme-snippets: Rust Fibonacci snippet compiled and passed`), `sh scripts/test_getting_started.sh` (`[PASS] test-getting-started: all walkthrough examples compiled and ran successfully`), and `sh scripts/test_user_paths.sh` (`[PASS] user-paths: README's install, release-layout, symlink and stdlib-named-directory recipes work against a staged install in 9 s`) all exited 0.
+      - C4: temporarily changing `doc/tour.md` to `doc/nonexistent_tour.md` in `README.md` caused `sh scripts/check_md_links.sh` to exit 1 with `[FAIL] README.md:345: doc/nonexistent_tour.md` (and `README.md:12`), then restored cleanly.
+      - C5: `make test-changed BASE=HEAD~1` on `git:b2a05e5` passed: `Total: 3868 run, 3868 passed, 0 failed, 106 skipped (140.5s)`.
     - **Ends with:** the change committed, an `**Awaiting review:**` bullet naming C1 to C5, then `tm done`. The check-in is `id:0m832`.
 
 - [ ] +docs +review +AI-D @provenance @checkin D6 Check-in review of the documentation consolidation and verification-ledger separation (D1 to D5) id:0m832
