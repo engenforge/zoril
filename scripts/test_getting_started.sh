@@ -106,7 +106,7 @@ find "$STAGED_DOC" -type f -name "*.md" | while read -r md_file; do
             rel_repo="$(cd "$repo_md_dir" && cd "$(dirname "$target")" && pwd)/$(basename "$target")"
             rel_repo="${rel_repo#$REPO_ROOT/}"
             case "$rel_repo" in
-                tests/*|bench/*|scripts/*|doc/spec/*|doc/language/*|doc/vision/*|doc/bootstrap/*|bootstrap/*|media/*|Makefile)
+                tests/*|bench/*|scripts/*|doc/spec/*|doc/language/*|doc/vision/*|doc/bootstrap/*|doc/tools/*|doc/design/*|bootstrap/*|media/*|Makefile)
                     continue
                     ;;
             esac

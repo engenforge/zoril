@@ -340,6 +340,13 @@ zoril -I <stdlib>  --emit-zil  ->  zilc  ->  qbe  ->  as  ->  ld  (with runtime.
 
 `PREFIX` is the directory holding `lib/zoril/` and `share/zoril/`: `/usr/local` after `sudo make install`, or the one you gave `make install PREFIX=...`.
 
+## Documentation
+
+- **Getting Started & Language Guide:** [Getting Started](doc/getting_started.md), [Tour of Zoril](doc/tour.md), [What Zoril Checks](doc/SAFETY.md), [Stability Statement](doc/STABILITY.md), [Known Issues](KNOWN_ISSUES.md), [Roadmap](doc/ROADMAP.md)
+- **Vision & Benchmarks:** [Why Zoril](doc/vision/why_zoril.md), [Zero Overhead](doc/zero_overhead.md), [Language Comparison](doc/language/language_comparison.md)
+- **Language & Toolchain Specifications:** [Surface Syntax](doc/spec/surface_syntax.md), [Standard Library](doc/spec/standard_library.md), [Safety Model](doc/spec/safety_model.md), [Unsafe Policy](doc/spec/unsafe_policy.md), [ABI](doc/spec/abi.md), [Modular Compilation](doc/spec/modular_compilation.md), [Intermediate Language](doc/spec/intermediate_language.md), [ZIR](doc/spec/zir.md), [Formatter (`zoril fmt`)](doc/tools/fmt.md)
+- **Contributor Guides & Verification Ledgers:** [Developer Guide](doc/developer_guide.md), [Dependencies](doc/dependencies.md), [Reproducible Builds](doc/reproducible_builds.md), [Two-Stage Bootstrap](doc/bootstrap/two_stage.md), [Provenance Design](doc/design/provenance.md), [Safety Verification Ledger](bench/safety_matrix/README.md), [Checked-Program Fuzzer](bench/fuzz/README.md)
+
 ## Repository layout
 
 - `src/` — the self-hosted compiler frontend (`main.zrl`, lexer, parser, AST, ZIR, verification pass, ZIL emitter, formatter).

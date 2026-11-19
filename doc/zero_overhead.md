@@ -54,34 +54,7 @@ To isolate these factors, the benchmark harness (`scripts/perf_gap.sh`) compares
 
 ## 3. Measurements Alongside Rust, Zig, and Hare
 
-Cross-language benchmarks (`scripts/bench_cross_lang.sh`, documented in `doc/language/language_comparison.md`) measure Zoril alongside other systems languages. They are context for Zoril's trade-offs, not a ranking: the LLVM-based toolchains produce much faster code, and Hare's compiler is faster on clean builds.
-
-### Execution Speed (Workloads)
-
-_Best of 3 runs, on the same host as the build table below._
-
-| Language / Toolchain  | `fib(38)` x3 (ms) | 4096-element array loop (ms) | Notes                                        |
-| --------------------- | ----------------- | ---------------------------- | -------------------------------------------- |
-| **Zoril**             | 732               | 726                          | Safe language, mandatory checks, QBE backend |
-| **C (gcc -O2)**       | 187               | 145                          | Production optimizing C compiler             |
-| **Zig (ReleaseFast)** | 130               | 537                          | LLVM backend, bounds checking disabled       |
-| **Rust (-O)**         | 132               | 133                          | LLVM backend, overflow checking disabled     |
-| **Hare**              | 690               | 959                          | QBE backend peer                             |
-
-### Build Throughput & Incremental Compilation
-
-_Measured on Linux (AMD Ryzen 7 3700X, 16 threads, powersave governor) across all toolchains on the multi-file project benchmark (100 modules × 30 functions = 3,000 functions, ~28k–34k LOC, baseline unoptimized modes)._
-
-| Language             | Codebase LOC | Clean Compile Throughput | Incremental Touch Rebuild | Incremental Edit Rebuild |
-| -------------------- | ------------ | ------------------------ | ------------------------- | ------------------------ |
-| **Zoril (`zbuild`)** | 33,706 LOC   | 3,912 LOC/s (8,614 ms)   | 63 ms                     | 92 ms (98.9% speedup)    |
-| **Hare**             | 27,709 LOC   | 14,094 LOC/s (1,966 ms)  | 167 ms                    | 169 ms (91.4% speedup)   |
-| **Rust (Cargo dev)** | 27,905 LOC   | 16,443 LOC/s (1,697 ms)  | 481 ms                    | 504 ms (70.3% speedup)   |
-| **Zig (Debug)**      | 30,735 LOC   | 15,609 LOC/s (1,969 ms)  | 71 ms                     | 657 ms (66.6% speedup)   |
-
-On a smaller project (25 modules × 10 functions, 2,931 LOC), `tools/zbuild` achieves 6,498 LOC/s clean throughput (451 ms), with a 12 ms touch rebuild and 26 ms edit rebuild (94.2% speedup).
-
-In modular compilation (`tools/zbuild`), peak resident memory is bounded by the largest module compilation step in the build tree: ~15 MB peak RSS on the 2,931-LOC project, and ~192 MB on the 33,706-LOC project, where the largest step is the generated `main.zrl` (3,106 lines calling all 3,000 functions; an ordinary module takes ~11 MB). Measured the same way on the same 3,000-function project - the largest single process in each build, read with `getrusage` - Hare's build peaks at 167 MB, Zig's at 213 MB and Rust's (`cargo` dev) at 320 MB ([`doc/language/language_comparison.md`](language/language_comparison.md)). In whole-program mode, `zoril` holds the complete program AST, IL, and interprocedural summaries in memory, taking ~10–12 MB/kLOC (~33 MB for the 2,931-LOC project, ~445 MB for the ~39k-LOC compiler itself). The generated projects differ in size between languages by up to 1.2x, so the rebuild columns are close to, but not exactly, head-to-head figures.
+Cross-language benchmarks (`scripts/bench_cross_lang.sh`) compare Zoril's execution speed (`fib(38)`, array loop), clean build throughput, incremental `zbuild` rebuild latencies, and per-step peak resident memory alongside C (`gcc -O2`), Rust (`rustc -O` / `cargo`), Zig (`ReleaseFast` / `Debug`), and Hare on a multi-file project benchmark. Because those measurements are re-recorded as toolchains and passes evolve, the canonical tables and host specifications live in a single place: [`doc/language/language_comparison.md`](language/language_comparison.md). In summary, LLVM-based toolchains produce faster code on compute-heavy kernels and Hare builds faster from clean, while `zbuild` uses interface-level early cutoff to keep incremental edit rebuilds sub-second and peak RSS bounded by the largest compilation step.
 
 ---
 

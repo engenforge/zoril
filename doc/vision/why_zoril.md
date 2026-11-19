@@ -83,15 +83,14 @@ Zoril learns from many languages. Comparisons below are context for its design c
 
 - **Context:** small, self-hosted, minimal-dependency toolchains targeting QBE. Zoril shares their backend and their aim of a small toolchain.
 - **Codebase sizes:** cproc ~9k lines of C; Hare's compiler, `harec`, ~23k lines of C, driven by the `hare` build tool; Zoril ~42k lines of Zoril; QBE ~15k lines of C.
-- **Execution speed:** on call-heavy code (`fib(38)` ×3), Zoril (732 ms) and Hare (690 ms) are close, reflecting the shared backend.
-- **Build speed:** Zoril compiles more slowly than Hare on clean builds (on the ~30k-LOC benchmark project, Hare compiles 14,094 lines a second, measured with `hare build`, and Zoril 3,912). The likely reasons are that Zoril checks more at compile time and that it is early alpha. `tools/zbuild` makes up for part of it by caching compiled modules, with interface-level early cutoff, to keep edit-rebuild cycles short (63 ms touch, 92 ms edit at 30k LOC; 12 ms touch, 26 ms edit on its 2,931-LOC benchmark project; the projects differ in size, so these are not head-to-head figures).
+- **Execution and build speed:** sharing the QBE backend puts Zoril and Hare in the same ballpark on call-heavy execution, while Hare compiles faster on clean builds because Zoril performs whole-body move and region-escape inference across function bodies. `tools/zbuild` recovers edit-cycle responsiveness through module-level caching and interface-level early cutoff (current throughput and latency numbers are recorded in [`doc/language/language_comparison.md`](../language/language_comparison.md)).
 - **Design:** both languages check bounds on reads and writes. Hare deliberately keeps memory management manual and explicit; Zoril experiments with adding compile-time move checking and stack escape checking on top of a similarly small toolchain.
 
 ### B. Zig
 
 - **Context:** a systems language built around explicit control, compile-time execution (`comptime`), and explicit allocators, with a mature standard library and growing ecosystem.
 - **Design:** Zig gives programmers control over safety per build mode and detects double-free and use-after-free at run time with its General Purpose Allocator in safe modes. Zoril tries a different point: use-after-move and stack escape checks at compile time, and bounds checks in every build.
-- **Performance:** Zig's LLVM backend produces considerably faster code than Zoril's QBE backend today (for example 130 ms against 732 ms on `fib`, and 537 ms against 726 ms on the array loop).
+- **Performance:** Zig's LLVM backend produces considerably faster machine code than Zoril's QBE backend today on compute- and loop-heavy benchmarks (recorded in [`doc/language/language_comparison.md`](../language/language_comparison.md)).
 
 ### C. Research Lineage: Cyclone, Vale, Austral
 
