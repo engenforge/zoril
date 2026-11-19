@@ -1,7 +1,6 @@
 // name: Closure handed to a function that calls it stores a frame view through a captured &mut
-// expected: known_gap
-// gap: call_it(|| { *out = s; }) with fn call_it(g: fn()) { g(); } is accepted, with and without --provenance: inside call_it the call through g stores the environment into itself (parameter 0 into parameter 0), which call_it's store summary (from the old storage walk) does not record, so the caller never checks what the closure captured; a summary built from the origin sets is expected to close it
-// observed: exit 77
+// expected: compile_reject
+// Refused at scope exit of 'a': OriginSets records call_it's unknown-fn self-store edge and transfers 'a''s release-tier borrow from the closure's captures to OUTSIDE_BORROWER.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

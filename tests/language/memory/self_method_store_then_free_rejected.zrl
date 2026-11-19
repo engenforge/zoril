@@ -1,0 +1,29 @@
+// Refused twin for self_method_store_called_twice_accepted: calling a releasing &mut self
+// method after p.lex() while p.tok is read afterwards is refused because holder three keeps
+// p borrowed in the release tier.
+// expected compile fail
+// EXPECT: cannot mutably borrow 'p' while it is already borrowed
+import "vec.zrl";
+use vec::Vec;
+
+struct Parser {
+    buf: Vec<i32>,
+    tok: [i32],
+}
+
+impl Parser {
+    fn lex(self: &mut Parser) {
+        self.tok = self.buf.as_slice();
+    }
+    fn free_all(self: &mut Parser) {
+        self.buf.free();
+    }
+}
+
+fn main() -> i32 {
+    let mut p = Parser { buf: Vec::<i32>.new(), tok: @slice(0 as *i32, 0) };
+    p.buf.push(42);
+    p.lex();
+    p.free_all();
+    return p.tok[0] - 42;
+}

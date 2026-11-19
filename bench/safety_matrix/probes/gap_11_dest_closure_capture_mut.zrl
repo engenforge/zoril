@@ -1,7 +1,6 @@
 // name: Closure stores frame view through captured mutable reference
-// expected: known_gap
-// gap: Closure storing through captured mutable reference not recognized as escaping frame
-// observed: exit 77
+// expected: compile_reject
+// Refused at scope exit of 'a': the closure's store edge transfers 'a''s release-tier borrow to OUTSIDE_BORROWER across the call, so 'a' cannot go out of scope while out still views it.
 import "mem.zrl";
 use mem::Arena;
 import "vec.zrl";

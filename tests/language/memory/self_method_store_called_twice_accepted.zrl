@@ -1,0 +1,27 @@
+// Accepted twin for C3: a method storing a view of self's own Vec into self can be called
+// twice because holder three records self's borrow in the release tier, which allows later
+// non-releasing &mut self calls.
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+
+struct Parser {
+    buf: Vec<i32>,
+    tok: [i32],
+}
+
+impl Parser {
+    fn lex(self: &mut Parser) {
+        self.tok = self.buf.as_slice();
+    }
+}
+
+fn main() -> i32 {
+    let mut p = Parser { buf: Vec::<i32>.new(), tok: @slice(0 as *i32, 0) };
+    p.buf.push(42);
+    p.lex();
+    p.lex();
+    let diff = p.tok[0] - 42;
+    p.buf.free();
+    return diff;
+}

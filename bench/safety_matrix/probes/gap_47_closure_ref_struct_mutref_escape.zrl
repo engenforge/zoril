@@ -1,7 +1,6 @@
 // name: Closure stores a frame view through an external &mut held in a local struct it captured a reference to
-// expected: known_gap
-// gap: a closure capturing r = &w, where the local struct w holds the caller's &mut, stores a slice of a Vec in this frame's arena through *r.out; the external destination is two hops from the closure environment (env -> w -> out)
-// observed: exit 77
+// expected: compile_reject
+// Refused at scope exit of 'a': OriginSets tracks multi-hop reference edges from closure captures into out and transfers 'a''s release-tier borrow to OUTSIDE_BORROWER.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

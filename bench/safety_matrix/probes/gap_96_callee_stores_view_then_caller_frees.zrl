@@ -1,7 +1,6 @@
 // name: A callee stores a view of one argument into another; the caller then frees the first
-// expected: known_gap
-// gap: put(&mut s, &v) with fn put(out: &mut [i32], v: &Vec<i32>) { *out = v.as_slice(); }, then kill(&mut v) with fn kill(v: &mut Vec<i32>) { v.free(); }, then s[0] is accepted with and without --provenance, and reads the freed buffer: the caller's s holds no borrow of v, because a call's store summary gives the stored view's borrow to no local of the caller (the liveness half of the summary), so kill's &mut use of v does not conflict; let s = v.as_slice(); v.free(); is refused; route class: a store through a pointer to a local, made by a callee, with the view made in the callee
-// observed: exit 77
+// expected: compile_reject
+// Refused at kill(&mut v): holder three (§3.1) records v's release-tier borrow on s from put's store summary, which conflicts with the releasing call kill(&mut v) while s is read afterwards.
 import "vec.zrl";
 use vec::Vec;
 
