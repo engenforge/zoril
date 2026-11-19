@@ -64,14 +64,14 @@ Rules id:z0075 deferred: each root is seen today only in the tree's own code (ch
 
 Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.md` §5): a leak, which does not break memory safety. The series makes a `Box` free its allocation and drop its contents at scope end without ever shipping a free that some route can observe. **Invariants for every task in it:** (1) the leak stays the default until id:z0028; the freeing code is built behind an off-by-default option, `--box-free` (`zoril` and `zbuild`), so the tree is releasable after every task; (2) the routes that would observe a freed `Box` are closed first (id:z0019 to id:z0023), each a `+safety` change with probes, accepted twins and the rejection differential; (3) each task ends open with an `Awaiting review` bullet and is fix-reviewed by another model before the next starts; (4) the two drop predicates, `type_needs_drop_internal` (`src/lower_zir/utils.zrl`) and `zil_type_needs_drop` (`src/lower_zir_to_zil.zrl`), change together; (5) build warning-free under stage1 (`make preflight-changed`), keep the `if absent_type { return false; }` lines of both predicates textually intact (mutation anchors), add no `zoril_*` symbol in `src/` (`scripts/check_runtimes.sh`), and regenerate `corpus/zrl_whole_program_zil.sha256` in a commit of its own when output changes. **Order:** id:z0019 to id:z0023 in any order; then id:z0024 to id:z0028 in sequence.
 
-- [ ] +types id:z0018 A10.1 A method call or an index through a reference to a `Box` is refused
+- [ ] +types +AI-G id:z0018 A10.1 A method call or an index through a reference to a `Box` is refused
     > **Created:** 2026-11-03
     > **Context:** An over-rejection with a clean diagnostic in both build modes.
 
     - `impl Point { fn sum(self: &Point) -> i64 { ... } }` then `fn f(p: &Box<Point>) -> i64 { return p.sum(); }` gives "cannot move out of borrow" (likewise `p.bump()` with `p: &mut Box<Point>`); `fn f(p: &Box<[i64; 4]>) -> i64 { return p[2]; }` gives "cannot index `&Box<[i64; 4]>`". `b.sum()` on a `Box<Point>` works.
     - **Do:** the method receiver and the index base auto-dereference through every reference and `Box` layer, as field access does (`peel_field_base`), with read and write tests in both build modes and a fuzzer shape.
 
-- [ ] +safety +tests id:z0019 A11.1 A borrow derived from a `Box` ends with the `Box`
+- [ ] +safety +tests +AI-G id:z0019 A11.1 A borrow derived from a `Box` ends with the `Box`
     > **Created:** 2026-11-03
 
     - **Series:** `Box` drop (above).
@@ -79,7 +79,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Route:** `type_has_drop` (`src/check_zir.zrl`) answers false for a `Box`, so the scope-end rule does not treat a `Box` local as freeing anything, and a borrow derived from a `Box<Point>` can outlive the block that owns it. Harmless while a `Box` leaks; a use after free once it frees.
     - **Do:** reproduce first (a borrow kept past the `Box`'s block is accepted); make `type_has_drop` and its siblings in the scope-end rule (`local_type_has_drop`) count a `Box`. Probes: the escaping borrow (`compile_reject`); accepted twins for a borrow that ends inside the block and for a `Box` received as a parameter. `make test`, `make preflight-changed`, the rejection differential.
 
-- [ ] +safety +tests id:z0020 A11.2 A closure may not move out through a captured `Box`
+- [ ] +safety +tests +AI-G id:z0020 A11.2 A closure may not move out through a captured `Box`
     > **Created:** 2026-11-03
 
     - **Series:** `Box` drop.
@@ -87,7 +87,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Route:** a capture alias with a projection (`*b`, `b.f` of a captured `Box`) is not refused as a move out of a capture, so a closure can take the value out of a `Box` its environment still owns.
     - **Do:** reproduce first; refuse the move, keeping reads and borrows through the capture legal. Probes: the move (`compile_reject`); twins for a read, a borrow and a `Copy` field copied out. Verification as id:z0019.
 
-- [ ] +safety +tests id:z0021 A11.3 A move out through a slice or an intermediate reference reports "cannot move out of borrow"
+- [ ] +safety +tests +AI-G id:z0021 A11.3 A move out through a slice or an intermediate reference reports "cannot move out of borrow"
     > **Created:** 2026-11-03
 
     - **Series:** `Box` drop.
@@ -96,7 +96,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Found (2026-11-15, the check-in id:3yasf):** the slice shape is open today for types other than `Box`. A value with a `Drop` impl read by value out of a slice or array element is dropped twice (`gap_90`; id:760hd in `active.tm.md` refuses it, with the message `cannot move out of an array or slice element`), and a `Vec` read twice out of a slice element gives two owners of one buffer (`gap_92`; whether that read is refused is the maintainer's decision, id:v0bwt, which names the `Box` shape of this task). What is left for this task after those two is `let x = *r.f` and whatever id:v0bwt leaves of `s[i]` for a `Box`.
     - **Found (2026-11-15, id:v0rsm):** its slice shape (`let x = s[i]` with `s: &[Box<T>]`) is refused by id:v0rsm's rule with the message `cannot move out of an array or slice element` (`tests/language/memory/element_move/slice_box_let.zrl`).
 
-- [ ] +safety +tests id:z0022 A11.4 A partial move is detected through `Box` dereferences and array indices
+- [ ] +safety +tests +AI-G id:z0022 A11.4 A partial move is detected through `Box` dereferences and array indices
     > **Created:** 2026-11-03
 
     - **Series:** `Box` drop.
@@ -105,7 +105,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Do:** reproduce first; make the walk follow `Box` dereferences and array indices; probes for each, twins for moving the whole value and for `Copy` fields. Verification as id:z0019.
     - **Found (2026-11-15, the check-in id:3yasf):** the array-index half is reproduced for a field that needs a drop (`let s = a[0].s;` with `a: [P]`, two drops) and is refused by id:760hd in `active.tm.md`, in `check_zir`'s `check_place_use` rather than in `reject_partial_move`. The `Box` dereference half is left for this task.
 
-- [ ] +safety +tests id:z0023 A11.4b A `Box` cannot be forged with `@ptr_cast` or `@ptr_from_int`
+- [ ] +safety +tests +AI-G id:z0023 A11.4b A `Box` cannot be forged with `@ptr_cast` or `@ptr_from_int`
     > **Created:** 2026-11-03
 
     - **Series:** `Box` drop.
@@ -114,7 +114,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Now:** `unsafe { @ptr_cast<Box<i64>>(&x as *i64) }` compiles. Once a `Box` frees, the compiler-emitted drop of a forged one would unmap a stack or arena page.
     - **Do:** both intrinsics reject a `Box` target (and a type containing one by value) with the wording `as` uses; probes for both (`compile_reject`), twins for a raw-pointer target. Check how `stdlib/local_mem.zrl`'s `arena_init` builds its `Box<ArenaHeader>`. Verification as id:z0019.
 
-- [ ] +tests id:z0024 A11.5 Lowering preparation for `Box` drops, with no change in behaviour
+- [ ] +tests +AI-G id:z0024 A11.5 Lowering preparation for `Box` drops, with no change in behaviour
     > **Created:** 2026-11-03
 
     - **Series:** `Box` drop; after id:z0019 to id:z0023.
@@ -122,7 +122,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Do (none changes output while `--box-free` is off):** (1) `find_drop_fn` (`src/lower_zir_to_zil.zrl`) stops peeling a `Box` as it peels a reference, and `Drop`/`DropIfLive` stop counting a `Box` as a plain pointer; (2) a `Box` temporary keeps its entry-block stack slot instead of being replaced by its SSA value, so a `Box` created in one branch dominates its scope-exit drop; (3) the `--box-free` option in `zoril` and `zbuild` (help, man pages, the toolchain stamp); (4) a way to run the suite with the option (a wrapper like `scripts/zoril-checked.sh`, or a variable the runner passes on), and a defined route for `--checked` together with it; (5) the option is part of every key the incremental build compares (the `.zri` and the ZIL hashes as well as the toolchain stamp).
     - **Verification:** `make test` with the corpus golden hashes unchanged, `make preflight-changed`.
 
-- [ ] +safety +tests id:z0025 A11.6 Under `--box-free`, a `Box` runs its contents' drop and frees its allocation
+- [ ] +safety +tests +AI-D id:z0025 A11.6 Under `--box-free`, a `Box` runs its contents' drop and frees its allocation
     > **Created:** 2026-11-03
 
     - **Series:** `Box` drop; after id:z0024.
@@ -131,7 +131,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Moving out of a `Box` is refused under the option until id:z0026**, with an explicit error; the option also refuses moving a `Box` field out of an aggregate and `[box x; n]` with `n > 1`. `stdlib/local_mem.zrl`'s `Box<ArenaHeader>`: check that the header page is not unmapped twice.
     - **Tests (with and without the option):** drop counts into a `static mut` for scope end, early return, `break`, a move into a call, overwrite by assignment, `Option<Box<D>>`, `Box<Box<D>>`, a field, an array, the recursive list; a bounded-memory loop (3,000 boxes of 1 MiB stays small; skipped without `/proc`); a mutant that removes the option gate. `make test`, `make test-checked` with the option, `make preflight-changed`, the rejection differential with the option on and off.
 
-- [ ] +safety +tests id:z0026 A11.7 Under `--box-free`, moving a value out of a `Box` copies it out before the allocation is freed
+- [ ] +safety +tests +AI-D id:z0026 A11.7 Under `--box-free`, moving a value out of a `Box` copies it out before the allocation is freed
     > **Created:** 2026-11-03
 
     - **Series:** `Box` drop; after id:z0025.
@@ -139,7 +139,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Do:** at every move site whose source is a `Box` dereference (`let`, assignment, struct, array, tuple and enum-variant construction, `box`, call arguments, receivers, `if`/`match` results, `return`, block tails), copy the value into an unnamed `let mut` local, free the allocation without dropping its contents, and clear the moved-from slot so its drop flag does not fire. Remove id:z0025's refusal.
     - **Tests:** each site with a drop-counted `T` and a `Copy` `T`, exiting with a value that is wrong if the copy or the free is wrong; `make test-checked` with the option. Verification as id:z0025.
 
-- [ ] +fuzz +tests id:z0027 A11.8 The fuzzer and the checked build exercise `Box` drops
+- [ ] +fuzz +tests +AI-D id:z0027 A11.8 The fuzzer and the checked build exercise `Box` drops
     > **Created:** 2026-11-03
 
     - **Series:** `Box` drop; after id:z0026.
@@ -148,7 +148,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Also:** audit `stdlib/` for raw-pointer reads that create a second owner (a `Vec`, `HashMap`, `ByteVec`, `String` or iterator returning an element by value without removing it); decide each (a move that clears the source, a copy only for `Copy` types, or a documented obligation) before id:z0028.
     - **Verification:** `make fuzz-prove`, the session, `scripts/test_fuzz_tools.sh`, `make test`.
 
-- [ ] +safety +release id:z0028 A11.9 Make freeing the default, remove `--box-free`, and say in the documents that a `Box` is freed
+- [ ] +safety +release +AI-D id:z0028 A11.9 Make freeing the default, remove `--box-free`, and say in the documents that a `Box` is freed
     > **Created:** 2026-11-03
 
     - **Series:** `Box` drop; last.
@@ -159,7 +159,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
 
 ## Evidence and tooling
 
-- [ ] +fuzz +safety +tests id:z0029 The fuzzer's mutation score: which compiler mutants the fuzzer kills
+- [ ] +fuzz +safety +tests +AI-D id:z0029 The fuzzer's mutation score: which compiler mutants the fuzzer kills
     > **Created:** 2026-11-03
 
     - **Depends note:** a full release-bar fuzz run, recorded (the maintainer's).
@@ -168,20 +168,20 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Do:** generalise `scripts/fuzz/prove_oracle.sh` (or add a sibling sharing its scratch-build code) to run a fixed pilot with any mutant's compiler; a mutant is killed when the run reports a fault, candidate or accepted mismatch. Size the pilot from a trial; a survivor is re-run at a larger range once. A `make fuzz-mutation-score` target printing killed/survived per mutant with the oracle that killed it.
     - **The result is a list, not a fix:** each survivor gets one line of why in `bench/fuzz/README.md`; widening the generator for one is its own task. `make fuzz-prove`, `scripts/test_fuzz_tools.sh` on a one-mutant fixture, `scripts/check_fuzz_fresh.sh --strict`.
 
-- [ ] +tests id:z0030 H3 A golden for `zilc`'s output on `corpus/zil/`
+- [ ] +tests +AI-G id:z0030 H3 A golden for `zilc`'s output on `corpus/zil/`
     > **Created:** 2026-11-03
 
     - **Why:** the hand-written programs in `corpus/zil/` are checked by exit code only, so a change in what `zilc` emits that keeps the exit codes passes unseen; the front end's output on `corpus/zrl/` is pinned by `corpus/zrl_whole_program_zil.sha256`.
     - **Do:** a hash file beside it holding the SHA-256 of the SSA `build/zilc` writes for each `corpus/zil/*.zil`, checked where that file is checked (`scripts/test_incremental.sh`) and regenerated with `UPDATE_GOLDEN=1`; skip `// @skip:` files; fail on an empty golden; document it in `corpus/README.md`. Change one file's expected SSA and confirm the step names it. `make test`.
 
-- [ ] +tests +portability id:z0031 D1 The dependency matrix as a few scenarios instead of one full `make test` per tool
+- [ ] +tests +portability +AI-G id:z0031 D1 The dependency matrix as a few scenarios instead of one full `make test` per tool
     > **Created:** 2026-11-03
 
     - **Why:** `scripts/test_dep_matrix.sh` runs a full `make test` per optional and per configurable tool, one after another.
     - **Scenarios:** required tools only (every optional tool removed at once; each gate it affects prints `[SKIP]` with its reason); a typical user (`git` and `lua` present, the rest absent); a relocated toolchain (every configurable tool reached only through its variable); the minimal gcc-free bootstrap; each required tool missing (per tool, each fails within seconds); clang for the C-facing tests (`CC=clang`, skipped when absent). Keep the per-tool matrix behind `make deps-matrix FULL=1`. Split the `ffi-callback` test so only its GNU `__asm__` cases need the extension.
     - **Verification:** the scenario matrix green with its wall time recorded; a planted fault that only scenario 2 catches.
 
-- [ ] +tools +portability +deps id:z0118 Build and test tooling without Lua: shell for glue, Zoril for everything larger
+- [ ] +tools +portability +deps +AI-D id:z0118 Build and test tooling without Lua: shell for glue, Zoril for everything larger
     > **Created:** 2026-10-15
     > **Context:** in the incubator repository this one spun out of; filed here 2026-11-06 by id:z0103, with its figures updated against this tree.
     > **Context:** an assessment of shell against Lua for the tooling, and how Hare splits its C and Hare tooling, reviewed 2026-10-15 in the incubator (the document was not carried over).
@@ -264,7 +264,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Do:** in `check_closure`, exit 2 with `[FAIL] closure-private-names: <label>: no modules listed` when the list is unreadable or names no module that exists.
     - **Checks:** C1 a missing and an empty `--list` file each print that line and exit 2. C2 the gate on the tree still prints both `[PASS]` lines. C3 `make test`, its `Total:` quoted.
 
-- [ ] +docs +tests @main The safety pages' probe and hole counts are checked against the tree id:594de
+- [ ] +docs +tests +AI-D @main The safety pages' probe and hole counts are checked against the tree id:594de
     > **Created:** 2026-11-14
     > **Context:** found while closing id:z0100.
 
@@ -327,34 +327,34 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
 
 ## Types, diagnostics and the standard library
 
-- [ ] +generics +types id:z0032 G1 `impl<T: Copy> Source<T> for S` fails to bind `T` when it appears only in the trait's arguments
+- [ ] +generics +types +AI-G id:z0032 G1 `impl<T: Copy> Source<T> for S` fails to bind `T` when it appears only in the trait's arguments
     > **Created:** 2026-11-03
     > **Context:** Rejected in both build modes.
 
     - **Reproducer:** `trait Source<T> { fn pull(self: &Self, fallback: T) -> T; } struct S { x: i32 } impl<T: Copy> Source<T> for S { fn pull(self: &S, fallback: T) -> T { return fallback; } } fn main() -> i32 { let s = S { x: 1 }; return s.pull(42) - 42; }` gives `type mismatch: expected &S, found bool`.
     - **Cause:** `impl_scope` (`src/mono.zrl`) binds an `impl`'s type parameters only by matching its target type. **Direction:** unify the trait's type arguments to bind the rest, mangle the bound arguments into the method name, and reject a parameter that appears in neither at the `impl` header.
 
-- [ ] +generics +types id:z0033 G2 User `impl` blocks on `Box<T>` resolve at the `impl` and fail method lookup at the call
+- [ ] +generics +types +AI-D id:z0033 G2 User `impl` blocks on `Box<T>` resolve at the `impl` and fail method lookup at the call
     > **Created:** 2026-11-03
     > **Context:** Rejected in both build modes.
 
     - **Reproducer:** `trait Priv { fn q(self: &Self) -> i32; } impl<T> Priv for Box<T> { fn q(self: &Box<T>) -> i32 { return 5; } } fn main() -> i32 { let b = box 7; return b.q() - 5; }` gives `no field 'q' on '&Box<i32>'`.
     - **Cause:** `impl_applies` (`src/mono.zrl`) matches only user types and primitives, not `Box`. **Decide first:** forbid `impl ... for Box<..>` with a clear diagnostic at the header, or allow it for local traits (mono, mangling, interface printing and the spec, symmetrically with `[T]`).
 
-- [ ] +stdlib +portability id:z0034 F1 Portable random access to a file: `File.seek` and `File.read_at`
+- [ ] +stdlib +portability +AI-G id:z0034 F1 Portable random access to a file: `File.seek` and `File.read_at`
     > **Created:** 2026-11-03
 
     - **Now:** reading in pieces works (`Read::read` in a loop, `doc/tour.md` §7); random access is reachable only through `os_unix::lseek` (`stdlib/os/unix.zrl`), with a raw `i64` result and a numeric `whence`.
     - **Do:** `File.seek(pos: SeekFrom) -> Result<u64, Error>` with `enum SeekFrom { Start(u64), End(i64), Current(i64) }`, and `File.read_at(buf: [mut u8], offset: u64) -> Result<usize, Error>` (positional; `pread64` on Linux). Document them in `doc/spec/standard_library.md` and the man-page comments (`make man-gen`), and use them in `doc/tour.md` §7. Tests for each `SeekFrom` arm, `read_at` at 0, mid-file, at and past the end, a seek before 0, and the position left unchanged. `make test`, `make preflight-changed`.
 
-- [ ] +audit +diagnostics id:z0035 A7.12 Separate compilation names a private generic item as missing, not as private
+- [ ] +audit +diagnostics +AI-G id:z0035 A7.12 Separate compilation names a private generic item as missing, not as private
     > **Created:** 2026-11-03
     > **Context:** Both build modes reject the access; only the wording differs.
 
     - **Reproducers:** a private `fn priv_gen<T>` used from another module (whole-program: "it is private"; `zbuild`: "the module defines no 'priv_gen'"); a private generic method called from another module (whole-program: "cannot access private method"; `zbuild`: "no field 'priv_m' on 'S'").
     - **Cause:** `is_private_signature_fn` and `method_is_written` (`src/interface_print.zrl`) skip generic items. **Direction:** write unreferenced private generic functions and methods into the `.zri` as bodiless signatures, and check the resolver rejects calling them before instantiation; then narrow the `KNOWN_ISSUES.md` §4 entry.
 
-- [ ] +stdlib +docs `proc.zrl`: say what a command given both `set_envp` and an `env_*` call passes to the child id:w8vmg
+- [ ] +stdlib +docs +AI-G `proc.zrl`: say what a command given both `set_envp` and an `env_*` call passes to the child id:w8vmg
     > **Created:** 2026-11-13
     > **Context:** found at check-in id:mxt3d, reviewing id:z0132.
 
@@ -372,7 +372,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Do:** qualify a const's symbol by its module, as a function's is, in whole-program and separate compilation (the `.zri` names the symbol the importer references). Probe a `pub const` read from another module, a `static`, and a const of the same name in a module and in the program's root.
     - **Checks:** C1 the program above builds and exits 0, whole-program and through `zbuild` (a test under `tests/modular/`). C2 take the change out and watch C1 fail to assemble. C3 `make test` and `make preflight-changed`, each `Total:` quoted.
 
-- [ ] +types +diagnostics @main A call with turbofish checks the number of type arguments id:7sb2k
+- [ ] +types +diagnostics +AI-G @main A call with turbofish checks the number of type arguments id:7sb2k
     > **Created:** 2026-11-14
     > **Context:** found by id:z0100's probes.
 
@@ -381,7 +381,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Found:** a call ignores a wrong number of type arguments: `id::<i32, i32>(3)` with `fn id<T>(x: T) -> T` and `g::<i32>(3)` with a non-generic `g` both compile and run (exit 0 for `return id::<i32, i32>(3) - 3;`), and `id::<>(3)` infers `T`. The value form refuses each since git:dc006a0 (`a generic function named as a value needs one type argument for each of its type parameters`, `type arguments given to a function that is not generic`). `direct_callee` in `src/lower_zir/expr.zrl` passes `type_args` to `instantiate_function` without comparing the count with `ff.type_params.len`; a method call (`instantiate_method`) is the twin to probe.
     - **Do:** refuse a count that is not zero and not the declaration's (zero still infers), and type arguments on a non-generic function, at the call as the value form does; an error test per form; `make test`, `make preflight-changed` (the differential lists the newly refused programs).
 
-- [ ] +types +diagnostics @main A pattern that moves several values out of a tuple or struct is accepted id:ts1jg
+- [ ] +types +diagnostics +AI-D @main A pattern that moves several values out of a tuple or struct is accepted id:ts1jg
     > **Created:** 2026-11-14
     > **Context:** found by id:z0176's sibling probes.
 
@@ -464,7 +464,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Background:** since id:z0095 an `unsafe fn` becomes a plain `fn` value only inside `unsafe`, and that block claims the function is safe to call with every argument the `fn` type admits (`unsafe_policy.md` §1), the obligation a safe wrapper or a closure calling it in `unsafe` already carries (`build/z95r/d_wrapper.zrl`, `d_closure.zrl`: both compile and fault the same way as the coercion). An `unsafe fn(..) -> R` type would let a value keep the precondition, so each call through it is marked, as Rust's `unsafe fn` pointers are. It is a language feature: the parser, the type checker, monomorphization, `.zri` interfaces, and the stage1 closure (`src/` cannot use it until a re-pin).
     - **Choices:** keep the id:z0095 rule alone; add the type beside it (the coercion to a plain `fn` stays, in `unsafe`); or add the type and refuse the coercion. Measure first how many `unsafe fn` values the tree and the tests make (none in `src/`, zilc or zbuild as of id:z0095).
 
-- [ ] +release +portability +decision id:z0036 R6 Make the toolchain's output identical on every Linux C library
+- [ ] +release +portability +decision +AI-D id:z0036 R6 Make the toolchain's output identical on every Linux C library
     > **Created:** 2026-11-03
 
     - **Owner:** the maintainer's decision.
@@ -472,18 +472,18 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Background:** `doc/reproducible_builds.md` ("Why the C Library, QBE and the Linker Matter"): QBE's `qsort` calls leave the order of equal elements to the C library, so QBE writes different, equivalent assembly under glibc and musl, and `ld` versions place `.note.gnu.property` differently. A tie-break on a stable key in QBE's three comparators plus `as -mx86-used-note=no` was measured to give byte-identical binaries on glibc and musl.
     - **Choices:** vendor QBE with the patch; send the tie-breaks upstream; or keep documenting that the published binaries reproduce on the release host only. The `as` flag (and `zbuild` passing it) is needed for either of the first two.
 
-- [ ] +docs +research id:z0037 DOC1 Documentation for three readers: an assessment, no decisions
+- [ ] +docs +research +AI-D id:z0037 DOC1 Documentation for three readers: an assessment, no decisions
     > **Created:** 2026-11-03
 
     - **Observation:** users, contributors and scripts read the same safety pages, and gates match sentences in the prose (`scripts/check_safety_figures.sh` in `doc/SAFETY.md`, `scripts/check_safety_model.sh` in `doc/spec/safety_model.md`), so every figure must appear verbatim, which is part of why the pages are dense.
     - **Output:** a short assessment with two or three options (a plain-language user page; a contributor reference; data for scripts kept as data, with tables generated), each with its scope, effort and effect on the gates, plus one rewritten section as a sample. Stop for the maintainer's decision.
 
-- [ ] +refactor id:z0038 H1 Remove the duplicate `import "io.zrl";` and `primitive_type_name` in `src/interface_print.zrl`
+- [ ] +refactor +AI-G id:z0038 H1 Remove the duplicate `import "io.zrl";` and `primitive_type_name` in `src/interface_print.zrl`
     > **Created:** 2026-11-03
 
     - `src/interface_print.zrl` imports `io.zrl` twice and defines a private `primitive_type_name` identical to `pub fn primitive_type_name` in `src/ast.zrl`, which it already imports. Delete the second import and the copy, and import `ast::primitive_type_name`. `make test`.
 
-- [ ] +portability id:z0039 stage0-c's runtimes have no `.note.GNU-stack` section
+- [ ] +portability +AI-G id:z0039 stage0-c's runtimes have no `.note.GNU-stack` section
     > **Created:** 2026-11-03
 
     - **Deferred:** stage0-c is frozen and fixed only when a bug blocks building stage1 or its own suites.
@@ -531,7 +531,7 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
 
 Where Zoril has been tested, by operating system and architecture, recorded per release. **First priority:** Alpine Linux, Arch Linux and Debian (stable): between them they cover musl and glibc, and a `/bin/sh` that is BusyBox `ash`, `bash` and `dash`. **Second priority:** other systems (Ubuntu, Fedora, the BSDs once a port exists, other architectures once the runtime supports them), in an order revised as ports are prioritised. Today the runtime targets `x86_64` Linux only, so the architecture column has one value.
 
-- [ ] +docs +portability id:z0050 CM1 Define the compatibility matrix and record the hosts already tested
+- [ ] +docs +portability +AI-G id:z0050 CM1 Define the compatibility matrix and record the hosts already tested
     > **Created:** 2026-11-03
 
     - **Group:** the compatibility matrix (CM1 to CM4).
@@ -542,7 +542,7 @@ Where Zoril has been tested, by operating system and architecture, recorded per 
     - **Keep the page true:** a row says which release it was tested at; a release with no row for a first-priority system does not claim it.
     - **Verification:** `make test` (`md-check`, the table width rule); every result in the table has a run behind it.
 
-- [ ] +portability +tests id:z0051 CM2 Test Debian (stable) and add its row
+- [ ] +portability +tests +AI-G id:z0051 CM2 Test Debian (stable) and add its row
     > **Created:** 2026-11-03
 
     - **Depends note:** CM1.
@@ -551,7 +551,7 @@ Where Zoril has been tested, by operating system and architecture, recorded per 
     - **A failure** gets a task of its own, named in the row; this task records the result and does not fix it.
     - **Verification:** the row's three results, each from a run on the release commit.
 
-- [ ] +portability +tests id:z0052 CM3 A recipe for adding a host to the matrix
+- [ ] +portability +tests +AI-G id:z0052 CM3 A recipe for adding a host to the matrix
     > **Created:** 2026-11-03
 
     - **Depends note:** CM2.
@@ -559,7 +559,7 @@ Where Zoril has been tested, by operating system and architecture, recorded per 
     - **Do:** a short section in `doc/compatibility.md`: how to install the dependencies on the host, which three commands to run, what to record, and how to report a result (a pull request with the row, or an issue linking the logs). After CM1 and CM2 this is written from three systems' experience, so it can be followed on a fourth without asking.
     - **Verification:** follow the recipe on one second-priority system and add its row.
 
-- [ ] +docs +release id:z0053 CM4 The release checklist requires the first-priority rows
+- [ ] +docs +release +AI-G id:z0053 CM4 The release checklist requires the first-priority rows
     > **Created:** 2026-11-03
 
     - **Depends note:** CM1.
