@@ -1,6 +1,6 @@
 # Zoril Policy on the `unsafe` Boundary
 
-Normative. This document states what Zoril's safe/unsafe boundary is _for_, so the marker is built against a policy rather than designed from the syntax outward. It is Zoril's own position, derived from a survey of prior art recorded in `doc/language/best_practices_for_unsafe_keyword.md`.
+Normative. This document states what Zoril's safe/unsafe boundary is _for_, so the marker is built against a policy rather than designed from the syntax outward. It is Zoril's own position.
 
 **The policy in one sentence:** `unsafe` marks operations the compiler cannot verify, so that everything _not_ marked can be trusted — and application code should never need to write it.
 

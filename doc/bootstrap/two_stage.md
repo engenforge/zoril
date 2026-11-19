@@ -1,15 +1,19 @@
 # Two-Stage Source Bootstrap
 
-A source build goes through two frozen layers. `stage0-C`, a C99 compiler for a fixed subset of Zoril, builds a frozen snapshot of the compiler; the snapshot then builds `src/`, the production compiler, which rebuilds itself to a fixpoint. The snapshot is what lets `src/` use more of the language than `stage0-C` itself accepts.
+A source build goes through two frozen layers. `stage0-C`, a C99 compiler for a fixed subset of Zoril, builds a frozen snapshot of the compiler (`stage1/`); the snapshot then builds `src/`, the production compiler, which rebuilds itself to a fixpoint. The snapshot is what lets `src/` use more of the language than `stage0-C` itself accepts.
 
 ```text
-stage0-C (C99)  --builds-->  stage1/ (frozen Zoril, stage0-C dialect)
-                               -> build/zoril-stage1, build/zilc-stage1
-build/zoril-stage1  --compiles-->  src/  ->  build/zoril  (the production compiler)
-build/zoril         --compiles-->  tools/zilc/src/  ->  build/zilc
+Layer 1 (frozen):  stage0-C  (C99, fixed subset; builds stage1/ -> build/zoril-stage1, build/zilc-stage1)
+        │  compiles (via QBE)
+        ▼
+Layer 2 (subset):  the stage1 snapshot  (Zoril, constrained to the stage0-C subset; builds src/ -> build/zoril)
+        │  builds
+        ▼
+Layer 3 (full):    src/ compiler (build/zoril -> tools/zilc/src/ -> build/zilc) and every full-idiomatic
+                    Zoril program (stdlib/, tests/, tools/, ...)
 ```
 
-`src/` and the `stdlib/` modules it imports are therefore limited by what the pinned snapshot accepts, which is the full language as of the freeze, rather than by `stage0-C`. The release tree keeps the two seeds under `bootstrap/stage0-c/` and `bootstrap/stage1/`; the snapshot's dialect and known issues are summarized in [`KNOWN_ISSUES.md`](../../KNOWN_ISSUES.md).
+The subset constraint is a property of the **source** at Layer 2, not of the **compiler's capability**. `stage1/` is written in the restricted Zoril subset `stage0-C` accepts (no struct or tuple match patterns, no `if let`/`while let`, no tuple destructuring in `let`, numeric-only `for` ranges), yet the compiler built from it implements the full Zoril language as of the freeze. `src/` and the `stdlib/` modules it imports are therefore limited only by what the pinned snapshot accepts, rather than by `stage0-C`, while the single frozen C compiler (auditable once) anchors an evolving compiler without ever growing itself. The release tree keeps the two seeds under `bootstrap/stage0-c/` and `bootstrap/stage1/`; the snapshot's dialect and known issues are summarized in [`KNOWN_ISSUES.md`](../../KNOWN_ISSUES.md).
 
 ## 1. Freeze set
 

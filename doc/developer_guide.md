@@ -119,7 +119,7 @@ make -C bootstrap/stage0-c minimal
 make -C bootstrap/stage0-c test_all_minimal
 ```
 
-The two seed compilers and how they fit together are described in [`bootstrap/bootstrap_layering.md`](bootstrap/bootstrap_layering.md); the re-pin procedure and backport policy are in [`bootstrap/two_stage.md`](bootstrap/two_stage.md).
+How the two seed compilers fit together, along with the re-pin procedure and backport policy, is described in [`bootstrap/two_stage.md`](bootstrap/two_stage.md).
 
 ### Fuzzing
 

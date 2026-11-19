@@ -95,13 +95,13 @@ Zoril learns from many languages. Comparisons below are context for its design c
 
 ### C. Research Lineage: Cyclone, Vale, Austral
 
-These languages explored memory safety without a Rust-style general borrow checker, and Zoril builds on their ideas ([`doc/language/arena_based_languages.md`](../language/arena_based_languages.md)):
+These languages explored memory safety without a Rust-style general borrow checker, and Zoril builds on their ideas:
 
 - _Cyclone_ pioneered safe region-based memory management for C, including region-annotated pointers, and directly influenced Rust. Its annotations show how much a language must express when it checks regions across separately compiled code.
 - _Austral_ uses linear types with capability tokens: every linear value is consumed exactly once.
 - _Vale_ pairs references with generation counters checked at run time, and uses regions to remove many of those checks.
 
-Zoril's point in this space pairs arena allocation with affine values and region escape analysis inferred from function bodies, so that programs need neither lifetime annotations nor runtime generation checks. The cost of that choice is compile time and some conservative rejections (§2.B): the compiler analyses function bodies and carries the results in module interfaces, instead of reading lifetimes from signatures. The arena half of that goal is not reached yet: until it is, arena handles are planned to carry a run-time generation check.
+In contrast to Zig's explicit `ArenaAllocator` (which relies on spatial checks and testing tools rather than compile-time temporal proofs) or Go's experimental GC-backed arenas (where the garbage collector keeps blocks live if a reference escapes), Zoril pairs arena allocation with affine values and region escape analysis inferred from function bodies, so that programs need neither lifetime annotations nor runtime generation checks. The cost of that choice is compile time and some conservative rejections (§2.B): the compiler analyses function bodies and carries the results in module interfaces, instead of reading lifetimes from signatures. The arena half of that goal is not reached yet: until it is, arena handles are planned to carry a run-time generation check.
 
 ### D. Rust
 
