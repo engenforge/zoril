@@ -1,5 +1,29 @@
 # Completed Archive
 
+- [x] +spec +docs +AI-D @provenance Make surface_syntax.md self-contained, concise, and consistent with the compiler id:sy0vy
+    > **Created:** 2026-11-19
+    > **Branch:** `provenance`
+    > **Completed:** 2026-11-19 git:9bdc23f
+
+    - **Placed:** at the top of `active.tm.md` (a self-contained spec/doc cleanup with no dependency, created retroactively after review and completion on `stream/provenance`).
+    - **Why:** `doc/spec/surface_syntax.md` had accumulated ~40+ inline repository test/probe citations, compiler internal symbol names (`Driver.check_uncalled_methods`, `Monomorphizer.impl_target_is_concrete`, `zoril_abort`), repo script/build paths, links to non-spec docs (`KNOWN_ISSUES.md`, design notes, walkthroughs), duplicated rules across sections, past-bug narratives, tutorial idioms, and several factual contradictions against `src/`. The inline `.zrl`/probe links were enforced by `scripts/check_safety_model.sh` running `check_normative_sentences` directly on `surface_syntax.md` even though `safety_model.md`, `matrix.md`, and `unsafe_policy.md` are the safety-evidence documents.
+    - **Changes:**
+      - _Self-contained, tightened spec (`doc/spec/surface_syntax.md`):_ removed all repository-internal file references, compiler internal names, repo scripts, build paths, past-bug narratives, internal jargon ("Option A+"), and tutorial idioms; deduplicated overlapping rules across §2.5/§7.2, §2.6–§2.7/§11.2.6, §3.3/§7.4, §7.1/§8.4–§8.5, and §3.9/§4.1/§9.1 (15,042 words / 105,331 bytes -> 9,285 words / 63,953 bytes).
+      - _Preserved anchors & provenance alignment:_ kept all §1–§11.2.7 section numbers (fixing duplicate `§2.6` -> `§2.6` + `§2.7`) and `#74-allocators` intact for `safety_model.md`, `matrix.md`, `src/` comments, and pending B3f/B3g tasks; accurately documented implemented `stream/provenance` attributes (`#[borrows]`, `#[unsafe(borrows)]`, `#[stores]`, `#[fresh]`) without pre-claiming unbuilt B3f/B3g behavior, preserving clean attachment points in §2.5 and §9.1.
+      - _Fixed factual drift (verified against `src/`):_ corrected inverted Postfix vs. Unary operator precedence (`src/parser/expr.zrl`), resolved the implicit-narrowing contradiction between §2.7 and §11.2.6 (`src/lower_zir/utils.zrl`), added the `char` primitive type (4-byte Unicode scalar value, with `u8` char literals widening implicitly), added `usize`/`isize` integer suffixes, added `@shl_wrap`/`@shr_wrap`/`@alloca` to §2.4, added `[val; N]` array repeat literals to §3.4, added `unsafe { ... }` and enumerated `unsafe` operations in §5.1/§11.2.5, dropped stale heading counts, and added Appendix A (Condensed Grammar).
+      - _Gate scope (`scripts/check_safety_model.sh`):_ scoped `check_normative_sentences` (and `--list-citations`) to `safety_model.md`, `matrix.md`, and `unsafe_policy.md`, while retaining `§x.y.z` heading verification, relative-link checking, and banned safety-phrase checking on `surface_syntax.md`.
+    - **Checks:**
+      - C1: `make test-changed BASE=HEAD~1` on the committed tree passes all doc, markdown, link, safety-model, portability, no-new-deps, and `stage0c-docs` gates.
+      - C2: `sh scripts/check_safety_model.sh --selftest` and `sh scripts/test_check_md_links.sh` pass.
+      - C3: `doc/spec/surface_syntax.md` has zero repository-internal path/symbol references (`grep -nE '\.md|tests/|bench/|scripts/|bootstrap/|build/|stdlib/|doc/|KNOWN_ISSUES|Driver\.|Monomorphizer\.|zoril_abort|Option A\+' doc/spec/surface_syntax.md` prints nothing).
+      - C4: measurable conciseness improvement recorded via `wc -l -w -c` before vs. after.
+    - **Completion (2026-11-19, git:9bdc23f):** committed on `stream/provenance` (`build/provenance`, on top of git:a9b60aa).
+      - C1: `make test-changed BASE=HEAD~1` on git:9bdc23f: `Total: 151 run, 151 passed, 0 failed, 0 skipped (15.6s)` (`comment-noise` 2/2, `md-check` 5/5, `no-new-deps` 1/1, `portability` 18/18, `safety-model` 100/100, `stage0c-docs` 22/22, `Integration` `md-links`+`doc-snippets` 2/2, `stray-files` 1/1).
+      - C2: `sh scripts/check_safety_model.sh --selftest` (`[PASS] phrases selftest: 9 claims reported, 0 false positives`, `[PASS] entries selftest: edited and dropped rows are reported, a matching pair (a GAP side kept) is not`) and `sh scripts/test_check_md_links.sh` (all 11 `[PASS]` cases, exit 0).
+      - C3: `grep -nE '\.md|tests/|bench/|scripts/|bootstrap/|build/|stdlib/|doc/|KNOWN_ISSUES|Driver\.|Monomorphizer\.|zoril_abort|Option A\+' doc/spec/surface_syntax.md` prints no matches (exit 1 / empty output).
+      - C4: `git show a9b60aa:doc/spec/surface_syntax.md | wc -l -w -c` = `1126 15042 105331`; `wc -l -w -c doc/spec/surface_syntax.md` = `967 9285 63953` (-38.3% words, -39.3% bytes, including Appendix A).
+      - No compiled code (`src/`, `stdlib/`, `tools/`) changed, so `make test`, `make preflight-changed`, and the fuzz record do not apply.
+
 - [x] +safety +spec +AI-D @provenance B3e Decide the notation for an `extern`'s store effect (`*s -> d`, trusted) in the surface syntax spec id:yp1er
     > **Created:** 2026-11-19
     > **Branch:** `provenance`
