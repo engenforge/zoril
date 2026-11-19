@@ -32,7 +32,8 @@ vgcore.*
 # Cache and local artifacts
 .zoril-cache/
 
-# Task files: the orphan `tasks` branch, mounted here as a worktree (AGENTS.md, Working on tasks)
-/doc/tasks/
+# Task files: the orphan `tasks` branch, mounted here as a worktree (AGENTS.md, Working on tasks).
+# No trailing slash, so a symlink to another checkout's mount is ignored too.
+/doc/tasks
 # Benchmark and density records: the orphan `records` branch, mounted here as a worktree
-/bench/records/
+/bench/records
