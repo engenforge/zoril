@@ -5,7 +5,7 @@
 .nh
 .ad l
 .\" Begin generated content:
-.TH "zoril\-args" "3" "2026\-11\-18"
+.TH "zoril\-args" "3" "2026\-11\-19"
 .PP
 .SH NAME
 .PP
@@ -135,6 +135,7 @@ pub fn next(self: &mut Args) \-> Option<[u8]>;
 .PP
 .RS 4
 Yields the next argument as a byte slice, or None when all arguments have been consumed.\&
+The result is Args.\&get'\&s, process memory that outlives every Args.\&
 .PP
 .RE
 \fBargs\fR

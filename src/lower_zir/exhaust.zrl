@@ -93,8 +93,8 @@ impl ZirLowerer {
 
     // The types of constructor C's fields: a variant's payload (its elements, when it is a
     // tuple), a tuple's elements, a struct's fields.
-    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
-    #[unsafe(borrows())]
+    // The result is lowerer arena data, which no borrow of the lowerer guards (ZirLowerer.arena).
+    #[borrows()]
     fn exh_ctor_field_types(self: &mut ZirLowerer, ty: u32, kind: u32, c: usize) -> [mut u32] {
         if kind == EXH_TYPE_ENUM {
             let payload = self.get_variant_payload_type(ty, c as u32);
@@ -177,8 +177,8 @@ impl ZirLowerer {
     // The sub-patterns of constructor pattern P, one per field of the constructor (ARITY), or
     // an empty slice when they cannot be lined up (then the row is left out, which can only
     // report a case as missing, never miss one).
-    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
-    #[unsafe(borrows())]
+    // The result is lowerer arena data, which no borrow of the lowerer guards (ZirLowerer.arena).
+    #[borrows()]
     fn exh_sub_patterns(
         self: &mut ZirLowerer,
         p: u32,

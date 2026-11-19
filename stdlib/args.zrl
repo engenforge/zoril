@@ -82,8 +82,8 @@ impl Args {
     }
 
     // Yields the next argument as a byte slice, or None when all arguments have been consumed.
-    // SAFETY: the result is Args.get's, process memory that outlives every Args.
-    #[unsafe(borrows())]
+    // The result is Args.get's, process memory that outlives every Args.
+    #[borrows()]
     pub fn next(self: &mut Args) -> Option<[u8]> {
         if self.index >= self.argc {
             return Option.None;

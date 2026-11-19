@@ -1073,8 +1073,7 @@ impl ZirLowerer {
 
     // A tuple or struct pattern looks through a reference to the value it points at.
     // The result is a Place of scratch-arena data, like lower_expr's.
-    // SAFETY: what is not PLACE's is lowerer arena data (append_projection; ZirLowerer.arena).
-    #[unsafe(borrows(place))]
+    #[borrows(place)]
     fn pattern_through_ref(self: &mut ZirLowerer, place: Place, ty: u32) -> PatternTarget {
         let tag = self.get_type_tag(ty);
         if self.pattern_peels_pointer(tag) {

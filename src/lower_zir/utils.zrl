@@ -642,8 +642,8 @@ impl ZirLowerer {
     // when the whole expression is built: the later operand's statements (`r.len()`, a block
     // that frees through `r`) run after the move, as they do in the source, and the borrow checker
     // sees them in that order. A literal or a plain name cannot observe the move and needs none.
-    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
-    #[unsafe(borrows())]
+    // The result is lowerer arena data, which no borrow of the lowerer guards (ZirLowerer.arena).
+    #[borrows()]
     pub fn lower_operand(
         self: &mut ZirLowerer,
         exprs: [ExprId],
@@ -1818,8 +1818,8 @@ impl ZirLowerer {
     // The type arguments of generic method F called as `x.f(ARGS)`, read off the arguments
     // (F's first parameter is the receiver) and F's bounds. Empty, reported, when one cannot
     // be inferred.
-    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
-    #[unsafe(borrows())]
+    // The result is lowerer arena data, which no borrow of the lowerer guards (ZirLowerer.arena).
+    #[borrows()]
     pub fn infer_method_type_args(
         self: &mut ZirLowerer,
         f: &FnDecl,
@@ -2425,8 +2425,8 @@ impl ZirLowerer {
         }
     }
 
-    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
-    #[unsafe(borrows())]
+    // The result is lowerer arena data, which no borrow of the lowerer guards (ZirLowerer.arena).
+    #[borrows()]
     pub fn append_deref(self: &mut ZirLowerer, pl: &Place) -> Place {
         return self.append_projection(pl, Projection.Deref);
     }

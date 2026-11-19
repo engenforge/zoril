@@ -917,8 +917,7 @@ impl Monomorphizer {
     // SELF_TY, one per parameter, 0 where SELF_TY does not decide it; none for an impl that
     // declares no parameters of its own. The list is a fresh arena one (as `impl_scope` makes
     // for such an impl), so a caller may keep it across further `&mut self` calls.
-    // SAFETY: the result is the compilation's arena data (its own, the module's or the AST's).
-    #[unsafe(borrows(imp))]
+    #[borrows(imp)]
     pub fn impl_type_args(self: &mut Monomorphizer, imp: &ImplDecl, self_ty: u32) -> [u32] {
         if imp.type_params.len == 0 as usize { return @slice(0 as *mut u32, 0 as usize); }
         return self.impl_scope(
@@ -1133,8 +1132,7 @@ impl Monomorphizer {
     // target type's parameters (PARAMS) bound to ARGS and `Self` to SELF_TY.
     // The result is `resolve_type_list`'s fresh arena list; nothing in it points into this
     // monomorphizer, so a caller may keep it across further `&mut self` calls.
-    // SAFETY: the result is the compilation's arena data (its own, the module's or the AST's).
-    #[unsafe(borrows())]
+    #[borrows()]
     fn resolve_in_impl(
         self: &mut Monomorphizer,
         tys: [TypeId],
@@ -1174,8 +1172,7 @@ impl Monomorphizer {
     // The typedef of the struct or enum declaration DECL whose parameters are already bound, and
     // an empty struct for any other declaration. The fields are fresh arena data (see
     // struct_typedef), so the result is not tied to this monomorphizer.
-    // SAFETY: the result is the compilation's arena data (its own, the module's or the AST's).
-    #[unsafe(borrows())]
+    #[borrows()]
     fn typedef_of_decl(self: &mut Monomorphizer, decl: Decl) -> ILTypeDef {
         return match decl {
             Decl.Struct(s) => self.struct_typedef(&s),
@@ -1187,8 +1184,8 @@ impl Monomorphizer {
         };
     }
 
-    // SAFETY: the result is the compilation's arena data (its own, the module's or the AST's).
-    #[unsafe(borrows())]
+    // The result is the compilation's arena data (its own, the module's or the AST's).
+    #[borrows()]
     fn generic_typedef_of_decl(
         self: &mut Monomorphizer,
         decl: Decl,

@@ -1427,8 +1427,7 @@ impl ZirVerifier {
     // nested payloads. The whole enum stands for the payload part, which no projection names.
     // Base 0 when PLACE is not such a place. The result is always a copy in the scratch arena,
     // so it holds no borrow of PLACE, STATE or the verifier.
-    // SAFETY: the result is scratch-arena data, reset only once the verifier is gone.
-    #[unsafe(borrows())]
+    #[borrows()]
     fn enum_payload_borrow_root(
         self: &mut ZirVerifier,
         place: &Place,

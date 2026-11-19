@@ -192,8 +192,7 @@ impl ZirLowerer {
 
     // A Place is a base local and an arena projection list: no result points into the lowerer, so
     // a caller may hold one across further `&mut self` calls.
-    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
-    #[unsafe(borrows())]
+    #[borrows()]
     pub fn lower_expr(self: &mut ZirLowerer, expr_id: ExprId, expected_ty: u32) -> Place {
         let place = self.lower_expr_internal(expr_id, expected_ty);
         // Span of the expression just lowered, for diagnostics raised while consuming its value.
@@ -3144,8 +3143,7 @@ impl ZirLowerer {
     // type wrote past the slot when `e` was larger and reinterpreted the payload when the error
     // types differed (probes gap_68 to gap_70). The result points into no lowerer storage, as
     // `lower_expr`'s does.
-    // SAFETY: what is not VAL_PLACE's is lowerer arena data (ZirLowerer.arena).
-    #[unsafe(borrows(val_place))]
+    #[borrows(val_place)]
     fn lower_try_early_return(
         self: &mut ZirLowerer,
         val_place: Place,
