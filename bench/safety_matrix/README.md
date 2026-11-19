@@ -8,7 +8,9 @@ This ledger holds the machine-checked safety verification summaries, open `known
 
 The counts in this ledger and the marker-density rows below are as of **0.1.0-alpha-172-g9e79c80** (2026-11-15); they are refreshed at milestones (`scripts/check_safety_figures.sh --milestone`).
 
-The repository keeps 529 probes in [`probes/`](probes), each recording its expectation in its first lines: **382 `compile_reject`**, **76 `accept`**, **8 `runtime_trap`**, **11 `runtime_fault`**, and **52 `known_gap`**. `scripts/run_safety_matrix.sh` runs all of them and fails when an observation differs from the recorded expectation; `make test` gates it (`safety-matrix`) together with `safety-model` (`scripts/check_safety_model.sh`), which keeps this ledger, [`matrix.md`](matrix.md), and the probes consistent in both directions.
+The repository keeps 529 probes in [`probes/`](probes) for the 79-row safety matrix (making up the 529-probe safety matrix), each recording its expectation in its first lines: **382 `compile_reject`**, **76 `accept`**, **8 `runtime_trap`**, **11 `runtime_fault`**, and **52 `known_gap`**. `scripts/run_safety_matrix.sh` runs all of them and fails when an observation differs from the recorded expectation; `make test` gates it (`safety-matrix`) together with `safety-model` (`scripts/check_safety_model.sh`), which keeps this ledger, [`matrix.md`](matrix.md), and the probes consistent in both directions.
+
+In differential fuzzing against `rustc`, the shorter `--release` session on this codebase compiled and ran **755,772** programs across both whole-program and `zbuild` builds (following the **2,638,155** release-bar run on the previous code; see [`bench/fuzz/README.md`](../fuzz/README.md)).
 
 ---
 

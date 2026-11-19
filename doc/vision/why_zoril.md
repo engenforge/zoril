@@ -9,7 +9,7 @@
 **Zoril** stands for **Zero Overhead Regional Inference Language**:
 
 - **Zero Overhead:** safety and abstraction should cost nothing (or close to nothing) at run time. Zoril has no garbage collector or reference counting; ownership, moves, and drops are checked at compile time, generics are monomorphized, and bounds checks are elided where the compiler can prove the index in range. How close the compiler gets to zero overhead is measured in [`doc/zero_overhead.md`](../zero_overhead.md).
-- **Regional:** memory is organized by regions (`'local`, `'static`, `'heap`, and arenas), and a pointer may not outlive the region it points into. This is checked: for stack frames by the escape analysis, and for arenas by tying a value to the handle it was allocated from, so resetting, freeing or outliving the arena while a value from it is live is a compile error ([`128_arena_use_after_reset.zrl`](../../bench/safety_matrix/probes/128_arena_use_after_reset.zrl), [`159_arena_tied_collection_outlives_block.zrl`](../../bench/safety_matrix/probes/159_arena_tied_collection_outlives_block.zrl)).
+- **Regional:** memory is organized by regions (`'local`, `'static`, `'heap`, and arenas), and a pointer may not outlive the region it points into. This is checked: for stack frames by the escape analysis, and for arenas by tying a value to the handle it was allocated from, so resetting, freeing or outliving the arena while a value from it is live is a compile error ([What Zoril Checks](../SAFETY.md#24-arenas)).
 - **Inference:** regions and escape behaviour are inferred, including across functions through interprocedural summaries, so programs carry no lifetime annotations.
 
 ---
@@ -40,13 +40,13 @@ Zoril is not a subset of Rust. It aims first at systems software: data-oriented,
 
 ## 2. What Zoril Does Today
 
-Every capability below is exercised by the running compiler (`build/zoril`) during `make test`, including the safety matrix in [`doc/spec/safety_model.md`](../spec/safety_model.md) (79 rows at the time of writing, with no row marked **GAP**).
+Every capability below is exercised by the running compiler (`build/zoril`) during `make test`, including the safety matrix in [`bench/safety_matrix/README.md`](../../bench/safety_matrix/README.md) (specified in [`doc/spec/safety_model.md`](../spec/safety_model.md)).
 
 ### A. One Build Configuration
 
 Languages with several build modes balance runtime checks against peak performance in different ways. Rust keeps bounds checks in release builds but, by default, turns integer-overflow panics into wrapping arithmetic. Zig checks bounds in `Debug` and `ReleaseSafe` and omits those checks in `ReleaseFast` for throughput. Both are deliberate choices that give programmers control.
 
-**Zoril has a single build configuration.** Bounds checks on array and slice reads and writes (`surface_syntax.md` §11.2.3, tested by probes `bench/safety_matrix/probes/10_oob_array_write.zrl` and `11_oob_slice_write.zrl`) are always present, and no option turns a runtime trap into undefined behaviour.
+**Zoril has a single build configuration.** Bounds checks on array and slice reads and writes ([`doc/spec/surface_syntax.md`](../spec/surface_syntax.md) §11.2.3, [What Zoril Checks](../SAFETY.md#3-checked-at-run-time)) are always present, and no option turns a runtime trap into undefined behaviour.
 
 Measurements in [`doc/language/language_comparison.md`](../language/language_comparison.md) show that this need not cost throughput in simple loops: when a loop guard dominates the index (`while i < 4096`), the compiler removes the bounds check, and the checked loop compiles to **byte-identical machine code** to an unchecked raw-pointer loop. Loops with irregular indexing still pay for their checks (see [`doc/zero_overhead.md`](../zero_overhead.md) §4).
 
@@ -54,8 +54,8 @@ Measurements in [`doc/language/language_comparison.md`](../language/language_com
 
 Zoril enforces an affine type system at compile time:
 
-- **Use-after-move and double-drop:** values of non-copy types (`Vec`, `String`, resources) move on assignment and function call. Reusing a moved binding or dropping a moved resource is a compile error (`tests/error_reporting/err_own_use_after_move.zrl`).
-- **Dangling stack pointers:** returning a pointer to local stack storage, directly or behind a cast, is a compile error (`surface_syntax.md` §11.2.4, `tests/error_reporting/ec_region_escape_return_cast.zrl`).
+- **Use-after-move and double-drop:** values of non-copy types (`Vec`, `String`, resources) move on assignment and function call. Reusing a moved binding or dropping a moved resource is a compile error ([What Zoril Checks](../SAFETY.md#21-ownership-moves-and-drops)).
+- **Dangling stack pointers:** returning a pointer to local stack storage, directly or behind a cast, is a compile error ([`doc/spec/surface_syntax.md`](../spec/surface_syntax.md) §11.2.4, [What Zoril Checks](../SAFETY.md#23-stack-regions-and-frames)).
 - **Escape through calls:** each function is summarized by where its result may point and which of its parameters it stores into, so a stack pointer handed back by a callee, or stored by a callee into longer-lived memory or a global, is also rejected (safety matrix row "Region Escape: Through a Call").
 
 > [!IMPORTANT]
@@ -65,7 +65,7 @@ Zoril enforces an affine type system at compile time:
 
 Typical application code is not expected to use `unsafe`. The standard library is written so that applications do not need it: raw memory access stays in runtime primitives and allocator abstractions (`stdlib/mem.zrl`, `stdlib/file.zrl`, `stdlib/args.zrl`), as [`doc/spec/unsafe_policy.md`](../spec/unsafe_policy.md) §4 describes.
 
-An example JSON tool written in Zoril (a CLI parser, query engine, and schema validator of about 2,000 non-comment lines, not yet published) contains no `unsafe { }` block (see `doc/SAFETY.md` §5.3). `scripts/marker_density.sh` reports 0.00% line density, no raw pointer casts (`as *T` / `as *mut T`) and no reference forgeries (`&*p` / `&mut *p`). It uses enums with payloads, exhaustive pattern matching, and `Result<T, E>` error propagation rather than raw pointers.
+An example JSON tool written in Zoril (a CLI parser, query engine, and schema validator of about 2,000 non-comment lines, not yet published) contains no `unsafe { }` block (see [`bench/safety_matrix/README.md`](../../bench/safety_matrix/README.md)). `scripts/marker_density.sh` reports 0.00% line density, no raw pointer casts (`as *T` / `as *mut T`) and no reference forgeries (`&*p` / `&mut *p`). It uses enums with payloads, exhaustive pattern matching, and `Result<T, E>` error propagation rather than raw pointers.
 
 ### D. A Small Compiler
 

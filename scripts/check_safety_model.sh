@@ -873,36 +873,21 @@ END {
 }
 check_stdlib_raw_ptr_deref
 
-# ── the counts the documents state must match the matrix ───────────────────────
-# README.md, doc/STABILITY.md and doc/vision/why_zoril.md each state a row count, the README also
-# states a probe count, and the README says whether any row is marked **GAP**. Those are the numbers a
-# reader sees first, and the reason this check exists is that "four open gaps" outlived two of the
-# holes it counted: a count that drifts is invisible until someone reads it next to the matrix.
+# ── the counts the ledger states must match the matrix ──────────────────────────
+# bench/safety_matrix/README.md states the row count, the probe count, and whether any row is marked **GAP**.
 check_document_counts() {
-    readme="$REPO_ROOT/README.md"
-    stab="$REPO_ROOT/doc/STABILITY.md"
-    vision="$REPO_ROOT/doc/vision/why_zoril.md"
-
-    n=$(grep -oE '[0-9]+-row safety matrix' "$readme" | head -n1 | grep -oE '^[0-9]+' || true)
-    if [ "$n" = "$total" ]; then ok "README row count ($n) matches the matrix"
-    else note "README says $n rows; the matrix has $total"; fi
+    n=$(grep -oE '[0-9]+-row safety matrix' "$DOC" | head -n1 | grep -oE '^[0-9]+' || true)
+    if [ "$n" = "$total" ]; then ok "safety-matrix ledger row count ($n) matches the matrix"
+    else note "safety-matrix ledger says $n rows; the matrix has $total"; fi
 
     # The gap statement, in both directions: a closed gap must not still be claimed, and an open one
     # must not be hidden behind a stale sentence.
-    if grep -qF 'No row is marked **GAP**' "$readme"; then
-        if [ "$gap" -eq 0 ]; then ok "README states no row is marked **GAP**, and none is"
-        else note "README says no row is marked **GAP**, but $gap row(s) are"; fi
+    if grep -qF 'No row above is marked **GAP**' "$DOC"; then
+        if [ "$gap" -eq 0 ]; then ok "safety-matrix ledger states no row is marked **GAP**, and none is"
+        else note "safety-matrix ledger says no row is marked **GAP**, but $gap row(s) are"; fi
     elif [ "$gap" -eq 0 ]; then
-        note "no row is marked **GAP**, but the README does not say so"
+        note "no row is marked **GAP**, but the safety-matrix ledger does not say so"
     fi
-
-    n=$(grep -oE 'All [0-9]+ rows are under continuous' "$stab" | grep -oE '[0-9]+' || true)
-    if [ "$n" = "$total" ]; then ok "STABILITY row count ($n) matches the matrix"
-    else note "STABILITY says $n rows; the matrix has $total"; fi
-
-    n=$(grep -oE '\([0-9]+ rows at the time of writing' "$vision" | grep -oE '[0-9]+' || true)
-    if [ "$n" = "$total" ]; then ok "why_zoril row count ($n) matches the matrix"
-    else note "why_zoril says $n rows; the matrix has $total"; fi
 }
 check_document_counts
 

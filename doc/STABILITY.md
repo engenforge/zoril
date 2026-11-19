@@ -48,46 +48,10 @@ One part of the ABI is promised: a `struct` **whose fields all have a C layout**
 
 ## 2. Published Safety Claims
 
-A key objective for Zoril is to catch memory-safety errors at compile time, so that safety costs as little as possible at run time; what cannot be checked at compile time is checked by lightweight runtime checks. Unlike languages where safety depends on build flags (e.g. debug vs release modes), **the checks Zoril performs are active in every build**: there is no "unsafe build mode" that disables bounds checks or borrow tracking. Which of them hold in checked code, which are checked only when the program runs, and what is left to the programmer is stated tier by tier in [What Zoril Checks](SAFETY.md); this section is the summary.
+Zoril's compile-time checks (affine ownership, move tracking, borrow aliasing, and stack/arena region escape analysis) and runtime checks (array/slice bounds traps and checked shift counts) run in **every build configuration**: there is no release flag that compiles bounds or borrow checks out.
 
-### Core Checks in Checked Code
+For the full breakdown of what is checked and what is left to the programmer, see:
 
-1. **Spatial Safety (Bounds Checking):**
-   - All indexing operations on fixed-size arrays and slices (both read and write) are validated.
-   - If an access cannot be statically proven in-bounds at compile time, a runtime check is generated. Any out-of-bounds access immediately and deterministically terminates the process via `sys_exit_group(134)` (abort), so an out-of-bounds read or write never touches memory.
-   - The status `134` is the Linux report of that stop (`128 + SIGABRT`). What every platform promises is the stop itself: the process ends at the failed check and nothing after it runs.
-2. **Temporal Safety (Ownership & Borrowing):**
-   - Values are governed by affine ownership and move tracking (`src/check_zir.zrl`).
-   - Use-after-move, use-after-free, and double-free/double-drop are rejected at compile time.
-   - Mutable borrows (`&mut`) enforce exclusive access, rejecting aliasing mutations in checked code.
-3. **Region Safety (No Escaping Stack Pointers):**
-   - Functions cannot return pointers or references to local stack frames (`src/verify.zrl`).
-   - Provenance tracking tags derived values (`points_to_stack`) through arithmetic, casts, and memory slots, so a stack address cannot escape its activation record in checked code. The analysis is intraprocedural and conservative, and it rejects some programs that are in fact sound ([What Zoril Checks](SAFETY.md) §4.4).
-4. **Type Safety:**
-   - Casting between arbitrary memory representations is prohibited in checked code. Safe casts (`as`) only convert between compatible numeric types, between pointer types, or from references to raw pointers.
-
-### What `unsafe` Gates
-
-Zoril confines dangerous or unverified low-level operations behind explicit `unsafe { ... }` blocks. The `unsafe` keyword is a reachability gate, not an escape from compiler verification. The normative list is [`doc/spec/unsafe_policy.md`](spec/unsafe_policy.md) §1, six operations:
-
-1. Dereferencing a raw pointer (`*p`, `&*p`, `p.field`, `p.0`, a method call through it), which includes indexing one (`p[i]`) and using it where a reference is expected.
-2. Making a reference or a slice out of an integer or a raw pointer (`@ptr_cast<&T>`, `@ptr_from_int<&T>`, `@ptr_cast<[T]>`), including through a type parameter.
-3. Synthesizing a slice from a pointer and a length (`@slice`), unless the length is a literal `0`.
-4. Invoking foreign/external C functions (`extern fn`).
-5. A raw system call (`@syscall`).
-6. An uninitialized stack slot (`@alloca`).
-
-Calling an **`unsafe fn`** is a seventh route: a function is declared `unsafe fn` when it requires a precondition the type system cannot prove, and calling one needs an enclosing `unsafe { }` block or an `unsafe fn` body. In `stdlib/` those are the interface contracts - `Args.new`, `Vec::new_in_raw`, `Vec::set_len`, the allocator primitives, `mmap_or_trap`, `mmap_anon`, `mmap_anon_or_trap`, `munmap_or_trap`, `sys_execve` and the other `*_raw` entry points.
-
-_Creating_ a raw pointer is not one of them: `n as *T`, `@ptr_from_int<*T>`, `@ptr_cast<*T>` and `@int_cast<U>` are safe, because every _use_ of the pointer is gated on its type, and a marker on the creation would leave a fixed hardware address with no spelling in a `static`.
-
-All other checks (such as type checks, SSA well-formedness, and must-use enforcement) remain active inside `unsafe` blocks. What `unsafe` leaves unchecked, item by item, is [What Zoril Checks](SAFETY.md) §4.1.
-
-### Known Gaps
-
-Zoril maintains an automated verification suite that links every claim in the safety model to concrete executable probes (`bench/safety_matrix/probes/`).
-
-- For the complete matrix of **72** safety properties, each backed by its probes, refer directly to [`doc/spec/safety_model.md`](spec/safety_model.md); the tiers - what is checked at compile time, what only when the program runs, and what is the programmer's job - are in [What Zoril Checks](SAFETY.md).
-- Any known gaps where the compiler accepts unverified constructs in checked code are tracked in [`doc/spec/safety_model.md#known-gaps`](spec/safety_model.md#known-gaps).
-- **Evidence, not a proof:** a matrix entry says which checks were tested, not that every route to the operation is covered, so the release bar is a recorded fuzzing budget as well: **2,638,155** generated programs that compiled and ran (the bar is 2,500,000), over seeds **1-882000** (x 8) in **17 h 31 min** of wall time, with no fault (any signal other than expected traps) and no program the `rustc` differential oracle flagged, met on the previous code; on the code released here a shorter session compiled and ran **755,772** programs with no fault, no flagged program and no disagreement between whole-program and `zbuild` builds, and a full release-bar run on this code is planned soon. The record, the allowlist of intended differences and the coverage report are in [`bench/fuzz/README.md`](../bench/fuzz/README.md). A budget bounds what was tried; it does not bound the language.
-- **Current Status (v0.1.0-alpha):** There are **no GAP rows** in the 79-row architecture matrix; the 16 open soundness holes in checked code (where views of frame-owned storage escape through indirect routes) are tracked as `known_gap` probes in [`doc/spec/safety_model.md#known-gaps`](spec/safety_model.md#known-gaps) and documented in [`doc/SAFETY.md`](SAFETY.md) §6. All 79 rows are under continuous automated verification (`make safety-model` and `make safety-matrix`, running all 425 probes).
+- **[What Zoril Checks](SAFETY.md):** the user-facing three-tier safety guide (compile-time checks, runtime traps, `unsafe` boundary, and open gap families).
+- **[Safety Model](spec/safety_model.md) and [Unsafe Boundary Policy](spec/unsafe_policy.md):** the normative verification architecture, property domain specifications, and `unsafe` contract rules.
+- **[Safety Verification Ledger](../bench/safety_matrix/README.md) and [Fuzzing Record](../bench/fuzz/README.md):** the live safety-matrix row and probe counts, open `known_gap` inventory, trusted-base census, and differential fuzzing budgets.

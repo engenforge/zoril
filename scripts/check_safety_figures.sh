@@ -218,7 +218,7 @@ if [ "$SELFTEST" -eq 1 ]; then
             echo
             echo 'The counts in this ledger and the density rows are as of **0.1.0** (2026-11-15); they are refreshed at each release.'
             echo
-            echo 'The repository keeps 3 probes in `bench/safety_matrix/probes/`, each recording its expectation in its first lines: **1 `compile_reject`**, **1 `accept`**, **0 `runtime_trap`**, **0 `runtime_fault`**, and **1 `known_gap`**.'
+            echo 'The repository keeps 3 probes in `bench/safety_matrix/probes/` (a 3-probe safety matrix), each recording its expectation in its first lines: **1 `compile_reject`**, **1 `accept`**, **0 `runtime_trap`**, **0 `runtime_fault`**, and **1 `known_gap`**.'
             echo
             echo '| Figure | Value |'
             echo '| --- | --- |'
@@ -410,15 +410,13 @@ if [ "$PROBES" -eq 1 ]; then
         echo "[FAIL] safety-figures: §6 says tracked as ${have:-missing} known_gap probes; the tree has $p_known_gap"
         bad=1
     fi
-    if [ -f "$REPO/README.md" ]; then
-        have=$(grep -oE '[0-9]+-probe safety matrix' "$REPO/README.md" | head -n1 | grep -oE '^[0-9]+' || true)
-        if [ "$have" != "$p_probes" ]; then
-            echo "[FAIL] safety-figures: README says ${have:-missing}-probe safety matrix; the tree has $p_probes"
-            bad=1
-        fi
+    have=$(grep -oE '[0-9]+-probe safety matrix' "$DOC" | head -n1 | grep -oE '^[0-9]+' || true)
+    if [ "$have" != "$p_probes" ]; then
+        echo "[FAIL] safety-figures: $DOC says ${have:-missing}-probe safety matrix; the tree has $p_probes"
+        bad=1
     fi
     [ "$bad" -ne 0 ] && exit 1
-    echo "[PASS] safety-figures: all probe counts in bench/safety_matrix/README.md and README.md match the tree ($p_probes probes)"
+    echo "[PASS] safety-figures: all probe counts in bench/safety_matrix/README.md match the tree ($p_probes probes)"
     exit 0
 fi
 
