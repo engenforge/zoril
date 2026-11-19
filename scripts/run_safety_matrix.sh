@@ -34,7 +34,7 @@
 # and is checked against that instead. A separate build checks less than a whole-program one
 # (KNOWN_ISSUES.md section 4), and a regression of the summary pass appeared under zbuild first (A3.1).
 # `accept` is behaviour that is correct by design. `known_gap` is a hole: the compiler
-# accepts code it should not, and doc/spec/safety_model.md lists the probe under "Known
+# accepts code it should not, and bench/safety_matrix/README.md lists the probe under "Known
 # gaps". A known gap is reported as [SKIP] while the compiler still accepts it, and as
 # [FAIL] once it does not, so closing a gap means flipping its probe's expectation and
 # removing its entry.
@@ -290,7 +290,7 @@ for probe in "$PROBES_DIR"/*.zrl; do
         elif [ "$match" -eq 1 ]; then
             printf '[SKIP] %s (known gap: %s)\n' "$name" "$gap"
         else
-            printf '[FAIL] %s (known gap closed? %s now; flip the probe'"'"'s expectation and remove its Known gaps entry in safety_model.md)\n' "$name" "$observed"
+            printf '[FAIL] %s (known gap closed? %s now; flip the probe'"'"'s expectation and remove its Known gaps entry in bench/safety_matrix/README.md)\n' "$name" "$observed"
             FAILS=$((FAILS + 1))
         fi
         printf '%s\t%s\n' "$name" "$observed" >> "$RESULT_FILE"

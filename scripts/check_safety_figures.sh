@@ -69,7 +69,7 @@ while [ $# -gt 0 ]; do
         *) die ;;
     esac
 done
-[ -n "$DOC" ] || DOC="$REPO/doc/SAFETY.md"
+[ -n "$DOC" ] || DOC="$REPO/bench/safety_matrix/README.md"
 
 run_sub() {
     if [ -n "$REPO_ARG" ] && [ -n "$DOC_ARG" ]; then
@@ -138,7 +138,7 @@ if [ "$SELFTEST" -eq 1 ]; then
     tmp=$(mktemp -d "${TMPDIR:-/tmp}/safety-figures.XXXXXX") || exit 2
     trap 'rm -rf "$tmp"' EXIT
     fail=0
-    mkdir -p "$tmp/t/src" "$tmp/t/stdlib" "$tmp/t/doc"
+    mkdir -p "$tmp/t/src" "$tmp/t/stdlib" "$tmp/t/bench/safety_matrix"
     printf 'fn a() {}\n' > "$tmp/t/stdlib/one.zrl"
     printf 'unsafe fn s() { unsafe { x(); } }\n' > "$tmp/t/stdlib/two.zrl"
     mkdir -p "$tmp/t/stdlib/sub"
@@ -152,16 +152,16 @@ if [ "$SELFTEST" -eq 1 ]; then
             echo '| --- | --- |'
             "$SELF" --repo "$tmp/t" --print | awk -F'\t' '{printf "| %s | %s |\n", $1, $2}'
             echo
-        } > "$tmp/t/doc/SAFETY.md"
+        } > "$tmp/t/bench/safety_matrix/README.md"
     }
     wrote_table
-    if ! out=$("$SELF" --repo "$tmp/t" --doc "$tmp/t/doc/SAFETY.md" 2>&1); then
+    if ! out=$("$SELF" --repo "$tmp/t" --doc "$tmp/t/bench/safety_matrix/README.md" 2>&1); then
         echo "[FAIL] selftest: a matching table was refused"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
     fi
 
     # One figure moving is reported as a mismatch, naming the row and both values.
     printf 'fn extra() {}\n' >> "$tmp/t/stdlib/one.zrl"
-    out=$("$SELF" --repo "$tmp/t" --doc "$tmp/t/doc/SAFETY.md" 2>&1)
+    out=$("$SELF" --repo "$tmp/t" --doc "$tmp/t/bench/safety_matrix/README.md" 2>&1)
     if [ $? -eq 0 ]; then
         echo "[FAIL] selftest: a moved figure was accepted"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
     elif ! printf '%s' "$out" | grep -q '^\[FAIL\].*stdlib lines'; then
@@ -169,8 +169,8 @@ if [ "$SELFTEST" -eq 1 ]; then
     fi
 
     # A document with no table fails rather than passing vacuously.
-    printf '# Doc\n\nNo table here.\n' > "$tmp/t/doc/SAFETY.md"
-    if "$SELF" --repo "$tmp/t" --doc "$tmp/t/doc/SAFETY.md" > "$tmp/notable.log" 2>&1; then
+    printf '# Doc\n\nNo table here.\n' > "$tmp/t/bench/safety_matrix/README.md"
+    if "$SELF" --repo "$tmp/t" --doc "$tmp/t/bench/safety_matrix/README.md" > "$tmp/notable.log" 2>&1; then
         echo "[FAIL] selftest: a document with no figures table was accepted"; sed 's/^/       /' "$tmp/notable.log"; fail=1
     elif ! grep -q 'no `| Figure | Value |` table' "$tmp/notable.log"; then
         echo "[FAIL] selftest: the missing-table message did not say what to add"; sed 's/^/       /' "$tmp/notable.log"; fail=1
@@ -200,7 +200,7 @@ if [ "$SELFTEST" -eq 1 ]; then
     esac
 
     # M1-M5: milestone figures, stamp, probe counts, and §5.3 prose sentences.
-    mkdir -p "$tmp/m1/src" "$tmp/m1/stdlib" "$tmp/m1/doc/spec" "$tmp/m1/bench/safety_matrix/probes" "$tmp/m1/tests"
+    mkdir -p "$tmp/m1/src" "$tmp/m1/stdlib" "$tmp/m1/bench/safety_matrix/probes" "$tmp/m1/tests"
     printf 'fn a() {}\n' > "$tmp/m1/stdlib/one.zrl"
     printf 'unsafe fn s() { unsafe { x(); } }\n' > "$tmp/m1/stdlib/two.zrl"
     printf 'let a = unsafe { b() };\n' > "$tmp/m1/src/main.zrl"
@@ -210,14 +210,13 @@ if [ "$SELFTEST" -eq 1 ]; then
     printf 'tests/a.zrl\n' > "$tmp/m1/tests/smoke.list"
     printf '(`tests/smoke.list`, 1 tests\n' > "$tmp/m1/AGENTS.md"
     printf 'and the 3-probe safety matrix across 1 rows.\n' > "$tmp/m1/README.md"
-    "$SELF" --repo "$tmp/m1" --density --print | cut -f2 > "$tmp/m1/doc/spec/unsafe_policy.md"
     write_m1_doc() {
         {
-            echo '# Doc'
+            echo '# Ledger'
             echo
-            echo '## 5. The testing behind this'
+            echo '## 1. Snapshot and Probe Counts'
             echo
-            echo 'The counts in §5 and §6, the density rows of [unsafe_policy.md](spec/unsafe_policy.md) §5 and the README'"'"'s probe count are as of **0.1.0** (2026-11-15); they are refreshed at each release.'
+            echo 'The counts in this ledger and the density rows are as of **0.1.0** (2026-11-15); they are refreshed at each release.'
             echo
             echo 'The repository keeps 3 probes in `bench/safety_matrix/probes/`, each recording its expectation in its first lines: **1 `compile_reject`**, **1 `accept`**, **0 `runtime_trap`**, **0 `runtime_fault`**, and **1 `known_gap`**.'
             echo
@@ -228,10 +227,12 @@ if [ "$SELFTEST" -eq 1 ]; then
             echo '- **The standard library** holds 1 `unsafe { }` blocks in 1 of its 2 modules.'
             echo '- **The compiler** is 1 modules of Zoril, with 1 `unsafe { }` blocks.'
             echo
-            echo '## 6. Known gaps'
+            "$SELF" --repo "$tmp/m1" --density --print | cut -f2
+            echo
+            echo '## 2. Known gaps'
             echo
             echo 'tracked as 1 `known_gap` probes'
-        } > "$tmp/m1/doc/SAFETY.md"
+        } > "$tmp/m1/bench/safety_matrix/README.md"
     }
     write_m1_doc
     if ! out=$(SAFETY_FIGURES_IN_SELFTEST=1 "$SELF" --repo "$tmp/m1" --milestone 2>&1); then
@@ -248,23 +249,21 @@ if [ "$SELFTEST" -eq 1 ]; then
         echo "[FAIL] selftest M1: --milestone did not fail naming compiler lines"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
     fi
     write_m1_doc
-    # Update policy line count after adding line to src/main.zrl
-    "$SELF" --repo "$tmp/m1" --density --print | cut -f2 > "$tmp/m1/doc/spec/unsafe_policy.md"
 
     # M2: no stamp line -> --all fails with exact message.
-    grep -v 'as of \*\*' "$tmp/m1/doc/SAFETY.md" > "$tmp/m1/doc/SAFETY.md.nostamp"
-    mv "$tmp/m1/doc/SAFETY.md.nostamp" "$tmp/m1/doc/SAFETY.md"
+    grep -v 'as of \*\*' "$tmp/m1/bench/safety_matrix/README.md" > "$tmp/m1/bench/safety_matrix/README.md.nostamp"
+    mv "$tmp/m1/bench/safety_matrix/README.md.nostamp" "$tmp/m1/bench/safety_matrix/README.md"
     out=$(SAFETY_FIGURES_IN_SELFTEST=1 "$SELF" --repo "$tmp/m1" --all 2>&1)
-    if [ $? -eq 0 ] || ! printf '%s' "$out" | grep -qF '[FAIL] safety-figures: doc/SAFETY.md §5 has no "as of" line'; then
+    if [ $? -eq 0 ] || ! printf '%s' "$out" | grep -qF '[FAIL] safety-figures: bench/safety_matrix/README.md has no "as of" line'; then
         echo "[FAIL] selftest M2: missing stamp did not fail with expected message"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
     fi
 
     # M3: stamp with no date -> same failure.
     write_m1_doc
-    sed 's/ (2026-11-15)//' "$tmp/m1/doc/SAFETY.md" > "$tmp/m1/doc/SAFETY.md.nodate"
-    mv "$tmp/m1/doc/SAFETY.md.nodate" "$tmp/m1/doc/SAFETY.md"
+    sed 's/ (2026-11-15)//' "$tmp/m1/bench/safety_matrix/README.md" > "$tmp/m1/bench/safety_matrix/README.md.nodate"
+    mv "$tmp/m1/bench/safety_matrix/README.md.nodate" "$tmp/m1/bench/safety_matrix/README.md"
     out=$(SAFETY_FIGURES_IN_SELFTEST=1 "$SELF" --repo "$tmp/m1" --all 2>&1)
-    if [ $? -eq 0 ] || ! printf '%s' "$out" | grep -qF '[FAIL] safety-figures: doc/SAFETY.md §5 has no "as of" line'; then
+    if [ $? -eq 0 ] || ! printf '%s' "$out" | grep -qF '[FAIL] safety-figures: bench/safety_matrix/README.md has no "as of" line'; then
         echo "[FAIL] selftest M3: stamp without date did not fail with expected message"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
     fi
     write_m1_doc
@@ -278,8 +277,8 @@ if [ "$SELFTEST" -eq 1 ]; then
     rm -f "$tmp/m1/bench/safety_matrix/probes/p4.zrl"
 
     # M5: a §5.3 sentence that differs from its table row -> --milestone fails.
-    sed 's/holds 1 `unsafe { }` blocks/holds 99 `unsafe { }` blocks/' "$tmp/m1/doc/SAFETY.md" > "$tmp/m1/doc/SAFETY.md.bad"
-    mv "$tmp/m1/doc/SAFETY.md.bad" "$tmp/m1/doc/SAFETY.md"
+    sed 's/holds 1 `unsafe { }` blocks/holds 99 `unsafe { }` blocks/' "$tmp/m1/bench/safety_matrix/README.md" > "$tmp/m1/bench/safety_matrix/README.md.bad"
+    mv "$tmp/m1/bench/safety_matrix/README.md.bad" "$tmp/m1/bench/safety_matrix/README.md"
     out=$(SAFETY_FIGURES_IN_SELFTEST=1 "$SELF" --repo "$tmp/m1" --milestone 2>&1)
     if [ $? -eq 0 ] || ! printf '%s' "$out" | grep -q '§5\.3'; then
         echo "[FAIL] selftest M5: --milestone did not fail on mismatched §5.3 sentence"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
@@ -339,7 +338,7 @@ density_figures() {
 }
 if [ "$DENSITY" -eq 1 ]; then
     if [ "$PRINT" -eq 1 ]; then density_figures; exit 0; fi
-    POLICY=${POLICY:-$REPO/doc/spec/unsafe_policy.md}
+    POLICY=${POLICY:-$REPO/bench/safety_matrix/README.md}
     bad=0
     while IFS='	' read -r label text; do
         if ! grep -qF -- "$text" "$POLICY"; then
@@ -350,7 +349,7 @@ if [ "$DENSITY" -eq 1 ]; then
 $(density_figures)
 EOF
     [ "$bad" -ne 0 ] && exit 1
-    echo "[PASS] safety-figures: the src/ and stdlib/ density rows of unsafe_policy.md §5 match the tree (Rust rows are a one-time measurement)"
+    echo "[PASS] safety-figures: the src/ and stdlib/ density rows of bench/safety_matrix/README.md match the tree (Rust rows are a one-time measurement)"
     exit 0
 fi
 if [ "$STAMP" -eq 1 ]; then
@@ -359,10 +358,10 @@ if [ "$STAMP" -eq 1 ]; then
         exit 1
     fi
     if ! grep -Eq 'as of \*\*[^*]+\*\* \([0-9]{4}-[0-9]{2}-[0-9]{2}\)' "$DOC"; then
-        echo '[FAIL] safety-figures: doc/SAFETY.md §5 has no "as of" line'
+        echo '[FAIL] safety-figures: bench/safety_matrix/README.md has no "as of" line'
         exit 1
     fi
-    echo '[PASS] safety-figures: doc/SAFETY.md §5 carries an "as of" stamp'
+    echo '[PASS] safety-figures: bench/safety_matrix/README.md carries an "as of" stamp'
     exit 0
 fi
 
@@ -419,7 +418,7 @@ if [ "$PROBES" -eq 1 ]; then
         fi
     fi
     [ "$bad" -ne 0 ] && exit 1
-    echo "[PASS] safety-figures: all probe counts in doc/SAFETY.md (§5.1, §6) and README.md match the tree ($p_probes probes)"
+    echo "[PASS] safety-figures: all probe counts in bench/safety_matrix/README.md and README.md match the tree ($p_probes probes)"
     exit 0
 fi
 
@@ -502,7 +501,7 @@ while IFS='|' read -r _ label _ rest; do
         bad=1
     fi
 done <<EOF
-$(grep -E '^\| *[^|]+ *\|' "$DOC" | sed -n '/^| *Figure *|/,/^$/p')
+$(sed -n '/^| *Figure *|/,/^[[:space:]]*$/p' "$DOC" | grep -E '^\| *[^|]+ *\|')
 EOF
 
 # Check the two §5.3 prose sentences against the table's rows when present.
@@ -535,7 +534,7 @@ if grep -qF -- '**The compiler** is ' "$DOC"; then
 fi
 
 if [ "$bad" -ne 0 ]; then
-    echo "FAIL: doc/SAFETY.md §5.3 does not match the tree ($checked figure(s) compared)."
+    echo "FAIL: bench/safety_matrix/README.md §3 does not match the tree ($checked figure(s) compared)."
     exit 1
 fi
 echo "[PASS] safety-figures: all $checked §5 figure(s) match the tree (stdlib and src, .zrl files, physical lines, \`unsafe { }\` occurrences, \`unsafe fn\` declarations at line start)"
