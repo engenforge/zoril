@@ -6,6 +6,25 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
+- [ ] +safety +spec +AI-D @provenance B3e Decide the notation for an `extern`'s store effect (`*s -> d`, trusted) in the surface syntax spec id:yp1er
+    > **Created:** 2026-11-19
+    > **Branch:** `provenance`
+    > **Depends:** id:f81f3
+
+    - **Placed:** directly after id:77rr6, before the stage 1 task it blocks (id:f81f3's decision 2).
+    - **Decide and write into `doc/spec/surface_syntax.md`** (§2.5 and the `#[stores(..)]` paragraph, near line 763), with `doc/design/provenance.md` following:
+      1. _The form:_ `*s -> d` says that what `s` points to is stored into what `d` points to. Settle whether `**s` or `*s -> *d` is needed, and whether `static` may be a target or a source, as in `#[stores(p -> static)]`.
+      2. _The spelling of trust:_ `#[unsafe(stores(..))]` on an `extern`, since no body checks it (principle 4). Today `build/zoril` refuses it: `only #[borrows(..)] can be marked unsafe` (id:f81f3's F8). Settle what a plain `#[stores(..)]` on an `extern` means from now on: refused, or a warning that names the `unsafe` spelling.
+      3. _"Stores nothing":_ how an `extern` that takes pointers and keeps none says so (`#[unsafe(stores())]`?), so that stage 2 can refuse an undeclared `extern` without false refusals of `memset` and the like.
+      4. _What a caller applies:_ the call store rule over `O(*s)`, the contents origins of the argument, into `d`'s destination reach (`os_dest_reach`). State it for the default build as well: stage 1's refusal in the default build or only under `--provenance`. The decision of id:f81f3 leaves this open. Record the choice and why.
+      5. _The `.zri`:_ what `interface_print.zrl` writes for the new form, so that `tests/modular/iface_attrs/` can check a round trip.
+      6. _Stage 1's rule, in words with its boundary:_ which `extern` calls are refused when undeclared ("two or more pointer parameters, and an argument whose origins hold a parameter or frame bit"), with the reason that the boundary moves in stage 2.
+    - **Constraint (F8):** `stdlib/mem_raw.zrl` is in `src/`'s stage1 closure. Stage1 accepts `#[unsafe(stores(*src -> dest))]` on an `extern` and does not check it. Re-check that any other spelling chosen here parses under `build/zoril-stage1`.
+    - **Output:** the spec text committed, and **Checks:** written into id:716bm and id:eb38n, each a command and its expected output, with a fix-out check. Stage 1 is not ready to start without them.
+    - **Checks:** C1, the spec change committed, and the doc tier passing (`make test-changed BASE=HEAD~1`). C2, each of items 1 to 6 is answered in the spec or design note, cited by section. C3, the spelling chosen parses under `build/zoril-stage1` (rc=0, a three-line file as in F8).
+
+    - **Moved (2026-11-19, the maintainer's request to group `+AI-G` work):** from between id:77rr6 and id:716bm to before id:77rr6. It depends on nothing in id:77rr6, and with it first, id:77rr6, id:716bm and id:eb38n run as one `+AI-G` batch.
+
 - [ ] +safety +tests +AI-G @provenance B3d A raw-pointer write through a loose raw local reaches the caller's parameter targets under `--provenance` id:77rr6
     > **Created:** 2026-11-19
     > **Branch:** `provenance`
@@ -41,23 +60,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C9: the fuzz record is stale for `src/` (`scripts/check_fuzz_fresh.sh`); say so.
     - **Ends with:** the fix committed, an `**Awaiting review:**` bullet naming C2, C4, C5 and C7, then `tm done`. The check-in is the `@checkin` task after stage 2.
 
-- [ ] +safety +spec +AI-D @provenance B3e Decide the notation for an `extern`'s store effect (`*s -> d`, trusted) in the surface syntax spec id:yp1er
-    > **Created:** 2026-11-19
-    > **Branch:** `provenance`
-    > **Depends:** id:f81f3
-
-    - **Placed:** directly after id:77rr6, before the stage 1 task it blocks (id:f81f3's decision 2).
-    - **Decide and write into `doc/spec/surface_syntax.md`** (§2.5 and the `#[stores(..)]` paragraph, near line 763), with `doc/design/provenance.md` following:
-      1. _The form:_ `*s -> d` says that what `s` points to is stored into what `d` points to. Settle whether `**s` or `*s -> *d` is needed, and whether `static` may be a target or a source, as in `#[stores(p -> static)]`.
-      2. _The spelling of trust:_ `#[unsafe(stores(..))]` on an `extern`, since no body checks it (principle 4). Today `build/zoril` refuses it: `only #[borrows(..)] can be marked unsafe` (id:f81f3's F8). Settle what a plain `#[stores(..)]` on an `extern` means from now on: refused, or a warning that names the `unsafe` spelling.
-      3. _"Stores nothing":_ how an `extern` that takes pointers and keeps none says so (`#[unsafe(stores())]`?), so that stage 2 can refuse an undeclared `extern` without false refusals of `memset` and the like.
-      4. _What a caller applies:_ the call store rule over `O(*s)`, the contents origins of the argument, into `d`'s destination reach (`os_dest_reach`). State it for the default build as well: stage 1's refusal in the default build or only under `--provenance`. The decision of id:f81f3 leaves this open. Record the choice and why.
-      5. _The `.zri`:_ what `interface_print.zrl` writes for the new form, so that `tests/modular/iface_attrs/` can check a round trip.
-      6. _Stage 1's rule, in words with its boundary:_ which `extern` calls are refused when undeclared ("two or more pointer parameters, and an argument whose origins hold a parameter or frame bit"), with the reason that the boundary moves in stage 2.
-    - **Constraint (F8):** `stdlib/mem_raw.zrl` is in `src/`'s stage1 closure. Stage1 accepts `#[unsafe(stores(*src -> dest))]` on an `extern` and does not check it. Re-check that any other spelling chosen here parses under `build/zoril-stage1`.
-    - **Output:** the spec text committed, and **Checks:** written into id:716bm and id:eb38n, each a command and its expected output, with a fix-out check. Stage 1 is not ready to start without them.
-    - **Checks:** C1, the spec change committed, and the doc tier passing (`make test-changed BASE=HEAD~1`). C2, each of items 1 to 6 is answered in the spec or design note, cited by section. C3, the spelling chosen parses under `build/zoril-stage1` (rc=0, a three-line file as in F8).
-
 - [ ] +safety +tests +AI-G @provenance B3f Stage 1: `memcpy` declares its store effect, and a call to an undeclared `extern` with two or more pointer parameters is refused id:716bm
     > **Created:** 2026-11-19
     > **Branch:** `provenance`
@@ -81,6 +83,27 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Checks:** written by id:yp1er, with the probe above as C1 (before rc=0 and its exit; after, refused) and a fix-out check.
     - **Ends with:** the fix committed, an `**Awaiting review:**` bullet, `tm done`; then the check-in.
 
+- [ ] +diagnostics +AI-G @provenance id:z0066 B3.9 Provenance diagnostics name the origin they found, once per site
+    > **Created:** 2026-11-05
+    > **Branch:** `provenance`
+    > **Depends:** id:0m61c
+
+    - **Found by:** id:z0049's review (correction 8).
+
+    - **Now:** the return rule says "the returned value holds an address of this frame" also when the returned origins are only `Unknown`, and the call store rule often prints the same warning twice at one location: under `--provenance=warn`, `src/fmt/doc.zrl:111:21`, `src/driver/module.zrl:1338:13`, `tools/zbuild/src/build.zrl:580:17`, `tests/unit/test_empty_compile_and_tool_errors.zrl:65:5` (re-checked 2026-11-06 after id:z0092).
+    - **Stale examples (2026-11-06):** the `Unknown`-only return was `fn mk3(n: u64) -> Box<H> { let p = @ptr_from_int<*u8>(n); return box H { p: p, n: n }; }`, now accepted (`@ptr_from_int` gives `Raw` since id:z0063), and the duplicate was `fn add(v: &mut Vec<Vec<i32>>) { v.push(Vec::<i32>.new()); }`, now accepted. Find a current `Unknown`-only return first: the sources left are a summary-less call (a `.zri` import with no summary) and an index the walk cannot type.
+    - **Do:** word each rule's message by the origin that triggered it (`Frame`: an address of this frame; `Unknown`: an address the compiler cannot trace), and print one diagnostic per site and rule. Update the `EXPECT:` lines of the provenance tests that change, and say so in the commit message.
+    - **Checks:**
+      - C1: a current `Unknown`-only return, as a program under 15 lines, recorded in this task with the message it gets today (quoted). If none is found in the session, stop and report what was tried: the wording change waits for one.
+      - C2: one test per wording (`Frame`, `Unknown`), each with an `// EXPECT:` line for its new message, under `tests/language/memory/provenance/`; both pass.
+      - C3: under `--provenance=warn`, each of the four sites in **Now** prints one diagnostic per rule: for each, `grep -c '<file>:<line>:<col>'` on the compiler's output is 1 (or 0 if the site is now accepted); quote the four counts.
+      - C4: a test with two different rules at one site prints both (one each), so the de-duplication is per rule, not per site.
+      - C5: every `EXPECT:` line changed, listed in the commit message (`git diff --stat -- tests` matches the list).
+      - C6: `make test` and `make preflight-changed`, each `Total:` line quoted.
+    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
+
+    - **Moved (2026-11-19, the maintainer's request to group `+AI-G` work):** from after id:z0044 to directly after id:eb38n. It joins that batch of `+AI-G` tasks, and its check-in id:h1yk5 follows the batch's check-in id:g764h. Its only dependency, id:0m61c, is complete. Nothing between its old and new places depends on it. The tests id:77rr6 to id:eb38n add may carry `EXPECT:` lines in the old wording, and this task updates them with the rest (C5).
+
 - [ ] +safety +review +AI-D @provenance @checkin Review of the hidden-store fixes: lead 1, `extern` declarations stage 1 and 2 id:g764h
     > **Created:** 2026-11-19
     > **Branch:** `provenance`
@@ -88,6 +111,21 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
     - **Placed:** directly after id:eb38n, the last `+AI-G` task of the batch it reviews (id:77rr6, id:716bm, id:eb38n, from id:f81f3's decisions).
     - **Review:** the steps of AGENTS.md's check-in list. Re-run each **Awaiting review:** bullet. Probe the sibling routes: a raw write through a raw pointer in a by-value aggregate, a raw pointer held in a `Vec` (an owner: lead 1 leaves it out), a declared `extern` called through a `fn` value, and an `extern` declared in one module and called from another through `zbuild` (the `.zri` round trip). Confirm that gap_102, gap_103 and F9's test are where the decisions put them: refused under `--provenance`, and the default build's status written in their Known gaps entries.
+
+- [ ] +safety +review +AI-D @provenance @checkin Review of the provenance diagnostics wording and de-duplication (id:z0066) id:h1yk5
+    > **Created:** 2026-11-17
+    > **Branch:** `provenance`
+    > **Depends:** id:z0066
+
+    - **Placed:** directly after id:z0066, the `+AI-G` batch it reviews (a review of the task list, the maintainer's request, 2026-11-17: id:z0066 had no check-in, and it changes the checker's diagnostics and the `EXPECT:` lines of provenance tests). id:z0065, the next task that builds on it, depends on this one.
+
+    - **Checks:**
+      - Re-read the queue and `git log -p` of id:z0066's commits.
+      - Re-run id:z0066's C3 (one diagnostic per site and rule at the four sites) and C4 (two rules at one site print both).
+      - No program is accepted that was refused: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` shows 0 newly accepted, and the same count under `--provenance` over `tests/language/memory/provenance/` and the `gap_*` probes before and after (a de-duplication keyed too coarsely must not drop the only error of a function).
+      - Every `EXPECT:` line changed is in the commit message's list (C5), and none changed from one rule's message to another rule's.
+
+    - **Moved (2026-11-19, with id:z0066):** to directly after id:g764h, so that both check-ins of the `+AI-G` batch run back to back in one `+AI-D` session. It is still before id:z0065, which depends on it.
 
 - [ ] +safety +tests +AI-D @provenance L2a A call summary records which arguments the callee may release id:bfcvm
     > **Created:** 2026-11-17
@@ -165,38 +203,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
         - C5: take the summary step out and watch `gap_96` build and run 77; make the borrows strict and watch C3's method-called-twice twin be refused.
         - C6: `make test`; `REJECT_DIFF_NO_CACHE=1 make preflight-changed` with `reject-diff: base verdicts: fresh (no cache)` quoted and each newly refused program listed. This acts in the default mode, as L2 does.
     - **Depends changed (2026-11-17, L1):** added id:kqp9n (L2, for the outside holder and the tier mark) and id:bfcvm (`releases`). Removed id:z0011, which this task needed only for `gap_44`; `gap_44` is id:z0011's own.
-
-- [ ] +diagnostics +AI-G @provenance id:z0066 B3.9 Provenance diagnostics name the origin they found, once per site
-    > **Created:** 2026-11-05
-    > **Branch:** `provenance`
-    > **Depends:** id:0m61c
-
-    - **Found by:** id:z0049's review (correction 8).
-
-    - **Now:** the return rule says "the returned value holds an address of this frame" also when the returned origins are only `Unknown`, and the call store rule often prints the same warning twice at one location: under `--provenance=warn`, `src/fmt/doc.zrl:111:21`, `src/driver/module.zrl:1338:13`, `tools/zbuild/src/build.zrl:580:17`, `tests/unit/test_empty_compile_and_tool_errors.zrl:65:5` (re-checked 2026-11-06 after id:z0092).
-    - **Stale examples (2026-11-06):** the `Unknown`-only return was `fn mk3(n: u64) -> Box<H> { let p = @ptr_from_int<*u8>(n); return box H { p: p, n: n }; }`, now accepted (`@ptr_from_int` gives `Raw` since id:z0063), and the duplicate was `fn add(v: &mut Vec<Vec<i32>>) { v.push(Vec::<i32>.new()); }`, now accepted. Find a current `Unknown`-only return first: the sources left are a summary-less call (a `.zri` import with no summary) and an index the walk cannot type.
-    - **Do:** word each rule's message by the origin that triggered it (`Frame`: an address of this frame; `Unknown`: an address the compiler cannot trace), and print one diagnostic per site and rule. Update the `EXPECT:` lines of the provenance tests that change, and say so in the commit message.
-    - **Checks:**
-      - C1: a current `Unknown`-only return, as a program under 15 lines, recorded in this task with the message it gets today (quoted). If none is found in the session, stop and report what was tried: the wording change waits for one.
-      - C2: one test per wording (`Frame`, `Unknown`), each with an `// EXPECT:` line for its new message, under `tests/language/memory/provenance/`; both pass.
-      - C3: under `--provenance=warn`, each of the four sites in **Now** prints one diagnostic per rule: for each, `grep -c '<file>:<line>:<col>'` on the compiler's output is 1 (or 0 if the site is now accepted); quote the four counts.
-      - C4: a test with two different rules at one site prints both (one each), so the de-duplication is per rule, not per site.
-      - C5: every `EXPECT:` line changed, listed in the commit message (`git diff --stat -- tests` matches the list).
-      - C6: `make test` and `make preflight-changed`, each `Total:` line quoted.
-    - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
-
-- [ ] +safety +review +AI-D @provenance @checkin Review of the provenance diagnostics wording and de-duplication (id:z0066) id:h1yk5
-    > **Created:** 2026-11-17
-    > **Branch:** `provenance`
-    > **Depends:** id:z0066
-
-    - **Placed:** directly after id:z0066, the `+AI-G` batch it reviews (a review of the task list, the maintainer's request, 2026-11-17: id:z0066 had no check-in, and it changes the checker's diagnostics and the `EXPECT:` lines of provenance tests). id:z0065, the next task that builds on it, depends on this one.
-
-    - **Checks:**
-      - Re-read the queue and `git log -p` of id:z0066's commits.
-      - Re-run id:z0066's C3 (one diagnostic per site and rule at the four sites) and C4 (two rules at one site print both).
-      - No program is accepted that was refused: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` shows 0 newly accepted, and the same count under `--provenance` over `tests/language/memory/provenance/` and the `gap_*` probes before and after (a de-duplication keyed too coarsely must not drop the only error of a function).
-      - Every `EXPECT:` line changed is in the commit message's list (C5), and none changed from one rule's message to another rule's.
 
 - [ ] +safety +measurement +AI-D @provenance B1.8c Measure: a store through a local raw pointer adds the stored value's origins to that local, so a heap block holding a frame address cannot leave the frame id:71a06
     > **Created:** 2026-11-14
