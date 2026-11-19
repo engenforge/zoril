@@ -8404,6 +8404,7 @@ fn os_call(
     let mut known = (fn_id as usize) < module.functions.len();
     let mut storage = 0 as u64;
     let mut ties = 0 as u64;
+    let mut trusted = false;
     let mut ret_ty = 0 as u32;
     let mut from_mask = 0 as u64;
     let mut to_mask = 0 as u64;
@@ -8445,6 +8446,7 @@ fn os_call(
             // (`memcpy` in `Vec.clone_in`) is invisible to the body, and a declaration may be wider
             // than it. A narrowing `#[borrows()]` adds nothing, so it no longer launders a tie.
             ties = f.os_ret_contents | (if f.has_borrows { f.ret_ties } else { 0 as u64 });
+            trusted = f.borrows_trusted;
             ret_flags = f.os_ret_flags;
             ret_fresh = f.os_ret_fresh;
             edges = f.os_edges;
@@ -8491,10 +8493,16 @@ fn os_call(
     if body && result_carries && !os_holds_pointer(module, ret_ty, 0 as usize) {
         ties = 0 as u64;
     }
+    // What the result points into through its tied arguments. `#[unsafe(borrows(..))]` states it
+    // in place of the body's ties, so the trust is stated once, at its `// SAFETY:` line, and its
+    // callers are checked against the declaration as against a bodyless callee's. Which arena an
+    // owning result's storage is in stays the body's: the declaration speaks of borrows only.
+    let view_ties = if trusted { ties & module.functions[fn_id as usize].ret_ties } else { ties };
     let mut i = 0 as usize;
     while i < args.len {
         let in_storage = i >= 64 as usize || ((storage >> (i as u64)) & 1 as u64) != 0 as u64;
         let in_ties = i >= 64 as usize || ((ties >> (i as u64)) & 1 as u64) != 0 as u64;
+        let in_view = i >= 64 as usize || ((view_ties >> (i as u64)) & 1 as u64) != 0 as u64;
         if result_carries && (in_storage || in_ties) {
             let aty = os_arg(c, module, locals, fn_id, args, i);
             let tah = os_t(c, OS_T_AH);
@@ -8539,7 +8547,7 @@ fn os_call(
                     } else {
                         os_reach_all(c, tao, tr);
                     }
-                    let _ = os_or(c, vo, tr);
+                    if in_view { let _ = os_or(c, vo, tr); }
                     // Storage in an arena is named by the arena argument's own origins (`Frame(a)`
                     // for `&a`), never by what the arena struct holds: under a body summary that
                     // includes the C memory of its blocks (Static), which would make every Vec in

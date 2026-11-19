@@ -1,0 +1,8 @@
+// A trusted narrowing whose body returns what its argument points to: its interface keeps both
+// the body summary (`ret_contents = 1`) and `#[unsafe(borrows())]`, read by
+// prov_accept_trusted_forward.zrl.
+pub struct S { pub a: [u8] }
+
+// SAFETY: every S this module's importers build holds a string literal, which outlives every S.
+#[unsafe(borrows())]
+pub fn view(s: &S) -> [u8] { return s.a; }

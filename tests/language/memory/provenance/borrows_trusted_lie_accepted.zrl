@@ -1,0 +1,26 @@
+// A `#[unsafe(borrows(..))]` is believed even where it is false, and so are its callers (§3,
+// _Checked contracts_, tier 3): `view` says its result needs no borrow of `v`, but returns `v`'s
+// heap buffer. `fwd` returns that result under a checked `#[borrows()]`, which the call's declared
+// ties satisfy, so `main` holds no borrow of `v` and frees the buffer while the view lives. This
+// is the cost of trust; the `// SAFETY:` line is where such a declaration is reviewed. The checked
+// spelling of `view` is refused (borrows_narrower_than_body_refused.zrl).
+// flags: --provenance
+// expected exit 0
+
+import "vec.zrl";
+use vec::Vec;
+
+// SAFETY: false on purpose: the result is `v`'s own buffer, freed with it.
+#[unsafe(borrows())]
+fn view(v: &Vec<u8>) -> [u8] { return v.as_slice(); }
+
+#[borrows()]
+fn fwd(v: &Vec<u8>) -> [u8] { return view(v); }
+
+fn main() -> i32 {
+    let mut v = Vec::<u8>.new();
+    v.push(7 as u8);
+    let s = fwd(&v);
+    v = Vec::<u8>.new();
+    return s.len as i32 - 1;
+}

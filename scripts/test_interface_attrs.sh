@@ -190,6 +190,12 @@ for prog in "$src"/prov_*.zrl; do
         [ -z "$want_text" ] || grep -qF -- "$want_text" "$dir/$name.zb.log" || fail "$name: zbuild did not print: $want_text" "$dir/$name.zb.log"
     fi
 done
+# prov_accept_trusted_forward passes under zbuild for the right reason only if `view`'s interface
+# keeps the body's tie beside the trusted declaration, which the call then reads instead.
+tv="$dir/cache/iface/$(printf '%s' "$src/lib_trusted_view.zri" | sed 's|/|%2F|g')"
+grep -B2 'fn view(' "$tv" 2>/dev/null | grep -q 'ret_contents = 1,' \
+    && grep -B1 'fn view(' "$tv" | grep -qF '#[unsafe(borrows())]' \
+    || fail "lib_trusted_view's interface lost view's ret_contents or its #[unsafe(borrows())]" "$tv"
 
 # 6b. ret_fresh is read back, not just written: a caller of `mix` (tied to its arena argument, and
 # fresh on the other path) owns storage of its own only through the bit, so dropping it from the

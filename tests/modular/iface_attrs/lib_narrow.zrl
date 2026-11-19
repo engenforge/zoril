@@ -1,0 +1,6 @@
+// A `#[borrows()]` narrower than its body, which the result points into: read by
+// prov_reject_narrowing.zrl. A library of its own, since importing it refuses the program.
+pub struct S { pub a: [u8] }
+
+#[borrows()]
+pub fn view(s: &S) -> [u8] { return s.a; }
