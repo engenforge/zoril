@@ -316,6 +316,15 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **The time:** the bench step took 198 s with the cache cold (this review, `wall=488`; id:kbv3f's run, about 8.5 minutes); id:8wvxb's C1 gave `wall=384` with it warm. `doc/developer_guide.md` says ~6 minutes and does not say which.
     - **To decide:** (1) whether a run with a failed comparison row is stored as `complete`, or the failure is replayed with its `[WARN]`; a wrong skip here hides a broken benchmark source from whoever reads the comparison rows of a preflight (`--update-doc` and `--record` run in full and would show it). (2) The fix of `array_loop.zig` for zig 0.17, and which zig versions the sources are meant for. (3) Whether the guide gives both times. Each answer becomes an `+AI-G` task.
 
+- [ ] +safety +AI-G @provenance The rejection differential also compares the verdicts of programs under `--provenance` id:bzkc0
+    > **Created:** 2026-11-19
+    > **Branch:** `provenance`
+
+    - **Found by:** id:50y0m, whose change makes the checker accept more only under `--provenance`. `scripts/check_reject_diff.sh` does not read a program's `// flags:` line and compiles every program with the default rules, so its run on that change reported `0 newly accepted ... 0 newly refused, of 69168 programs`, and could not have reported anything else. id:50y0m ran a hand differential instead (its completion note: base and change compiled every `.zrl` under `tests/` and `bench/safety_matrix/probes/` with `--provenance`, and the base also read its own `stdlib/`).
+    - **Placed:** in `future.tm.md` under Evidence and tooling: it blocks no open task. While the series changes the `--provenance` rules, the maintainer may want it sooner.
+    - **Do:** in `check_reject_diff.sh`, compile every program a second time with `--provenance` (each compiler with its own `stdlib/`), and report newly accepted and newly refused programs of that pass on their own lines, beside the default pass's. Both passes go into the cache key.
+    - **Checks:** C1: on id:50y0m's change (`PREFLIGHT_BASE=38860b3`, at git:7f5e508), `REJECT_DIFF_NO_CACHE=1 sh scripts/check_reject_diff.sh 38860b3` lists `borrows_trusted_lie_accepted.zrl` as newly accepted under `--provenance` (and `prov_accept_trusted_forward.zrl` if the program set includes `tests/modular/iface_attrs/`), and nothing else. C2: with the second pass taken out, C1 lists neither. C3: the default pass's line is unchanged on the same run. C4: `make test`.
+
 ## Types, diagnostics and the standard library
 
 - [ ] +generics +types id:z0032 G1 `impl<T: Copy> Source<T> for S` fails to bind `T` when it appears only in the trait's arguments
