@@ -126,4 +126,4 @@ Zoril is an early experiment, not an attempt to be everything to everyone. It is
 - **Application code without `unsafe`, built on small, auditable runtime primitives**
 - **A small toolchain that is easy to read, audit, and build from source**
 
-For language subtleties and contrasts with C and Rust semantics, see [`doc/language/gotchas_and_subtleties.md`](../language/gotchas_and_subtleties.md).
+For language subtleties and contrasts with C and Rust semantics, see [`doc/tour.md`](../tour.md#12-idioms-subtleties-and-contrasts-with-c-and-rust).

@@ -292,7 +292,7 @@ while i < 100 {
 }
 ```
 
-When the arena is freed, all memory within it is reclaimed at once, which removes the per-object free overhead and the fragmentation a general heap leaves behind. Every value an arena hands out through checked code is tied to it at compile time: freeing or resetting the arena while a `Vec` built with `new_in(&arena)` — or anything else read out of it — is live is a compile error, and so is moving such a collection out of the block that owns the arena handle, because the handle's implicit `Drop` unmaps the arena at that block's end ([`159_arena_tied_collection_outlives_block.zrl`](../bench/safety_matrix/probes/159_arena_tied_collection_outlives_block.zrl)), except through the open routes in [What Zoril Checks](SAFETY.md#6-known-gaps-in-checked-code) §6 (class A). Only the `unsafe` `_raw` entry points take a raw arena pointer, and those are unchecked by design ([What Zoril Checks](SAFETY.md) §4.1).
+When the arena is freed, all memory within it is reclaimed at once, which removes the per-object free overhead and the fragmentation a general heap leaves behind. Every value an arena hands out through checked code is tied to it at compile time: freeing or resetting the arena while a `Vec` built with `new_in(&arena)` — or anything else read out of it — is live is a compile error, and so is moving such a collection out of the block that owns the arena handle, because the handle's implicit `Drop` unmaps the arena at that block's end, except through the open routes in [What Zoril Checks](SAFETY.md#6-known-gaps-in-checked-code) §6 (class A). Only the `unsafe` `_raw` entry points take a raw arena pointer, and those are unchecked by design ([What Zoril Checks](SAFETY.md) §4.1).
 
 ### Heap Boxing
 
@@ -361,6 +361,175 @@ fn sum_bytes(path: [u8]) -> Result<u64, Error> {
 ```
 
 `bufio::BufReader` wraps any `Read` with a buffer and reads lines (`read_line`, `read_until`). Version 0.1 has no portable way to read at an offset: on Unix, `os_unix::lseek(f.fd(), offset, 0)` (`import "os/unix.zrl" as os_unix;`) moves a file's position, as code you keep per platform. A portable seek and read-only memory mapping of a file are planned.
+
+---
+
+## 12. Idioms, Subtleties, and Contrasts with C and Rust
+
+Zoril borrows syntax from Rust (`fn`, `let`, `mut`, `match`, `struct`, `enum`, `impl`, `trait`) and low-level semantics from C and QBE (`@syscall`, simple value layout), yet is neither a subset of Rust nor a "safe C". This section catalogs the main places where Zoril differs from C or Rust expectations and the idioms idiomatic code uses instead.
+
+### A. Operator Precedence, Comparisons, and Assignments
+
+Zoril uses **Rust-style operator precedence**: bitwise operators (`&`, `^`, `|`) bind tighter than equality and relational comparisons, comparisons are **non-associative** (chaining `a < b < c` is a compile error; write `a < b && b < c`), and assignments are statements that yield `()` rather than expression values.
+
+```zoril
+const MASK: u32 = 4;
+
+fn is_set(status: u32) -> bool {
+    return status & MASK != 0; // Parsed as (status & MASK) != 0, unlike C's status & (MASK != 0)
+}
+```
+
+```zoril,compile-fail
+fn in_order(a: i32, b: i32, c: i32) -> bool {
+    return a < b < c; // COMPILE ERROR: comparison operators cannot be chained
+}
+```
+
+```zoril,compile-fail
+fn get_val() -> i32 { return 1; }
+
+fn main() -> i32 {
+    let mut x = 0;
+    if (x = get_val()) { return 1; } // COMPILE ERROR: assignment yields no value
+    return 0;
+}
+```
+
+### B. References, Auto-Dereferencing, and Immutability
+
+Field access and method calls on references (`&T` / `&mut T`) automatically dereference, so write `node.val` rather than `(*node).val` (writing `(*r).field` makes an explicit dereference look like a raw-pointer access to readers and audit tools). Unlike Rust, **Zoril has no interior mutability through `&T`** (no `UnsafeCell`): `&T` is strictly read-only, and mutating behind a pointer requires `&mut T` or `*mut T`. Declaring `let mut r: &T` lets `r` be rebound to another target, not mutated through `*r`:
+
+```zoril
+import "core.zrl";
+
+struct Node { val: i64, next: Option<&Node> }
+
+fn read_val(node: &Node) -> i64 {
+    return node.val; // auto-deref
+}
+```
+
+```zoril,compile-fail
+fn main() -> i32 {
+    let x: i64 = 1;
+    let y: i64 = 2;
+    let mut r: &i64 = &x;
+    r = &y;  // OK: rebinds 'r' to point to 'y'
+    *r = 10; // COMPILE ERROR: cannot assign through a shared reference &i64
+    return 0;
+}
+```
+
+### C. Fixed-Size Arrays vs. Slices
+
+Fixed-size arrays `[T; N]` are value types: passing `[u8; 4096]` by value copies 4,096 bytes on the stack. Pass `&[T; N]` or a slice `[T]` / `[mut T]` (a 16-byte `{ptr, len}` fat pointer) instead; use `subslice(s, start, len)` and `subslice_from(s, start)` in `core0.zrl` for bounds-checked sub-slicing. Both reads and writes on arrays and slices are bounds-checked in every build.
+
+```zoril
+fn process(data: &[u8; 4096]) {} // 8-byte reference
+fn process_slice(data: [u8]) {}  // 16-byte slice (ptr + len)
+```
+
+### D. Strict Reborrowing Across `&mut self` Calls
+
+A reference taken into a collection (`Vec`, `String`, `HashMap`) keeps that collection borrowed while the reference is live. Calling a `&mut self` method on the same collection — even through a `&mut` parameter — is rejected at compile time:
+
+```zoril,compile-fail
+import "vec.zrl";
+use vec::Vec;
+
+fn first_then_free(v: &mut Vec<i32>) -> i32 {
+    let r = v.get(0).unwrap();
+    v.free(); // COMPILE ERROR: cannot mutably borrow 'v' while it is already borrowed
+    return *r;
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(10);
+    return first_then_free(&mut v);
+}
+```
+
+Six idioms work cleanly with strict reborrowing:
+
+1. **End the borrow before mutation:** scope the view so its last use precedes the `&mut self` call.
+2. **Copy the value out:** copy a scalar or `Copy` field before calling the mutating method.
+3. **Hoist self-derived arguments:** compute arguments that borrow `self` beforehand (pure scalar reads like `v.push(v.len())` are accepted directly).
+4. **Keep an index and re-read:** hold an integer index or key across the mutation and re-index afterwards.
+5. **Re-look up interned data:** keep an interned ID across operations that may reallocate or reset an arena, then re-fetch the slice.
+6. **Split the struct:** put independently mutated fields in separate structs or fields rather than mutating the whole aggregate.
+
+### E. Narrowing Casts, Booleans, Sub-Word Wrapping, and Checked Shifts
+
+Zoril widens integers implicitly (`u8` to `u32`), but **rejects implicit narrowing** — any truncating conversion requires `as`. Conditions must have type `bool` (no truthy/falsy integers). Sub-word arithmetic (`u8`, `i8`, `u16`, `i16`) masks intermediate results modulo $2^N$, and shift counts must lie in `[0, width)` (out-of-range constant counts fail at compile time; variable counts trap with exit 134 unless `@shl_wrap` / `@shr_wrap` is used).
+
+```zoril,compile-fail
+fn main() -> i32 {
+    let a: u32 = 1000;
+    let c: u8 = a as u8; // OK: explicit truncation (232)
+    let b: u8 = a;       // COMPILE ERROR: cannot implicitly narrow u32 to u8
+    return 0;
+}
+```
+
+```zoril,compile-fail
+fn main() -> i32 {
+    let count = 5;
+    if count { return 1; } // COMPILE ERROR: condition must be bool
+    return 0;
+}
+```
+
+```zoril,wrap
+let a: u8 = 200 as u8;
+let b: u8 = 100 as u8;
+let c: u8 = a + b;         // 44 (300 mod 256)
+let x: u32 = 1;
+let n: u32 = 32;
+let y = @shl_wrap(x, n);   // 1 << (32 & 31) = 1
+```
+
+### F. Structural `Copy` vs. Move-Only Owning Collections
+
+A struct or enum is `Copy` automatically when all its fields are `Copy` and it does not implement `Drop`. `Box<T>`, `Drop` types (`io::File`), and buffer-owning collections (`Vec<T>`, `String`, `ByteVec`, `HashMap`) **move** on assignment or pass-by-value; call `.clone()` for an independent copy, or pass `&T` / `&mut T` to borrow:
+
+```zoril,wrap
+import "vec.zrl";
+import "clone.zrl";
+use vec::Vec;
+
+let mut v1 = Vec::<u8>.new();
+v1.push(1);
+let v2 = v1.clone(); // allocates an independent buffer
+v1.push(2);          // v1.len() is 2, v2.len() is 1
+```
+
+### G. Idiomatic Structure and Author Checklist
+
+Prefer guard clauses with early returns, `Option<T>` / `Result<T, E>` with `?` over sentinel values, named constants over magic numbers, and exhaustive `match` over tag ladders:
+
+```zoril
+import "core.zrl";
+
+enum DigitError { Empty, NotADigit }
+
+fn parse_digit(s: [u8]) -> Result<u8, DigitError> {
+    if s.len == 0 { return Result.Err(DigitError.Empty); }
+    let c = s[0];
+    if c < '0' as u8 || c > '9' as u8 { return Result.Err(DigitError.NotADigit); }
+    return Result.Ok(c - '0' as u8);
+}
+```
+
+**Checklist for Zoril code authors:**
+
+1. **Bitwise precedence:** `&`, `^`, and `|` bind tighter than `==` and `<`.
+2. **Large arrays:** pass `&[T; N]` or `[T]` instead of copying `[T; N]` by value.
+3. **Immutability:** mutate through `&mut T` or `*mut T`; `&T` has no interior mutability.
+4. **Narrowing casts:** write explicit `as` when discarding bits.
+5. **Collections:** pass `&Vec<T>` / `&mut Vec<T>` to share or mutate; `.clone()` when a second owner is needed.
+6. **Application `unsafe`:** rely on stdlib types (`Vec`, `String`, `Args`, `File`) so application code stays free of `unsafe`.
 
 ---
 
