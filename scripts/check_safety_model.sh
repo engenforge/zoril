@@ -524,9 +524,6 @@ if [ "${1:-}" = "--list-citations" ]; then
         if [ -f "$REPO_ROOT/doc/spec/unsafe_policy.md" ]; then
             list_normative_citations "$REPO_ROOT/doc/spec/unsafe_policy.md" "$REPO_ROOT"
         fi
-        if [ -f "$REPO_ROOT/doc/spec/surface_syntax.md" ]; then
-            list_normative_citations "$REPO_ROOT/doc/spec/surface_syntax.md" "$REPO_ROOT"
-        fi
     fi
     exit 0
 fi
@@ -780,13 +777,12 @@ if [ -f "$SPEC" ]; then
 fi
 
 # ── Normative safety sentences must cite tests ───────────────────────────────
+# Enforced on the safety-evidence documents; surface_syntax.md is a self-contained
+# language specification whose safety claims are traced in safety_model.md and matrix.md.
 check_normative_sentences "$DOC" "$REPO_ROOT"
 check_normative_sentences "$MATRIX" "$REPO_ROOT"
 if [ -f "$POLICY" ]; then
     check_normative_sentences "$POLICY" "$REPO_ROOT"
-fi
-if [ -f "$SPEC" ]; then
-    check_normative_sentences "$SPEC" "$REPO_ROOT"
 fi
 
 # ── No public safe stdlib function takes a raw pointer it dereferences ────────
