@@ -6,10 +6,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +docs +AI-G @provenance D2 Consolidate language walkthroughs, idioms, gotchas, and compiler case studies into doc/tour.md and doc/developer_guide.md id:f6bmr
+- [x] +docs +AI-G @provenance D2 Consolidate language walkthroughs, idioms, gotchas, and compiler case studies into doc/tour.md and doc/developer_guide.md id:f6bmr
     > **Created:** 2026-11-19
     > **Branch:** `provenance`
     > **Depends:** id:p0eq0
+    > **Completed:** 2026-11-19 git:3d1ea25
 
     - **Placed:** directly after `id:p0eq0` (`D1`), before `id:bazt1` (`D3`).
     - **Why:** `doc/language/walkthrough.md` (237L / 1,312W) and `doc/tour.md` (372L / 2,323W) are two separate walkthroughs of the same introductory topics (`fn add`, `if/else`, `box`, `Descriptor` `Drop`, `Shape`/`Option`/`Result`, `match`, `defer`, `for`, `@syscall`), while `doc/language/gotchas_and_subtleties.md` (330L / 1,940W), `doc/language/best_practices_for_development.md` (218L / 1,198W), and `doc/language/idiomatic_refactoring_opportunities.md` (141L / 889W) repeat the same language idioms and compiler-architecture case studies. None of `walkthrough.md`, `best_practices_for_development.md`, or `idiomatic_refactoring_opportunities.md` is linked from anywhere in the repository.
@@ -23,6 +24,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3, executable code blocks: `sh scripts/test_doc_snippets.sh doc/tour.md doc/developer_guide.md doc/vision/why_zoril.md` compiles and runs every snippet (including the folded `zoril` and `zoril,compile-fail` blocks) with 0 failures.
       - C4, negative / take-out check: temporarily change one folded `zoril,compile-fail` block in `doc/tour.md` §12 to `zoril`, run `sh scripts/test_doc_snippets.sh doc/tour.md`, confirm it exits 1, and restore `zoril,compile-fail`.
       - C5: `make test-changed BASE=HEAD~1` passes; quote its `Total:` line.
+    - **Awaiting review:** re-run C1 (`wc -l -w doc/tour.md doc/developer_guide.md` and `test ! -e` for the 4 removed files), C2 (zero stale references grep), C3 (`test_doc_snippets.sh doc/tour.md doc/developer_guide.md doc/vision/why_zoril.md`), C4 (change one §12 `zoril,compile-fail` block to `zoril` and confirm `test_doc_snippets.sh` exits 1), and C5 (`make test-changed BASE=HEAD~1`).
+    - **Completion (2026-11-19, git:3d1ea25):** committed on `stream/provenance` (`build/provenance`, on top of `git:3d644a8`).
+      - C1: `wc -l -w doc/tour.md doc/developer_guide.md` -> `541 3457 doc/tour.md`, `222 4089 doc/developer_guide.md`, `763 7546 total` (under 950 lines and 8,500 words); `test ! -e` confirmed absent for all 4 removed files (`doc/language/walkthrough.md`, `doc/language/gotchas_and_subtleties.md`, `doc/language/best_practices_for_development.md`, `doc/language/idiomatic_refactoring_opportunities.md`). Also removed the inline `159_arena_tied_collection_outlives_block.zrl` probe link from `doc/tour.md` §5.
+      - C2: `grep -rnE 'walkthrough\.md|gotchas_and_subtleties|best_practices_for_development|idiomatic_refactoring_opportunities' doc/ scripts/ src/ stdlib/ tools/ tests/ bench/ README.md CONTRIBUTING.md KNOWN_ISSUES.md SECURITY.md Makefile` exited 1 (empty output).
+      - C3: `sh scripts/test_doc_snippets.sh doc/tour.md doc/developer_guide.md doc/vision/why_zoril.md` exited 0 (`[PASS] doc-snippets: 25 blocks passed, 0 not tested`).
+      - C4: temporarily changing the first `zoril,compile-fail` block in `doc/tour.md` §12 (`a < b < c`) to `zoril` and running `sh scripts/test_doc_snippets.sh doc/tour.md` exited 1 (`[FAIL] doc-snippets: doc/tour.md:383: zoril failed`, `[FAIL] doc-snippets: 1 failed, 24 passed, 0 not tested`), then restored cleanly.
+      - C5: `make test-changed BASE=HEAD~1` on `git:3d1ea25` passed: `Total: 3870 run, 3870 passed, 0 failed, 106 skipped (139.9s)`.
     - **Ends with:** the change committed, an `**Awaiting review:**` bullet naming C1 to C5, then `tm done`. The check-in is `id:0m832`.
 
 - [ ] +docs +safety +AI-G @provenance D3 Move machine-parsed safety verification ledgers into bench/safety_matrix/README.md and make safety_model.md and unsafe_policy.md self-contained specs id:bazt1
