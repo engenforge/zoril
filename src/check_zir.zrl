@@ -5765,6 +5765,9 @@ pub struct OriginSets {
     // Per local built by a literal, a bit for each element overwritten before it is seen
     // (os_dead_inits).
     pub dead_init: [mut u64],
+    // Parameters whose reachable storage this body may release (§3.1, _What invalidates_): bit i
+    // for parameter i, bit 63 for 63 and later.
+    pub releases: u64,
 }
 
 const OS_NO_ENV: usize = 0xffffffff;
@@ -6997,6 +7000,8 @@ fn os_unknown_call_effects(
         let _ = os_or(c, tsv, tr);
         k = k + 1 as usize;
     }
+    let rw = tsv * c.words;
+    c.releases = c.releases | c.buf[rw + OS_W_ADDR] | c.buf[rw + OS_W_CONTENTS];
     // The summary's edges carry what the arguments reach (os_note_edges below), not this Unknown:
     // a `fn` value's body was checked where it was made, so what it stores is something its
     // arguments reach, and an Unknown edge would refuse every caller handing it a closure.
@@ -8196,6 +8201,31 @@ pub fn zir_open_call_depth(module: &ILModule, func: &ZirFunction) -> u32 {
     return low;
 }
 
+// The parameters F's `#[releases]` declaration marks as released: each raw-pointer parameter
+// (`*T` or `*mut T`), bit 63 for 63 and later (§3.1, item 2).
+pub fn os_decl_releases(module: &ILModule, f: &ILFunction, sret_name: u32) -> u64 {
+    if !f.releases { return 0 as u64; }
+    let base = if f.params_len > 0 as usize && f.param(0).name == sret_name {
+        1 as usize
+    } else {
+        0 as usize
+    };
+    let mut mask = 0 as u64;
+    let mut i = 0 as usize;
+    while i + base < f.params_len {
+        let ty = f.param(i + base).ty;
+        if ty != 0 as u32 && ty as usize <= module.types.len() {
+            let tag = os_type_def_tag(module, ty);
+            if tag == ILTYPE_RAWPTR || tag == ILTYPE_RAWPTRMUT {
+                let bit = if i < 63 as usize { i } else { 63 as usize };
+                mask = mask | ((1 as u64) << (bit as u64));
+            }
+        }
+        i = i + 1 as usize;
+    }
+    return mask;
+}
+
 // This body's summary, written to its function for the calls after it (§3, _The summary_): the
 // parameter origins of the result's O, its Static and Unknown (a Frame origin is Unknown to a
 // caller), whether the result's S is fresh storage (a Frame or Unknown origin), and the store
@@ -8283,10 +8313,13 @@ pub fn store_origin_summary(
     let contents = old.os_ret_contents | c.buf[r + OS_W_CONTENTS];
     flags = flags | old.os_ret_flags;
     fresh = fresh || old.os_ret_fresh;
+    let releases = old.os_releases | c.releases | os_decl_releases(module, &old, c.sret_name);
+    c.releases = releases;
     if addr != old.os_ret_addr
         || contents != old.os_ret_contents
         || flags != old.os_ret_flags
-        || fresh != old.os_ret_fresh {
+        || fresh != old.os_ret_fresh
+        || releases != old.os_releases {
         grew = true;
     }
     let f = module.get_function_mut(idx);
@@ -8295,6 +8328,7 @@ pub fn store_origin_summary(
     f.os_ret_contents = contents;
     f.os_ret_flags = flags;
     f.os_ret_fresh = fresh;
+    f.os_releases = releases;
     f.os_edges = out;
     f.os_edge_rows = rows;
     return grew;
@@ -8413,6 +8447,7 @@ fn os_call(
     let mut body = false;
     let mut ret_flags = 0 as u64;
     let mut ret_fresh = false;
+    let mut cal_releases = 0 as u64;
     let mut edges = 0 as *mut u64;
     let mut edge_rows = 0 as usize;
     if known {
@@ -8424,6 +8459,7 @@ fn os_call(
         ret_ty = f.ret_ty;
         from_mask = f.stores_storage;
         to_mask = f.store_targets;
+        cal_releases = os_decl_releases(module, f, c.sret_name);
         if !f.os_known && f.os_depth != 0 as u32 {
             // A callee still being lowered: this body is in a recursive cycle with it. Its summary
             // starts empty and grows with the cycle's fixpoint, which rechecks this body
@@ -8448,6 +8484,7 @@ fn os_call(
             trusted = f.borrows_trusted;
             ret_flags = f.os_ret_flags;
             ret_fresh = f.os_ret_fresh;
+            cal_releases = cal_releases | f.os_releases;
             edges = f.os_edges;
             edge_rows = f.os_edge_rows;
             from_mask = 0 as u64;
@@ -8570,6 +8607,20 @@ fn os_call(
     }
     if body { os_edge_effects(c, module, locals, fn_id, args, edges, edge_rows); }
     os_summary_store_effects(c, module, locals, fn_id, args, from_mask, to_mask);
+    if cal_releases != 0 as u64 {
+        let mut k = 0 as usize;
+        while k < args.len {
+            let bit = if k < 63 as usize { k } else { 63 as usize };
+            if (cal_releases >> (bit as u64)) & 1 as u64 != 0 as u64 {
+                let _ = os_arg(c, module, locals, fn_id, args, k);
+                let _ = os_or(c, tao, tas);
+                os_reach_all(c, tao, tr);
+                let rw = tr * c.words;
+                c.releases = c.releases | c.buf[rw + OS_W_ADDR] | c.buf[rw + OS_W_CONTENTS];
+            }
+            k = k + 1 as usize;
+        }
+    }
 }
 
 // exhaustive: every rvalue must say which origins its value carries and what storage it owns.
@@ -8926,6 +8977,7 @@ pub fn compute_origins_zir(
         env_caps: @slice(0 as *mut u32, 0 as usize),
         // SAFETY: NL u64 in ARENA, as above, zeroed below before any read.
         dead_init: unsafe { @slice(zoril_allocator_alloc(arena, nl * 8) as *mut u64, nl) },
+        releases: 0 as u64,
     };
     unsafe {
         memset(c.edges.ptr as *mut u8, 0, (OS_EDGE_ROWS * 3 * 8) as u64);
@@ -9146,6 +9198,19 @@ pub fn print_origins(c: &OriginSets, func: &ZirFunction, module: &ILModule, tabl
             print("\n");
         }
         r = r + 1 as usize;
+    }
+    if c.releases != 0 as u64 {
+        print("  releases");
+        let mut ri = 0 as usize;
+        while ri < 64 as usize {
+            if (c.releases >> (ri as u64)) & 1 as u64 != 0 as u64 {
+                print(" ");
+                let _ = write_u64(&mut out, ri as u64);
+                if ri == 63 as usize { print("+"); }
+            }
+            ri = ri + 1 as usize;
+        }
+        print("\n");
     }
 }
 

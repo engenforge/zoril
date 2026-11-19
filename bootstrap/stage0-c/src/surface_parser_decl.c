@@ -536,9 +536,10 @@ ImplDecl* parse_impl(Parser* parser) {
     return impl;
 }
 
-/* #[must_use] sets *is_must_use. #[borrows(a, b)], #[stores(..)] and #[fresh] are
+/* #[must_use] sets *is_must_use. #[borrows(a, b)], #[stores(..)], #[fresh] and #[releases] are
  * accepted and ignored: they state which parameters a returned reference points into,
- * where a reference parameter is stored, or that a raw pointer result is a new mapping,
+ * where a reference parameter is stored, that a raw pointer result is a new mapping, or
+ * that a call may release storage through a raw pointer,
  * which only the safety checker of the self-hosted compiler uses (stage0-C is not that
  * checker, language_subset.md §1.6).
  * Anything else is an error. */
@@ -560,7 +561,9 @@ void parse_attribute(Parser* parser, bool* is_must_use) {
             parser_advance(parser);
         }
         parser_consume(parser, TOK_RPAREN, "Expect ')' after #[stores(...");
-    } else if (parser->previous.kind == TOK_IDENT && strcmp(parser->previous.as.ident, "fresh") == 0) {
+    } else if (parser->previous.kind == TOK_IDENT
+               && (strcmp(parser->previous.as.ident, "fresh") == 0
+                   || strcmp(parser->previous.as.ident, "releases") == 0)) {
         (void)0;
     } else if (parser->previous.kind == TOK_IDENT) {
         char buf[128];

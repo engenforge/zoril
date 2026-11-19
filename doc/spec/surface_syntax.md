@@ -89,6 +89,7 @@ Attributes are written `#[...]` immediately before the declaration they modify:
 - **`#[unsafe(borrows(p, ...))]`**: On a function; declares a narrower `#[borrows(..)]` contract that the compiler trusts beyond what static analysis proves (for example, returning a slice read through a raw pointer into longer-lived memory). Calling the function remains safe; the `unsafe` marks the trusted assumption on the declaration. `unsafe(..)` marks no other attribute (§7.2).
 - **`#[stores(p -> q, ...)]`**: On a function; declares that the body stores parameter `p`'s storage into memory reached through `q` (omitting `-> q` targets `self`; `-> static` targets global memory). Checked against the function body (§7.2).
 - **`#[fresh]`**: On an `unsafe fn` whose written return type is a raw pointer (`*T` or `*mut T`; type aliases are not accepted): asserts that each call returns newly allocated memory reachable by no other live pointer (or an error sentinel tested before use). The compiler checks only placement and return type; the freshness claim itself is trusted.
+- **`#[releases]`**: On an `unsafe fn` or `extern fn` taking a raw-pointer parameter (`*T` or `*mut T`): declares that calling the function may release or invalidate storage reached through its raw-pointer parameters.
 
 Compiler-generated module interfaces may also contain `#[summary(...)]` and `#[export]`; neither is part of user-written source syntax.
 

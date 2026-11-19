@@ -1,0 +1,21 @@
+// A cycle member that frees nothing itself gets the `releases` of the callee it reaches through
+// the recursive cycle from the fixpoint (§3.1, item 2): `kill_b` only calls `kill_a`, which is
+// still being lowered when `kill_b` runs its first origin pass.
+// ORIGINS: kill_a releases 0
+// ORIGINS: kill_b releases 0
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+
+fn kill_a(v: &mut Vec<i32>) {
+    if false { kill_b(v); }
+    v.free();
+}
+fn kill_b(v: &mut Vec<i32>) { kill_a(v); }
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    kill_b(&mut v);
+    return 0;
+}

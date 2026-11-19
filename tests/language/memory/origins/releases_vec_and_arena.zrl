@@ -1,0 +1,32 @@
+// The releasing primitives (`zoril_allocator_free`, `arena_free`, `arena_reset`) and the
+// standard-library and user wrappers above them record `releases 0` in their summaries
+// (§3.1, _What invalidates_, item 2).
+// ORIGINS: Vec_Ti32::free releases 0
+// ORIGINS: Arena::reset releases 0
+// ORIGINS: Arena::reset_to releases 0
+// ORIGINS: Arena::drop releases 0
+// ORIGINS: arena_reset releases 0
+// ORIGINS: arena_free releases 0
+// ORIGINS: kill releases 0
+// ORIGINS: kill_wrap releases 0
+// ORIGINS: kill_outer releases 0
+// expected exit 0
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn kill(v: &mut Vec<i32>) { v.free(); }
+fn kill_wrap(v: &mut Vec<i32>) { kill(v); }
+fn kill_outer(v: &mut Vec<i32>) { kill_wrap(v); }
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 2; } };
+    let m = a.mark();
+    a.reset_to(m);
+    a.reset();
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    kill_outer(&mut v);
+    return 0;
+}

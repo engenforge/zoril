@@ -40,7 +40,8 @@ for want in \
     "gen_must_use|#[must_use]" "gen_borrows|#[borrows(b)]" "gen_stores|#[stores(val -> dst)]" \
     "impl_must_use|#[must_use]" "impl_borrows|#[borrows(self)]" "impl_stores|#[stores(val -> self)]" \
     "area|#[must_use]" "first|#[borrows(self)]" \
-    "gen_fresh|#[fresh]" "fresh_block|#[fresh]" "impl_fresh|#[fresh]" "tr_fresh|#[fresh]"; do
+    "gen_fresh|#[fresh]" "fresh_block|#[fresh]" "impl_fresh|#[fresh]" "tr_fresh|#[fresh]" \
+    "release_block|#[releases]"; do
     item=${want%%|*}; attr=${want#*|}
     has_attr "$item" "$attr" || fail "the interface lost $attr on $item" "$dir/lib.zri"
 done
@@ -170,6 +171,8 @@ want_summary fresh "ret_fresh = true"
 want_summary first "ret_fresh = false"
 want_summary split_u "ret_fresh = true,"         # an `unsafe fn` writes its summary too (Z-0070)
 want_summary stash_u "edge = 1, edge_addr = 1,"  # its store edge v -> out
+want_summary kill "releases = 1"
+want_summary first "releases = 0"
 for prog in "$src"/prov_*.zrl; do
     [ -f "$prog" ] || continue
     name=$(basename "$prog" .zrl)
@@ -213,5 +216,19 @@ origins_of() { # IFACE-DIR -> the result's line of origins_fresh_caller's `calle
 with_bit=$(origins_of "$fr"); without_bit=$(origins_of "$fr/off")
 case "$with_bit" in *"Frame("*) ;; *) fail "an imported ret_fresh result owns no storage of its own: '$with_bit'" ;; esac
 [ "$with_bit" != "$without_bit" ] || fail "ret_fresh is not read from the interface: both give '$with_bit'"
+
+# 6c. releases is read back from `.zri`, and agrees between whole-program and separate compilation.
+sed 's/releases = 1/releases = 0/' "$fr/${key%.zrl}.zri" > "$fr/off/${key%.zrl}.zri"
+releases_of_iface() {
+    run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -I "$src" -c --iface-dir "$1" --emit-origins -o /dev/null "$src/origins_releases_caller.zrl" 2>&1 \
+        | awk '/^origins / { on = ($2 == "caller"); next } on && $1 == "releases" { sub(/^  /, ""); print; exit }'
+}
+releases_whole=$(run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -I "$src" --emit-origins "$src/origins_releases_caller.zrl" 2>&1 \
+    | awk '/^origins / { on = ($2 == "caller"); next } on && $1 == "releases" { sub(/^  /, ""); print; exit }')
+releases_imported=$(releases_of_iface "$fr")
+releases_off=$(releases_of_iface "$fr/off")
+[ "$releases_whole" = "releases 0" ] || fail "whole-program origins_releases_caller gave '$releases_whole', expected 'releases 0'"
+[ "$releases_imported" = "$releases_whole" ] || fail "imported origins_releases_caller gave '$releases_imported', expected '$releases_whole'"
+[ -z "$releases_off" ] || fail "releases is not read from the interface: with releases = 0 it still gave '$releases_off'"
 
 echo "[PASS] interface-attrs: attributes, visibility and unsafe survive a .zri; every generic or trait attribute of the standard library is in its interface; zbuild and the whole-program build agree on the fixtures and probe 194; private items, duplicate methods and exports are diagnosed as whole-program does"

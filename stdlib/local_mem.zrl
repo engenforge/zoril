@@ -86,6 +86,7 @@ pub unsafe fn zoril_allocator_realloc(
 }
 
 // CALLER OBLIGATION: arena must point to a live mapped ArenaHeader.
+#[releases]
 pub unsafe fn arena_free(arena: *mut ArenaHeader) {
     // Syscall 11: munmap(addr, length)
     @syscall(11, arena.start as u64, arena.capacity);

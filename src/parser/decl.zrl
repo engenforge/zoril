@@ -30,6 +30,10 @@ pub struct Attribute {
     // anything but an `unsafe fn` returning a raw pointer.
     pub fresh: bool,
     pub fresh_span: Span,
+    // `#[releases]` (surface_syntax.md §2.5) and where it was written, for the error when it is on
+    // anything but an `unsafe fn` or `extern fn` taking a raw pointer.
+    pub releases: bool,
+    pub releases_span: Span,
     pub derive_clone: bool,
     pub doc_comment: u32,
     pub has_summary: bool,
@@ -70,6 +74,8 @@ impl Parser {
             must_use: false,
             fresh: false,
             fresh_span: self.cur.span,
+            releases: false,
+            releases_span: self.cur.span,
             derive_clone: false,
             doc_comment: self.cur_comment,
             has_summary: false,
@@ -106,6 +112,9 @@ impl Parser {
             } else if name == "fresh" {
                 attr.fresh = true;
                 attr.fresh_span = name_span;
+            } else if name == "releases" {
+                attr.releases = true;
+                attr.releases_span = name_span;
             } else if name == "derive" {
                 self.parse_derive_list(&mut attr);
             } else if name == "borrows" {
@@ -225,15 +234,16 @@ impl Parser {
 
     // `(key = value, ..)` of a `#[summary]` the compiler wrote into a `.zri`; unknown keys are
     // skipped, so an older compiler reads a newer interface. The origin-set keys (`ret_addr`,
-    // `ret_contents`, `ret_flags`, `ret_fresh`, `decl_stores`, `decl_into`, and per store edge
-    // `edge`, `edge_addr`, `edge_contents`, `edge_global`, in that order) become `attr.summary_os`;
-    // an interface without `ret_addr` carries none, and its importer keeps the older masks.
+    // `ret_contents`, `ret_flags`, `ret_fresh`, `decl_stores`, `decl_into`, `releases`, and per
+    // store edge `edge`, `edge_addr`, `edge_contents`, `edge_global`, in that order) become
+    // `attr.summary_os`; an interface without `ret_addr` carries none, and its importer keeps the
+    // older masks.
     fn parse_summary_args(self: &mut Parser, attr: &mut Attribute) {
         self.next_token();
         let mut saw_os = false;
         let mut os_head = unsafe { Vec::<u64>.new_in_raw(self.arena) };
         let mut os_edges = unsafe { Vec::<u64>.new_in_raw(self.arena) };
-        let mut head = [0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64];
+        let mut head = [0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64];
         while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
             let key_id = self.cur.token.get_ident_id();
             self.expect(Token.Ident(0 as u32));
@@ -275,6 +285,8 @@ impl Parser {
                 head[4] = int_val;
             } else if key == "decl_into" {
                 head[5] = int_val;
+            } else if key == "releases" {
+                head[6] = int_val;
             } else if key == "edge"
                 || key == "edge_addr"
                 || key == "edge_contents"
@@ -306,7 +318,7 @@ impl Parser {
         }
         if saw_os {
             let mut h = 0 as usize;
-            while h < 6 as usize { os_head.push(head[h]); h = h + 1 as usize; }
+            while h < 7 as usize { os_head.push(head[h]); h = h + 1 as usize; }
             let ed = os_edges.as_slice();
             let mut e = 0 as usize;
             while e + 4 as usize <= ed.len {
@@ -402,6 +414,28 @@ impl Parser {
                 );
             }
         }
+        if attr.releases {
+            let mut raw_param = false;
+            for p in params {
+                if p.ty != 0 as TypeId {
+                    match self.ast.types[p.ty as usize] {
+                        Type.Ptr(_) | Type.PtrMut(_) => { raw_param = true; },
+                        _ => {},
+                    }
+                }
+            }
+            if !is_unsafe && !is_extern {
+                self.report_error(
+                    "#[releases] applies only to an unsafe fn or an extern fn",
+                    attr.releases_span
+                );
+            } else if !raw_param {
+                self.report_error(
+                    "#[releases] applies only to a function taking a *T or *mut T parameter",
+                    attr.releases_span
+                );
+            }
+        }
         let mut body = 0 as ExprId;
         if self.is_kind(TokenKind.LBrace) {
             if is_extern && !has_abi {
@@ -447,6 +481,7 @@ impl Parser {
             is_variadic: is_variadic,
             must_use: attr.must_use,
             fresh: attr.fresh && is_unsafe,
+            releases: attr.releases && (is_unsafe || is_extern),
             from_interface: self.file_path.len >= 4 as usize
                 && subslice_from(self.file_path, self.file_path.len - 4 as usize) == ".zri",
             type_params: tp,
@@ -612,6 +647,7 @@ impl Parser {
             is_variadic: false,
             must_use: false,
             fresh: false,
+            releases: false,
             from_interface: false,
             type_params: @slice(0 as *mut TypeParam, 0 as usize),
             doc_comment: 0 as u32,
@@ -842,6 +878,12 @@ impl Parser {
                 if attr.fresh {
                     self.report_error("#[fresh] applies only to an unsafe fn", attr.fresh_span);
                 }
+                if attr.releases {
+                    self.report_error(
+                        "#[releases] applies only to an unsafe fn or an extern fn",
+                        attr.releases_span
+                    );
+                }
                 let c = self.parse_const_decl(m_pub);
                 constants.push(c);
             } else {
@@ -967,6 +1009,15 @@ impl Parser {
             && !self.is_kind(TokenKind.KUnsafe)
             && !self.is_kind(TokenKind.KExtern) {
             self.report_error("#[fresh] applies only to an unsafe fn", attr.fresh_span);
+        }
+        if attr.releases
+            && !self.is_kind(TokenKind.KFn)
+            && !self.is_kind(TokenKind.KUnsafe)
+            && !self.is_kind(TokenKind.KExtern) {
+            self.report_error(
+                "#[releases] applies only to an unsafe fn or an extern fn",
+                attr.releases_span
+            );
         }
         match self.cur.token.kind() {
             TokenKind.KImport => {

@@ -564,6 +564,8 @@ pub struct FnDecl {
     pub must_use: bool,
     // `#[fresh]`: the author's claim that each call returns memory only the caller reaches (§2.5).
     pub fresh: bool,
+    // `#[releases]`: the author's claim that the function releases storage its raw-pointer arguments reach (§2.5).
+    pub releases: bool,
     // Read from a `.zri`: its spans are lines of the interface, not of the module's source, so a
     // diagnostic about the body cannot name a line of the source (the importer reports none that the
     // module's own build can report).
@@ -591,9 +593,9 @@ pub struct FnDecl {
     pub summary_ret_stack: bool,
     pub summary_alloc: usize,
     // The origin-set summary an interface carried (doc/design/provenance.md §3): empty if none,
-    // else [ret_addr, ret_contents, ret_flags, ret_fresh, decl_stores, decl_into] then the store
-    // edge rows of `ILFunction.os_edges`; the decl masks are the author's `#[stores(..)]`, which
-    // os_call re-adds because it clears the flat masks for a body summary.
+    // else [ret_addr, ret_contents, ret_flags, ret_fresh, decl_stores, decl_into, releases] then the
+    // store edge rows of `ILFunction.os_edges`; the decl masks are the author's `#[stores(..)]`,
+    // which os_call re-adds because it clears the flat masks for a body summary.
     pub summary_os: [u64],
     // `#[borrows(p, ...)]`: the returned reference points into these parameters only
     // (`#[borrows()]`: into none of them). Without it, Rust's elision rules decide.

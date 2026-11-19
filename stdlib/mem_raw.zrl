@@ -59,11 +59,13 @@ pub unsafe fn arena_init_result(capacity: u64) -> Result<*mut ArenaHeader, Error
 }
 
 // CALLER OBLIGATION: arena must point to a live, mapped ArenaHeader.
+#[releases]
 pub unsafe fn arena_free(arena: *mut ArenaHeader) {
     munmap_or_trap((*arena).start, (*arena).capacity);
 }
 
 // CALLER OBLIGATION: arena must point to a live ArenaHeader, and offset must not exceed capacity.
+#[releases]
 pub unsafe fn arena_reset(arena: *mut ArenaHeader, offset: u64) {
     let old_offset = (*arena).offset;
     if offset < old_offset {
@@ -124,6 +126,7 @@ pub unsafe fn zoril_allocator_realloc(
 }
 
 // CALLER OBLIGATION: arena must be null or a valid ArenaHeader matching ptr's allocation.
+#[releases]
 pub unsafe fn zoril_allocator_free(arena: *mut ArenaHeader, ptr: *u8, size: u64) {
     if arena as u64 == 0 as u64 {
         munmap_or_trap(ptr, size);

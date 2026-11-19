@@ -1,0 +1,15 @@
+// expected exit 7
+// `#[releases]` (surface_syntax.md §2.5) was "Unknown attribute 'releases'", so every program
+// reaching stdlib/mem_raw.zrl failed to parse once `arena_free`, `arena_reset` and
+// `zoril_allocator_free` carried it. stage0-C runs no provenance check, so it accepts the
+// attribute and ignores it.
+#[releases]
+unsafe fn clear(p: *mut i32) {
+    *p = 7;
+}
+
+fn main() -> i32 {
+    let mut x = 0;
+    unsafe { clear(&mut x as *mut i32); }
+    return x;
+}

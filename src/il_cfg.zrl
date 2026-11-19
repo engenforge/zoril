@@ -75,6 +75,8 @@ pub struct ILFunction {
     pub must_use: bool,
     // `#[fresh]` (ast::FnDecl.fresh): the result is memory only the caller reaches.
     pub fresh: bool,
+    // `#[releases]` (ast::FnDecl.releases): the function releases storage its raw-pointer arguments reach.
+    pub releases: bool,
     pub arena_alloc_bytes: usize,
     pub doc_comment: u32,
     pub source_file: u32,
@@ -160,6 +162,7 @@ pub struct ILFunction {
     pub os_ret_contents: u64,
     pub os_ret_flags: u64,
     pub os_ret_fresh: bool,
+    pub os_releases: u64,
     pub os_edges: *mut u64,
     pub os_edge_rows: usize,
     // While this body is being lowered, its depth on the driver's lowering stack (1 for the

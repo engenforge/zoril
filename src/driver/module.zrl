@@ -980,8 +980,8 @@ impl Driver {
         // interface; empty when it has none. os_call clears the flat `stores`/`into` masks for a known
         // summary and re-adds only the declared ones, so those come with it.
         let os = f.summary_os;
-        let has_os = os.len >= 6 as usize;
-        let os_rows = if has_os { (os.len - 6 as usize) / 4 as usize } else { 0 as usize };
+        let has_os = os.len >= 7 as usize;
+        let os_rows = if has_os { (os.len - 7 as usize) / 4 as usize } else { 0 as usize };
         if has_os {
             decl_from = decl_from | os[4];
             decl_to = decl_to | os[5];
@@ -995,7 +995,7 @@ impl Driver {
             let dst = unsafe { @slice(os_edges, os_rows * 4 as usize) };
             let mut q = 0 as usize;
             while q < os_rows * 4 as usize {
-                dst[q] = os[6 + q];
+                dst[q] = os[7 + q];
                 q = q + 1 as usize;
             }
         }
@@ -1025,6 +1025,7 @@ impl Driver {
                 && f.body
                     == 0 as ExprId, is_export: f.is_export, is_unsafe: f.is_unsafe, is_local: is_local, is_pub: f.is_pub, must_use: f.must_use,
             fresh: f.fresh,
+            releases: f.releases,
             arena_alloc_bytes: if f.has_summary { f.summary_alloc } else { 0 as usize },
             doc_comment: f.doc_comment,
             source_file: source_file,
@@ -1083,6 +1084,7 @@ impl Driver {
             os_ret_contents: if has_os { os[1] } else { 0 as u64 },
             os_ret_flags: if has_os { os[2] } else { 0 as u64 },
             os_ret_fresh: has_os && os[3] != 0 as u64,
+            os_releases: if has_os { os[6] } else { 0 as u64 },
             os_edges: os_edges,
             os_edge_rows: os_rows,
             os_depth: 0 as u32,
@@ -1282,7 +1284,7 @@ impl Driver {
             }
             self.module.get_function_mut(e.func_idx as usize).os_in_cycle = false;
         }
-        if check && self.emit_origins && e.source_file == self.target_source_file {
+        if check && self.emit_origins {
             check_zir::print_origins(&origins, &e.zir, self.module, self.intern_table);
         }
         // SAFETY: as at MARK above: nothing allocated past it outlives this pass.
@@ -1384,7 +1386,7 @@ impl Driver {
                 source_file: current_source_file,
                 rules: rules,
             });
-        } else if self.emit_origins && current_source_file == self.target_source_file {
+        } else if self.emit_origins {
             check_zir::print_origins(&origins, &zir_func, self.module, self.intern_table);
         }
         // `--emit-zir-stats`: a census of the canonical ZIR, before this frame's scratch arena is

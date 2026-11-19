@@ -20,10 +20,8 @@ errors=0
 count=0
 for f in "$DIR"/*.zrl; do
     [ -f "$f" ] || continue
-    want=$(sed -n 's|^// ORIGINS: [^ ]* ||p' "$f" | head -n 1)
-    fn=$(sed -n 's|^// ORIGINS: \([^ ]*\) .*|\1|p' "$f" | head -n 1)
-    loc=$(printf '%s\n' "$want" | sed 's| .*||')
-    if [ -z "$want" ] || [ -z "$fn" ]; then
+    directives=$(sed -n 's|^// ORIGINS: ||p' "$f")
+    if [ -z "$directives" ]; then
         echo "[FAIL] $f: no // ORIGINS: line"
         errors=$((errors + 1))
         continue
@@ -31,15 +29,44 @@ for f in "$DIR"/*.zrl; do
     count=$((count + 1))
     out="$WORK/$(basename "$f" .zrl).out"
     run_with_timeout -k 5s 30s "$ZORIL" -I stdlib=stdlib --emit-origins "$f" > "$out" 2>&1 < /dev/null
-    got=$(awk -v fn="$fn" -v loc="$loc" '
-        /^origins / { on = ($2 == fn); next }
-        on && $1 == loc { sub(/^  /, ""); print; exit }' "$out")
-    if [ "$got" = "$want" ]; then
+    file_ok=1
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        fn=${line%% *}
+        want=${line#* }
+        loc=${want%% *}
+        case "$loc" in
+            !*)
+                key=${loc#!}
+                got=$(awk -v fn="$fn" -v loc="$key" '
+                    /^origins / { on = ($2 == fn); if (on) seen = 1; next }
+                    on && $1 == loc { sub(/^  /, ""); print; exit }
+                    END { if (!seen) print "(no origins block for " fn ")" }' "$out")
+                if [ -n "$got" ]; then
+                    echo "[FAIL] $f: $fn"
+                    echo "       expected: $want"
+                    echo "       actual:   $got"
+                    file_ok=0
+                fi
+                ;;
+            *)
+                got=$(awk -v fn="$fn" -v loc="$loc" '
+                    /^origins / { on = ($2 == fn); next }
+                    on && $1 == loc { sub(/^  /, ""); print; exit }' "$out")
+                if [ "$got" != "$want" ]; then
+                    echo "[FAIL] $f: $fn"
+                    echo "       expected: $want"
+                    echo "       actual:   ${got:-(no line for $loc; output in $out)}"
+                    file_ok=0
+                fi
+                ;;
+        esac
+    done <<EOF
+$directives
+EOF
+    if [ "$file_ok" -eq 1 ]; then
         echo "[PASS] $f"
     else
-        echo "[FAIL] $f: $fn"
-        echo "       expected: $want"
-        echo "       actual:   ${got:-(no line for $loc; output in $out)}"
         errors=$((errors + 1))
     fi
 done
