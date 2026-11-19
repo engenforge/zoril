@@ -790,11 +790,12 @@ impl ZirVerifier {
         state: &ZirAnalysisState,
         locals: [Local]
     ) -> bool {
+        let is_owner = self.type_owns_storage(self.get_place_type(place, locals), 0 as usize);
         let mut i = 0 as usize;
         while i < state.borrows.len() {
             let b = &state.borrows[i];
             if self.borrow_counts(b, state, locals)
-                && !b.release_only
+                && (!b.release_only || is_owner)
                 && self.places_overlap(place, &b.base) {
                 return true;
             }
@@ -3837,6 +3838,13 @@ impl ZirVerifier {
         return mask;
     }
 
+    fn callee_env_releases_mask(self: &ZirVerifier, fn_id: u32) -> u64 {
+        if (fn_id as usize) >= self.zil_module.functions.len() { return 0 as u64; }
+        let f = &self.zil_module.functions[fn_id as usize];
+        if f.os_known { return f.os_env_releases; }
+        return 0 as u64;
+    }
+
     fn reset_to_mark_epoch(
         self: &ZirVerifier,
         fn_id: u32,
@@ -3868,13 +3876,11 @@ impl ZirVerifier {
         func: &ZirFunction
     ) {
         if arg.base == 0 as u32 { return; }
-        let mut found_ab = false;
         if !env_only {
             let mut ai = 0 as usize;
             while ai < state.borrows.len() {
                 let ab = state.borrows[ai];
                 if ab.borrower == arg.base && (ab.direct || !ab.derived) {
-                    found_ab = true;
                     let mut bi = 0 as usize;
                     while bi < state.borrows.len() {
                         let b = &state.borrows[bi];
@@ -3905,7 +3911,7 @@ impl ZirVerifier {
                 ai = ai + 1 as usize;
             }
         }
-        if found_ab || self.origins as usize == 0 as usize { return; }
+        if self.origins as usize == 0 as usize { return; }
         let c: &mut OriginSets = unsafe { &mut *self.origins };
         let tao = os_t(c, OS_T_AO);
         let tas = os_t(c, OS_T_AS);
@@ -3916,7 +3922,10 @@ impl ZirVerifier {
             let ta = os_t(c, OS_T_X);
             os_clear(c, ta);
             let _ = os_read(c, self.zil_module, self.intern_table, locals, arg, ta, tas);
+            let _ = os_or(c, ta, tas);
             os_clear(c, tas);
+            os_reach_all(c, ta, tr);
+            os_copy(c, ta, tr);
             let w = ta * c.words;
             c.buf[w + OS_W_ADDR] = 0 as u64;
             c.buf[w + OS_W_CONTENTS] = 0 as u64;
@@ -3977,13 +3986,16 @@ impl ZirVerifier {
         func: &ZirFunction
     ) {
         let cal_releases = self.callee_releases_mask(fn_id);
-        if cal_releases == 0 as u64 { return; }
+        let cal_env_releases = self.callee_env_releases_mask(fn_id);
+        if cal_releases == 0 as u64 && cal_env_releases == 0 as u64 { return; }
         let exempt_epoch = self.reset_to_mark_epoch(fn_id, args, state);
         let mut k = 0 as usize;
         while k < args.len {
             let bit = if k < 63 as usize { k } else { 63 as usize };
             if (cal_releases >> (bit as u64)) & 1 as u64 != 0 as u64 {
                 self.check_arg_release(&args[k], exempt_epoch, false, span, state, locals, func);
+            } else if (cal_env_releases >> (bit as u64)) & 1 as u64 != 0 as u64 {
+                self.check_arg_release(&args[k], exempt_epoch, true, span, state, locals, func);
             }
             k = k + 1 as usize;
         }
@@ -3999,7 +4011,9 @@ impl ZirVerifier {
         func: &ZirFunction
     ) {
         let mut cal_releases = 0xffffffffffffffff as u64;
+        let mut cal_env_releases = 0 as u64;
         let mut env_releases = true;
+        let mut env_only_callee = true;
         let mut known = false;
         if self.origins as usize != 0 as usize {
             let c: &OriginSets = unsafe { &*self.origins };
@@ -4009,11 +4023,15 @@ impl ZirVerifier {
                     known = true;
                     let fid = (k & !OS_KNOWN_ENV) - 1 as u32;
                     cal_releases = self.callee_releases_mask(fid);
+                    cal_env_releases = self.callee_env_releases_mask(fid);
                     if k & OS_KNOWN_ENV == 0 as u32 {
                         env_releases = false;
                     } else {
                         let shift = if args.len < 63 as usize { args.len } else { 63 as usize };
-                        env_releases = (cal_releases >> (shift as u64)) != 0 as u64;
+                        let rel_env = (cal_releases >> (shift as u64)) != 0 as u64;
+                        let env_rel_env = (cal_env_releases >> (shift as u64)) != 0 as u64;
+                        env_releases = rel_env || env_rel_env;
+                        env_only_callee = !rel_env;
                     }
                 }
             }
@@ -4030,7 +4048,9 @@ impl ZirVerifier {
         let mut i = 0 as usize;
         while i < args.len {
             let bit = if i < 63 as usize { i } else { 63 as usize };
-            if (cal_releases >> (bit as u64)) & 1 as u64 != 0 as u64 {
+            let is_rel = (cal_releases >> (bit as u64)) & 1 as u64 != 0 as u64;
+            let is_env_rel = (cal_env_releases >> (bit as u64)) & 1 as u64 != 0 as u64;
+            if is_rel || is_env_rel {
                 let mut can_release = true;
                 if !known {
                     let mut aty = self.get_place_type(&args[i], locals);
@@ -4041,10 +4061,14 @@ impl ZirVerifier {
                     }
                     if aty != 0 as u32 {
                         let tag = self.zil_module.types[aty as usize - 1 as usize].def.get_tag();
-                        if is_raw_pointer_tag(tag)
-                            || is_shared_pointer_tag(tag)
-                            || tag == ILTYPE_SLICE {
+                        if is_raw_pointer_tag(tag) {
                             can_release = false;
+                        } else if self.origins as usize != 0 as usize {
+                            let c: &mut OriginSets = unsafe { &mut *self.origins };
+                            if !os_type_has(c, self.zil_module, self.intern_table, aty, OS_Q_HANDLE)
+                                && !os_owns(c, self.zil_module, self.intern_table, aty) {
+                                can_release = false;
+                            }
                         } else if !is_mut_pointer_tag(tag)
                             && !self.type_owns_storage(aty, 0 as usize) {
                             can_release = false;
@@ -4052,13 +4076,13 @@ impl ZirVerifier {
                     }
                 }
                 if can_release {
-                    self.check_arg_release(&args[i], 0 as u32, false, span, state, locals, func);
+                    self.check_arg_release(&args[i], 0 as u32, !is_rel, span, state, locals, func);
                 }
             }
             i = i + 1 as usize;
         }
-        if env_releases && (known || callee.projections.len == 0 as usize) {
-            self.check_arg_release(callee, 0 as u32, !known, span, state, locals, func);
+        if env_releases {
+            self.check_arg_release(callee, 0 as u32, env_only_callee, span, state, locals, func);
         }
     }
 
@@ -4326,25 +4350,23 @@ impl ZirVerifier {
                 || (i < args.len && state.borrows.len() > 0 as usize) {
                 let mut j = 0 as usize;
                 while j < nargs {
-                    if j != i {
-                        {
-                            let c: &mut OriginSets = unsafe { &mut *self.origins };
-                            let tao = os_t(c, OS_T_AO);
-                            let tas = os_t(c, OS_T_AS);
-                            let _ = os_unknown_arg(
-                                c,
-                                self.zil_module,
-                                self.intern_table,
-                                locals,
-                                args,
-                                &cal_pl,
-                                j
-                            );
-                            let _ = os_or(c, tao, tas);
-                            os_dest_reach(c, self.zil_module, self.intern_table, locals, tao, td);
-                        }
-                        self.apply_edge_targets(&src, from_c, td, span, state, locals, func);
+                    {
+                        let c: &mut OriginSets = unsafe { &mut *self.origins };
+                        let tao = os_t(c, OS_T_AO);
+                        let tas = os_t(c, OS_T_AS);
+                        let _ = os_unknown_arg(
+                            c,
+                            self.zil_module,
+                            self.intern_table,
+                            locals,
+                            args,
+                            &cal_pl,
+                            j
+                        );
+                        let _ = os_or(c, tao, tas);
+                        os_dest_reach(c, self.zil_module, self.intern_table, locals, tao, td);
                     }
+                    self.apply_edge_targets(&src, from_c, td, span, state, locals, func);
                     j = j + 1 as usize;
                 }
             }
@@ -6779,6 +6801,8 @@ pub struct OriginSets {
     // Parameters whose reachable storage this body may release (§3.1, _What invalidates_): bit i
     // for parameter i, bit 63 for 63 and later.
     pub releases: u64,
+    // Parameters whose reachable closure environments this body may invoke (and thereby release).
+    pub env_releases: u64,
 }
 
 const OS_NO_ENV: usize = 0xffffffff;
@@ -8017,7 +8041,7 @@ fn os_add_releases(
     table: &InternTable,
     locals: [Local],
     src: usize,
-    include_contents: bool
+    to_env: bool
 ) {
     let tr = os_t(c, OS_T_R);
     os_copy(c, tr, src);
@@ -8029,7 +8053,7 @@ fn os_add_releases(
             if os_has_frame(c, tr, id) {
                 if os_or(c, tr, c.nl + id) { more = true; }
                 let lty = os_local_ty(locals, id as u32);
-                if !os_owns(c, module, table, lty) {
+                if os_type_has(c, module, table, lty, OS_Q_HANDLE) {
                     if os_or(c, tr, id) { more = true; }
                 }
             }
@@ -8037,8 +8061,12 @@ fn os_add_releases(
         }
     }
     let rw = tr * c.words;
-    c.releases = c.releases | c.buf[rw + OS_W_ADDR];
-    if include_contents { c.releases = c.releases | c.buf[rw + OS_W_CONTENTS]; }
+    let bits = c.buf[rw + OS_W_ADDR] | c.buf[rw + OS_W_CONTENTS];
+    if to_env {
+        c.env_releases = c.env_releases | bits;
+    } else {
+        c.releases = c.releases | bits;
+    }
 }
 
 // What a call to a callee with no usable summary (a `fn` value, a body not read yet) does to the
@@ -8092,17 +8120,16 @@ fn os_unknown_call_effects(
             } else {
                 let tag = os_type_def_tag(module, aty);
                 !is_raw_pointer_tag(tag)
-                    && !is_shared_pointer_tag(tag)
-                    && tag != ILTYPE_SLICE
-                    && (is_mut_pointer_tag(tag) || os_owns(c, module, table, aty))
+                    && (os_type_has(c, module, table, aty, OS_Q_HANDLE)
+                        || os_owns(c, module, table, aty))
             }
         } else {
             false
         };
         if can_rel && k < args.len {
-            os_add_releases(c, module, table, locals, tao, true);
-        } else if k == args.len {
             os_add_releases(c, module, table, locals, tao, false);
+        } else if k == args.len {
+            os_add_releases(c, module, table, locals, tao, true);
         }
         k = k + 1 as usize;
     }
@@ -9427,12 +9454,15 @@ pub fn store_origin_summary(
     flags = flags | old.os_ret_flags;
     fresh = fresh || old.os_ret_fresh;
     let releases = old.os_releases | c.releases | os_decl_releases(module, &old, c.sret_name);
+    let env_releases = old.os_env_releases | c.env_releases;
     c.releases = releases;
+    c.env_releases = env_releases;
     if addr != old.os_ret_addr
         || contents != old.os_ret_contents
         || flags != old.os_ret_flags
         || fresh != old.os_ret_fresh
-        || releases != old.os_releases {
+        || releases != old.os_releases
+        || env_releases != old.os_env_releases {
         grew = true;
     }
     let f = module.get_function_mut(idx);
@@ -9442,6 +9472,7 @@ pub fn store_origin_summary(
     f.os_ret_flags = flags;
     f.os_ret_fresh = fresh;
     f.os_releases = releases;
+    f.os_env_releases = env_releases;
     f.os_edges = out;
     f.os_edge_rows = rows;
     return grew;
@@ -9573,6 +9604,7 @@ fn os_call(
     let mut ret_flags = 0 as u64;
     let mut ret_fresh = false;
     let mut cal_releases = 0 as u64;
+    let mut cal_env_releases = 0 as u64;
     let mut edges = 0 as *mut u64;
     let mut edge_rows = 0 as usize;
     if known {
@@ -9610,6 +9642,7 @@ fn os_call(
             ret_flags = f.os_ret_flags;
             ret_fresh = f.os_ret_fresh;
             cal_releases = cal_releases | f.os_releases;
+            cal_env_releases = cal_env_releases | f.os_env_releases;
             edges = f.os_edges;
             edge_rows = f.os_edge_rows;
             from_mask = 0 as u64;
@@ -9734,11 +9767,15 @@ fn os_call(
     }
     if body { os_edge_effects(c, module, table, locals, fn_id, args, edges, edge_rows); }
     os_summary_store_effects(c, module, table, locals, fn_id, args, from_mask, to_mask);
-    if cal_releases != 0 as u64 {
+    if cal_releases != 0 as u64 || cal_env_releases != 0 as u64 {
         let mut k = 0 as usize;
         while k < args.len {
             let bit = if k < 63 as usize { k } else { 63 as usize };
             if (cal_releases >> (bit as u64)) & 1 as u64 != 0 as u64 {
+                let _ = os_arg(c, module, table, locals, fn_id, args, k);
+                let _ = os_or(c, tao, tas);
+                os_add_releases(c, module, table, locals, tao, false);
+            } else if (cal_env_releases >> (bit as u64)) & 1 as u64 != 0 as u64 {
                 let _ = os_arg(c, module, table, locals, fn_id, args, k);
                 let _ = os_or(c, tao, tas);
                 os_add_releases(c, module, table, locals, tao, true);
@@ -10127,6 +10164,7 @@ pub fn compute_origins_zir(
         // SAFETY: NL u64 in ARENA, as above, zeroed below before any read.
         dead_init: unsafe { @slice(zoril_allocator_alloc(arena, nl * 8) as *mut u64, nl) },
         releases: 0 as u64,
+        env_releases: 0 as u64,
     };
     unsafe {
         memset(c.edges.ptr as *mut u8, 0, (OS_EDGE_ROWS * 3 * 8) as u64);

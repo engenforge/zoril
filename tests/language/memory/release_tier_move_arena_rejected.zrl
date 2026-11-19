@@ -1,0 +1,23 @@
+// Regression test: moving an owning local (Arena) while it has a live release-tier borrow
+// must be refused, otherwise the new owner can reset the arena while the view is live.
+// expected compile fail
+// EXPECT: cannot move borrowed value 'a'
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn put(out: &mut [i32], a: &Arena) {
+    let mut v = Vec::<i32>.new_in(a);
+    v.push(42);
+    *out = v.as_slice();
+}
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 2; } };
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    put(&mut s, &a);
+    let mut a2 = a;
+    a2.reset();
+    return s[0] - 42;
+}

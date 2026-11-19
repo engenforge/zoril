@@ -65,7 +65,7 @@ impl IndexFacts {
         };
         f.find_eligible(func, module);
         f.find_constants(func);
-        f.find_entry_facts(func);
+        f.entry = f.find_entry_facts(arena, func);
         return f;
     }
 
@@ -173,10 +173,15 @@ impl IndexFacts {
 
     // The facts on entry to each block, in block order (a block whose single predecessor comes
     // later, a loop's back edge, gets none).
-    fn find_entry_facts(self: &mut IndexFacts, func: &ZirFunction) {
+    fn find_entry_facts(
+        self: &IndexFacts,
+        arena: *mut ArenaHeader,
+        func: &ZirFunction
+    ) -> Vec<[IndexFact]> {
         let nb = func.blocks.len;
-        let preds = new_u64s(self.arena, nb + 1 as usize);
-        let pred_of = new_u64s(self.arena, nb + 1 as usize);
+        let mut entry = unsafe { Vec::<[IndexFact]>.with_capacity_in_raw(arena, nb) };
+        let preds = new_u64s(arena, nb + 1 as usize);
+        let pred_of = new_u64s(arena, nb + 1 as usize);
         for bi in 0 as usize..nb {
             match func.blocks[bi].terminator {
                 ZirTerminator.Jmp(t) => { count_pred(preds, pred_of, t, bi); },
@@ -188,11 +193,11 @@ impl IndexFacts {
             }
         }
         for bi in 0 as usize..nb {
-            let mut facts = unsafe { Vec::<IndexFact>.new_in_raw(self.arena) };
+            let mut facts = unsafe { Vec::<IndexFact>.new_in_raw(arena) };
             let p = pred_of[bi] as usize;
             if bi > 0 as usize && preds[bi] == 1 as u64 && p < bi {
                 let pb = &func.blocks[p];
-                for fact in self.entry.as_slice()[p] {
+                for fact in entry.as_slice()[p] {
                     let mut dead = false;
                     for st in pb.statements { if kills(st, fact.local) { dead = true; } }
                     if !dead { facts.push(*fact); }
@@ -204,8 +209,9 @@ impl IndexFacts {
                     }
                 }
             }
-            self.entry.push(facts.as_slice());
+            entry.push(facts.as_slice());
         }
+        return entry;
     }
 
     // The fact a branch on COND establishes on its true edge, COND defined among STMTS as an

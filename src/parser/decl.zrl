@@ -243,7 +243,16 @@ impl Parser {
         let mut saw_os = false;
         let mut os_head = unsafe { Vec::<u64>.new_in_raw(self.arena) };
         let mut os_edges = unsafe { Vec::<u64>.new_in_raw(self.arena) };
-        let mut head = [0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64, 0 as u64];
+        let mut head = [
+            0 as u64,
+            0 as u64,
+            0 as u64,
+            0 as u64,
+            0 as u64,
+            0 as u64,
+            0 as u64,
+            0 as u64
+        ];
         while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
             let key_id = self.cur.token.get_ident_id();
             self.expect(Token.Ident(0 as u32));
@@ -287,6 +296,8 @@ impl Parser {
                 head[5] = int_val;
             } else if key == "releases" {
                 head[6] = int_val;
+            } else if key == "env_releases" {
+                head[7] = int_val;
             } else if key == "edge"
                 || key == "edge_addr"
                 || key == "edge_contents"
@@ -318,7 +329,7 @@ impl Parser {
         }
         if saw_os {
             let mut h = 0 as usize;
-            while h < 7 as usize { os_head.push(head[h]); h = h + 1 as usize; }
+            while h < 8 as usize { os_head.push(head[h]); h = h + 1 as usize; }
             let ed = os_edges.as_slice();
             let mut e = 0 as usize;
             while e + 4 as usize <= ed.len {

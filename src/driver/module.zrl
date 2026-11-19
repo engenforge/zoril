@@ -546,8 +546,11 @@ impl Driver {
         span: Span,
         cv: &ConstInit
     ) -> bool {
+        // SAFETY: the scratch arena is the driver's own and live; the initializer's temporary
+        // ZIR is allocated above SCRATCH_OFFSET and discarded here, leaving prior allocations intact.
         let scratch_offset = unsafe { (*self.scratch_arena).offset };
         let ok = self.check_global_initializer_in_scratch(value, ty, form, span, cv);
+        // SAFETY: as at SCRATCH_OFFSET above: nothing allocated past it outlives this check.
         unsafe { reset_driver_scratch(self.scratch_arena, scratch_offset); }
         return ok;
     }
@@ -992,8 +995,8 @@ impl Driver {
         // interface; empty when it has none. os_call clears the flat `stores`/`into` masks for a known
         // summary and re-adds only the declared ones, so those come with it.
         let os = f.summary_os;
-        let has_os = os.len >= 7 as usize;
-        let os_rows = if has_os { (os.len - 7 as usize) / 4 as usize } else { 0 as usize };
+        let has_os = os.len >= 8 as usize;
+        let os_rows = if has_os { (os.len - 8 as usize) / 4 as usize } else { 0 as usize };
         if has_os {
             decl_from = decl_from | os[4];
             decl_to = decl_to | os[5];
@@ -1007,7 +1010,7 @@ impl Driver {
             let dst = unsafe { @slice(os_edges, os_rows * 4 as usize) };
             let mut q = 0 as usize;
             while q < os_rows * 4 as usize {
-                dst[q] = os[7 + q];
+                dst[q] = os[8 + q];
                 q = q + 1 as usize;
             }
         }
@@ -1097,6 +1100,7 @@ impl Driver {
             os_ret_flags: if has_os { os[2] } else { 0 as u64 },
             os_ret_fresh: has_os && os[3] != 0 as u64,
             os_releases: if has_os { os[6] } else { 0 as u64 },
+            os_env_releases: if has_os { os[7] } else { 0 as u64 },
             os_edges: os_edges,
             os_edge_rows: os_rows,
             os_depth: 0 as u32,
@@ -1225,6 +1229,8 @@ impl Driver {
         let depth = self.os_low.len() as u32;
         self.module.get_function_mut(idx).os_depth = depth;
         let pending_start = self.os_pending.len();
+        // SAFETY: the scratch arena is the driver's own and live; body passes allocate above
+        // SCRATCH_OFFSET and discard their scratch data once this body (or its cycle) finishes.
         let scratch_offset = unsafe { (*self.scratch_arena).offset };
         let result = self.run_body_passes_in_scratch(f, name, zir_arg_start);
         let low = self.os_low[depth as usize - 1 as usize];
@@ -1237,6 +1243,7 @@ impl Driver {
             return result;
         }
         if self.os_pending.len() > pending_start { self.os_fixpoint(pending_start); }
+        // SAFETY: as at SCRATCH_OFFSET above: nothing allocated past it outlives this body pass.
         unsafe { reset_driver_scratch(self.scratch_arena, scratch_offset); }
         return result;
     }
@@ -1301,7 +1308,7 @@ impl Driver {
             }
             self.module.get_function_mut(e.func_idx as usize).os_in_cycle = false;
         }
-        if check && self.emit_origins {
+        if check && self.emit_origins && e.source_file == self.target_source_file {
             check_zir::print_origins(&origins, &e.zir, self.module, self.intern_table);
         }
         // SAFETY: as at MARK above: nothing allocated past it outlives this pass.
@@ -1404,7 +1411,7 @@ impl Driver {
                 source_file: current_source_file,
                 rules: rules,
             });
-        } else if self.emit_origins {
+        } else if self.emit_origins && current_source_file == self.target_source_file {
             check_zir::print_origins(&origins, &zir_func, self.module, self.intern_table);
         }
         // `--emit-zir-stats`: a census of the canonical ZIR, before this frame's scratch arena is

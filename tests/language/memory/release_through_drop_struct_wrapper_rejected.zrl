@@ -1,0 +1,38 @@
+// Regression test: sibling route of Bug 6 — a Drop struct wrapping &mut Vec<i32> is an
+// owning local whose O(id) must still be followed by os_add_releases.
+// expected compile fail
+// EXPECT: cannot mutably borrow 'v' while it is already borrowed
+import "vec.zrl";
+use vec::Vec;
+
+struct Guard {
+    v: &mut Vec<i32>,
+}
+
+impl Drop for Guard {
+    fn drop(self: &mut Guard) {
+        self.v.free();
+    }
+}
+
+fn kill_guard(g: &mut Guard) {
+    g.v.free();
+}
+
+fn kill_via_drop(v: &mut Vec<i32>) {
+    let mut g = Guard { v: v };
+    kill_guard(&mut g);
+}
+
+fn store_and_kill(out: &mut [i32], v: &mut Vec<i32>) {
+    *out = v.as_slice();
+    kill_via_drop(v);
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    store_and_kill(&mut s, &mut v);
+    return s[0] - 42;
+}

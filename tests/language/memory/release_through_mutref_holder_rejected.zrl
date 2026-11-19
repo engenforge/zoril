@@ -1,0 +1,29 @@
+// Regression test: check_arg_release must still walk OriginSets when arg has a direct borrow
+// (&mut h where Holder holds &mut Vec<i32>), otherwise passing &mut h to a releasing callee
+// misses the release-tier borrow on v.
+// expected compile fail
+// EXPECT: cannot mutably borrow 'v' while it is already borrowed
+import "vec.zrl";
+use vec::Vec;
+
+struct Holder {
+    vp: &mut Vec<i32>,
+}
+
+fn kill_holder(h: &mut Holder) {
+    h.vp.free();
+}
+
+fn store_and_kill(out: &mut [i32], v: &mut Vec<i32>) {
+    *out = v.as_slice();
+    let mut h = Holder { vp: v };
+    kill_holder(&mut h);
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    store_and_kill(&mut s, &mut v);
+    return s[0] - 42;
+}

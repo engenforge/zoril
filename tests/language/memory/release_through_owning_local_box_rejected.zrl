@@ -1,0 +1,25 @@
+// Regression test: os_add_releases must follow O(id) for owning locals whose type carries
+// a mutable handle (such as BoxMut<&mut Vec<i32>>), so a callee releasing through one records
+// releases on its parameter.
+// expected compile fail
+// EXPECT: cannot mutably borrow 'v' while it is already borrowed
+import "vec.zrl";
+use vec::Vec;
+
+fn kill_box(b: &mut BoxMut<&mut Vec<i32>>) {
+    (*b).free();
+}
+
+fn kill_via_box(v: &mut Vec<i32>) {
+    let mut b: BoxMut<&mut Vec<i32>> = box v;
+    kill_box(&mut b);
+}
+
+pub fn store_and_kill(out: &mut [i32], v: &mut Vec<i32>) {
+    *out = v.as_slice();
+    kill_via_box(v);
+}
+
+fn main() -> i32 {
+    return 0;
+}

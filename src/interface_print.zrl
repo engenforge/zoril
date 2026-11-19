@@ -233,6 +233,8 @@ impl InterfacePrinter {
             self.write_dec(unsafe { (*p_f).stores_declared_to });
             self.write(", releases = ");
             self.write_dec(unsafe { (*p_f).os_releases });
+            self.write(", env_releases = ");
+            self.write_dec(unsafe { (*p_f).os_env_releases });
             let rows = unsafe { (*p_f).os_edge_rows };
             if rows > 0 as usize {
                 // SAFETY: the function's own summary table, OS_EDGE_ROWS rows of four u64 in the

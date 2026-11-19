@@ -1,0 +1,20 @@
+// Regression test: moving an owning local (Vec) while it has a live release-tier borrow
+// must be refused, otherwise the new owner can free the backing buffer while the view is live.
+// expected compile fail
+// EXPECT: cannot move borrowed value 'v'
+import "vec.zrl";
+use vec::Vec;
+
+fn put(out: &mut [i32], v: &Vec<i32>) {
+    *out = v.as_slice();
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    put(&mut s, &v);
+    let mut v2 = v;
+    v2.free();
+    return s[0] - 42;
+}

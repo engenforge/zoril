@@ -1,0 +1,31 @@
+// Regression test: can_rel in os_unknown_call_effects and check_call_ptr_releases must
+// recognize structs carrying &mut (OS_Q_HANDLE), not only direct &mut or owning types.
+// expected compile fail
+// EXPECT: cannot mutably borrow 'v' while it is already borrowed
+import "vec.zrl";
+use vec::Vec;
+
+struct Wrap {
+    v: &mut Vec<i32>,
+}
+
+fn kill_wrap(w: Wrap) {
+    w.v.free();
+}
+
+fn run(f: fn(Wrap), w: Wrap) {
+    f(w);
+}
+
+fn store_and_kill(out: &mut [i32], v: &mut Vec<i32>) {
+    *out = v.as_slice();
+    run(kill_wrap, Wrap { v: v });
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    store_and_kill(&mut s, &mut v);
+    return s[0] - 42;
+}

@@ -672,6 +672,7 @@ impl ZilParser {
                 os_ret_flags: 0 as u64,
                 os_ret_fresh: false,
                 os_releases: 0 as u64,
+                os_env_releases: 0 as u64,
                 os_edges: 0 as *mut u64,
                 os_edge_rows: 0 as usize,
                 os_depth: 0 as u32,

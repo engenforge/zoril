@@ -123,6 +123,7 @@ pub fn ensure_parent_dir(file_path: [u8], arena: *mut ArenaHeader) -> Result<(),
     return Result.Ok(());
 }
 
+#[borrows(arena)]
 pub fn join_path(dir: [u8], name: [u8], arena: *mut ArenaHeader) -> [u8] {
     let mut s = unsafe { String.new_in_raw(arena) };
     s.push_str(dir);
