@@ -6,10 +6,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +safety +spec +AI-D @provenance B3e Decide the notation for an `extern`'s store effect (`*s -> d`, trusted) in the surface syntax spec id:yp1er
+- [x] +safety +spec +AI-D @provenance B3e Decide the notation for an `extern`'s store effect (`*s -> d`, trusted) in the surface syntax spec id:yp1er
     > **Created:** 2026-11-19
     > **Branch:** `provenance`
     > **Depends:** id:f81f3
+    > **Completed:** 2026-11-19 git:a9b60aa
 
     - **Placed:** directly after id:77rr6, before the stage 1 task it blocks (id:f81f3's decision 2).
     - **Decide and write into `doc/spec/surface_syntax.md`** (§2.5 and the `#[stores(..)]` paragraph, near line 763), with `doc/design/provenance.md` following:
@@ -24,6 +25,19 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Checks:** C1, the spec change committed, and the doc tier passing (`make test-changed BASE=HEAD~1`). C2, each of items 1 to 6 is answered in the spec or design note, cited by section. C3, the spelling chosen parses under `build/zoril-stage1` (rc=0, a three-line file as in F8).
 
     - **Moved (2026-11-19, the maintainer's request to group `+AI-G` work):** from between id:77rr6 and id:716bm to before id:77rr6. It depends on nothing in id:77rr6, and with it first, id:77rr6, id:716bm and id:eb38n run as one `+AI-G` batch.
+
+    - **Completion (2026-11-19, git:a9b60aa):** the decision is in `doc/design/provenance.md` §3, as a new paragraph, _Store effects of an `extern`_, after _Scalars, casts and `extern`_. It answers items 1 to 6, and id:716bm and id:eb38n now carry the **Do:** and numbered **Checks:** that build it.
+      - _Deviation from the task text:_ `doc/spec/surface_syntax.md` was not edited. The spec describes what the compiler does, and none of this is built, so a spec sentence saying the call is refused would be a safety claim made before its probe (AGENTS.md, Safety claims and evidence). The exact spec edits are id:716bm's Do 6 and id:eb38n's C8, committed with the code.
+      - _Found while deciding:_ the declaration needs no new caller machinery. A pair is exactly one summary edge row, and `os_edge_effects` already reads those for bodies. The rows, from `--emit-origins` on a scratch body (`build/yp1/rows_keep.zrl`, quoted in id:716bm's C2): `*s -> d` is `store ParamContents(1) -> Param(0)` (`fn cp(d: *mut &i32, s: *&i32) { unsafe { *d = *s; } }`), and `s -> d` is `store Param(1) -> Param(0)` (`fn st(d: *mut *i32, s: *i32) { unsafe { *d = s; } }`). The paragraph of 2026-11-03 in the design note, which says a safe caller cannot hand an `extern` a frame address, is refuted by gap_103. The new paragraph says so instead of rewriting the old one.
+      - _Decided here, beyond the maintainer's two decisions:_
+        - item 4, only `--provenance` reads the `*s` pairs and refuses (the staging of decision 1);
+        - stage 2 counts 64-bit integer parameters and variadic tails as able to carry an address, since a cast keeps origins;
+        - a call through an `extern "C" fn` value is refused as an undeclared `extern` in stage 2;
+        - `err_unsafe_attr_not_borrows.zrl`'s `EXPECT:` changes in id:716bm.
+      - C1: git:a9b60aa. `make test-changed BASE=HEAD` before the commit: `Total: 3871 run, 3871 passed, 0 failed, 106 skipped (139.7s)`.
+      - C2: items 1 to 6 are the bullets _The pairs_ (1), _The declaration_ (2), _The pairs_' last sentence (3), _What a caller applies_ and _Which builds_ (4), _The interface_ (5) and _The refusal, in two stages_ (6).
+      - C3: `build/zoril-stage1 -I stdlib=stdlib --emit-zil -o /dev/null` on `#[unsafe(stores(*src -> dest))]` above `extern fn memcpy(dest: *mut u8, src: *u8, size: u64) -> *mut u8;` and a `main`: `stage1 rc=0`, re-run 2026-11-19.
+      - No compiled code changed, so `make test`, `make preflight-changed` and the fuzz record do not apply.
 
 - [ ] +safety +tests +AI-G @provenance B3d A raw-pointer write through a loose raw local reaches the caller's parameter targets under `--provenance` id:77rr6
     > **Created:** 2026-11-19
@@ -45,6 +59,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Tests:** add `tests/language/memory/provenance/raw_write_through_loose_raw_param_refused.zrl` (gap_102's program; `// flags: --provenance`, `// expected compile fail`, `// EXPECT: call store rule`), `raw_write_declared_stores_binds_caller_refused.zrl` (the same with `#[stores(r -> s)]` on `put`, `build/f81/p/decl.zrl`), and `raw_write_integer_through_loose_raw_accepted.zrl` (`r: i32`, `build/f81/p/int.zrl`; `// expected exit 0`).
     - **Docs:** gap_102's Known gaps entry in `doc/spec/safety_model.md` says the program is refused under `--provenance` and is accepted only by the default build until id:z0065. The probe stays `known_gap`. Its `// gap:` line is a marker line and is left as it is. `doc/design/provenance.md` gets a sentence where id:95w4z's loose-raw step is described.
     - **Scripts (scratch, from id:f81f3; recreate them under `build/77r/` if `build/f81/` is gone):**
+      - `mk.sh SRCDIR OUT`, a scratch compiler from a copy of `src/` (`cp -r src build/77r/src_x`, edit it there): `timeout -k 5s 300s build/zoril -I stdlib=stdlib -I "$S" -I build/gen --emit-zil -o "$O.zil" "$S/main.zrl"`, then `timeout -k 5s 300s build/zilc "$O.zil" "$O.ssa"`, `qbe -o "$O.s" "$O.ssa"`, `as -o "$O.o" "$O.s"`, `ld -o "$O" "$O.o" build/runtime.o`. Never replace `build/zoril`. A test run with it: `ZORIL_CC=$PWD/<compiler> ./scripts/test.sh <paths>` (a missing binary fails, so the variable is read).
       - `pdiff.sh BASE NEW`: `find tests bench/safety_matrix/probes -name '*.zrl' ! -name '*_lib.zrl' | sort`; compile each with both compilers, with `-I stdlib=stdlib -I "$(dirname $f)" --provenance -o /dev/null`, under `timeout -k 2 30`; print `$f base=$a new=$b` where the exit codes differ.
       - `rootwarn.sh ZORIL OUT`: for each of `src/main.zrl tools/zilc/src/main.zrl tools/zbuild/src/main.zrl tools/zman/src/main.zrl tools/ztest/src/main.zrl`, run `ZORIL -I stdlib=stdlib -I <root dir> -I src -I build/gen --provenance=warn --emit-zil -o /dev/null <root> 2>&1 | grep provenance`, prefixed with the root, then sort into OUT.
       - `grid.sh`: `ZORIL_CC=<wrapper exec'ing the compiler with --provenance> sh scripts/check_store_grid.sh --dir <d>/work --expected <copy of bench/fuzz/store_grid_expected_failures.txt> --twins <copy of store_grid_twin_rejections.txt> --classes <copy of store_grid_classes.txt>`.
@@ -52,7 +67,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C1, before: `build/zoril --provenance -I stdlib=stdlib -o /dev/null bench/safety_matrix/probes/gap_102_raw_write_store_hidden_from_summary.zrl` gives rc=0.
       - C2, after: the same gives rc=1 with `error: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)` at `6:58`. Without `--provenance`: rc=0.
       - C3: the three new tests pass (`./scripts/test.sh tests/language/memory/provenance`).
-      - C4, the fix taken out (a scratch compiler built without the hunk; recipe in id:50y0m): the two `_refused` tests fail, the `_accepted` one passes.
+      - C4, the fix taken out (a scratch compiler built with `mk.sh` without the hunk): the two `_refused` tests fail, the `_accepted` one passes.
       - C5: `pdiff.sh` with the base and new compilers prints exactly one line, `gap_102 ... base=0 new=1`, apart from the three new tests.
       - C6: `rootwarn.sh` gives 183 lines with each compiler, and the two files are identical (`cmp`).
       - C7: the store grid under `--provenance` with each compiler gives 3932 twins refused and identical twin lists (`sort -u` of `work/twin_rejections.txt`, `comm -3` empty), and no unsafe cell accepted.
@@ -65,23 +80,60 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     > **Branch:** `provenance`
     > **Depends:** id:yp1er
 
-    - **Placed:** directly after id:yp1er, which settles its notation and writes its **Checks:**. It is not ready to start until those checks are here.
-    - **Do:** id:f81f3's decision 2, stage 1. Parse and check the form id:yp1er chose. Write it in the `.zri`. Declare `memcpy`'s effect in `stdlib/mem_raw.zrl` (`make man-gen` follows). At a call to an `extern` with two or more pointer parameters and no declaration, refuse when an argument's origins hold a parameter or frame bit (F5's measured site, `os_call`).
-    - **Closes:** gap_103 (`bench/safety_matrix/probes/gap_103_extern_copy_store_hidden_through_raw_field.zrl`), in whichever builds id:yp1er's item 4 says. If that includes the default build, flip the probe, and remove its Known gaps entry and its link in `doc/SAFETY.md` §6 class (I), without touching the probe counts. If it is `--provenance` only, it stays `known_gap` until id:z0065, as gap_102 does, and its Known gaps entry says so.
-    - **Must stay accepted:** F5's 22 `memcpy` callers in `src/`, `stdlib/` and `tools/` (`build/f81/ext_fns.txt`), under `--provenance=warn` and by default: no new warning at the five roots.
-    - **Checks:** written by id:yp1er.
-    - **Ends with:** the fix committed, an `**Awaiting review:**` bullet, `tm done`; the check-in follows stage 2.
+    - **Placed:** directly after id:77rr6, in the `+AI-G` batch id:77rr6, id:716bm, id:eb38n and id:z0066, which the check-ins id:g764h and id:h1yk5 review.
+    - **The decision this builds:** `doc/design/provenance.md` §3, _Store effects of an `extern`_ (git:a9b60aa, id:yp1er). Read it first. It is the source of everything below. Background is in id:f81f3 (`completed.tm.md`): F4 to F6 and F8.
+    - **Do:**
+      - 1. _Parser_ (`src/parser/decl.zrl`, `parse_unsafe_attribute` and `parse_stores_list`): accept `unsafe(stores(..))` beside `unsafe(borrows(..))`, with a flag on the attribute, say `stores_trusted`, carried to `FnDecl` as `borrows_trusted` is. Accept a `*` before a pair's source, kept in a third per-pair list, `stores_contents: [bool]`. Errors, each with a test under `tests/error_reporting/`:
+        - `#[unsafe(stores(..))]` on a function with a body: `#[unsafe(stores(..))] is for an extern: a body's #[stores(..)] is checked against it`.
+        - a plain `#[stores(..)]` on an `extern`: `an extern's #[stores(..)] cannot be checked: write #[unsafe(stores(..))]`.
+        - a `*s` pair on a body's `#[stores(..)]`: `the *p form is for an extern`.
+        - another attribute under `unsafe(..)`: `only #[borrows(..)] and an extern's #[stores(..)] can be marked unsafe`.
+        - `tests/error_reporting/err_unsafe_attr_not_borrows.zrl` (`#[unsafe(stores(a))]` on a body) changes its `EXPECT:` to the first message. id:yp1er decided that change. Name it in the commit message.
+      - 2. _The rows:_ give an `extern` with the declaration the summary edge rows of the reference bodies (C2). Its call goes through `os_edge_effects` (`src/check_zir.zrl`), as a body's does, and the default build's masks get the `s -> d` and `-> static` pairs only.
+      - 3. _The refusal_ (`os_call`, the `bare_extern` path): under `--provenance`, a call to an `extern` with two or more raw-pointer parameters and no declaration is refused when an argument's origins (the address or contents word) hold a `Frame` or `Param` bit. The message: `the extern 'NAME' declares no #[unsafe(stores(..))], and this call passes it an address of this frame or of a parameter (extern store rule)`.
+      - 4. _`memcpy`:_ in `stdlib/mem_raw.zrl`, put `// SAFETY: memcpy copies the n bytes at src into dest, so what src points to is stored where dest points, and it keeps neither pointer.` and `#[unsafe(stores(*src -> dest))]` above `pub extern fn memcpy`, below its comment block. Extend `scripts/check_safety_comments.sh` to require the `// SAFETY:` line above `#[unsafe(stores(` as it does above `#[unsafe(borrows(`. Then run `make man-gen` and `scripts/test_man_pages.sh`.
+      - 5. _The `.zri`_ (`src/interface_print.zrl`, `emit_fn`): write the attribute above `extern fn` as written, `*` included. Reading it back goes through the same parser. An imported `extern` without one stays undeclared: the `#[summary]` written for it must not make it count as declared (`bare_extern = f.is_extern && !f.has_summary` in `os_call` reads `has_summary`, so check that path).
+      - 6. _Spec_ (commit with the code, not before): in `doc/spec/surface_syntax.md` §2.5, change the `#[unsafe(borrows(..))]` bullet's "`unsafe(..)` marks no other attribute" to "`unsafe(..)` marks one other: an `extern`'s `#[stores(..)]`". Add a bullet for `#[unsafe(stores(p -> q, *p -> q, ...))]` saying what the design note's _The declaration_ and _The pairs_ say. In §9.1, add a paragraph: an `extern` keeps nothing it is given unless it declares it, and under `--provenance` a call to an undeclared `extern` with two or more raw-pointer parameters that passes an address of the frame or a parameter is refused. Give the `memcpy` example. Add an `Extern Store Effects` row to `doc/spec/safety_model.md` only if `scripts/check_safety_model.sh` needs one for the new tests. Otherwise gap_103's Known gaps entry says it is refused under `--provenance` and stays `known_gap` until id:z0065.
+    - **Must stay accepted:** id:f81f3's F5 list, the 22 safe functions in `src/`, `stdlib/` and `tools/` that call `memcpy` (`build/f81/ext_fns.txt` if it is still there). C6 shows it.
+    - **Tests** (new, under `tests/language/memory/provenance/`, each `// flags: --provenance`):
+      - `extern_copy_undeclared_refused.zrl`: gap_103's program, `// expected compile fail`, `// EXPECT:` the extern store rule.
+      - `extern_copy_declared_frame_source_refused.zrl`: the same with `#[unsafe(stores(*s -> d))]` on its `memcpy`. Refused by the call store rule at `put`'s caller, because `&local` reaches `h.r`.
+      - `extern_copy_declared_bytes_accepted.zrl`: a declared `memcpy` copying bytes of a local `[u8; 8]` into a heap `Vec<u8>` the caller owns, `// expected exit 0`. id:f81f3's F6 over-refusal must be gone.
+      - `extern_copy_declared_stdlib_accepted.zrl`: `Vec<i32>.clone()` of a local, through stdlib's `memcpy`, `// expected exit 0`.
+      - In `tests/modular/iface_attrs/`: `lib_extern_copy.zrl` with a `pub` declared `memcpy` wrapper `extern`, and `lib_extern_bare.zrl` with an undeclared two-pointer `extern`. Callers `prov_reject_extern_copy.zrl`, which passes a frame address through the declared one into a parameter's memory, and `prov_reject_extern_bare.zrl`. Plus a `scripts/test_interface_attrs.sh` assertion that `lib_extern_copy.zri` keeps `#[unsafe(stores(*src -> dest))]` above `extern fn`.
+    - **Checks:**
+      - C1, before: `timeout -k 5s 30s build/zoril --provenance -I stdlib=stdlib -o /dev/null bench/safety_matrix/probes/gap_103_extern_copy_store_hidden_through_raw_field.zrl` gives rc=0.
+      - C2, the rows: `build/yp1/rows_keep.zrl` (recreate if gone: `fn cp(d: *mut &i32, s: *&i32) { unsafe { *d = *s; } }`, `fn st(d: *mut *i32, s: *i32) { unsafe { *d = s; } }`, `fn main() -> i32 { return 0; }`) under `--emit-origins` prints `store ParamContents(1) -> Param(0)` for `cp` and `store Param(1) -> Param(0)` for `st` (recorded by id:yp1er on git:a9b60aa). A declared `extern` with `*s -> d`, and one with `s -> d`, at the same positions behave at a call as `cp` and `st` do. Show it with the two `_refused` tests above, each run again with `cp` or `st` in place of the `extern`: the same verdict and message.
+      - C3, after: C1's command gives rc=1 with the extern store rule message at the `memcpy` call in `put`. Without `--provenance`: rc=0, so gap_103 stays `known_gap`.
+      - C4: the new tests pass (`./scripts/test.sh tests/language/memory/provenance tests/error_reporting tests/modular`), and `sh scripts/test_interface_attrs.sh` passes.
+      - C5, the fix taken out (a scratch compiler without the refusal of Do 3; built with `mk.sh` from id:77rr6's **Scripts**): `extern_copy_undeclared_refused.zrl` and `prov_reject_extern_bare.zrl` fail. With `memcpy`'s declaration taken out of `stdlib/mem_raw.zrl` instead, `extern_copy_declared_stdlib_accepted.zrl` fails.
+      - C6: `pdiff.sh` (id:77rr6's **Scripts**) between the compiler before and after prints only gap_103 and the new tests. `rootwarn.sh` gives the same lines with each compiler, since the roots' 22 `memcpy` callers are not refused.
+      - C7: the store grid under `--provenance` (id:77rr6's `grid.sh`) gives the same 3932 twins as before, and no unsafe cell is accepted.
+      - C8: `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, with its `reject-diff: base verdicts: fresh (no cache)` line and 0 newly accepted. Also `make test`, `sh scripts/run_safety_matrix.sh`, `sh scripts/check_safety_model.sh`, `sh scripts/check_safety_comments.sh`, `make man-gen` with `scripts/test_man_pages.sh`, and the `closure-private-names` gate, since `stdlib/mem_raw.zrl` is in `src/`'s stage1 closure. Quote each `Total:` line.
+      - C9: stage1 still builds `src/` with the declaration in place: `make` from a tree with `build/zoril` removed (the stage1 path), rc=0. The fuzz record is stale for `src/` and `stdlib/` (`scripts/check_fuzz_fresh.sh`).
+    - **Ends with:** the fix committed, an `**Awaiting review:**` bullet naming C2, C3, C5 and C6, then `tm done`. The check-in is id:g764h.
 
 - [ ] +safety +tests +AI-G @provenance B3g Stage 2: every `extern` that takes a pointer declares its store effect, or a call passing it a parameter or frame pointer is refused id:eb38n
     > **Created:** 2026-11-19
     > **Branch:** `provenance`
     > **Depends:** id:716bm
 
-    - **Placed:** directly after id:716bm, whose boundary it removes. It must be done before the series ends (id:z0012), since it ends stage 1's departure from principle 1 (id:f81f3's decision 2).
-    - **Do:** widen stage 1's refusal from `extern`s with two or more pointer parameters to every `extern` that takes a pointer. Give each pointer-taking `extern` in `stdlib/`, `src/` and `tools/` its declaration in id:yp1er's form, `memset`'s "stores nothing" among them.
-    - **First, the sibling probe (id:f81f3's F9):** a test under `tests/` with `// link: <file.s>`, where the `.s` supplies a one-pointer `extern` that keeps its argument in a Zoril global, called from a safe function with a frame pointer. Before the change it is accepted, and its exit code shows the dangling read; after the change it is refused. This needs no `known_gap` probe in `bench/safety_matrix/probes/`, which has no `// link:`. Say so in the Known gaps entry of class (I) if the route stays open in the default build.
-    - **Checks:** written by id:yp1er, with the probe above as C1 (before rc=0 and its exit; after, refused) and a fix-out check.
-    - **Ends with:** the fix committed, an `**Awaiting review:**` bullet, `tm done`; then the check-in.
+    - **Placed:** directly after id:716bm, whose boundary it removes. It must be done before the series ends (id:z0012), because it ends stage 1's departure from principle 1 (id:f81f3's decision 2).
+    - **The decision this builds:** `doc/design/provenance.md` §3, _Store effects of an `extern`_, the _stage 2_ half (git:a9b60aa, id:yp1er). id:716bm built the declaration, its rows, the `.zri` and the stage 1 refusal. This task widens the refusal only.
+    - **Do:**
+      - Under `--provenance`, apply id:716bm's extern store rule to every `extern` with a parameter that can carry an address (`os_carries`: a raw pointer, or `u64`, `usize`, `i64` or `isize`) or a variadic tail. Apply it also to a call through an `extern "C" fn` value, which has no declaration to read: the message there is `a call through a C function pointer passes it an address of this frame or of a parameter (extern store rule)`.
+      - Give each such `extern` in `stdlib/`, `src/`, `tools/`, `tests/` and `bench/` that the widened rule refuses its declaration. That is `#[unsafe(stores())]` where it keeps nothing, with a `// SAFETY:` line in `stdlib/`. In a test, add it only where the rule refuses the test; a test's verdict must not change.
+    - **First, the sibling probe (id:f81f3's F9):** add `tests/language/memory/provenance/extern_one_pointer_keeps_frame_refused.zrl` with `// link: extern_one_pointer_keep.s` (`// link:` as `tests/integration/test_ffi.zrl` uses it; check how `scripts/test.sh` resolves the path). The `.s` defines `keep(p)`, which stores `p` in a Zoril `static mut KEPT: *i32` by its symbol. A safe `put(r: &i32) { unsafe { keep(r as *i32); } }` is called with `&local`, then a later safe read goes through an `unsafe` load of `KEPT`. If the `static mut` symbol cannot be reached from the `.s`, have the `.s` keep `p` in its own data and add a second `extern` `kept() -> *i32`. Record which one was used.
+    - **Checks:**
+      - C1, before: the probe compiled with `--provenance` and run gives rc=0 and prints, or exits with, the dead frame's value. Quote it. Without `--provenance`: the same.
+      - C2, a measurement before the error: build the rule as a warning first, and count the refused calls, by `extern`, over the five roots (`rootwarn.sh`, id:77rr6's **Scripts**) and over `tests/` and `bench/` (`pdiff.sh`). Record the counts here before making it an error. If any refused call in `src/`, `stdlib/` or `tools/` is a real hidden store, stop and report it as a finding: it would be a hole, on the public side of `SECURITY.md` (a program shape).
+      - C3, after: the probe is refused with the extern store rule under `--provenance` and accepted without it. Add the route to gap_103's Known gaps entry or to class (I) in `doc/SAFETY.md` §6, as the default build's open route, until id:z0065. Leave the probe counts alone.
+      - C4, the fix taken out (the widening reverted in a scratch compiler, built with `mk.sh` from id:77rr6's **Scripts**): the probe is accepted again. With the C function pointer case reverted, a test calling through an `extern "C" fn` value with `&local as *u8` (add `extern_c_fn_pointer_frame_refused.zrl`) is accepted.
+      - C5: `pdiff.sh` between the compiler before and after shows only the new tests. Every other changed verdict is a declaration this task added, or it is a stop.
+      - C6: the store grid under `--provenance` gives the same 3932 twins and no unsafe cell accepted (`grid.sh`).
+      - C7: `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, with its `reject-diff: base verdicts: fresh (no cache)` line and 0 newly accepted. Also `make test`, `sh scripts/run_safety_matrix.sh`, `sh scripts/check_safety_model.sh`, `sh scripts/check_safety_comments.sh`, `make man-gen` with `scripts/test_man_pages.sh`, and stage1 building `src/` (`make` with `build/zoril` removed). Quote each `Total:` line. The fuzz record is stale.
+      - C8: `doc/spec/surface_syntax.md` §9.1's paragraph from id:716bm reads "every `extern` that can be passed an address" instead of "two or more raw-pointer parameters".
+    - **Ends with:** the fix committed, an `**Awaiting review:**` bullet naming C1 to C5, then `tm done`. The check-in is id:g764h.
 
 - [ ] +diagnostics +AI-G @provenance id:z0066 B3.9 Provenance diagnostics name the origin they found, once per site
     > **Created:** 2026-11-05
