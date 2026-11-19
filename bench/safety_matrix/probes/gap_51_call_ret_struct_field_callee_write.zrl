@@ -1,7 +1,5 @@
 // name: Frame view stored through a callee writing a call-returned struct's field
-// expected: known_gap
-// gap: a &mut field projected from a call-returned struct and passed to a writing callee (write(d.out, s) with d = pass_slot(h)) leaves the outer caller's store summary empty
-// observed: exit 77
+// expected: compile_reject
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

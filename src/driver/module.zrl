@@ -36,7 +36,7 @@ use il_type::{ILArray, ILPRIM_U8, ILPrimitive, ILSlice, ILTYPE_ARRAY, ILTYPE_BOX
 use io::eprint;
 use intern::InternTable;
 use lower_zir_to_zil::ZirToZilLowerer;
-use mem_raw::{arena_reset, zoril_allocator_alloc};
+use mem_raw::{ARENA_HEADER_SIZE, ARENA_POISON, ArenaHeader, memset, zoril_allocator_alloc};
 use mono::INFER_RESULT;
 use progress::progress_name;
 use resolve::SymbolKind;
@@ -44,6 +44,18 @@ use state::{Driver, NO_LOW, OsPending};
 use types::{CONST_FORM_ERROR, CONST_FORM_NOT_CONST, CONST_FORM_STRING, ConstInit};
 use vec::Vec;
 use zir::ZirModule;
+
+// Resets `self.scratch_arena` back to a mark taken on entry to the body pass; allocations prior
+// to that mark (and separate driver fields such as `self.intern_table`) are untouched, so
+// omitting `#[releases]` prevents field-insensitive summaries from conflating them with `Driver`.
+unsafe fn reset_driver_scratch(arena: *mut ArenaHeader, offset: u64) {
+    let old_offset = (*arena).offset;
+    if offset < old_offset {
+        let released = ((*arena).start as u64 + ARENA_HEADER_SIZE + offset) as *mut u8;
+        memset(released, ARENA_POISON, old_offset - offset);
+    }
+    (*arena).offset = offset;
+}
 
 impl Driver {
 
@@ -536,7 +548,7 @@ impl Driver {
     ) -> bool {
         let scratch_offset = unsafe { (*self.scratch_arena).offset };
         let ok = self.check_global_initializer_in_scratch(value, ty, form, span, cv);
-        unsafe { arena_reset(self.scratch_arena, scratch_offset); }
+        unsafe { reset_driver_scratch(self.scratch_arena, scratch_offset); }
         return ok;
     }
 
@@ -1225,7 +1237,7 @@ impl Driver {
             return result;
         }
         if self.os_pending.len() > pending_start { self.os_fixpoint(pending_start); }
-        unsafe { arena_reset(self.scratch_arena, scratch_offset); }
+        unsafe { reset_driver_scratch(self.scratch_arena, scratch_offset); }
         return result;
     }
 
@@ -1278,7 +1290,12 @@ impl Driver {
             &mut origins
         );
         if check {
-            let refused = check_zir::os_infer_ties(&mut origins, self.module, e.func_idx as usize);
+            let refused = check_zir::os_infer_ties(
+                &mut origins,
+                self.module,
+                self.intern_table,
+                e.func_idx as usize
+            );
             if refused > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
                 self.had_error = true;
             }
@@ -1288,7 +1305,7 @@ impl Driver {
             check_zir::print_origins(&origins, &e.zir, self.module, self.intern_table);
         }
         // SAFETY: as at MARK above: nothing allocated past it outlives this pass.
-        unsafe { arena_reset(self.scratch_arena, mark); }
+        unsafe { reset_driver_scratch(self.scratch_arena, mark); }
         return grew;
     }
 
@@ -1372,7 +1389,8 @@ impl Driver {
         );
         if !in_cycle {
             let idx = self.builder.current_func_idx as usize;
-            if check_zir::os_infer_ties(&mut origins, self.module, idx) > 0 as u32
+            if check_zir::os_infer_ties(&mut origins, self.module, self.intern_table, idx)
+                > 0 as u32
                 && self.provenance == check_zir::PROVENANCE_ON {
                 self.had_error = true;
             }
@@ -1400,7 +1418,8 @@ impl Driver {
             self.scratch_arena,
             &mut zm,
             self.module,
-            self.intern_table
+            self.intern_table,
+            &mut origins as *mut check_zir::OriginSets
         );
         zir_ver.file_path = self.file_path;
         zir_ver.verify();

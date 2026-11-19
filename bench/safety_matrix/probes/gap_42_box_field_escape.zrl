@@ -1,7 +1,5 @@
 // name: Frame view stored out after a write into a Box's contents
-// expected: known_gap
-// gap: a slice of a Vec in this frame's arena, written into a field of a Box's contents ((*b).s = v.as_slice()), is accepted and then stored out through *out = (*b).s; the same program with b a plain local struct is refused (cannot store 'v')
-// observed: exit 77
+// expected: compile_reject
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

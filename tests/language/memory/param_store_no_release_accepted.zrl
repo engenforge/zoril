@@ -1,0 +1,18 @@
+// Accepted twin of gap_87: storing v.as_slice() through out with no later release passes.
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+
+fn keep_view(out: &mut [i32], v: &mut Vec<i32>) {
+    *out = v.as_slice();
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    keep_view(&mut s, &mut v);
+    let diff = s[0] - 42;
+    v.free();
+    return diff;
+}

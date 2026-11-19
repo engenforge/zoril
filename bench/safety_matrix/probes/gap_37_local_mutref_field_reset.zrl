@@ -1,7 +1,6 @@
 // name: Arena reset after a field write through a local &mut to the struct
-// expected: known_gap
-// gap: a value written into a local's field through a local &mut to it is not recorded as a borrow the struct holds: check_assign skips a write through a pointer (place_writes_through_pointer), so the reset passes while the field is read afterwards
-// observed: exit 77
+// expected: compile_reject
+// Refused at a.reset(): storing v.as_slice() through a local &mut to w gives v's borrow to w (§3.1, holder one), so w keeps a borrowed while w.s is still read after the reset.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

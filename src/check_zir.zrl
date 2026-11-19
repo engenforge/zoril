@@ -25,6 +25,9 @@ use vec::Vec;
 use route_set::{ROUTE_BACKEDGE, ROUTE_JOIN, ROUTE_RV_BASE, ROUTE_RV_REF, ROUTE_RV_REFMUT, route_bit, rv_bit, stmt_bit, term_bit};
 use zir::{LOCAL_KIND_LET, LOCAL_KIND_TMP, Local, PROJ_DEREF, PROJ_FIELD, PROJ_INDEX, PROJ_TUPLEINDEX, Place, Projection, ZirBlock, ZirFunction, ZirModule, ZirRvalue, ZirStmt, ZirTerminator};
 
+// The frame's outside holder (§3.1, holder two): memory outside the frame's locals, live until return.
+pub const OUTSIDE_BORROWER: u32 = 0xffffffff as u32;
+
 pub struct ActiveBorrow {
     pub base: Place,
     pub is_mut: bool,
@@ -40,6 +43,8 @@ pub struct ActiveBorrow {
     // replacing the type comparison `is_direct_referent_borrow` used to guess it (which could not
     // tell a same-type indirect borrow, and could not see through a field or element step).
     pub direct: bool,
+    // Release tier (§3.1, item 2): conflicts only with a release, not with other `&mut` uses.
+    pub release_only: bool,
     pub epoch: u32,
     // The routes that carried this borrow to its current holder: the rvalue that created it, the
     // rvalue at every propagation step, and the cfg:join / cfg:backedge flags the borrow crossed.
@@ -147,6 +152,7 @@ pub struct ZirVerifier {
     pub cur_rv: u64,
     pub cur_stmt: u64,
     pub cur_term: u64,
+    pub origins: *mut OriginSets,
 }
 
 impl ZirVerifier {
@@ -154,7 +160,8 @@ impl ZirVerifier {
         arena: *mut ArenaHeader,
         module: &mut ZirModule,
         zil_module: &mut ILModule,
-        intern_table: &mut InternTable
+        intern_table: &mut InternTable,
+        origins: *mut OriginSets
     ) -> ZirVerifier {
         return ZirVerifier {
             arena: arena,
@@ -176,6 +183,7 @@ impl ZirVerifier {
             cur_rv: 0 as u64,
             cur_stmt: 0 as u64,
             cur_term: 0 as u64,
+            origins: origins,
         };
     }
 
@@ -648,6 +656,7 @@ impl ZirVerifier {
         while i < state.borrows.len() {
             let b = &state.borrows[i];
             if self.borrow_counts(b, &*state, locals)
+                && !b.release_only
                 && b.is_mut
                 && self.places_overlap(place, &b.base) {
                 self.report_borrow_conflict(
@@ -784,7 +793,9 @@ impl ZirVerifier {
         let mut i = 0 as usize;
         while i < state.borrows.len() {
             let b = &state.borrows[i];
-            if self.borrow_counts(b, state, locals) && self.places_overlap(place, &b.base) {
+            if self.borrow_counts(b, state, locals)
+                && !b.release_only
+                && self.places_overlap(place, &b.base) {
                 return true;
             }
             i = i + 1 as usize;
@@ -1337,7 +1348,7 @@ impl ZirVerifier {
         let mut i = 0 as usize;
         while i < state.borrows.len() {
             let b = &state.borrows[i];
-            if self.borrow_counts(b, &*state, locals) {
+            if self.borrow_counts(b, &*state, locals) && !b.release_only {
                 if self.places_overlap(place, &b.base) {
                     let is_exempt = exempt_epoch != 0 as u32 && !b.is_mut && b.epoch < exempt_epoch;
                     if !is_exempt {
@@ -1396,6 +1407,7 @@ impl ZirVerifier {
             span: span,
             derived: false,
             direct: true,
+            release_only: false,
             epoch: self.next_borrow_epoch,
             via: via,
         });
@@ -1415,6 +1427,7 @@ impl ZirVerifier {
                 span: span,
                 derived: false,
                 direct: false,
+                release_only: false,
                 epoch: self.next_borrow_epoch,
                 via: via,
             });
@@ -1533,12 +1546,14 @@ impl ZirVerifier {
             },
             ZirRvalue.Call(fn_id, args) => {
                 self.check_places_moved(args, span, state, locals);
+                self.check_call_releases(fn_id, args, span, state, locals, func);
                 self.check_call_arg_mutability(fn_id, args, span, state, locals);
                 self.check_call_stores_escapes(fn_id, args, span, state, locals, func);
             },
             ZirRvalue.CallPtr(f, args) => {
                 self.check_place_use(&f, false, span, state, locals);
                 self.check_places_moved(args, span, state, locals);
+                self.check_call_ptr_releases(&f, args, span, state, locals, func);
                 self.check_call_ptr_arg_mutability(&f, args, span, state, locals);
             },
             ZirRvalue.StructLiteral(_, args)
@@ -2097,12 +2112,43 @@ impl ZirVerifier {
         return state;
     }
 
+    fn push_borrow(self: &ZirVerifier, state: &mut ZirAnalysisState, nb: ActiveBorrow) {
+        let mut k = 0 as usize;
+        while k < state.borrows.len() {
+            if state.borrows[k].borrower == nb.borrower
+                && self.places_equal(&state.borrows[k].base, &nb.base) {
+                let mut merged = state.borrows[k];
+                merged.is_mut = merged.is_mut || nb.is_mut;
+                merged.derived = merged.derived && nb.derived;
+                merged.direct = merged.direct || nb.direct;
+                merged.release_only = merged.release_only && nb.release_only;
+                merged.via = merged.via | nb.via;
+                if nb.epoch > merged.epoch { merged.epoch = nb.epoch; }
+                state.borrows[k] = merged;
+                return;
+            }
+            k = k + 1 as usize;
+        }
+        state.borrows.push(nb);
+    }
+
     fn propagate_borrow(
         self: &mut ZirVerifier,
         rv: &ZirRvalue,
         state: &mut ZirAnalysisState,
         dest_id: u32,
         locals: [Local]
+    ) {
+        self.propagate_borrow_direct(rv, state, dest_id, locals, true);
+    }
+
+    fn propagate_borrow_direct(
+        self: &mut ZirVerifier,
+        rv: &ZirRvalue,
+        state: &mut ZirAnalysisState,
+        dest_id: u32,
+        locals: [Local],
+        allow_direct: bool
     ) {
         if dest_id != 0 as u32 {
             let mut li = 0 as usize;
@@ -2121,15 +2167,20 @@ impl ZirVerifier {
         }
 
         let src_id = match *rv {
-            ZirRvalue.Use(p) => p.base,
+            ZirRvalue.Use(p) => if self.place_holds_reference(&p, locals) {
+                p.base
+            } else {
+                0 as u32
+            },
             _ => 0 as u32,
         };
         // A bare local-to-local copy of the reference itself keeps pointing at the same
         // referent; reading a field, element or deref out of a value does not.
-        let direct_copy = match *rv {
-            ZirRvalue.Use(p) => p.projections.len == 0 as usize,
-            _ => false,
-        };
+        let direct_copy = allow_direct
+            && match *rv {
+                ZirRvalue.Use(p) => p.projections.len == 0 as usize,
+                _ => false,
+            };
 
         // A borrow follows a value only into something that can hold a reference:
         // `let y = *r` or `let n = v.as_slice()[i]` copies a value out; it does not keep
@@ -2146,23 +2197,28 @@ impl ZirVerifier {
         while i < n {
             let b = state.borrows[i];
             if b.borrower == src_id {
-                state.borrows.push(ActiveBorrow {
-                    base: b.base,
-                    is_mut: b.is_mut,
-                    region: b.region,
-                    borrower: dest_id,
-                    span: b.span,
-                    derived: b.derived,
-                    direct: direct_copy && b.direct,
-                    epoch: self.next_borrow_epoch,
-                    via: b.via | rv_bit(rv),
-                });
+                self.push_borrow(
+                    state,
+                    ActiveBorrow {
+                        base: b.base,
+                        is_mut: b.is_mut,
+                        region: b.region,
+                        borrower: dest_id,
+                        span: b.span,
+                        derived: b.derived,
+                        direct: direct_copy && b.direct,
+                        release_only: b.release_only || dest_id == OUTSIDE_BORROWER,
+                        epoch: self.next_borrow_epoch,
+                        via: b.via | rv_bit(rv),
+                    }
+                );
             }
             i = i + 1 as usize;
         }
     }
 
     fn local_holds_reference(self: &mut ZirVerifier, id: u32, locals: [Local]) -> bool {
+        if id == OUTSIDE_BORROWER { return true; }
         let mut li = 0 as usize;
         while li < locals.len {
             if locals[li].id == id {
@@ -2173,6 +2229,24 @@ impl ZirVerifier {
             li = li + 1 as usize;
         }
         return false;
+    }
+
+    fn place_holds_reference(self: &mut ZirVerifier, p: &Place, locals: [Local]) -> bool {
+        if p.projections.len == 0 as usize {
+            return self.local_holds_reference(p.base, locals);
+        }
+        let ty = self.get_place_type(p, locals);
+        if ty == 0 as u32 { return false; }
+        return self.type_holds_reference(ty);
+    }
+
+    fn place_type_owns_storage(self: &mut ZirVerifier, p: &Place, locals: [Local]) -> bool {
+        if p.projections.len == 0 as usize {
+            return self.local_type_owns_storage(p.base, locals);
+        }
+        let ty = self.get_place_type(p, locals);
+        if ty == 0 as u32 { return false; }
+        return self.type_owns_storage(ty, 0 as usize);
     }
 
     fn is_temp_local(self: &ZirVerifier, id: u32, locals: [Local]) -> bool {
@@ -2187,13 +2261,15 @@ impl ZirVerifier {
     }
 
     // Does this borrow constrain the borrowed place right now? Its borrower must still own
-    // it, and an inherited borrow counts only once a named local holds it.
+    // it, and an inherited borrow counts only once a named local holds it. The frame's outside
+    // holder is live until the frame returns (§3.1, holder two).
     fn borrow_counts(
         self: &ZirVerifier,
         b: &ActiveBorrow,
         state: &ZirAnalysisState,
         locals: [Local]
     ) -> bool {
+        if b.borrower == OUTSIDE_BORROWER { return true; }
         if state.ownership[b.borrower as usize] != OWN_OWNED { return false; }
         if !self.is_live(b.borrower) { return false; }
         return !(b.derived && self.is_temp_local(b.borrower, locals));
@@ -2240,22 +2316,26 @@ impl ZirVerifier {
         while bi < n {
             if state.borrows[bi].borrower == src {
                 let b = state.borrows[bi];
-                state.borrows.push(ActiveBorrow {
-                    base: b.base,
-                    is_mut: b.is_mut,
-                    region: b.region,
-                    borrower: dest,
-                    span: b.span,
-                    // The environment's own storage is the closure's, not the caller's: keeping
-                    // the flag means a closure whose environment ends at an inner scope is
-                    // rejected while the closure is still live (Unified Solution D). A block-tail
-                    // closure has its environment promoted to the enclosing scope instead
-                    // (lower_block, promote_local_to_parent_scope).
-                    derived: b.derived,
-                    direct: false,
-                    epoch: self.next_borrow_epoch,
-                    via: b.via | via,
-                });
+                self.push_borrow(
+                    state,
+                    ActiveBorrow {
+                        base: b.base,
+                        is_mut: b.is_mut,
+                        region: b.region,
+                        borrower: dest,
+                        span: b.span,
+                        // The environment's own storage is the closure's, not the caller's: keeping
+                        // the flag means a closure whose environment ends at an inner scope is
+                        // rejected while the closure is still live (Unified Solution D). A block-tail
+                        // closure has its environment promoted to the enclosing scope instead
+                        // (lower_block, promote_local_to_parent_scope).
+                        derived: b.derived,
+                        direct: false,
+                        release_only: b.release_only || dest == OUTSIDE_BORROWER,
+                        epoch: self.next_borrow_epoch,
+                        via: b.via | via,
+                    }
+                );
             }
             bi = bi + 1 as usize;
         }
@@ -2275,17 +2355,21 @@ impl ZirVerifier {
         while bi < n {
             if state.borrows[bi].borrower == src {
                 let b = state.borrows[bi];
-                state.borrows.push(ActiveBorrow {
-                    base: b.base,
-                    is_mut: b.is_mut,
-                    region: b.region,
-                    borrower: dest,
-                    span: b.span,
-                    derived: true,
-                    direct: false,
-                    epoch: self.next_borrow_epoch,
-                    via: b.via,
-                });
+                self.push_borrow(
+                    state,
+                    ActiveBorrow {
+                        base: b.base,
+                        is_mut: b.is_mut,
+                        region: b.region,
+                        borrower: dest,
+                        span: b.span,
+                        derived: true,
+                        direct: false,
+                        release_only: b.release_only || dest == OUTSIDE_BORROWER,
+                        epoch: self.next_borrow_epoch,
+                        via: b.via,
+                    }
+                );
             }
             bi = bi + 1 as usize;
         }
@@ -2312,17 +2396,21 @@ impl ZirVerifier {
         while bi < n {
             if state.borrows[bi].borrower == src {
                 let b = state.borrows[bi];
-                state.borrows.push(ActiveBorrow {
-                    base: b.base,
-                    is_mut: b.is_mut,
-                    region: b.region,
-                    borrower: dest,
-                    span: b.span,
-                    derived: b.derived,
-                    direct: false,
-                    epoch: self.next_borrow_epoch,
-                    via: b.via | via,
-                });
+                self.push_borrow(
+                    state,
+                    ActiveBorrow {
+                        base: b.base,
+                        is_mut: b.is_mut,
+                        region: b.region,
+                        borrower: dest,
+                        span: b.span,
+                        derived: b.derived,
+                        direct: false,
+                        release_only: b.release_only || dest == OUTSIDE_BORROWER,
+                        epoch: self.next_borrow_epoch,
+                        via: b.via | via,
+                    }
+                );
             }
             bi = bi + 1 as usize;
         }
@@ -2360,17 +2448,21 @@ impl ZirVerifier {
                 } else {
                     true
                 };
-                state.borrows.push(ActiveBorrow {
-                    base: b.base,
-                    is_mut: b.is_mut,
-                    region: b.region,
-                    borrower: dest,
-                    span: b.span,
-                    derived: derived,
-                    direct: false,
-                    epoch: self.next_borrow_epoch,
-                    via: b.via | via,
-                });
+                self.push_borrow(
+                    state,
+                    ActiveBorrow {
+                        base: b.base,
+                        is_mut: b.is_mut,
+                        region: b.region,
+                        borrower: dest,
+                        span: b.span,
+                        derived: derived,
+                        direct: false,
+                        release_only: b.release_only || dest == OUTSIDE_BORROWER,
+                        epoch: self.next_borrow_epoch,
+                        via: b.via | via,
+                    }
+                );
             }
             bi = bi + 1 as usize;
         }
@@ -2915,9 +3007,14 @@ impl ZirVerifier {
                 } else if !self.place_writes_through_pointer(place, locals) {
                     // A write into a field, element or tuple slot of the local (`x.f = ..`,
                     // `x[i] = ..`, `x.0 = ..`) stores the value in x: x holds what the value
-                    // holds. A write through a pointer stores into the referent instead, which
-                    // the escape rules judge.
-                    self.inherit_rv_borrows(rv, borrower_id, state, locals);
+                    // holds. A write through a pointer gives the borrow to every local in the
+                    // destination's reach (holder one, strict tier) and to the outside holder when
+                    // the reach leaves the frame (holder two, release tier; §3.1).
+                    if self.place_holds_reference(place, locals) {
+                        self.inherit_rv_borrows(rv, borrower_id, state, locals);
+                    }
+                } else if self.place_holds_reference(place, locals) {
+                    self.apply_through_pointer_borrows(place, rv, state, locals, true);
                 }
             },
         }
@@ -2926,10 +3023,15 @@ impl ZirVerifier {
                 return;
             }
         }
-        // The place itself must not be borrowed.
+        // The place itself must not be borrowed. A release-tier borrow conflicts only when the
+        // assignment overwrites the owner whole (§3.1, item 2).
+        let overwrites_owner = self.place_type_owns_storage(place, locals);
         for i in 0 as usize..state.borrows.len() {
             let b = &state.borrows[i];
-            if self.borrow_counts(b, &*state, locals) && self.places_overlap(&b.base, place) {
+            if self.borrow_counts(b, &*state, locals)
+                && self.places_overlap(&b.base, place)
+                && (!b.release_only
+                    || (overwrites_owner && self.place_overwrites_borrow(place, &b.base))) {
                 self.report_borrow_conflict(
                     "cannot assign to",
                     place,
@@ -2951,15 +3053,119 @@ impl ZirVerifier {
             // The borrows of a copied reference join x's: x keeps each borrow it already holds
             // and the old value's borrow is not ended, because the other fields are still live.
             // The copy lands in a field or slot, not in x itself, so it is not a direct borrow.
-            let before = state.borrows.len();
-            self.propagate_borrow(rv, state, place.base, locals);
-            let mut bi = before;
-            while bi < state.borrows.len() {
-                state.borrows[bi].direct = false;
-                bi = bi + 1 as usize;
+            if self.place_holds_reference(place, locals) {
+                self.propagate_borrow_direct(rv, state, place.base, locals, false);
             }
+        } else if self.place_holds_reference(place, locals) {
+            self.apply_through_pointer_borrows(place, rv, state, locals, false);
         }
         self.end_rv_temp_borrows(rv, place.base, state, locals);
+    }
+
+    fn place_overwrites_borrow(
+        self: &ZirVerifier,
+        assign_place: &Place,
+        borrow_base: &Place
+    ) -> bool {
+        if assign_place.base != borrow_base.base { return false; }
+        let mut i1 = 0 as usize;
+        let mut i2 = 0 as usize;
+        while i1 < assign_place.projections.len {
+            let pr1 = &assign_place.projections[i1];
+            let t1 = pr1.get_tag();
+            if t1 == PROJ_DEREF {
+                i1 = i1 + 1 as usize;
+                continue;
+            }
+            while i2 < borrow_base.projections.len
+                && borrow_base.projections[i2].get_tag() == PROJ_DEREF {
+                i2 = i2 + 1 as usize;
+            }
+            if i2 >= borrow_base.projections.len { return false; }
+            let pr2 = &borrow_base.projections[i2];
+            if pr2.get_tag() != t1 { return false; }
+            if t1 == PROJ_FIELD && pr1.get_Field() != pr2.get_Field() { return false; }
+            if t1 == PROJ_TUPLEINDEX && pr1.get_TupleIndex() != pr2.get_TupleIndex() {
+                return false;
+            }
+            i1 = i1 + 1 as usize;
+            i2 = i2 + 1 as usize;
+        }
+        return true;
+    }
+
+    // Holders one and two (§3.1, item 1) for a write through a pointer: each `Frame(L)` in PLACE's
+    // destination reach receives RV's borrows under the strict tier, and any external origin
+    // (`Param`, `Static`, `Raw`, `Unknown`) gives them to the frame's outside holder under the
+    // release tier.
+    fn apply_through_pointer_borrows(
+        self: &mut ZirVerifier,
+        place: &Place,
+        rv: &ZirRvalue,
+        state: &mut ZirAnalysisState,
+        locals: [Local],
+        is_inherit: bool
+    ) {
+        if self.origins as usize == 0 as usize { return; }
+        let c: &mut OriginSets = unsafe { &mut *self.origins };
+        let dm = os_t(c, OS_T_DM);
+        let td = os_t(c, OS_T_D);
+        os_clear(c, dm);
+        os_clear(c, td);
+        os_addr(c, self.zil_module, self.intern_table, locals, place, dm);
+        os_dest_reach(c, self.zil_module, self.intern_table, locals, dm, td);
+        let nl = c.nl;
+        let ext = os_external(c, td);
+        let mut id = 1 as usize;
+        while id < nl {
+            if os_has_frame(unsafe { &*self.origins }, td, id) {
+                if is_inherit {
+                    self.inherit_rv_borrows(rv, id as u32, state, locals);
+                } else {
+                    self.propagate_borrow_direct(rv, state, id as u32, locals, false);
+                }
+            }
+            id = id + 1 as usize;
+        }
+        if ext {
+            if is_inherit {
+                self.inherit_rv_borrows(rv, OUTSIDE_BORROWER, state, locals);
+            } else {
+                self.propagate_borrow_direct(rv, state, OUTSIDE_BORROWER, locals, false);
+            }
+        }
+    }
+
+    fn give_outside_borrows_from(
+        self: &mut ZirVerifier,
+        src: u32,
+        via: u64,
+        state: &mut ZirAnalysisState
+    ) {
+        if src == 0 as u32 || src == OUTSIDE_BORROWER { return; }
+        let n = state.borrows.len();
+        let mut bi = 0 as usize;
+        while bi < n {
+            if state.borrows[bi].borrower == src {
+                let b = state.borrows[bi];
+                self.push_borrow(
+                    state,
+                    ActiveBorrow {
+                        base: b.base,
+                        is_mut: b.is_mut,
+                        region: b.region,
+                        borrower: OUTSIDE_BORROWER,
+                        span: b.span,
+                        derived: b.derived,
+                        direct: false,
+                        release_only: true,
+                        epoch: self.next_borrow_epoch,
+                        via: b.via | via,
+                    }
+                );
+            }
+            bi = bi + 1 as usize;
+        }
     }
 
     // A scope-exit drop (IF_LIVE: guarded by a runtime drop flag, so a value already moved or
@@ -3271,7 +3477,7 @@ impl ZirVerifier {
                 && self.borrow_counts(b, state, locals)
                 && self.places_overlap(&place, &b.base)
                 && self.borrowed_storage_is_local(&b.base, locals)
-                && (!b.derived || self.local_type_has_drop(local_id, locals)) {
+                && ((!b.release_only && !b.derived) || self.local_type_has_drop(local_id, locals)) {
                 self.report_borrow_conflict(
                     "cannot let",
                     &place,
@@ -3596,12 +3802,223 @@ impl ZirVerifier {
         }
     }
 
-    fn check_call_stores_escapes(
+    fn callee_releases_mask(self: &mut ZirVerifier, fn_id: u32) -> u64 {
+        if (fn_id as usize) >= self.zil_module.functions.len() { return 0 as u64; }
+        let f = &self.zil_module.functions[fn_id as usize];
+        let sret_name = self.intern_table.intern("__sret");
+        let mut mask = os_decl_releases(self.zil_module, f, sret_name);
+        if f.os_known { mask = mask | f.os_releases; }
+        return mask;
+    }
+
+    fn reset_to_mark_epoch(
+        self: &ZirVerifier,
+        fn_id: u32,
+        args: [Place],
+        state: &ZirAnalysisState
+    ) -> u32 {
+        if !self.is_arena_reset_to_call(fn_id) || args.len < 2 as usize { return 0 as u32; }
+        let arena_base = self.get_borrow_base(args[0].base, state);
+        let mark_local = args[1].base;
+        let mut mi = 0 as usize;
+        while mi < state.mark_infos.len() {
+            let info = &state.mark_infos[mi];
+            if info.mark_local == mark_local && info.arena_base == arena_base {
+                return info.epoch;
+            }
+            mi = mi + 1 as usize;
+        }
+        return 0 as u32;
+    }
+
+    fn check_arg_release(
+        self: &mut ZirVerifier,
+        arg: &Place,
+        exempt_epoch: u32,
+        span: Span,
+        state: &ZirAnalysisState,
+        locals: [Local],
+        func: &ZirFunction
+    ) {
+        if arg.base == 0 as u32 { return; }
+        let mut found_ab = false;
+        let mut ai = 0 as usize;
+        while ai < state.borrows.len() {
+            let ab = state.borrows[ai];
+            if ab.borrower == arg.base && (ab.direct || !ab.derived) {
+                found_ab = true;
+                let mut bi = 0 as usize;
+                while bi < state.borrows.len() {
+                    let b = &state.borrows[bi];
+                    if b.release_only
+                        && b.borrower != arg.base
+                        && self.borrow_counts(b, state, locals)
+                        && self.places_overlap(&ab.base, &b.base) {
+                        let is_exempt = exempt_epoch != 0 as u32
+                            && !b.is_mut
+                            && b.epoch < exempt_epoch;
+                        if !is_exempt {
+                            self.report_borrow_conflict(
+                                "cannot mutably borrow",
+                                &ab.base,
+                                "while it is already borrowed",
+                                span,
+                                &b.base,
+                                b.span,
+                                b.via,
+                                locals
+                            );
+                            return;
+                        }
+                    }
+                    bi = bi + 1 as usize;
+                }
+            }
+            ai = ai + 1 as usize;
+        }
+        if found_ab || self.origins as usize == 0 as usize { return; }
+        let c: &mut OriginSets = unsafe { &mut *self.origins };
+        let tao = os_t(c, OS_T_AO);
+        let tas = os_t(c, OS_T_AS);
+        let tr = os_t(c, OS_T_R);
+        os_clear(c, tao);
+        os_clear(c, tas);
+        let _ = os_read(c, self.zil_module, self.intern_table, locals, arg, tao, tas);
+        let _ = os_or(c, tao, tas);
+        os_reach_all(c, tao, tr);
+        let rw = tr * c.words;
+        let p_bits = c.buf[rw + OS_W_ADDR] | c.buf[rw + OS_W_CONTENTS];
+        let mut bi = 0 as usize;
+        while bi < state.borrows.len() {
+            let b = &state.borrows[bi];
+            if b.release_only && b.borrower != arg.base && self.borrow_counts(b, state, locals) {
+                let mut hits = os_has_frame(unsafe { &*self.origins }, tr, b.base.base as usize);
+                if !hits {
+                    let mut pi = 0 as usize;
+                    while pi < (*func).params.len {
+                        if (*func).params[pi].id == b.base.base {
+                            let bit = if pi < 63 as usize { pi } else { 63 as usize };
+                            if (p_bits >> (bit as u64)) & 1 as u64 != 0 as u64 { hits = true; }
+                            break;
+                        }
+                        pi = pi + 1 as usize;
+                    }
+                }
+                if hits {
+                    let is_exempt = exempt_epoch != 0 as u32 && !b.is_mut && b.epoch < exempt_epoch;
+                    if !is_exempt {
+                        self.report_borrow_conflict(
+                            "cannot mutably borrow",
+                            &b.base,
+                            "while it is already borrowed",
+                            span,
+                            &b.base,
+                            b.span,
+                            b.via,
+                            locals
+                        );
+                        return;
+                    }
+                }
+            }
+            bi = bi + 1 as usize;
+        }
+    }
+
+    fn check_call_releases(
         self: &mut ZirVerifier,
         fn_id: u32,
         args: [Place],
         span: Span,
         state: &ZirAnalysisState,
+        locals: [Local],
+        func: &ZirFunction
+    ) {
+        let cal_releases = self.callee_releases_mask(fn_id);
+        if cal_releases == 0 as u64 { return; }
+        let exempt_epoch = self.reset_to_mark_epoch(fn_id, args, state);
+        let mut k = 0 as usize;
+        while k < args.len {
+            let bit = if k < 63 as usize { k } else { 63 as usize };
+            if (cal_releases >> (bit as u64)) & 1 as u64 != 0 as u64 {
+                self.check_arg_release(&args[k], exempt_epoch, span, state, locals, func);
+            }
+            k = k + 1 as usize;
+        }
+    }
+
+    fn check_call_ptr_releases(
+        self: &mut ZirVerifier,
+        callee: &Place,
+        args: [Place],
+        span: Span,
+        state: &ZirAnalysisState,
+        locals: [Local],
+        func: &ZirFunction
+    ) {
+        let mut cal_releases = 0xffffffffffffffff as u64;
+        let mut env_releases = true;
+        let mut known = false;
+        if self.origins as usize != 0 as usize {
+            let c: &OriginSets = unsafe { &*self.origins };
+            if callee.projections.len == 0 as usize && (callee.base as usize) < c.nl {
+                let k = c.known_fn[callee.base as usize];
+                if k != 0 as u32 && k != OS_KNOWN_NONE {
+                    known = true;
+                    let fid = (k & !OS_KNOWN_ENV) - 1 as u32;
+                    cal_releases = self.callee_releases_mask(fid);
+                    if k & OS_KNOWN_ENV == 0 as u32 {
+                        env_releases = false;
+                    } else {
+                        let shift = if args.len < 63 as usize { args.len } else { 63 as usize };
+                        env_releases = (cal_releases >> (shift as u64)) != 0 as u64;
+                    }
+                }
+            }
+        }
+        let mut cal_fn_ty = 0 as u32;
+        if !known {
+            let cty = self.get_place_type(callee, locals);
+            if cty != 0 as u32
+                && (cty as usize) <= self.zil_module.types.len()
+                && self.zil_module.types[cty as usize - 1 as usize].def.get_tag() == ILTYPE_FN {
+                cal_fn_ty = cty;
+            }
+        }
+        let mut i = 0 as usize;
+        while i < args.len {
+            let bit = if i < 63 as usize { i } else { 63 as usize };
+            if (cal_releases >> (bit as u64)) & 1 as u64 != 0 as u64 {
+                let mut skip_raw = false;
+                if !known {
+                    let mut aty = self.get_place_type(&args[i], locals);
+                    if aty == 0 as u32 && cal_fn_ty != 0 as u32 {
+                        let fn_t = self.zil_module.types[cal_fn_ty as usize
+                            - 1 as usize].def.get_Fn();
+                        if i < fn_t.params.len { aty = fn_t.params[i]; }
+                    }
+                    if aty != 0 as u32
+                        && is_raw_pointer_tag(
+                            self.zil_module.types[aty as usize - 1 as usize].def.get_tag()
+                        ) {
+                        skip_raw = true;
+                    }
+                }
+                if !skip_raw {
+                    self.check_arg_release(&args[i], 0 as u32, span, state, locals, func);
+                }
+            }
+            i = i + 1 as usize;
+        }
+        if env_releases { self.check_arg_release(callee, 0 as u32, span, state, locals, func); }
+    }
+
+    fn check_call_stores_escapes(
+        self: &mut ZirVerifier,
+        fn_id: u32,
+        args: [Place],
+        span: Span,
+        state: &mut ZirAnalysisState,
         locals: [Local],
         func: &ZirFunction
     ) {
@@ -3647,9 +4064,52 @@ impl ZirVerifier {
                         ) {
                             return;
                         }
+                        if self.place_holds_reference(&args[i], locals) {
+                            self.give_outside_borrows_from(args[i].base, self.cur_rv, state);
+                        }
                     }
                 }
                 i = i + 1 as usize;
+            }
+        }
+
+        if p_func.os_known {
+            // SAFETY: os_edge_rows rows of four u64 allocated by store_origin_summary.
+            let edge_tbl = unsafe { @slice(p_func.os_edges, p_func.os_edge_rows * 4 as usize) };
+            let mut r = 0 as usize;
+            while r < p_func.os_edge_rows {
+                let row = r * 4 as usize;
+                let code = edge_tbl[row] as usize;
+                if code < 64 as usize && code < args.len {
+                    let gflags = edge_tbl[row + 3 as usize];
+                    let mut escapes = (gflags & (OS_EDGE_GLOBAL | OS_EDGE_ENV)) != 0 as u64;
+                    if !escapes {
+                        let targets = edge_tbl[row + 1 as usize] | edge_tbl[row + 2 as usize];
+                        let mut j = 0 as usize;
+                        while j < args.len {
+                            if j != code
+                                && j < 64 as usize
+                                && ((targets >> (j as u64)) & 1 as u64) != 0 as u64 {
+                                if self.local_is_external_target(
+                                    func,
+                                    locals,
+                                    args[j].base,
+                                    0 as usize
+                                ) {
+                                    escapes = true;
+                                    break;
+                                }
+                            }
+                            j = j + 1 as usize;
+                        }
+                    }
+                    if escapes
+                        && self.place_carries_borrow(&args[code], locals)
+                        && self.place_holds_reference(&args[code], locals) {
+                        self.give_outside_borrows_from(args[code].base, self.cur_rv, state);
+                    }
+                }
+                r = r + 1 as usize;
             }
         }
 
@@ -3690,6 +4150,9 @@ impl ZirVerifier {
                             func
                         ) {
                             return;
+                        }
+                        if !p_func.os_known && self.place_holds_reference(&args[i], locals) {
+                            self.give_outside_borrows_from(args[i].base, self.cur_rv, state);
                         }
                     }
                 }
@@ -3843,6 +4306,7 @@ impl ZirVerifier {
                             merged.is_mut = merged.is_mut || b2.is_mut;
                             merged.derived = merged.derived && b2.derived;
                             merged.direct = merged.direct || b2.direct;
+                            merged.release_only = merged.release_only && b2.release_only;
                             merged.via = merged.via | b2.via;
                             if b2.epoch > merged.epoch { merged.epoch = b2.epoch; }
                             res_ref.borrows[k] = merged;
@@ -3859,6 +4323,7 @@ impl ZirVerifier {
                             span: b2.span,
                             derived: b2.derived,
                             direct: b2.direct,
+                            release_only: b2.release_only,
                             epoch: b2.epoch,
                             via: b2.via,
                         });
@@ -4015,6 +4480,7 @@ impl ZirVerifier {
                 || b1.is_mut != b2.is_mut
                 || b1.derived != b2.derived
                 || b1.direct != b2.direct
+                || b1.release_only != b2.release_only
                 || b1.epoch != b2.epoch {
                 return false;
             }
@@ -5718,7 +6184,6 @@ pub struct OriginSets {
     pub unknown_ids: [mut u32],
     // The interned `__sret`: a callee whose first parameter has it takes the result's slot there.
     pub sret_name: u32,
-    pub table: &InternTable,
     // The functions named `T::drop`, so a type implementing Drop owns (os_owns).
     pub drop_fns: [mut u32],
     pub ndrop: usize,
@@ -6206,12 +6671,12 @@ fn os_arena_at_depths(c: &mut OriginSets, src: usize, depths: u64) {
 }
 
 // Whether user type NAME implements Drop: a function `NAME::drop` exists.
-fn os_has_drop(c: &OriginSets, module: &ILModule, name: u32) -> bool {
+fn os_has_drop(c: &OriginSets, module: &ILModule, table: &InternTable, name: u32) -> bool {
     if name == 0 as u32 { return false; }
-    let s = c.table.lookup(name);
+    let s = table.lookup(name);
     let mut k = 0 as usize;
     while k < c.ndrop {
-        let n = c.table.lookup(module.functions[c.drop_fns[k] as usize].name);
+        let n = table.lookup(module.functions[c.drop_fns[k] as usize].name);
         if n.len == s.len + 6 as usize {
             let mut same = true;
             let mut i = 0 as usize;
@@ -6233,7 +6698,7 @@ fn os_has_drop(c: &OriginSets, module: &ILModule, name: u32) -> bool {
 // of the four standard-library collections designated as owners until they get a Drop of their own,
 // or contains an owning type by value. A raw pointer, a reference, a slice and a function value own
 // nothing. An unknown type owns.
-fn os_owns(c: &mut OriginSets, module: &ILModule, ty: u32) -> bool {
+fn os_owns(c: &mut OriginSets, module: &ILModule, table: &InternTable, ty: u32) -> bool {
     if ty == 0 as u32 || ty as usize > module.types.len() { return true; }
     let memo = c.owns_memo[ty as usize];
     if memo != 0 as u8 { return memo == 2 as u8; }
@@ -6250,32 +6715,32 @@ fn os_owns(c: &mut OriginSets, module: &ILModule, ty: u32) -> bool {
             | ILType.Fn(_)
             | ILType.FD(_)
             | ILType.IORing => {},
-        ILType.Array(a) => { yes = os_owns(c, module, a.element); },
+        ILType.Array(a) => { yes = os_owns(c, module, table, a.element); },
         ILType.Tuple(elems) => {
             for e in elems {
-                if os_owns(c, module, *e) { yes = true; }
+                if os_owns(c, module, table, *e) { yes = true; }
             }
         },
         ILType.User(u) => {
-            let s = c.table.lookup(u.name);
+            let s = table.lookup(u.name);
             if u.id == 0xffffffff as u32 || u.id as usize >= module.typedefs.len() {
                 yes = true;
             } else if type_name_is(s, "Vec")
                 || type_name_is(s, "String")
                 || type_name_is(s, "ByteVec")
                 || type_name_is(s, "HashMap")
-                || os_has_drop(c, module, u.name) {
+                || os_has_drop(c, module, table, u.name) {
                 yes = true;
             } else {
                 match module.typedefs[u.id as usize] {
                     ILTypeDef.Struct(st) => {
                         for f in st.fields {
-                            if os_owns(c, module, f.ty) { yes = true; }
+                            if os_owns(c, module, table, f.ty) { yes = true; }
                         }
                     },
                     ILTypeDef.Enum(en) => {
                         for v in en.variants {
-                            if v.payload != 0 as u32 && os_owns(c, module, v.payload) {
+                            if v.payload != 0 as u32 && os_owns(c, module, table, v.payload) {
                                 yes = true;
                             }
                         }
@@ -6299,7 +6764,13 @@ fn os_owns(c: &mut OriginSets, module: &ILModule, ty: u32) -> bool {
 // `*mut` pointer; OS_Q_LOOSE_RAW, whether it holds by value a raw `*mut` pointer that is not part
 // of an owner (a standard collection or a Drop type, whose raw pointers point into what it owns),
 // not looking behind a reference or a slice. An unknown type answers yes.
-fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool {
+fn os_type_has(
+    c: &mut OriginSets,
+    module: &ILModule,
+    table: &InternTable,
+    ty: u32,
+    q: usize
+) -> bool {
     if ty == 0 as u32 || ty as usize > module.types.len() { return true; }
     let m = q * c.nt + ty as usize;
     let memo = c.q_memo[m];
@@ -6312,8 +6783,8 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
         ILType.PtrMut(x) => {
             yes = q == OS_Q_HANDLE
                 || q == OS_Q_REF_HANDLE
-                || (q == OS_Q_ARENA && os_type_has(c, module, x, q))
-                || (q == OS_Q_ARENA_REF && os_type_has(c, module, x, OS_Q_ARENA));
+                || (q == OS_Q_ARENA && os_type_has(c, module, table, x, q))
+                || (q == OS_Q_ARENA_REF && os_type_has(c, module, table, x, OS_Q_ARENA));
         },
         ILType.Ptr(x) | ILType.RawPtr(x) | ILType.RawPtrMut(x) => {
             let raw_mut = module.types[ty as usize - 1 as usize].def.get_tag() == ILTYPE_RAWPTRMUT;
@@ -6323,7 +6794,7 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
                 yes = true;
                 if x != 0 as u32 && x as usize <= module.types.len() {
                     if let ILType.User(pu) = module.types[x as usize - 1 as usize].def {
-                        if type_name_is(c.table.lookup(pu.name), "ArenaHeader") { yes = false; }
+                        if type_name_is(table.lookup(pu.name), "ArenaHeader") { yes = false; }
                     }
                 }
             } else if raw_mut && q == OS_Q_REF_HANDLE {
@@ -6332,62 +6803,63 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
                 // one holds.
                 yes = true;
             } else if q == OS_Q_ARENA_REF {
-                yes = os_type_has(c, module, x, OS_Q_ARENA);
+                yes = os_type_has(c, module, table, x, OS_Q_ARENA);
             } else if q == OS_Q_LOOSE_RAW {
                 yes = false;
             } else {
-                yes = q != OS_Q_FRESH && os_type_has(c, module, x, q);
+                yes = q != OS_Q_FRESH && os_type_has(c, module, table, x, q);
             }
         },
         ILType.Boxed(x) | ILType.BoxedMut(x) => {
-            yes = q == OS_Q_FRESH || os_type_has(c, module, x, q);
+            yes = q == OS_Q_FRESH || os_type_has(c, module, table, x, q);
         },
         ILType.Slice(sl) => {
             yes = ((q == OS_Q_HANDLE || q == OS_Q_REF_HANDLE) && sl.mutable)
-                || (q == OS_Q_ARENA_REF && os_type_has(c, module, sl.element, OS_Q_ARENA))
+                || (q == OS_Q_ARENA_REF && os_type_has(c, module, table, sl.element, OS_Q_ARENA))
                 || (q != OS_Q_FRESH
                     && q != OS_Q_ARENA_REF
                     && q != OS_Q_LOOSE_RAW
-                    && os_type_has(c, module, sl.element, q));
+                    && os_type_has(c, module, table, sl.element, q));
         },
         ILType.Fn(_) => { yes = q == OS_Q_HANDLE; },
-        ILType.Array(a) => { yes = os_type_has(c, module, a.element, q); },
+        ILType.Array(a) => { yes = os_type_has(c, module, table, a.element, q); },
         ILType.Tuple(elems) => {
             for e in elems {
-                if os_type_has(c, module, *e, q) { yes = true; }
+                if os_type_has(c, module, table, *e, q) { yes = true; }
             }
         },
         ILType.User(u) => {
             if u.id == 0xffffffff as u32 || u.id as usize >= module.typedefs.len() {
                 yes = true;
             } else if q == OS_Q_ARENA
-                && (type_name_is(c.table.lookup(u.name), "Arena")
-                    || type_name_is(c.table.lookup(u.name), "ArenaHeader")) {
+                && (type_name_is(table.lookup(u.name), "Arena")
+                    || type_name_is(table.lookup(u.name), "ArenaHeader")) {
                 // `ArenaHeader` is an arena's raw form (`Vec.new_in_raw(arena)`).
                 yes = true;
             } else if q == OS_Q_ARENA_REF
-                && (type_name_is(c.table.lookup(u.name), "Arena")
-                    || type_name_is(c.table.lookup(u.name), "ArenaHeader")) {
+                && (type_name_is(table.lookup(u.name), "Arena")
+                    || type_name_is(table.lookup(u.name), "ArenaHeader")) {
                 yes = false;
-            } else if q == OS_Q_FRESH && os_has_drop(c, module, u.name) {
+            } else if q == OS_Q_FRESH && os_has_drop(c, module, table, u.name) {
                 yes = true;
             } else if q == OS_Q_LOOSE_RAW
-                && (type_name_is(c.table.lookup(u.name), "Vec")
-                    || type_name_is(c.table.lookup(u.name), "String")
-                    || type_name_is(c.table.lookup(u.name), "ByteVec")
-                    || type_name_is(c.table.lookup(u.name), "HashMap")
-                    || os_has_drop(c, module, u.name)) {
+                && (type_name_is(table.lookup(u.name), "Vec")
+                    || type_name_is(table.lookup(u.name), "String")
+                    || type_name_is(table.lookup(u.name), "ByteVec")
+                    || type_name_is(table.lookup(u.name), "HashMap")
+                    || os_has_drop(c, module, table, u.name)) {
                 yes = false;
             } else {
                 match module.typedefs[u.id as usize] {
                     ILTypeDef.Struct(st) => {
                         for f in st.fields {
-                            if os_type_has(c, module, f.ty, q) { yes = true; }
+                            if os_type_has(c, module, table, f.ty, q) { yes = true; }
                         }
                     },
                     ILTypeDef.Enum(en) => {
                         for v in en.variants {
-                            if v.payload != 0 as u32 && os_type_has(c, module, v.payload, q) {
+                            if v.payload != 0 as u32
+                                && os_type_has(c, module, table, v.payload, q) {
                                 yes = true;
                             }
                         }
@@ -6414,7 +6886,14 @@ fn os_type_has(c: &mut OriginSets, module: &ILModule, ty: u32, q: usize) -> bool
 // `Arena`'s header) point into what it owns, S(L), so a `static`'s address one of its elements
 // holds is no destination of a push. A capture alias's slot is the environment's memory, so a
 // Frame of one adds ParamContents(`__env`) (§3, _Closure environments_).
-fn os_dest_reach(c: &mut OriginSets, module: &ILModule, locals: [Local], src: usize, dst: usize) {
+fn os_dest_reach(
+    c: &mut OriginSets,
+    module: &ILModule,
+    table: &InternTable,
+    locals: [Local],
+    src: usize,
+    dst: usize
+) {
     os_copy(c, dst, src);
     let mut more = true;
     while more {
@@ -6424,15 +6903,15 @@ fn os_dest_reach(c: &mut OriginSets, module: &ILModule, locals: [Local], src: us
             if os_has_frame(c, dst, id) {
                 if os_or(c, dst, c.nl + id) { more = true; }
                 let lty = os_local_ty(locals, id as u32);
-                if !os_type_has(c, module, lty, OS_Q_HANDLE)
-                    && os_type_has(c, module, lty, OS_Q_LOOSE_RAW)
+                if !os_type_has(c, module, table, lty, OS_Q_HANDLE)
+                    && os_type_has(c, module, table, lty, OS_Q_LOOSE_RAW)
                     && c.buf[id * c.words + OS_W_FLAGS] & ORIGIN_STATIC != 0 as u64 {
                     os_add_flag(c, dst, ORIGIN_STATIC);
                 }
-                if os_type_has(c, module, lty, OS_Q_HANDLE) {
+                if os_type_has(c, module, table, lty, OS_Q_HANDLE) {
                     let held = os_t(c, OS_T_DR);
                     os_copy(c, held, id);
-                    if !os_type_has(c, module, lty, OS_Q_REF_HANDLE) {
+                    if !os_type_has(c, module, table, lty, OS_Q_REF_HANDLE) {
                         let fw = held * c.words + OS_W_FLAGS;
                         c.buf[fw] = c.buf[fw] & !ORIGIN_STATIC;
                     }
@@ -6450,7 +6929,7 @@ fn os_dest_reach(c: &mut OriginSets, module: &ILModule, locals: [Local], src: us
 // another does: a store into an owned capture of anything but its own contents is an edge into a
 // global (os_note_edges). Past bit 62 a capture keeps ParamContents(`__env`) and no bit of its own,
 // which only refuses more at the caller.
-fn os_cap_bits(c: &mut OriginSets, module: &ILModule, locals: [Local]) {
+fn os_cap_bits(c: &mut OriginSets, module: &ILModule, table: &InternTable, locals: [Local]) {
     let cap = os_t(c, OS_T_CAP);
     let owncap = os_t(c, OS_T_OWNCAP);
     let mut next = c.env_param + 1 as usize;
@@ -6458,7 +6937,7 @@ fn os_cap_bits(c: &mut OriginSets, module: &ILModule, locals: [Local]) {
     while li < c.nl {
         if locals[li - 1 as usize].is_capture_alias {
             os_add_frame(c, cap, li as u32);
-            if os_owns(c, module, locals[li - 1 as usize].ty) {
+            if os_owns(c, module, table, locals[li - 1 as usize].ty) {
                 os_add_frame(c, owncap, li as u32);
             }
             if next < 63 as usize {
@@ -6524,6 +7003,7 @@ fn os_meets_frames(c: &OriginSets, a: usize, b: usize) -> bool {
 fn os_drop_self_store(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     val: usize,
     dest: usize
@@ -6546,7 +7026,7 @@ fn os_drop_self_store(
         k = k + 1 as usize;
     }
     if id == 0 as usize || !os_has_frame(c, os_t(c, OS_T_CAP), id) { return; }
-    if os_type_has(c, module, os_local_ty(locals, id as u32), OS_Q_HANDLE) { return; }
+    if os_type_has(c, module, table, os_local_ty(locals, id as u32), OS_Q_HANDLE) { return; }
     let w = val * c.words + OS_W_FRAME + id / 64 as usize;
     c.buf[w] = c.buf[w] & !((1 as u64) << ((id % 64 as usize) as u64));
 }
@@ -6702,10 +7182,10 @@ fn os_field_type(module: &ILModule, ty: u32, name: u32) -> u32 {
 
 // The element type of a `Vec<T>`, 0 for any other type: what codegen's index_addr indexes in the
 // Vec's buffer (get_slice_element_type, by the same name test).
-fn os_vec_element(c: &OriginSets, module: &ILModule, ty: u32) -> u32 {
+fn os_vec_element(module: &ILModule, table: &InternTable, ty: u32) -> u32 {
     if os_type_def_tag(module, ty) != ILTYPE_USER { return 0 as u32; }
     let u = module.types[ty as usize - 1 as usize].def.get_User();
-    if !type_name_is(c.table.lookup(u.name), "Vec") || u.type_args.len == 0 as usize {
+    if !type_name_is(table.lookup(u.name), "Vec") || u.type_args.len == 0 as usize {
         return 0 as u32;
     }
     return u.type_args[0];
@@ -6718,7 +7198,13 @@ fn os_vec_element(c: &OriginSets, module: &ILModule, ty: u32) -> u32 {
 // (§3, _Details the transfer needs_): its sets already hold its contents', so `*b` and `(*b).s`
 // stay in the box's own slot. Returns P's type, 0 when the walk lost it: the memory is then
 // everything the base reaches, and Unknown.
-fn os_walk(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place) -> u32 {
+fn os_walk(
+    c: &mut OriginSets,
+    module: &ILModule,
+    table: &InternTable,
+    locals: [Local],
+    p: &Place
+) -> u32 {
     let tm = os_t(c, OS_T_M);
     let ta = os_t(c, OS_T_A);
     os_clear(c, tm);
@@ -6797,7 +7283,7 @@ fn os_walk(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place) ->
                 // (`self.len = self.len + other.len` would read as storing `other` into `self`).
                 if tag == ILTYPE_SLICE
                     && i + 1 as usize == p.projections.len
-                    && c.table.lookup(name) == "len" {
+                    && table.lookup(name) == "len" {
                     c.walk_len = true;
                 }
                 ty = os_field_type(module, ty, name);
@@ -6817,7 +7303,7 @@ fn os_walk(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place) ->
             // reaches, as for a slice; anything else reached through a pointer or box is pointer
             // arithmetic over that memory, of the same type.
             Projection.Index(_) => {
-                let elem = os_vec_element(c, module, ty);
+                let elem = os_vec_element(module, table, ty);
                 if tag == ILTYPE_ARRAY {
                     ty = module.types[ty as usize - 1 as usize].def.get_Array().element;
                 } else if elem != 0 as u32 && !idx_mut {
@@ -6852,13 +7338,14 @@ fn os_walk(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place) ->
 fn os_read(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     p: &Place,
     dst_o: usize,
     dst_s: usize
 ) -> u32 {
     if p.base == 0 as u32 { return 0 as u32; }
-    let ty = os_walk(c, module, locals, p);
+    let ty = os_walk(c, module, table, locals, p);
     if c.walk_len { return ty; }
     if ty != 0 as u32 && !os_carries(c, module, ty) { return ty; }
     if !c.walk_crossed {
@@ -6869,7 +7356,7 @@ fn os_read(
     let tm = os_t(c, OS_T_M);
     let ta = os_t(c, OS_T_A);
     os_clear(c, ta);
-    if os_owns(c, module, ty) {
+    if os_owns(c, module, table, ty) {
         os_through_split(c, tm, dst_o, dst_s);
     } else {
         os_through_split(c, tm, dst_o, ta);
@@ -6878,9 +7365,16 @@ fn os_read(
 }
 
 // Adds the origins of the address `&P` to DST: the base's slot, or the memory a pointer led to.
-fn os_addr(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place, dst: usize) {
+fn os_addr(
+    c: &mut OriginSets,
+    module: &ILModule,
+    table: &InternTable,
+    locals: [Local],
+    p: &Place,
+    dst: usize
+) {
     if p.base == 0 as u32 { return; }
-    let _ = os_walk(c, module, locals, p);
+    let _ = os_walk(c, module, table, locals, p);
     if c.walk_crossed {
         let tm = os_t(c, OS_T_M);
         let _ = os_or(c, dst, tm);
@@ -6894,6 +7388,7 @@ fn os_addr(c: &mut OriginSets, module: &ILModule, locals: [Local], p: &Place, ds
 fn os_write_memory(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     mem: usize,
     vo: usize,
@@ -6904,7 +7399,7 @@ fn os_write_memory(
         let lty = os_local_ty(locals, id as u32);
         if os_has_frame(c, mem, id) && os_carries(c, module, lty) {
             if os_or(c, id, vo) { c.changed = true; }
-            if os_owns(c, module, lty) && os_or(c, c.nl + id, vs) { c.changed = true; }
+            if os_owns(c, module, table, lty) && os_or(c, c.nl + id, vs) { c.changed = true; }
         }
         id = id + 1 as usize;
     }
@@ -6918,27 +7413,28 @@ fn os_write_memory(
 fn os_unknown_arg(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     args: [Place],
     callee: &Place,
     k: usize
-) {
+) -> u32 {
     let tao = os_t(c, OS_T_AO);
     let tas = os_t(c, OS_T_AS);
     let ta = os_t(c, OS_T_X);
     os_clear(c, tao);
     os_clear(c, tas);
     if k < args.len {
-        let _ = os_read(c, module, locals, &args[k], tao, tas);
-        return;
+        return os_read(c, module, table, locals, &args[k], tao, tas);
     }
     os_clear(c, ta);
-    let _ = os_read(c, module, locals, callee, ta, tas);
+    let _ = os_read(c, module, table, locals, callee, ta, tas);
     os_clear(c, tas);
     let w = ta * c.words + OS_W_FLAGS;
     c.buf[w] = c.buf[w] & !ORIGIN_STATIC;
     os_env_frames_only(c, module, locals, ta);
     os_through(c, ta, tao);
+    return 0 as u32;
 }
 
 // Takes out of SET, the origins of a `fn` value, every Frame(L) whose L is not a tuple. A `fn`
@@ -6964,6 +7460,36 @@ fn os_env_frames_only(c: &mut OriginSets, module: &ILModule, locals: [Local], se
     }
 }
 
+fn os_add_releases(
+    c: &mut OriginSets,
+    module: &ILModule,
+    table: &InternTable,
+    locals: [Local],
+    src: usize,
+    include_contents: bool
+) {
+    let tr = os_t(c, OS_T_R);
+    os_copy(c, tr, src);
+    let mut more = true;
+    while more {
+        more = false;
+        let mut id = 1 as usize;
+        while id < c.nl {
+            if os_has_frame(c, tr, id) {
+                if os_or(c, tr, c.nl + id) { more = true; }
+                let lty = os_local_ty(locals, id as u32);
+                if !os_owns(c, module, table, lty) {
+                    if os_or(c, tr, id) { more = true; }
+                }
+            }
+            id = id + 1 as usize;
+        }
+    }
+    let rw = tr * c.words;
+    c.releases = c.releases | c.buf[rw + OS_W_ADDR];
+    if include_contents { c.releases = c.releases | c.buf[rw + OS_W_CONTENTS]; }
+}
+
 // What a call to a callee with no usable summary (a `fn` value, a body not read yet) does to the
 // caller's locals: it may store anything every argument reaches, and EXTRA, into anything any
 // argument reaches (§3, "counts as storing every reference argument into every other"). EXTRA is
@@ -6975,6 +7501,7 @@ fn os_env_frames_only(c: &mut OriginSets, module: &ILModule, locals: [Local], se
 fn os_unknown_call_effects(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     args: [Place],
     callee: &Place,
@@ -6991,17 +7518,33 @@ fn os_unknown_call_effects(
     let td = os_t(c, OS_T_D);
     os_clear(c, tsv);
     os_clear(c, tso);
+    let mut cal_fn_ty = 0 as u32;
+    if callee.base != 0 as u32 {
+        let cty = os_walk(c, module, table, locals, callee);
+        if cty != 0 as u32 && os_type_def_tag(module, cty) == ILTYPE_FN { cal_fn_ty = cty; }
+    }
     let mut k = 0 as usize;
     while k < nargs {
-        os_unknown_arg(c, module, locals, args, callee, k);
+        let mut aty = os_unknown_arg(c, module, table, locals, args, callee, k);
         let _ = os_or(c, tso, tas);
         let _ = os_or(c, tao, tas);
         os_reach_all(c, tao, tr);
         let _ = os_or(c, tsv, tr);
+        if aty == 0 as u32 && k < args.len && cal_fn_ty != 0 as u32 {
+            if let ILType.Fn(fn_t) = module.types[cal_fn_ty as usize - 1 as usize].def {
+                if k < fn_t.params.len { aty = fn_t.params[k]; }
+            }
+        }
+        let is_raw = k < args.len
+            && aty != 0 as u32
+            && is_raw_pointer_tag(os_type_def_tag(module, aty));
+        if !is_raw && k < args.len {
+            os_add_releases(c, module, table, locals, tao, true);
+        } else if k == args.len {
+            os_add_releases(c, module, table, locals, tao, false);
+        }
         k = k + 1 as usize;
     }
-    let rw = tsv * c.words;
-    c.releases = c.releases | c.buf[rw + OS_W_ADDR] | c.buf[rw + OS_W_CONTENTS];
     // The summary's edges carry what the arguments reach (os_note_edges below), not this Unknown:
     // a `fn` value's body was checked where it was made, so what it stores is something its
     // arguments reach, and an Unknown edge would refuse every caller handing it a closure.
@@ -7013,18 +7556,18 @@ fn os_unknown_call_effects(
         let mut refused = false;
         let mut i = 0 as usize;
         while i < nargs && !refused {
-            os_unknown_arg(c, module, locals, args, callee, i);
+            let _ = os_unknown_arg(c, module, table, locals, args, callee, i);
             let _ = os_or(c, tao, tas);
             os_reach_all(c, tao, tv);
             if os_frame_bound(c, tv) {
                 let mut j = 0 as usize;
                 while j < nargs && !refused {
-                    os_unknown_arg(c, module, locals, args, callee, j);
+                    let _ = os_unknown_arg(c, module, table, locals, args, callee, j);
                     let _ = os_or(c, tao, tas);
                     let sf = os_t(c, OS_T_SF);
                     os_copy(c, sf, tv);
-                    os_drop_self_store(c, module, locals, sf, tao);
-                    os_dest_reach(c, module, locals, tao, td);
+                    os_drop_self_store(c, module, table, locals, sf, tao);
+                    os_dest_reach(c, module, table, locals, tao, td);
                     if os_frame_bound(c, sf) && os_external(c, td) {
                         os_refuse(
                             c,
@@ -7041,12 +7584,12 @@ fn os_unknown_call_effects(
     let ed = os_t(c, OS_T_ED);
     k = 0 as usize;
     while k < nargs {
-        os_unknown_arg(c, module, locals, args, callee, k);
+        let _ = os_unknown_arg(c, module, table, locals, args, callee, k);
         let _ = os_or(c, tao, tas);
-        os_dest_reach(c, module, locals, tao, ed);
+        os_dest_reach(c, module, table, locals, tao, ed);
         os_note_edges(c, ev, ed);
         os_reach_all(c, tao, tw);
-        os_write_memory(c, module, locals, tw, tsv, tso);
+        os_write_memory(c, module, table, locals, tw, tsv, tso);
         k = k + 1 as usize;
     }
 }
@@ -7607,6 +8150,7 @@ fn os_dead_inits(c: &mut OriginSets, module: &ILModule, func: &ZirFunction) {
 fn os_check_closure_value(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     fid: u32,
     env: u32
@@ -7622,7 +8166,7 @@ fn os_check_closure_value(
     // declared parameters, which are the ones a call through the value passes (lower_rv_call_ptr).
     let mut e = if f.params_len >= base { f.params_len - base } else { 0 as usize };
     if e > 0 as usize
-        && type_name_is(c.table.lookup(f.param(f.params_len - 1 as usize).name), "__env") {
+        && type_name_is(table.lookup(f.param(f.params_len - 1 as usize).name), "__env") {
         e = e - 1 as usize;
     }
     let ao = os_t(c, OS_T_AO);
@@ -7630,7 +8174,7 @@ fn os_check_closure_value(
     let place = Place { base: env, projections: @slice(0 as *mut Projection, 0 as usize) };
     os_clear(c, ao);
     os_clear(c, aos);
-    let _ = os_read(c, module, locals, &place, ao, aos);
+    let _ = os_read(c, module, table, locals, &place, ao, aos);
     let _ = os_or(c, ao, aos);
     let tv = os_t(c, OS_T_SV);
     let tv2 = os_t(c, OS_T_X);
@@ -7655,11 +8199,11 @@ fn os_check_closure_value(
     }
     // SAFETY: the closure's own summary table, os_edge_rows rows of four u64 in the main arena
     // (store_origin_summary).
-    let table = unsafe { @slice(f.os_edges, f.os_edge_rows * 4 as usize) };
+    let edge_tbl = unsafe { @slice(f.os_edges, f.os_edge_rows * 4 as usize) };
     let mut r = 0 as usize;
     while r < f.os_edge_rows {
         let row = r * 4 as usize;
-        let code = table[row] as usize;
+        let code = edge_tbl[row] as usize;
         let contents = code >= 64 as usize && code < 128 as usize;
         let pidx = if contents { code - 64 as usize } else { code };
         if code < 128 as usize && pidx >= e {
@@ -7670,7 +8214,7 @@ fn os_check_closure_value(
                 os_copy(c, tv, ao);
             }
             let bound = os_frame_bound(c, tv);
-            if table[row + 3 as usize] & OS_EDGE_GLOBAL != 0 as u64 {
+            if edge_tbl[row + 3 as usize] & OS_EDGE_GLOBAL != 0 as u64 {
                 if c.checking && bound {
                     os_refuse(
                         c,
@@ -7686,10 +8230,10 @@ fn os_check_closure_value(
             while w <= 2 as usize {
                 let mut j = e;
                 while j < 64 as usize {
-                    if (table[row + w] >> (j as u64)) & 1 as u64 != 0 as u64 {
+                    if (edge_tbl[row + w] >> (j as u64)) & 1 as u64 != 0 as u64 {
                         os_copy(c, tv2, ao);
                         if j > e { os_add_read(c, tv2); }
-                        os_dest_reach(c, module, locals, tv2, ed);
+                        os_dest_reach(c, module, table, locals, tv2, ed);
                         if c.checking && bound && os_external(c, ed) {
                             os_refuse(
                                 c,
@@ -7714,6 +8258,7 @@ fn os_check_closure_value(
 fn os_known_call(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     callee: &Place,
     args: [Place],
@@ -7725,7 +8270,7 @@ fn os_known_call(
     let fid = (k & !OS_KNOWN_ENV) - 1 as u32;
     if fid as usize >= module.functions.len() { return false; }
     if k & OS_KNOWN_ENV == 0 as u32 {
-        os_call(c, module, locals, fid, args, owner);
+        os_call(c, module, table, locals, fid, args, owner);
         return true;
     }
     // The callee value, then one argument for each bit a capture can have in the summary, up to
@@ -7745,7 +8290,7 @@ fn os_known_call(
     }
     c.known_env = args.len;
     c.known_tuple = c.env_of[callee.base as usize];
-    os_call(c, module, locals, fid, all, owner);
+    os_call(c, module, table, locals, fid, all, owner);
     c.known_env = OS_NO_ENV;
     c.known_tuple = 0 as u32;
     return true;
@@ -7760,6 +8305,7 @@ fn os_known_call(
 fn os_fn_value_result(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     args: [Place],
     callee: &Place,
@@ -7772,7 +8318,7 @@ fn os_fn_value_result(
     let tr = os_t(c, OS_T_R);
     let mut k = 0 as usize;
     while k <= args.len {
-        os_unknown_arg(c, module, locals, args, callee, k);
+        let _ = os_unknown_arg(c, module, table, locals, args, callee, k);
         let _ = os_or(c, tao, tas);
         os_reach_all(c, tao, tr);
         let _ = os_or(c, vo, tr);
@@ -7790,13 +8336,14 @@ fn os_fn_value_result(
 fn os_arg(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     fn_id: u32,
     args: [Place],
     i: usize
 ) -> u32 {
     if c.known_env == OS_NO_ENV || i < c.known_env {
-        return os_arg_read(c, module, locals, fn_id, args, i);
+        return os_arg_read(c, module, table, locals, fn_id, args, i);
     }
     let tao = os_t(c, OS_T_AO);
     let tas = os_t(c, OS_T_AS);
@@ -7806,7 +8353,7 @@ fn os_arg(
     if i == c.known_env {
         // The environment's own slots: a store into one of them, which the summary names as
         // ParamContents(`__env`) whichever capture it is, reaches every capture's source local too.
-        let ty = os_arg_read(c, module, locals, fn_id, args, i);
+        let ty = os_arg_read(c, module, table, locals, fn_id, args, i);
         let mut k = 0 as usize;
         while k < ncap {
             os_add_frame(c, tao, c.env_caps[first + k]);
@@ -7815,7 +8362,7 @@ fn os_arg(
         return ty;
     }
     let j = i - c.known_env - 1 as usize;
-    if j >= ncap { return os_arg(c, module, locals, fn_id, args, c.known_env); }
+    if j >= ncap { return os_arg(c, module, table, locals, fn_id, args, c.known_env); }
     // Capture j is field j of the tuple, which holds what local env_caps[first + j] held when the
     // tuple was built, and what a store into a slot added (above): its address names that local.
     os_clear(c, tao);
@@ -7827,6 +8374,7 @@ fn os_arg(
 fn os_arg_read(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     fn_id: u32,
     args: [Place],
@@ -7837,7 +8385,7 @@ fn os_arg_read(
     let ta = os_t(c, OS_T_A);
     os_clear(c, tao);
     os_clear(c, tas);
-    let aty = os_read(c, module, locals, &args[i], tao, tas);
+    let aty = os_read(c, module, table, locals, &args[i], tao, tas);
     if aty == 0 as u32 || os_type_def_tag(module, aty) != ILTYPE_PTR { return aty; }
     if (fn_id as usize) >= module.functions.len() { return aty; }
     let f = &module.functions[fn_id as usize];
@@ -7866,6 +8414,7 @@ fn os_arg_read(
 fn os_summary_store_effects(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     fn_id: u32,
     args: [Place],
@@ -7886,7 +8435,7 @@ fn os_summary_store_effects(
     let mut i = 0 as usize;
     while i < args.len {
         if i >= 64 as usize || ((from_mask >> (i as u64)) & 1 as u64) != 0 as u64 {
-            let _ = os_arg(c, module, locals, fn_id, args, i);
+            let _ = os_arg(c, module, table, locals, fn_id, args, i);
             let po = os_t(c, OS_T_EV);
             let ps = os_t(c, OS_T_ED);
             os_copy(c, po, tao);
@@ -7906,7 +8455,7 @@ fn os_summary_store_effects(
         i = 0 as usize;
         while i < args.len && !refused {
             if i >= 64 as usize || ((from_mask >> (i as u64)) & 1 as u64) != 0 as u64 {
-                let _ = os_arg(c, module, locals, fn_id, args, i);
+                let _ = os_arg(c, module, table, locals, fn_id, args, i);
                 let po = os_t(c, OS_T_EV);
                 let ps = os_t(c, OS_T_ED);
                 os_copy(c, po, tao);
@@ -7930,12 +8479,12 @@ fn os_summary_store_effects(
                             ((to_mask >> (j as u64)) & 1 as u64) != 0 as u64
                         };
                         if target {
-                            let _ = os_arg(c, module, locals, fn_id, args, j);
+                            let _ = os_arg(c, module, table, locals, fn_id, args, j);
                             let _ = os_or(c, tao, tas);
                             let sf = os_t(c, OS_T_SF);
                             os_copy(c, sf, tv);
-                            os_drop_self_store(c, module, locals, sf, tao);
-                            os_dest_reach(c, module, locals, tao, td);
+                            os_drop_self_store(c, module, table, locals, sf, tao);
+                            os_dest_reach(c, module, table, locals, tao, td);
                             if os_frame_bound(c, sf) && os_external(c, td) {
                                 os_refuse(
                                     c,
@@ -7969,12 +8518,12 @@ fn os_summary_store_effects(
             ((to_mask >> (j as u64)) & 1 as u64) != 0 as u64
         };
         if target {
-            let _ = os_arg(c, module, locals, fn_id, args, j);
+            let _ = os_arg(c, module, table, locals, fn_id, args, j);
             let _ = os_or(c, tao, tas);
-            os_dest_reach(c, module, locals, tao, ed);
+            os_dest_reach(c, module, table, locals, tao, ed);
             os_note_edges(c, ev, ed);
             os_reach_all(c, tao, tw);
-            os_write_memory(c, module, locals, tw, tsv, tso);
+            os_write_memory(c, module, table, locals, tw, tsv, tso);
         }
         j = j + 1 as usize;
     }
@@ -7986,6 +8535,7 @@ fn os_summary_store_effects(
 fn os_param_origin(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     fn_id: u32,
     args: [Place],
@@ -7998,7 +8548,7 @@ fn os_param_origin(
     let tr = os_t(c, OS_T_R);
     let mut k = i;
     while k < args.len && (k == i || i == 63 as usize) {
-        let _ = os_arg(c, module, locals, fn_id, args, k);
+        let _ = os_arg(c, module, table, locals, fn_id, args, k);
         let _ = os_or(c, tao, tas);
         if contents {
             os_through_plus(c, tao, tr);
@@ -8045,6 +8595,7 @@ fn os_write_edge(c: &mut OriginSets, module: &ILModule, locals: [Local], mem: us
 fn os_edge_effects(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     fn_id: u32,
     args: [Place],
@@ -8057,17 +8608,17 @@ fn os_edge_effects(
     // SAFETY: EDGES has ROWS rows of four u64: store_origin_summary's table in the main arena,
     // which outlives every body's checks, or null with zero rows for a callee in a recursive cycle
     // that has no summary yet (os_call), whose empty slice is never indexed.
-    let table = unsafe { @slice(edges, rows * 4 as usize) };
+    let edge_tbl = unsafe { @slice(edges, rows * 4 as usize) };
     let mut refused = false;
     let mut r = 0 as usize;
     while r < rows {
         let row = r * 4 as usize;
-        let code = table[row] as usize;
+        let code = edge_tbl[row] as usize;
         os_clear(c, tv);
         if code < 64 as usize {
-            os_param_origin(c, module, locals, fn_id, args, code, false, tv);
+            os_param_origin(c, module, table, locals, fn_id, args, code, false, tv);
         } else if code < 128 as usize {
-            os_param_origin(c, module, locals, fn_id, args, code - 64 as usize, true, tv);
+            os_param_origin(c, module, table, locals, fn_id, args, code - 64 as usize, true, tv);
         } else if code == OS_EDGE_STATIC {
             os_add_flag(c, tv, ORIGIN_STATIC);
         } else if code == OS_EDGE_RODATA {
@@ -8084,7 +8635,7 @@ fn os_edge_effects(
         os_clear(c, moved);
         let pidx = if code < 64 as usize { code } else { code - 64 as usize };
         if code < 128 as usize && pidx < 63 as usize {
-            let _ = os_arg(c, module, locals, fn_id, args, pidx);
+            let _ = os_arg(c, module, table, locals, fn_id, args, pidx);
             if code < 64 as usize {
                 os_moved_storage(c, moved, os_t(c, OS_T_AO), os_t(c, OS_T_AS));
             }
@@ -8102,7 +8653,7 @@ fn os_edge_effects(
             }
         }
         let bound = os_frame_bound(c, tv);
-        let gflags = table[row + 3 as usize];
+        let gflags = edge_tbl[row + 3 as usize];
         if gflags & (OS_EDGE_GLOBAL | OS_EDGE_ENV) != 0 as u64 {
             if c.checking && bound && !refused {
                 os_refuse(
@@ -8121,13 +8672,13 @@ fn os_edge_effects(
         while w <= 2 as usize {
             let mut j = 0 as usize;
             while j < 64 as usize {
-                if (table[row + w] >> (j as u64)) & 1 as u64 != 0 as u64 {
+                if (edge_tbl[row + w] >> (j as u64)) & 1 as u64 != 0 as u64 {
                     // The target memory: what argument j names (ParamAddr), or what a write through
                     // it can reach (ParamContents), which is its destination reach (§3), not every
                     // read through it: a callee writes only through what it could write through,
                     // so the Static of a literal already in a `Vec<[u8]>` is no target.
                     os_clear(c, tm);
-                    os_param_origin(c, module, locals, fn_id, args, j, false, tm);
+                    os_param_origin(c, module, table, locals, fn_id, args, j, false, tm);
                     // A capture's bit as a target is the memory the capture's value names, one read
                     // through its local (os_arg names the local), whatever its type: the reach
                     // follows what a local holds only for a mutable handle, never a raw pointer.
@@ -8142,8 +8693,8 @@ fn os_edge_effects(
                     }
                     let sf = os_t(c, OS_T_SF);
                     os_copy(c, sf, tv);
-                    os_drop_self_store(c, module, locals, sf, tm);
-                    os_dest_reach(c, module, locals, tm, ed);
+                    os_drop_self_store(c, module, table, locals, sf, tm);
+                    os_dest_reach(c, module, table, locals, tm, ed);
                     if w == 2 as usize { os_copy(c, tm, ed); }
                     if c.checking
                         && bound
@@ -8161,7 +8712,7 @@ fn os_edge_effects(
                     if !os_is_empty(c, moved) {
                         let none = os_t(c, OS_T_X);
                         os_clear(c, none);
-                        os_write_memory(c, module, locals, tm, none, moved);
+                        os_write_memory(c, module, table, locals, tm, none, moved);
                     }
                 }
                 j = j + 1 as usize;
@@ -8353,12 +8904,17 @@ fn os_body_ties(c: &mut OriginSets, module: &ILModule, f: &ILFunction) -> u64 {
 // A body in a recursive cycle gets its ties once the cycle's summaries are final, after the
 // borrow checks of the cycle's own bodies ran; those read a call into the cycle as tied to every
 // argument instead (inherit_rv_borrows, ILFunction.os_in_cycle). Returns the refusals.
-pub fn os_infer_ties(c: &mut OriginSets, module: &mut ILModule, idx: usize) -> u32 {
+pub fn os_infer_ties(
+    c: &mut OriginSets,
+    module: &mut ILModule,
+    table: &InternTable,
+    idx: usize
+) -> u32 {
     let f = module.functions[idx];
     if f.borrows_trusted || f.from_interface || f.is_extern { return 0 as u32; }
     if f.has_borrows && c.rules == PROVENANCE_OFF { return 0 as u32; }
     if f.params_len > 0 as usize
-        && type_name_is(c.table.lookup(f.param(f.params_len - 1 as usize).name), "__env") {
+        && type_name_is(table.lookup(f.param(f.params_len - 1 as usize).name), "__env") {
         return 0 as u32;
     }
     // A borrow is held only by a value whose type can hold a reference (inherit_rv_borrows), so
@@ -8384,7 +8940,7 @@ pub fn os_infer_ties(c: &mut OriginSets, module: &mut ILModule, idx: usize) -> u
         i = i + 1 as usize;
     }
     if missing == 0 as u64 { return 0 as u32; }
-    if f.has_borrows { return os_refuse_narrowing(c, &f, base, missing); }
+    if f.has_borrows { return os_refuse_narrowing(c, table, &f, base, missing); }
     let p = module.get_function_mut(idx);
     p.ret_ties = p.ret_ties | missing;
     p.ties_inferred = true;
@@ -8393,7 +8949,13 @@ pub fn os_infer_ties(c: &mut OriginSets, module: &mut ILModule, idx: usize) -> u
 
 // One refusal per parameter in MISSING, at F's declaration: its `#[borrows(..)]` leaves out a tie
 // the body makes. The caller holds no borrow of that argument while the result points into it.
-fn os_refuse_narrowing(c: &mut OriginSets, f: &ILFunction, base: usize, missing: u64) -> u32 {
+fn os_refuse_narrowing(
+    c: &mut OriginSets,
+    table: &InternTable,
+    f: &ILFunction,
+    base: usize,
+    missing: u64
+) -> u32 {
     let kind = if c.rules == PROVENANCE_WARN { "warning" } else { "error" };
     let mut n = 0 as u32;
     let mut i = 0 as usize;
@@ -8403,7 +8965,7 @@ fn os_refuse_narrowing(c: &mut OriginSets, f: &ILFunction, base: usize, missing:
             n = n + 1 as u32;
             diag_start(c.file, f.decl_span, kind);
             eprint("provenance: #[borrows(..)] leaves out '");
-            eprint(c.table.lookup(f.param(i + base).name));
+            eprint(table.lookup(f.param(i + base).name));
             eprint("', which the result may point into; a declaration may name more than ");
             eprint("the body returns, never less ");
             eprint("(a reviewed narrowing is `#[unsafe(borrows(..))]`)\n");
@@ -8425,6 +8987,7 @@ fn os_refuse_narrowing(c: &mut OriginSets, f: &ILFunction, base: usize, missing:
 fn os_call(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     fn_id: u32,
     args: [Place],
@@ -8512,13 +9075,15 @@ fn os_call(
         os_add_flag(c, vo, ORIGIN_UNKNOWN);
         os_add_flag(c, vs, ORIGIN_UNKNOWN);
         let none = Place { base: 0 as u32, projections: @slice(0 as *mut Projection, 0 as usize) };
-        os_unknown_call_effects(c, module, locals, args, &none, args.len, ORIGIN_UNKNOWN);
+        os_unknown_call_effects(c, module, table, locals, args, &none, args.len, ORIGIN_UNKNOWN);
         return;
     }
     let tas = os_t(c, OS_T_AS);
     let mut tied = false;
     let mut arena_tie = false;
-    let owning = ret_ty != 0 as u32 && os_carries(c, module, ret_ty) && os_owns(c, module, ret_ty);
+    let owning = ret_ty != 0 as u32
+        && os_carries(c, module, ret_ty)
+        && os_owns(c, module, table, ret_ty);
     // A callee of no result type (ret_ty 0, unit) hands back no address.
     let result_carries = ret_ty != 0 as u32 && os_carries(c, module, ret_ty);
     // An integer read through a parameter (`self.len` in `Vec.len`) is no address of it, and the
@@ -8540,25 +9105,25 @@ fn os_call(
         let in_ties = i >= 64 as usize || ((ties >> (i as u64)) & 1 as u64) != 0 as u64;
         let in_view = i >= 64 as usize || ((view_ties >> (i as u64)) & 1 as u64) != 0 as u64;
         if result_carries && (in_storage || in_ties) {
-            let aty = os_arg(c, module, locals, fn_id, args, i);
+            let aty = os_arg(c, module, table, locals, fn_id, args, i);
             let tah = os_t(c, OS_T_AH);
             os_copy(c, tah, tao);
             let _ = os_or(c, tao, tas);
             if aty == 0 as u32 || os_carries(c, module, aty) {
                 tied = true;
-                let arena = owning && os_type_has(c, module, aty, OS_Q_ARENA);
+                let arena = owning && os_type_has(c, module, table, aty, OS_Q_ARENA);
                 if arena { arena_tie = true; }
                 // An argument that holds its arena by value (`unwrap` of a `Result<Arena, _>`)
                 // names the arena's storage by what it owns, S; what it holds, O, is what that
                 // storage holds (a literal a callee put in the arena), never storage.
                 let mut arena_store = if aty != 0 as u32
-                    && !os_type_has(c, module, aty, OS_Q_ARENA_REF) {
+                    && !os_type_has(c, module, table, aty, OS_Q_ARENA_REF) {
                     tas
                 } else {
                     tao
                 };
                 if arena && arena_store == tao && aty != 0 as u32 {
-                    let depths = os_arena_depths(module, c.table, aty, 0 as usize);
+                    let depths = os_arena_depths(module, table, aty, 0 as usize);
                     if depths != 2 as u64 && depths != 0 as u64 {
                         os_arena_at_depths(c, tao, depths);
                         arena_store = os_t(c, OS_T_ARENA);
@@ -8569,7 +9134,7 @@ fn os_call(
                     // (`id(v)`, `o.unwrap()`) moves the storage it owns into the call, so that
                     // storage is no address the result holds; a callee returning an address into
                     // it says so with Unknown, its own Frame.
-                    if body && aty != 0 as u32 && os_owns(c, module, aty) {
+                    if body && aty != 0 as u32 && os_owns(c, module, table, aty) {
                         let _ = os_or(c, vo, tah);
                     } else {
                         let _ = os_or(c, vo, tao);
@@ -8602,21 +9167,19 @@ fn os_call(
     }
     if result_carries && bare_extern && !tied { os_add_flag(c, vo, ORIGIN_STATIC); }
     if result_carries && body { os_add_flag(c, vo, ret_flags); }
-    if owning && (!arena_tie || ret_fresh || os_type_has(c, module, ret_ty, OS_Q_FRESH)) {
+    if owning && (!arena_tie || ret_fresh || os_type_has(c, module, table, ret_ty, OS_Q_FRESH)) {
         let _ = os_or(c, vs, owner);
     }
-    if body { os_edge_effects(c, module, locals, fn_id, args, edges, edge_rows); }
-    os_summary_store_effects(c, module, locals, fn_id, args, from_mask, to_mask);
+    if body { os_edge_effects(c, module, table, locals, fn_id, args, edges, edge_rows); }
+    os_summary_store_effects(c, module, table, locals, fn_id, args, from_mask, to_mask);
     if cal_releases != 0 as u64 {
         let mut k = 0 as usize;
         while k < args.len {
             let bit = if k < 63 as usize { k } else { 63 as usize };
             if (cal_releases >> (bit as u64)) & 1 as u64 != 0 as u64 {
-                let _ = os_arg(c, module, locals, fn_id, args, k);
+                let _ = os_arg(c, module, table, locals, fn_id, args, k);
                 let _ = os_or(c, tao, tas);
-                os_reach_all(c, tao, tr);
-                let rw = tr * c.words;
-                c.releases = c.releases | c.buf[rw + OS_W_ADDR] | c.buf[rw + OS_W_CONTENTS];
+                os_add_releases(c, module, table, locals, tao, true);
             }
             k = k + 1 as usize;
         }
@@ -8624,7 +9187,14 @@ fn os_call(
 }
 
 // exhaustive: every rvalue must say which origins its value carries and what storage it owns.
-fn os_rvalue(c: &mut OriginSets, module: &ILModule, locals: [Local], rv: &ZirRvalue, owner: usize) {
+fn os_rvalue(
+    c: &mut OriginSets,
+    module: &ILModule,
+    table: &InternTable,
+    locals: [Local],
+    rv: &ZirRvalue,
+    owner: usize
+) {
     let vo = os_t(c, OS_T_VO);
     let vs = os_t(c, OS_T_VS);
     os_clear(c, vo);
@@ -8634,33 +9204,33 @@ fn os_rvalue(c: &mut OriginSets, module: &ILModule, locals: [Local], rv: &ZirRva
             | ZirRvalue.UnaryOp(_, p)
             | ZirRvalue.EnumVariant(_, _, p)
             | ZirRvalue.ArrayRepeat(p, _, _) => {
-            let _ = os_read(c, module, locals, &p, vo, vs);
+            let _ = os_read(c, module, table, locals, &p, vo, vs);
         },
         ZirRvalue.Ref(p, _) | ZirRvalue.RefMut(p, _) => {
-            os_addr(c, module, locals, &p, vo);
+            os_addr(c, module, table, locals, &p, vo);
         },
         // An enum payload is lowered as the address of the payload inside the enum place; a
         // `match` binding or `?` then reads through it. A `match` on a reference names the
         // reference itself, and codegen takes the enum's address from its value
         // (`enum_address`), so the payload lies in what the reference holds, not in its slot.
         ZirRvalue.EnumPayload(p, _, _) => {
-            let pty = os_walk(c, module, locals, &p);
+            let pty = os_walk(c, module, table, locals, &p);
             if pty != 0 as u32 && is_any_pointer_tag(os_type_def_tag(module, pty)) {
-                let _ = os_read(c, module, locals, &p, vo, vs);
+                let _ = os_read(c, module, table, locals, &p, vo, vs);
                 os_clear(c, vs);
             } else {
-                os_addr(c, module, locals, &p, vo);
+                os_addr(c, module, table, locals, &p, vo);
             }
         },
         ZirRvalue.BinaryOp(_, a, b) => {
-            let _ = os_read(c, module, locals, &a, vo, vs);
-            let _ = os_read(c, module, locals, &b, vo, vs);
+            let _ = os_read(c, module, table, locals, &a, vo, vs);
+            let _ = os_read(c, module, table, locals, &b, vo, vs);
         },
         ZirRvalue.StructLiteral(_, args)
             | ZirRvalue.Tuple(args)
             | ZirRvalue.Array(_, args)
             | ZirRvalue.Intrinsic(_, args) => {
-            for a in args { let _ = os_read(c, module, locals, a, vo, vs); }
+            for a in args { let _ = os_read(c, module, table, locals, a, vo, vs); }
         },
         // A system call's result is the kernel's integer, not one of its arguments (§3, _Raw
         // operations_): an address it returns (mmap) becomes one only through `@ptr_from_int`.
@@ -8668,27 +9238,27 @@ fn os_rvalue(c: &mut OriginSets, module: &ILModule, locals: [Local], rv: &ZirRva
         // A cast reinterprets the value, so an owner cast to a pointer is an address into the
         // storage it owns (`b as *i32` for a box): what it owns joins what it holds.
         ZirRvalue.Cast(p, _) => {
-            let _ = os_read(c, module, locals, &p, vo, vs);
+            let _ = os_read(c, module, table, locals, &p, vo, vs);
             let _ = os_or(c, vo, vs);
         },
         // An address made from an integer: whatever the integer was made from, still checked (a
         // frame address round-tripped through `as u64` stays this frame's), and Raw.
         ZirRvalue.PtrFromInt(p, _) => {
-            let _ = os_read(c, module, locals, &p, vo, vs);
+            let _ = os_read(c, module, table, locals, &p, vo, vs);
             let _ = os_or(c, vo, vs);
             os_add_flag(c, vo, ORIGIN_RAW);
         },
         ZirRvalue.Boxed(p) => {
-            let _ = os_read(c, module, locals, &p, vo, vs);
+            let _ = os_read(c, module, table, locals, &p, vo, vs);
             let _ = os_or(c, vs, owner);
         },
-        ZirRvalue.Call(fn_id, args) => { os_call(c, module, locals, fn_id, args, owner); },
+        ZirRvalue.Call(fn_id, args) => { os_call(c, module, table, locals, fn_id, args, owner); },
         ZirRvalue.CallPtr(callee, args) => {
-            if os_known_call(c, module, locals, &callee, args, owner) { return; }
+            if os_known_call(c, module, table, locals, &callee, args, owner) { return; }
             os_note_unknown(c, UNKNOWN_FN_VALUE);
             let nargs = args.len + 1 as usize;
-            os_unknown_call_effects(c, module, locals, args, &callee, nargs, ORIGIN_STATIC);
-            os_fn_value_result(c, module, locals, args, &callee, owner);
+            os_unknown_call_effects(c, module, table, locals, args, &callee, nargs, ORIGIN_STATIC);
+            os_fn_value_result(c, module, table, locals, args, &callee, owner);
         },
         // A capturing closure's value is the address of its environment struct: it holds what the
         // environment pointer holds, so a read through it reaches the captures (§3, _Closure
@@ -8714,6 +9284,7 @@ fn os_rvalue(c: &mut OriginSets, module: &ILModule, locals: [Local], rv: &ZirRva
 fn os_store(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     base: u32,
     crossed: bool,
@@ -8724,13 +9295,13 @@ fn os_store(
     let vs = os_t(c, OS_T_VS);
     if crossed {
         let dm = os_t(c, OS_T_DM);
-        os_write_memory(c, module, locals, dm, vo, vs);
+        os_write_memory(c, module, table, locals, dm, vo, vs);
         return;
     }
     if base == 0 as u32 || base as usize >= c.nl { return; }
     if !os_carries(c, module, os_local_ty(locals, base)) { return; }
     if os_or(c, base as usize, vo) { c.changed = true; }
-    if os_owns(c, module, os_local_ty(locals, base)) && os_or(c, c.nl + base as usize, vs) {
+    if os_owns(c, module, table, os_local_ty(locals, base)) && os_or(c, c.nl + base as usize, vs) {
         c.changed = true;
     }
 }
@@ -8741,6 +9312,7 @@ fn os_store(
 fn os_check_store(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     base: u32,
     crossed: bool
@@ -8752,9 +9324,9 @@ fn os_check_store(
         let dm = os_t(c, OS_T_DM);
         let sf = os_t(c, OS_T_SF);
         os_copy(c, sf, vo);
-        os_drop_self_store(c, module, locals, sf, dm);
+        os_drop_self_store(c, module, table, locals, sf, dm);
         if !os_frame_bound(c, sf) { return; }
-        os_dest_reach(c, module, locals, dm, td);
+        os_dest_reach(c, module, table, locals, dm, td);
         if !os_external(c, td) { return; }
     } else if base == 0 as u32
         || base as usize > locals.len
@@ -8772,6 +9344,7 @@ fn os_check_store(
 fn os_live_elements(
     c: &mut OriginSets,
     module: &ILModule,
+    table: &InternTable,
     locals: [Local],
     rv: &ZirRvalue,
     dead: u64
@@ -8787,14 +9360,20 @@ fn os_live_elements(
     let mut k = 0 as usize;
     while k < vals.len {
         if k >= 64 as usize || (dead >> (k as u64)) & 1 as u64 == 0 as u64 {
-            let _ = os_read(c, module, locals, &vals[k], vo, vs);
+            let _ = os_read(c, module, table, locals, &vals[k], vo, vs);
         }
         k = k + 1 as usize;
     }
 }
 
 // exhaustive: every statement must say what it writes into which local's sets.
-fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt) {
+fn os_stmt(
+    c: &mut OriginSets,
+    module: &ILModule,
+    table: &InternTable,
+    locals: [Local],
+    st: &ZirStmt
+) {
     let own = os_t(c, OS_T_OWN);
     match *st {
         ZirStmt.Let(id, rv, span) => {
@@ -8807,9 +9386,9 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
                 0 as u64
             };
             if dead == 0 as u64 {
-                os_rvalue(c, module, locals, &rv, own);
+                os_rvalue(c, module, table, locals, &rv, own);
             } else {
-                os_live_elements(c, module, locals, &rv, dead);
+                os_live_elements(c, module, table, locals, &rv, dead);
             }
             let ty = os_local_ty(locals, id);
             if id != 0 as u32 && (id as usize) < c.nl && c.cap_bit[id as usize] != 0 as u8 {
@@ -8820,20 +9399,20 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
             if id != 0 as u32
                 && (id as usize) <= locals.len
                 && locals[id as usize - 1 as usize].is_capture_alias
-                && os_owns(c, module, ty) {
+                && os_owns(c, module, table, ty) {
                 let vs = os_t(c, OS_T_VS);
                 os_add_frame(c, vs, id);
             }
-            os_store(c, module, locals, id, false, ty);
+            os_store(c, module, table, locals, id, false, ty);
             if let ZirRvalue.FuncAddr(fid, env) = rv {
                 if env != 0 as u32 && (id as usize) < c.nl && c.env_of[id as usize] == 0 as u32 {
-                    os_check_closure_value(c, module, locals, fid, env);
+                    os_check_closure_value(c, module, table, locals, fid, env);
                 }
             }
         },
         ZirStmt.Assign(pl, rv, span) => {
             c.span = span;
-            let ty = os_walk(c, module, locals, &pl);
+            let ty = os_walk(c, module, table, locals, &pl);
             let crossed = c.walk_crossed;
             let tm = os_t(c, OS_T_M);
             let dm = os_t(c, OS_T_DM);
@@ -8844,9 +9423,9 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
                 os_clear(c, own);
                 os_add_frame(c, own, pl.base);
             }
-            os_rvalue(c, module, locals, &rv, own);
+            os_rvalue(c, module, table, locals, &rv, own);
             if c.checking && (ty == 0 as u32 || os_carries(c, module, ty)) {
-                os_check_store(c, module, locals, pl.base, crossed);
+                os_check_store(c, module, table, locals, pl.base, crossed);
             }
             // An integer stored records no summary edge (§3, _The summary as built_): a callee's
             // bookkeeping (`arena.offset = .. + size`) is no address of what it was computed from,
@@ -8868,10 +9447,10 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
                 os_copy(c, ev, os_t(c, OS_T_VO));
                 let _ = os_or(c, ev, os_t(c, OS_T_VS));
                 os_drop_moved_storage(c, ev, os_t(c, OS_T_VO), os_t(c, OS_T_VS));
-                os_dest_reach(c, module, locals, dm, ed);
+                os_dest_reach(c, module, table, locals, dm, ed);
                 os_note_edges(c, ev, ed);
             }
-            os_store(c, module, locals, pl.base, crossed, ty);
+            os_store(c, module, table, locals, pl.base, crossed, ty);
         },
         ZirStmt.Drop(_, _)
             | ZirStmt.DropIfLive(_, _)
@@ -8883,10 +9462,13 @@ fn os_stmt(c: &mut OriginSets, module: &ILModule, locals: [Local], st: &ZirStmt)
 // The origin sets of FUNC's locals (see OriginSets), and under RULES the rules' refusals,
 // reported against FILE and counted in `errors`. Parameter i holds
 // Param(i) when its type can hold an address; a by-value parameter that owns storage owns
-// Frame(itself) (§5: a by-value `Vec` is this frame's). The sets keep TABLE for the dump and
-// nothing of MODULE or FUNC (their buffers are in ARENA), so the driver can write the body's
-// summary into MODULE while they are live.
-#[borrows(table, arena, file, func)]
+// Frame(itself) (§5: a by-value `Vec` is this frame's). The sets keep only FILE for reporting
+// and scratch buffers in ARENA, and nothing of TABLE, MODULE, or FUNC, so the driver can keep
+// them live across `ZirVerifier` (`&mut zir_func`) and write summaries into MODULE while they are
+// live.
+// SAFETY: every slice field on `OriginSets` is allocated in `arena` (or empty) except `file`,
+// which is parameter `file`. Nothing from `module`, `table`, or `func` is stored in the result.
+#[unsafe(borrows(arena, file))]
 pub fn compute_origins_zir(
     arena: *mut ArenaHeader,
     module: &ILModule,
@@ -8940,7 +9522,6 @@ pub fn compute_origins_zir(
             @slice(zoril_allocator_alloc(arena, nstmts * 4) as *mut u32, nstmts)
         },
         sret_name: sret_name,
-        table: table,
         drop_fns: drop_fns,
         ndrop: ndrop,
         q_memo: unsafe {
@@ -8997,11 +9578,13 @@ pub fn compute_origins_zir(
         let p = (*func).params[pi];
         if p.id != 0 as u32 && (p.id as usize) < nl {
             if os_carries(&mut c, module, p.ty) { os_add_param(&mut c, p.id as usize, pi); }
-            if os_owns(&mut c, module, p.ty) { os_add_frame(&mut c, nl + p.id as usize, p.id); }
+            if os_owns(&mut c, module, table, p.ty) {
+                os_add_frame(&mut c, nl + p.id as usize, p.id);
+            }
         }
         pi = pi + 1 as usize;
     }
-    os_cap_bits(&mut c, module, locals);
+    os_cap_bits(&mut c, module, table, locals);
     os_known_callees(&mut c, func);
     os_known_envs(&mut c, func);
     os_dead_inits(&mut c, module, func);
@@ -9011,28 +9594,34 @@ pub fn compute_origins_zir(
         c.changed = false;
         c.passes = c.passes + 1 as u32;
         c.unknown_calls = 0 as u32;
-        os_pass(&mut c, module, func, ret);
+        os_pass(&mut c, module, table, func, ret);
         more = c.changed;
         // One more pass over the settled sets applies the rules (§3); it changes no set.
         if !more && c.rules != PROVENANCE_OFF && !c.checking {
             c.checking = true;
             c.unknown_calls = 0 as u32;
-            os_pass(&mut c, module, func, ret);
+            os_pass(&mut c, module, table, func, ret);
         }
     }
     return c;
 }
 
-fn os_pass(c: &mut OriginSets, module: &ILModule, func: &ZirFunction, ret: usize) {
+fn os_pass(
+    c: &mut OriginSets,
+    module: &ILModule,
+    table: &InternTable,
+    func: &ZirFunction,
+    ret: usize
+) {
     let locals = (*func).locals;
     for b in (*func).blocks {
-        for st in b.statements { os_stmt(c, module, locals, st); }
+        for st in b.statements { os_stmt(c, module, table, locals, st); }
         if let ZirTerminator.Ret(rp) = b.terminator {
             let vo = os_t(c, OS_T_VO);
             let vs = os_t(c, OS_T_VS);
             os_clear(c, vo);
             os_clear(c, vs);
-            let _ = os_read(c, module, locals, &rp, vo, vs);
+            let _ = os_read(c, module, table, locals, &rp, vo, vs);
             if os_or(c, ret, vo) { c.changed = true; }
             if os_or(c, ret + 1 as usize, vs) { c.changed = true; }
             // The return rule: the result carries no Frame or Unknown origin.

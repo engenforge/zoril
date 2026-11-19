@@ -1,7 +1,5 @@
 // name: Call store summary misses mutual recursion
-// expected: known_gap
-// gap: compute_ret_storage_zir lacks interprocedural fixpoint over mutually recursive calls
-// observed: exit 77
+// expected: compile_reject
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;
