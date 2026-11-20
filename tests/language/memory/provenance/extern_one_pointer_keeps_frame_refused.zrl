@@ -1,4 +1,3 @@
-// flags: --provenance
 // expected compile fail
 // EXPECT: extern store rule
 // link: tests/language/memory/provenance/extern_one_pointer_keep.s

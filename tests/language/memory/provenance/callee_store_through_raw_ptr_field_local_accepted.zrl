@@ -1,5 +1,4 @@
 // The safe twin: the raw pointer names a local slot, so the frame address stays in the frame.
-// flags: --provenance
 // expected exit 0
 struct S { p: *mut *i32 }
 fn put(s: &S, r: &i32) { unsafe { *s.p = r as *i32; } }

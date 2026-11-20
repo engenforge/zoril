@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: error: cannot return 'b' a reference into storage owned by this frame (a collection, a box or an arena) cannot outlive the frame
+// EXPECT: error: provenance: the returned value holds an address of this frame (return rule)
 // Returning a reference into a local Box dropped at return is rejected.
 fn make() -> &i32 {
     let b = box 5;

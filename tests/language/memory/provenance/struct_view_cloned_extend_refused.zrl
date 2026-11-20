@@ -1,6 +1,5 @@
 // extend_from_slice stores the slice's elements (clones of them once a user Clone runs), and each holds a
 // view of a stack array: the caller's Vec would get a view of this frame (doc/design/provenance.md §3).
-// flags: --provenance
 // EXPECT: call store rule
 // expected compile fail
 import "vec.zrl";

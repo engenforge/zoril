@@ -1,6 +1,5 @@
 // A `fn` item in a struct field the callee reaches: a struct whose only handles are `fn` values
 // names no Static memory through them (§3, _Destination reach_).
-// flags: --provenance
 // expected exit 0
 struct M { f: fn(&i32) -> i32 }
 fn rd(p: &i32) -> i32 { return *p; }

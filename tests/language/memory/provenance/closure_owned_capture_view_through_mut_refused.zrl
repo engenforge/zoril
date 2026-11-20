@@ -1,6 +1,5 @@
 // A view of a closure's owned capture dies when the closure frees or grows the capture, so it may
 // not be stored through a captured `&mut` (§3, _A closure body's summary is stated over `__env`_).
-// flags: --provenance
 // EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
 // expected compile fail
 import "vec.zrl";

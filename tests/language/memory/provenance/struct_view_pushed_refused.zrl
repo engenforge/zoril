@@ -1,5 +1,4 @@
 // A struct literal holding a view of a stack array, pushed into the caller's Vec: the struct carries the view as the bare slice does (doc/design/provenance.md §3).
-// flags: --provenance
 // EXPECT: call store rule
 // expected compile fail
 import "vec.zrl";

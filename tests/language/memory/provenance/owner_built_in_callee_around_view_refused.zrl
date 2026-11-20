@@ -2,7 +2,6 @@
 // the view reaches the caller as an address of `v`'s buffer, and the call store rule refuses it.
 // A per-store edge kind decided by the stored type (`Vec<[i32]>` owns) took the buffer for storage
 // moved into `out` and accepted this (Z-0071's review, Z-0072).
-// flags: --provenance
 // EXPECT: call store rule
 // expected compile fail
 import "vec.zrl";

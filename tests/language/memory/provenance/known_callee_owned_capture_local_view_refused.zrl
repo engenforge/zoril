@@ -1,7 +1,6 @@
 // A view of a local `Vec` stored into an owned capture through a known call: the capture outlives
 // the call, so the call store rule refuses the frame address, as before the moved holder's own
 // storage was left out of the check (§3, _A closure body's summary is stated over `__env`_).
-// flags: --provenance
 // EXPECT: provenance: the callee stores an address of this frame into a global (call store rule)
 // expected compile fail
 import "vec.zrl";

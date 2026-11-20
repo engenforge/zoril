@@ -1,7 +1,6 @@
 // A struct holding a `fn` value beside a raw `*mut` pointer to a global keeps the global in its
 // destination reach: what the pointer points to may be written through it (§3, _Destination
 // reach_).
-// flags: --provenance
 // EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
 // expected compile fail
 static mut G: *i32 = 0 as *i32;

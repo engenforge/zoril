@@ -1,6 +1,5 @@
 // An owning call result holding a box by value owns the call's own Frame, tied or not.
 // ORIGINS: f w O={Param(0)} S={Frame(_2)}
-// flags: --provenance
 // expected exit 0
 import "core.zrl";
 import "vec.zrl";

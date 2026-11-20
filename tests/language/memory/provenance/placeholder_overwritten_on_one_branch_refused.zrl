@@ -1,6 +1,5 @@
 // A tuple slot built from a local's address and overwritten on one branch only: the other path
 // keeps the placeholder, so storing the slot out is refused (§3, _Transfer_).
-// flags: --provenance
 // EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
 // expected compile fail
 fn bad(out: &mut &i32, p: &i32, c: bool) { let seed = 0; let mut t = (&seed, 1); if c { t.0 = p; } *out = t.0; }

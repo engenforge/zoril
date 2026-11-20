@@ -1,7 +1,6 @@
 // Views of a caller's buffer split by an `unsafe fn` into the caller's arena are pushed into another
 // Vec in that arena: with the `unsafe fn`'s own summary nothing of this frame moves, and the call
 // store rule accepts it (zman's and zbuild's parsers, Z-0070).
-// flags: --provenance
 // expected exit 0
 import "vec.zrl";
 import "string.zrl";

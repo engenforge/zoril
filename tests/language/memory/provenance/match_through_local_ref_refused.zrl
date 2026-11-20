@@ -1,6 +1,5 @@
 // The must-reject sibling of match_through_ref_accepted: the scrutinee is a reference to a local
 // enum, so the binding points into this frame and the return rule refuses it (Z-0061).
-// flags: --provenance
 // EXPECT: return rule
 // expected compile fail
 struct P { a: i32 }

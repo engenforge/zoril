@@ -1,7 +1,6 @@
 // A closure built in a loop, each time capturing a reborrow of a `&mut` parameter and a local's
 // address, kept in a struct field and called after the loop: the environment reaches both, so the
 // call is refused (§3, _Calls through a `fn` value_).
-// flags: --provenance
 // EXPECT: unknown-call store rule
 // expected compile fail
 struct H { f: fn() }

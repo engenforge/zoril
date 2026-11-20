@@ -1,7 +1,6 @@
 // A recursive cycle's store summary comes from its fixpoint (Z-0059): `stash_b` stores nothing
 // itself and calls `stash_a`, still being lowered, so only the fixpoint gives it `stash_a`'s edge
 // `Param(1) -> Param(0)`, and the call store rule refuses the frame view `f` hands it.
-// flags: --provenance
 // EXPECT: call store rule
 // expected compile fail
 import "mem.zrl";

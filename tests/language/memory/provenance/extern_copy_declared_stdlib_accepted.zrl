@@ -1,4 +1,3 @@
-// flags: --provenance
 // expected exit 0
 //
 // Vec<i32>.clone() of a local Vec through stdlib's declared memcpy is accepted.

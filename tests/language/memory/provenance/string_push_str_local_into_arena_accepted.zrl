@@ -1,4 +1,3 @@
-// flags: --provenance
 // expected exit 0
 // Copying bytes from a local String into an arena-backed String with push_str
 // copies non-address-carrying u8 values and must not tie the output to the local String.

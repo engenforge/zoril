@@ -1,7 +1,6 @@
 // The twin of raw_ptr_from_dropped_owner_accepted.zrl with the raw pointer stored beside an owned
 // `Vec` in one struct: the struct owns the `Vec`, not what `p` points to, so the store is accepted and
 // `p` dangles once `keep` drops `b`. Only a dereference of `p`, inside `unsafe`, could reach the block.
-// flags: --provenance
 // expected exit 0
 import "mem_raw.zrl";
 import "vec.zrl";

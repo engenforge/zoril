@@ -4,7 +4,6 @@
 // ties satisfy, so `main` holds no borrow of `v` and frees the buffer while the view lives. This
 // is the cost of trust; the `// SAFETY:` line is where such a declaration is reviewed. The checked
 // spelling of `view` is refused (borrows_narrower_than_body_refused.zrl).
-// flags: --provenance
 // expected exit 0
 
 import "vec.zrl";

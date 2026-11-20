@@ -1,6 +1,5 @@
 // An index into a Vec followed by a field read returns what the caller's Vec holds, which the return
 // rule accepts (`Monomorphizer.instance_type_args`, Z-0068).
-// flags: --provenance
 // expected exit 0
 import "vec.zrl";
 use vec::Vec;

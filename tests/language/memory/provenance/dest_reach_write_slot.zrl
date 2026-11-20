@@ -1,7 +1,6 @@
 // The direct-call twin of gap_47: `write_slot` stores through `*r.out`, and `r = &w` with `w`
 // holding the caller's `&mut`. The destination reach finds the Param two hops away, so the call
 // store rule refuses it on its own (Z-0012 deletes the buffer-escape rule that refuses it too).
-// flags: --provenance
 // EXPECT: call store rule
 // expected compile fail
 import "mem.zrl";

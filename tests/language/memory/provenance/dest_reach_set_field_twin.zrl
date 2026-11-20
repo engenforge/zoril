@@ -1,7 +1,6 @@
 // A callee storing into a local struct's field through `&mut w`: the destination is Frame(w), and
 // `w` holds no mutable handle, so a view of this frame's arena may go there (§3, _Destination
 // reach_).
-// flags: --provenance
 // expected exit 0
 import "mem.zrl";
 import "vec.zrl";

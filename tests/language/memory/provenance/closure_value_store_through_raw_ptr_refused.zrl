@@ -1,7 +1,6 @@
 // gap_94's closure handed to a function that calls it: the closure rule reads one level through the
 // environment for the target a capture names, so the global the captured raw pointer reaches is
 // memory that outlives the frame (§3, _A closure made into a value_).
-// flags: --provenance
 // EXPECT: provenance: the closure made here stores an address of this frame into memory that outlives it when it is called (closure rule)
 // expected compile fail
 static mut G: *i32 = 0 as *i32;

@@ -1,6 +1,5 @@
 // A `fn` item's code is read-only data like a literal: beside a `&mut` in one struct it does not
 // make what the struct reaches a global.
-// flags: --provenance
 // expected exit 0
 fn seven() -> i32 { return 7; }
 struct W { f: fn() -> i32, out: &mut [i32] }

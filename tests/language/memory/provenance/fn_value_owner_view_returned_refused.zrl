@@ -1,7 +1,6 @@
 // A `Vec` a `fn` value returns owns fresh storage of this frame, so a view of it cannot be returned
 // (§3, _Calls through a `fn` value_). With S left empty, as Z-0088's experiment B had it, the view
 // held only what the callee value reaches and the return passed: a view of a freed buffer (Z-0092).
-// flags: --provenance
 // EXPECT: return rule
 // expected compile fail
 import "vec.zrl";

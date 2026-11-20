@@ -1,7 +1,6 @@
 // Destination reach follows O(L) only for a type that can hold a mutable handle: a `Vec<[u8]>`
 // holds none, so the Static that `v.push("lit")` put in O(v) does not make `&mut v` external, and
 // pushing a view of this frame's arena stays accepted (§3, _Destination reach_).
-// flags: --provenance
 // expected exit 0
 import "mem.zrl";
 import "vec.zrl";

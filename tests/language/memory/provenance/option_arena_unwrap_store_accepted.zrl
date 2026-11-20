@@ -1,6 +1,5 @@
 // The same through `Option<Arena>`: an arena held by value in any enum is named by what it owns
 // (Z-0082).
-// flags: --provenance
 // expected exit 0
 import "mem.zrl";
 import "vec.zrl";

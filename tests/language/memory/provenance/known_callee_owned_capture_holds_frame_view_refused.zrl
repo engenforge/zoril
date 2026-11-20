@@ -1,7 +1,6 @@
 // What an owned capture holds is still checked at a known call: the holder moved into the closure
 // holds a view of `f`'s array, and the closure stores it through a captured `&mut` parameter
 // (§3, _A closure body's summary is stated over `__env`_).
-// flags: --provenance
 // EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
 // expected compile fail
 import "vec.zrl";

@@ -1,6 +1,5 @@
 // A literal beside a `&mut` in one struct does not make what the struct reaches a global: the
 // caller's own view stored into the caller's own slot is accepted.
-// flags: --provenance
 // expected exit 0
 struct W { name: [u8], out: &mut [i32] }
 fn inner(out: &mut [i32], data: [i32]) {

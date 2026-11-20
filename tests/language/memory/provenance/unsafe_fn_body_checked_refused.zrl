@@ -1,7 +1,6 @@
 // An `unsafe fn` body is checked like any other (only `@ptr_from_int`'s Raw is exempt): gap_47's
 // program with the storer made `unsafe` is refused. With the body-wide exemption it compiled and
 // read the freed arena (exit 77) (Z-0063).
-// flags: --provenance
 // EXPECT: the callee stores an address of this frame into memory that outlives it (call store rule)
 // expected compile fail
 import "mem.zrl";

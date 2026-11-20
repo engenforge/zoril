@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: region escape: a pointer to local stack storage is written to memory that outlives this function
+// EXPECT: error: provenance: the returned value holds an address of this frame (return rule)
 // A struct holding a local's address is copied into the caller's return slot.
 struct W { p: *mut i32 }
 fn leak() -> W {

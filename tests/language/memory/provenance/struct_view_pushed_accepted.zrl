@@ -1,7 +1,6 @@
 // A struct holding a view is pushed wherever the view outlives the Vec: a view of the caller's array
 // passed in, of an array in the same frame as the Vec, and a string literal; and an aggregate value
 // produced by an `if` is passed by value to a storing callee (doc/design/provenance.md §3).
-// flags: --provenance
 // expected exit 0
 import "vec.zrl";
 use vec::Vec;

@@ -247,20 +247,11 @@ impl Verifier {
         return curr;
     }
 
-    // `#[borrows(..)]` is a claim the compiler mostly cannot check (that is why it exists), but it
-    // can catch the visible lie: a result that points into the storage of a parameter the attribute
-    // leaves out (`&a.v` under `#[borrows(b)]`). Addresses are followed through field, offset, cast
-    // and move, and through the stack slot each parameter is first stored in; a pointer *loaded*
-    // through a parameter is not its address (it is the arena/buffer case the attribute is for).
-    fn check_borrows_claim(self: &mut Verifier, func: &ILFunction) {
-        self.storage_facts(func, true);
-    }
     // `#[stores(p -> q)]` is checked against the body's computed masks: it may declare more than
-    // the body stores (a wider public contract; `--provenance`'s call store rule holds callers to
-    // it, the default build reads the body's stores), never less, so a store the
-    // body makes and the declaration leaves out is an error in its own module. A `pub fn` that
-    // stores a reference parameter without declaring it warns, naming the attribute to add - a
-    // contract callers cannot see is what the declaration is for.
+    // the body stores (a wider public contract; the provenance call store rule holds callers to
+    // it), never less, so a store the body makes and the declaration leaves out is an error in its
+    // own module. A `pub fn` that stores a reference parameter without declaring it warns, naming
+    // the attribute to add - a contract callers cannot see is what the declaration is for.
     fn check_stores_claims(self: &mut Verifier) {
         let saved_file_path = self.file_path;
         let mut warned_spans = unsafe { Vec::<Span>.new_in_raw(self.arena) };
@@ -1043,7 +1034,6 @@ impl Verifier {
         span: Span
     ) {
         self.tie_call_result_storage(p_f, args, ssa);
-        self.check_call_stores_stack(p_f, args, span);
     }
 
     // Whether the argument for callee parameter I carries a pointer into this frame. A
@@ -1098,94 +1088,6 @@ impl Verifier {
                 }
             }
             i = i + 1 as usize;
-        }
-    }
-
-    // A function value is called where no check can see the arguments, so a body that stores one
-    // parameter's own storage into another parameter or a global cannot become one: the direct
-    // call's check (check_call_stores_stack) has no analogue through the value. A target that is
-    // also the stored parameter is the same place written back, which cannot move a pointer out
-    // of it (doc/spec/surface_syntax.md §7.3).
-    fn check_fn_value(self: &mut Verifier, fid: u32, span: Span) {
-        if fid as usize >= self.module.functions.len() { return; }
-        let p_f = &self.module.functions[fid as usize];
-        let stored = unsafe { (*p_f).stores_storage };
-        if stored == 0 as u64 { return; }
-        let targets = unsafe { (*p_f).store_targets };
-        if targets == 0 as u64 { return; }
-        if (targets & STORE_GLOBAL_BIT) != 0 as u64 || (targets & !stored) != 0 as u64 {
-            self.report_error(
-                "region escape: the function stores a reference into memory that outlives a call through a `fn` value",
-                span
-            );
-        }
-    }
-
-    // The callee writes the storage of some arguments into memory its other arguments reach
-    // (`stores_storage` into `store_targets`). Passing a pointer into this frame for one of
-    // the first is a write of that pointer to each target: within the frame it taints the
-    // target's slot, outside it (a caller's memory, a global) it dangles, as when the write
-    // is in this function (note_stack_ptr_written).
-    fn check_call_stores_stack(
-        self: &mut Verifier,
-        p_f: *mut ILFunction,
-        args: [SSAId],
-        span: Span
-    ) {
-        // Unknown (see `tie_call_result_storage`): assume it stores every pointer it is handed
-        // into long-lived memory, so a stack argument the caller passes is reported.
-        let known = unsafe { (*p_f).storage_known };
-        let stored = if known {
-            unsafe { (*p_f).stores_storage }
-        } else {
-            0xffffffffffffffff as u64
-        };
-        if stored == 0 as u64 { return; }
-        let targets = if known {
-            unsafe { (*p_f).store_targets }
-        } else {
-            (1 as u64) << (STORE_INTO_GLOBAL as u64)
-        };
-        let hidden = self.hidden_param_count(unsafe { &*p_f });
-        let mut stack_arg = false;
-        let mut i = hidden;
-        while i < args.len {
-            let u = i - hidden;
-            if u < STORE_INTO_GLOBAL as usize
-                && ((stored >> (u as u64)) & 1 as u64) != 0 as u64
-                && self.arg_points_to_stack(p_f, i, args[i]) {
-                stack_arg = true;
-            }
-            i = i + 1 as usize;
-        }
-        if !stack_arg { return; }
-        if (targets & STORE_GLOBAL_BIT) != 0 as u64 {
-            self.report_error(
-                "region escape: the callee stores a pointer to local stack storage where it outlives this function",
-                span
-            );
-            return;
-        }
-        // Each target in this frame now holds a stack pointer; one outside it is an error,
-        // reported once for the call.
-        let mut escapes = false;
-        i = hidden;
-        while i < args.len {
-            let u = i - hidden;
-            if u < STORE_INTO_GLOBAL as usize && ((targets >> (u as u64)) & 1 as u64) != 0 as u64 {
-                if self.is_stack_addr(args[i]) {
-                    self.mark_holds_stack(args[i]);
-                } else {
-                    escapes = true;
-                }
-            }
-            i = i + 1 as usize;
-        }
-        if escapes {
-            self.report_error(
-                "region escape: a pointer to local stack storage is written to memory that outlives this function",
-                span
-            );
         }
     }
 
@@ -1253,11 +1155,6 @@ impl Verifier {
     fn note_stack_ptr_written(self: &mut Verifier, dst: SSAId, span: Span) {
         if self.is_stack_addr(dst) {
             self.mark_holds_stack(dst);
-        } else {
-            self.report_error(
-                "region escape: a pointer to local stack storage is written to memory that outlives this function",
-                span
-            );
         }
     }
 
@@ -1476,7 +1373,6 @@ impl Verifier {
         }
         for i in 0 as usize..func.blocks_len { self.check_block(func.block_ids()[i]); }
 
-        if func.has_borrows { self.check_borrows_claim(func); }
         // Operand types: a mismatch is ZIL the compiler should not have produced.
         for issue in type_check_function(self.module, func, self.arena).as_slice() {
             let mut msg = unsafe { ByteVec.new_raw(self.arena) };
@@ -1677,7 +1573,7 @@ impl Verifier {
             ILInstr.Call(c) => { self.mark_call(c, ssa, span); },
             ILInstr.CallPtr(c) => { self.mark_call_ptr(c, ssa); },
             ILInstr.Cast(c) => { self.mark_cast(c, ssa); },
-            ILInstr.FuncAddr(fid) => { self.check_fn_value(fid, span); },
+            ILInstr.FuncAddr(_) => {},
             ILInstr.Const(c) => { self.mark_const(c, ssa); },
             ILInstr.Alloc(a) => { self.mark_alloc(a, ssa); },
             ILInstr.FieldAddr(fa) => { self.mark_field_addr(fa, ssa); },
@@ -1895,11 +1791,6 @@ impl Verifier {
         if (is_ref_store && self.is_stack_addr(s.val)) || self.holds_stack(s.val) {
             if dst_is_stack {
                 self.mark_holds_stack(s.ptr);
-            } else {
-                self.report_error(
-                    "region escape: a pointer to local stack storage is written to memory that outlives this function",
-                    span
-                );
             }
         }
 

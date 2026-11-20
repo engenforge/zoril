@@ -1,6 +1,5 @@
 // A view of a local Arena's buffer stored into the caller's struct: the arena is this frame's
 // storage now that its mapping is not `Raw` (Z-0076), and the view still may not leave the frame.
-// flags: --provenance
 // expected compile fail
 // EXPECT: a value holding an address of this frame is stored into memory that outlives it (store rule)
 import "mem.zrl";

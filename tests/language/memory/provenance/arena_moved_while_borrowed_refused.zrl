@@ -1,6 +1,5 @@
 // A local Arena passed by value to a callee that drops it while a Vec in it is still used: the
 // borrow rules refuse the move; the arena being this frame's storage (Z-0076) changes nothing here.
-// flags: --provenance
 // expected compile fail
 // EXPECT: cannot move borrowed value 'a'
 import "mem.zrl";

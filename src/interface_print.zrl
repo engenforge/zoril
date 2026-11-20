@@ -11,7 +11,6 @@ import "bytevec.zrl";
 import "il_type.zrl";
 import "il_instr.zrl";
 import "il_cfg.zrl";
-import "summary_pass.zrl";
 import "vec.zrl";
 import "module_path.zrl";
 import "io.zrl";
@@ -24,7 +23,6 @@ use io::{Fd, write_all};
 use fmt::write_u64;
 use mem_raw::ArenaHeader;
 use module_path::sorted_unique_ids;
-use summary_pass::FuncSummary;
 use vec::Vec;
 
 pub struct InterfacePrinter {
@@ -34,7 +32,6 @@ pub struct InterfacePrinter {
     pub arena: *mut ArenaHeader,
     pub target_source_file: u32,
     pub module: *mut ILModule,
-    pub summaries: [FuncSummary],
     // Names used by this module's public generic bodies (see AST.collect_generic_body_refs).
     pub generic_refs: Vec<u32>,
     // This module was compiled from a root the compiler was told is the standard library
@@ -59,7 +56,6 @@ impl InterfacePrinter {
         arena: *mut ArenaHeader,
         target_source_file: u32,
         module: *mut ILModule,
-        summaries: [FuncSummary],
         source_is_stdlib: bool
     ) -> InterfacePrinter {
         return InterfacePrinter {
@@ -69,7 +65,6 @@ impl InterfacePrinter {
             arena: arena,
             target_source_file: target_source_file,
             module: module,
-            summaries: summaries,
             generic_refs: unsafe { Vec::<u32>.new_in_raw(arena) },
             source_is_stdlib: source_is_stdlib,
         };
@@ -186,25 +181,12 @@ impl InterfacePrinter {
 
     fn write_summary_attr(self: &InterfacePrinter, p_f: *mut ILFunction, indent: [u8]) {
         if p_f == 0 as *mut ILFunction { return; }
-        let tid = unsafe { (*p_f).id as usize };
-        if tid >= self.summaries.len { return; }
-        let summary = &self.summaries[tid];
         let alloc = unsafe { (*p_f).arena_alloc_bytes };
         self.write(indent);
-        self.write("#[summary(escape = ");
-        self.write_dec(summary.returns_param_mask);
-        self.write(", stash = ");
-        self.write_dec(summary.stashes_param_mask);
-        self.write(", escape_via = ");
-        self.write_dec(summary.returns_via_mask);
-        self.write(", stash_via = ");
-        self.write_dec(summary.stashes_via_mask);
-        self.write(", ret_stack = ");
-        if summary.returns_local_stack { self.write("true"); } else { self.write("false"); }
         // `alloc` (constant arena bytes the body allocates) is part of the interface on purpose: the
         // verifier's interprocedural arena-capacity check reads it from imported functions, so a
         // body edit that changes it must invalidate dependants (doc/spec/modular_compilation.md §2.3).
-        self.write(", alloc = ");
+        self.write("#[summary(alloc = ");
         self.write_dec(alloc as u64);
         // `storage`: parameters whose own storage the result may point into (ret_storage,
         // from the body); an importer ties a stack argument's frame to the result by it.

@@ -2,7 +2,6 @@
 // carries the view's Frame origins, the storage `v` owns (_2, from `Vec.new()`; before Z-0048 the walk read through the box a second time and
 // gave `x O={} S={}`).
 // ORIGINS: f x O={Frame(_2)} S={}
-// flags: --provenance
 // EXPECT: store rule
 // expected compile fail
 import "vec.zrl";

@@ -3,7 +3,6 @@
 // it. The summary names `p`'s capture, and the caller maps it to the local `p` the environment was
 // built from, so `seed`'s address, which only the holder holds, is not what the call stores (§3,
 // _Calls through a known callee_).
-// flags: --provenance
 // expected exit 0
 import "vec.zrl";
 use vec::Vec;

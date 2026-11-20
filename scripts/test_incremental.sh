@@ -931,20 +931,18 @@ set +e
 bad_rc=$?
 set -e
 [ "$bad_rc" -ne 0 ] || { echo "FAIL: zbuild accepted a function returning a stack reference obtained across a module boundary"; exit 1; }
-grep -q 'region escape: returning a pointer to local stack storage' "$XS_DIR/bad.err" || { echo "FAIL: expected the intra-module escape diagnostic through zbuild:"; cat "$XS_DIR/bad.err"; exit 1; }
+grep -q 'error: provenance: the returned value holds an address of this frame (return rule)' "$XS_DIR/bad.err" || { echo "FAIL: expected the intra-module escape diagnostic through zbuild:"; cat "$XS_DIR/bad.err"; exit 1; }
 "$ZBUILD_BIN" --compiler "$ZORIL_CC" --zilc "$ZILC_CC" --compiler "$ZORIL_CC" --cache-dir "$XS_DIR/.g" -o "$XS_DIR/good" "$XS_DIR/good_caller.zrl" > /dev/null
 set +e; "$XS_DIR/good"; good_rc=$?; set -e
 [ "$good_rc" -eq 7 ] || { echo "FAIL: safe cross-module caller exited $good_rc, expected 7"; exit 1; }
-grep -q 'summary(escape = 1,' "$XS_DIR/.g/iface/"*lib.zri || { echo "FAIL: lib interface lacks the escape summary (bit 0: its first parameter)"; exit 1; }
+grep -q 'ret_addr = 1,' "$XS_DIR/.g/iface/"*lib.zri || { echo "FAIL: lib interface lacks the provenance return summary (bit 0: its first parameter)"; exit 1; }
 # A callee that stashes its argument in global memory is rejected the same way.
 set +e
 "$ZBUILD_BIN" --compiler "$ZORIL_CC" --zilc "$ZILC_CC" --compiler "$ZORIL_CC" --cache-dir "$XS_DIR/.k" -o "$XS_DIR/keep" "$XS_DIR/keep_caller.zrl" > "$XS_DIR/keep.out" 2> "$XS_DIR/keep.err"
 keep_rc=$?
 set -e
 [ "$keep_rc" -ne 0 ] || { echo "FAIL: zbuild accepted passing a stack pointer to a callee that stashes it globally"; exit 1; }
-# The verifier's own store summary (stores/into) catches it first; the summary pass's check
-# backs it up.
-grep -Eq 'callee stores a pointer to local stack storage|callee stashes local stack pointer into global memory' "$XS_DIR/keep.err" || { echo "FAIL: expected the global-stash diagnostic through zbuild:"; cat "$XS_DIR/keep.err"; exit 1; }
+grep -q 'error: provenance: the callee stores an address of this frame into a global (call store rule)' "$XS_DIR/keep.err" || { echo "FAIL: expected the global-stash diagnostic through zbuild:"; cat "$XS_DIR/keep.err"; exit 1; }
 echo "  [PASS] stack-escape and global-stash through an imported callee are rejected via zbuild; safe caller links and runs"
 
 # ── Test 25: an imported function without a summary is treated conservatively ──────────────────
@@ -959,8 +957,8 @@ set +e
 cons_rc=$?
 set -e
 [ "$cons_rc" -ne 0 ] || { echo "FAIL: passing a stack pointer to an imported function with no summary was accepted"; exit 1; }
-grep -qE 'callee stashes local stack pointer|callee stores a pointer to local stack storage' "$CONS_DIR/c.err" || { echo "FAIL: expected the unknown-callee escape diagnostic:"; cat "$CONS_DIR/c.err"; exit 1; }
-printf '// zri-module: tests/incremental/conservative/lib.zrl\npub struct S {\n    pub a: i32,\n}\n\n#[summary(escape = 0, stash = 0, ret_stack = false, alloc = 0, storage = 0, stores = 0, into = 0)]\npub fn take(p: *mut S);\n' > "$CONS_DIR/iface/$key.zri"
+grep -q 'error: provenance: a call with no store summary may store an address of this frame into memory that outlives it (unknown-call store rule)' "$CONS_DIR/c.err" || { echo "FAIL: expected the unknown-callee escape diagnostic:"; cat "$CONS_DIR/c.err"; exit 1; }
+printf '// zri-module: tests/incremental/conservative/lib.zrl\npub struct S {\n    pub a: i32,\n}\n\n#[summary(alloc = 0, storage = 0, stores = 0, into = 0, ret_addr = 0, ret_contents = 0, ret_flags = 0, ret_fresh = false)]\npub fn take(p: *mut S);\n' > "$CONS_DIR/iface/$key.zri"
 "$ZORIL_CC" -c tests/incremental/conservative/caller.zrl --require-interface --iface-dir "$CONS_DIR/iface" --interproc-summary -o "$CONS_DIR/c2.zil" > /dev/null 2>&1 || { echo "FAIL: caller rejected although the interface says the callee stashes nothing"; exit 1; }
 echo "  [PASS] missing summary assumes the worst; an explicit clean summary lets the same caller compile"
 
@@ -1116,8 +1114,8 @@ printf 'pub fn init(x: *mut i64) -> *mut i64 { return x; }\n' > "$SI_DIR/mod_a.z
 printf 'pub fn init(x: *mut i64) -> i64 { return 0; }\n' > "$SI_DIR/mod_b.zrl"
 "$ZORIL_CC" --emit-interface "$SI_DIR/mod_a.zrl" -o "$SI_DIR/mod_a.zri" > /dev/null 2>&1
 "$ZORIL_CC" --emit-interface "$SI_DIR/mod_b.zrl" -o "$SI_DIR/mod_b.zri" > /dev/null 2>&1
-grep -q 'summary(escape = 1,' "$SI_DIR/mod_a.zri" || { echo "FAIL: mod_a init should report escape = 1 (bit 0: its first parameter)"; cat "$SI_DIR/mod_a.zri"; exit 1; }
-grep -q 'summary(escape = 0' "$SI_DIR/mod_b.zri" || { echo "FAIL: mod_b init should report escape = 0"; cat "$SI_DIR/mod_b.zri"; exit 1; }
+grep -q 'ret_addr = 1,' "$SI_DIR/mod_a.zri" || { echo "FAIL: mod_a init should report ret_addr = 1 (bit 0: its first parameter)"; cat "$SI_DIR/mod_a.zri"; exit 1; }
+grep -q 'ret_addr = 0,' "$SI_DIR/mod_b.zri" || { echo "FAIL: mod_b init should report ret_addr = 0"; cat "$SI_DIR/mod_b.zri"; exit 1; }
 
 mkdir -p "$SI_DIR/alloc"
 write_grab() { printf 'import "mem_raw.zrl";\npub unsafe fn grab(a: *mut mem_raw::ArenaHeader) -> *mut u8 { return mem_raw::zoril_allocator_alloc(a, %s as u64); }\n' "$1" > "$SI_DIR/alloc/g.zrl"; }
@@ -1849,7 +1847,7 @@ EOF
 rc=0; "$HM_DIR/bin" || rc=$?
 [ "$rc" -eq 0 ] || { echo "FAIL: HashMap across modules failed check $rc"; exit 1; }
 CMP_ZRI=$(grep -rl "zri-module: stdlib/cmp" "$HM_DIR/.c")
-grep -q "#\[summary(escape = 0, stash = 0" "$CMP_ZRI" || { echo "FAIL: cmp interface lacks primitive summary"; exit 1; }
+grep -q "#\[summary(alloc = 0," "$CMP_ZRI" || { echo "FAIL: cmp interface lacks primitive summary"; exit 1; }
 echo "  [PASS] HashMap insert/get compiles via zbuild and primitive trait summaries travel through .zri"
 
 # ── Test 45: escaping method on primitive type across modules through zbuild ──
@@ -1859,13 +1857,13 @@ rm -rf "$SP_DIR"
 mkdir -p "$SP_DIR"
 touch "$SP_DIR/.zoril-root"
 cat > "$SP_DIR/lib.zrl" <<'EOF'
-pub static mut KEEP: usize = 0 as usize;
+pub static mut KEEP: *u64 = 0 as *u64;
 pub trait Stash {
     fn stash(self: &Self);
 }
 impl Stash for u64 {
     fn stash(self: &u64) {
-        KEEP = self as *u64 as usize;
+        KEEP = self as *u64;
     }
 }
 EOF
@@ -1884,9 +1882,9 @@ set +e
 sp_rc=$?
 set -e
 [ "$sp_rc" -ne 0 ] || { echo "FAIL: zbuild accepted an escaping method on a primitive type across modules"; exit 1; }
-grep -q 'region escape: the callee stores a pointer to local stack storage where it outlives this function' "$SP_DIR/build.log" || { echo "FAIL: expected escape diagnostic for primitive method stash:"; cat "$SP_DIR/build.log"; exit 1; }
+grep -q 'error: provenance: the callee stores an address of this frame into a global (call store rule)' "$SP_DIR/build.log" || { echo "FAIL: expected escape diagnostic for primitive method stash:"; cat "$SP_DIR/build.log"; exit 1; }
 LIB_ZRI=$(grep -rl "zri-module: lib" "$SP_DIR/.c")
-grep -q "#\[summary(escape = 0, stash = 1" "$LIB_ZRI" || { echo "FAIL: lib interface lacks stash=1 summary on primitive method"; exit 1; }
+grep -q "edge = 0, edge_addr = 0, edge_contents = 0, edge_global = 1" "$LIB_ZRI" || { echo "FAIL: lib interface lacks global store edge summary on primitive method"; exit 1; }
 echo "  [PASS] escaping method on primitive type carries stash summary through .zri and is rejected across modules"
 
 # ── Test 46: the block-scope storage summary travels through .zri across modules ──
@@ -1966,7 +1964,7 @@ set +e
 stale_rc=$?
 set -e
 [ "$stale_rc" -ne 0 ] || { echo "FAIL: a stale interface accepted a call that hands back a pointer into a local's storage (the unknown masks read as 'nothing escapes')"; exit 1; }
-grep -q "region escape" "$SI_DIR/stale.log" || { echo "FAIL: expected a region-escape diagnostic for the stale interface:"; cat "$SI_DIR/stale.log"; exit 1; }
+grep -q "error: provenance:" "$SI_DIR/stale.log" || { echo "FAIL: expected a provenance diagnostic for the stale interface:"; cat "$SI_DIR/stale.log"; exit 1; }
 # The same caller against the real interface is rejected too, by the summary instead of the
 # unknown fallback: the pair is what pins `storage_known`.
 set +e
@@ -2064,7 +2062,7 @@ set -e
 [ "$can_omit_rc" -ne 0 ] || { echo "FAIL: an interface holding none of the caller's functions was accepted - the interface is not being read"; exit 1; }
 [ "$can_fresh_rc" -eq 0 ] || { echo "FAIL: the caller was rejected against its own fresh interface"; exit 1; }
 [ "$can_stale_rc" -ne 0 ] || { echo "FAIL: an unknown store mask accepted a pointer to this frame's stack storage"; exit 1; }
-grep -qE 'region escape|stashes local stack pointer|stores a pointer to local stack storage' "$CAN_DIR/stale.log" || { echo "FAIL: expected a region-escape diagnostic for the stale interface"; exit 1; }
+grep -q 'error: provenance: a call with no store summary may store an address of this frame into memory that outlives it (unknown-call store rule)' "$CAN_DIR/stale.log" || { echo "FAIL: expected a provenance unknown-call diagnostic for the stale interface"; exit 1; }
 echo "  [PASS] an unknown store mask rejects a stack pointer the summary would have allowed (fresh: accepted, stale: rejected)"
 
 

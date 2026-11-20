@@ -192,7 +192,7 @@ Live probe counts, trusted-base census figures, and the ZIR/ZIL route reachabili
 
 ## 6. Known gaps in checked code
 
-The matrix has no row marked `GAP`, and no `known_gap` probes remain open: the unified provenance rules (`doc/design/provenance.md`) and the two-tier liveness model now run by default beside the existing checks, closing the indirect frame/owner escape, `#[borrows()]` narrowing, and loose raw-pointer store probes.
+The matrix has no row marked `GAP`, and no `known_gap` probes remain open: the unified provenance rules (`doc/design/provenance.md`) and the two-tier liveness model have replaced the legacy escape classifiers, closing the indirect frame/owner escape, `#[borrows()]` narrowing, and loose raw-pointer store probes.
 
 The verification ledger and probe inventory live in [`bench/safety_matrix/README.md#known-gaps`](../bench/safety_matrix/README.md#known-gaps).
 

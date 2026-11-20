@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: #[borrows(..)] does not list a parameter this function returns a pointer into
+// EXPECT: provenance: #[borrows(..)] leaves out 'a', which the result may point into
 // The attribute says the result points into b only; the body returns an address in a.
 struct T { v: i32 }
 #[borrows(b)]

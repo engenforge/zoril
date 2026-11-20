@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: tests/error_reporting/err_unsafe_borrows_visible_lie.zrl:8:1: error: #[borrows(..)] does not list a parameter this function returns a pointer into
+// EXPECT: tests/error_reporting/err_unsafe_borrows_visible_lie.zrl:8:1: error: provenance: #[borrows(..)] leaves out 'a', which the result may point into
 // Trust covers what the analysis cannot see, not an address the body visibly computes from a
 // parameter the attribute leaves out (the twin of probe 93).
 struct T { v: i32 }

@@ -1,6 +1,5 @@
 // A local Arena returned, alone and inside a struct: its storage moves to the caller (Z-0076).
 // Taken out of `Arena.new`'s Result with `match`, not `unwrap` (Z-0082).
-// flags: --provenance
 // expected exit 0
 import "mem.zrl";
 import "io.zrl";

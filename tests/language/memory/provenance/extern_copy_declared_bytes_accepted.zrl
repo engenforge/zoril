@@ -1,4 +1,3 @@
-// flags: --provenance
 // expected exit 0
 //
 // Copying bytes of a local [u8; 8] into a caller-owned heap Vec<u8> through

@@ -1,6 +1,5 @@
 // The safe twin of cycle_fixpoint_refused: the cycle stores a view of the caller's own array
 // through its `&mut`, which outlives the call, so the fixpoint's edge refuses nothing.
-// flags: --provenance
 // expected exit 0
 fn stash_a(out: &mut [i32], s: [i32]) {
     if false { stash_b(out, s); }

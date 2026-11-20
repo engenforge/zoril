@@ -1,7 +1,6 @@
 // A placeholder overwritten before anything reads it: a tuple slot, both fields of a struct, both
 // slots of an array at constant indices, and a whole tuple reassigned. The literal's dead elements
 // add nothing to the local's sets, so a closure storing the new value out is accepted (§3, _Transfer_).
-// flags: --provenance
 // expected exit 5
 struct Two { a: &i32, b: &i32 }
 fn tup(out: &mut &i32, p: &i32) {

@@ -2,7 +2,6 @@
 // write into its environment, which the caller cannot see field by field, so the later known call
 // reads the environment as one value, and the view of `x` that `apply` may have put into `h` is
 // refused when the call's result is stored out (§3, _Calls through a known callee_).
-// flags: --provenance
 // EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
 // expected compile fail
 struct Holder { s: &i32, d: &mut i32 }

@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: error: region escape: returning a pointer to local stack storage
+// EXPECT: error: provenance: the returned value holds an address of this frame (return rule)
 // Returning a reference into a Box in a field of a by-value parameter dropped at return is rejected.
 struct S {
     b: Box<i32>,

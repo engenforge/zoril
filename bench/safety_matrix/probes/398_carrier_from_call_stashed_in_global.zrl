@@ -5,7 +5,7 @@
 // result carries (`returns`/`returns_via` bits) into the slot the call wrote.
 struct Carrier { v: &i32 }
 fn mk(r: &i32) -> Carrier { return Carrier { v: r }; }
-static mut KEEP: usize = 0 as usize;
-fn keep(c: Carrier) { KEEP = c.v as *i32 as usize; }
+static mut KEEP: *i32 = 0 as *i32;
+fn keep(c: Carrier) { KEEP = c.v as *i32; }
 fn leak() { let x = 42; keep(mk(&x)); }
 fn main() -> i32 { leak(); return 0; }

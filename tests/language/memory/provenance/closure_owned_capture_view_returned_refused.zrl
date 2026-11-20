@@ -1,6 +1,5 @@
 // A closure returning a view of its owned capture: the capture's storage is Frame of it in the body,
 // so the return rule refuses the view (§3, _A closure body's summary is stated over `__env`_).
-// flags: --provenance
 // EXPECT: provenance: the returned value holds an address of this frame (return rule)
 // expected compile fail
 import "vec.zrl";

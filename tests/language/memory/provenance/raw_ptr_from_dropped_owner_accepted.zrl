@@ -2,7 +2,6 @@
 // pointer of a `Buf` whose `Drop` frees the buffer, so the caller's slot dangles. A raw pointer in
 // checked code carries no promise about what it points to (safety_model.md, "Raw pointers in checked
 // code"); the dereference that would read the freed block needs `unsafe`, where the programmer checks.
-// flags: --provenance
 // expected exit 0
 import "mem_raw.zrl";
 struct Buf { data: *mut u8 }

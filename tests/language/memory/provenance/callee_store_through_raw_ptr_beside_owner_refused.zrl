@@ -1,5 +1,4 @@
 // The same store with the raw pointer beside a Vec in one struct: the struct owns storage, but the pointer is not part of the Vec, so the global stays a target.
-// flags: --provenance
 // expected compile fail
 // EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
 import "vec.zrl";

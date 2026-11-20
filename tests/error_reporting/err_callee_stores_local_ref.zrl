@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: tests/error_reporting/err_callee_stores_local_ref.zrl:7:33: error: region escape: a pointer to local stack storage is written to memory that outlives this function
+// EXPECT: tests/error_reporting/err_callee_stores_local_ref.zrl:7:33: error: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
 // put's body stores its p into h (summary: stores p, into h), so passing &x for a local x
 // writes a pointer into fill's frame into the caller's H.
 struct H { r: &i32 }

@@ -1,6 +1,5 @@
 // A local Arena reset while a Vec in it is still used: the borrow rules refuse the reset; the
 // arena being this frame's storage (Z-0076) changes nothing here.
-// flags: --provenance
 // expected compile fail
 // EXPECT: cannot mutably borrow 'a' while it is already borrowed
 import "mem.zrl";

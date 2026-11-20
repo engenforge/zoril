@@ -1,6 +1,5 @@
 // An index through a raw pointer followed by a field address returns the caller's memory, which the
 // return rule accepts (`HashMap.get`, stdlib/hashmap.zrl, Z-0068).
-// flags: --provenance
 // expected exit 0
 struct S { v: i32 }
 struct H { e: *mut S }

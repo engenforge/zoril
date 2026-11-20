@@ -1,7 +1,6 @@
 // A `#[borrows(..)]` that names less than the body returns is refused: `view` returns a slice
 // `s` holds, so a caller holding no borrow of `s` could let the result outlive it (§3, _Checked
 // contracts_, tier 2). A reviewed narrowing is spelled `#[unsafe(borrows(..))]`.
-// flags: --provenance
 // EXPECT: provenance: #[borrows(..)] leaves out 's', which the result may point into
 // expected compile fail
 

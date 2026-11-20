@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: error: cannot store 'v' a reference into storage owned by this frame (a collection, a box or an arena) cannot outlive the frame
+// EXPECT: error: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
 // A reference into a local collection's or arena's buffer stored through a parameter or outliving place is rejected.
 import "mem.zrl";
 import "vec.zrl";

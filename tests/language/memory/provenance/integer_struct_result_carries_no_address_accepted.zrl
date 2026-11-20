@@ -1,7 +1,6 @@
 // A struct of counts read through a reference to a tuple holding a local's address: a result
 // holding only integers is not tied to what the callee reads through its argument (§3, _Scalars,
 // casts and `extern`_).
-// flags: --provenance
 // expected exit 3
 struct Counts { a: usize, b: usize }
 fn counts(p: &(&i32, usize)) -> Counts { return Counts { a: p.1, b: p.1 }; }

@@ -1,6 +1,5 @@
 // A `fn` value read from raw memory is called with a local's address: the result reaches it, so
 // returning it is refused (§3, _Calls through a `fn` value_).
-// flags: --provenance
 // EXPECT: return rule
 // expected compile fail
 fn id(p: &i32) -> &i32 { return p; }

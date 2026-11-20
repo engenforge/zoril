@@ -1,5 +1,4 @@
 // A tuple element carries the view of a stack array into the caller's Vec (doc/design/provenance.md §3).
-// flags: --provenance
 // EXPECT: call store rule
 // expected compile fail
 import "vec.zrl";

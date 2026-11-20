@@ -1,7 +1,6 @@
 // A wider `#[stores(..)]` binds its callers as if the body made the store: passing an address of
 // this frame where `put` declares it stores into longer-lived memory is refused, though `put`'s
 // body stores nothing (§3, _Checked contracts_).
-// flags: --provenance
 // EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
 // expected compile fail
 

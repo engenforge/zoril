@@ -2,7 +2,6 @@
 // address of the caller's frame, which a raw pointer may not carry out of the frame, so the call store
 // rule refuses it. What is checked is the address a raw pointer value carries, not whether the heap
 // storage it points to is still live.
-// flags: --provenance
 // EXPECT: call store rule
 // expected compile fail
 struct Buf { data: *mut u8 }

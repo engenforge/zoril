@@ -1,6 +1,5 @@
 // The must-reject twin through a raw pointer: a view of this frame stored into a field of the
 // caller's element is refused by the store rule (Z-0068).
-// flags: --provenance
 // EXPECT: (store rule)
 // expected compile fail
 struct S { r: [i32] }

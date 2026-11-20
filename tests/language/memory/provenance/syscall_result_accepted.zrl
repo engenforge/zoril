@@ -1,7 +1,6 @@
 // A system call's result is the kernel's integer and carries none of its arguments' origins, so
 // returning it passes the return rule although an argument is this frame's address (`raw_open` in
 // stdlib/os/linux.zrl, Z-0063). getpid(2) ignores its arguments.
-// flags: --provenance
 // expected exit 0
 fn pid() -> i64 {
     let buf: [u8; 2] = [104 as u8, 10 as u8];

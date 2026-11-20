@@ -85,7 +85,6 @@ src/parser/parse_type.zrl	191	16	12	2
 src/progress.zrl	12	3	3	1
 src/resolve.zrl	1978	175	94	7
 src/route_set.zrl	172	57	26	23
-src/summary_pass.zrl	657	13	9	4
 src/token.zrl	258	15	10	4
 src/verify.zrl	2244	236	101	9
 src/zil_print.zrl	888	69	30	11

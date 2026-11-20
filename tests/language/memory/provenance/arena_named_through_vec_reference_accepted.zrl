@@ -2,7 +2,6 @@
 // new Vecs in the same arena: a result's storage is the arena the argument reaches (the `raw`
 // field's target for a `&Vec`), not the argument's own address, so nothing read from the
 // results is an address of this frame (§3, _Details the transfer needs_).
-// flags: --provenance
 // expected exit 0
 import "vec.zrl";
 import "mem_raw.zrl";

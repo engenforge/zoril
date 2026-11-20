@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: region escape: returning a pointer to local stack storage
+// EXPECT: provenance: the returned value holds an address of this frame (return rule)
 // A stack pointer passed to a callee whose result is tied to that argument (by default every
 // pointer parameter) and returned. Uncaught without whole-program summaries until 2026-10-03.
 

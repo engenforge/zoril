@@ -3,9 +3,7 @@
 // buffer-escape rule refuses it (it counts a by-value parameter as outliving the frame); Z-0012
 // deletes that rule and flips this test to `expected exit 0`.
 // ORIGINS: f b O={Param(0), Frame(_2)} S={Frame(b)}
-// flags: --provenance
-// EXPECT: cannot store 'v'
-// expected compile fail
+// expected exit 0
 import "vec.zrl";
 use vec::Vec;
 struct S { s: [i32] }

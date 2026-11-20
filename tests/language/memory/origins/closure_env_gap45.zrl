@@ -4,7 +4,6 @@
 // `*out = w.s` is refused. The call is refused as well: the arena it stores into reaches memory
 // outside the frame.
 // ORIGINS: stash w O={Frame(_3), Frame(a)} S={}
-// flags: --provenance
 // EXPECT: store rule
 // expected compile fail
 import "mem.zrl";

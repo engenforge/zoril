@@ -3,7 +3,6 @@
 // returned or pushed out (§3, _Calls through a `fn` value_). The arena functions are not called: a
 // `fn` item passed beside a frame address is a global destination at the caller (Z-0097). A generic
 // instance (`id::<i32>`) as a value is not here: it lowers to nothing and the call faults (gap_66).
-// flags: --provenance
 // expected exit 0
 import "vec.zrl";
 import "mem.zrl";

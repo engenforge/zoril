@@ -2,7 +2,6 @@
 // by-value `Lexer` parameter owns no storage of this frame: a view read through `&lex` is the view
 // the struct holds (its Param), with no Frame(lex).
 // ORIGINS: f t O={Param(1), ParamContents(1)} S={}
-// flags: --provenance
 // expected exit 0
 struct Lexer { text: [u8], cur: *u8 }
 fn text_of(l: &Lexer) -> [u8] { return l.text; }

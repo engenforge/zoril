@@ -178,18 +178,18 @@ for prog in "$src"/prov_*.zrl; do
     name=$(basename "$prog" .zrl)
     expect_fail=0; grep -q '^// expected compile fail' "$prog" && expect_fail=1
     want_text=$(sed -n 's|^// EXPECT: *||p' "$prog" | head -1)
-    if run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib --provenance --emit-zil -o "$dir/$name.zil" "$prog" > "$dir/$name.whole.log" 2>&1; then
-        [ "$expect_fail" -eq 0 ] || fail "$name: the whole-program build accepted it under --provenance" "$dir/$name.whole.log"
+    if run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib --emit-zil -o "$dir/$name.zil" "$prog" > "$dir/$name.whole.log" 2>&1; then
+        [ "$expect_fail" -eq 0 ] || fail "$name: the whole-program build accepted it" "$dir/$name.whole.log"
     else
-        [ "$expect_fail" -eq 1 ] || fail "$name: the whole-program build rejected it under --provenance" "$dir/$name.whole.log"
+        [ "$expect_fail" -eq 1 ] || fail "$name: the whole-program build rejected it" "$dir/$name.whole.log"
     fi
-    if zb --provenance -o "$dir/$name.bin" "$prog" > "$dir/$name.zb.log" 2>&1; then
-        [ "$expect_fail" -eq 0 ] || fail "$name: zbuild accepted it under --provenance" "$dir/$name.zb.log"
+    if zb -o "$dir/$name.bin" "$prog" > "$dir/$name.zb.log" 2>&1; then
+        [ "$expect_fail" -eq 0 ] || fail "$name: zbuild accepted it" "$dir/$name.zb.log"
         want=$(sed -n 's|^// expected exit \([0-9]*\).*|\1|p' "$prog" | head -1)
         "$dir/$name.bin"; rc=$?
         [ "$rc" -eq "${want:-0}" ] || fail "$name: zbuild's program exited $rc, expected ${want:-0}"
     else
-        [ "$expect_fail" -eq 1 ] || fail "$name: zbuild rejected it under --provenance" "$dir/$name.zb.log"
+        [ "$expect_fail" -eq 1 ] || fail "$name: zbuild rejected it" "$dir/$name.zb.log"
         [ -z "$want_text" ] || grep -qF -- "$want_text" "$dir/$name.zb.log" || fail "$name: zbuild did not print: $want_text" "$dir/$name.zb.log"
     fi
 done

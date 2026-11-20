@@ -1,6 +1,5 @@
 // A C function pointer handed a local's address: its result reaches the argument, as a bare
 // `extern`'s tied result does, so returning it is refused (§3, _Calls through a `fn` value_).
-// flags: --provenance
 // EXPECT: return rule
 // expected compile fail
 extern "C" fn c_id(x: *i32) -> *i32 { return x; }

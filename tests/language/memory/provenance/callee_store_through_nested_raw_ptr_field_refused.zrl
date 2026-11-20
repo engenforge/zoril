@@ -1,5 +1,4 @@
 // The same store with the struct holding the raw pointer nested in another struct.
-// flags: --provenance
 // expected compile fail
 // EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
 static mut G: *i32 = 0 as *i32;

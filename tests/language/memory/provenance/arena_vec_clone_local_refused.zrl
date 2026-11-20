@@ -1,7 +1,6 @@
 // A clone of a `Vec` built in a local arena, made by a callee taking the `Vec` by reference: the
 // clone's storage is the arena the `Vec` points to, a local, so storing a view of it out is
 // refused (§3, _Details the transfer needs_).
-// flags: --provenance
 // EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
 // expected compile fail
 import "vec.zrl";

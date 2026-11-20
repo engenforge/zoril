@@ -1,7 +1,6 @@
 // A struct holding an arena's raw form (`*mut ArenaHeader`) beside a `static`'s address: the raw
 // pointer points at an arena, not at a `static mut`, so a callee that builds a Vec in that arena
 // and pushes a view of the caller's array into the caller's Vec stores nothing into a global.
-// flags: --provenance
 // expected exit 0
 import "mem.zrl";
 import "mem_raw.zrl";

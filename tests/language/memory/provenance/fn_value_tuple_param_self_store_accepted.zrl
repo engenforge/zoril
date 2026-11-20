@@ -2,7 +2,6 @@
 // field-insensitive summary stores the destination into itself, so the local holds its own
 // address, but a `fn` value's environment is always a closure's tuple, so the call through it
 // reaches nothing of this frame (§3, _Calls through a `fn` value_).
-// flags: --provenance
 // expected exit 42
 fn default_fn() -> i32 { return 0; }
 fn twin_fn() -> i32 { return 42; }

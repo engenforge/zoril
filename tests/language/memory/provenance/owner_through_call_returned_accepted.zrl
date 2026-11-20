@@ -2,7 +2,6 @@
 // Option with `unwrap`, and a local Arena out of its Result with `unwrap`. The owner moves into the
 // call, so the storage it owned is no address the result holds, and the return takes nothing of
 // this frame with it (Z-0083).
-// flags: --provenance
 // expected exit 0
 import "vec.zrl";
 import "mem.zrl";

@@ -1,7 +1,6 @@
 // A closure local handed by `&mut` to a callee that reassigns it is no known callee (§3, _Calls
 // through a known callee_). Known as the first closure, the call would only store the parameter's
 // view into a local; the replacement stores the frame view into the caller's memory.
-// flags: --provenance
 // EXPECT: unknown-call store rule
 // expected compile fail
 fn swap_in(slot: &mut fn(&mut [i32], &mut [i32]), g: fn(&mut [i32], &mut [i32])) { *slot = g; }

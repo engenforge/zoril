@@ -1,7 +1,6 @@
 // Pushing an owner (a Vec, a String) into a caller's Vec moves it, with the storage it owns: the
 // call store rule reads the addresses it holds, not that storage (Z-0062). Directly, through a
 // by-value parameter, and a builder returning the Vec it pushed into.
-// flags: --provenance
 // expected exit 0
 import "vec.zrl";
 import "string.zrl";

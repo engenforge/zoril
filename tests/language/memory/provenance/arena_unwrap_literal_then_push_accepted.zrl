@@ -3,7 +3,6 @@
 // names the arena's storage by what that by-value argument owns, not by what it holds, so the
 // literal's Static is no storage of the arena and the second push stores nothing outside the frame
 // (Z-0082).
-// flags: --provenance
 // expected exit 0
 import "mem.zrl";
 import "vec.zrl";

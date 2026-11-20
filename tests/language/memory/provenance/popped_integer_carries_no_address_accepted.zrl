@@ -1,7 +1,6 @@
 // An integer popped from a local `Vec<usize>` (an `Option<usize>`) and written into a caller's
 // `Vec`: a result holding only integers is not tied to what the callee reads through its
 // arguments, so the `Vec`'s buffer does not reach the caller (§3, _Scalars, casts and `extern`_).
-// flags: --provenance
 // expected exit 0
 
 import "vec.zrl";

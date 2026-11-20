@@ -1,7 +1,6 @@
 // `#[fresh]` takes only the `Raw` of an address made from an integer out of a call's result: a
 // function that claims it and returns a global's address still gives Static, and a frame address
 // stored through it is refused (Z-0076).
-// flags: --provenance
 // expected compile fail
 // EXPECT: a value holding an address of this frame is stored into memory that outlives it (store rule)
 static mut SLOT: *mut i32 = 0 as *mut i32;

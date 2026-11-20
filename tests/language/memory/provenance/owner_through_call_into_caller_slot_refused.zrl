@@ -1,6 +1,5 @@
 // A Vec holding a view of this frame, moved through an identity function into the caller's slot:
 // still a store of this frame's address into memory that outlives it (Z-0083).
-// flags: --provenance
 // expected compile fail
 // EXPECT: a value holding an address of this frame is stored into memory that outlives it (store rule)
 import "vec.zrl";

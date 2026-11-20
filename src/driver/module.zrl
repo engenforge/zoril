@@ -1353,8 +1353,8 @@ impl Driver {
             if check { e.rules } else { check_zir::PROVENANCE_OFF },
             e.file_path
         );
-        if origins.errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
-            self.had_provenance_error = true;
+        if origins.errors > 0 as u32 {
+            self.had_error = true;
         }
         let grew = check_zir::store_origin_summary(
             self.arena,
@@ -1369,8 +1369,8 @@ impl Driver {
                 self.intern_table,
                 e.func_idx as usize
             );
-            if refused > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
-                self.had_provenance_error = true;
+            if refused > 0 as u32 {
+                self.had_error = true;
             }
             self.module.get_function_mut(e.func_idx as usize).os_in_cycle = false;
         }
@@ -1435,7 +1435,7 @@ impl Driver {
         let sret_name = self.intern_table.intern("__sret");
         // An `unsafe fn` body is checked like any other: only the addresses it makes from integers
         // are exempt (ORIGIN_RAW, §3, _Raw operations_).
-        let rules = self.provenance;
+        let rules = check_zir::PROVENANCE_ON;
         // A body in a recursive cycle (it, or a body nested in it, calls one still being lowered)
         // is computed now for the summary its callers in the cycle read, and checked when the
         // cycle's root finishes, with the final summaries (Driver.os_fixpoint).
@@ -1459,8 +1459,8 @@ impl Driver {
             );
         }
         let origins_slice = unsafe { @slice(origins_ptr, 1 as usize) };
-        if origins_slice[0].errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
-            self.had_provenance_error = true;
+        if origins_slice[0].errors > 0 as u32 {
+            self.had_error = true;
         }
         // The body's summary, for the calls lowered after it; an `unsafe fn`'s too, since an address
         // it makes from an integer is Raw, not Unknown (§3, _Raw operations_).
@@ -1473,9 +1473,8 @@ impl Driver {
         if !in_cycle {
             let idx = self.builder.current_func_idx as usize;
             if check_zir::os_infer_ties(&mut origins_slice[0], self.module, self.intern_table, idx)
-                > 0 as u32
-                && self.provenance == check_zir::PROVENANCE_ON {
-                self.had_provenance_error = true;
+                > 0 as u32 {
+                self.had_error = true;
             }
         }
         if in_cycle {

@@ -8,7 +8,6 @@ import "mono.zrl";
 import "builder.zrl";
 import "driver.zrl";
 import "verify.zrl";
-import "summary_pass.zrl";
 import "zil_print.zrl";
 import "interface_print.zrl";
 import "intern.zrl";
@@ -51,7 +50,6 @@ use mono::{Monomorphizer, mono_instantiate_type, mono_project_assoc_type};
 use progress::{VERBOSE, progress};
 use resolve::Resolver;
 use state::Driver;
-use summary_pass::{FuncSummary, InterprocSummaryPass};
 use sys::arg_to_slice;
 use vec::Vec;
 use version::version;
@@ -81,7 +79,6 @@ fn write_interface_file(
     table: &mut InternTable,
     arena: *mut ArenaHeader,
     m: &mut ILModule,
-    summaries: [FuncSummary],
     input_mod_id: [u8],
     input_is_stdlib: bool
 ) -> bool {
@@ -102,7 +99,6 @@ fn write_interface_file(
         arena,
         target_sf,
         m as *mut ILModule,
-        summaries,
         input_is_stdlib
     );
     ip.emit_interface();
@@ -135,9 +131,6 @@ struct Options {
     // the stdlib's CHECKED_BUILD constant reads as true, so released arena space stays poisoned
     // and is never reused, and the lowering poisons a dead local's slot and a dropped value.
     checked: bool,
-    // `--provenance` (1) or `--provenance=warn` (2): the store and return rules of
-    // doc/design/provenance.md §3, added to the old ones (check_zir::PROVENANCE_*).
-    provenance: u32,
     // `--hosted`: the program is linked into a libc process (see the HOSTED branch of rt/runtime.s). The only
     // difference in the output is the entry's name, `zoril_main` instead of `main`: the hosted
     // runtime defines `main` itself and calls it.
@@ -201,13 +194,6 @@ fn print_usage() {
     );
     print("                           Not a safety mode; release builds are unaffected\n");
     print(
-        "  --provenance[=warn]      Developer option: also apply the origin-set store and return\n"
-    );
-    print(
-        "                           rules (doc/design/provenance.md); =warn reports their refusals\n"
-    );
-    print("                           as warnings that do not fail the compile\n");
-    print(
         "  --hosted                 Link the program into a libc process: name its entry zoril_main\n"
     );
     print(
@@ -257,7 +243,7 @@ fn levenshtein(a: [u8], b: [u8]) -> u64 {
 
 fn suggest_option(arg: [u8]) -> [u8] {
     if arg == "--" { return ""; }
-    let opts: [[u8]; 27] = [
+    let opts: [[u8]; 26] = [
         "-h",
         "--help",
         "-V",
@@ -281,7 +267,6 @@ fn suggest_option(arg: [u8]) -> [u8] {
         "-W",
         "-A",
         "--checked",
-        "--provenance",
         "--hosted",
         "--no-verify",
         "--interproc-summary"
@@ -289,7 +274,7 @@ fn suggest_option(arg: [u8]) -> [u8] {
     let mut best_dist = 99 as u64;
     let mut best_opt: [u8] = "";
     let mut i = 0 as usize;
-    while i < 27 as usize {
+    while i < 26 as usize {
         let opt = opts[i];
         let d = levenshtein(arg, opt);
         if d < best_dist {
@@ -331,7 +316,7 @@ fn parse_args(argc: i32, argv: **u8, table: &mut InternTable, arena: *mut ArenaH
         include_ids: unsafe { Vec::<u32>.new_in_raw(arena) },
         bad_args: false,
         no_verify: false, interproc_summary: false, interproc_stats: false,
-        show_help: false, checked: false, provenance: 1 as u32, hosted: false, lower_all: false,
+        show_help: false, checked: false, hosted: false, lower_all: false,
     };
     let mut end_of_options = false;
     let mut i = 1 as i32;
@@ -397,10 +382,6 @@ fn parse_args(argc: i32, argv: **u8, table: &mut InternTable, arena: *mut ArenaH
             unsafe { VERBOSE = true; }
         } else if !end_of_options && arg == "--checked" {
             o.checked = true;
-        } else if !end_of_options && arg == "--provenance" {
-            o.provenance = 1 as u32;
-        } else if !end_of_options && arg == "--provenance=warn" {
-            o.provenance = 2 as u32;
         } else if !end_of_options && arg == "--hosted" {
             o.hosted = true;
         } else if !end_of_options && arg == "--no-verify" {
@@ -585,7 +566,6 @@ fn compile(
         (*driver).compile_only = compile_only;
         (*driver).target_source_file = target_source_file;
         (*driver).checked = o.checked;
-        (*driver).provenance = o.provenance;
         (*driver).hosted = o.hosted;
         (*driver).collect_zir_stats = o.emit_zir_stats;
         (*driver).emit_origins = o.emit_origins;
@@ -606,23 +586,21 @@ fn compile(
         }
     }
 
-    let had_prov_err = unsafe { (*driver).had_provenance_error };
     progress("PROGRESS: Verifying...\n");
-    let verified = verify_module(o, m, table, arena, compile_only, target_source_file);
-    let all_ok = verified.ok && !had_prov_err;
+    let verified_ok = verify_module(o, m, table, arena);
     if o.emit_zir_stats {
-        if all_ok {
+        if verified_ok {
             print("verdict accept\n");
             return 0;
         }
         print("verdict reject\n");
         return 1;
     }
-    if o.emit_origins { return if all_ok { 0 } else { 1 }; }
-    if !all_ok { return 1; }
+    if o.emit_origins { return if verified_ok { 0 } else { 1 }; }
+    if !verified_ok { return 1; }
 
     // The methods nothing calls were lowered to be checked, and the checks above are what read
-    // those bodies (the IL verifier and the summary pass); the driver's own lowering checks ran
+    // those bodies (the IL verifier); the driver's own lowering checks ran
     // over each body as it was lowered. With both done, drop what the check added, so the ZIL, the
     // interface and the object are exactly what the program's *called* code lowers to
     // (ILModule.drop_check_only_code).
@@ -636,7 +614,6 @@ fn compile(
             table,
             arena,
             m,
-            verified.summaries,
             input_mod_id,
             input_is_stdlib
         ) {
@@ -651,7 +628,6 @@ fn compile(
             table,
             arena,
             m,
-            verified.summaries,
             input_mod_id,
             input_is_stdlib
         ) {
@@ -667,59 +643,17 @@ fn compile(
     return 0;
 }
 
-// The verifier and the summary pass in a scope of their own: the pass holds the module and the table
-// mutably, so it must be gone before the emitters borrow both again. The summaries are arena data.
-struct VerifyOutcome {
-    ok: bool,
-    summaries: [FuncSummary],
-}
-
-// SAFETY: the summaries are arena data holding only integers, nothing of M or TABLE.
-#[unsafe(borrows(arena, o))]
+// The ZIL verifier (unless --no-verify). False after an error.
 fn verify_module(
     o: &Options,
     m: &mut ILModule,
     table: &mut InternTable,
-    arena: *mut ArenaHeader,
-    compile_only: bool,
-    target_source_file: u32
-) -> VerifyOutcome {
-    let mut summary_pass = InterprocSummaryPass.new(arena, m, table, o.input_path);
-    summary_pass.apply_conservative_defaults(compile_only, target_source_file);
-    let ok = check_module(o, &mut summary_pass, arena, compile_only);
-    return VerifyOutcome { ok: ok, summaries: summary_pass.summaries };
-}
-
-// The ZIL verifier (unless --no-verify), then the summary pass when an interface is written
-// or --interproc-summary asks for it. False after an error. The module and table come from the pass.
-fn check_module(
-    o: &Options,
-    summary_pass: &mut InterprocSummaryPass,
-    arena: *mut ArenaHeader,
-    compile_only: bool
+    arena: *mut ArenaHeader
 ) -> bool {
-    let wants_summaries = o.emit_interface || o.write_interface_path.len > 0 as usize;
-    if o.no_verify {
-        if wants_summaries { summary_pass.run(false); }
-        return true;
-    }
-    let mut verifier = Verifier.new(
-        arena,
-        summary_pass.module,
-        summary_pass.intern_table,
-        o.input_path
-    );
+    if o.no_verify { return true; }
+    let mut verifier = Verifier.new(arena, m, table, o.input_path);
     verifier.verify();
-    if verifier.had_error { return false; }
-    // A whole-program build sees every body, so it enforces the summaries as a separate build
-    // does (`zbuild` passes the flag): both modes then accept the same programs.
-    let enforce = o.interproc_summary || !compile_only;
-    if enforce || wants_summaries {
-        summary_pass.verbose = o.interproc_stats;
-        let pass_ok = summary_pass.run(enforce);
-        if enforce && (!pass_ok || summary_pass.had_error) { return false; }
-    }
-    return true;
+    return !verifier.had_error;
 }
 
 fn write_zil(o: &Options, m: &mut ILModule, table: &mut InternTable, input_mod_id: [u8]) -> bool {

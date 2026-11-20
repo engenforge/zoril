@@ -2,7 +2,6 @@
 // arena's Frame, so pushing it into a parameter is refused (§3, _Calls through a `fn` value_; the
 // `fn`-value twin of push_arena_vec_refused.zrl). The refusal rests on the result's O: it holds
 // with the result's S reduced to fresh storage of this frame (Z-0092's review).
-// flags: --provenance
 // EXPECT: call store rule
 // expected compile fail
 import "vec.zrl";

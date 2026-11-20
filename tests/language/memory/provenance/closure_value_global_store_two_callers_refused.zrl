@@ -1,6 +1,5 @@
 // gap_64 through two callers: the closure is checked where it is made, whoever calls it (§3, _A
 // closure made into a value_).
-// flags: --provenance
 // EXPECT: provenance: the closure made here stores an address of this frame into a global when it is called (closure rule)
 // expected compile fail
 static mut G: *i32 = 0 as *i32;

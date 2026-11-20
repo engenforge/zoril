@@ -2,7 +2,6 @@
 // parameter holds Frame(a) both as an address (the arena tie) and as storage it owns, so moving it
 // must keep that Frame, and the call store rule refuses it (Z-0062, mutant M137; gap_62 is the
 // same program by default).
-// flags: --provenance
 // EXPECT: call store rule
 // expected compile fail
 import "vec.zrl";

@@ -64,7 +64,7 @@ The compiler accepts exactly one input file. Specifying more than one input file
 	Print a census of the ZIR constructs and CFG shape the input lowers to, one line per construct, and exit without emitting ZIL. Used by *scripts/check_route_coverage.sh* to check that the probes cited by a safety matrix row walk every route the row lists.
 
 *--emit-origins*
-	Developer option. Print the origin sets of every function the input file defines - for each local, the origins of the addresses it holds (O) and of the storage it owns (S); for the result, its O and S; and the store edges of the function's summary, one *store* line per stored value - as described in *doc/design/provenance.md*, and exit without emitting ZIL; the exit status is the compile's verdict. The rules read the sets only under *--provenance*. Used by *scripts/test_origins.sh*.
+	Developer option. Print the origin sets of every function the input file defines - for each local, the origins of the addresses it holds (O) and of the storage it owns (S); for the result, its O and S; and the store edges of the function's summary, one *store* line per stored value - as described in *doc/design/provenance.md*, and exit without emitting ZIL; the exit status is the compile's verdict. Used by *scripts/test_origins.sh*.
 
 *--lower-all*
 	Developer option. A whole-program build lowers and checks a function of an imported standard-library module only when the program reaches it; the input module and every other import are lowered in full. This option lowers the standard library's functions in full too, as a build did before, so that a check sees every body. Used by *scripts/check_stdlib_bodies.sh*, which compiles each standard-library module this way.
@@ -82,9 +82,6 @@ The compiler accepts exactly one input file. Specifying more than one input file
 
 *--checked*
 	Developer option, not a user-facing mode. Instrument the emitted program for memory-safety testing: released arena space stays poisoned and is never handed out again, a local's slot is poisoned where its scope ends, a dropped value is poisoned and a second drop of it traps (exit 134), and a heap block released twice traps instead of unmapping whatever lives there now. A release build contains none of it - the instrumentation is emitted only under this flag, so the emitted ZIL of a program does not change - and it is not a safety mode: nothing about what the compiler accepts changes. See *make test-checked* in *doc/developer_guide.md*.
-
-*--provenance*, *--provenance=warn*
-	Developer option, off by default, until the rules replace the old ones. Also apply the store and return rules of the origin sets (*doc/design/provenance.md*): a store through a reference, into a closure capture or into a global, whose destination outlives the frame, takes no value holding an address of this frame; a returned value holds none; a call applies the same rule to the callee's store summary, and a call with no summary to every argument against every other. The rules are added to the existing checks and never remove a rejection. With *=warn* each refusal is a *warning:* line and the compile does not fail on it, so a compile that succeeds lists what the new rules refuse and the old ones accept. An *unsafe fn* body is not checked.
 
 *--*
 	Terminate option processing. All subsequent arguments are treated as input file paths, even if they begin with a dash *-*.

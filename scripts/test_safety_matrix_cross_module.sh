@@ -121,8 +121,8 @@ fi
 check "Probe 07: Dangling stack ptr (callee) [cross-mod]" "$obs" "compile error"
 
 # ── Probe 07 (negative test): Dangling stack ptr rejected via --interproc-summary ───
-output=$("$ZORIL" -I "$TMP_DIR" --interproc-summary --emit-zil -o /dev/null "$TMP_DIR/probe07_caller.zrl" 2>&1 || true)
-if echo "$output" | grep -Fq "error: region escape: returning a pointer to local stack storage"; then
+output=$("$ZORIL" -I "$TMP_DIR" --emit-zil -o /dev/null "$TMP_DIR/probe07_caller.zrl" 2>&1 || true)
+if echo "$output" | grep -Fq "error: provenance: the returned value holds an address of this frame (return rule)"; then
     obs="compile error"
 else
     obs="accepted"

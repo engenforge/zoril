@@ -2,7 +2,6 @@
 // in that arena: the arena is reached through a pointer, so it is still named by what the argument
 // holds (the caller's arena, outside this frame), and a frame view pushed into the Vec is refused
 // (Z-0082).
-// flags: --provenance
 // expected compile fail
 // EXPECT: the callee stores an address of this frame into memory that outlives it (call store rule)
 import "mem.zrl";

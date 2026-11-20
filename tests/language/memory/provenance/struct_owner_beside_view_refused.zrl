@@ -2,7 +2,6 @@
 // into the caller's slot: the view is an address of `v`'s buffer whatever the struct owns, and the
 // call store rule refuses it (Z-0071's review, Z-0072). The old rules refuse it too; this test
 // keeps the provenance refusal once they are deleted (Z-0012).
-// flags: --provenance
 // EXPECT: call store rule
 // expected compile fail
 import "vec.zrl";

@@ -1,6 +1,5 @@
 // The must-reject twin: an index then field read of a local Vec whose elements hold a view of this
 // frame reads that view through the Vec's buffer, and the return rule refuses it (Z-0068).
-// flags: --provenance
 // EXPECT: return rule
 // expected compile fail
 import "vec.zrl";

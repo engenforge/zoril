@@ -889,138 +889,6 @@ impl ZirVerifier {
             || type_name_is(s, "HashMap");
     }
 
-    // Whether LOCAL_ID's storage belongs to a frame that outlives this one, proved by provenance: a
-    // parameter, a value copied from one, a collection a standard-library raw constructor took
-    // (`*_raw`, `unsafe`, the caller's buffer), or one anchored to a `&Arena` argument that itself
-    // outlives the frame. Must-external - one binding this frame owns makes the local this frame's,
-    // so a reference into its buffer cannot escape. Anything else, including a call the checker
-    // cannot classify (a helper that returns a collection), is not external: the strict side.
-    fn local_storage_external(
-        self: &mut ZirVerifier,
-        func: &ZirFunction,
-        locals: [Local],
-        local_id: u32,
-        depth: usize
-    ) -> bool {
-        if depth > 8 as usize { return false; }
-        if local_id == 0 as u32 || (local_id as usize) > locals.len { return false; }
-        for p in func.params {
-            if p.id == local_id { return true; }
-        }
-        let mut any = false;
-        let mut bi = 0 as usize;
-        while bi < func.blocks.len {
-            let b = &func.blocks[bi];
-            let mut si = 0 as usize;
-            while si < b.statements.len {
-                match b.statements[si] {
-                    ZirStmt.Let(id, rv, _) => {
-                        if id == local_id {
-                            any = true;
-                            if !self.rvalue_storage_external(
-                                func,
-                                locals,
-                                &rv,
-                                depth + 1 as usize
-                            ) {
-                                return false;
-                            }
-                        }
-                    },
-                    ZirStmt.Assign(pl, rv, _) => {
-                        if pl.base == local_id && pl.projections.len == 0 as usize {
-                            any = true;
-                            if !self.rvalue_storage_external(
-                                func,
-                                locals,
-                                &rv,
-                                depth + 1 as usize
-                            ) {
-                                return false;
-                            }
-                        }
-                    },
-                    _ => {},
-                }
-                si = si + 1 as usize;
-            }
-            bi = bi + 1 as usize;
-        }
-        return any;
-    }
-
-    fn rvalue_storage_external(
-        self: &mut ZirVerifier,
-        func: &ZirFunction,
-        locals: [Local],
-        rv: &ZirRvalue,
-        depth: usize
-    ) -> bool {
-        match *rv {
-            // A copy of a place (a bare copy, a reborrow, a box, a match binding's payload, a
-            // cast) is as external as the place it came from; a `match` binding is the route a
-            // `&Option<T>` parameter's payload takes (`Clone for Option<T>`).
-            ZirRvalue.Use(p)
-                | ZirRvalue.Ref(p, _)
-                | ZirRvalue.RefMut(p, _)
-                | ZirRvalue.Boxed(p)
-                | ZirRvalue.EnumPayload(p, _, _)
-                | ZirRvalue.Cast(p, _) => {
-                return self.place_storage_external(func, locals, &p, depth);
-            },
-            ZirRvalue.Call(fn_id, args) => {
-                // An `unsafe fn` hands the caller an obligation rather than a guarantee: the raw
-                // constructors are where the standard library's callers take it, so what they
-                // return is not read as this frame's. It has to be the callee's own attribute,
-                // not the (`-I stdlib=`-only) standard-library identity the flags need, or a
-                // build with a plain `-I stdlib` would reject the stdlib's own code.
-                if self.is_unsafe_call(fn_id) {
-                    return true;
-                }
-                if self.is_buffer_external_call(fn_id) { return true; }
-                if self.is_buffer_anchored_call(fn_id) {
-                    // `new_in(a: &Arena)`, `Command::new(program, a: &Arena)`: the `&Arena`
-                    // argument, the (only) reference-typed one, decides whose buffer the
-                    // collection holds.
-                    let mut ai = 0 as usize;
-                    while ai < args.len {
-                        let aty = self.get_place_type(&args[ai], locals);
-                        if aty != 0 as u32
-                            && is_reference_tag(self.get_type_decl(aty).def.get_tag()) {
-                            return self.place_storage_external(func, locals, &args[ai], depth);
-                        }
-                        ai = ai + 1 as usize;
-                    }
-                }
-                return false;
-            },
-            // A literal lives in the program image, not in this frame.
-            ZirRvalue.StringConst(_)
-                | ZirRvalue.GlobalAddr(_) => { return true; },
-            ZirRvalue.StructLiteral(_, args) | ZirRvalue.Tuple(args) => {
-                let mut any = false;
-                for a in args {
-                    if self.place_storage_external(func, locals, a, depth + 1 as usize) {
-                        any = true;
-                    }
-                }
-                return any;
-            },
-            _ => { return false; },
-        }
-    }
-
-    fn place_storage_external(
-        self: &mut ZirVerifier,
-        func: &ZirFunction,
-        locals: [Local],
-        p: &Place,
-        depth: usize
-    ) -> bool {
-        if p.base == 0 as u32 { return false; }
-        return self.local_storage_external(func, locals, p.base, depth);
-    }
-
     // Why moving out of temporary LOCAL_ID (an enum payload address) is refused: 0 if not
     // refused, 1 if its source is borrowed (by a live borrow, or because the source is behind
     // a named reference), 2 if its source is a closure capture, 3 if its source is an array
@@ -1107,21 +975,6 @@ impl ZirVerifier {
     fn is_arena_reset_to_call(self: &ZirVerifier, fn_id: u32) -> bool {
         if fn_id as usize >= self.zil_module.functions.len() { return false; }
         return self.zil_module.functions[fn_id as usize].arena_reset_to;
-    }
-
-    fn is_buffer_external_call(self: &ZirVerifier, fn_id: u32) -> bool {
-        if fn_id as usize >= self.zil_module.functions.len() { return false; }
-        return self.zil_module.functions[fn_id as usize].buffer_external;
-    }
-
-    fn is_buffer_anchored_call(self: &ZirVerifier, fn_id: u32) -> bool {
-        if fn_id as usize >= self.zil_module.functions.len() { return false; }
-        return self.zil_module.functions[fn_id as usize].buffer_anchored;
-    }
-
-    fn is_unsafe_call(self: &ZirVerifier, fn_id: u32) -> bool {
-        if fn_id as usize >= self.zil_module.functions.len() { return false; }
-        return self.zil_module.functions[fn_id as usize].is_unsafe;
     }
 
     fn get_reset_to_exempt_epoch(
@@ -2299,8 +2152,7 @@ impl ZirVerifier {
     // The same, for a closure's environment: the captures' borrows are what the closure keeps. One
     // exception, and it is what makes a by-value capture work: a borrow whose *base* is a compiler
     // temporary is the environment's own storage (`&env`, the tuple build_closure_env makes), which
-    // lives in the enclosing frame - its lifetime is the escape analysis's business
-    // (`returns_local_stack` / `stashes_param_mask`, src/summary_pass.zrl), and counting it here
+    // lives in the enclosing frame - its lifetime is the provenance checker's business, and counting it here
     // rejected every closure that captures anything by value
     // (tests/language/closures/capturing_closure_if_expr.zrl). Recording a reference *inside* the
     // environment (base = the local it came from) is what must keep its flag.
@@ -3020,11 +2872,6 @@ impl ZirVerifier {
                 }
             },
         }
-        if self.place_outlives_frame(func, locals, place) {
-            if self.check_rvalue_escapes_frame("cannot store", rv, span, state, locals, func) {
-                return;
-            }
-        }
         // The place itself must not be borrowed. A release-tier borrow conflicts only when the
         // assignment overwrites a value whose type drops on overwrite (an Arena, a Box, or a Drop
         // impl; overwriting a Vec does not run Drop or free its old buffer) (§3.1, item 2).
@@ -3468,42 +3315,6 @@ impl ZirVerifier {
     // The unifying store rule:
     // A store is rejected when the value stored carries a borrow of frame-owned storage
     // (a collection, a box, an arena, or a closure's owned capture) and the destination outlives the frame
-    // (a pointer or reference parameter, a captured &mut, another capture, or a global).
-    //
-    // This applies both to direct assignments (`*dst = val`, `dst.field = val`) where
-    // `place_outlives_frame` holds, and to calls (`callee(dst, val)`) where callee
-    // storage summaries indicate a value passed via one argument is stored into a target
-    // that outlives the caller's frame (including loads and derefs through reference parameters).
-    fn check_borrow_escapes_frame(
-        self: &mut ZirVerifier,
-        action: [u8],
-        borrower_local: u32,
-        span: Span,
-        state: &ZirAnalysisState,
-        locals: [Local],
-        func: &ZirFunction
-    ) -> bool {
-        return self.check_borrow_escapes_frame_depth(
-            action,
-            borrower_local,
-            span,
-            state,
-            locals,
-            func,
-            0 as usize,
-            false
-        );
-    }
-
-    fn os_local_storage_external(self: &ZirVerifier, id: u32) -> bool {
-        if self.origins as usize == 0 as usize || id == 0 as u32 { return false; }
-        let c: &OriginSets = unsafe { &*self.origins };
-        if (id as usize) >= c.nl { return false; }
-        let s = c.nl + id as usize;
-        if os_has_frame(c, s, id as usize) { return false; }
-        return os_external(c, s);
-    }
-
     fn local_type_has_drop_place(self: &mut ZirVerifier, pl: &Place, locals: [Local]) -> bool {
         let ty = self.get_place_type(pl, locals);
         return self.type_has_drop_or_box(ty, 0 as usize);
@@ -3542,291 +3353,6 @@ impl ZirVerifier {
             }
         }
         return false;
-    }
-
-    fn check_borrow_escapes_frame_depth(
-        self: &mut ZirVerifier,
-        action: [u8],
-        borrower_local: u32,
-        span: Span,
-        state: &ZirAnalysisState,
-        locals: [Local],
-        func: &ZirFunction,
-        depth: usize,
-        via_release: bool
-    ) -> bool {
-        if borrower_local == 0 as u32 || depth > 8 as usize { return false; }
-        let mut vi = 0 as usize;
-        while vi < state.borrows.len() {
-            let b = &state.borrows[vi];
-            if b.borrower == borrower_local
-                && b.base.base != 0 as u32
-                && !(b.release_only && b.base.base == borrower_local) {
-                let rel = via_release || b.release_only;
-                if self.borrowed_storage_is_local(&b.base, locals)
-                    && self.local_type_owns_storage(b.base.base, locals)
-                    && !self.local_storage_external(func, locals, b.base.base, 0 as usize)
-                    && !(rel && self.os_local_storage_external(b.base.base)) {
-                    self.report_borrow_conflict(
-                        action,
-                        &b.base,
-                        "a reference into storage owned by this frame (a collection, a box or an arena) cannot outlive the frame",
-                        span,
-                        &b.base,
-                        b.span,
-                        b.via,
-                        locals
-                    );
-                    return true;
-                }
-                if b.base.base != borrower_local
-                    && self.check_borrow_escapes_frame_depth(
-                        action,
-                        b.base.base,
-                        span,
-                        state,
-                        locals,
-                        func,
-                        depth + 1 as usize,
-                        rel
-                    ) {
-                    return true;
-                }
-            }
-            vi = vi + 1 as usize;
-        }
-        return false;
-    }
-
-    fn local_is_ref_or_ptr(self: &ZirVerifier, local_id: u32, locals: [Local]) -> bool {
-        let mut li = 0 as usize;
-        while li < locals.len {
-            if locals[li].id == local_id {
-                let ty = locals[li].ty;
-                if ty == 0 as u32 || (ty as usize) > self.zil_module.types.len() { return false; }
-                let tag = self.zil_module.types[ty as usize - 1 as usize].def.get_tag();
-                return is_any_pointer_tag(tag);
-            }
-            li = li + 1 as usize;
-        }
-        return false;
-    }
-
-    fn rvalue_is_external_target(
-        self: &mut ZirVerifier,
-        func: &ZirFunction,
-        locals: [Local],
-        local_id: u32,
-        rv: &ZirRvalue,
-        depth: usize
-    ) -> bool {
-        match *rv {
-            ZirRvalue.Use(p)
-                | ZirRvalue.Ref(p, _)
-                | ZirRvalue.RefMut(p, _)
-                | ZirRvalue.Cast(p, _)
-                | ZirRvalue.EnumPayload(p, _, _)
-                | ZirRvalue.EnumVariant(_, _, p)
-                | ZirRvalue.Boxed(p) => {
-                return self.local_is_external_target(func, locals, p.base, depth + 1 as usize);
-            },
-            ZirRvalue.Tuple(args) | ZirRvalue.StructLiteral(_, args) | ZirRvalue.Array(_, args) => {
-                for a in args {
-                    if self.local_is_external_target(func, locals, a.base, depth + 1 as usize) {
-                        return true;
-                    }
-                }
-                return false;
-            },
-            ZirRvalue.Call(fn_id, args) => {
-                let is_ref = self.local_is_ref_or_ptr(local_id, locals);
-                let is_opt_ref = !is_ref && self.local_holds_reference(local_id, locals);
-                if is_ref || is_opt_ref {
-                    if is_opt_ref {
-                        let mut li = 0 as usize;
-                        let mut is_enum = false;
-                        while li < locals.len {
-                            if locals[li].id == local_id {
-                                let ty = locals[li].ty;
-                                if ty != 0 as u32 && (ty as usize) <= self.zil_module.types.len() {
-                                    let tag = self.zil_module.types[ty as usize
-                                        - 1 as usize].def.get_tag();
-                                    if tag == ILTYPE_USER {
-                                        let uid = self.zil_module.types[ty as usize
-                                            - 1 as usize].def.get_User().id;
-                                        if uid != 0 as u32
-                                            && (uid as usize) < self.zil_module.typedefs.len() {
-                                            if let ILTypeDef.Enum(_) = self.zil_module.typedefs[uid as usize] {
-                                                is_enum = true;
-                                            }
-                                        }
-                                    }
-                                }
-                                break;
-                            }
-                            li = li + 1 as usize;
-                        }
-                        if !is_enum { return false; }
-                    }
-                    let mut ties = 0xffffffffffffffff as u64;
-                    if (fn_id as usize) < self.zil_module.functions.len() {
-                        ties = self.zil_module.functions[fn_id as usize].ret_ties;
-                    }
-                    let mut i = 0 as usize;
-                    while i < args.len {
-                        if i >= 64 as usize || ((ties >> (i as u64)) & 1 as u64) != 0 as u64 {
-                            if self.local_is_external_target(
-                                func,
-                                locals,
-                                args[i].base,
-                                depth + 1 as usize
-                            ) {
-                                return true;
-                            }
-                        }
-                        i = i + 1 as usize;
-                    }
-                }
-                return false;
-            },
-            ZirRvalue.CallPtr(_, args) => {
-                if self.local_is_ref_or_ptr(local_id, locals) {
-                    for a in args {
-                        if self.local_is_external_target(func, locals, a.base, depth + 1 as usize) {
-                            return true;
-                        }
-                    }
-                }
-                return false;
-            },
-            ZirRvalue.GlobalAddr(_) => {
-                return true;
-            },
-            _ => { return false; },
-        }
-    }
-
-    fn local_is_external_target(
-        self: &mut ZirVerifier,
-        func: &ZirFunction,
-        locals: [Local],
-        local_id: u32,
-        depth: usize
-    ) -> bool {
-        if depth > 8 as usize { return false; }
-        if local_id == 0 as u32 || (local_id as usize) > locals.len { return false; }
-        for p in func.params {
-            if p.id == local_id { return true; }
-        }
-        if locals[local_id as usize - 1 as usize].is_capture_alias {
-            return true;
-        }
-        let mut bi = 0 as usize;
-        while bi < func.blocks.len {
-            let b = &func.blocks[bi];
-            let mut si = 0 as usize;
-            while si < b.statements.len {
-                match b.statements[si] {
-                    ZirStmt.Let(id, rv, _) => {
-                        if id == local_id {
-                            if self.rvalue_is_external_target(func, locals, id, &rv, depth) {
-                                return true;
-                            }
-                        }
-                    },
-                    ZirStmt.Assign(pl, rv, _) => {
-                        if pl.base == local_id && pl.projections.len == 0 as usize {
-                            if self.rvalue_is_external_target(func, locals, pl.base, &rv, depth) {
-                                return true;
-                            }
-                        }
-                    },
-                    _ => {},
-                }
-                si = si + 1 as usize;
-            }
-            bi = bi + 1 as usize;
-        }
-        return false;
-    }
-
-    fn place_carries_borrow(self: &mut ZirVerifier, p: &Place, locals: [Local]) -> bool {
-        let ty = self.get_place_type(p, locals);
-        if ty == 0 as u32 { return true; }
-        return self.type_holds_reference(ty) || self.type_owns_storage(ty, 0 as usize);
-    }
-
-    fn place_outlives_frame(
-        self: &mut ZirVerifier,
-        func: &ZirFunction,
-        locals: [Local],
-        place: &Place
-    ) -> bool {
-        if place.projections.len == 0 as usize { return false; }
-        return self.local_is_external_target(func, locals, place.base, 0 as usize);
-    }
-
-    fn check_rvalue_escapes_frame(
-        self: &mut ZirVerifier,
-        action: [u8],
-        rv: &ZirRvalue,
-        span: Span,
-        state: &ZirAnalysisState,
-        locals: [Local],
-        func: &ZirFunction
-    ) -> bool {
-        match *rv {
-            ZirRvalue.Use(p) => {
-                if !self.place_carries_borrow(&p, locals) { return false; }
-                return self.check_borrow_escapes_frame(action, p.base, span, state, locals, func);
-            },
-            ZirRvalue.Ref(p, _) | ZirRvalue.RefMut(p, _) => {
-                if self.check_borrow_escapes_frame(action, p.base, span, state, locals, func) {
-                    return true;
-                }
-                if p.base != 0 as u32
-                    && self.borrowed_storage_is_local(&p, locals)
-                    && self.local_type_owns_storage(p.base, locals)
-                    && !self.local_storage_external(func, locals, p.base, 0 as usize) {
-                    self.report_borrow_conflict(
-                        action,
-                        &p,
-                        "a reference into storage owned by this frame (a collection, a box or an arena) cannot outlive the frame",
-                        span,
-                        &p,
-                        span,
-                        0 as u64,
-                        locals
-                    );
-                    return true;
-                }
-                return false;
-            },
-            ZirRvalue.Tuple(elems) => {
-                for e in elems {
-                    if self.check_borrow_escapes_frame(action, e.base, span, state, locals, func) {
-                        return true;
-                    }
-                }
-                return false;
-            },
-            ZirRvalue.StructLiteral(_, args) | ZirRvalue.Array(_, args) => {
-                for a in args {
-                    if self.check_borrow_escapes_frame(action, a.base, span, state, locals, func) {
-                        return true;
-                    }
-                }
-                return false;
-            },
-            ZirRvalue.EnumVariant(_, _, p)
-                | ZirRvalue.EnumPayload(p, _, _)
-                | ZirRvalue.Boxed(p)
-                | ZirRvalue.Cast(p, _)
-                | ZirRvalue.ArrayRepeat(p, _, _) => {
-                return self.check_borrow_escapes_frame(action, p.base, span, state, locals, func);
-            },
-            _ => { return false; },
-        }
     }
 
     fn callee_releases_mask(self: &mut ZirVerifier, fn_id: u32) -> u64 {
@@ -4517,94 +4043,6 @@ impl ZirVerifier {
         if fn_id as usize >= self.zil_module.functions.len() { return; }
         let p_func = self.zil_module.functions[fn_id as usize];
 
-        if p_func.has_stores_declared {
-            let decl_from = p_func.stores_declared_from;
-            let decl_to = p_func.stores_declared_to;
-            let to_global = (decl_to & (0x8000000000000000 as u64)) != 0 as u64;
-            let mut i = 0 as usize;
-            while i < args.len {
-                if i < 64 as usize && ((decl_from >> (i as u64)) & 1 as u64) != 0 as u64 {
-                    let mut escapes = to_global;
-                    if !escapes {
-                        let mut j = 0 as usize;
-                        while j < args.len {
-                            if j != i
-                                && j < 64 as usize
-                                && ((decl_to >> (j as u64)) & 1 as u64) != 0 as u64 {
-                                if self.local_is_external_target(
-                                    func,
-                                    locals,
-                                    args[j].base,
-                                    0 as usize
-                                ) {
-                                    escapes = true;
-                                    break;
-                                }
-                            }
-                            j = j + 1 as usize;
-                        }
-                    }
-                    if escapes && self.place_carries_borrow(&args[i], locals) {
-                        if self.check_borrow_escapes_frame(
-                            "cannot store",
-                            args[i].base,
-                            span,
-                            state,
-                            locals,
-                            func
-                        ) {
-                            return;
-                        }
-                    }
-                }
-                i = i + 1 as usize;
-            }
-        }
-
-        if p_func.stores_storage != 0 as u64 {
-            let stored = p_func.stores_storage;
-            let targets = p_func.store_targets;
-            let to_global = (targets & (0x8000000000000000 as u64)) != 0 as u64;
-            let mut i = 0 as usize;
-            while i < args.len {
-                if i < 64 as usize && ((stored >> (i as u64)) & 1 as u64) != 0 as u64 {
-                    let mut escapes = to_global;
-                    if !escapes {
-                        let mut j = 0 as usize;
-                        while j < args.len {
-                            if j != i
-                                && j < 64 as usize
-                                && ((targets >> (j as u64)) & 1 as u64) != 0 as u64 {
-                                if self.local_is_external_target(
-                                    func,
-                                    locals,
-                                    args[j].base,
-                                    0 as usize
-                                ) {
-                                    escapes = true;
-                                    break;
-                                }
-                            }
-                            j = j + 1 as usize;
-                        }
-                    }
-                    if escapes && self.place_carries_borrow(&args[i], locals) {
-                        if self.check_borrow_escapes_frame(
-                            "cannot store",
-                            args[i].base,
-                            span,
-                            state,
-                            locals,
-                            func
-                        ) {
-                            return;
-                        }
-                    }
-                }
-                i = i + 1 as usize;
-            }
-        }
-
         if self.origins as usize == 0 as usize { return; }
 
         if p_func.os_known {
@@ -4717,27 +4155,6 @@ impl ZirVerifier {
                             span
                         );
                     }
-                }
-                // A return ends every scope, and this path has never run the block-end rule
-                // (`emit_scope_cleanup` skips the marker: the region verifier was trusted to see
-                // an escape). It does not see a buffer reached through a local - `v.get(i)` /
-                // `v.as_slice()` hand back `self.data`, which is not derived from `self` - so a
-                // reference into a buffer owned by this frame (a collection, a box or an arena)
-                // would leave with the frame and read invalid memory. Default-deny: any borrow the
-                // returned value holds whose root is a local owning storage is rejected unless the
-                // local's provenance proves that storage outlives the frame (a parameter, a `*_raw`
-                // constructor, or a constructor anchored to a parameter's arena). Before
-                // `check_place_use`: that marks the returned value moved, and a moved borrower no
-                // longer counts.
-                if self.place_carries_borrow(&ret_pl, locals) {
-                    self.check_borrow_escapes_frame(
-                        "cannot return",
-                        ret_pl.base,
-                        span,
-                        state,
-                        locals,
-                        func
-                    );
                 }
                 self.check_place_use(&ret_pl, true, span, state, locals);
                 // A linear resource consumed on some paths into this return but not others is
@@ -9770,7 +9187,7 @@ pub fn os_infer_ties(
     idx: usize
 ) -> u32 {
     let f = module.functions[idx];
-    if f.borrows_trusted || f.from_interface || f.is_extern { return 0 as u32; }
+    if f.from_interface || f.is_extern { return 0 as u32; }
     if f.has_borrows && c.rules == PROVENANCE_OFF { return 0 as u32; }
     if f.params_len > 0 as usize
         && type_name_is(table.lookup(f.param(f.params_len - 1 as usize).name), "__env") {
@@ -9786,7 +9203,18 @@ pub fn os_infer_ties(
     } else {
         0 as usize
     };
-    let body = os_body_ties(c, module, &f);
+    // Even a trusted `#[unsafe(borrows(..))]` cannot leave out a direct address of a parameter
+    // (`&a.v`) when the return type itself is a reference or slice.
+    let body = if f.borrows_trusted {
+        let rtag = os_type_def_tag(module, f.ret_ty);
+        if rtag == ILTYPE_PTR || rtag == ILTYPE_PTRMUT || rtag == ILTYPE_SLICE {
+            f.os_ret_addr
+        } else {
+            0 as u64
+        }
+    } else {
+        os_body_ties(c, module, &f)
+    };
     let mut missing = 0 as u64;
     let mut i = 0 as usize;
     while i < 63 as usize {
@@ -9941,6 +9369,26 @@ fn os_call(
         os_add_flag(c, vs, ORIGIN_UNKNOWN);
         let none = Place { base: 0 as u32, projections: @slice(0 as *mut Projection, 0 as usize) };
         os_unknown_call_effects(c, module, table, locals, args, &none, args.len, ORIGIN_UNKNOWN);
+        if c.checking {
+            let mut k = 0 as usize;
+            while k < args.len {
+                let _ = os_arg(c, module, table, locals, fn_id, args, k);
+                if os_frame_bound(c, tao) {
+                    os_refuse(
+                        c,
+                        OS_RULE_UNKNOWN_CALL,
+                        os_origin_msg(
+                            c,
+                            tao,
+                            "a call with no store summary may store an address of this frame into memory that outlives it (unknown-call store rule)",
+                            "a call with no store summary may store an address the compiler cannot trace into memory that outlives it (unknown-call store rule)"
+                        )
+                    );
+                    break;
+                }
+                k = k + 1 as usize;
+            }
+        }
         return;
     }
     let tas = os_t(c, OS_T_AS);

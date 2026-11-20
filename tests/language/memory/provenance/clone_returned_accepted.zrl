@@ -1,6 +1,5 @@
 // Safe twin: cloning a borrowed Vec<u8>, an Option<i32>, an Option<[u8]> from a parameter view,
 // and resizing a caller's Vec<H> with a parameter view are accepted under --provenance.
-// flags: --provenance
 // expected exit 0
 import "vec.zrl";
 import "clone.zrl";

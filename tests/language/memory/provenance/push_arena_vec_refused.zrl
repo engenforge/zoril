@@ -1,7 +1,6 @@
 // The must-reject twin with storage the pushed owner does not own: a Vec in a local arena holds
 // the arena's Frame as an address too (the arena tie), so moving it keeps that Frame and the call
 // store rule refuses it (Z-0062).
-// flags: --provenance
 // EXPECT: call store rule
 // expected compile fail
 import "vec.zrl";

@@ -1,5 +1,4 @@
 // Vec.resize cloning a struct holding a frame view into a caller's Vec is refused (doc/design/provenance.md §3).
-// flags: --provenance
 // EXPECT: the callee stores an address of this frame into memory that outlives it (call store rule)
 // expected compile fail
 import "vec.zrl";

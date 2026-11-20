@@ -1,5 +1,4 @@
 // gap_95 under --provenance: a callee stores a frame address through a raw pointer to a static mut that a struct field holds.
-// flags: --provenance
 // expected compile fail
 // EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
 static mut G: *i32 = 0 as *i32;

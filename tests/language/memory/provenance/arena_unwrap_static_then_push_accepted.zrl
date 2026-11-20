@@ -2,7 +2,6 @@
 // read-only data, no destination at all): `unwrap` names the arena's storage by what the by-value
 // Result owns, not by what it holds, so the Static pushed into one Vec is no storage of the arena and
 // a push into another Vec in it stores nothing outside the frame (Z-0082).
-// flags: --provenance
 // expected exit 0
 import "mem.zrl";
 import "vec.zrl";

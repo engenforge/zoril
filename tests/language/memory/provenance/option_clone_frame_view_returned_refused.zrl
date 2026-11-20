@@ -1,5 +1,4 @@
 // Option.clone of an Option holding a view of this frame cannot be returned (doc/design/provenance.md §3).
-// flags: --provenance
 // EXPECT: the returned value holds an address of this frame (return rule)
 // expected compile fail
 import "core.zrl";

@@ -1,6 +1,5 @@
 // A view of a Vec's buffer in a local Arena taken out of its Result with `unwrap`, returned: the
 // arena is this frame's storage whichever way it was unwrapped (Z-0082).
-// flags: --provenance
 // expected compile fail
 // EXPECT: the returned value holds an address of this frame (return rule)
 import "mem.zrl";

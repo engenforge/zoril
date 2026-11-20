@@ -639,7 +639,7 @@ Every type is either `Copy` or `Move`:
 **Returned-reference ties (`#[borrows]`):** A call whose return type can hold a reference or view ties its result to its arguments, keeping them borrowed while the result is live:
 
 1. **Default & inferred ties:** By default, the result borrows `self` if the function takes a reference `self`, otherwise all reference and pointer parameters. For a function with a body and no `#[borrows(..)]`, the compiler also adds any other parameters the body returns a view of. Inside a mutually recursive cycle, calls conservatively borrow all arguments.
-2. **Checked contract (`#[borrows(p, ...)]`):** Explicitly lists the parameters the return value may borrow (`#[borrows()]` for none, e.g., arena-allocated results). A declaration may list more parameters than the body returns, never fewer: directly returning an address computed from an unlisted parameter is always a compile-time error, and under `--provenance` checking any narrowing below the body's inferred ties is a compile-time error.
+2. **Checked contract (`#[borrows(p, ...)]`):** Explicitly lists the parameters the return value may borrow (`#[borrows()]` for none, e.g., arena-allocated results). A declaration may list more parameters than the body returns, never fewer: narrowing below the body's inferred ties is a compile-time error.
 3. **Trusted narrowing (`#[unsafe(borrows(p, ...))]`):** Marks a narrower contract when static analysis cannot prove independence (for example, a view read through a raw pointer into longer-lived memory). Calling the function remains safe; callers use its declared ties in place of the body's inferred ties, while direct returns of an unlisted parameter's address remain a compile-time error.
 
 ```zoril,no-test
@@ -650,7 +650,7 @@ pub fn intern(self: &mut Table, name: [u8]) -> [u8] { ... }
 pub fn first_word(cfg: &Config, text: [u8]) -> [u8] { ... }
 ```
 
-**Declared store contracts (`#[stores]`):** `#[stores(p -> q, ...)]` declares that a function body stores parameter `p`'s storage into memory reached through `q` (`#[stores(p)]` targets `self`; `#[stores(p -> static)]` targets a global). A declaration may be wider than what the body stores; omitting a store the body makes is a compile-time error in that module (generic bodies are exempt from per-instance checking). A `pub fn` that stores a reference parameter without declaring `#[stores(..)]` emits a warning. Under `--provenance`, callers are held to declared store contracts as well as inferred summaries.
+**Declared store contracts (`#[stores]`):** `#[stores(p -> q, ...)]` declares that a function body stores parameter `p`'s storage into memory reached through `q` (`#[stores(p)]` targets `self`; `#[stores(p -> static)]` targets a global). A declaration may be wider than what the body stores; omitting a store the body makes is a compile-time error in that module (generic bodies are exempt from per-instance checking). A `pub fn` that stores a reference parameter without declaring `#[stores(..)]` emits a warning. Callers are held to declared store contracts as well as inferred summaries.
 
 Zoril has no lifetime annotation syntax (`'a`); function-level attributes (`#[borrows]`, `#[stores]`) are the sole mechanism for expressing cross-boundary borrow and storage contracts.
 
@@ -762,7 +762,7 @@ An `extern fn` declaration names an external C-ABI function with no body, resolv
 
 `char`, slices (pass `.ptr` and `.len`), references, `Box<T>`, tuples, arrays, structs by value (pass a raw pointer), enums, closures, and Zoril `fn` values are disallowed in `extern` signatures.
 
-An `extern` keeps nothing it is given unless `#[unsafe(stores(..))]` declares it, and under `--provenance` a call to every undeclared `extern` that can be passed an address (a raw pointer, 64-bit integer, or variadic tail), or through an `extern "C" fn` value, that passes an address of the frame or a parameter is refused (`extern store rule`). For example, `memcpy` declares `#[unsafe(stores(*src -> dest))]` so callers know that what `src` points to is stored where `dest` points.
+An `extern` keeps nothing it is given unless `#[unsafe(stores(..))]` declares it, and a call to every undeclared `extern` that can be passed an address (a raw pointer, 64-bit integer, or variadic tail), or through an `extern "C" fn` value, that passes an address of the frame or a parameter is refused (`extern store rule`). For example, `memcpy` declares `#[unsafe(stores(*src -> dest))]` so callers know that what `src` points to is stored where `dest` points.
 
 ### 9.2 System Calls
 

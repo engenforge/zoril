@@ -1,4 +1,3 @@
-// flags: --provenance
 // expected exit 0
 //
 // Storing an integer through a loose raw pointer local is accepted.

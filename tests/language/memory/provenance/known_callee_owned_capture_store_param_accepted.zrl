@@ -2,7 +2,6 @@
 // what the environment owns by the moved holder is not a value the closure stores, and the store
 // into the capture is no global edge of `f`, so `main` may pass a view of its own array (§3, _A
 // closure body's summary is stated over `__env`_).
-// flags: --provenance
 // expected exit 0
 import "vec.zrl";
 use vec::Vec;

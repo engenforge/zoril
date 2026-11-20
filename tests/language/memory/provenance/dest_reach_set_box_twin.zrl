@@ -1,6 +1,5 @@
 // The `Box` twin of `v.push(arena_str)`: a box is not a leaf handle, so `&mut b` does not follow
 // O(b), where "lit" put Static, and the store stays accepted (§3, _Destination reach_).
-// flags: --provenance
 // expected exit 0
 import "mem.zrl";
 import "vec.zrl";

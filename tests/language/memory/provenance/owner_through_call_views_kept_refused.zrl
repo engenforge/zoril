@@ -1,6 +1,5 @@
 // A Vec holding a view of this frame, moved through `Option.unwrap` and returned: what the owner
 // holds still goes with the result; only the storage it owns is not an address (Z-0083).
-// flags: --provenance
 // expected compile fail
 // EXPECT: the returned value holds an address of this frame (return rule)
 import "vec.zrl";

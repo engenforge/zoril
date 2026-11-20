@@ -2,7 +2,6 @@
 // so its summary is written when its recursive cycle closes (the pending re-check), not when it
 // is first lowered. With that summary its result is in the caller's arena and the push is
 // accepted; without one its callers read the old masks, fresh storage of this frame (Z-0070).
-// flags: --provenance
 // expected exit 0
 import "vec.zrl";
 import "string.zrl";

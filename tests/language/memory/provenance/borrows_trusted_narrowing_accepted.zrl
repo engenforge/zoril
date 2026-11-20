@@ -1,7 +1,6 @@
 // `#[unsafe(borrows(..))]` is trusted as written where it names less than the body returns
 // (§3, _Checked contracts_, tier 3): the author vouches that `view`'s result, a static string's
 // view the struct holds, needs no borrow of `s`.
-// flags: --provenance
 // expected exit 0
 
 struct S { a: [u8] }

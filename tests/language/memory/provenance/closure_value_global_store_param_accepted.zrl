@@ -1,7 +1,6 @@
 // gap_64's safe twin: the closure stores the address its maker was handed into the global, and
 // `main` hands it a static's, so no frame address reaches the global (§3, _A closure made into a
 // value_).
-// flags: --provenance
 // expected exit 0
 static mut G: *i32 = 0 as *i32;
 static K: i32 = 7;

@@ -2,7 +2,6 @@
 // the tuple's own storage is the environment's, but the call's environment is what the `fn`
 // value holds, so the call does not reach the buffer the tuple owns (§3, _Calls through a `fn`
 // value_).
-// flags: --provenance
 // expected exit 7
 import "vec.zrl";
 use vec::Vec;

@@ -2,7 +2,6 @@
 // field and calls through it: the call's environment is what the `fn` value holds, not the
 // storage the struct owns, so neither the call nor the earlier store is refused (§3, _Calls
 // through a `fn` value_).
-// flags: --provenance
 // expected exit 42
 import "vec.zrl";
 use vec::Vec;

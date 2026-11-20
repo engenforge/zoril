@@ -1,10 +1,7 @@
 // A frame address stored inside `unsafe` through a `#[fresh]` result and the pointer returned.
-// The provenance rules do not follow memory an untracked raw heap pointer reaches (documented as
-// outside the provenance guarantee in safety_model.md §3.2 and unsafe_policy.md §1). Only the
-// old region rule refuses this today; flip to an accept test when the old region rule is retired.
-// flags: --provenance
-// expected compile fail
-// EXPECT: region escape: a pointer to local stack storage is written to memory that outlives this function
+// Outside the provenance guarantee (documented in safety_model.md §3.2 and unsafe_policy.md §1):
+// accepted once the legacy region rule is retired.
+// expected exit 0
 #[fresh]
 unsafe fn block() -> *mut &i32 {
     return @ptr_from_int<*mut &i32>(

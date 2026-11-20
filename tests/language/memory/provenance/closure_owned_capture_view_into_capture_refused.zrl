@@ -1,7 +1,6 @@
 // A view of one owned capture pushed into another: the destination is the environment's, and the
 // view is not the destination's own storage, so the call store rule refuses it (§3, _A closure
 // body's summary is stated over `__env`_).
-// flags: --provenance
 // EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
 // expected compile fail
 import "vec.zrl";

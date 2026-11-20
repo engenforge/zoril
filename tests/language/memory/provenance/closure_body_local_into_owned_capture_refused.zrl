@@ -1,7 +1,6 @@
 // A view of the closure body's own local pushed into an owned capture: the capture outlives the
 // call, its slot being the environment's memory (§3, _A closure body's summary is stated over
 // `__env`_). The old rules accept it.
-// flags: --provenance
 // EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
 // expected compile fail
 import "vec.zrl";

@@ -1,7 +1,6 @@
 // A HashMap in a local Arena, inserted into in the same frame. The allocator's null-arena path maps
 // with `mmap_anon`, so an arena allocation is not `Raw` and growing the map's table is no store into
 // a global (P1, Z-0076; refused by that rule at b1b6a9f).
-// flags: --provenance
 // expected exit 42
 import "hashmap.zrl";
 import "mem.zrl";

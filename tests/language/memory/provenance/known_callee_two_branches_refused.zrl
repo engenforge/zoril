@@ -2,7 +2,6 @@
 // known callee_). The two store in opposite directions: known as the first, the call would only
 // store the parameter's view into a local; through the second it stores the frame view into the
 // caller's memory, which the unknown-call rule refuses.
-// flags: --provenance
 // EXPECT: unknown-call store rule
 // expected compile fail
 fn f(out: &mut [i32], c: bool) {

@@ -1,6 +1,5 @@
 // A tuple slot built from a local's address and overwritten inside a loop that may not run: the
 // placeholder reaches the store after the loop, which is refused (§3, _Transfer_).
-// flags: --provenance
 // EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
 // expected compile fail
 fn bad(out: &mut &i32, p: &i32, n: i32) { let seed = 0; let mut t = (&seed, 1); let mut i = 0; while i < n { t.0 = p; i = i + 1; } *out = t.0; }

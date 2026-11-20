@@ -3,7 +3,6 @@
 // `apply`, `fold` over a range with a non-capturing function, a view of a parameter through a `fn`
 // item, an `unsafe fn` and a `fn` value read from raw memory, and a C function pointer. With the
 // result Unknown each of these bodies was refused (Z-0092).
-// flags: --provenance
 // expected exit 0
 import "iter.zrl";
 use iter::{Iterator, range};

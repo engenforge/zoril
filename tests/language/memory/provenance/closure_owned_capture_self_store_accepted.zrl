@@ -2,7 +2,6 @@
 // capture, which the environment owns: the body is accepted, as a local `Vec`'s push is (§3, _A
 // closure body's summary is stated over `__env`_). The call in the creating frame is still an
 // unknown call, so the closure is made and not called here.
-// flags: --provenance
 // expected exit 0
 import "vec.zrl";
 use vec::Vec;

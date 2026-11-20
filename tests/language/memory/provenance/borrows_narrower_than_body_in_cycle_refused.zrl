@@ -1,6 +1,5 @@
 // The same narrowing in a recursive body, whose ties are settled once its cycle's summaries are
 // final: it is checked there too (§3, _Checked contracts_).
-// flags: --provenance
 // EXPECT: provenance: #[borrows(..)] leaves out 's', which the result may point into
 // expected compile fail
 
