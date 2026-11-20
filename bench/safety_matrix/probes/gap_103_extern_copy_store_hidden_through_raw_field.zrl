@@ -1,7 +1,6 @@
 // name: A safe function copies a view of the caller's frame with memcpy through a raw pointer it was given, undeclared
-// expected: known_gap
-// gap: put passes s.p, a raw pointer to the caller's h.r, to memcpy, a bare extern with no declared effect, with &src as the source, and declares no #[stores(..)], so no summary records that r is stored: leak passes &local, h.r keeps a pointer into leak's dead frame, and main reads it; the default build and --provenance both accept it; the planned rule makes a safe function that passes a pointer from a parameter to a bare extern declare #[stores(..)]
-// observed: exit 77
+// expected: compile_reject
+// Refused by the provenance extern store rule: an undeclared extern taking pointers cannot be passed a frame or parameter address.
 struct H { r: &i32 }
 struct Slot { p: *mut &i32 }
 static G: i32 = 7;

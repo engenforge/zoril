@@ -1,7 +1,6 @@
 // name: A safe function stores a view of the caller's frame through a raw pointer, undeclared
-// expected: known_gap
-// gap: put's body stores r through the raw pointer s.p in an unsafe block and declares no #[stores(..)], so no summary records the store: leak passes &local, h.r keeps a pointer into leak's dead frame, and main reads it; the default build and --provenance both accept it; the planned rule makes a safe function that stores through a raw pointer declare #[stores(..)], which callers then obey
-// observed: exit 77
+// expected: compile_reject
+// Refused by the provenance call store rule: os_dest_reach follows the loose raw pointer local's parameter words.
 struct H { r: &i32 }
 struct Slot { p: *mut &i32 }
 static G: i32 = 7;

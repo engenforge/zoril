@@ -5,7 +5,7 @@
 .nh
 .ad l
 .\" Begin generated content:
-.TH "zoril\-file" "3" "2026\-10\-27"
+.TH "zoril\-file" "3" "2026\-11\-20"
 .PP
 .SH NAME
 .PP
@@ -282,6 +282,8 @@ pub unsafe fn read_to_end_sized_raw<R: Read>(r: &mut R, initial_cap: u64, arena:
 Reads all bytes from reader r with an initial buffer hint.\&
 .PP
 Caller obligation: arena must be valid and initialized.\&
+.PP
+never into r; r.\&read(chunk) only writes bytes into chunk.\&
 .PP
 .RE
 \fBread_to_end_raw\fR

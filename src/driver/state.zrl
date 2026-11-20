@@ -64,6 +64,9 @@ pub struct Driver {
     pub checked: bool,
     // `zoril --provenance[=warn]`: check_zir::PROVENANCE_OFF, _ON or _WARN.
     pub provenance: u32,
+    // Set when a provenance rule rejects a body: kept separate from had_error so the legacy
+    // IL verifier still runs beside provenance until it is retired.
+    pub had_provenance_error: bool,
     // `zoril --hosted`: the program shares its process with libc, so a function that would take the
     // name of one of libc's symbols is an error.
     pub hosted: bool,
@@ -226,7 +229,8 @@ impl Driver {
                 target_source_file: 0 as u32,
                 is_specialization: false,
                 checked: false,
-                provenance: 0 as u32,
+                provenance: 1 as u32,
+                had_provenance_error: false,
                 hosted: false,
                 collect_zir_stats: false,
                 zir_stats: ZirStats.new(),

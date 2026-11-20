@@ -195,6 +195,8 @@ pub unsafe fn read_to_end_sized_raw<R: Read>(r: &mut R, initial_cap: u64, arena:
 
 	Caller obligation: arena must be valid and initialized.
 
+	never into r; r.read(chunk) only writes bytes into chunk.
+
 *read_to_end_raw*
 ```
 pub unsafe fn read_to_end_raw<R: Read>(r: &mut R, arena: *mut ArenaHeader) -> Result<[u8], Error>;

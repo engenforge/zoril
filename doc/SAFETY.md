@@ -192,26 +192,9 @@ Live probe counts, trusted-base census figures, and the ZIR/ZIL route reachabili
 
 ## 6. Known gaps in checked code
 
-The matrix has no row marked `GAP`, and open soundness holes in checked code are tracked as `known_gap` probes. They fall into three families:
+The matrix has no row marked `GAP`, and no `known_gap` probes remain open: the unified provenance rules (`doc/design/provenance.md`) and the two-tier liveness model now run by default beside the existing checks, closing the indirect frame/owner escape, `#[borrows()]` narrowing, and loose raw-pointer store probes.
 
-1. **Frame/owner escape through indirect routes:** an address of the current stack frame or of storage the function owns outlives the function (through same-parameter pairs, closures, enum payloads, `fn` values, call summaries, by-value aggregates, `extern` copies such as `memcpy`, or `Clone` implementations). The unified provenance rules (`--provenance`, designed in the repository's `doc/design/provenance.md`) close these escapes.
-2. **In-frame invalidation of views held outside a local:** a view is read after its backing collection or arena is freed or reset while no local binding in the frame holds the borrow (such as `#[borrows()]` across a reset). The two-tier liveness model closes these routes by distinguishing storage-releasing operations from growth.
-3. **Raw-pointer reach inside `unsafe`:** a store inside an `unsafe` block through a raw pointer reaches a global or parameter target the default checker does not trace; `--provenance` tracks loose raw locals while leaving unchecked dereference contracts under `unsafe` (§4.1).
-
-For example, this function is accepted in the default build although the arena dies when it returns while `out` keeps the view:
-
-```zoril,no-test
-fn stash_pair(p: (&mut [i32], [i32])) { *p.0 = p.1; }
-
-fn escape_storer(out: &mut [i32]) {
-    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return; } };
-    let mut v = Vec::<i32>.new_in(&a);
-    v.push(42);
-    stash_pair((out, v.as_slice()));  // the destination and the view travel in one parameter
-}                                     // accepted: `a` is gone, `out` still views its storage
-```
-
-The complete per-probe `known_gap` inventory and the `(A)`–`(O)` route-class breakdown live in [`bench/safety_matrix/README.md#known-gaps`](../bench/safety_matrix/README.md#known-gaps).
+The verification ledger and probe inventory live in [`bench/safety_matrix/README.md#known-gaps`](../bench/safety_matrix/README.md#known-gaps).
 
 ---
 

@@ -140,7 +140,9 @@ pub fn read_to_end_sized<R: Read>(r: &mut R, initial_cap: u64, a: &Arena) -> Res
 // CALLER OBLIGATION: arena must be valid and initialized.
 //
 // INTERNAL: unsafe raw-pointer escape hatch for bootstrap compiler and internal modules
-#[borrows(arena)]
+// SAFETY: the returned slice points into `arena` (allocated by `zoril_allocator_alloc`),
+// never into `r`; `r.read(chunk)` only writes bytes into `chunk`.
+#[unsafe(borrows(arena))]
 pub unsafe fn read_to_end_sized_raw<R: Read>(
     r: &mut R,
     initial_cap: u64,

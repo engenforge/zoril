@@ -1,7 +1,6 @@
 // name: Option.clone of an Option holding a view of this frame is returned
-// expected: known_gap
-// gap: Clone for Option<T> declares no #[borrows()], so o.clone() is tied to the local o by the &self default, but the default build's return rule does not follow that tie to the view of a stack array o holds: the clone of Some(s) is returned and the caller reads the dead frame; returning o itself is refused, and so is the clone under --provenance (return rule)
-// observed: exit 7
+// expected: compile_reject
+// Refused by the provenance return rule: Option.clone's summary ties its result to the frame view o holds.
 import "core.zrl";
 import "clone.zrl";
 fn view() -> Option<[u8]> { let buf = [42 as u8; 16]; let s: [u8] = &buf; let o = Option.Some(s); return o.clone(); }

@@ -1,7 +1,6 @@
 // name: Arena reset after a #[borrows()] method returns a view of its receiver
-// expected: known_gap
-// gap: a #[borrows()] method returning a slice its receiver holds (text_from returns self.source, a view of a Vec in arena a) gives a result that holds no borrow: a.reset() is accepted while the result is read afterwards; without the attribute the same program is refused at the reset (cannot mutably borrow 'a')
-// observed: exit 77
+// expected: compile_reject
+// Refused by the provenance #[borrows(..)] check: a declaration cannot narrow away a parameter the body returns.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

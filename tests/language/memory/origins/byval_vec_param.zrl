@@ -1,6 +1,7 @@
 // A by-value `Vec` parameter is a local: its storage is Frame(v), not the caller's (gap_32).
 // ORIGINS: store_view v O={Param(1)} S={Frame(v)}
-// expected exit 42
+// expected compile fail
+// EXPECT: store rule
 import "vec.zrl";
 use vec::Vec;
 fn store_view(out: &mut [i32], v: Vec<i32>) {

@@ -1333,7 +1333,7 @@ impl Driver {
             e.file_path
         );
         if origins.errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
-            self.had_error = true;
+            self.had_provenance_error = true;
         }
         let grew = check_zir::store_origin_summary(
             self.arena,
@@ -1349,7 +1349,7 @@ impl Driver {
                 e.func_idx as usize
             );
             if refused > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
-                self.had_error = true;
+                self.had_provenance_error = true;
             }
             self.module.get_function_mut(e.func_idx as usize).os_in_cycle = false;
         }
@@ -1439,7 +1439,7 @@ impl Driver {
         }
         let origins_slice = unsafe { @slice(origins_ptr, 1 as usize) };
         if origins_slice[0].errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
-            self.had_error = true;
+            self.had_provenance_error = true;
         }
         // The body's summary, for the calls lowered after it; an `unsafe fn`'s too, since an address
         // it makes from an integer is Raw, not Unknown (§3, _Raw operations_).
@@ -1454,7 +1454,7 @@ impl Driver {
             if check_zir::os_infer_ties(&mut origins_slice[0], self.module, self.intern_table, idx)
                 > 0 as u32
                 && self.provenance == check_zir::PROVENANCE_ON {
-                self.had_error = true;
+                self.had_provenance_error = true;
             }
         }
         if in_cycle {

@@ -1,7 +1,6 @@
 // name: A struct holding a view of this frame is cloned into the caller's Vec by resize
-// expected: known_gap
-// gap: out.resize(1, H { s: &buf }) with buf a stack array and impl Clone for H returning H { s: self.s }: resize stores clones of value, and the clone's result is not tied to the view self holds, so the caller's Vec gets the frame view; out.push(H { s: &buf }) is refused (also through extend_from_slice of an array of such structs)
-// observed: exit 77
+// expected: compile_reject
+// Refused by the provenance call store rule: Clone's summary propagates the frame view into resize's destination.
 import "vec.zrl";
 use vec::Vec;
 struct H { s: [u8] }

@@ -331,7 +331,7 @@ fn parse_args(argc: i32, argv: **u8, table: &mut InternTable, arena: *mut ArenaH
         include_ids: unsafe { Vec::<u32>.new_in_raw(arena) },
         bad_args: false,
         no_verify: false, interproc_summary: false, interproc_stats: false,
-        show_help: false, checked: false, provenance: 0 as u32, hosted: false, lower_all: false,
+        show_help: false, checked: false, provenance: 1 as u32, hosted: false, lower_all: false,
     };
     let mut end_of_options = false;
     let mut i = 1 as i32;
@@ -606,18 +606,20 @@ fn compile(
         }
     }
 
+    let had_prov_err = unsafe { (*driver).had_provenance_error };
     progress("PROGRESS: Verifying...\n");
     let verified = verify_module(o, m, table, arena, compile_only, target_source_file);
+    let all_ok = verified.ok && !had_prov_err;
     if o.emit_zir_stats {
-        if verified.ok {
+        if all_ok {
             print("verdict accept\n");
             return 0;
         }
         print("verdict reject\n");
         return 1;
     }
-    if o.emit_origins { return if verified.ok { 0 } else { 1 }; }
-    if !verified.ok { return 1; }
+    if o.emit_origins { return if all_ok { 0 } else { 1 }; }
+    if !all_ok { return 1; }
 
     // The methods nothing calls were lowered to be checked, and the checks above are what read
     // those bodies (the IL verifier and the summary pass); the driver's own lowering checks ran
