@@ -257,10 +257,40 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: added and verified all 4 sibling refusal tests under `tests/language/memory/provenance/`: `vec_as_slice_returned_refused.zrl`, `vec_wrap_slice_returned_refused.zrl`, `vec_arena_element_returned_refused.zrl`, and `vec_clone_push_frame_view_refused.zrl` (P5, `call store rule` + `return rule`).
       - C4: `make test-changed BASE=HEAD` ran the full suite and passed (`Total: 4014 run, 4014 passed, 0 failed, 58 skipped (144.5s)`). No compiled code changed; store grid and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` unchanged from `id:h1yk5` on `git:9d4fc28`.
 
+- [ ] +safety +tests +AI-D @provenance B4a.1 Fix extend_from_slice (probes 419/420), String.push_str byte-copy ties (zbuild/ztest), and undeclared externs in tests id:fnr7r
+    > **Created:** 2026-11-20
+    > **Branch:** `provenance`
+    > **Depends:** id:sjqmy
+
+    - **Placed:** before id:z0065, which it blocks (3 `accept` probes and 6 warnings in `tools/zbuild` + `tools/ztest` fail under `--provenance`, and id:z0065 forbids newly refusing `accept` probes without a task).
+    - **Do:**
+      - 1. `Vec::extend_from_slice` (`stdlib/vec.zrl:409`): remove or fix `#[stores(slice -> self)]` so `419_extend_from_slice_stack_bytes_accepted.zrl` and `420_extend_from_slice_caller_arena_views_accepted.zrl` are accepted under `--provenance`, while `gap_56_extern_copy_extend_from_slice.zrl` and `418_extend_from_slice_frame_views_rejected.zrl` stay refused (verify both default and `--provenance` modes; check whether the body's `Clone` loop already carries the store summary now that `Clone` dropped `#[borrows()]`).
+      - 2. `String.push_str` byte-copy ties (`tools/zbuild/src/util.zrl:127` `join_path`, `tools/ztest/src/main.zrl:54,62` `cat2`/`item_path`): decide why `memcpy`'s `#[unsafe(stores(*src -> dest))]` on `u8` bytes ties a `String` (`u8` elements) to its source slice (whether `String.push_str` / `os_edge_effects` should not propagate origins into non-carrying `u8` storage, or whether `join_path`/`cat2`/`item_path` take `#[unsafe(borrows(..))]`), implement the chosen fix, and verify 0 warnings in `tools/zbuild` and `tools/ztest` under `--provenance=warn`.
+      - 3. Undeclared `extern`s in tests: add `#[unsafe(stores(..))]` to `bench/safety_matrix/probes/141_extern_call_unsafe.zrl` (`memcmp`), `tests/stdlib/test_runtime_memcmp.zrl`, `tests/ffi_callback/include/cb.zrl`, `tests/hosted/include/qsort_callback.zrl`, and `tests/platform_layer/include/platform.zrl` (and inspect `platform.zrl:55` unknown-call store rule) without changing any test's expected verdict.
+    - **Checks:**
+      - C1: `419`, `420`, and `141` pass under `--provenance`; `gap_56` and `418` stay refused under `--provenance` (and `418` in default mode).
+      - C2: `tools/zbuild/src/main.zrl` and `tools/ztest/src/main.zrl` produce 0 provenance warnings under `--provenance=warn`.
+      - C3: the 5 undeclared-`extern` tests compile under `--provenance` with their existing verdicts unchanged.
+      - C4: `make test`, `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (0 newly accepted, quoting `reject-diff: base verdicts: fresh (no cache)`), and `sh scripts/run_safety_matrix.sh`.
+
+- [ ] +safety +tests +AI-D @provenance B4a.2 Resolve the remaining src/ --provenance=warn sites and inspect the 7 non-extern tests id:ejjzw
+    > **Created:** 2026-11-20
+    > **Branch:** `provenance`
+    > **Depends:** id:fnr7r
+
+    - **Placed:** before id:z0065, which it blocks (`src/main.zrl` has 182 `--provenance=warn` warnings and 7 non-extern tests fail under `--provenance`).
+    - **Do:**
+      - 1. Resolve the 3 root warning sites in `src/` (`src/driver/module.zrl:1422,1452,1477,1501` `Driver::lower_fn_body` pushing `OsPending { zir: zir_func }`; `src/driver/module.zrl:864` `Driver::set_ice_context` causing 14 global warnings; and `src/mono.zrl:296` / `src/lower_zir/expr.zrl:3373` passing `&f` plus the 162 `Unknown` call-store warnings propagating through the `lower_expr` mutual-recursion cycle), following id:z0064's classification (real escape: fix code; safe arena-lifetime invariant: explicit `unsafe` with `// SAFETY:` or code restructuring).
+      - 2. Inspect and resolve the 7 remaining non-extern tests newly refused under `--provenance`: `tests/language/closures/closure_type_inference.zrl`, `tests/language/enums/variant_several_args_drop_once.zrl`, `tests/language/match/match_by_value_drops_once.zrl`, `tests/language/match/match_skipped_parts_dropped.zrl`, `tests/language/memory/origins/byval_vec_param.zrl`, `tests/language/modules/trait_names.zrl`, and `tests/unit/test_empty_compile_and_tool_errors.zrl`. Stop and report if any test's expected verdict would change.
+    - **Checks:**
+      - C1: all 5 roots (`src/main.zrl`, `tools/zilc`, `tools/zbuild`, `tools/zman`, `tools/ztest`) produce **0** provenance warnings under `--provenance=warn`.
+      - C2: all 7 tests pass under `--provenance` (or any real escape / precision task is split and reported).
+      - C3: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (quoting each `Total:` line and `reject-diff: base verdicts: fresh (no cache)`).
+
 - [ ] +safety +tests +AI-D @provenance id:z0065 B4a The new rules on by default, beside the old ones
     > **Created:** 2026-11-05
     > **Branch:** `provenance`
-    > **Depends:** id:z0064, id:z0075, id:z0088, id:z0092, id:z0180, id:z0093, id:z0094, id:z0097, id:z0087, id:z0086, id:z0084, id:z0089, id:z0090, id:7kbpd, id:z0066, id:h1yk5, id:w17jf, id:nc3ym, id:4by24, id:z0091, id:71a06, id:sjqmy, id:fqf8x
+    > **Depends:** id:z0064, id:z0075, id:z0088, id:z0092, id:z0180, id:z0093, id:z0094, id:z0097, id:z0087, id:z0086, id:z0084, id:z0089, id:z0090, id:7kbpd, id:z0066, id:h1yk5, id:w17jf, id:nc3ym, id:4by24, id:z0091, id:71a06, id:sjqmy, id:fqf8x, id:fnr7r, id:ejjzw
     > **Check-in:** stop for review after it.
 
     - **Split from:** id:z0012.
