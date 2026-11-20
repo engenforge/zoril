@@ -1,0 +1,23 @@
+// flags: --provenance
+// expected compile fail
+// EXPECT: call store rule
+// EXPECT: return rule
+//
+// Two different rules triggered at the same statement span both print (one each).
+
+fn wrap(out: &mut *i32, p: *i32) -> *i32 {
+    unsafe { *out = p; }
+    return p;
+}
+
+fn bad(out: &mut *i32) -> *i32 {
+    let x = 1;
+    return wrap(out, &x);
+}
+
+fn main() -> i32 {
+    let mut g: i32 = 0;
+    let mut p = &g as *i32;
+    let _ = bad(&mut p);
+    return 0;
+}

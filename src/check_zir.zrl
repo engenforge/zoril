@@ -6733,6 +6733,18 @@ pub const PROVENANCE_OFF: u32 = 0;
 pub const PROVENANCE_ON: u32 = 1;
 pub const PROVENANCE_WARN: u32 = 2;
 
+const OS_RULE_STORE: u8 = 1;
+const OS_RULE_CALL_STORE: u8 = 2;
+const OS_RULE_UNKNOWN_CALL: u8 = 3;
+const OS_RULE_CLOSURE: u8 = 4;
+const OS_RULE_RETURN: u8 = 5;
+const OS_RULE_EXTERN_STORE: u8 = 6;
+
+pub struct OsSeenDiag {
+    pub span: Span,
+    pub rule: u8,
+}
+
 pub struct OriginSets {
     pub nl: usize,
     pub words: usize,
@@ -6765,6 +6777,8 @@ pub struct OriginSets {
     pub file: [u8],
     pub span: Span,
     pub errors: u32,
+    pub seen_diags: [mut OsSeenDiag],
+    pub seen_diags_len: usize,
     // The store edges of this body, for its summary (§3, _The summary_): per stored-value code
     // (OS_EDGE_ROWS), the targets' ParamAddr bits, ParamContents bits, and OS_EDGE_GLOBAL.
     pub edges: [mut u64],
@@ -7792,8 +7806,41 @@ fn os_note_edge_row(c: &mut OriginSets, row: usize, t_addr: u64, t_contents: u64
     c.edges[r + 2 as usize] = c.edges[r + 2 as usize] | t_flags;
 }
 
-// Reports one refusal of the rules at the statement being checked (c.span).
-fn os_refuse(c: &mut OriginSets, msg: [u8]) {
+// Reports one refusal of the rules at the statement being checked (c.span), at most once per
+// site and rule.
+fn os_mark_diag(c: &mut OriginSets, rule: u8) -> bool {
+    let mut i = 0 as usize;
+    while i < c.seen_diags_len {
+        let d = &c.seen_diags[i];
+        if d.rule == rule && d.span.line == c.span.line && d.span.col == c.span.col {
+            return false;
+        }
+        i = i + 1 as usize;
+    }
+    if c.seen_diags_len < c.seen_diags.len {
+        c.seen_diags[c.seen_diags_len] = OsSeenDiag { span: c.span, rule: rule };
+        c.seen_diags_len = c.seen_diags_len + 1 as usize;
+    }
+    return true;
+}
+
+fn os_has_any_frame(c: &OriginSets, set: usize) -> bool {
+    let d = set * c.words;
+    let mut k = OS_W_FRAME;
+    while k < c.words {
+        if c.buf[d + k] != 0 as u64 { return true; }
+        k = k + 1 as usize;
+    }
+    return false;
+}
+
+fn os_origin_msg(c: &OriginSets, set: usize, frame_msg: [u8], unknown_msg: [u8]) -> [u8] {
+    if os_has_any_frame(c, set) { return frame_msg; }
+    return unknown_msg;
+}
+
+fn os_refuse(c: &mut OriginSets, rule: u8, msg: [u8]) {
+    if !os_mark_diag(c, rule) { return; }
     c.errors = c.errors + 1 as u32;
     diag_start(c.file, c.span, if c.rules == PROVENANCE_WARN { "warning" } else { "error" });
     eprint("provenance: ");
@@ -8218,7 +8265,13 @@ fn os_unknown_call_effects(
                     if os_frame_bound(c, sf) && os_external(c, td) {
                         os_refuse(
                             c,
-                            "a call with no store summary may store an address of this frame into memory that outlives it (unknown-call store rule)"
+                            OS_RULE_UNKNOWN_CALL,
+                            os_origin_msg(
+                                c,
+                                sf,
+                                "a call with no store summary may store an address of this frame into memory that outlives it (unknown-call store rule)",
+                                "a call with no store summary may store an address the compiler cannot trace into memory that outlives it (unknown-call store rule)"
+                            )
                         );
                         refused = true;
                     }
@@ -8839,7 +8892,13 @@ fn os_check_closure_value(
         if c.checking && os_frame_bound(c, tv) {
             os_refuse(
                 c,
-                "a closure whose stores are not known yet holds an address of this frame (closure rule)"
+                OS_RULE_CLOSURE,
+                os_origin_msg(
+                    c,
+                    tv,
+                    "a closure whose stores are not known yet holds an address of this frame (closure rule)",
+                    "a closure whose stores are not known yet holds an address the compiler cannot trace (closure rule)"
+                )
             );
         }
         return;
@@ -8866,7 +8925,13 @@ fn os_check_closure_value(
                 if c.checking && bound {
                     os_refuse(
                         c,
-                        "the closure made here stores an address of this frame into a global when it is called (closure rule)"
+                        OS_RULE_CLOSURE,
+                        os_origin_msg(
+                            c,
+                            tv,
+                            "the closure made here stores an address of this frame into a global when it is called (closure rule)",
+                            "the closure made here stores an address the compiler cannot trace into a global when it is called (closure rule)"
+                        )
                     );
                     return;
                 }
@@ -8885,7 +8950,13 @@ fn os_check_closure_value(
                         if c.checking && bound && os_external(c, ed) {
                             os_refuse(
                                 c,
-                                "the closure made here stores an address of this frame into memory that outlives it when it is called (closure rule)"
+                                OS_RULE_CLOSURE,
+                                os_origin_msg(
+                                    c,
+                                    tv,
+                                    "the closure made here stores an address of this frame into memory that outlives it when it is called (closure rule)",
+                                    "the closure made here stores an address the compiler cannot trace into memory that outlives it when it is called (closure rule)"
+                                )
                             );
                             return;
                         }
@@ -9115,7 +9186,13 @@ fn os_summary_store_effects(
                     if global {
                         os_refuse(
                             c,
-                            "the callee stores an address of this frame into a global (call store rule)"
+                            OS_RULE_CALL_STORE,
+                            os_origin_msg(
+                                c,
+                                tv,
+                                "the callee stores an address of this frame into a global (call store rule)",
+                                "the callee stores an address the compiler cannot trace into a global (call store rule)"
+                            )
                         );
                         refused = true;
                     }
@@ -9136,7 +9213,13 @@ fn os_summary_store_effects(
                             if os_frame_bound(c, sf) && os_external(c, td) {
                                 os_refuse(
                                     c,
-                                    "the callee stores an address of this frame into memory that outlives it (call store rule)"
+                                    OS_RULE_CALL_STORE,
+                                    os_origin_msg(
+                                        c,
+                                        sf,
+                                        "the callee stores an address of this frame into memory that outlives it (call store rule)",
+                                        "the callee stores an address the compiler cannot trace into memory that outlives it (call store rule)"
+                                    )
                                 );
                                 refused = true;
                             }
@@ -9306,7 +9389,13 @@ fn os_edge_effects(
             if c.checking && bound && !refused {
                 os_refuse(
                     c,
-                    "the callee stores an address of this frame into a global (call store rule)"
+                    OS_RULE_CALL_STORE,
+                    os_origin_msg(
+                        c,
+                        tv,
+                        "the callee stores an address of this frame into a global (call store rule)",
+                        "the callee stores an address the compiler cannot trace into a global (call store rule)"
+                    )
                 );
                 refused = true;
             }
@@ -9354,7 +9443,13 @@ fn os_edge_effects(
                         && os_external(c, ed) {
                         os_refuse(
                             c,
-                            "the callee stores an address of this frame into memory that outlives it (call store rule)"
+                            OS_RULE_CALL_STORE,
+                            os_origin_msg(
+                                c,
+                                sf,
+                                "the callee stores an address of this frame into memory that outlives it (call store rule)",
+                                "the callee stores an address the compiler cannot trace into memory that outlives it (call store rule)"
+                            )
                         );
                         refused = true;
                     }
@@ -9850,6 +9945,7 @@ fn os_call(
             while k < args.len {
                 let _ = os_arg(c, module, table, locals, fn_id, args, k);
                 if os_has_frame_or_param(c, tao) {
+                    if !os_mark_diag(c, OS_RULE_EXTERN_STORE) { break; }
                     c.errors = c.errors + 1 as u32;
                     diag_start(
                         c.file,
@@ -9973,6 +10069,7 @@ fn os_rvalue(
                         if os_has_frame_or_param(c, tao) {
                             os_refuse(
                                 c,
+                                OS_RULE_EXTERN_STORE,
                                 "a call through a C function pointer passes it an address of this frame or of a parameter (extern store rule)"
                             );
                             break;
@@ -10059,9 +10156,16 @@ fn os_check_store(
         || !locals[base as usize - 1 as usize].is_capture_alias {
         return;
     }
+    let val_set = if crossed { os_t(c, OS_T_SF) } else { vo };
     os_refuse(
         c,
-        "a value holding an address of this frame is stored into memory that outlives it (store rule)"
+        OS_RULE_STORE,
+        os_origin_msg(
+            c,
+            val_set,
+            "a value holding an address of this frame is stored into memory that outlives it (store rule)",
+            "a value holding an address the compiler cannot trace is stored into memory that outlives it (store rule)"
+        )
     );
 }
 
@@ -10265,6 +10369,16 @@ pub fn compute_origins_zir(
         file: file,
         span: (*func).span,
         errors: 0 as u32,
+        seen_diags: unsafe {
+            @slice(
+                zoril_allocator_alloc(
+                    arena,
+                    (nstmts * 6 as usize + 6 as usize) * sizeof(OsSeenDiag)
+                ) as *mut OsSeenDiag,
+                nstmts * 6 as usize + 6 as usize
+            )
+        },
+        seen_diags_len: 0 as usize,
         // SAFETY: a block of OS_EDGE_ROWS * 3 u64 in ARENA, the body's scratch arena, which lives
         // as long as these sets; it is zeroed below before any read.
         edges: unsafe {
@@ -10364,7 +10478,16 @@ fn os_pass(
                 } else {
                     c.span = (*func).span;
                 }
-                os_refuse(c, "the returned value holds an address of this frame (return rule)");
+                os_refuse(
+                    c,
+                    OS_RULE_RETURN,
+                    os_origin_msg(
+                        c,
+                        vo,
+                        "the returned value holds an address of this frame (return rule)",
+                        "the returned value holds an address the compiler cannot trace (return rule)"
+                    )
+                );
             }
         }
     }

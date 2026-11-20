@@ -1,0 +1,17 @@
+// flags: --provenance
+// expected compile fail
+// EXPECT: the returned value holds an address the compiler cannot trace (return rule)
+//
+// Returning an Unknown-only origin (from a summary-less .zri import) prints
+// the Unknown-specific return rule wording.
+
+import "unknown_summaryless_lib.zri";
+
+fn bad() -> *u8 {
+    return unknown_summaryless_lib::mk();
+}
+
+fn main() -> i32 {
+    let _ = bad();
+    return 0;
+}
