@@ -185,10 +185,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - Defects found and fixed in `git:103295f`: `tests/language/memory/provenance/extern_one_pointer_keep.s` was ignored by `*.s` in `.gitignore` and never committed (would be missing in a fresh clone/tarball); `scripts/check_clean_tree.sh` had a duplicate exemption line; two test comments carried `(id:eb38n)`. Added `!tests/language/memory/provenance/extern_one_pointer_keep.s` to `.gitignore`, tracked the `.s` file, deduplicated `check_clean_tree.sh`, and removed the task IDs from test comments (`sh scripts/check_clean_tree.sh` passed; `./scripts/test.sh` on the two tests: `Total: 3 run, 3 passed, 0 failed, 0 skipped (0.1s)`).
       - Verified `stage0-c` change in `838eafc` is justified under `AGENTS.md` (unblocks stage0-c's suites parsing `stdlib/mem_raw.zrl`, with regression test `bootstrap/stage0-c/tests/fixed_bugs/unsafe_stores_attribute_ignored.zrl`), `fn_value_result_accepted.zrl` edit in `1aa3e43` adapts `through_c` to the new `extern "C" fn` rule without weakening coverage, and `gap_102`/`gap_103`/F9's status in `bench/safety_matrix/README.md` matches the decisions.
 
-- [ ] +safety +review +AI-D @provenance @checkin Review of the provenance diagnostics wording and de-duplication (id:z0066) id:h1yk5
+- [x] +safety +review +AI-D @provenance @checkin Review of the provenance diagnostics wording and de-duplication (id:z0066) id:h1yk5
     > **Created:** 2026-11-17
     > **Branch:** `provenance`
     > **Depends:** id:z0066
+    > **Completed:** 2026-11-20 git:9d4fc28
 
     - **Placed:** directly after id:z0066, the `+AI-G` batch it reviews (a review of the task list, the maintainer's request, 2026-11-17: id:z0066 had no check-in, and it changes the checker's diagnostics and the `EXPECT:` lines of provenance tests). id:z0065, the next task that builds on it, depends on this one.
 
@@ -199,6 +200,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - Every `EXPECT:` line changed is in the commit message's list (C5), and none changed from one rule's message to another rule's.
 
     - **Moved (2026-11-19, with id:z0066):** to directly after id:g764h, so that both check-ins of the `+AI-G` batch run back to back in one `+AI-D` session. It is still before id:z0065, which depends on it.
+    - **Review recorded (2026-11-20, git:9d4fc28):**
+      - Re-read queue and `git show 9d4fc28`: `os_mark_diag` keys on `(rule, span.line, span.col)` per function and only suppresses duplicates after the first diagnostic for that `(rule, line, col)` has already incremented `c.errors`, so it cannot drop the only error of a function. `os_origin_msg` selects the Frame vs Unknown wording via `os_has_any_frame`.
+      - Re-ran C3 under `--provenance=warn`: `src/fmt/doc.zrl:111:21 count=0`, `src/driver/module.zrl:1338:13 count=0`, `tools/zbuild/src/build.zrl:580:17 count=0`, `tests/unit/test_empty_compile_and_tool_errors.zrl:65:5 count=1`.
+      - Re-ran C4 on `two_rules_one_site_refused.zrl`: prints both `call store rule` and `return rule` at `15:12` (one each).
+      - Verified no program accepted that was refused: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` passed (`reject-diff: base verdicts: fresh (no cache); base front end 111 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 10596 newly refused, of 69173 programs`, `Total: 1528 run, 1528 passed, 0 failed, 0 skipped (109.3s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.6s)`). Under `--provenance`, before (`1aa3e43`, `build/h1y/zoril_before`) and after (`HEAD`) both gave `provenance 107/162 refused; gap_* 99/103 refused`.
+      - Verified C5: `git show --stat 9d4fc28 -- tests/` shows 0 existing `EXPECT:` lines changed and only the 4 new files listed in the commit message. No defects found.
 
 - [ ] +safety +measurement +AI-D @provenance B1.8c Measure: a store through a local raw pointer adds the stored value's origins to that local, so a heap block holding a frame address cannot leave the frame id:71a06
     > **Created:** 2026-11-14
