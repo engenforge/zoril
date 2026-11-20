@@ -137,10 +137,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C7: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` passed (`reject-diff: base verdicts: fresh (no cache); base front end 111 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 10596 newly refused, of 69173 programs`, `Total: 1525 run, 1525 passed, 0 failed, 0 skipped (109.1s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.6s)`); `make test` passed (`Total: 4000 run, 4000 passed, 0 failed, 58 skipped (143.4s)`); `sh scripts/run_safety_matrix.sh` (`All probes complete: 505/533 passed. Mismatches: 0`), `sh scripts/check_safety_model.sh` (`PASS: safety_model.md is self-consistent.`), `sh scripts/check_safety_comments.sh` (`PASS: all 180 stdlib unsafe blocks state the invariant they rely on.`), `make man-gen` + `scripts/test_man_pages.sh` (`[PASS] man-pages`), and stage1 build (`rm -f build/zoril && make` -> `rc=0`, `Fixpoint reached: 23008480 bytes of ZIL`) all passed. Fuzz record is stale.
       - C8: `doc/spec/surface_syntax.md` §9.1 updated to "every undeclared `extern` that can be passed an address ... or through an `extern "C" fn` value".
 
-- [ ] +diagnostics +AI-G @provenance id:z0066 B3.9 Provenance diagnostics name the origin they found, once per site
+- [x] +diagnostics +AI-G @provenance id:z0066 B3.9 Provenance diagnostics name the origin they found, once per site
     > **Created:** 2026-11-05
     > **Branch:** `provenance`
     > **Depends:** id:0m61c
+    > **Completed:** 2026-11-20
 
     - **Found by:** id:z0049's review (correction 8).
 
@@ -154,6 +155,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: a test with two different rules at one site prints both (one each), so the de-duplication is per rule, not per site.
       - C5: every `EXPECT:` line changed, listed in the commit message (`git diff --stat -- tests` matches the list).
       - C6: `make test` and `make preflight-changed`, each `Total:` line quoted.
+    - **Checks recorded (2026-11-20, git:9d4fc28):**
+      - C1: `build/z66/unk_zri.zrl` (`import "nolib.zri"; fn f() -> *u8 { return nolib::mk(); } fn main() -> i32 { return 0; }` with `nolib.zri` `pub fn mk() -> *u8;`) got `build/z66/unk_zri.zrl:2:24: error: provenance: the returned value holds an address of this frame (return rule)` before the change.
+      - C2: `return_frame_wording_refused.zrl` (`the returned value holds an address of this frame (return rule)`) and `return_unknown_wording_refused.zrl` (`the returned value holds an address the compiler cannot trace (return rule)`) both pass (`./scripts/test.sh tests/language/memory/provenance`: `Total: 163 run, 163 passed, 0 failed, 0 skipped (0.9s)`).
+      - C3: under `--provenance=warn`: `src/fmt/doc.zrl:111:21 count=0`, `src/driver/module.zrl:1338:13 count=0`, `tools/zbuild/src/build.zrl:580:17 count=0`, `tests/unit/test_empty_compile_and_tool_errors.zrl:65:5 count=1` (down from 2).
+      - C4: `two_rules_one_site_refused.zrl` prints both `call store rule` and `return rule` at `15:12` (one each) and passes.
+      - C5: 0 existing `EXPECT:` lines changed (`git diff --stat -- tests` is empty); the 4 new test files are listed in the commit message.
+      - C6: `make test` passed (`Total: 4006 run, 4006 passed, 0 failed, 58 skipped (144.4s)`); `make preflight-changed` passed (`[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 10596 newly refused, of 69173 programs`, `Total: 1528 run, 1528 passed, 0 failed, 0 skipped (109.1s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.7s)`).
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
 
     - **Moved (2026-11-19, the maintainer's request to group `+AI-G` work):** from after id:z0044 to directly after id:eb38n. It joins that batch of `+AI-G` tasks, and its check-in id:h1yk5 follows the batch's check-in id:g764h. Its only dependency, id:0m61c, is complete. Nothing between its old and new places depends on it. The tests id:77rr6 to id:eb38n add may carry `EXPECT:` lines in the old wording, and this task updates them with the rest (C5).
