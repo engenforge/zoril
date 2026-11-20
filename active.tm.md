@@ -537,10 +537,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - **C6:** `tm validate --strict doc/tasks/*.tm.md` passed with 0 warnings.
       - **Fuzz renewal request (item 4):** requested the maintainer to schedule the post-provenance fuzz renewal run (`make fuzz-release`, per `id:z0003`) once `stream/provenance` merges to `main` (and after `id:mskex`, `id:4ngz8`, `id:r1shp` if desired in the same session).
 
-- [ ] +safety +precision +AI-G @provenance H2 `#[unsafe(borrows(*self))]` declares a result tied only to what the referent holds; the interface carries it; Vec and String clones use it id:42ae2
+- [x] +safety +precision +AI-G @provenance H2 `#[unsafe(borrows(*self))]` declares a result tied only to what the referent holds; the interface carries it; Vec and String clones use it id:42ae2
     > **Created:** 2026-11-18
     > **Branch:** `provenance`
     > **Depends:** id:bfd1z
+    > **Completed:** 2026-11-20 git:2228b18
 
     - **Promoted (provenance, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, next to id:mqh84 and id:22qty, before the history squash (id:6d5wy): H2 and H3 change `src/` and `stdlib/` on the `provenance` branch, so they land before it is cleaned up and merged. The maintainer approved resuming them for the next release (2026-11-20), which also approves the new `pub` `Vec.empty_like` that the **Stop and report first** bullet waits for; the design note's "Ties through a reference to an owner" paragraph and `KNOWN_ISSUES.md` §5 (the `v.clone()` and `Vec<T>::resize` bound) are updated when H3 lands.
     - **Placed:** after id:bfd1z, whose `ret_held` it sets by declaration; id:2sdmk's decision (4).
@@ -549,13 +550,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Scope:** the parser accepts `*self` (and `*p` for a reference parameter `p`) only inside `#[unsafe(borrows(..))]`, setting the parameter's `ret_held` bit as well as its `ret_ties` bit; the interface writers keep the form and write a `ret_held` `#[summary]` key; `scripts/check_safety_comments.sh` requires a `// SAFETY:` line above it as for the other `#[unsafe(..)]`; `doc/spec/surface_syntax.md` and `doc/spec/unsafe_policy.md` name it. Stdlib: `Vec.empty_like` with the declaration, `Clone for Vec<T>` rewritten on it with no `unsafe`, `Clone for String` with the declaration.
     - **Checks:** C1: `tests/error_reporting/` tests: `*self` in a plain `#[borrows(..)]` refused, `*x` for a by-value parameter refused. C2: `--emit-origins` on `build/2sdmk/shapes.zrl` shows a held bit for `cl` (`Vec<[u8]>`) and none for `Vec<S>.clone` (P2). C3: `tests/modular/iface_attrs/` case: the `.zri` of a module with the declaration has `ret_held`, and an importer reads it (the key removed from the `.zri` by hand: the importer's held bit is gone). C4: `make test`, `make preflight-changed`, rejection differential with no newly accepted program (the borrow checker does not read `ret_held` until H3).
 
+    - **Completion (2026-11-20, git:2228b18, on `stream/provenance`; build/provenance):** applied id:bfd1z's word patch; parser `*p` (unsafe form only), `ILFunction.ret_held_decl` joined into `os_ret_held`, `ret_held` summary key, `*p` written back in `.zri`; `Clone for String` declares it. **Deviation:** `Vec.empty_like` and the `Clone for Vec<T>` rewrite are not done (stage1 cannot parse `borrows(*self)` in `vec.zrl`); split to id:yc4ad. C1: `tests/error_reporting/err_borrows_held_plain.zrl` and `err_borrows_held_by_value.zrl` pass. C2: not run on `shapes.zrl` (file absent); `--emit-origins` on a `Vec<[u8]>` clone caller shows no held line because the generic clone is deliberately not declared. C3: `sh scripts/test_interface_attrs.sh` section 6e passes (`ret_held = 1` written, `*h` kept, key set to 0 removes the importer's held line). C4: `make test` `Total: 4108 run, 4108 passed, 0 failed, 2 skipped (144.0s)`; rejection differential in id:mqh84.
     - **Deferred (2026-11-18, by the maintainer's decision recorded in id:2sdmk):** id:bfd1z counted 5 held sites among the 84 of `src/` and `tools/`, which is small, so H2, H3 and id:22qty move to `future.tm.md`, to resume after id:z0012.
     - **Start from id:bfd1z's patch:** the word and `ILFunction.os_ret_held` this task sets by declaration were not committed. Apply id:bfd1z's **Patch: the word** first, re-run its C1 to C4, and write the design note paragraph and the `unsafe` obligation that id:bfd1z's scope named. Also read its Findings A to C.
 
-- [ ] +safety +precision +AI-G @provenance H3 A call tied to an argument only through what its referent holds borrows what the referent holds, not the referent, so probe 307 is accepted id:mqh84
+- [x] +safety +precision +AI-G @provenance H3 A call tied to an argument only through what its referent holds borrows what the referent holds, not the referent, so probe 307 is accepted id:mqh84
     > **Created:** 2026-11-18
     > **Branch:** `provenance`
     > **Depends:** id:42ae2, id:z0044, id:kqp9n
+    > **Completed:** 2026-11-20 git:4e8d9b2
 
     - **Promoted (provenance, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, after id:42ae2, which it depends on (its blockers id:z0044 and id:kqp9n are complete).
     - **Placed:** after id:42ae2; id:2sdmk's decision (2), and id:2sdmk's checks C1 to C3.
@@ -564,14 +567,24 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Checks:** C1: probe 307 `accept`; gap_77, P1, P2, P3, P5, P6, P8 and P9 refused, each as a test. C2: with the copy of the referent's borrows taken out (the direct borrow dropped, nothing copied), P3 and P5 are accepted (the check sees the defect); restored, refused. C3: P7: `sh scripts/run_safety_matrix.sh` with 0 mismatches, and the `safety-matrix-zbuild` and `zbuild-diff` gates pass. C4: `make test`, `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, every newly accepted program listed with its reason.
     - **Ends with a check-in:** the `@checkin` task after it reviews H2 and H3.
 
+    - **Completion (2026-11-20, git:4e8d9b2):** `inherit_borrows_held` in `src/check_zir.zrl` and `os_through_held` for `os_call`'s first read. Probe 307 is **not** flipped (see id:yc4ad). C1: `string_clone_independent_accepted.zrl`, `string_clone_returned_accepted.zrl` accepted; `string_clone_arena_reset_refused.zrl` (P3 twin), `vec_clone_self_view_original_changed_refused.zrl` (P2) and the existing gap_77/P5 tests refused. C2: with the copy of the referent's borrows taken out, the arena-reset twin was accepted (exit 2); restored, refused. C3: `sh scripts/run_safety_matrix.sh`: `All probes complete: 539/539 passed. Mismatches: 0`; `safety-matrix-zbuild` and `zbuild-diff` ran in `make test`. C4: `make test` `Total: 4116 run, 4116 passed, 0 failed, 2 skipped (143.9s)`; `REJECT_DIFF_NO_CACHE=1 sh scripts/check_reject_diff.sh 992e4da`: `reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted ..., 0 newly refused, of 69179 programs against 992e4da`; `make preflight-changed PREFLIGHT_BASE=1aba284`: `Total: 1550 run, 1550 passed, 0 failed, 0 skipped (110.6s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (102.9s)`. Fuzz record is stale for `src/` and `stdlib/`. P9's class inside one body (Finding B) is not added as a test.
     - **Deferred (2026-11-18, by the maintainer's decision recorded in id:2sdmk):** id:bfd1z counted 5 held sites among the 84 of `src/` and `tools/`, which is small, so H2, H3 and id:22qty move to `future.tm.md`, to resume after id:z0012.
     - **Check to add:** id:bfd1z's Finding B, P9's class inside one body, beside P9.
     - **From id:sjqmy (2026-11-20, git:04be73c):** when this task lands, also have `os_call`'s tie arm read `ret_held` (using `os_through_split` into `O`, dropping `S` of the pointee) so P1–P4 (`return v.clone()` of local `Vec`/`String`, and `Vec<Vec<[u8]>>::resize`) are accepted alongside probe 307, and remove the `KNOWN_ISSUES.md` §5 bound.
 
+- [ ] +safety +precision +AI-D @provenance H4 Declare Vec.empty_like with borrows(*self) and infer Clone for Vec<T> per T, so probe 307 is accepted id:yc4ad
+    > **Created:** 2026-11-20
+    > **Branch:** `provenance`
+    > **Depends:** id:mqh84
+
+    - **Placed:** after id:mqh84, from which it was split; before its check-in id:22qty.
+    - **Why:** H2 could not add `Vec.empty_like` with `#[unsafe(borrows(*self))]`: `stdlib/vec.zrl` is in the stage1 closure and the pinned stage1 does not parse `*self` inside `borrows(..)` (`stdlib/vec.zrl:69:22: error: expected identifier, but found *`). Declaring the tie on the generic `Clone for Vec<T>` is unsound (a `T::clone` returning a view into its source buffer was accepted: `tests/language/memory/provenance/vec_clone_self_view_original_changed_refused.zrl` keeps it refused).
+    - **Stop and ask:** a stage1 re-pin or backport that parses `borrows(*self)` is the maintainer's decision. Then: add `Vec.empty_like`, rewrite `Clone for Vec<T>` on it with no `unsafe`, flip probe 307 to `accept`, remove the `Vec` bound from `KNOWN_ISSUES.md` §5, and re-run id:mqh84's C1 to C4 (P2 and P3 stay refused).
+
 - [ ] +safety +AI-D @provenance @checkin Check-in: review H2 and H3 (the trusted held declaration, and the caller rule that frees probe 307) id:22qty
     > **Created:** 2026-11-18
     > **Branch:** `provenance`
-    > **Depends:** id:42ae2, id:mqh84
+    > **Depends:** id:42ae2, id:mqh84, id:yc4ad
 
     - **Promoted (provenance, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, after id:mqh84, the batch it reviews, before the history squash (id:6d5wy).
     - **Placed:** directly after id:mqh84, the batch it reviews (H2, H3; H1 is `+AI-D` and closes itself).
