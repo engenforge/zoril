@@ -22,9 +22,12 @@ pub struct Attribute {
     pub borrows_trusted: bool,
     pub borrows: [u32],
     pub has_stores: bool,
+    pub stores_trusted: bool,
+    pub stores_span: Span,
     pub stores_from: [u32],
     pub stores_to: [u32],
     pub stores_static: [bool],
+    pub stores_contents: [bool],
     pub must_use: bool,
     // `#[fresh]` (surface_syntax.md §2.5) and where it was written, for the error when it is on
     // anything but an `unsafe fn` returning a raw pointer.
@@ -68,9 +71,12 @@ impl Parser {
             borrows_trusted: false,
             borrows: @slice(0 as *mut u32, 0 as usize),
             has_stores: false,
+            stores_trusted: false,
+            stores_span: self.cur.span,
             stores_from: @slice(0 as *mut u32, 0 as usize),
             stores_to: @slice(0 as *mut u32, 0 as usize),
             stores_static: @slice(0 as *mut bool, 0 as usize),
+            stores_contents: @slice(0 as *mut bool, 0 as usize),
             must_use: false,
             fresh: false,
             fresh_span: self.cur.span,
@@ -122,6 +128,7 @@ impl Parser {
                 attr.borrows = self.parse_name_list();
             } else if name == "stores" {
                 attr.has_stores = true;
+                attr.stores_span = name_span;
                 self.parse_stores_list(&mut attr);
             } else if name == "export" {
                 // Only an interface says this: in a source file it would let a C declaration be called
@@ -157,8 +164,16 @@ impl Parser {
             attr.has_borrows = true;
             attr.borrows_trusted = true;
             attr.borrows = self.parse_name_list();
+        } else if self.intern_table.lookup(name_id) == "stores" {
+            attr.has_stores = true;
+            attr.stores_trusted = true;
+            attr.stores_span = name_span;
+            self.parse_stores_list(attr);
         } else {
-            self.report_error("only #[borrows(..)] can be marked unsafe", name_span);
+            self.report_error(
+                "only #[borrows(..)] and an extern's #[stores(..)] can be marked unsafe",
+                name_span
+            );
         }
         self.expect(Token.RParen);
     }
@@ -201,12 +216,19 @@ impl Parser {
         let mut froms = unsafe { Vec::<u32>.new_in_raw(self.arena) };
         let mut tos = unsafe { Vec::<u32>.new_in_raw(self.arena) };
         let mut stats = unsafe { Vec::<bool>.new_in_raw(self.arena) };
+        let mut conts = unsafe { Vec::<bool>.new_in_raw(self.arena) };
         for f in attr.stores_from { froms.push(*f); }
         for t in attr.stores_to { tos.push(*t); }
         for s in attr.stores_static { stats.push(*s); }
+        for c in attr.stores_contents { conts.push(*c); }
         let self_name = self.intern_table.intern("self");
         self.expect(Token.LParen);
         while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+            let mut is_contents = false;
+            if self.is_kind(TokenKind.Star) {
+                is_contents = true;
+                self.next_token();
+            }
             let src = self.cur.token.get_ident_id();
             self.expect(Token.Ident(0 as u32));
             let mut dst = self_name;
@@ -224,12 +246,14 @@ impl Parser {
             froms.push(src);
             tos.push(dst);
             stats.push(is_static);
+            conts.push(is_contents);
             if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
         }
         self.expect(Token.RParen);
         attr.stores_from = froms.as_slice();
         attr.stores_to = tos.as_slice();
         attr.stores_static = stats.as_slice();
+        attr.stores_contents = conts.as_slice();
     }
 
     // `(key = value, ..)` of a `#[summary]` the compiler wrote into a `.zri`; unknown keys are
@@ -480,6 +504,26 @@ impl Parser {
             }
             self.expect(Token.Semi);
         }
+        if attr.stores_trusted && (!is_extern || body != 0 as ExprId) {
+            self.report_error(
+                "#[unsafe(stores(..))] is for an extern: a body's #[stores(..)] is checked against it",
+                attr.stores_span
+            );
+        } else if attr.has_stores && !attr.stores_trusted && is_extern && body == 0 as ExprId {
+            self.report_error(
+                "an extern's #[stores(..)] cannot be checked: write #[unsafe(stores(..))]",
+                attr.stores_span
+            );
+        }
+        if body != 0 as ExprId {
+            let mut has_contents_pair = false;
+            for sc in attr.stores_contents {
+                if *sc { has_contents_pair = true; }
+            }
+            if has_contents_pair {
+                self.report_error("the *p form is for an extern", attr.stores_span);
+            }
+        }
         return FnDecl {
             name: name,
             params: params,
@@ -515,9 +559,11 @@ impl Parser {
             borrows_trusted: attr.borrows_trusted,
             borrows: attr.borrows,
             has_stores: attr.has_stores,
+            stores_trusted: attr.stores_trusted,
             stores_from: attr.stores_from,
             stores_to: attr.stores_to,
             stores_static: attr.stores_static,
+            stores_contents: attr.stores_contents,
             expr_start: expr_start,
             expr_end: self.ast.exprs.len() as u32,
             default_of: 0 as u32,
@@ -681,9 +727,11 @@ impl Parser {
             borrows_trusted: false,
             borrows: @slice(0 as *mut u32, 0 as usize),
             has_stores: false,
+            stores_trusted: false,
             stores_from: @slice(0 as *mut u32, 0 as usize),
             stores_to: @slice(0 as *mut u32, 0 as usize),
             stores_static: @slice(0 as *mut bool, 0 as usize),
+            stores_contents: @slice(0 as *mut bool, 0 as usize),
             expr_start: expr_start,
             expr_end: self.ast.exprs.len() as u32,
             default_of: 0 as u32,

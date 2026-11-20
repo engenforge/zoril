@@ -609,9 +609,11 @@ pub struct FnDecl {
     // the body is verified (src/verify.zrl); a `pub fn` that stores a reference parameter without
     // declaring it warns, naming the line to add.
     pub has_stores: bool,
+    pub stores_trusted: bool,
     pub stores_from: [u32],
     pub stores_to: [u32],
     pub stores_static: [bool],
+    pub stores_contents: [bool],
     // Half-open range of ExprIds allocated while parsing this function (its whole body).
     pub expr_start: u32,
     pub expr_end: u32,

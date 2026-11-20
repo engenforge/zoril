@@ -1,0 +1,14 @@
+// flags: --provenance
+// expected compile fail
+// EXPECT: (extern store rule)
+import "lib_extern_bare.zrl";
+
+fn put(out: &mut &i32) {
+    let x = 5;
+    let r = &x;
+    unsafe {
+        lib_extern_bare::memcpy(out as *mut &i32 as *mut u8, &r as *&i32 as *u8, 8 as u64);
+    }
+}
+
+fn main() -> i32 { return 0; }

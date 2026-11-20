@@ -164,19 +164,33 @@ impl Driver {
         return mask;
     }
 
+    fn param_index(self: &Driver, f: &FnDecl, name: u32) -> usize {
+        let mut pi = 0 as usize;
+        while pi < f.params.len && pi < 63 as usize {
+            if f.params[pi].name == name { return pi; }
+            pi = pi + 1 as usize;
+        }
+        return 63 as usize;
+    }
+
     fn compute_stores_declared(self: &mut Driver, f: &FnDecl) -> (u64, u64) {
         let mut from = 0 as u64;
         let mut to = 0 as u64;
         if !f.has_stores { return (from, to); }
         let mut bi = 0 as usize;
         while bi < f.stores_from.len && bi < f.stores_to.len {
-            from = from | self.param_bit(f, f.stores_from[bi], true);
+            let is_contents = f.is_extern && bi < f.stores_contents.len && f.stores_contents[bi];
+            let sbit = self.param_bit(f, f.stores_from[bi], true);
             let is_static = bi < f.stores_static.len && f.stores_static[bi];
-            if is_static {
-                // Bit 63: the target is a global (src/verify.zrl, STORE_GLOBAL_BIT).
-                to = to | 0x8000000000000000 as u64;
+            // Bit 63: the target is a global (src/verify.zrl, STORE_GLOBAL_BIT).
+            let tbit = if is_static {
+                0x8000000000000000 as u64
             } else {
-                to = to | self.param_bit(f, f.stores_to[bi], false);
+                self.param_bit(f, f.stores_to[bi], false)
+            };
+            if !is_contents {
+                from = from | sbit;
+                to = to | tbit;
             }
             bi = bi + 1 as usize;
         }
@@ -996,7 +1010,7 @@ impl Driver {
         // summary and re-adds only the declared ones, so those come with it.
         let os = f.summary_os;
         let has_os = os.len >= 8 as usize;
-        let os_rows = if has_os { (os.len - 8 as usize) / 4 as usize } else { 0 as usize };
+        let mut os_rows = if has_os { (os.len - 8 as usize) / 4 as usize } else { 0 as usize };
         if has_os {
             decl_from = decl_from | os[4];
             decl_to = decl_to | os[5];
@@ -1012,6 +1026,37 @@ impl Driver {
             while q < os_rows * 4 as usize {
                 dst[q] = os[8 + q];
                 q = q + 1 as usize;
+            }
+        } else if f.is_extern
+            && f.body == 0 as ExprId
+            && f.has_stores
+            && f.stores_from.len > 0 as usize {
+            os_rows = f.stores_from.len;
+            // SAFETY: the main arena outlives every body's checks; the block holds `os_rows * 4` u64,
+            // all written by the loop below before it is read.
+            os_edges = unsafe { zoril_allocator_alloc(self.arena, os_rows * 32 + 8) as *mut u64 };
+            let dst = unsafe { @slice(os_edges, os_rows * 4 as usize) };
+            let mut bi = 0 as usize;
+            while bi < os_rows {
+                let sidx = self.param_index(f, f.stores_from[bi]);
+                let is_contents = bi < f.stores_contents.len && f.stores_contents[bi];
+                let code = if is_contents { 64 as usize + sidx } else { sidx };
+                let is_static = bi < f.stores_static.len && f.stores_static[bi];
+                let didx = if is_static {
+                    63 as usize
+                } else {
+                    self.param_index(f, f.stores_to[bi])
+                };
+                let addr = if is_static || didx >= 63 as usize {
+                    0 as u64
+                } else {
+                    (1 as u64) << (didx as u64)
+                };
+                dst[bi * 4 as usize] = code as u64;
+                dst[bi * 4 as usize + 1 as usize] = addr;
+                dst[bi * 4 as usize + 2 as usize] = 0 as u64;
+                dst[bi * 4 as usize + 3 as usize] = if is_static { 1 as u64 } else { 0 as u64 };
+                bi = bi + 1 as usize;
             }
         }
         let decl_span = if f.body != 0 as ExprId {

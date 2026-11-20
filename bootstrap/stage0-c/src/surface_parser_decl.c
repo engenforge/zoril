@@ -545,8 +545,12 @@ ImplDecl* parse_impl(Parser* parser) {
  * Anything else is an error. */
 void parse_attribute(Parser* parser, bool* is_must_use) {
     parser_consume(parser, TOK_LBRACKET, "Expect '[' after '#'");
+    bool is_unsafe = parser_match(parser, TOK_UNSAFE);
+    if (is_unsafe) {
+        parser_consume(parser, TOK_LPAREN, "Expect '(' after unsafe");
+    }
     parser_consume(parser, TOK_IDENT, "Expect attribute name");
-    if (parser->previous.kind == TOK_IDENT && strcmp(parser->previous.as.ident, "must_use") == 0) {
+    if (!is_unsafe && parser->previous.kind == TOK_IDENT && strcmp(parser->previous.as.ident, "must_use") == 0) {
         *is_must_use = true;
     } else if (parser->previous.kind == TOK_IDENT && strcmp(parser->previous.as.ident, "borrows") == 0) {
         parser_consume(parser, TOK_LPAREN, "Expect '(' after borrows");
@@ -561,7 +565,7 @@ void parse_attribute(Parser* parser, bool* is_must_use) {
             parser_advance(parser);
         }
         parser_consume(parser, TOK_RPAREN, "Expect ')' after #[stores(...");
-    } else if (parser->previous.kind == TOK_IDENT
+    } else if (!is_unsafe && parser->previous.kind == TOK_IDENT
                && (strcmp(parser->previous.as.ident, "fresh") == 0
                    || strcmp(parser->previous.as.ident, "releases") == 0)) {
         (void)0;
@@ -569,6 +573,9 @@ void parse_attribute(Parser* parser, bool* is_must_use) {
         char buf[128];
         snprintf(buf, sizeof(buf), "Unknown attribute '%s'", parser->previous.as.ident);
         parser_error(parser, buf);
+    }
+    if (is_unsafe) {
+        parser_consume(parser, TOK_RPAREN, "Expect ')' after #[unsafe(...)]");
     }
     parser_consume(parser, TOK_RBRACKET, "Expect ']' after attribute");
 }

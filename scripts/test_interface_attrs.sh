@@ -231,4 +231,14 @@ releases_off=$(releases_of_iface "$fr/off")
 [ "$releases_imported" = "$releases_whole" ] || fail "imported origins_releases_caller gave '$releases_imported', expected '$releases_whole'"
 [ -z "$releases_off" ] || fail "releases is not read from the interface: with releases = 0 it still gave '$releases_off'"
 
+# 6d. an extern's #[unsafe(stores(..))] is preserved in `.zri` above `extern fn`.
+ec_zri="$dir/cache/iface/$(printf '%s' "$src/lib_extern_copy.zri" | sed 's|/|%2F|g')"
+if [ ! -f "$ec_zri" ]; then
+    run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -c --write-interface "$fr/lib_extern_copy.zri" -o "$fr/lib_extern_copy.zil" "$src/lib_extern_copy.zrl" > "$fr/ec.log" 2>&1 \
+        || fail "lib_extern_copy.zrl's interface was not written" "$fr/ec.log"
+    ec_zri="$fr/lib_extern_copy.zri"
+fi
+grep -B1 'extern fn memcpy(' "$ec_zri" | grep -qF '#[unsafe(stores(*src -> dest))]' \
+    || fail "lib_extern_copy.zri lost #[unsafe(stores(*src -> dest))] above extern fn" "$ec_zri"
+
 echo "[PASS] interface-attrs: attributes, visibility and unsafe survive a .zri; every generic or trait attribute of the standard library is in its interface; zbuild and the whole-program build agree on the fixtures and probe 194; private items, duplicate methods and exports are diagnosed as whole-program does"

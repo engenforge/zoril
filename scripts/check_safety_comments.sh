@@ -43,7 +43,7 @@ for f in "$DIR"/*.zrl; do
     esac
 
     report="$(awk -v file="$disp" '
-        /^[ \t]*#\[unsafe\(borrows\(/ {
+        /^[ \t]*#\[unsafe\((borrows|stores)\(/ {
             if (run) { n++; run = 0; next }
             printf "%s:%d: %s\n", file, FNR, $0
             n++

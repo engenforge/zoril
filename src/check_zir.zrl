@@ -7465,6 +7465,29 @@ fn os_dest_reach(
     src: usize,
     dst: usize
 ) {
+    os_dest_reach_impl(c, module, table, locals, src, dst, true);
+}
+
+fn os_handle_reach(
+    c: &mut OriginSets,
+    module: &ILModule,
+    table: &InternTable,
+    locals: [Local],
+    src: usize,
+    dst: usize
+) {
+    os_dest_reach_impl(c, module, table, locals, src, dst, false);
+}
+
+fn os_dest_reach_impl(
+    c: &mut OriginSets,
+    module: &ILModule,
+    table: &InternTable,
+    locals: [Local],
+    src: usize,
+    dst: usize,
+    include_storage: bool
+) {
     os_copy(c, dst, src);
     let mut more = true;
     while more {
@@ -7472,7 +7495,7 @@ fn os_dest_reach(
         let mut id = 1 as usize;
         while id < c.nl {
             if os_has_frame(c, dst, id) {
-                if os_or(c, dst, c.nl + id) { more = true; }
+                if include_storage && os_or(c, dst, c.nl + id) { more = true; }
                 let lty = os_local_ty(locals, id as u32);
                 if !os_type_has(c, module, table, lty, OS_Q_HANDLE)
                     && os_type_has(c, module, table, lty, OS_Q_LOOSE_RAW)
@@ -7654,6 +7677,19 @@ fn os_moved_storage(c: &mut OriginSets, dst: usize, vo: usize, vs: usize) {
 fn os_frame_bound(c: &OriginSets, set: usize) -> bool {
     let d = set * c.words;
     if c.buf[d + OS_W_FLAGS] & ORIGIN_UNKNOWN != 0 as u64 { return true; }
+    let mut k = OS_W_FRAME;
+    while k < c.words {
+        if c.buf[d + k] != 0 as u64 { return true; }
+        k = k + 1 as usize;
+    }
+    return false;
+}
+
+fn os_has_frame_or_param(c: &OriginSets, set: usize) -> bool {
+    let d = set * c.words;
+    if c.buf[d + OS_W_ADDR] != 0 as u64 || c.buf[d + OS_W_CONTENTS] != 0 as u64 {
+        return true;
+    }
     let mut k = OS_W_FRAME;
     while k < c.words {
         if c.buf[d + k] != 0 as u64 { return true; }
@@ -9294,7 +9330,10 @@ fn os_edge_effects(
                     os_copy(c, sf, tv);
                     os_drop_self_store(c, module, table, locals, sf, tm);
                     os_dest_reach(c, module, table, locals, tm, ed);
-                    if w == 2 as usize { os_copy(c, tm, ed); }
+                    if w == 2 as usize {
+                        os_handle_reach(c, module, table, locals, tm, os_t(c, OS_T_X));
+                        os_copy(c, tm, os_t(c, OS_T_X));
+                    }
                     if c.checking
                         && bound
                         && !refused
@@ -9619,7 +9658,7 @@ fn os_call(
     let mut edge_rows = 0 as usize;
     if known {
         let f = &module.functions[fn_id as usize];
-        bare_extern = f.is_extern && !f.has_summary;
+        bare_extern = f.is_extern;
         known = f.storage_known || bare_extern;
         storage = f.ret_storage;
         ties = f.ret_ties;
@@ -9663,8 +9702,12 @@ fn os_call(
             if !f.has_borrows { ties = 0 as u64; }
             from_mask = 0 as u64;
             to_mask = 0 as u64;
+            if f.has_stores_declared {
+                edges = f.os_edges;
+                edge_rows = f.os_edge_rows;
+            }
         }
-        if f.has_stores_declared {
+        if f.has_stores_declared && !bare_extern {
             from_mask = from_mask | f.stores_declared_from;
             to_mask = to_mask | f.stores_declared_to;
         }
@@ -9775,7 +9818,45 @@ fn os_call(
     if owning && (!arena_tie || ret_fresh || os_type_has(c, module, table, ret_ty, OS_Q_FRESH)) {
         let _ = os_or(c, vs, owner);
     }
-    if body { os_edge_effects(c, module, table, locals, fn_id, args, edges, edge_rows); }
+    if (body || bare_extern) && edge_rows > 0 as usize {
+        os_edge_effects(c, module, table, locals, fn_id, args, edges, edge_rows);
+    }
+    if c.checking && bare_extern && !module.functions[fn_id as usize].has_stores_declared {
+        let f = &module.functions[fn_id as usize];
+        let mut raw_params = 0 as usize;
+        let mut pi = 0 as usize;
+        while pi < f.params_len {
+            let pty = f.param(pi).ty;
+            if pty != 0 as u32 {
+                let tag = os_type_def_tag(module, pty);
+                if tag == ILTYPE_RAWPTR || tag == ILTYPE_RAWPTRMUT {
+                    raw_params = raw_params + 1 as usize;
+                }
+            }
+            pi = pi + 1 as usize;
+        }
+        if raw_params >= 2 as usize {
+            let mut k = 0 as usize;
+            while k < args.len {
+                let _ = os_arg(c, module, table, locals, fn_id, args, k);
+                if os_has_frame_or_param(c, tao) {
+                    c.errors = c.errors + 1 as u32;
+                    diag_start(
+                        c.file,
+                        c.span,
+                        if c.rules == PROVENANCE_WARN { "warning" } else { "error" }
+                    );
+                    eprint("provenance: the extern '");
+                    eprint(table.lookup(f.name));
+                    eprint(
+                        "' declares no #[unsafe(stores(..))], and this call passes it an address of this frame or of a parameter (extern store rule)\n"
+                    );
+                    break;
+                }
+                k = k + 1 as usize;
+            }
+        }
+    }
     os_summary_store_effects(c, module, table, locals, fn_id, args, from_mask, to_mask);
     if cal_releases != 0 as u64 || cal_env_releases != 0 as u64 {
         let mut k = 0 as usize;

@@ -285,6 +285,26 @@ impl InterfacePrinter {
         }
     }
 
+    fn write_stores_contract(self: &InterfacePrinter, f: &FnDecl, indent: [u8]) {
+        if !f.has_stores { return; }
+        self.write(indent);
+        self.write(if f.stores_trusted { "#[unsafe(stores(" } else { "#[stores(" });
+        let mut i = 0 as usize;
+        while i < f.stores_from.len {
+            if i > 0 as usize { self.write(", "); }
+            if i < f.stores_contents.len && f.stores_contents[i] { self.write("*"); }
+            self.write_ident(f.stores_from[i]);
+            self.write(" -> ");
+            if f.stores_static[i] {
+                self.write("static");
+            } else {
+                self.write_ident(f.stores_to[i]);
+            }
+            i = i + 1 as usize;
+        }
+        self.write(if f.stores_trusted { "))]\n" } else { ")]\n" });
+    }
+
     // The contracts the author wrote as `#[borrows(..)]` and `#[stores(..)]` on a body this
     // interface carries (a generic function, a generic method, a trait method): the importer
     // instantiates the body and checks it against them. A non-generic function carries them as
@@ -301,23 +321,7 @@ impl InterfacePrinter {
             }
             self.write(if f.borrows_trusted { "))]\n" } else { ")]\n" });
         }
-        if f.has_stores {
-            self.write(indent);
-            self.write("#[stores(");
-            let mut i = 0 as usize;
-            while i < f.stores_from.len {
-                if i > 0 as usize { self.write(", "); }
-                self.write_ident(f.stores_from[i]);
-                self.write(" -> ");
-                if f.stores_static[i] {
-                    self.write("static");
-                } else {
-                    self.write_ident(f.stores_to[i]);
-                }
-                i = i + 1 as usize;
-            }
-            self.write(")]\n");
-        }
+        self.write_stores_contract(f, indent);
     }
 
     fn write(self: &InterfacePrinter, s: [u8]) {
@@ -1196,6 +1200,7 @@ impl InterfacePrinter {
             self.write("#[releases]\n");
         }
         if is_gen { self.write_declared_contracts(f, ""); }
+        if !is_gen && f.is_extern && !private_signature { self.write_stores_contract(f, ""); }
         if f.is_export {
             self.write("#[export]\n");
         }

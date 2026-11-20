@@ -86,8 +86,9 @@ Attributes are written `#[...]` immediately before the declaration they modify:
 - **`#[must_use]`**: On a function; emits a compiler warning if the return value is discarded without being bound and used or explicitly ignored with `let _ = ...`.
 - **`#[derive(Clone)]`**: On a struct; generates a field-by-field `Clone` implementation (§8.5).
 - **`#[borrows(p, ...)]`**: On a function; declares that any reference or view returned by the function may point only into the listed parameters, or into none of them for `#[borrows()]` (§7.2).
-- **`#[unsafe(borrows(p, ...))]`**: On a function; declares a narrower `#[borrows(..)]` contract that the compiler trusts beyond what static analysis proves (for example, returning a slice read through a raw pointer into longer-lived memory). Calling the function remains safe; the `unsafe` marks the trusted assumption on the declaration. `unsafe(..)` marks no other attribute (§7.2).
+- **`#[unsafe(borrows(p, ...))]`**: On a function; declares a narrower `#[borrows(..)]` contract that the compiler trusts beyond what static analysis proves (for example, returning a slice read through a raw pointer into longer-lived memory). Calling the function remains safe; the `unsafe` marks the trusted assumption on the declaration. `unsafe(..)` marks one other: an `extern`'s `#[stores(..)]` (§7.2).
 - **`#[stores(p -> q, ...)]`**: On a function; declares that the body stores parameter `p`'s storage into memory reached through `q` (omitting `-> q` targets `self`; `-> static` targets global memory). Checked against the function body (§7.2).
+- **`#[unsafe(stores(p -> q, *p -> q, ...))]`**: On an `extern fn`; declares the store effects the compiler trusts because an `extern` has no body to check. `p -> q` stores the pointer `p` itself into memory `q` points to (`-> static` for C's own memory); `*p -> q` (and `*p -> static`) stores what `p` points to into `q` (as `memcpy` copies contents from `src` to `dest`). `#[unsafe(stores())]` declares that the `extern` keeps nothing it is given. Plain `#[stores(..)]` on an `extern`, `#[unsafe(stores(..))]` on a body, and `*p` on a body's `#[stores(..)]` are errors.
 - **`#[fresh]`**: On an `unsafe fn` whose written return type is a raw pointer (`*T` or `*mut T`; type aliases are not accepted): asserts that each call returns newly allocated memory reachable by no other live pointer (or an error sentinel tested before use). The compiler checks only placement and return type; the freshness claim itself is trusted.
 - **`#[releases]`**: On an `unsafe fn` or `extern fn` taking a raw-pointer parameter (`*T` or `*mut T`): declares that calling the function may release or invalidate storage reached through its raw-pointer parameters.
 
@@ -760,6 +761,8 @@ An `extern fn` declaration names an external C-ABI function with no body, resolv
 - Linear `fd<..>` handles in bodyless foreign `extern fn` declarations (not in `extern "C" fn` definitions or C function pointer types; pass `i32` instead)
 
 `char`, slices (pass `.ptr` and `.len`), references, `Box<T>`, tuples, arrays, structs by value (pass a raw pointer), enums, closures, and Zoril `fn` values are disallowed in `extern` signatures.
+
+An `extern` keeps nothing it is given unless `#[unsafe(stores(..))]` declares it, and under `--provenance` a call to an undeclared `extern` with two or more raw-pointer parameters that passes an address of the frame or a parameter is refused (`extern store rule`). For example, `memcpy` declares `#[unsafe(stores(*src -> dest))]` so callers know that what `src` points to is stored where `dest` points.
 
 ### 9.2 System Calls
 

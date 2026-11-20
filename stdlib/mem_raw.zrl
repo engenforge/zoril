@@ -10,6 +10,8 @@ use fmt::write_u64;
 use sys::{mmap_anon, mmap_anon_or_trap, munmap_or_trap, syscall_failed};
 
 // CALLER OBLIGATION: dest and src must point to valid memory of at least size bytes; regions must not overlap.
+// SAFETY: memcpy copies the n bytes at src into dest, so what src points to is stored where dest points, and it keeps neither pointer.
+#[unsafe(stores(* src -> dest))]
 pub extern fn memcpy(dest: *mut u8, src: *u8, size: u64);
 
 // CALLER OBLIGATION: dest must point to valid writable memory of at least size bytes.

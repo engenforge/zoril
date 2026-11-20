@@ -1,0 +1,11 @@
+// expected exit 0
+// Regression test: stage0-C accepts and ignores #[unsafe(stores(..))] on extern fn
+// (as it ignores #[borrows(..)], #[stores(..)], #[fresh] and #[releases]), so its suites
+// continue to parse stdlib/mem_raw.zrl.
+
+#[unsafe(stores(*src -> dest))]
+extern fn memcpy(dest: *mut u8, src: *u8, size: u64);
+
+fn main() -> i32 {
+    return 0;
+}
