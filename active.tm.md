@@ -591,15 +591,24 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - **Siblings probed (`/tmp/ci`):** field receiver (`x.v.clone()`, `x.s.clone()`), `Box` receiver, `match` binding over `&e`, generic `dup<T: Clone>(x: &T)`: independent clones accepted, arena reset / freed view source refused; a held tie inferred through two wrappers (`w2 -> w -> clone`): `v.push` accepted, `a.reset()` refused.
       - The fuzz record is stale for `src/` and `stdlib/` (`check_fuzz_fresh.sh`: `STALE`).
 
-- [ ] +safety +AI-D @provenance @checkin Check-in: review H2 and H3 (the trusted held declaration, and the caller rule that frees probe 307) id:22qty
+- [x] +safety +AI-D @provenance @checkin Check-in: review H2 and H3 (the trusted held declaration, and the caller rule that frees probe 307) id:22qty
     > **Created:** 2026-11-18
     > **Branch:** `provenance`
     > **Depends:** id:42ae2, id:mqh84, id:yc4ad
+    > **Completed:** 2026-11-20 git:a5644e6
 
     - **Promoted (provenance, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, after id:mqh84, the batch it reviews, before the history squash (id:6d5wy).
     - **Placed:** directly after id:mqh84, the batch it reviews (H2, H3; H1 is `+AI-D` and closes itself).
     - **Moved (2026-11-18, the maintainer's decision):** with id:42ae2 and id:mqh84, to stay directly after the batch it reviews.
     - **Review:** re-run H3's C1 to C3 and P1 to P8 of id:2sdmk; probe the sibling routes: a held tie through a trait call resolved per instance, a `Box` receiver, a field receiver (`s.v.clone()`), a `match` binding receiver, and an import whose `.zri` has no `ret_held` key.
+    - **Review record (2026-11-20, Opus session; H2 and H3 were written by a Sonnet session):**
+      1. Queue re-read: the batch added id:yc4ad (H4, split from H2), done first in this session (git:02f863f, a5644e6), which this review covers too since it changes the H3 rule (`os_call`'s arena under a held tie).
+      2. Commits read: `git show 2228b18 4e8d9b2 02f863f a5644e6`. H2: `ParamOwned` word, `os_may_own`, `held_spoiled`, `os_through_plus_held`, `ret_held` key, parser `*p` in the `unsafe` form only. H3: `inherit_borrows_held` replaces a *direct* borrow of the referent by the referent's own recorded borrows and keeps every derived one as is (so P8's `v.get(0).unwrap().clone()` keeps `v` borrowed); an open cycle reads as unheld. Sound against the planted cases; the invariant it rests on (a reference or slice read from memory points only into what its owner borrows) is P5's and P9's, both refused.
+      3. Re-run on `build/zoril` at a5644e6's code (02f863f): C1, P1, P2, P3, P5, P8, P9 refused (`cannot mutably borrow '<v|v1|a|t.buf>' while it is already borrowed`), plus `Vec<[u8]>` clone twins of P5/P9; probe 307 accepted. C3 and P7: `safety-matrix 539 run 539 passed`, `safety-matrix-zbuild 539 run 539 passed`, `zbuild-diff` and `interface-attrs` in `Integration 242 run 242 passed`; `make test` `Total: 4122 run, 4122 passed, 0 failed, 2 skipped (143.6s)` (after a5644e6, a doc-only commit; the code run is id:yc4ad's).
+      4. Siblings (programs under `/tmp/ci`, each a `main` of 3 to 6 lines): field receiver `x.v.clone()`/`x.s.clone()`, `Box` receiver `(*b).clone()`, `match &e { E.A(t) => t.clone() }`, generic `dup<T: Clone>(x: &T)` per instance (`Vec<u8>`, `String`, `Vec<[u8]>`): each independent clone accepted, each arena reset / free of a view's source while the clone lives refused; held tie through two inferred wrappers: `a.reset()` refused. Import with no `ret_held`: `scripts/test_interface_attrs.sh` 6e (key set to 0, the importer's held line gone), in `make test`. Parser: `borrows(*q)` naming no parameter refused (`#[borrows] names no parameter of this function: q`); on a `&mut` parameter accepted (claim true there); without `// SAFETY:` the `safety-comments` gate fails it.
+      5. Corrected in review: the design note said a `Vec<[u8]>` clone is unheld; it is held (`let c = v.clone(); v.push(b.as_slice());` accepted, correctly: `c` holds views into `b`), fixed in a5644e6.
+      6. Imprecision found, strict side, not a hole: with `v: Vec<[u8]>` holding `b.as_slice()`, `let c = v.clone(); v.free(); b.free();` is refused at `v.free()` (`cannot mutably borrow 'v' while it is already borrowed`), while the `Vec<u8>` twin `let c = v.clone(); v.free();` is accepted. Not filed: no program in the tree needs it.
+      7. Plan edits: added id:3nrvs, the `@checkin` after the `@main` `+AI-G` batch (z0032 to z0015), which had none. A reword note on id:6d5wy (H2's message). No re-tags or moves.
 
     - **Deferred (2026-11-18, by the maintainer's decision recorded in id:2sdmk):** id:bfd1z counted 5 held sites among the 84 of `src/` and `tools/`, which is small, so H2, H3 and id:22qty move to `future.tm.md`, to resume after id:z0012.
 
@@ -614,6 +623,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - Keep commits of distinct tasks separate where a later task's notes rely on telling them apart, and keep a local backup branch pointing at the old tip (`992e4da`) until the merge to `main` is published.
       - Verify tree identity (`git rev-parse <new>^{tree}` equals `git rev-parse <old>^{tree}`).
       - Update every rewritten SHA cited in `doc/tasks/*.tm.md` in a single task commit listing the old -> new SHA pairs.
+    - **From the check-in id:22qty (2026-11-20):** 2228b18 (H2) says "Clone for Vec<T> and for String declare it"; the `Vec<T>` declaration was unsound and 4e8d9b2 (H3) takes it out. These are commits of different tasks (H2, H3, H4), which `AGENTS.md` keeps apart, so reword 2228b18's message to say the `Vec<T>` declaration is temporary and taken out by the next commit (whether 2228b18's tree, with the unsound declaration, may reach `main` at all is the maintainer's call). a5644e6 is a fix to 02f863f of the same task (id:yc4ad) and may be squashed into it. The tip is now a5644e6, not `992e4da`: C1 compares against the tip at the start of the squash.
     - **Checks:** C1 `git -C build/provenance rev-parse HEAD^{tree}` equals the pre-squash tip's tree SHA (`992e4da^{tree}`), quoted. C2 `git -C build/provenance log --oneline main..HEAD` commit count before and after, quoted. C3 old tip preserved on a local backup branch. C4 every rewritten SHA in `doc/tasks/*.tm.md` updated and `tm validate --strict doc/tasks/*.tm.md` prints no warning.
 
 - [ ] +merge +safety +AI-D @provenance Merge the provenance branch into main id:w3vde
@@ -697,6 +707,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `rm build/zoril && make` (stage1 builds `src/diag.zrl`) and `make`, no warning.
       - C7: take the counter's check out (a scratch edit) and watch C2 fail; restore.
       - C8: the `KNOWN_ISSUES.md` entry removed or updated; `make test` and `make preflight-changed`, each `Total:` line quoted; the fuzz record is stale for `src/`.
+
+- [ ] +review +AI-D @main @checkin Check-in: review the main +AI-G batch (z0032, 7sb2k, 5342d, z0182, vdgj4, z0015) id:3nrvs
+    > **Created:** 2026-11-20
+    > **Branch:** `main`
+    > **Depends:** id:z0032, id:7sb2k, id:5342d, id:z0182, id:vdgj4, id:z0015
+
+    - **Placed:** directly after id:z0015, the last of the `@main` `+AI-G` batch it reviews, by the check-in id:22qty (`AGENTS.md`, Check-ins, step 3: the next `@checkin` after the next batch). No `@checkin` followed the batch when it was promoted.
+    - **Review:** the steps of `AGENTS.md` Check-ins; re-run each task's numbered checks and each **Awaiting review:** bullet.
 
 - [ ] +types +diagnostics +AI-D @main A pattern that moves several values out of a tuple or struct is accepted id:ts1jg
     > **Created:** 2026-11-14
