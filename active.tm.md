@@ -537,6 +537,28 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - **C6:** `tm validate --strict doc/tasks/*.tm.md` passed with 0 warnings.
       - **Fuzz renewal request (item 4):** requested the maintainer to schedule the post-provenance fuzz renewal run (`make fuzz-release`, per `id:z0003`) once `stream/provenance` merges to `main` (and after `id:mskex`, `id:4ngz8`, `id:r1shp` if desired in the same session).
 
+- [ ] +git +AI-D @provenance Clean up and squash the commit history in the provenance worktree before merging to main id:6d5wy
+    > **Created:** 2026-11-20
+    > **Branch:** `provenance`
+    > **Depends:** id:a85sp
+
+    - **Placed:** directly after id:a85sp (the maintainer's request, 2026-11-20), before merging `stream/provenance` into `main` (id:w3vde).
+    - **Do:** review the 107 commits on `stream/provenance` (`build/provenance`, `main..HEAD`) and squash multi-commit task sequences, fixups, and per-file micro-commits into clean, concise logical commits following `AGENTS.md`'s "Code branches" rules:
+      - Combine several commits of one task (e.g., per-file `#[borrows(..)]` check-in/tightening runs, fixups to the preceding commit, or probe+fix pairs where no later task's notes need them apart) into one commit whose body preserves every `Task:` line.
+      - Keep commits of distinct tasks separate where a later task's notes rely on telling them apart, and keep a local backup branch pointing at the old tip (`992e4da`) until the merge to `main` is published.
+      - Verify tree identity (`git rev-parse <new>^{tree}` equals `git rev-parse <old>^{tree}`).
+      - Update every rewritten SHA cited in `doc/tasks/*.tm.md` in a single task commit listing the old -> new SHA pairs.
+    - **Checks:** C1 `git -C build/provenance rev-parse HEAD^{tree}` equals the pre-squash tip's tree SHA (`992e4da^{tree}`), quoted. C2 `git -C build/provenance log --oneline main..HEAD` commit count before and after, quoted. C3 old tip preserved on a local backup branch. C4 every rewritten SHA in `doc/tasks/*.tm.md` updated and `tm validate --strict doc/tasks/*.tm.md` prints no warning.
+
+- [ ] +merge +safety +AI-D @provenance Merge the provenance branch into main id:w3vde
+    > **Created:** 2026-11-20
+    > **Branch:** `provenance`
+    > **Depends:** id:6d5wy
+
+    - **Placed:** directly after id:6d5wy (the maintainer's request, 2026-11-20), landing the completed provenance series on `main`.
+    - **Do:** merge the cleaned-up provenance branch into `main` (maintainer's decision), resolving any conflicts in recorded figures (`corpus/zrl_whole_program_zil.sha256`, `bench/fuzz/*`, safety figures) by recomputing them from the merged tree (`UPDATE_GOLDEN=1` in `scripts/test_incremental.sh`), never by taking a side. Update `id:z0045` if needed to cite the commit on `main`. Push `bench/records` if preflight appends rows.
+    - **Checks:** C1 `git log -n 5 --oneline main` shows the merge commit on `main`. C2 `make test` on `main`, `Total:` line quoted. C3 `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=<main before the merge>` on `main`, quoting each `Total:` line and the `reject-diff: base verdicts: fresh (no cache)` line. C4 `sh scripts/check_store_grid.sh` summary quoted (0 unsafe cells accepted).
+
 - [ ] +zil +decision +AI-D @zil ZL1 Settle the slice form of string_const and the slice_ptr opcode, and check what the pinned stage1 feeds zilc id:m6vm3
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decisions in id:1kaye (`future.tm.md`), 2026-11-13
@@ -601,3 +623,25 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Why:** ZIL is not checked for memory safety, but zilc should catch the mistakes that are easy to see in ZIL as designed and that happen most often (the maintainer, id:ahd1c).
     - **Do:** list candidate checks, each with a three-line ZIL program that shows the mistake, and say for each whether ZIL as written carries what the check needs. Candidates to start from: a value used after a `move` or `drop` in the same function, a `drop` twice, a `slice_load`/`slice_store` with no dominating `bounds_check` (spec §6.3), the address of an `alloc 'local` returned or stored into a global, a `slice_len` or `slice_ptr` on a value that is not a slice, a `syscall` with an argument count its stub does not take, and a block with no terminator. Corpus mistakes count as evidence of what is common: id:1kaye's string over-read is one. Rank them by how often they would fire and how simple they are, and split each chosen check into an `+AI-G` task with its own numbered **Checks:** and a take-out.
     - **Checks:** C1: every candidate has its program and its answer here, with the zilc output today (`timeout -k 5s 30s build/zilc <file>`). C2: the chosen checks are tasks, placed after this one, with a check-in after them.
+
+- [ ] +fuzz +safety +release +AI-D @main Renew the fuzz record (make fuzz-release) after the provenance and ZIL series id:v2f8h
+    > **Created:** 2026-11-20
+    > **Branch:** `main`
+    > **Depends:** id:w3vde, id:0mbg3
+
+    - **Placed:** after the remaining `@zil` tasks (id:0mbg3) and before the release task (id:jtk00), per the maintainer's request (2026-11-20). Optionally promote and land generator-debt tasks `id:mskex`, `id:4ngz8`, and `id:r1shp` from `future.tm.md` before running this session so the renewed record covers the new provenance route classes.
+    - **Do:** on a clean `main` tree with `rustc` available, run the release-bar fuzz renewal (`make fuzz-release`, per `id:z0003` and `bench/fuzz/README.md`), triage any findings, update `bench/fuzz/README.md` with the renewed record and commit hashes, and verify `scripts/check_fuzz_fresh.sh` reports fresh for `src/`, `stdlib/`, `tools/zilc`, `tools/zbuild`, and `rt/`.
+    - **Checks:** C1 `make fuzz-release` summary line quoted (0 faults, 0 unclassified candidates, 0 `knownblind`, all calibration rows in fixed state). C2 `sh scripts/check_fuzz_fresh.sh` reports fresh for all tracked components. C3 `make test-changed BASE=HEAD`, its `Total:` line quoted.
+
+- [ ] +release +AI-D @main Cut the new release (version bump, changelog, make preflight, tarballs, and tag) id:jtk00
+    > **Created:** 2026-11-20
+    > **Branch:** `main`
+    > **Depends:** id:v2f8h
+
+    - **Placed:** after the fuzz renewal (id:v2f8h), per the maintainer's request (2026-11-20).
+    - **Do:** prepare and cut the next Zoril release on `main`:
+      1. Bump the version, update `CHANGELOG.md`, `README.md`, `KNOWN_ISSUES.md`, and `doc/SAFETY.md` / release notes for the provenance and ZIL series.
+      2. Run the full `make preflight` gate on `main` (and push `bench/records`).
+      3. Build and verify the release source tarballs (`make dist`, unpack into an empty directory, build and run `make test` from the tarball with `git` off `PATH`).
+      4. Maintainer tags and publishes the release (never push tags from an agent session).
+    - **Checks:** C1 `make preflight` passes end to end, quoting each `Total:` line and the store-grid summary. C2 `make dist` produces the release tarball, and building + running `make test` from the unpacked tarball (with no `.git` and `git` off `PATH`) passes, quoting `Total:`. C3 `sh scripts/check_fuzz_fresh.sh` reports fresh. C4 release tag created by the maintainer.
