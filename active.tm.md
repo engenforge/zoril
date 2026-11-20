@@ -257,10 +257,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: added and verified all 4 sibling refusal tests under `tests/language/memory/provenance/`: `vec_as_slice_returned_refused.zrl`, `vec_wrap_slice_returned_refused.zrl`, `vec_arena_element_returned_refused.zrl`, and `vec_clone_push_frame_view_refused.zrl` (P5, `call store rule` + `return rule`).
       - C4: `make test-changed BASE=HEAD` ran the full suite and passed (`Total: 4014 run, 4014 passed, 0 failed, 58 skipped (144.5s)`). No compiled code changed; store grid and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` unchanged from `id:h1yk5` on `git:9d4fc28`.
 
-- [ ] +safety +tests +AI-D @provenance B4a.1 Fix extend_from_slice (probes 419/420), String.push_str byte-copy ties (zbuild/ztest), and undeclared externs in tests id:fnr7r
+- [x] +safety +tests +AI-D @provenance B4a.1 Fix extend_from_slice (probes 419/420), String.push_str byte-copy ties (zbuild/ztest), and undeclared externs in tests id:fnr7r
     > **Created:** 2026-11-20
     > **Branch:** `provenance`
     > **Depends:** id:sjqmy
+    > **Completed:** 2026-11-20 git:bb7a091
 
     - **Placed:** before id:z0065, which it blocks (3 `accept` probes and 6 warnings in `tools/zbuild` + `tools/ztest` fail under `--provenance`, and id:z0065 forbids newly refusing `accept` probes without a task).
     - **Do:**
@@ -272,6 +273,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: `tools/zbuild/src/main.zrl` and `tools/ztest/src/main.zrl` produce 0 provenance warnings under `--provenance=warn`.
       - C3: the 5 undeclared-`extern` tests compile under `--provenance` with their existing verdicts unchanged.
       - C4: `make test`, `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (0 newly accepted, quoting `reject-diff: base verdicts: fresh (no cache)`), and `sh scripts/run_safety_matrix.sh`.
+    - **Checks recorded (2026-11-20, git:bb7a091):**
+      - Decision for item 2: `extend_bytes` calls `memcpy` (`#[unsafe(stores(*src -> dest))]`) on `bytes.ptr`, giving `extend_bytes` / `String.push_str` a `ParamContents(1) -> ParamContents(0)` edge that even refused copying a local `String.as_slice()` into an `Arena`-backed `String`. Added `os_contents_non_carrying` in `src/check_zir.zrl` so `os_param_origin(..., contents=true)` skips safe slices/references (`[T]`, `&T`, `&mut T`) whose element/referent type carries no address (`!os_carries`), while keeping raw pointers (`*u8`) tracked for `memcpy` (`gap_103`). Added regression test `tests/language/memory/provenance/string_push_str_local_into_arena_accepted.zrl`.
+      - C1: under `--provenance`, `419`, `420`, and `141` all gave `rc=0`; `gap_56` (`call store rule`) and `418` (`call store rule` + borrow error) gave `rc=1` under `--provenance`, and `418` stayed `rc=1` in default mode.
+      - C2: `tools/zbuild/src/main.zrl` and `tools/ztest/src/main.zrl` both produced 0 provenance warnings under `--provenance=warn`.
+      - C3: `141_extern_call_unsafe.zrl`, `test_runtime_memcmp.zrl`, `cb.zrl`, `qsort_callback.zrl`, `platform.zrl`, and `app.zrl` all compiled with `rc=0` under `--provenance` (`platform.zrl`/`app.zrl` pass `Frame` by value to `handler` so `trampoline` does not hand a stack reference to an unknown `fn` value); `./scripts/test_platform_layer.sh` and `./scripts/test_ffi_callback.sh` passed.
+      - C4: `make test` passed (`Total: 4016 run, 4016 passed, 0 failed, 58 skipped (144.2s)`); `REJECT_DIFF_NO_CACHE=1 make preflight-changed` passed (`reject-diff: base verdicts: fresh (no cache); base front end 112 s`, `[PASS] reject-diff: 2 newly accepted (none that must be refused, or all allowed), 10596 newly refused, of 69173 programs against a484d11487430a4f709006c069b68454b476b98a` — both newly accepted are `bench/safety_matrix/probes/141_extern_call_unsafe.zrl` whole-program and zbuild, `probe-accept`, because base `a484d11` does not parse `#[unsafe(stores())]`; `Total: 1533 run, 1533 passed, 0 failed, 0 skipped (109.3s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.6s)`); `sh scripts/run_safety_matrix.sh` passed (`All probes complete: 505/533 passed. Mismatches: 0`); `make man-gen` + `scripts/test_man_pages.sh` passed (`[PASS] man-pages`). Fuzz record is stale for `src/` and `stdlib/`.
 
 - [ ] +safety +tests +AI-D @provenance B4a.2 Resolve the remaining src/ --provenance=warn sites and inspect the 7 non-extern tests id:ejjzw
     > **Created:** 2026-11-20
