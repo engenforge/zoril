@@ -537,12 +537,55 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - **C6:** `tm validate --strict doc/tasks/*.tm.md` passed with 0 warnings.
       - **Fuzz renewal request (item 4):** requested the maintainer to schedule the post-provenance fuzz renewal run (`make fuzz-release`, per `id:z0003`) once `stream/provenance` merges to `main` (and after `id:mskex`, `id:4ngz8`, `id:r1shp` if desired in the same session).
 
+- [ ] +safety +precision +AI-G @provenance H2 `#[unsafe(borrows(*self))]` declares a result tied only to what the referent holds; the interface carries it; Vec and String clones use it id:42ae2
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+    > **Depends:** id:bfd1z
+
+    - **Promoted (provenance, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, next to id:mqh84 and id:22qty, before the history squash (id:6d5wy): H2 and H3 change `src/` and `stdlib/` on the `provenance` branch, so they land before it is cleaned up and merged. The maintainer approved resuming them for the next release (2026-11-20), which also approves the new `pub` `Vec.empty_like` that the **Stop and report first** bullet waits for; the design note's "Ties through a reference to an owner" paragraph and `KNOWN_ISSUES.md` §5 (the `v.clone()` and `Vec<T>::resize` bound) are updated when H3 lands.
+    - **Placed:** after id:bfd1z, whose `ret_held` it sets by declaration; id:2sdmk's decision (4).
+    - **Moved (2026-11-18, the maintainer's decision):** from directly after id:bfd1z to directly after id:z0044, with H3 and the check-in id:22qty. H3 cannot land before id:z0044 and id:kqp9n (P9 of id:2sdmk), and a trusted form and summary bit added before id:z0011 and id:z0012 are more for those to check and carry over. H2 stays tied to H3, so it moves with it. If id:bfd1z's count is small, the three move to `future.tm.md` instead.
+    - **Stop and report first:** `Vec.empty_like` is a new `pub` stdlib method and `Clone for Vec<T>`'s body changes; both wait for the maintainer's approval of id:2sdmk.
+    - **Scope:** the parser accepts `*self` (and `*p` for a reference parameter `p`) only inside `#[unsafe(borrows(..))]`, setting the parameter's `ret_held` bit as well as its `ret_ties` bit; the interface writers keep the form and write a `ret_held` `#[summary]` key; `scripts/check_safety_comments.sh` requires a `// SAFETY:` line above it as for the other `#[unsafe(..)]`; `doc/spec/surface_syntax.md` and `doc/spec/unsafe_policy.md` name it. Stdlib: `Vec.empty_like` with the declaration, `Clone for Vec<T>` rewritten on it with no `unsafe`, `Clone for String` with the declaration.
+    - **Checks:** C1: `tests/error_reporting/` tests: `*self` in a plain `#[borrows(..)]` refused, `*x` for a by-value parameter refused. C2: `--emit-origins` on `build/2sdmk/shapes.zrl` shows a held bit for `cl` (`Vec<[u8]>`) and none for `Vec<S>.clone` (P2). C3: `tests/modular/iface_attrs/` case: the `.zri` of a module with the declaration has `ret_held`, and an importer reads it (the key removed from the `.zri` by hand: the importer's held bit is gone). C4: `make test`, `make preflight-changed`, rejection differential with no newly accepted program (the borrow checker does not read `ret_held` until H3).
+
+    - **Deferred (2026-11-18, by the maintainer's decision recorded in id:2sdmk):** id:bfd1z counted 5 held sites among the 84 of `src/` and `tools/`, which is small, so H2, H3 and id:22qty move to `future.tm.md`, to resume after id:z0012.
+    - **Start from id:bfd1z's patch:** the word and `ILFunction.os_ret_held` this task sets by declaration were not committed. Apply id:bfd1z's **Patch: the word** first, re-run its C1 to C4, and write the design note paragraph and the `unsafe` obligation that id:bfd1z's scope named. Also read its Findings A to C.
+
+- [ ] +safety +precision +AI-G @provenance H3 A call tied to an argument only through what its referent holds borrows what the referent holds, not the referent, so probe 307 is accepted id:mqh84
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+    > **Depends:** id:42ae2, id:z0044, id:kqp9n
+
+    - **Promoted (provenance, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, after id:42ae2, which it depends on (its blockers id:z0044 and id:kqp9n are complete).
+    - **Placed:** after id:42ae2; id:2sdmk's decision (2), and id:2sdmk's checks C1 to C3.
+    - **Moved (2026-11-18, the maintainer's decision):** with id:42ae2, to after id:z0044; its blockers id:z0044 and id:kqp9n are now before it (see id:42ae2).
+    - **Scope:** `inherit_rv_borrows`'s `Call` arm reads the callee's `ret_held`, as decision (2) says; P1 to P8 of id:2sdmk become tests (`tests/language/memory/` or probes) with their expected verdicts; probe 307 flipped to `accept`.
+    - **Checks:** C1: probe 307 `accept`; gap_77, P1, P2, P3, P5, P6, P8 and P9 refused, each as a test. C2: with the copy of the referent's borrows taken out (the direct borrow dropped, nothing copied), P3 and P5 are accepted (the check sees the defect); restored, refused. C3: P7: `sh scripts/run_safety_matrix.sh` with 0 mismatches, and the `safety-matrix-zbuild` and `zbuild-diff` gates pass. C4: `make test`, `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, every newly accepted program listed with its reason.
+    - **Ends with a check-in:** the `@checkin` task after it reviews H2 and H3.
+
+    - **Deferred (2026-11-18, by the maintainer's decision recorded in id:2sdmk):** id:bfd1z counted 5 held sites among the 84 of `src/` and `tools/`, which is small, so H2, H3 and id:22qty move to `future.tm.md`, to resume after id:z0012.
+    - **Check to add:** id:bfd1z's Finding B, P9's class inside one body, beside P9.
+    - **From id:sjqmy (2026-11-20, git:04be73c):** when this task lands, also have `os_call`'s tie arm read `ret_held` (using `os_through_split` into `O`, dropping `S` of the pointee) so P1–P4 (`return v.clone()` of local `Vec`/`String`, and `Vec<Vec<[u8]>>::resize`) are accepted alongside probe 307, and remove the `KNOWN_ISSUES.md` §5 bound.
+
+- [ ] +safety +AI-D @provenance @checkin Check-in: review H2 and H3 (the trusted held declaration, and the caller rule that frees probe 307) id:22qty
+    > **Created:** 2026-11-18
+    > **Branch:** `provenance`
+    > **Depends:** id:42ae2, id:mqh84
+
+    - **Promoted (provenance, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, after id:mqh84, the batch it reviews, before the history squash (id:6d5wy).
+    - **Placed:** directly after id:mqh84, the batch it reviews (H2, H3; H1 is `+AI-D` and closes itself).
+    - **Moved (2026-11-18, the maintainer's decision):** with id:42ae2 and id:mqh84, to stay directly after the batch it reviews.
+    - **Review:** re-run H3's C1 to C3 and P1 to P8 of id:2sdmk; probe the sibling routes: a held tie through a trait call resolved per instance, a `Box` receiver, a field receiver (`s.v.clone()`), a `match` binding receiver, and an import whose `.zri` has no `ret_held` key.
+
+    - **Deferred (2026-11-18, by the maintainer's decision recorded in id:2sdmk):** id:bfd1z counted 5 held sites among the 84 of `src/` and `tools/`, which is small, so H2, H3 and id:22qty move to `future.tm.md`, to resume after id:z0012.
+
 - [ ] +git +AI-D @provenance Clean up and squash the commit history in the provenance worktree before merging to main id:6d5wy
     > **Created:** 2026-11-20
     > **Branch:** `provenance`
-    > **Depends:** id:a85sp
+    > **Depends:** id:a85sp, id:22qty
 
-    - **Placed:** directly after id:a85sp (the maintainer's request, 2026-11-20), before merging `stream/provenance` into `main` (id:w3vde).
+    - **Placed:** after id:a85sp and the H2/H3 batch with its check-in id:22qty (the maintainer's request, 2026-11-20), before merging `stream/provenance` into `main` (id:w3vde).
     - **Do:** review the 107 commits on `stream/provenance` (`build/provenance`, `main..HEAD`) and squash multi-commit task sequences, fixups, and per-file micro-commits into clean, concise logical commits following `AGENTS.md`'s "Code branches" rules:
       - Combine several commits of one task (e.g., per-file `#[borrows(..)]` check-in/tightening runs, fixups to the preceding commit, or probe+fix pairs where no later task's notes need them apart) into one commit whose body preserves every `Task:` line.
       - Keep commits of distinct tasks separate where a later task's notes rely on telling them apart, and keep a local backup branch pointing at the old tip (`992e4da`) until the merge to `main` is published.
@@ -558,6 +601,123 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Placed:** directly after id:6d5wy (the maintainer's request, 2026-11-20), landing the completed provenance series on `main`.
     - **Do:** merge the cleaned-up provenance branch into `main` (maintainer's decision), resolving any conflicts in recorded figures (`corpus/zrl_whole_program_zil.sha256`, `bench/fuzz/*`, safety figures) by recomputing them from the merged tree (`UPDATE_GOLDEN=1` in `scripts/test_incremental.sh`), never by taking a side. Update `id:z0045` if needed to cite the commit on `main`. Push `bench/records` if preflight appends rows.
     - **Checks:** C1 `git log -n 5 --oneline main` shows the merge commit on `main`. C2 `make test` on `main`, `Total:` line quoted. C3 `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=<main before the merge>` on `main`, quoting each `Total:` line and the `reject-diff: base verdicts: fresh (no cache)` line. C4 `sh scripts/check_store_grid.sh` summary quoted (0 unsafe cells accepted).
+
+- [ ] +generics +types +AI-G @main id:z0032 G1 `impl<T: Copy> Source<T> for S` fails to bind `T` when it appears only in the trait's arguments
+    > **Created:** 2026-11-03
+    > **Context:** Rejected in both build modes.
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, first of the `main` `+AI-G` group that follows the merge of `provenance` (id:w3vde); order inside the group is not critical.
+    - **Reproducer:** `trait Source<T> { fn pull(self: &Self, fallback: T) -> T; } struct S { x: i32 } impl<T: Copy> Source<T> for S { fn pull(self: &S, fallback: T) -> T { return fallback; } } fn main() -> i32 { let s = S { x: 1 }; return s.pull(42) - 42; }` gives `type mismatch: expected &S, found bool`.
+    - **Cause:** `impl_scope` (`src/mono.zrl`) binds an `impl`'s type parameters only by matching its target type. **Direction:** unify the trait's type arguments to bind the rest, mangle the bound arguments into the method name, and reject a parameter that appears in neither at the `impl` header.
+
+- [ ] +types +diagnostics +AI-G @main A call with turbofish checks the number of type arguments id:7sb2k
+    > **Created:** 2026-11-14
+    > **Context:** found by id:z0100's probes.
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the `main` `+AI-G` group after id:w3vde; order inside the group is not critical.
+    - **Placed:** in `future.tm.md`: a diagnostic gap, not a soundness hole; no task depends on it.
+
+    - **Found:** a call ignores a wrong number of type arguments: `id::<i32, i32>(3)` with `fn id<T>(x: T) -> T` and `g::<i32>(3)` with a non-generic `g` both compile and run (exit 0 for `return id::<i32, i32>(3) - 3;`), and `id::<>(3)` infers `T`. The value form refuses each since git:dc006a0 (`a generic function named as a value needs one type argument for each of its type parameters`, `type arguments given to a function that is not generic`). `direct_callee` in `src/lower_zir/expr.zrl` passes `type_args` to `instantiate_function` without comparing the count with `ff.type_params.len`; a method call (`instantiate_method`) is the twin to probe.
+    - **Do:** refuse a count that is not zero and not the declaration's (zero still infers), and type arguments on a non-generic function, at the call as the value form does; an error test per form; `make test`, `make preflight-changed` (the differential lists the newly refused programs).
+
+- [ ] +modular +AI-G @main Two modules that each define a private const of the same name fail to assemble: the const's symbol is not qualified by its module id:5342d
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the `main` `+AI-G` group after id:w3vde; order inside the group is not critical.
+    - **Placed:** in `future.tm.md`: found by check-in id:9y3ke; a build failure on a correct program, not a soundness hole.
+
+    - **Found (2026-11-14, `main` at git:b26ca47):** modules `ma.zrl` with `const LIM: i32 = 1;` and `mb.zrl` with `const LIM: i32 = 2;`, each read by a `pub fn`, imported by one `main`: `build/zoril` emits both as the symbol `z3LIME`, and the assembler fails with ``Error: symbol `z3LIME' is already defined`` (`build/z135/priv/const/`). Functions are qualified by their module (`z6stdlib3mem5Arena4dropE`); a const is not. The program is correct and should build.
+    - **Do:** qualify a const's symbol by its module, as a function's is, in whole-program and separate compilation (the `.zri` names the symbol the importer references). Probe a `pub const` read from another module, a `static`, and a const of the same name in a module and in the program's root.
+    - **Checks:** C1 the program above builds and exits 0, whole-program and through `zbuild` (a test under `tests/modular/`). C2 take the change out and watch C1 fail to assemble. C3 `make test` and `make preflight-changed`, each `Total:` quoted.
+
+- [ ] +stdlib +tests +AI-G @main id:z0182 `Vec.resize` shrinking and `Vec.clear` drop the elements they remove
+    > **Created:** 2026-11-11
+    > **Context:** by id:z0174.
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the `main` `+AI-G` group after id:w3vde; order inside the group is not critical.
+    - **Now:** `resize(new_len, value)` with `new_len < len`, and `clear()`, only set `len`: the removed elements are never dropped. A leak, not a memory hole (nothing reads them again), but it breaks "drop exactly once" for a `T` with a `Drop`, as `truncate`/`clear` do in Rust.
+    - **Do:** drop each removed element, last first, before setting `len`; probe a `Drop` counter through both, and an arena-backed `Vec` (whose `free` is a no-op).
+    - **Checks:** C1 a run-time test counting one drop per removed element for both; C2 take the drop out and watch it count 0; C3 `make test`, its `Total:` quoted.
+
+- [ ] +tests +AI-G @main An or-pattern whose alternatives bind different names is refused with a clear diagnostic id:vdgj4
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the `main` `+AI-G` group after id:w3vde; order inside the group is not critical.
+    - **Placed:** in `future.tm.md` by the check-in id:vvtam: a spec rule not enforced and a poor diagnostic, not a hole (a binding missing from the alternative that matched is caught as `use of uninitialized variable` when it is read).
+
+    - **Found (2026-11-14, id:vvtam):** `doc/spec/surface_syntax.md` §"OR Patterns" says every alternative must bind the same set of names. `match x { I.A(n) | I.B(m) => { return 1; } }` (`enum I { A(i32), B(i32) }`) is accepted. `match x { O.A(s, _) | O.D => {}, _ => {} }` (`S: Drop`) is refused only as `use of uninitialized variable 'a temporary'`, at line 1 column 1 of the enclosing function, and `I.A(n) | I.B => { return n; }` is refused as `use of uninitialized variable 'n'`. The compiler at git:c161107 behaves the same.
+    - **Do:** in `Pattern.Or` (`src/lower_zir/lower_match.zrl`), collect the names each alternative binds (the per-alternative symbol set `bind_pattern_name` defines). If one alternative's set differs from the first's, report `a binding in an or-pattern must appear in every alternative: '<name>' is missing from one` at the pattern's span, next to the existing `a binding in an or-pattern must have the same type in every alternative` check.
+    - **Checks:**
+      - C1: `tests/error_reporting/err_or_pattern_binding_missing.zrl` (`// expected compile fail`, `// EXPECT: a binding in an or-pattern must appear in every alternative`) passes under `./scripts/test.sh`. It holds the three programs above, one per function, and the direct `build/zoril --emit-zil` output shows the new error once for each.
+      - C2: with the new check commented out, C1 fails (`I.A(n) | I.B(m)` compiles).
+      - C3: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` exits 0. Quote the `fresh (no cache)` line and list every newly refused program with its reason; any test in `tests/` that is newly refused is a finding to report, not one to rewrite.
+      - C4: full `make test` passes; quote the `Total:` line.
+
+- [ ] +diagnostics +AI-G @main id:z0015 `zoril` stops after a bounded number of errors, and says when a file does not look like Zoril source
+    > **Created:** 2026-11-03
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, last of the `main` `+AI-G` group after id:w3vde; it touches `src/diag.zrl`, which stage1 compiles, so use only what the pinned stage1 accepts.
+    - **Now:** 300 KB of random bytes named `junk.zrl` gives about 139,000 error lines (12 MB); 160 KB of prose about 33,000. `zbuild` passes the same output through. Reproduce: `head -c 300000 /dev/urandom > junk.zrl; ./build/zoril -I stdlib=stdlib --emit-zil -o o.zil junk.zrl 2>&1 | wc -l`.
+    - **Do:** count errors in `diag_start` (`src/diag.zrl`); past the limit (default 20) print one line naming `--error-limit N` (0 removes the limit) and exit 1. `zbuild --error-limit N` passes it to every `zoril -c`; both man pages and `--help` say so. Before lexing, refuse a NUL byte or invalid UTF-8 with one line; if the limit is reached before the first declaration, the stopping line says the file does not look like Zoril source. `src/diag.zrl` is in stage1's closure: use only what stage1 accepts (a `static mut` counter).
+    - **Checks:**
+      - C1: before the change, the reproducer in **Now**: the line count, quoted. And no existing error test expects more than 20 errors: `grep -c 'EXPECT:'` per file under `tests/`, the largest count quoted (if one is over 20, stop and report: the default changes).
+      - C2: a program with 25 type errors: 20 error lines, then the stopping line naming `--error-limit N`, exit 1; with `--error-limit 0`, all 25; with `--error-limit 3`, 3; quote each count.
+      - C3: a NUL byte, invalid UTF-8, and 160 KB of prose: one line each, the prose one saying the file does not look like Zoril source; the reproducer from **Now** prints at most 21 lines; quote each.
+      - C4: the same through `zbuild --error-limit N` in `scripts/test_zbuild_errors.sh`, passing.
+      - C5: `zoril --help`, `zbuild --help` and both man pages name `--error-limit` (`make man`, `sh scripts/test_man_pages.sh`).
+      - C6: `rm build/zoril && make` (stage1 builds `src/diag.zrl`) and `make`, no warning.
+      - C7: take the counter's check out (a scratch edit) and watch C2 fail; restore.
+      - C8: the `KNOWN_ISSUES.md` entry removed or updated; `make test` and `make preflight-changed`, each `Total:` line quoted; the fuzz record is stale for `src/`.
+
+- [ ] +types +diagnostics +AI-D @main A pattern that moves several values out of a tuple or struct is accepted id:ts1jg
+    > **Created:** 2026-11-14
+    > **Context:** found by id:z0176's sibling probes.
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, first of the `main` `+AI-D` group after the `+AI-G` group; order inside the group is not critical. Re-probe against id:z0176's arm-scope change first.
+    - **Placed:** in `future.tm.md`: a false refusal (the safe side), no task depends on it; after id:z0176's fix, whose arm-scope change it should be re-probed against.
+
+    - **Found (`main` at git:8d4670b, `S: Drop`):** each is refused with `use of moved value`, though it moves each value once: `let (s, k) = t;` with `t: (S, i32)`, `let W { s: s, k: k } = w;` with `struct W { s: S, k: i32 }`, `match w { W { s: s, k: k } => .. }`, and `T.A((s, k))` for `enum T { A((S, i32)), B }` (`use of moved value 'the value of the expression at ..'`). Binding the aggregate whole (`T.A(t)`, `F.A(w)`) is accepted.
+    - **Do:** find which move the checker sees twice (the destructured place, then a field of it), and accept a pattern whose bindings move disjoint parts; the rejection differential lists every newly accepted program, each read for a second owner.
+
+- [ ] +tests +AI-D @main A by-value pattern that binds a part needing a drop beside any other part is refused with `use of moved value` id:2bx4a
+    > **Created:** 2026-11-14
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the `main` `+AI-D` group; order inside the group is not critical.
+    - **Placed:** in `future.tm.md` by the check-in id:vvtam: a correct program refused, not a hole, and it predates that batch (stage1 refuses it too).
+
+    - **Found (2026-11-14, id:vvtam, scratch `build/vvtam/p/`):** with `struct S { p: *mut u8 }` and `impl Drop for S`, each of these is refused, at the second binding, with `use of moved value 'w'` (or `'the value of the expression at L:C'` for a temporary scrutinee): `let w = (mk(fp), 1); let (x, z) = w;` (the second part is an `i32`), `let w = (mk(fp), mk(fp)); let (x, z) = w;`, `match w { (x, z) => {} }`, `match e { P.A(x, z) => {}, P.B => {} }`, `let W2 { a: x, b: z } = w;`, `let W2 { a: x, b: z } = W2 { .. };`. Binding one part and skipping the others (`let (x, _) = w;`, `P.A(s, _)`) is accepted and drops each value once (`tests/language/match/match_skipped_parts_dropped.zrl`). Without a `Drop` type in the aggregate (`(T, T)`, `T` a plain struct) it is accepted. `build/zoril` at git:7877894, the compiler at git:c161107 and `build/zoril-stage1` all refuse it, and no test in `tests/` binds two parts of an aggregate that needs a drop.
+    - **Lead:** the first by-value binding seems to mark the scrutinee moved before the next sub-pattern reads its part. Compare `bind_pattern_name` (`src/lower_zir/lower_match.zrl`) with the borrow checker's view of `Let(x, Use(w.0))` followed by a read of `w.1`.
+    - **Do:** diagnose (`+AI-D`: the cause is unknown), then settle the fix in this task's text and re-tag it `+AI-G` if it is mechanical. The fix must keep `match_skipped_parts_dropped.zrl` and `match_by_value_drops_once.zrl` passing and add the six programs above as drop-count cases (each part dropped once). It makes the checker accept more, so the rejection differential applies.
+
+- [ ] +docs +tests +AI-D @main The safety pages' probe and hole counts are checked against the tree id:594de
+    > **Created:** 2026-11-14
+    > **Context:** found while closing id:z0100.
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the `main` `+AI-D` group; order inside the group is not critical. Its counts matter right after id:z0065 and id:z0012 closed every `known_gap` probe.
+    - **Placed:** in `future.tm.md`: documentation drift with no safety effect; no task depends on it.
+
+    - **Found:** `scripts/check_safety_figures.sh` checks `doc/SAFETY.md` §5.3 and the density rows of `doc/spec/unsafe_policy.md`, but not the probe counts in `doc/SAFETY.md` §5 ("**366 `compile_reject`**, ... **46 `known_gap`**") and §6 ("tracked as 46 `known_gap` probes"), nor the open-hole count in `doc/spec/safety_model.md` ("the 18 holes still open"), nor `doc/STABILITY.md`'s "16 open soundness holes", "72 safety properties" and "79-row architecture matrix". At git:891b76e `gap_80` made 47 `known_gap` probes while both `doc/SAFETY.md` lines said 46; `doc/STABILITY.md`'s 16 and `safety_model.md`'s 19 (now 18) already disagree.
+    - **Do:** decide which of these counts each page should state at all (a page can link to the table instead of repeating a number); recompute the ones kept from the probes' `// expected:` lines and the Known gaps table in `check_safety_figures.sh`, and fail on a mismatch; a planted wrong count shows the check fails.
+
+- [ ] +diagnosis +AI-D @main Two stage0c gates race on `build/zoril-c` in `make test` (`mv: cannot stat build/zoril-c.tmp`) id:nf1fv
+    > **Created:** 2026-11-13
+    > **Context:** found while doing id:z0136, which it did not cause.
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, last of the `main` `+AI-D` group, before the `@zil` series. Retagged `@main`: the race is in `make test`'s stage0c gates, which a release's tarball check runs, not in the `testinfra` series.
+    - **Placed:** future file, under Evidence and tooling: not blocking, and not a one-session fix until the cause is known.
+
+    - **Seen:** `./scripts/test.sh --gates` failed `stage0c-corpus` (and once `stage0c-error-locations`) with `exited 2 without reporting a failing item`, in two of five runs on one host. `build/gates/stage0c-corpus.log` ends `mv: cannot stat 'build/zoril-c.tmp': No such file or directory` and `make: *** [Makefile:122: build/zoril-c] Error 1`. Both gates run `make -C bootstrap/stage0-c test_*` at once, and both can decide `build/zoril-c` needs rebuilding.
+    - **Next:** read `bootstrap/stage0-c/Makefile` around line 122 and find whether the rule writes `build/zoril-c.tmp` under one name for every make; a rebuilt-once step before the gates start (or a per-process temporary name) would end it. The stage0 compiler is frozen except for a blocking bug, but the freeze covers the compiler, not its Makefile; ask the maintainer if a change there is needed.
 
 - [ ] +zil +decision +AI-D @zil ZL1 Settle the slice form of string_const and the slice_ptr opcode, and check what the pinned stage1 feeds zilc id:m6vm3
     > **Created:** 2026-11-13
@@ -624,12 +784,70 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Do:** list candidate checks, each with a three-line ZIL program that shows the mistake, and say for each whether ZIL as written carries what the check needs. Candidates to start from: a value used after a `move` or `drop` in the same function, a `drop` twice, a `slice_load`/`slice_store` with no dominating `bounds_check` (spec §6.3), the address of an `alloc 'local` returned or stored into a global, a `slice_len` or `slice_ptr` on a value that is not a slice, a `syscall` with an argument count its stub does not take, and a block with no terminator. Corpus mistakes count as evidence of what is common: id:1kaye's string over-read is one. Rank them by how often they would fire and how simple they are, and split each chosen check into an `+AI-G` task with its own numbered **Checks:** and a take-out.
     - **Checks:** C1: every candidate has its program and its answer here, with the zilc output today (`timeout -k 5s 30s build/zilc <file>`). C2: the chosen checks are tasks, placed after this one, with a check-in after them.
 
+- [ ] +tools +AI-G @main id:z0014 `zilc` refuses text it does not recognise between declarations, and a file that is not ZIL
+    > **Created:** 2026-11-03
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, after id:0mbg3 (the `@zil` series), not before: ZL2 and ZL3 edit `tools/zilc/src/zil_parse.zrl` and the `corpus/zil/` files this task's checks run on, and a later edit of the same parser avoids a conflict.
+    - **Now:** `zilc` exits 0 with no message on random bytes, and on `printf '\x01\x02 zz garbage\n'` it writes a stray global parsed out of the word `garbage`. `ZilParser.parse_module` (`tools/zilc/src/zil_parse.zrl`) dispatches on a declaration's first byte and skips any other byte, so text between declarations is dropped silently.
+    - **Do:** at top level, after trivia, accept only the declaration forms of `doc/spec/intermediate_language.md` and report anything else as `zilc: line N: expected a declaration, found '<token>'` with exit 1; before parsing, refuse a NUL byte or invalid UTF-8 with one line. Keep the first-error behaviour.
+    - **Checks:**
+      - C1: before the change, `printf '\x01\x02 zz garbage\n' > build/z14/g.zil; timeout 10 build/zilc build/z14/g.zil -o build/z14/g.ssa; echo $?` and the `.ssa` it writes; quote both (exit 0 and a stray global today).
+      - C2: one `tests/zilc/` case per refusal: a stray word between two functions, control bytes, a NUL byte, invalid UTF-8; each fails before the change (run the new tests against the old `build/zilc` and quote) and passes after.
+      - C3: each refusal's message is the one in **Do** (`zilc: line N: expected a declaration, found '<token>'`, or the one-line NUL/UTF-8 refusal), with exit 1; quote each.
+      - C4: every file in `corpus/zil/` still compiles and gives its expected exit (`./scripts/test.sh corpus/zil` or the scenario that runs them); quote its `Total:` line.
+      - C5: take the top-level check out (a scratch edit) and watch the stray-word case pass silently again; restore.
+      - C6: the `KNOWN_ISSUES.md` entry removed or updated; `make test` and `make preflight-changed`, each `Total:` line quoted; the completion note says the fuzz record is stale for `tools/zilc/`.
+
+- [ ] +tools +AI-G @main id:z0016 `zbuild` builds a program written in ZIL, and refuses any other input with one line
+    > **Created:** 2026-11-03
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, after id:z0014, in the `+AI-G` group before the fuzz renewal; it builds `.zil` files through the slice form ZL2 settles.
+    - **Now:** `zbuild 01_arithmetic.zil` (from `corpus/zil/`) parses the ZIL as Zoril and prints about thirty `expected declaration` errors; the manual pipeline (`zilc`, `qbe`, `as`, `ld` with the runtime) works and exits 30.
+    - **Do:** a root ending in `.zil` skips the module graph and the front end and runs `zilc`, `qbe`, `as` and the link with `zbuild`'s usual linker and runtime choice, honouring `-o` and the cache directory; `--checked` with a `.zil` root is refused with one line. A root ending in neither `.zrl` nor `.zil` is refused with one line naming both. Update `doc/man/zbuild.1.scd` (`make man`), `zbuild --help`, and "Starting from ZIL" in `doc/getting_started.md`.
+    - **Checks:**
+      - C1: before the change, `build/zbuild corpus/zil/01_arithmetic.zil -o build/z16/a; echo $?` and the first three error lines, quoted.
+      - C2: after, the same builds and `build/z16/a; echo $?` prints 30; every file in `corpus/zil/` gives its expected exit code (a loop in a new scenario, or in `scripts/test_user_paths.sh` with the installed `zbuild`); quote the loop's summary.
+      - C3: `-o` and the cache directory are honoured: the binary lands at the `-o` path, and a second build of the same `.zil` reuses the cache (the scenario checks the cache directory's contents).
+      - C4: `zbuild foo.txt` and `zbuild --checked x.zil`: one line each, exit nonzero; quote both.
+      - C5: take the `.zil` branch out (a scratch edit) and watch C2's scenario fail; restore.
+      - C6: `doc/man/zbuild.1.scd` (`make man`), `zbuild --help` and "Starting from ZIL" in `doc/getting_started.md` updated; `sh scripts/test_man_pages.sh` passes; the doc snippet scenario (`./scripts/test.sh --scenario getting-started`) passes.
+      - C7: the `KNOWN_ISSUES.md` entry removed or updated; `make test` and `make preflight-changed`, each `Total:` line quoted; the fuzz record is stale for `tools/zbuild/`.
+
+- [ ] +fuzz +safety +AI-G @main Fuzzer generator: add indirect closure, fn-value forwarding, and mutual-recursion route builders id:mskex
+    > **Created:** 2026-11-20
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the generator group before the fuzz renewal id:v2f8h, which depends on it.
+    - **Placed:** before id:z0013 and the post-provenance fuzz renewal (id:a85sp item 3, generator debt).
+    - **Do:** add compositional builders and feature tags to `scripts/fuzz/gen.lua` (with matching Rust twin emission) for: (1) closures capturing `&Holder` / `&&Holder` where `Holder` holds `&mut` (`gap_47`, `gap_48`); (2) a capturing closure passed to a `fn(...)` callee that invokes it (`gap_52`) or forwards a view through a closure parameter (`gap_55`); (3) mutually recursive helpers storing a view through a local (`gap_28`, `gap_54`).
+    - **Checks:** C1 `lua scripts/fuzz/gen.lua --features` lists the new tags. C2 `make fuzz-short` runs cleanly with 0 `gen-bug`s and covers all new tags. C3 `make fuzz-calibrate` passes. C4 `make test-changed BASE=HEAD`, its `Total:` quoted.
+
+- [ ] +fuzz +safety +AI-G @main Fuzzer generator: add release-tier liveness, inner-block callee store, and method-elision route builders id:4ngz8
+    > **Created:** 2026-11-20
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the generator group before the fuzz renewal id:v2f8h, which depends on it.
+    - **Placed:** before id:z0013 and the post-provenance fuzz renewal (id:a85sp item 3, generator debt).
+    - **Do:** add compositional builders and feature tags to `scripts/fuzz/gen.lua` (with matching Rust twin emission) for: (1) release-tier liveness: a view stored through a local `&mut`, `&mut` parameter, `self`, `Box`, or two-callee `put`+`kill` followed by `free`/`reset` (`gap_37`–`gap_39`, `gap_43`, `gap_87`, `gap_96`, `425`–`428`); (2) a callee (direct or `fn` value) storing an inner-block local reference into an outer-block struct (`430`–`433`, `id:nhk9n`); (3) a `&self` method returning a view from another parameter followed by `reset` (`gap_44`, `gap_99`–`gap_101`).
+    - **Checks:** C1 `lua scripts/fuzz/gen.lua --features` lists the new tags. C2 `make fuzz-short` runs cleanly with 0 `gen-bug`s and covers all new tags. C3 `make fuzz-calibrate` passes. C4 `make test-changed BASE=HEAD`, its `Total:` quoted.
+
+- [ ] +fuzz +safety +AI-G @main Fuzzer generator: add container-of-views, extend_from_slice/Clone, and by-value aggregate route builders id:r1shp
+    > **Created:** 2026-11-20
+    > **Branch:** `main`
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the generator group before the fuzz renewal id:v2f8h, which depends on it.
+    - **Placed:** before id:z0013 and the post-provenance fuzz renewal (id:a85sp item 3, generator debt).
+    - **Do:** add compositional builders and feature tags to `scripts/fuzz/gen.lua` (with matching Rust twin emission) for: (1) `Vec::extend_from_slice` and `.clone()` copying views into an external container (`gap_56`, `gap_77`, `gap_78`, `gap_80`); (2) an owned `Vec` or struct holding frame views pushed or moved into a callee (`gap_59`–`gap_63`, `gap_79`); (3) a frame view read through a local reference to a local struct or passed in a by-value aggregate to a callee that stores it out (`gap_97`, `gap_98`).
+    - **Checks:** C1 `lua scripts/fuzz/gen.lua --features` lists the new tags. C2 `make fuzz-short` runs cleanly with 0 `gen-bug`s and covers all new tags. C3 `make fuzz-calibrate` passes. C4 `make test-changed BASE=HEAD`, its `Total:` quoted.
+
 - [ ] +fuzz +safety +release +AI-D @main Renew the fuzz record (make fuzz-release) after the provenance and ZIL series id:v2f8h
     > **Created:** 2026-11-20
     > **Branch:** `main`
-    > **Depends:** id:w3vde, id:0mbg3
+    > **Depends:** id:w3vde, id:0mbg3, id:mskex, id:4ngz8, id:r1shp
 
-    - **Placed:** after the remaining `@zil` tasks (id:0mbg3) and before the release task (id:jtk00), per the maintainer's request (2026-11-20). Optionally promote and land generator-debt tasks `id:mskex`, `id:4ngz8`, and `id:r1shp` from `future.tm.md` before running this session so the renewed record covers the new provenance route classes.
+    - **Placed:** after the remaining `@zil` tasks (id:0mbg3) and the generator-debt tasks id:mskex, id:4ngz8 and id:r1shp, and before the release task (id:jtk00), per the maintainer's request (2026-11-20), so the renewed record covers the provenance route classes.
     - **Do:** on a clean `main` tree with `rustc` available, run the release-bar fuzz renewal (`make fuzz-release`, per `id:z0003` and `bench/fuzz/README.md`), triage any findings, update `bench/fuzz/README.md` with the renewed record and commit hashes, and verify `scripts/check_fuzz_fresh.sh` reports fresh for `src/`, `stdlib/`, `tools/zilc`, `tools/zbuild`, and `rt/`.
     - **Checks:** C1 `make fuzz-release` summary line quoted (0 faults, 0 unclassified candidates, 0 `knownblind`, all calibration rows in fixed state). C2 `sh scripts/check_fuzz_fresh.sh` reports fresh for all tracked components. C3 `make test-changed BASE=HEAD`, its `Total:` line quoted.
 
