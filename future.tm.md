@@ -48,6 +48,7 @@ Rules id:z0075 deferred: each root is seen today only in the tree's own code (ch
 
     - **Deferred (2026-11-18, by the maintainer's decision recorded in id:2sdmk):** id:bfd1z counted 5 held sites among the 84 of `src/` and `tools/`, which is small, so H2, H3 and id:22qty move to `future.tm.md`, to resume after id:z0012.
     - **Check to add:** id:bfd1z's Finding B, P9's class inside one body, beside P9.
+    - **From id:sjqmy (2026-11-20, git:04be73c):** when this task lands, also have `os_call`'s tie arm read `ret_held` (using `os_through_split` into `O`, dropping `S` of the pointee) so P1–P4 (`return v.clone()` of local `Vec`/`String`, and `Vec<Vec<[u8]>>::resize`) are accepted alongside probe 307, and remove the `KNOWN_ISSUES.md` §5 bound.
 
 - [ ] +safety +AI-D @provenance @checkin Check-in: review H2 and H3 (the trusted held declaration, and the caller rule that frees probe 307) id:22qty
     > **Created:** 2026-11-18
