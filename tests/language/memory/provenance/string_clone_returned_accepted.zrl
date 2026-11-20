@@ -1,0 +1,16 @@
+// The clone of a local String is its own copy, so it can be returned: its held tie reads what the
+// original holds, not the bytes the original owns (doc/design/provenance.md §3, _Held ties_).
+// expected exit 0
+import "string.zrl";
+import "clone.zrl";
+use string::String;
+
+fn f() -> String {
+    let mut s = String.new();
+    s.push_str("ab");
+    return s.clone();
+}
+
+fn main() -> i32 {
+    return f().len() as i32 - 2;
+}

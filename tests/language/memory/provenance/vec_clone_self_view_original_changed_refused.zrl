@@ -1,0 +1,21 @@
+// A Vec clone whose element clone points into the source's buffer keeps the source borrowed, so
+// `Clone for Vec<T>` cannot declare a held tie for every T.
+// expected compile fail
+// EXPECT: cannot mutably borrow 'v1' while it is already borrowed
+import "vec.zrl";
+import "clone.zrl";
+use vec::Vec;
+
+struct S { a: [u8; 4], v: [u8] }
+impl Clone for S {
+    fn clone(self: &S) -> S { return S { a: self.a, v: &self.a }; }
+}
+
+fn main() -> i32 {
+    let e = [9 as u8; 4];
+    let mut v1 = Vec::<S>.new();
+    v1.push(S { a: [5 as u8; 4], v: &e });
+    let v2 = v1.clone();
+    v1.push(S { a: [1 as u8; 4], v: &e });
+    return v2.get(0).unwrap().v[0] as i32;
+}

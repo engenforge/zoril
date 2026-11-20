@@ -2230,6 +2230,50 @@ impl ZirVerifier {
         }
     }
 
+    // A call tied to the reference SRC only through what its referent holds (a held tie): DEST
+    // keeps the borrows SRC inherited from the referent and, for the borrow of the referent itself
+    // (`direct`), the borrows the referent holds, not the borrow. The referent's own storage is
+    // not what the result points into, so `v.clone()` leaves `v` free to change.
+    fn inherit_borrows_held(
+        self: &mut ZirVerifier,
+        src: u32,
+        dest: u32,
+        via: u64,
+        state: &mut ZirAnalysisState
+    ) {
+        if src == 0 as u32 || dest == 0 as u32 || src == dest { return; }
+        let n = state.borrows.len();
+        let mut bi = 0 as usize;
+        while bi < n {
+            let b = state.borrows[bi];
+            if b.borrower == src {
+                if b.direct || b.direct_inner {
+                    if b.base.base != dest {
+                        self.inherit_borrows_keeping(b.base.base, dest, via, state);
+                    }
+                } else {
+                    self.push_borrow(
+                        state,
+                        ActiveBorrow {
+                            base: b.base,
+                            is_mut: b.is_mut,
+                            region: b.region,
+                            borrower: dest,
+                            span: b.span,
+                            derived: b.derived,
+                            direct: false,
+                            direct_inner: false,
+                            release_only: b.release_only || dest == OUTSIDE_BORROWER,
+                            epoch: self.next_borrow_epoch,
+                            via: b.via | via,
+                        }
+                    );
+                }
+            }
+            bi = bi + 1 as usize;
+        }
+    }
+
     // DEST gets a copy of every borrow SRC holds (SRC's value now lives on in DEST).
     fn inherit_borrows(
         self: &mut ZirVerifier,
@@ -2417,6 +2461,7 @@ impl ZirVerifier {
             ZirRvalue.Call(fn_id, args) => {
                 let mut ties = 0xffffffffffffffff as u64;
                 let mut storage = 0 as u64;
+                let mut held = 0 as u64;
                 // A callee whose storage masks are unknown (`storage_known` false: an import whose
                 // `.zri` carried no storage keys, the fail-open case the audit found) is read as
                 // handing back a pointer into *each* argument's own storage. That is the strict
@@ -2438,6 +2483,9 @@ impl ZirVerifier {
                     if callee.os_known {
                         storage = callee.os_ret_addr;
                         storage_unknown = false;
+                        // A tie that is only through what the referent holds (doc/design/provenance.md
+                        // §3, _Held ties_); a summary still growing in a cycle has none yet.
+                        held = if open { 0 as u64 } else { callee.os_ret_held };
                     } else {
                         storage = callee.ret_storage;
                         storage_unknown = !callee.storage_known;
@@ -2456,6 +2504,10 @@ impl ZirVerifier {
                         // an import is read the same way: derived, not the header's own storage
                         // (`"a,b".split_raw(..)` holds pointers into the literal's bytes, not into
                         // the temporary that holds its header).
+                        if i < 63 as usize && ((held >> (i as u64)) & 1 as u64) != 0 as u64 {
+                            self.inherit_borrows_held(args[i].base, dest, rv_bit(rv), state);
+                            continue;
+                        }
                         let own_storage = storage_unknown
                             || (i < 64 as usize
                                 && ((storage >> (i as u64)) & 1 as u64) != 0 as u64
@@ -6543,6 +6595,12 @@ fn os_through(c: &mut OriginSets, src: usize, dst: usize) { os_through_as(c, src
 
 // os_through of a value that can own storage (OWNING) or cannot (os_owned_read).
 fn os_through_as(c: &mut OriginSets, src: usize, dst: usize, owning: bool) {
+    os_through_frames(c, src, dst, owning, true);
+}
+
+// os_through_as; FRAME_OWNED is whether a frame local the memory names also yields the storage
+// it owns, which a held tie leaves out.
+fn os_through_frames(c: &mut OriginSets, src: usize, dst: usize, owning: bool, frame_owned: bool) {
     os_clear(c, dst);
     let s = src * c.words;
     let d = dst * c.words;
@@ -6553,10 +6611,15 @@ fn os_through_as(c: &mut OriginSets, src: usize, dst: usize, owning: bool) {
     while id < c.nl {
         if os_has_frame(c, src, id) {
             let _ = os_or(c, dst, id);
-            let _ = os_or(c, dst, c.nl + id);
+            if frame_owned { let _ = os_or(c, dst, c.nl + id); }
         }
         id = id + 1 as usize;
     }
+}
+
+// The first read of a held tie (os_through_plus_held): what the referent holds as a borrow.
+fn os_through_held(c: &mut OriginSets, src: usize, dst: usize) {
+    os_through_frames(c, src, dst, false, false);
 }
 
 // The value read from the memory SRC names, kept apart as a direct read keeps it (§3: S(src) when
@@ -6600,7 +6663,7 @@ fn os_through_plus(c: &mut OriginSets, src: usize, dst: usize) {
 // the first read yields what the referent holds as a borrow, which owns nothing of it, and the
 // reads after it follow from there. What a Frame(L) the argument names holds comes as it is.
 fn os_through_plus_held(c: &mut OriginSets, src: usize, dst: usize) {
-    os_through_as(c, src, dst, false);
+    os_through_held(c, src, dst);
     let tb = os_t(c, OS_T_B);
     loop {
         os_through(c, dst, tb);

@@ -1,0 +1,18 @@
+// A String clone still holds what the original holds: it is made in the original's arena, so
+// resetting that arena while the clone lives is refused.
+// expected compile fail
+// EXPECT: cannot mutably borrow 'a' while it is already borrowed
+import "string.zrl";
+import "clone.zrl";
+import "mem.zrl";
+use string::String;
+use mem::Arena;
+
+fn main() -> i32 {
+    let mut a = Arena.new(4096).unwrap();
+    let mut s = String.new_in(&a);
+    s.push_str("ab");
+    let c = s.clone();
+    a.reset();
+    return c.len() as i32;
+}

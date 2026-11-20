@@ -14,10 +14,6 @@ use vec::Vec;
 // The clone keeps `self` borrowed while it lives, since its elements may hold what self's hold.
 impl<T: Clone> Clone for Vec<T> {
     // Creates an explicit duplicate copy of the value.
-    // SAFETY: the clone's elements are `T::clone`s of self's, so it holds at most what self's
-    // elements hold; it owns its own buffer and records only the arena `self` allocates from,
-    // which `self` holds as a borrow. It points into no storage `self` owns.
-    #[unsafe(borrows(* self))]
     fn clone(self: &Vec<T>) -> Vec<T> {
         // SAFETY: the pointer is the arena `self` (a live Vec) allocates from, and `new_in_raw`
         // only records it.
