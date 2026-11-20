@@ -7479,6 +7479,16 @@ fn os_dest_reach(
                     && c.buf[id * c.words + OS_W_FLAGS] & ORIGIN_STATIC != 0 as u64 {
                     os_add_flag(c, dst, ORIGIN_STATIC);
                 }
+                // A loose raw local holds no owner, so following its parameter words cannot pull
+                // in a Vec's elements; include them so stores reach caller parameters.
+                if !os_type_has(c, module, table, lty, OS_Q_HANDLE)
+                    && os_type_has(c, module, table, lty, OS_Q_LOOSE_RAW) {
+                    let dw = dst * c.words;
+                    let lw = id * c.words;
+                    c.buf[dw + OS_W_ADDR] = c.buf[dw + OS_W_ADDR] | c.buf[lw + OS_W_ADDR];
+                    c.buf[dw + OS_W_CONTENTS] = c.buf[dw + OS_W_CONTENTS]
+                        | c.buf[lw + OS_W_CONTENTS];
+                }
                 if os_type_has(c, module, table, lty, OS_Q_HANDLE) {
                     let held = os_t(c, OS_T_DR);
                     os_copy(c, held, id);
