@@ -43,6 +43,10 @@ pub struct ActiveBorrow {
     // replacing the type comparison `is_direct_referent_borrow` used to guess it (which could not
     // tell a same-type indirect borrow, and could not see through a field or element step).
     pub direct: bool,
+    // Whether this borrow was `direct` on the immediate referent copied by `inherit_reborrow`
+    // (`&_tmp` for a `by_ref` slice argument), so a `from_contents` edge on a `by_ref` parameter
+    // still recognizes the slice's own backing array as derived without losing its borrows.
+    pub direct_inner: bool,
     // Release tier (§3.1, item 2): conflicts only with a release, not with other `&mut` uses.
     pub release_only: bool,
     pub epoch: u32,
@@ -1261,6 +1265,7 @@ impl ZirVerifier {
             span: span,
             derived: false,
             direct: true,
+            direct_inner: false,
             release_only: false,
             epoch: self.next_borrow_epoch,
             via: via,
@@ -1281,6 +1286,7 @@ impl ZirVerifier {
                 span: span,
                 derived: false,
                 direct: false,
+                direct_inner: false,
                 release_only: false,
                 epoch: self.next_borrow_epoch,
                 via: via,
@@ -1976,6 +1982,7 @@ impl ZirVerifier {
                 merged.is_mut = merged.is_mut || nb.is_mut;
                 merged.derived = merged.derived && nb.derived;
                 merged.direct = merged.direct || nb.direct;
+                merged.direct_inner = merged.direct_inner && nb.direct_inner;
                 merged.release_only = merged.release_only && nb.release_only;
                 merged.via = merged.via | nb.via;
                 if nb.epoch > merged.epoch { merged.epoch = nb.epoch; }
@@ -2062,6 +2069,7 @@ impl ZirVerifier {
                         span: b.span,
                         derived: b.derived,
                         direct: direct_copy && b.direct,
+                        direct_inner: direct_copy && b.direct_inner,
                         release_only: b.release_only || dest_id == OUTSIDE_BORROWER,
                         epoch: self.next_borrow_epoch,
                         via: b.via | rv_bit(rv),
@@ -2146,7 +2154,33 @@ impl ZirVerifier {
         state: &mut ZirAnalysisState,
         locals: [Local]
     ) {
-        self.inherit_borrows_keeping(p.base, dest, via, state);
+        if p.base == 0 as u32 || dest == 0 as u32 || p.base == dest { return; }
+        let n = state.borrows.len();
+        let mut bi = 0 as usize;
+        while bi < n {
+            if state.borrows[bi].borrower == p.base {
+                let b = state.borrows[bi];
+                let reborrow_derived = b.derived;
+                self.push_borrow(
+                    state,
+                    ActiveBorrow {
+                        base: b.base,
+                        is_mut: b.is_mut,
+                        region: b.region,
+                        borrower: dest,
+                        span: b.span,
+                        derived: reborrow_derived,
+                        direct: false,
+                        direct_inner: p.projections.len == 0 as usize
+                            && (b.direct || b.direct_inner),
+                        release_only: b.release_only || dest == OUTSIDE_BORROWER,
+                        epoch: self.next_borrow_epoch,
+                        via: b.via | via,
+                    }
+                );
+            }
+            bi = bi + 1 as usize;
+        }
     }
 
     // The same, for a closure's environment: the captures' borrows are what the closure keeps. One
@@ -2185,6 +2219,7 @@ impl ZirVerifier {
                         // (lower_block, promote_local_to_parent_scope).
                         derived: b.derived,
                         direct: false,
+                        direct_inner: false,
                         release_only: b.release_only || dest == OUTSIDE_BORROWER,
                         epoch: self.next_borrow_epoch,
                         via: b.via | via,
@@ -2219,6 +2254,7 @@ impl ZirVerifier {
                         span: b.span,
                         derived: true,
                         direct: false,
+                        direct_inner: false,
                         release_only: b.release_only || dest == OUTSIDE_BORROWER,
                         epoch: self.next_borrow_epoch,
                         via: b.via,
@@ -2260,6 +2296,45 @@ impl ZirVerifier {
                         span: b.span,
                         derived: b.derived,
                         direct: false,
+                        direct_inner: false,
+                        release_only: b.release_only || dest == OUTSIDE_BORROWER,
+                        epoch: self.next_borrow_epoch,
+                        via: b.via | via,
+                    }
+                );
+            }
+            bi = bi + 1 as usize;
+        }
+    }
+
+    // Like `inherit_borrows_keeping`, for a slice built from a pointer (`&arr` coerced to `[T]`):
+    // keeps `direct: false` (so `inherit_borrows_as` still treats `&arr` as local stack storage),
+    // while recording `direct_inner: b.direct` so a `from_contents` edge on a `by_ref` slice
+    // parameter recognizes the slice's backing array as derived.
+    fn inherit_borrows_slice_direct(
+        self: &mut ZirVerifier,
+        src: u32,
+        dest: u32,
+        via: u64,
+        state: &mut ZirAnalysisState
+    ) {
+        if src == 0 as u32 || dest == 0 as u32 || src == dest { return; }
+        let n = state.borrows.len();
+        let mut bi = 0 as usize;
+        while bi < n {
+            if state.borrows[bi].borrower == src {
+                let b = state.borrows[bi];
+                self.push_borrow(
+                    state,
+                    ActiveBorrow {
+                        base: b.base,
+                        is_mut: b.is_mut,
+                        region: b.region,
+                        borrower: dest,
+                        span: b.span,
+                        derived: b.derived,
+                        direct: false,
+                        direct_inner: b.direct,
                         release_only: b.release_only || dest == OUTSIDE_BORROWER,
                         epoch: self.next_borrow_epoch,
                         via: b.via | via,
@@ -2312,6 +2387,7 @@ impl ZirVerifier {
                         span: b.span,
                         derived: derived,
                         direct: false,
+                        direct_inner: false,
                         release_only: b.release_only || dest == OUTSIDE_BORROWER,
                         epoch: self.next_borrow_epoch,
                         via: b.via | via,
@@ -2359,8 +2435,13 @@ impl ZirVerifier {
                     } else {
                         callee.ret_ties
                     };
-                    storage = self.zil_module.functions[fn_id as usize].ret_storage;
-                    storage_unknown = !self.zil_module.functions[fn_id as usize].storage_known;
+                    if callee.os_known {
+                        storage = callee.os_ret_addr;
+                        storage_unknown = false;
+                    } else {
+                        storage = callee.ret_storage;
+                        storage_unknown = !callee.storage_known;
+                    }
                 }
                 for i in 0 as usize..args.len {
                     if i >= 64 as usize || ((ties >> (i as u64)) & 1 as u64) != 0 as u64 {
@@ -2403,9 +2484,25 @@ impl ZirVerifier {
             },
             // A value built from operands holds what they hold: a struct, tuple or array literal,
             // a variant payload, a box, a repeated array or a cast. The copy keeps each operand
-            // borrow's own flag (see inherit_borrows_keeping).
-            ZirRvalue.StructLiteral(_, args)
-                | ZirRvalue.Array(_, args) => {
+            // borrow's own flag (see inherit_borrows_keeping). A slice built from a pointer
+            // (`&arr` coerced to `[T]`) records `direct_inner` so a `from_contents` edge on a
+            // `by_ref` slice parameter recognizes the backing array as derived.
+            ZirRvalue.StructLiteral(sty, args) => {
+                if sty != 0 as u32
+                    && self.get_type_decl(sty).def.get_tag() == ILTYPE_SLICE
+                    && args.len > 0 as usize
+                    && args[0].projections.len == 0 as usize {
+                    self.inherit_borrows_slice_direct(args[0].base, dest, rv_bit(rv), state);
+                    let mut ai = 1 as usize;
+                    while ai < args.len {
+                        self.inherit_borrows_keeping(args[ai].base, dest, rv_bit(rv), state);
+                        ai = ai + 1 as usize;
+                    }
+                } else {
+                    for a in args { self.inherit_borrows_keeping(a.base, dest, rv_bit(rv), state); }
+                }
+            },
+            ZirRvalue.Array(_, args) => {
                 for a in args { self.inherit_borrows_keeping(a.base, dest, rv_bit(rv), state); }
             },
             ZirRvalue.Tuple(elems) => {
@@ -2422,9 +2519,17 @@ impl ZirVerifier {
             // tests/language/memory/raw_ptr_element_assignment.zrl). Any other cast (to a
             // reference or an aggregate) carries the operand's borrows.
             ZirRvalue.Cast(p, target) => {
-                if target == 0 as u32
-                    || !is_raw_pointer_tag(self.get_type_decl(target).def.get_tag()) {
+                if target == 0 as u32 {
                     self.inherit_borrows_keeping(p.base, dest, rv_bit(rv), state);
+                } else {
+                    let ttag = self.get_type_decl(target).def.get_tag();
+                    if !is_raw_pointer_tag(ttag) {
+                        if p.projections.len == 0 as usize && ttag == ILTYPE_SLICE {
+                            self.inherit_borrows_slice_direct(p.base, dest, rv_bit(rv), state);
+                        } else {
+                            self.inherit_borrows_keeping(p.base, dest, rv_bit(rv), state);
+                        }
+                    }
                 }
             },
             ZirRvalue.PtrFromInt(_, _) => {},
@@ -3180,6 +3285,8 @@ impl ZirVerifier {
                     curr_ty = self.get_tuple_elem_type(curr_ty, idx);
                 },
                 Projection.Index(_) => {
+                    let i_tag = self.get_type_decl(curr_ty).def.get_tag();
+                    if i_tag == ILTYPE_SLICE || is_any_pointer_tag(i_tag) { return false; }
                     curr_ty = self.get_slice_element_type(curr_ty);
                 },
             }
@@ -3295,7 +3402,8 @@ impl ZirVerifier {
                 && self.borrow_counts(b, state, locals)
                 && self.places_overlap(&place, &b.base)
                 && self.borrowed_storage_is_local(&b.base, locals)
-                && ((!b.release_only && !b.derived) || self.local_type_has_drop(local_id, locals)) {
+                && ((!b.derived && (!b.release_only || b.borrower != OUTSIDE_BORROWER))
+                    || self.local_type_has_drop(local_id, locals)) {
                 self.report_borrow_conflict(
                     "cannot let",
                     &place,
@@ -3621,6 +3729,19 @@ impl ZirVerifier {
         return false;
     }
 
+    fn param_is_by_ref(self: &ZirVerifier, fn_id: u32, idx: usize) -> bool {
+        if (fn_id as usize) >= self.zil_module.functions.len() { return false; }
+        let f = &self.zil_module.functions[fn_id as usize];
+        let sret_name = self.intern_table.intern("__sret");
+        let base = if f.params_len > 0 as usize && f.param(0).name == sret_name {
+            1 as usize
+        } else {
+            0 as usize
+        };
+        if idx + base >= f.params_len { return false; }
+        return f.param(idx + base).by_ref;
+    }
+
     fn param_is_indirect(self: &ZirVerifier, fn_id: u32, idx: usize) -> bool {
         if (fn_id as usize) >= self.zil_module.functions.len() { return false; }
         let f = &self.zil_module.functions[fn_id as usize];
@@ -3640,10 +3761,15 @@ impl ZirVerifier {
 
     // Gives release-tier borrows from source argument SRC (carried borrows, plus referenced place
     // borrows when FROM_CONTENTS is true) to BORROWER_ID (a frame local id or OUTSIDE_BORROWER).
+    // When FROM_ADDR is false, the callee stores only what `*src` points to (ParamContents), so a
+    // direct borrow of `src`'s own referent (or the immediate referent of a `by_ref` slice
+    // argument, via `direct_inner`) is derived storage rather than a pointer to its stack slot.
     fn give_arg_borrows_to_target(
         self: &mut ZirVerifier,
         src: &Place,
+        from_addr: bool,
         from_contents: bool,
+        by_ref: bool,
         borrower_id: u32,
         via: u64,
         span: Span,
@@ -3664,6 +3790,8 @@ impl ZirVerifier {
             if state.borrows[bi].borrower == src.base {
                 any_copied = true;
                 let b = state.borrows[bi];
+                let is_direct = b.direct || (by_ref && b.direct_inner);
+                let derived = if !from_addr && is_direct { true } else { b.derived };
                 self.push_borrow(
                     state,
                     ActiveBorrow {
@@ -3672,8 +3800,9 @@ impl ZirVerifier {
                         region: b.region,
                         borrower: borrower_id,
                         span: b.span,
-                        derived: b.derived,
+                        derived: derived,
                         direct: false,
+                        direct_inner: false,
                         release_only: true,
                         epoch: b.epoch,
                         via: b.via | via,
@@ -3705,6 +3834,7 @@ impl ZirVerifier {
                                 span: b.span,
                                 derived: b.derived,
                                 direct: false,
+                                direct_inner: false,
                                 release_only: true,
                                 epoch: b.epoch,
                                 via: b.via | via,
@@ -3738,8 +3868,9 @@ impl ZirVerifier {
                         region: 0 as u32,
                         borrower: borrower_id,
                         span: span,
-                        derived: false,
+                        derived: !from_addr,
                         direct: false,
+                        direct_inner: false,
                         release_only: true,
                         epoch: 0 as u32,
                         via: via,
@@ -3754,7 +3885,9 @@ impl ZirVerifier {
     fn apply_edge_targets(
         self: &mut ZirVerifier,
         src_arg: &Place,
+        from_addr: bool,
         from_contents: bool,
+        by_ref: bool,
         td: usize,
         span: Span,
         state: &mut ZirAnalysisState,
@@ -3769,7 +3902,9 @@ impl ZirVerifier {
             if os_has_frame(unsafe { &*self.origins }, td, id) {
                 self.give_arg_borrows_to_target(
                     src_arg,
+                    from_addr,
                     from_contents,
+                    by_ref,
                     id as u32,
                     self.cur_rv,
                     span,
@@ -3783,7 +3918,9 @@ impl ZirVerifier {
         if ext {
             self.give_arg_borrows_to_target(
                 src_arg,
+                from_addr,
                 from_contents,
+                by_ref,
                 OUTSIDE_BORROWER,
                 self.cur_rv,
                 span,
@@ -3799,7 +3936,9 @@ impl ZirVerifier {
         fn_id: u32,
         call_args: [Place],
         src_arg: &Place,
+        from_addr: bool,
         from_contents: bool,
+        by_ref: bool,
         targets: u64,
         to_global: bool,
         span: Span,
@@ -3834,14 +3973,26 @@ impl ZirVerifier {
                     }
                     os_dest_reach(c, self.zil_module, self.intern_table, locals, tm, td);
                 }
-                self.apply_edge_targets(src_arg, from_contents, td, span, state, locals, func);
+                self.apply_edge_targets(
+                    src_arg,
+                    from_addr,
+                    from_contents,
+                    by_ref,
+                    td,
+                    span,
+                    state,
+                    locals,
+                    func
+                );
             }
             j = j + 1 as usize;
         }
         if to_global {
             self.give_arg_borrows_to_target(
                 src_arg,
+                from_addr,
                 from_contents,
+                by_ref,
                 OUTSIDE_BORROWER,
                 self.cur_rv,
                 span,
@@ -3892,7 +4043,17 @@ impl ZirVerifier {
                         let _ = os_or(c, tao, tas);
                         os_dest_reach(c, self.zil_module, self.intern_table, locals, tao, td);
                     }
-                    self.apply_edge_targets(&src, from_c, td, span, state, locals, func);
+                    self.apply_edge_targets(
+                        &src,
+                        true,
+                        from_c,
+                        false,
+                        td,
+                        span,
+                        state,
+                        locals,
+                        func
+                    );
                     j = j + 1 as usize;
                 }
             }
@@ -3971,7 +4132,9 @@ impl ZirVerifier {
                                     fid,
                                     all.as_slice(),
                                     &args[pidx],
+                                    !from_contents,
                                     from_contents,
+                                    self.param_is_by_ref(fid, pidx),
                                     targets,
                                     to_global,
                                     span,
@@ -3984,7 +4147,9 @@ impl ZirVerifier {
                                     fid,
                                     all.as_slice(),
                                     callee,
+                                    !from_contents,
                                     from_contents,
+                                    false,
                                     targets,
                                     to_global,
                                     span,
@@ -4006,7 +4171,9 @@ impl ZirVerifier {
                                         fid,
                                         all.as_slice(),
                                         &cap_pl,
+                                        !from_contents,
                                         from_contents,
+                                        false,
                                         targets,
                                         to_global,
                                         span,
@@ -4064,7 +4231,9 @@ impl ZirVerifier {
                             fn_id,
                             args,
                             &args[k],
+                            !from_contents,
                             from_contents,
+                            self.param_is_by_ref(fn_id, k),
                             targets,
                             to_global,
                             span,
@@ -4091,7 +4260,9 @@ impl ZirVerifier {
                         fn_id,
                         args,
                         &args[i],
+                        true,
                         from_c,
+                        self.param_is_by_ref(fn_id, i),
                         decl_to & (0x7fffffffffffffff as u64),
                         to_global,
                         span,
@@ -4115,7 +4286,9 @@ impl ZirVerifier {
                             fn_id,
                             args,
                             &args[i],
+                            true,
                             from_c,
+                            self.param_is_by_ref(fn_id, i),
                             targets & (0x7fffffffffffffff as u64),
                             to_global,
                             span,
@@ -4258,6 +4431,7 @@ impl ZirVerifier {
                             merged.is_mut = merged.is_mut || b2.is_mut;
                             merged.derived = merged.derived && b2.derived;
                             merged.direct = merged.direct || b2.direct;
+                            merged.direct_inner = merged.direct_inner && b2.direct_inner;
                             merged.release_only = merged.release_only && b2.release_only;
                             merged.via = merged.via | b2.via;
                             if b2.epoch > merged.epoch { merged.epoch = b2.epoch; }
@@ -4275,6 +4449,7 @@ impl ZirVerifier {
                             span: b2.span,
                             derived: b2.derived,
                             direct: b2.direct,
+                            direct_inner: b2.direct_inner,
                             release_only: b2.release_only,
                             epoch: b2.epoch,
                             via: b2.via,
@@ -4402,6 +4577,7 @@ impl ZirVerifier {
             && b1.is_mut == b2.is_mut
             && b1.derived == b2.derived
             && b1.direct == b2.direct
+            && b1.direct_inner == b2.direct_inner
             && b1.release_only == b2.release_only
             && b1.epoch == b2.epoch;
     }

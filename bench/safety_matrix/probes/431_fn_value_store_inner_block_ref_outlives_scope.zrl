@@ -1,0 +1,20 @@
+// name: Function value stores inner-block local reference into outer struct
+// expected: compile_reject
+// Refused at inner block end: calling fn_store_put through a `fn` value transfers `&hn` to hh, so hn cannot leave scope while hh is still live.
+struct FnStoreH { p: &i32 }
+
+fn fn_store_put(h: &mut FnStoreH, p: &i32) {
+    h.p = p;
+}
+
+fn main() -> i32 {
+    let hx: i32 = 7;
+    let mut hh = FnStoreH { p: &hx };
+    let f: fn(&mut FnStoreH, &i32) = fn_store_put;
+    {
+        let hn: i32 = 9;
+        f(&mut hh, &hn);
+    }
+    if *hh.p != 9 { return 92; }
+    return 0;
+}

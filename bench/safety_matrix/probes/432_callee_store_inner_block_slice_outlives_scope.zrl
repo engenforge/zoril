@@ -1,0 +1,19 @@
+// name: Callee stores slice of inner-block array into outer struct
+// expected: compile_reject
+// Refused at inner block end: store_slice takes `[i32]` by hidden reference (`by_ref`) and stores it into hh, so arr cannot leave scope while hh is still live.
+struct SliceH { s: [i32] }
+
+fn store_slice(h: &mut SliceH, s: [i32]) {
+    h.s = s;
+}
+
+fn main() -> i32 {
+    let a = [1, 2];
+    let mut hh = SliceH { s: &a };
+    {
+        let arr = [9, 10];
+        store_slice(&mut hh, &arr);
+    }
+    if hh.s[0] != 9 { return 92; }
+    return 0;
+}

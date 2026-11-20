@@ -1,0 +1,20 @@
+// name: Callee dereferences double reference to inner-block local into outer struct
+// expected: compile_reject
+// Refused at inner block end: take_ref_ref reads `*pp` (ParamContents of `&&i32`), so `r` is derived but `hn` remains a non-derived borrow on hh.
+struct FnStoreH { p: &i32 }
+
+fn take_ref_ref(h: &mut FnStoreH, pp: &&i32) {
+    h.p = *pp;
+}
+
+fn main() -> i32 {
+    let hx: i32 = 7;
+    let mut hh = FnStoreH { p: &hx };
+    {
+        let hn: i32 = 9;
+        let r: &i32 = &hn;
+        take_ref_ref(&mut hh, &r);
+    }
+    if *hh.p != 9 { return 92; }
+    return 0;
+}

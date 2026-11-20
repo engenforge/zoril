@@ -1,0 +1,21 @@
+// name: Callee reads outer reference through inner-block carrier struct into outer struct
+// expected: accept
+// Accepted twin of 430-433: extract_and_store reads only `src.r` (ParamContents), so `holder` is derived storage with no Drop while `hn` lives in the outer block.
+struct FnStoreH { p: &i32 }
+struct RefHolder { r: &i32 }
+
+fn extract_and_store(h: &mut FnStoreH, src: &RefHolder) {
+    h.p = src.r;
+}
+
+fn main() -> i32 {
+    let hx: i32 = 7;
+    let mut hh = FnStoreH { p: &hx };
+    let hn: i32 = 9;
+    {
+        let holder = RefHolder { r: &hn };
+        extract_and_store(&mut hh, &holder);
+    }
+    if *hh.p != 9 { return 92; }
+    return 0;
+}

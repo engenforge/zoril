@@ -1333,7 +1333,62 @@ impl Driver {
             let _ = self.os_pass_pending(k, sret_name, true);
             k = k + 1 as usize;
         }
+        let mut v = start;
+        while v < self.os_pending.len() {
+            self.verify_pending(v, sret_name);
+            v = v + 1 as usize;
+        }
         while self.os_pending.len() > start { let _ = self.os_pending.pop(); }
+    }
+
+    // Runs ZirVerifier for pending cycle member K once every member has its converged
+    // origin summary, ret_ties and os_in_cycle = false.
+    fn verify_pending(self: &mut Driver, k: usize, sret_name: u32) {
+        let e = self.os_pending[k];
+        // SAFETY: the scratch arena is the driver's own and live; the verifier's state is
+        // allocated above MARK and dropped by the reset below, leaving the kept ZIR intact.
+        let mark = unsafe { (*self.scratch_arena).offset };
+        let origins_ptr = unsafe {
+            zoril_allocator_alloc(self.scratch_arena, sizeof(check_zir::OriginSets) as u64)
+        } as *mut check_zir::OriginSets;
+        unsafe {
+            *origins_ptr = check_zir::compute_origins_zir(
+                self.scratch_arena,
+                self.module,
+                &e.zir,
+                sret_name,
+                self.intern_table,
+                check_zir::PROVENANCE_OFF,
+                e.file_path
+            );
+        }
+        let zf_ptr = unsafe {
+            zoril_allocator_alloc(self.scratch_arena, sizeof(zir::ZirFunction) as u64)
+        } as *mut zir::ZirFunction;
+        unsafe { *zf_ptr = e.zir; }
+        let zf_slice = unsafe { @slice(zf_ptr, 1 as usize) };
+        let zm_ptr = unsafe {
+            zoril_allocator_alloc(self.scratch_arena, sizeof(ZirModule) as u64)
+        } as *mut ZirModule;
+        unsafe { *zm_ptr = ZirModule { funcs: zf_slice }; }
+        let zm_slice = unsafe { @slice(zm_ptr, 1 as usize) };
+        let mut zir_ver = ZirVerifier.new(
+            self.scratch_arena,
+            &mut zm_slice[0],
+            self.module,
+            self.intern_table,
+            origins_ptr
+        );
+        zir_ver.file_path = e.file_path;
+        zir_ver.verify();
+        if self.collect_zir_stats {
+            self.zir_stats.note_reject_via(zir_ver.reject_via);
+        }
+        if zir_ver.had_error {
+            self.had_error = true;
+        }
+        // SAFETY: as at MARK above: nothing allocated past it outlives this pass.
+        unsafe { reset_driver_scratch(self.scratch_arena, mark); }
     }
 
     // One origin pass over pending body K, in a scratch region released after it. With CHECK the
@@ -1505,23 +1560,25 @@ impl Driver {
         unsafe { *zm_ptr = ZirModule { funcs: zf_slice }; }
         let zm_slice = unsafe { @slice(zm_ptr, 1 as usize) };
 
-        let mut zir_ver = ZirVerifier.new(
-            self.scratch_arena,
-            &mut zm_slice[0],
-            self.module,
-            self.intern_table,
-            origins_ptr
-        );
-        zir_ver.file_path = self.file_path;
-        zir_ver.verify();
-        // The routes this body's reported rejections travelled through; `--emit-zir-stats`
-        // prints their union, and the route-coverage gate counts only those.
-        if self.collect_zir_stats {
-            self.zir_stats.note_reject_via(zir_ver.reject_via);
-        }
-        if zir_ver.had_error {
-            self.had_error = true;
-            return Option.None;
+        if !in_cycle {
+            let mut zir_ver = ZirVerifier.new(
+                self.scratch_arena,
+                &mut zm_slice[0],
+                self.module,
+                self.intern_table,
+                origins_ptr
+            );
+            zir_ver.file_path = self.file_path;
+            zir_ver.verify();
+            // The routes this body's reported rejections travelled through; `--emit-zir-stats`
+            // prints their union, and the route-coverage gate counts only those.
+            if self.collect_zir_stats {
+                self.zir_stats.note_reject_via(zir_ver.reject_via);
+            }
+            if zir_ver.had_error {
+                self.had_error = true;
+                return Option.None;
+            }
         }
 
         let mut zir_to_zil = ZirToZilLowerer.new(

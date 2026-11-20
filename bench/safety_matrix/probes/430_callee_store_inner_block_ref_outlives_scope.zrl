@@ -1,0 +1,19 @@
+// name: Callee stores inner-block local reference into outer struct
+// expected: compile_reject
+// Refused at inner block end: fn_store_put transfers `&hn` (a non-derived borrow of hn's stack slot) to hh, so hn cannot leave scope while hh is still live.
+struct FnStoreH { p: &i32 }
+
+fn fn_store_put(h: &mut FnStoreH, p: &i32) {
+    h.p = p;
+}
+
+fn main() -> i32 {
+    let hx: i32 = 7;
+    let mut hh = FnStoreH { p: &hx };
+    {
+        let hn: i32 = 9;
+        fn_store_put(&mut hh, &hn);
+    }
+    if *hh.p != 9 { return 92; }
+    return 0;
+}
