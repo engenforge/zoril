@@ -260,6 +260,7 @@ check_git_status() {
             tools/*/test/fixtures/*.s|*/tools/*/test/fixtures/*.s) continue ;;
             bootstrap/*/tests/fixtures/*.ssa|*/bootstrap/*/tests/fixtures/*.ssa) continue ;;
             tests/integration/external_stub.s|*/tests/integration/external_stub.s) continue ;;
+            tests/language/memory/provenance/extern_one_pointer_keep.s|*/tests/language/memory/provenance/extern_one_pointer_keep.s) continue ;;
             */lib/rt/*.s|lib/rt/*.s) continue ;;
             # Specific bootstrap patterns from .gitignore
             bootstrap/_*|*/bootstrap/_*) continue ;;
@@ -354,6 +355,8 @@ check_nongit_dir() {
                 tools/*/test/fixtures/*.s|*/tools/*/test/fixtures/*.s) continue ;;
                 bootstrap/*/tests/fixtures/*.ssa|*/bootstrap/*/tests/fixtures/*.ssa) continue ;;
                 tests/integration/external_stub.s|*/tests/integration/external_stub.s) continue ;;
+                tests/language/memory/provenance/extern_one_pointer_keep.s|*/tests/language/memory/provenance/extern_one_pointer_keep.s) continue ;;
+            tests/language/memory/provenance/extern_one_pointer_keep.s|*/tests/language/memory/provenance/extern_one_pointer_keep.s) continue ;;
                 */lib/rt/*.s|lib/rt/*.s) continue ;;
                 bootstrap/*/src/*.ssa|*/bootstrap/*/src/*.ssa|bootstrap/*/stage0/*.ssa|*/bootstrap/*/stage0/*.ssa) continue ;;
                 bootstrap/*/proof/*|*/bootstrap/*/proof/*) continue ;;

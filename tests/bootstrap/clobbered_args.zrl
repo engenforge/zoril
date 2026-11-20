@@ -1,3 +1,4 @@
+#[unsafe(stores())]
 extern fn __zoril_syscall_3(sysno: i64, a: i64, b: i64, c: i64) -> i64;
 
 fn write_str(fd: i64, msg: *u8, len: i64) {

@@ -15,6 +15,8 @@ use sys::{mmap_anon, mmap_anon_or_trap, munmap_or_trap, syscall_failed};
 pub extern fn memcpy(dest: *mut u8, src: *u8, size: u64);
 
 // CALLER OBLIGATION: dest must point to valid writable memory of at least size bytes.
+// SAFETY: memset writes value bytes into dest and keeps no pointer.
+#[unsafe(stores())]
 pub extern fn memset(dest: *mut u8, value: i32, size: u64);
 
 // Low-level memory header tracking arena offset, capacity, and backing mmap bounds.

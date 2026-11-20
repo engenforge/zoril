@@ -7685,6 +7685,19 @@ fn os_frame_bound(c: &OriginSets, set: usize) -> bool {
     return false;
 }
 
+fn os_is_c_fn_ptr(module: &ILModule, ty: u32) -> bool {
+    if ty == 0 as u32 || ty as usize > module.types.len() { return false; }
+    let def = &module.types[ty as usize - 1 as usize].def;
+    if let ILType.Fn(f) = *def { return f.c_abi; }
+    if let ILType.RawPtr(inner) = *def {
+        if inner != 0 as u32 && inner as usize <= module.types.len() {
+            let idef = &module.types[inner as usize - 1 as usize].def;
+            if let ILType.Fn(f) = *idef { return f.c_abi; }
+        }
+    }
+    return false;
+}
+
 fn os_has_frame_or_param(c: &OriginSets, set: usize) -> bool {
     let d = set * c.words;
     if c.buf[d + OS_W_ADDR] != 0 as u64 || c.buf[d + OS_W_CONTENTS] != 0 as u64 {
@@ -9823,19 +9836,16 @@ fn os_call(
     }
     if c.checking && bare_extern && !module.functions[fn_id as usize].has_stores_declared {
         let f = &module.functions[fn_id as usize];
-        let mut raw_params = 0 as usize;
+        let mut takes_addr = f.is_variadic;
         let mut pi = 0 as usize;
-        while pi < f.params_len {
+        while pi < f.params_len && !takes_addr {
             let pty = f.param(pi).ty;
-            if pty != 0 as u32 {
-                let tag = os_type_def_tag(module, pty);
-                if tag == ILTYPE_RAWPTR || tag == ILTYPE_RAWPTRMUT {
-                    raw_params = raw_params + 1 as usize;
-                }
+            if pty != 0 as u32 && os_carries(c, module, pty) {
+                takes_addr = true;
             }
             pi = pi + 1 as usize;
         }
-        if raw_params >= 2 as usize {
+        if takes_addr {
             let mut k = 0 as usize;
             while k < args.len {
                 let _ = os_arg(c, module, table, locals, fn_id, args, k);
@@ -9945,6 +9955,32 @@ fn os_rvalue(
         ZirRvalue.Call(fn_id, args) => { os_call(c, module, table, locals, fn_id, args, owner); },
         ZirRvalue.CallPtr(callee, args) => {
             if os_known_call(c, module, table, locals, &callee, args, owner) { return; }
+            if c.checking {
+                let cty = os_read(
+                    c,
+                    module,
+                    table,
+                    locals,
+                    &callee,
+                    os_t(c, OS_T_X),
+                    os_t(c, OS_T_AS)
+                );
+                if os_is_c_fn_ptr(module, cty) {
+                    let tao = os_t(c, OS_T_AO);
+                    let mut k = 0 as usize;
+                    while k < args.len {
+                        let _ = os_unknown_arg(c, module, table, locals, args, &callee, k);
+                        if os_has_frame_or_param(c, tao) {
+                            os_refuse(
+                                c,
+                                "a call through a C function pointer passes it an address of this frame or of a parameter (extern store rule)"
+                            );
+                            break;
+                        }
+                        k = k + 1 as usize;
+                    }
+                }
+            }
             os_note_unknown(c, UNKNOWN_FN_VALUE);
             let nargs = args.len + 1 as usize;
             os_unknown_call_effects(c, module, table, locals, args, &callee, nargs, ORIGIN_STATIC);

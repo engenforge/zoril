@@ -762,7 +762,7 @@ An `extern fn` declaration names an external C-ABI function with no body, resolv
 
 `char`, slices (pass `.ptr` and `.len`), references, `Box<T>`, tuples, arrays, structs by value (pass a raw pointer), enums, closures, and Zoril `fn` values are disallowed in `extern` signatures.
 
-An `extern` keeps nothing it is given unless `#[unsafe(stores(..))]` declares it, and under `--provenance` a call to an undeclared `extern` with two or more raw-pointer parameters that passes an address of the frame or a parameter is refused (`extern store rule`). For example, `memcpy` declares `#[unsafe(stores(*src -> dest))]` so callers know that what `src` points to is stored where `dest` points.
+An `extern` keeps nothing it is given unless `#[unsafe(stores(..))]` declares it, and under `--provenance` a call to every undeclared `extern` that can be passed an address (a raw pointer, 64-bit integer, or variadic tail), or through an `extern "C" fn` value, that passes an address of the frame or a parameter is refused (`extern store rule`). For example, `memcpy` declares `#[unsafe(stores(*src -> dest))]` so callers know that what `src` points to is stored where `dest` points.
 
 ### 9.2 System Calls
 

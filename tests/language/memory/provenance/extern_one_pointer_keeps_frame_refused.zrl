@@ -1,0 +1,15 @@
+// flags: --provenance
+// expected compile fail
+// EXPECT: extern store rule
+// link: tests/language/memory/provenance/extern_one_pointer_keep.s
+//
+// A one-pointer undeclared extern that keeps its argument in C static memory
+// hides a frame address from put's caller (id:eb38n, F9).
+
+extern fn keep(p: *i32);
+extern fn kept() -> *i32;
+
+fn put(r: &i32) { unsafe { keep(r as *i32); } }
+fn leak() { let local = 42; put(&local); }
+fn smash(n: i32) -> i32 { let junk = [77 as i32; 256]; if n > 0 { return smash(n - 1) + junk[3]; } return 0; }
+fn main() -> i32 { leak(); let _ = smash(8); return unsafe { *kept() }; }

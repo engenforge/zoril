@@ -1,0 +1,16 @@
+// flags: --provenance
+// expected compile fail
+// EXPECT: extern store rule
+//
+// Calling through an extern "C" fn value with a frame address is refused
+// under --provenance (id:eb38n).
+
+#[unsafe(stores())]
+extern fn get_cb() -> extern "C" fn(*u8);
+
+fn main() -> i32 {
+    let f = unsafe { get_cb() };
+    let local: u8 = 7;
+    unsafe { f(&local as *u8); }
+    return 0;
+}
