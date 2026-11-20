@@ -1,0 +1,16 @@
+// expected compile fail
+// EXPECT: fn value rule
+// A declared `extern fn` with `#[unsafe(stores(p -> static))]` made into a Zoril `fn` value is refused.
+#[unsafe(stores(p -> static))]
+extern fn keep(p: *i32);
+fn apply(f: fn(*i32), p: *i32) { f(p); }
+fn bad() -> i32 {
+    let x = 1;
+    let f: fn(*i32) = unsafe { keep };
+    apply(f, &x as *i32);
+    return 0;
+}
+fn main() -> i32 {
+    let _ = bad();
+    return 0;
+}

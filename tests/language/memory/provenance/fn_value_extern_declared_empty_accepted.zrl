@@ -1,0 +1,11 @@
+// expected compile success
+// Positive twin: an `extern fn` declared `#[unsafe(stores())]` may be made into a Zoril `fn` value.
+#[unsafe(stores())]
+extern fn noop(p: *i32);
+fn apply(f: fn(*i32), p: *i32) { f(p); }
+fn main() -> i32 {
+    let x = 1;
+    let f: fn(*i32) = unsafe { noop };
+    apply(f, &x as *i32);
+    return 0;
+}

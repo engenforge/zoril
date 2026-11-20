@@ -57,6 +57,19 @@ unsafe fn reset_driver_scratch(arena: *mut ArenaHeader, offset: u64) {
     (*arena).offset = offset;
 }
 
+static mut ICE_NOTE_PTR: *mut u8 = 0 as *mut u8;
+
+fn ice_buf_append(buf: *mut u8, pos: usize, s: [u8]) -> usize {
+    let mut n = pos;
+    let mut i = 0 as usize;
+    while i < s.len && n < 512 as usize {
+        unsafe { *((buf as usize + n) as *mut u8) = s[i]; }
+        n = n + 1 as usize;
+        i = i + 1 as usize;
+    }
+    return n;
+}
+
 impl Driver {
 
     // A private function used by a public generic body must be linkable from the TU that
@@ -907,13 +920,21 @@ impl Driver {
 
     // An internal error's note: "while compiling `NAME` (FILE)".
     fn set_ice_context(self: &mut Driver, name: u32) {
-        let mut note = unsafe { ByteVec.new_raw(self.arena) };
-        note.push_slice("while compiling `");
-        note.push_slice(self.intern_table.lookup(name));
-        note.push_slice("` (");
-        note.push_slice(self.file_path);
-        note.push_slice(")");
-        set_ice_note(note.as_slice());
+        if ICE_NOTE_PTR as usize == 0 as usize {
+            ICE_NOTE_PTR = unsafe {
+                zoril_allocator_alloc(0 as *mut ArenaHeader, 512 as u64)
+            } as *mut u8;
+        }
+        let buf = ICE_NOTE_PTR;
+        let mut n = 0 as usize;
+        n = ice_buf_append(buf, n, "while compiling `");
+        n = ice_buf_append(buf, n, self.intern_table.lookup(name));
+        n = ice_buf_append(buf, n, "` (");
+        n = ice_buf_append(buf, n, self.file_path);
+        n = ice_buf_append(buf, n, ")");
+        // SAFETY: ICE_NOTE_PTR is a 512-byte process-lifetime heap buffer and n <= 512.
+        let note = unsafe { @slice(buf as *u8, n) };
+        set_ice_note(note);
     }
 
     fn unit_type(self: &mut Driver) -> u32 {

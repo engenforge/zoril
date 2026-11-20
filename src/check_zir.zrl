@@ -6739,6 +6739,7 @@ const OS_RULE_UNKNOWN_CALL: u8 = 3;
 const OS_RULE_CLOSURE: u8 = 4;
 const OS_RULE_RETURN: u8 = 5;
 const OS_RULE_EXTERN_STORE: u8 = 6;
+const OS_RULE_FN_VALUE: u8 = 7;
 
 pub struct OsSeenDiag {
     pub span: Span,
@@ -8849,14 +8850,98 @@ fn os_dead_inits(c: &mut OriginSets, module: &ILModule, func: &ZirFunction) {
     }
 }
 
+// A function or closure made into a `fn` value cannot store a declared parameter into a global:
+// a call through a `fn` value checks arguments against each other and its environment, never
+// against globals (§3, _Calls through a `fn` value_). An `extern fn` made into a Zoril `fn`
+// value (not an `extern "C" fn`) is checked the same way, and an undeclared one that can take
+// an address is refused outright.
+fn os_check_fn_value(
+    c: &mut OriginSets,
+    module: &ILModule,
+    table: &InternTable,
+    fid: u32,
+    ty: u32
+) {
+    if !c.checking || fid as usize >= module.functions.len() { return; }
+    if os_is_c_fn_ptr(module, ty) { return; }
+    let f = &module.functions[fid as usize];
+    if f.is_extern {
+        if !f.has_stores_declared {
+            let mut takes_addr = f.is_variadic;
+            let mut pi = 0 as usize;
+            while pi < f.params_len && !takes_addr {
+                let pty = f.param(pi).ty;
+                if pty != 0 as u32 && os_carries(c, module, pty) { takes_addr = true; }
+                pi = pi + 1 as usize;
+            }
+            if takes_addr {
+                os_refuse(
+                    c,
+                    OS_RULE_FN_VALUE,
+                    "an undeclared extern function that takes an address cannot be made into a fn value (fn value rule)"
+                );
+            }
+            return;
+        }
+        // SAFETY: the extern's own summary table, os_edge_rows rows of four u64 in the main arena.
+        let edge_tbl = unsafe { @slice(f.os_edges, f.os_edge_rows * 4 as usize) };
+        let mut r = 0 as usize;
+        while r < f.os_edge_rows {
+            let row = r * 4 as usize;
+            let code = edge_tbl[row] as usize;
+            let gflags = edge_tbl[row + 3 as usize];
+            if code < 128 as usize && (gflags & OS_EDGE_GLOBAL) != 0 as u64 {
+                os_refuse(
+                    c,
+                    OS_RULE_FN_VALUE,
+                    "a function or closure that stores a parameter into a global cannot be made into a fn value (fn value rule)"
+                );
+                return;
+            }
+            r = r + 1 as usize;
+        }
+        return;
+    }
+    if !f.os_known { return; }
+    let base = if f.params_len > 0 as usize && f.param(0).name == c.sret_name {
+        1 as usize
+    } else {
+        0 as usize
+    };
+    let mut e = if f.params_len >= base { f.params_len - base } else { 0 as usize };
+    if e > 0 as usize
+        && type_name_is(table.lookup(f.param(f.params_len - 1 as usize).name), "__env") {
+        e = e - 1 as usize;
+    }
+    // SAFETY: the function's own summary table, os_edge_rows rows of four u64 in the main arena.
+    let edge_tbl = unsafe { @slice(f.os_edges, f.os_edge_rows * 4 as usize) };
+    let mut r = 0 as usize;
+    while r < f.os_edge_rows {
+        let row = r * 4 as usize;
+        let code = edge_tbl[row] as usize;
+        let contents = code >= 64 as usize && code < 128 as usize;
+        let pidx = if contents { code - 64 as usize } else { code };
+        let gflags = edge_tbl[row + 3 as usize];
+        if code < 128 as usize && pidx < e && (gflags & OS_EDGE_GLOBAL) != 0 as u64 {
+            os_refuse(
+                c,
+                OS_RULE_FN_VALUE,
+                "a function or closure that stores a parameter into a global cannot be made into a fn value (fn value rule)"
+            );
+            return;
+        }
+        r = r + 1 as usize;
+    }
+}
+
 // The closure rule (§3, _A closure made into a value_): a closure that is not only called through
 // locals of this body (env_of 0) may be called where no caller knows its environment, so the edges
 // of its summary whose value is what the environment reaches are checked where it is made, against
 // the environment ENV (the pointer FuncAddr carries), and recorded as this body's own edges, since
 // a call of the closure anywhere is a store this body caused. The flow-insensitive sets already
 // hold what any later call writes into that environment. An edge whose value is a declared
-// parameter is checked where the argument is passed, by the store rules of the body that calls
-// the closure.
+// parameter into another parameter is checked where the argument is passed; one into a global is
+// refused where the value is made by os_check_fn_value.
 fn os_check_closure_value(
     c: &mut OriginSets,
     module: &ILModule,
@@ -10259,6 +10344,7 @@ fn os_stmt(
             }
             os_store(c, module, table, locals, id, false, ty);
             if let ZirRvalue.FuncAddr(fid, env) = rv {
+                os_check_fn_value(c, module, table, fid, ty);
                 if env != 0 as u32 && (id as usize) < c.nl && c.env_of[id as usize] == 0 as u32 {
                     os_check_closure_value(c, module, table, locals, fid, env);
                 }
@@ -10278,6 +10364,9 @@ fn os_stmt(
                 os_add_frame(c, own, pl.base);
             }
             os_rvalue(c, module, table, locals, &rv, own);
+            if let ZirRvalue.FuncAddr(fid, _) = rv {
+                os_check_fn_value(c, module, table, fid, ty);
+            }
             if c.checking && (ty == 0 as u32 || os_carries(c, module, ty)) {
                 os_check_store(c, module, table, locals, pl.base, crossed);
             }
