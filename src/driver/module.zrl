@@ -1387,22 +1387,26 @@ impl Driver {
         zir_low.current_source_file = current_source_file;
         zir_low.compile_only = self.compile_only;
         zir_low.implicit_self_ty = self.implicit_self_ty;
-        let mut zir_func = zir_low.lower_function(f, name);
+        let zf_ptr = unsafe {
+            zoril_allocator_alloc(self.scratch_arena, sizeof(zir::ZirFunction) as u64)
+        } as *mut zir::ZirFunction;
+        unsafe { *zf_ptr = zir_low.lower_function(f, name); }
+        let zf_slice = unsafe { @slice(zf_ptr, 1 as usize) };
         if zir_low.had_error {
             self.had_error = true;
             return Option.None;
         }
         // A closure's result found in its body (never an aggregate, see infer_result_from).
-        if zir_low.infer_ret && zir_func.ret_ty != 0 as u32 {
+        if zir_low.infer_ret && zf_slice[0].ret_ty != 0 as u32 {
             let p_func = self.module.get_function_mut(self.builder.current_func_idx as usize);
-            p_func.ret_ty = zir_func.ret_ty;
+            p_func.ret_ty = zf_slice[0].ret_ty;
         }
         // The function's own ret_storage, from its canonical ZIR: the borrow checker below reads
         // it at every call site, and the IL verifier recomputes it later from the lowered body.
         check_zir::compute_ret_storage_zir(
             self.scratch_arena,
             self.module,
-            &zir_func,
+            &zf_slice[0],
             self.builder.current_func_idx as u32
         );
         // Computed for every body; `--provenance` also applies its rules (doc/design/provenance.md
@@ -1415,20 +1419,26 @@ impl Driver {
         // is computed now for the summary its callers in the cycle read, and checked when the
         // cycle's root finishes, with the final summaries (Driver.os_fixpoint).
         let depth = self.os_low.len();
-        let open = check_zir::zir_open_call_depth(self.module, &zir_func);
+        let open = check_zir::zir_open_call_depth(self.module, &zf_slice[0]);
         if open < self.os_low[depth - 1 as usize] { self.os_low[depth - 1 as usize] = open; }
         let low = self.os_low[depth - 1 as usize];
         let in_cycle = low != NO_LOW && low as usize <= depth;
-        let mut origins = check_zir::compute_origins_zir(
-            self.scratch_arena,
-            self.module,
-            &zir_func,
-            sret_name,
-            self.intern_table,
-            if in_cycle { check_zir::PROVENANCE_OFF } else { rules },
-            self.file_path
-        );
-        if origins.errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
+        let origins_ptr = unsafe {
+            zoril_allocator_alloc(self.scratch_arena, sizeof(check_zir::OriginSets) as u64)
+        } as *mut check_zir::OriginSets;
+        unsafe {
+            *origins_ptr = check_zir::compute_origins_zir(
+                self.scratch_arena,
+                self.module,
+                &zf_slice[0],
+                sret_name,
+                self.intern_table,
+                if in_cycle { check_zir::PROVENANCE_OFF } else { rules },
+                self.file_path
+            );
+        }
+        let origins_slice = unsafe { @slice(origins_ptr, 1 as usize) };
+        if origins_slice[0].errors > 0 as u32 && self.provenance == check_zir::PROVENANCE_ON {
             self.had_error = true;
         }
         // The body's summary, for the calls lowered after it; an `unsafe fn`'s too, since an address
@@ -1437,11 +1447,11 @@ impl Driver {
             self.arena,
             self.module,
             self.builder.current_func_idx as usize,
-            &mut origins
+            &mut origins_slice[0]
         );
         if !in_cycle {
             let idx = self.builder.current_func_idx as usize;
-            if check_zir::os_infer_ties(&mut origins, self.module, self.intern_table, idx)
+            if check_zir::os_infer_ties(&mut origins_slice[0], self.module, self.intern_table, idx)
                 > 0 as u32
                 && self.provenance == check_zir::PROVENANCE_ON {
                 self.had_error = true;
@@ -1451,27 +1461,36 @@ impl Driver {
             self.module.get_function_mut(self.builder.current_func_idx as usize).os_in_cycle = true;
             self.os_pending.push(OsPending {
                 func_idx: self.builder.current_func_idx as u32,
-                zir: zir_func,
+                zir: zf_slice[0],
                 file_path: self.file_path,
                 source_file: current_source_file,
                 rules: rules,
             });
         } else if self.emit_origins && current_source_file == self.target_source_file {
-            check_zir::print_origins(&origins, &zir_func, self.module, self.intern_table);
+            check_zir::print_origins(
+                &origins_slice[0],
+                &zf_slice[0],
+                self.module,
+                self.intern_table
+            );
         }
         // `--emit-zir-stats`: a census of the canonical ZIR, before this frame's scratch arena is
         // reset (the counter arrays are part of the Driver, so nothing is allocated here).
         if self.collect_zir_stats {
-            self.zir_stats.note_function(&zir_func);
+            self.zir_stats.note_function(&zf_slice[0]);
         }
-        let mut zm = ZirModule { funcs: unsafe { @slice(&mut zir_func, 1 as usize) } };
+        let zm_ptr = unsafe {
+            zoril_allocator_alloc(self.scratch_arena, sizeof(ZirModule) as u64)
+        } as *mut ZirModule;
+        unsafe { *zm_ptr = ZirModule { funcs: zf_slice }; }
+        let zm_slice = unsafe { @slice(zm_ptr, 1 as usize) };
 
         let mut zir_ver = ZirVerifier.new(
             self.scratch_arena,
-            &mut zm,
+            &mut zm_slice[0],
             self.module,
             self.intern_table,
-            &mut origins as *mut check_zir::OriginSets
+            origins_ptr
         );
         zir_ver.file_path = self.file_path;
         zir_ver.verify();
@@ -1491,7 +1510,7 @@ impl Driver {
             self.resolver,
             self.mono,
             self.intern_table,
-            &mut zm,
+            &mut zm_slice[0],
             self.module,
             self.builder,
             self.sret_ssa,

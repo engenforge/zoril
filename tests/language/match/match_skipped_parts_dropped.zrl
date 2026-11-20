@@ -143,10 +143,11 @@ fn for_iter_skip(fp: *mut u8) {
     let it = PairIter { rem: 3, fp: fp };
     for (s, _) in it {}
 }
+static mut DROP_FLAG: u8 = 0 as u8;
 fn count(f: fn(*mut u8)) -> u8 {
-    let mut flag = 0 as u8;
-    f(&mut flag as *mut u8);
-    return flag;
+    DROP_FLAG = 0 as u8;
+    f(&mut DROP_FLAG as *mut u8);
+    return DROP_FLAG;
 }
 fn main() -> i32 {
     if count(first) != 2 as u8 { return 1; }

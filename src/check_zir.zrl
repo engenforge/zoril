@@ -8256,7 +8256,13 @@ fn os_unknown_call_effects(
             if os_frame_bound(c, tv) {
                 let mut j = 0 as usize;
                 while j < nargs && !refused {
-                    let _ = os_unknown_arg(c, module, table, locals, args, callee, j);
+                    let jty = os_unknown_arg(c, module, table, locals, args, callee, j);
+                    if j < args.len
+                        && jty != 0 as u32
+                        && !os_holds_pointer(module, jty, 0 as usize) {
+                        j = j + 1 as usize;
+                        continue;
+                    }
                     let _ = os_or(c, tao, tas);
                     let sf = os_t(c, OS_T_SF);
                     os_copy(c, sf, tv);
@@ -8284,7 +8290,11 @@ fn os_unknown_call_effects(
     let ed = os_t(c, OS_T_ED);
     k = 0 as usize;
     while k < nargs {
-        let _ = os_unknown_arg(c, module, table, locals, args, callee, k);
+        let kty = os_unknown_arg(c, module, table, locals, args, callee, k);
+        if k < args.len && kty != 0 as u32 && !os_holds_pointer(module, kty, 0 as usize) {
+            k = k + 1 as usize;
+            continue;
+        }
         let _ = os_or(c, tao, tas);
         os_dest_reach(c, module, table, locals, tao, ed);
         os_note_edges(c, ev, ed, OS_EDGE_REF);

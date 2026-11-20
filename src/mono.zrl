@@ -278,7 +278,7 @@ impl Monomorphizer {
 
         let ast: &AST = self.resolver.ast;
         let p_decl: &Decl = &ast.decls[decl_id as usize];
-        match *p_decl {
+        match p_decl {
             Decl.Fn(f) => {
                 let name = self.mangle_name(f.name, type_args);
 
@@ -294,7 +294,7 @@ impl Monomorphizer {
                 }
 
                 let id = self.lower_fn(
-                    &f,
+                    f,
                     name,
                     f.type_params,
                     type_args,

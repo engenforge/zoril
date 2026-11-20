@@ -3370,7 +3370,10 @@ impl ZirLowerer {
             expr_end: 0 as u32,
             default_of: 0 as u32,
         };
-        let func_idx = self.mono.lower_closure_fn(&f, c_name);
+        let f_ptr = unsafe { zoril_allocator_alloc(self.arena, sizeof(FnDecl)) } as *mut FnDecl;
+        unsafe { *f_ptr = f; }
+        let f_slice = unsafe { @slice(f_ptr as *FnDecl, 1 as usize) };
+        let func_idx = self.mono.lower_closure_fn(&f_slice[0], c_name);
         if env_ptr != 0 as u32 { self.mono.register_zir_closure_env(func_idx, env_ptr); }
 
         // The closure as a value: its code and, when it captures, its environment.
