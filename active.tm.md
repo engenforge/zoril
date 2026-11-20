@@ -491,6 +491,8 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6 (citing `id:z0012` `git:a1d539f` and `id:nhk9n` `git:f335a2f` on `stream/provenance`, no code edits since `f335a2f`): `make test`: `Total: 4106 run, 4106 passed, 0 failed, 2 skipped (143.0s)` (`a1d539f`: `Total: 4096 run, 4096 passed, 0 failed, 2 skipped (142.5s)`); `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: `Total: 1544 run, 1544 passed, 0 failed, 0 skipped (111.0s)` (checked suite) and `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.5s)` (`git` scenarios).
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
 
+    - **On `main` (2026-11-20, id:w3vde):** id:z0012's `git:a1d539f` and id:nhk9n's `git:f335a2f` (`0edf99f` and `883c834` before the squash in id:6d5wy, which rewrote them with their trees unchanged) are on local `main` through the merge `d9ce443`; C6's runs were re-run on `main` by id:w3vde (`make test` `Total: 4122 run, 4122 passed, 0 failed, 2 skipped (145.0s)`).
+
 - [x] +audit +AI-D @provenance id:z0017 A3.5 Twelve safe store-grid twins are rejected
     > **Created:** 2026-11-03
     > **Branch:** `provenance`
