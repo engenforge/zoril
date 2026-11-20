@@ -9838,7 +9838,8 @@ fn os_call(
                 if in_ties {
                     // ParamContents(i) is what is reached through the argument, whatever its type.
                     let held_i = i < 63 as usize && (held >> (i as u64)) & 1 as u64 != 0 as u64;
-                    if body && held_i && !in_storage {
+                    let held_read = body && held_i && !in_storage;
+                    if held_read {
                         os_through_plus_held(c, tao, tr);
                     } else if body
                         || aty != 0 as u32 && is_reference_tag(os_type_def_tag(module, aty)) {
@@ -9851,8 +9852,13 @@ fn os_call(
                     // for `&a`), never by what the arena struct holds: under a body summary that
                     // includes the C memory of its blocks (Static), which would make every Vec in
                     // a local arena an external destination.
+                    // Under a held tie the arena is one the referent holds as a borrow (its
+                    // `&Arena`), so it is named by the held read, which owns nothing of the
+                    // referent; the owning read of arena_store would make the result unheld.
                     if arena {
-                        if body {
+                        if held_read {
+                            let _ = os_or(c, vs, tr);
+                        } else if body {
                             let _ = os_or(c, vs, arena_store);
                         } else {
                             let _ = os_or(c, vs, tr);

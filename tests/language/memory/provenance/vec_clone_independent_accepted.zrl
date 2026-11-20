@@ -1,0 +1,14 @@
+// A Vec<u8> clone has its own buffer, so the original can grow while the clone lives.
+// expected exit 0
+import "vec.zrl";
+import "clone.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v1 = Vec::<u8>.new();
+    v1.push(1);
+    let mut v2 = v1.clone();
+    v1.push(2);
+    v2.push(3);
+    return (*v1.get(1).unwrap() + *v2.get(1).unwrap()) as i32 - 5;
+}

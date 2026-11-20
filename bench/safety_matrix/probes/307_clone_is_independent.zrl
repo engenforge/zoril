@@ -1,11 +1,10 @@
-// name: A cloned collection has its own buffer, yet the original cannot change while the clone lives
-// expected: compile_reject
-// A correct program refused while the analysis is imprecise (doc/vision/why_zoril.md, design
-// principle 1): `clone()` allocates a new buffer, so the two values are independent owners, but
-// the `&self` default ties the clone to `v1` itself rather than to what `v1` points into (its
-// arena and its elements), so `v1.push(2)` conflicts with `v2`'s borrow. The tie is what refuses
-// gap_77 (a clone of a Vec holding frame views, returned). It flips back to `accept` when a clone
-// is tied only to what the original points into.
+// name: A cloned collection has its own buffer, so the original can change while the clone lives
+// expected: accept
+// `clone()` allocates a new buffer, so the two values are independent owners. The `Vec<u8>`
+// clone's body has no `unsafe`, so its tie is inferred for `u8` as held: only to what `v1` points
+// into (its arena), not to `v1` itself, and `v1.push(2)` does not conflict with `v2`. A `T` whose
+// clone points into its source keeps the tie to `v1` (gap_77, and
+// tests/language/memory/provenance/vec_clone_self_view_original_changed_refused.zrl).
 import "vec.zrl";
 import "clone.zrl";
 use vec::Vec;
