@@ -9260,6 +9260,18 @@ fn os_summary_store_effects(
     }
 }
 
+// True when TY is a safe slice or reference whose element/referent type carries no address
+// (e.g. `[u8]`, `&i32`, `&[u8; N]`). Raw pointers (`*u8`, `*mut u8`) are excluded because they
+// can be type-erased pointers to address-carrying values (as in `memcpy`).
+fn os_contents_non_carrying(c: &mut OriginSets, module: &ILModule, ty: u32) -> bool {
+    if ty == 0 as u32 || ty as usize > module.types.len() { return false; }
+    match module.types[ty as usize - 1 as usize].def {
+        ILType.Slice(s) => { return !os_carries(c, module, s.element); },
+        ILType.Ptr(inner) | ILType.PtrMut(inner) => { return !os_carries(c, module, inner); },
+        _ => { return false; },
+    }
+}
+
 // Argument K of a direct call to FN_ID, what it holds and owns together, into DST: with CONTENTS
 // what is reached through it instead (ParamContents). Parameter 63 stands for itself and every
 // later one, so code 63 takes the union of arguments 63 onwards.
@@ -9279,11 +9291,13 @@ fn os_param_origin(
     let tr = os_t(c, OS_T_R);
     let mut k = i;
     while k < args.len && (k == i || i == 63 as usize) {
-        let _ = os_arg(c, module, table, locals, fn_id, args, k);
+        let arg_ty = os_arg(c, module, table, locals, fn_id, args, k);
         let _ = os_or(c, tao, tas);
         if contents {
-            os_through_plus(c, tao, tr);
-            let _ = os_or(c, dst, tr);
+            if !os_contents_non_carrying(c, module, arg_ty) {
+                os_through_plus(c, tao, tr);
+                let _ = os_or(c, dst, tr);
+            }
         } else {
             let _ = os_or(c, dst, tao);
         }

@@ -1,5 +1,7 @@
 // libc's qsort calls back into Zoril through a C function pointer.
+#[unsafe(stores())]
 extern fn qsort(base: *mut u8, n: usize, size: usize, cmp: extern "C" fn(*u8, *u8) -> i32);
+#[unsafe(stores())]
 extern fn printf(fmt: *u8, ...) -> i32;
 
 extern "C" fn by_value(a: *u8, b: *u8) -> i32 {

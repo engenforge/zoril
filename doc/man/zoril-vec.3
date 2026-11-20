@@ -5,7 +5,7 @@
 .nh
 .ad l
 .\" Begin generated content:
-.TH "zoril\-vec" "3" "2026\-11\-14"
+.TH "zoril\-vec" "3" "2026\-11\-20"
 .PP
 .SH NAME
 .PP
@@ -306,8 +306,6 @@ pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]);
 .RS 4
 Appends a clone of each element of slice to the end of the vector.\&
 extend_bytes appends bytes without a call per byte.\&
-A clone of a view is the same view, but clone'\&s #[borrows()] result hides that from
-the body'\&s summary, so the store is declared (probe 418 is accepted without it).\&
 .PP
 .RE
 \fBextend_bytes\fR

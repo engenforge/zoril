@@ -210,8 +210,6 @@ pub fn extend_from_slice(self: &mut Vec<T>, slice: [T]);
 
 	Appends a clone of each element of slice to the end of the vector.
 	extend\_bytes appends bytes without a call per byte.
-	A clone of a view is the same view, but clone's #[borrows()] result hides that from
-	the body's summary, so the store is declared (probe 418 is accepted without it).
 
 *extend_bytes*
 ```

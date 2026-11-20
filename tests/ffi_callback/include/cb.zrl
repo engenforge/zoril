@@ -9,8 +9,11 @@ struct Vtable {
     on_done: extern "C" fn(*mut u8) -> i32,
 }
 
+#[unsafe(stores())]
 extern fn c_for_each(n: i32, cb: extern "C" fn(*mut u8, i32) -> i32, userdata: *mut u8) -> i32;
+#[unsafe(stores())]
 extern fn c_run_vtable(vt: *Vtable, userdata: *mut u8) -> i32;
+#[unsafe(stores())]
 extern fn c_reenter(levels: i32, cb: extern "C" fn(*mut u8, i32) -> i32, userdata: *mut u8) -> i32;
 extern fn c_dirty_u8() -> u8;
 extern fn c_dirty_bool() -> bool;
