@@ -442,10 +442,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=HEAD~1`: clean-tree 4-gen selfhost fixpoint `PASS`, `All mutations caught.`, `fuzz-calibrate` `PASS`, `reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 8 newly refused, of 69179 programs against 0edf99f147fc3a2e28bf5abc4955de5f35f16a1a` (probes 430–433 × whole-program + zbuild), checked suite `Total: 1544 run, 1544 passed, 0 failed, 0 skipped (111.0s)`, git scenarios `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.7s)`, benchmarks within tolerance, `Figures @ 2026-11-20 (883c834): 539 probes, 52424 compiler lines, 4.59%/10.93% density`.
       - Fuzz record (`bench/fuzz/README.md`) is stale for `src/` (already stale for the provenance series, to be renewed under `id:a85sp` / `id:z0003`).
 
-- [ ] +audit +safety +AI-G @provenance id:z0045 A reference to a local carrier passed through a `let`, an identity call or a phi is refused
+- [x] +audit +safety +AI-G @provenance id:z0045 A reference to a local carrier passed through a `let`, an identity call or a phi is refused
     > **Created:** 2026-11-03
     > **Branch:** `provenance`
     > **Depends:** id:z0012
+    > **Completed:** 2026-11-20 git:0edf99f
 
     - **Depends note:** (do not edit `src/summary_pass.zrl` before id:z0012 retires it; close with id:z0012). Over-rejection, not a hole; related to id:z0017.
 
@@ -481,6 +482,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C5: the `accept` probe under `bench/safety_matrix/probes/`, and `sh scripts/run_safety_matrix.sh` passing; quote its summary.
       - C6: `make test` and `make preflight-changed`, each `Total:` line quoted, citing id:z0012's commit on `main`.
     - **Finding (2026-11-03):** id:z0047's read-through rule (`os_through_plus` on reference arguments) already gives `got O={Param(1)} S={}` on all three forms (`tests/language/memory/origins/read_through_{ref,identity,phi}.zrl`), `src/verify.zrl` accepts them with zero errors, and the sole refusal (`src/summary_pass.zrl:716`, "region escape: returning a pointer to local stack storage via sret") comes from `InterprocSummaryPass`, which id:z0012 retires and deletes. Do not change `src/summary_pass.zrl` beforehand; close this task with id:z0012 once the 3402 twins leave `bench/fuzz/store_grid_twin_rejections.txt`, the `accept` probe is added, and the rejection differential is recorded, citing id:z0012's commit on `main`.
+    - **Done (`git:0edf99f` on `stream/provenance`, verified on tip `git:883c834`; awaiting merge to `main`):**
+      - C1 (`scripts/build_zrl.sh` + run in `build/provenance` on `883c834`): `read_through_ref exit=0`, `read_through_identity exit=0`, `read_through_phi exit=0`.
+      - C2 (`grep -cE '__ref_(let|identity|phi)__' bench/fuzz/store_grid_twin_rejections.txt`): `3402` before (`06e9e69`) -> `0` after (`883c834` / `0edf99f`).
+      - C3 (`sh scripts/check_store_grid.sh` on `883c834`): `[PASS] store-grid-modular: all 0 expected failing cells match (318 two-module cells, 0 over-rejected twins, 0 generator errors)` and `[PASS] store-grid: all 0 expected failing cells match (34320 valid cells, 62 over-rejected twins, 0 hole classes, 0 generator errors in 119s)`.
+      - C4 (`reject-diff` from `id:z0012` `0edf99f` vs `a484d11` + `id:nhk9n` `883c834` vs `0edf99f`): `[PASS] reject-diff: 3874 newly accepted (none that must be refused, or all allowed), 17237 newly refused, of 69174 programs against a484d11487430a4f709006c069b68454b476b98a` (3,870 safe store-grid twins including the 3,402 `ref_{let,identity,phi}` twins from `id:z0045` + 468 safe carrier/struct/tuple/array twins, 2 `141_extern_call_unsafe.zrl` `probe-accept` entries, 2 safe test flips for `read_through_*` / `box_byval_param_write` / `id:71a06` case-C raw-heap-pointer boundary; 0 unsafe), followed by `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 8 newly refused, of 69179 programs against 0edf99f147fc3a2e28bf5abc4955de5f35f16a1a`.
+      - C5 (`bench/safety_matrix/probes/429_read_through_ref_let_carrier_accepted.zrl` + `sh scripts/run_safety_matrix.sh` on `883c834`): `All probes complete: 539/539 passed. Mismatches: 0`.
+      - C6 (citing `id:z0012` `git:0edf99f` and `id:nhk9n` `git:883c834` on `stream/provenance`, no code edits since `883c834`): `make test`: `Total: 4106 run, 4106 passed, 0 failed, 2 skipped (143.0s)` (`0edf99f`: `Total: 4096 run, 4096 passed, 0 failed, 2 skipped (142.5s)`); `REJECT_DIFF_NO_CACHE=1 make preflight-changed`: `Total: 1544 run, 1544 passed, 0 failed, 0 skipped (111.0s)` (checked suite) and `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.5s)` (`git` scenarios).
     - **Promoted (2026-11-14, the maintainer's request):** from `future.tm.md` with the whole provenance series, in its order there, after the open soundness holes on `main` and before the ZIL series. The series' notes moved to **Sprint notes** ("The provenance series").
 
 - [ ] +audit +AI-D @provenance id:z0017 A3.5 Twelve safe store-grid twins are rejected
