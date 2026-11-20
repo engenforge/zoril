@@ -6,10 +6,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +safety +tests +AI-G @provenance B3d A raw-pointer write through a loose raw local reaches the caller's parameter targets under `--provenance` id:77rr6
+- [x] +safety +tests +AI-G @provenance B3d A raw-pointer write through a loose raw local reaches the caller's parameter targets under `--provenance` id:77rr6
     > **Created:** 2026-11-19
     > **Branch:** `provenance`
     > **Depends:** id:f81f3
+    > **Completed:** 2026-11-20
 
     - **Placed:** directly after id:f81f3, the decision it implements (decision 1 there).
     - **Do:** in `os_dest_reach` (`src/check_zir.zrl`), right after the step that adds a loose raw local's `Static`, add the parameter words of `O(L)` too, for a local that is `OS_Q_LOOSE_RAW` and not `OS_Q_HANDLE`. This is id:f81f3's F3 patch, `build/f81/lead1.patch`:
@@ -41,6 +42,17 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C8: `sh scripts/run_safety_matrix.sh`, `sh scripts/check_safety_model.sh`, `make test`, `REJECT_DIFF_NO_CACHE=1 make preflight-changed`, quoting each `Total:` line and the `reject-diff: base verdicts: fresh (no cache)` line. The change only refuses more, so the differential must show 0 newly accepted.
       - C9: the fuzz record is stale for `src/` (`scripts/check_fuzz_fresh.sh`); say so.
     - **Ends with:** the fix committed, an `**Awaiting review:**` bullet naming C2, C4, C5 and C7, then `tm done`. The check-in is the `@checkin` task after stage 2.
+    - **Awaiting review:** C2 (`gap_102` refused under `--provenance` with `call store rule` at `10:58`, rc=0 without), C4 (base compiler without the hunk fails both `_refused` tests and passes `_accepted`), C5 (`pdiff.sh` prints only `gap_102` and the two new `_refused` tests), C7 (store grid under `--provenance` refuses 3932 twins with `comm -3` empty and 0 unsafe cells accepted).
+    - **Checks recorded (2026-11-20, git:560d963):**
+      - C1: `build/zoril --provenance -I stdlib=stdlib -o /dev/null bench/safety_matrix/probes/gap_102_raw_write_store_hidden_from_summary.zrl` gave `rc=0`.
+      - C2: with `--provenance`, `rc=1` with `bench/safety_matrix/probes/gap_102_raw_write_store_hidden_from_summary.zrl:10:58: error: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)`; without `--provenance`, `rc=0`.
+      - C3: `./scripts/test.sh tests/language/memory/provenance` passed: `Total: 154 run, 154 passed, 0 failed, 0 skipped (0.8s)`.
+      - C4: with `build/77r/zoril_base` (without the hunk), `raw_write_through_loose_raw_param_refused.zrl` and `raw_write_declared_stores_binds_caller_refused.zrl` failed (`compiled`), `raw_write_integer_through_loose_raw_accepted.zrl` passed (`Total: 4 run, 2 passed, 2 failed, 0 skipped`).
+      - C5: `pdiff.sh` between `zoril_base` and `build/zoril` printed only `gap_102_raw_write_store_hidden_from_summary.zrl base=0 new=1` and the two new `_refused` tests.
+      - C6: `rootwarn.sh` gave 183 lines with each compiler (`cmp=identical`).
+      - C7: `check_store_grid.sh` under `--provenance` gave 3932 twins in both `grid_base` and `grid_new`, `comm -3` on sorted twins was 0 lines, and 0 unsafe cells were accepted.
+      - C8: `sh scripts/run_safety_matrix.sh` (`All probes complete: 505/533 passed. Mismatches: 0`), `sh scripts/check_safety_model.sh` (`PASS: safety_model.md is self-consistent.`), `make test` (`Total: 3984 run, 3984 passed, 0 failed, 58 skipped (142.2s)`), `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (`reject-diff: base verdicts: fresh (no cache); base front end 111 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 10596 newly refused, of 69173 programs`, `Total: 1516 run, 1516 passed, 0 failed, 0 skipped (109.0s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.7s)`).
+      - C9: `scripts/check_fuzz_fresh.sh` reported `STALE` for `src/`, `stdlib/`, `tools/zilc`, `tools/zbuild`, `rt/`.
 
 - [ ] +safety +tests +AI-G @provenance B3f Stage 1: `memcpy` declares its store effect, and a call to an undeclared `extern` with two or more pointer parameters is refused id:716bm
     > **Created:** 2026-11-19
