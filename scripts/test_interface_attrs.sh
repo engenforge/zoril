@@ -241,4 +241,19 @@ fi
 grep -B1 'extern fn memcpy(' "$ec_zri" | grep -qF '#[unsafe(stores(*src -> dest))]' \
     || fail "lib_extern_copy.zri lost #[unsafe(stores(*src -> dest))] above extern fn" "$ec_zri"
 
+# 6e. ret_held is written, carries an `unsafe(borrows(*p))` declaration across a `.zri`, and is read
+# back: with the key set to 0 an importer's result is no longer held.
+want_summary first "ret_held = 1"
+want_summary held_decl "ret_held = 1"
+grep -B1 'fn held_decl(' "$dir/lib_summary.zri" | grep -qF '#[unsafe(borrows(*h))]' \
+    || fail "the interface lost #[unsafe(borrows(*h))] on held_decl" "$dir/lib_summary.zri"
+sed 's/ret_held = 1/ret_held = 0/' "$fr/${key%.zrl}.zri" > "$fr/off/${key%.zrl}.zri"
+held_of_iface() { # IFACE-DIR -> the held line of origins_held_caller's `caller`
+    run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -I "$src" -c --iface-dir "$1" --emit-origins -o /dev/null "$src/origins_held_caller.zrl" 2>&1 \
+        | awk '/^origins / { on = ($2 == "caller"); next } on && $1 == "held" { sub(/^  /, ""); print; exit }'
+}
+held_with=$(held_of_iface "$fr"); held_off=$(held_of_iface "$fr/off")
+[ "$held_with" = "held ParamContents(0)" ] || fail "an imported held result is not held: '$held_with'"
+[ -z "$held_off" ] || fail "ret_held is not read from the interface: with ret_held = 0 it still gave '$held_off'"
+
 echo "[PASS] interface-attrs: attributes, visibility and unsafe survive a .zri; every generic or trait attribute of the standard library is in its interface; zbuild and the whole-program build agree on the fixtures and probe 194; private items, duplicate methods and exports are diagnosed as whole-program does"

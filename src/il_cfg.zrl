@@ -162,6 +162,15 @@ pub struct ILFunction {
     pub os_ret_contents: u64,
     pub os_ret_flags: u64,
     pub os_ret_fresh: bool,
+    // The parameters the result may point into other than through what their referents hold as
+    // a borrow (ParamAddr, ParamOwned), every bit when the body cannot tell; and the held ties,
+    // `os_ret_contents` less those (doc/design/provenance.md §3, _Held ties_). A call's result
+    // reads a held tie as what the referent holds, nothing it owns. An import has `ret_held`.
+    pub os_ret_owned: u64,
+    pub os_ret_held: u64,
+    // The parameters an `#[unsafe(borrows(*p))]` declares held (bit i = user parameter i): the
+    // author vouches that the result points only into what the referent holds as a borrow.
+    pub ret_held_decl: u64,
     pub os_releases: u64,
     pub os_env_releases: u64,
     pub os_edges: *mut u64,

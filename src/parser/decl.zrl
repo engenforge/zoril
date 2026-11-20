@@ -21,6 +21,8 @@ pub struct Attribute {
     pub has_borrows: bool,
     pub borrows_trusted: bool,
     pub borrows: [u32],
+    pub borrows_held: [u32],
+    pub summary_held: u64,
     pub has_stores: bool,
     pub stores_trusted: bool,
     pub stores_span: Span,
@@ -70,6 +72,8 @@ impl Parser {
             has_borrows: false,
             borrows_trusted: false,
             borrows: @slice(0 as *mut u32, 0 as usize),
+            borrows_held: @slice(0 as *mut u32, 0 as usize),
+            summary_held: 0 as u64,
             has_stores: false,
             stores_trusted: false,
             stores_span: self.cur.span,
@@ -125,7 +129,7 @@ impl Parser {
                 self.parse_derive_list(&mut attr);
             } else if name == "borrows" {
                 attr.has_borrows = true;
-                attr.borrows = self.parse_name_list();
+                self.parse_borrows_list(&mut attr, false);
             } else if name == "stores" {
                 attr.has_stores = true;
                 attr.stores_span = name_span;
@@ -163,7 +167,7 @@ impl Parser {
         if self.intern_table.lookup(name_id) == "borrows" {
             attr.has_borrows = true;
             attr.borrows_trusted = true;
-            attr.borrows = self.parse_name_list();
+            self.parse_borrows_list(attr, true);
         } else if self.intern_table.lookup(name_id) == "stores" {
             attr.has_stores = true;
             attr.stores_trusted = true;
@@ -197,19 +201,33 @@ impl Parser {
 
     // `(a, b)` / `()`: `#[borrows]`'s parameter names, checked against the function's
     // parameters when it is lowered. The names are copied into the arena, so the result borrows
-    // nothing from the parser.
-    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
-    #[unsafe(borrows())]
-    fn parse_name_list(self: &mut Parser) -> [u32] {
+    // nothing from the parser. `*a` (TRUSTED only, an `#[unsafe(borrows(..))]`) also goes into
+    // `attr.borrows_held`: the result is tied to what a's referent holds, not to the referent.
+    fn parse_borrows_list(self: &mut Parser, attr: &mut Attribute, trusted: bool) {
         let mut names = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+        let mut held = unsafe { Vec::<u32>.new_in_raw(self.arena) };
         self.expect(Token.LParen);
         while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
-            names.push(self.cur.token.get_ident_id());
+            let mut starred = false;
+            if self.is_kind(TokenKind.Star) {
+                if !trusted {
+                    self.report_error(
+                        "`*name` is written only in #[unsafe(borrows(..))]",
+                        self.cur.span
+                    );
+                }
+                starred = true;
+                self.next_token();
+            }
+            let id = self.cur.token.get_ident_id();
+            names.push(id);
+            if starred { held.push(id); }
             self.expect(Token.Ident(0 as u32));
             if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
         }
         self.expect(Token.RParen);
-        return names.as_slice();
+        attr.borrows = names.as_slice();
+        attr.borrows_held = held.as_slice();
     }
 
     fn parse_stores_list(self: &mut Parser, attr: &mut Attribute) {
@@ -310,6 +328,8 @@ impl Parser {
             } else if key == "ret_addr" {
                 head[0] = int_val;
                 saw_os = true;
+            } else if key == "ret_held" {
+                attr.summary_held = int_val;
             } else if key == "ret_contents" {
                 head[1] = int_val;
             } else if key == "ret_flags" {
@@ -558,6 +578,8 @@ impl Parser {
             has_borrows: attr.has_borrows,
             borrows_trusted: attr.borrows_trusted,
             borrows: attr.borrows,
+            borrows_held: attr.borrows_held,
+            summary_held: attr.summary_held,
             has_stores: attr.has_stores,
             stores_trusted: attr.stores_trusted,
             stores_from: attr.stores_from,
@@ -726,6 +748,8 @@ impl Parser {
             has_borrows: false,
             borrows_trusted: false,
             borrows: @slice(0 as *mut u32, 0 as usize),
+            borrows_held: @slice(0 as *mut u32, 0 as usize),
+            summary_held: 0 as u64,
             has_stores: false,
             stores_trusted: false,
             stores_from: @slice(0 as *mut u32, 0 as usize),

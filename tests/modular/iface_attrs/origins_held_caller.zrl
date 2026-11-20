@@ -1,0 +1,11 @@
+// Not a test program: scripts/test_interface_attrs.sh compiles it against lib_summary's interface
+// with and without `ret_held` and requires `--emit-origins` to differ in the held line.
+import "lib_summary.zrl";
+
+fn caller(h: &lib_summary::H) -> [i32] {
+    return lib_summary::first(h);
+}
+
+fn caller_decl(h: &lib_summary::H) -> [i32] {
+    return lib_summary::held_decl(h);
+}

@@ -205,6 +205,8 @@ impl InterfacePrinter {
             self.write_dec(unsafe { (*p_f).os_ret_addr });
             self.write(", ret_contents = ");
             self.write_dec(unsafe { (*p_f).os_ret_contents });
+            self.write(", ret_held = ");
+            self.write_dec(unsafe { (*p_f).os_ret_held });
             self.write(", ret_flags = ");
             self.write_dec(unsafe { (*p_f).os_ret_flags });
             self.write(", ret_fresh = ");
@@ -256,6 +258,10 @@ impl InterfacePrinter {
                 if nm != sret_name && nm != env_name {
                     if user < 64 as usize && ((ties >> (user as u64)) & 1 as u64) != 0 as u64 {
                         if !first { self.write(", "); }
+                        let held_decl = unsafe { (*p_f).ret_held_decl };
+                        if trusted && ((held_decl >> (user as u64)) & 1 as u64) != 0 as u64 {
+                            self.write("*");
+                        }
                         self.write_ident(nm);
                         first = false;
                     }
@@ -298,6 +304,11 @@ impl InterfacePrinter {
             let mut i = 0 as usize;
             while i < f.borrows.len {
                 if i > 0 as usize { self.write(", "); }
+                let mut hi = 0 as usize;
+                while hi < f.borrows_held.len {
+                    if f.borrows_held[hi] == f.borrows[i] { self.write("*"); }
+                    hi = hi + 1 as usize;
+                }
                 self.write_ident(f.borrows[i]);
                 i = i + 1 as usize;
             }

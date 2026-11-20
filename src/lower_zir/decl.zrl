@@ -141,6 +141,8 @@ pub struct ZirLowerer {
     pub is_void_main: bool,
     pub current_literal_comment: u32, // ambient: the AST-level literal comment for the statement currently being lowered, 0 if none
     pub unsafe_depth: u32,
+    // The function being lowered has an `unsafe` block (ZirFunction.has_unsafe).
+    pub saw_unsafe: bool,
     // Nonzero while a scope's defers are being lowered; `defer_scope_depth` is the scope being
     // exited, so a loop entered inside the `defer` (deeper) may still `break`.
     pub defer_depth: u32,
@@ -207,6 +209,7 @@ impl ZirLowerer {
             is_void_main: false,
             current_literal_comment: 0 as u32,
             unsafe_depth: 0 as u32,
+            saw_unsafe: false,
             defer_depth: 0 as u32,
             defer_scope_depth: 0 as usize,
             file_path: "",
@@ -952,6 +955,9 @@ impl ZirLowerer {
     #[unsafe(borrows())]
     pub fn lower_function(self: &mut ZirLowerer, f: &FnDecl, mangled_name: u32) -> ZirFunction {
         let prev_unsafe_depth = self.unsafe_depth;
+        let prev_saw_unsafe = self.saw_unsafe;
+        // A body lowered inside an `unsafe` block (a closure's) may use what that block allows.
+        self.saw_unsafe = f.is_unsafe || self.unsafe_depth > 0 as u32;
         if f.is_unsafe {
             self.unsafe_depth = self.unsafe_depth + 1 as u32;
         }
@@ -1010,6 +1016,8 @@ impl ZirLowerer {
         // handing them out as slices is the boundary where they become safe, bounds-checked
         // storage for the rest of the pipeline.
         self.unsafe_depth = prev_unsafe_depth;
+        let has_unsafe = self.saw_unsafe;
+        self.saw_unsafe = prev_saw_unsafe;
         return ZirFunction {
             name: mangled_name,
             params: unsafe { @slice(self.locals.as_ptr(), f.params.len) },
@@ -1022,6 +1030,7 @@ impl ZirLowerer {
             } else {
                 Span { start: 0, end: 0, line: 0, col: 0 }
             },
+            has_unsafe: has_unsafe,
         };
     }
 

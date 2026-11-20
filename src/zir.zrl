@@ -501,6 +501,9 @@ pub struct ZirFunction {
     pub ret_ty: u32,
     pub doc_comment: u32,
     pub span: Span,
+    // The body has an `unsafe` block or is an `unsafe fn`: what it points into may be hidden from
+    // the origin sets (check_zir::OriginSets.held_spoiled).
+    pub has_unsafe: bool,
 }
 
 pub struct ZirModule {

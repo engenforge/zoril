@@ -1,0 +1,7 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_borrows_held_by_value.zrl:6:1: error: `*name` in #[unsafe(borrows(..))] needs a reference parameter: x
+// A by-value parameter has no referent whose held borrows a result could be tied to.
+// SAFETY: not relevant, the declaration is refused.
+#[unsafe(borrows(*x))]
+fn pass(x: i32) -> i32 { return x; }
+fn main() -> i32 { return 0; }

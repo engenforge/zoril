@@ -604,6 +604,12 @@ pub struct FnDecl {
     // `#[unsafe(borrows(..))]`: the author vouches for `borrows`, so it is trusted where it names
     // less than the body returns, which a plain `#[borrows(..)]` may not (doc/design/provenance.md §3).
     pub borrows_trusted: bool,
+    // The names of `borrows` written `*name` in an `#[unsafe(borrows(..))]`: the result is tied only
+    // to what the parameter's referent holds, not to the referent (doc/design/provenance.md §3,
+    // _Held ties_).
+    pub borrows_held: [u32],
+    // `ret_held` of an interface's `#[summary]`: the held ties of the exporting body's result.
+    pub summary_held: u64,
     // `#[stores(p -> q)]`: the body stores p's own storage into q's memory (`q` is `self` when
     // the arrow is left out, and `static` for a global). Checked against the computed masks when
     // the body is verified (src/verify.zrl); a `pub fn` that stores a reference parameter without

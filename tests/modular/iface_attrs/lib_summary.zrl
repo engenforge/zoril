@@ -123,3 +123,11 @@ pub unsafe fn stash_u(out: &mut H, v: [i32]) { out.r = v; }
 
 // A body that releases its argument: `releases = 1` in the summary, read back by an importer.
 pub fn kill(v: &mut Vec<i32>) { v.free(); }
+
+// A result tied only to what the referent holds: the interface writes ret_held, and the author's
+// `*h` declaration keeps it where the body hides its pointer in an `unsafe` block.
+// SAFETY: the result is the view the referent holds; nothing it owns is reachable through it.
+#[unsafe(borrows(*h))]
+pub fn held_decl(h: &H) -> [i32] {
+    return unsafe { @slice(h.r.ptr, h.r.len) };
+}

@@ -1,0 +1,9 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_borrows_held_plain.zrl:6:15: error: `*name` is written only in #[unsafe(borrows(..))]
+// A held tie is the author's claim about what a referent holds, so only the trusted form says it.
+struct V { n: usize }
+impl V {
+    #[borrows(*self)]
+    fn first(self: &V) -> &usize { return &self.n; }
+}
+fn main() -> i32 { return 0; }

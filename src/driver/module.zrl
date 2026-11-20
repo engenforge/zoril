@@ -129,6 +129,50 @@ impl Driver {
         };
     }
 
+    // The parameters `#[unsafe(borrows(*p))]` declares held (bit i = user parameter i): the result
+    // is tied to what p's referent holds, not to the referent. Names that match no parameter are
+    // reported by compute_ret_ties.
+    fn compute_ret_held_decl(self: &mut Driver, f: &FnDecl) -> u64 {
+        let mut mask = 0 as u64;
+        let mut bi = 0 as usize;
+        while bi < f.borrows_held.len {
+            let mut pi = 0 as usize;
+            while pi < f.params.len && pi < 64 as usize {
+                if f.params[pi].name == f.borrows_held[bi] {
+                    let ty_id = f.params[pi].ty;
+                    let is_ref = ty_id != 0 as TypeId
+                        && (ty_id as usize) < self.resolver.ast.types.len()
+                        && match self.resolver.ast.types[ty_id as usize] {
+                            Type.Ref(_) | Type.RefMut(_) => true,
+                            _ => false,
+                        };
+                    if is_ref {
+                        mask = mask | ((1 as u64) << (pi as u64));
+                    } else {
+                        self.report_error_concat(
+                            "`*name` in #[unsafe(borrows(..))] needs a reference parameter: ",
+                            self.resolver.intern_table.lookup(f.borrows_held[bi]),
+                            if f.body != 0 as ExprId {
+                                self.resolver.ast.expr_spans[f.body as usize]
+                            } else {
+                                Span {
+                                    start: 0 as u32,
+                                    end: 0 as u32,
+                                    line: 0 as u32,
+                                    col: 0 as u32
+                                }
+                            }
+                        );
+                        eprint("\n");
+                    }
+                }
+                pi = pi + 1 as usize;
+            }
+            bi = bi + 1 as usize;
+        }
+        return mask;
+    }
+
     // Which parameters a returned reference or pointer may point into (bit i = user
     // parameter i). `#[borrows(..)]` names them. Otherwise: `self` if the function has a
     // reference `self`, else every parameter whose type can hold a reference. (Rust's
@@ -1025,6 +1069,7 @@ impl Driver {
         let is_local = self.is_local_function(f, name);
         let owner_len = self.owner_len_of(name);
         let ret_ties = self.compute_ret_ties(f);
+        let ret_held_decl = self.compute_ret_held_decl(f);
         let (mut decl_from, mut decl_to) = self.compute_stores_declared(f);
         // An import's origin-set summary (summary_os), written by the compiler that built the
         // interface; empty when it has none. os_call clears the flat `stores`/`into` masks for a known
@@ -1165,6 +1210,9 @@ impl Driver {
             os_ret_contents: if has_os { os[1] } else { 0 as u64 },
             os_ret_flags: if has_os { os[2] } else { 0 as u64 },
             os_ret_fresh: has_os && os[3] != 0 as u64,
+            os_ret_owned: 0xffffffffffffffff as u64,
+            os_ret_held: if has_os { f.summary_held } else { 0 as u64 },
+            ret_held_decl: ret_held_decl,
             os_releases: if has_os { os[6] } else { 0 as u64 },
             os_env_releases: if has_os { os[7] } else { 0 as u64 },
             os_edges: os_edges,

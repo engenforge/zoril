@@ -3360,6 +3360,8 @@ impl ZirLowerer {
             has_borrows: false,
             borrows_trusted: false,
             borrows: @slice(0 as *mut u32, 0 as usize),
+            borrows_held: @slice(0 as *mut u32, 0 as usize),
+            summary_held: 0 as u64,
             has_stores: false,
             stores_trusted: false,
             stores_from: @slice(0 as *mut u32, 0 as usize),
@@ -3564,6 +3566,7 @@ impl ZirLowerer {
         // they do not switch off any other verification, per doc/spec/unsafe_policy.md §2.
         if b.is_unsafe {
             self.unsafe_depth = self.unsafe_depth + 1 as u32;
+            self.saw_unsafe = true;
         }
 
         let stmts = b.stmts;

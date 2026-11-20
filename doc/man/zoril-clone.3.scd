@@ -31,6 +31,8 @@ pub fn clone(self: &Vec<T>) -> Vec<T>;
 ```
 
 	Creates an explicit duplicate copy of the value.
+	elements hold; it owns its own buffer and records only the arena self allocates from,
+	which self holds as a borrow. It points into no storage self owns.
 
 *clone*
 ```
@@ -38,6 +40,7 @@ pub fn clone(self: &String) -> String;
 ```
 
 	Creates an explicit duplicate copy of the value.
+	from, which self holds as a borrow.
 
 # RETURN VALUES AND ERRORS
 
