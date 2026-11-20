@@ -39,6 +39,7 @@
         - `REJECT_DIFF_NO_CACHE=1 make preflight-changed PREFLIGHT_BASE=HEAD~1`: exit 0; `reject-diff: base verdicts: fresh (no cache); base front end 116 s`; `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 2034 newly refused, of 69173 programs against 28b628fe9afcdea47e45eb9d4dd6525ee8b71773` (all 2034 newly refused are `.unsafe.zrl` `move_owner` grid cells; 0 safe grid cells newly refused); checked suite `Total: 1513 run, 1513 passed, 0 failed, 0 skipped (109.3s)`; git scenarios `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.6s)`.
       - **Fuzz freshness:** `sh scripts/check_fuzz_fresh.sh` reports `bench/fuzz/README.md` (quoted in `doc/SAFETY.md` §5) is stale because `src/`, `tools/zilc/`, and `tools/zbuild/` changed.
       - **Check-in:** stopping for review after `id:fqf8x` as required by the task's `Check-in:` field.
+      - **Reviewed (2026-11-20):** approved by maintainer.
 
 - [x] +safety +tests +AI-D @provenance id:z0044 B0.1 A value stored into a local's field through a pointer to the local keeps its borrow
     > **Created:** 2026-11-03
