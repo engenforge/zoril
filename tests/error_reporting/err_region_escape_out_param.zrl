@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: region escape: a pointer to local stack storage is written to memory that outlives this function
+// EXPECT: error: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
 // Writing a local's address through an out-parameter leaves the caller holding it after return.
 fn leak(out: &mut *mut i32) {
     let mut x: i32 = 42;

@@ -623,6 +623,8 @@ impl ZilParser {
                 is_local: false,
                 is_pub: false,
                 must_use: false,
+                fresh: false,
+                releases: false,
                 arena_alloc_bytes: 0 as usize,
                 doc_comment: 0 as u32,
                 // ZIL text (unlike the surface language) carries no source-file
@@ -653,6 +655,8 @@ impl ZilParser {
                 // the state that would be conservative if it ever did.
                 storage_known: false,
                 has_borrows: false,
+                borrows_trusted: false,
+                ties_inferred: false,
                 // ZIL is post-borrow-checking: the arena lifecycle attributes decided their
                 // exemption in the front end and nothing here reads them.
                 arena_mark: false,
@@ -662,6 +666,20 @@ impl ZilParser {
                 allocator_free: false,
                 buffer_external: false,
                 buffer_anchored: false,
+                os_known: false,
+                os_ret_addr: 0 as u64,
+                os_ret_contents: 0 as u64,
+                os_ret_flags: 0 as u64,
+                os_ret_fresh: false,
+                os_ret_owned: 0xffffffffffffffff as u64,
+                os_ret_held: 0 as u64,
+                ret_held_decl: 0 as u64,
+                os_releases: 0 as u64,
+                os_env_releases: 0 as u64,
+                os_edges: 0 as *mut u64,
+                os_edge_rows: 0 as usize,
+                os_depth: 0 as u32,
+                os_in_cycle: false,
             };
             self.module.functions.push(f);
         }
@@ -824,8 +842,8 @@ impl ZilParser {
         return self.parse_uint() as u32;
     }
 
-    // A plain value: the caller may hold it across its own calls.
-    #[borrows()]
+    // SAFETY: a region name is a view of the ZIL source, not of the parser.
+    #[unsafe(borrows())]
     fn parse_region(self: &mut ZilParser) -> Region {
         self.skip_trivia();
         if self.peek() == '\'' as u8 {
@@ -853,7 +871,8 @@ impl ZilParser {
     }
 
     // The list is built in the module's arena, so the caller may keep it while parsing on.
-    #[borrows()]
+    // SAFETY: the result is in the module's arena, which zilc never resets.
+    #[unsafe(borrows())]
     fn parse_ssa_list(self: &mut ZilParser) -> [u32] {
         let mut list = unsafe { Vec::<u32>.with_capacity_in_raw(self.module.arena, 8 as usize) };
         while true {
@@ -969,7 +988,8 @@ impl ZilParser {
     }
 
     // The bytes are arena data, so the caller may keep them while parsing on.
-    #[borrows()]
+    // SAFETY: the result is in the module's arena, which zilc never resets.
+    #[unsafe(borrows())]
     fn parse_string_literal(self: &mut ZilParser) -> [u8] {
         self.skip_trivia();
         let mut list = unsafe { Vec::<u8>.with_capacity_in_raw(self.module.arena, 32 as usize) };
@@ -1013,7 +1033,8 @@ impl ZilParser {
     }
 
     // The list is arena data, so the caller may keep it while parsing on.
-    #[borrows()]
+    // SAFETY: the result is in the module's arena, which zilc never resets.
+    #[unsafe(borrows())]
     fn parse_phi_preds(self: &mut ZilParser) -> [PhiPred] {
         let mut preds = unsafe {
             Vec::<PhiPred>.with_capacity_in_raw(self.module.arena, 4 as usize)

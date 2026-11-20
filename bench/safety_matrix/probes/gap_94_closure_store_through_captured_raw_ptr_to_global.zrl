@@ -1,0 +1,17 @@
+// name: A closure storing a frame address through a captured raw pointer to a global
+// expected: compile_reject
+// Refused by the provenance call store rule: a capture target is read one level through its local, keeping Static.
+static mut G: *i32 = 0 as *i32;
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn stash() {
+    let x = 42;
+    let r = &x;
+    let gp = &mut G as *mut *i32;
+    let cl = || { unsafe { *gp = r as *i32; } };
+    cl();
+}
+fn main() -> i32 {
+    stash();
+    let _ = clobber_stack();
+    return unsafe { *G };
+}

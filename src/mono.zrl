@@ -278,7 +278,7 @@ impl Monomorphizer {
 
         let ast: &AST = self.resolver.ast;
         let p_decl: &Decl = &ast.decls[decl_id as usize];
-        match *p_decl {
+        match p_decl {
             Decl.Fn(f) => {
                 let name = self.mangle_name(f.name, type_args);
 
@@ -294,7 +294,7 @@ impl Monomorphizer {
                 }
 
                 let id = self.lower_fn(
-                    &f,
+                    f,
                     name,
                     f.type_params,
                     type_args,
@@ -917,7 +917,7 @@ impl Monomorphizer {
     // SELF_TY, one per parameter, 0 where SELF_TY does not decide it; none for an impl that
     // declares no parameters of its own. The list is a fresh arena one (as `impl_scope` makes
     // for such an impl), so a caller may keep it across further `&mut self` calls.
-    #[borrows()]
+    #[borrows(imp)]
     pub fn impl_type_args(self: &mut Monomorphizer, imp: &ImplDecl, self_ty: u32) -> [u32] {
         if imp.type_params.len == 0 as usize { return @slice(0 as *mut u32, 0 as usize); }
         return self.impl_scope(
@@ -935,7 +935,8 @@ impl Monomorphizer {
     // reach is bound to no type (0).
     // The result holds the arguments it was given, or a fresh arena list: it never points into
     // MONOMORPHIZER's own storage, so a caller may keep it across further `&mut self` calls.
-    #[borrows(imp, ty_params, ty_args)]
+    // SAFETY: the result is the compilation's arena data (its own, the module's or the AST's).
+    #[unsafe(borrows(imp, ty_params, ty_args))]
     fn impl_scope(
         self: &mut Monomorphizer,
         imp: &ImplDecl,
@@ -1052,7 +1053,8 @@ impl Monomorphizer {
     // The type's own parameters and arguments point at the AST and the type table, which the
     // resolver's arena owns and which outlives every caller: neither is a view of this
     // monomorphizer's own storage.
-    #[borrows()]
+    // SAFETY: the result is the compilation's arena data (its own, the module's or the AST's).
+    #[unsafe(borrows())]
     fn instance_type_params(self: &mut Monomorphizer, ty: u32) -> [TypeParam] {
         let none = @slice(0 as *mut TypeParam, 0 as usize);
         let origin = match self.module.types[ty as usize - 1 as usize].def {
@@ -1068,7 +1070,8 @@ impl Monomorphizer {
     }
 
     // TY's type arguments (`[i32]` for `Vec<i32>`); none for a type that is no instance.
-    #[borrows()]
+    // SAFETY: the result is the compilation's arena data (its own, the module's or the AST's).
+    #[unsafe(borrows())]
     fn instance_type_args(self: &mut Monomorphizer, ty: u32) -> [u32] {
         return match self.module.types[ty as usize - 1 as usize].def {
             ILType.User(u) => u.type_args,
@@ -1181,6 +1184,7 @@ impl Monomorphizer {
         };
     }
 
+    // The result is the compilation's arena data (its own, the module's or the AST's).
     #[borrows()]
     fn generic_typedef_of_decl(
         self: &mut Monomorphizer,
@@ -1322,7 +1326,8 @@ impl Monomorphizer {
 
     // The fields are a fresh arena list, not a view of this monomorphizer: the typedef may be
     // held by a caller across further `&mut self` calls (lower_typedef installs it in the module).
-    #[borrows()]
+    // SAFETY: the result is the compilation's arena data (its own, the module's or the AST's).
+    #[unsafe(borrows())]
     fn struct_typedef(self: &mut Monomorphizer, s: &StructDecl) -> ILTypeDef {
         let is_copy_opt_out = self.decl_is_copy_opt_out_struct(s);
         let mut fields = unsafe { Vec::<ILField>.with_capacity_in_raw(self.arena, s.fields.len) };
@@ -1339,7 +1344,8 @@ impl Monomorphizer {
     }
 
     // Variants are numbered in order unless one gives its discriminant.
-    #[borrows()]
+    // SAFETY: the result is the compilation's arena data (its own, the module's or the AST's).
+    #[unsafe(borrows())]
     fn enum_typedef(self: &mut Monomorphizer, e: &EnumDecl) -> ILTypeDef {
         let is_copy_opt_out = self.decl_is_copy_opt_out_enum(e);
         let mut variants = unsafe {

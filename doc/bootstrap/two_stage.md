@@ -1,15 +1,19 @@
 # Two-Stage Source Bootstrap
 
-A source build goes through two frozen layers. `stage0-C`, a C99 compiler for a fixed subset of Zoril, builds a frozen snapshot of the compiler; the snapshot then builds `src/`, the production compiler, which rebuilds itself to a fixpoint. The snapshot is what lets `src/` use more of the language than `stage0-C` itself accepts.
+A source build goes through two frozen layers. `stage0-C`, a C99 compiler for a fixed subset of Zoril, builds a frozen snapshot of the compiler (`stage1/`); the snapshot then builds `src/`, the production compiler, which rebuilds itself to a fixpoint. The snapshot is what lets `src/` use more of the language than `stage0-C` itself accepts.
 
 ```text
-stage0-C (C99)  --builds-->  stage1/ (frozen Zoril, stage0-C dialect)
-                               -> build/zoril-stage1, build/zilc-stage1
-build/zoril-stage1  --compiles-->  src/  ->  build/zoril  (the production compiler)
-build/zoril         --compiles-->  tools/zilc/src/  ->  build/zilc
+Layer 1 (frozen):  stage0-C  (C99, fixed subset; builds stage1/ -> build/zoril-stage1, build/zilc-stage1)
+        │  compiles (via QBE)
+        ▼
+Layer 2 (subset):  the stage1 snapshot  (Zoril, constrained to the stage0-C subset; builds src/ -> build/zoril)
+        │  builds
+        ▼
+Layer 3 (full):    src/ compiler (build/zoril -> tools/zilc/src/ -> build/zilc) and every full-idiomatic
+                    Zoril program (stdlib/, tests/, tools/, ...)
 ```
 
-`src/` and the `stdlib/` modules it imports are therefore limited by what the pinned snapshot accepts, which is the full language as of the freeze, rather than by `stage0-C`. The release tree keeps the two seeds under `bootstrap/stage0-c/` and `bootstrap/stage1/`; the snapshot's dialect and known issues are summarized in [`KNOWN_ISSUES.md`](../../KNOWN_ISSUES.md).
+The subset constraint is a property of the **source** at Layer 2, not of the **compiler's capability**. `stage1/` is written in the restricted Zoril subset `stage0-C` accepts (no struct or tuple match patterns, no `if let`/`while let`, no tuple destructuring in `let`, numeric-only `for` ranges), yet the compiler built from it implements the full Zoril language as of the freeze. `src/` and the `stdlib/` modules it imports are therefore limited only by what the pinned snapshot accepts, rather than by `stage0-C`, while the single frozen C compiler (auditable once) anchors an evolving compiler without ever growing itself. The release tree keeps the two seeds under `bootstrap/stage0-c/` and `bootstrap/stage1/`; the snapshot's dialect and known issues are summarized in [`KNOWN_ISSUES.md`](../../KNOWN_ISSUES.md).
 
 ## 1. Freeze set
 
@@ -53,6 +57,7 @@ Each snapshot must be compilable by `stage0-C`, so the snapshot is never appende
 - A deliberate **backport** may add a language feature the frozen compiler must parse (`use` / `ns::item`, `unsafe fn`). It is made through the re-pin procedure and recorded in the commit that carries it; a runtime fix moves `bootstrap/stage1/rt/runtime.s` with `rt/runtime.s`, because the `runtimes` gate requires the two to stay byte-identical.
   - **Backport recorded:** `bootstrap/stage1/rt/runtime.s` gained a `.note.GNU-stack` section (`.section .note.GNU-stack,"",@progbits`, which marks the stack non-executable) as a byte-identical copy of the same addition to `rt/runtime.s`. It changes no symbol and no code: the stage1 binaries link the object and now get a non-executable `GNU_STACK` instead of `RWE`. It is not a language backport and not a re-pin; `bootstrap/stage1/PIN` is unchanged.
   - **Backport recorded:** `bootstrap/stage1/src/lower_zir/match.zrl` and `bootstrap/stage1/src/lower_zir/expr.zrl` mark a by-value `match` scrutinee moved after the arm's guard and mark a by-value `self` method receiver moved after argument evaluation (backporting git:a38ce23 and git:ac6e24e so a value with a destructor moved either way in the `src/` closure is dropped once).
+  - **Backport recorded:** `bootstrap/stage1/src/parser.zrl` reads `#[unsafe(borrows(..))]` as `#[borrows(..)]` (parser only; `bootstrap/stage1/README.md`), so the trusted narrowings of `src/` and `tools/zilc/src/` can be written before the next re-pin. Stage1 checks no declaration against its body, so it compiles every program as before.
 - Verification, scripted in the source repository: `stage0-C` builds the candidate, the candidate builds current `src/`, the fixpoint holds, `make test` and `make preflight` pass, and `bootstrap/stage1/PIN` records the release it was pinned for.
 
 ## 4. Carried limits

@@ -1,0 +1,8 @@
+// A pushed owner moves into the Vec: the storage it owns joins what `v` owns (S), and is not an
+// address `v` holds (O), so `return v` passes the return rule (Z-0062).
+// ORIGINS: mk v O={} S={Frame(_1), Frame(_3)}
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+fn mk() -> Vec<Vec<i32>> { let mut v = Vec::<Vec<i32>>.new(); v.push(Vec::<i32>.new()); return v; }
+fn main() -> i32 { let v = mk(); return v.len() as i32 - 1; }

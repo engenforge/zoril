@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: #[releases] applies only to a function taking a *T or *mut T parameter
+#[releases]
+unsafe fn bad(n: usize) {}
+fn main() -> i32 { return 0; }

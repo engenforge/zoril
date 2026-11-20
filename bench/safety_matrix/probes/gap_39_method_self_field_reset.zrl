@@ -1,7 +1,6 @@
 // name: Arena reset after a method writes a field through self
-// expected: known_gap
-// gap: a value written into a local's field through self in a &mut self method is not recorded as a borrow the caller's struct holds: the write is through a pointer, which check_assign skips (place_writes_through_pointer), so the reset passes while the field is read afterwards
-// observed: exit 77
+// expected: compile_reject
+// Refused at a.reset(): holder three (§3.1) applies the method's store summary so the caller's struct holds v's release-tier borrow of a while w.s is read afterwards.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

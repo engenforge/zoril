@@ -1,0 +1,15 @@
+// name: A safe function copies a view of the caller's frame with memcpy through a raw pointer it was given, undeclared
+// expected: compile_reject
+// Refused by the provenance extern store rule: an undeclared extern taking pointers cannot be passed a frame or parameter address.
+struct H { r: &i32 }
+struct Slot { p: *mut &i32 }
+static G: i32 = 7;
+extern fn memcpy(d: *mut u8, s: *u8, n: u64) -> *mut u8;
+fn slot_of(h: &mut H) -> Slot { return Slot { p: &mut h.r as *mut &i32 }; }
+fn put(s: &Slot, r: &i32) {
+    let src = r;
+    unsafe { let _ = memcpy(s.p as *mut u8, &src as *&i32 as *u8, 8 as u64); }
+}
+fn leak(h: &mut H) { let local = 42; let s = slot_of(h); put(&s, &local); }
+fn smash(n: i32) -> i32 { let junk = [77 as i32; 256]; if n > 0 { return smash(n - 1) + junk[3]; } return 0; }
+fn main() -> i32 { let mut h = H { r: &G }; leak(&mut h); let _ = smash(8); return *h.r; }

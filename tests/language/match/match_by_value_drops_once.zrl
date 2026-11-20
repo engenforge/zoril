@@ -74,10 +74,11 @@ fn whole_drop_from_non_drop(fp: *mut u8) {
     let n = ND.A(D.B(fp));
     match n { ND.A(d) => {}, ND.B => {}, }
 }
+static mut DROP_FLAG: u8 = 0 as u8;
 fn count(f: fn(*mut u8)) -> u8 {
-    let mut flag = 0 as u8;
-    f(&mut flag as *mut u8);
-    return flag;
+    DROP_FLAG = 0 as u8;
+    f(&mut DROP_FLAG as *mut u8);
+    return DROP_FLAG;
 }
 fn main() -> i32 {
     if count(bound) != 1 as u8 { return 1; }

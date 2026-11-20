@@ -1,7 +1,5 @@
 // name: Store escape into mut ref returned by closure call
-// expected: known_gap
-// gap: CallPtr return target check misses closure call returning captured mutable reference
-// observed: exit 77
+// expected: compile_reject
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

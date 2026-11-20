@@ -1,0 +1,20 @@
+// expected exit 42
+// The safe twin of reject_ties_inferred: the result is read before the reset, and a view of
+// `self` alone does not hold the arena the argument was built in.
+import "lib_ties.zrl";
+import "mem.zrl";
+import "vec.zrl";
+use lib_ties::Picker;
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v = Vec::<u8>.new_in(&a);
+    v.push(42 as u8);
+    let p = Picker.new(@slice(0 as *u8, 0 as usize));
+    let first = p.pick(v.as_slice())[0];
+    let own = p.view();
+    a.reset();
+    return first as i32 + own.len as i32;
+}

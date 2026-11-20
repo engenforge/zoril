@@ -1,0 +1,17 @@
+// Not a test program: scripts/test_interface_attrs.sh compiles it whole-program and against
+// lib_summary's interface (with and without `releases`) and requires `--emit-origins` to print
+// the same `releases 0` for `caller` when imported as when compiled whole-program.
+import "lib_summary.zrl";
+import "vec.zrl";
+use vec::Vec;
+
+fn caller(v: &mut Vec<i32>) {
+    lib_summary::kill(v);
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    caller(&mut v);
+    return 0;
+}

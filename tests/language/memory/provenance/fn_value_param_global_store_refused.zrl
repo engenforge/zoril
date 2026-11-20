@@ -1,0 +1,15 @@
+// expected compile fail
+// EXPECT: fn value rule
+// A `fn` item that stores a declared parameter into a global cannot be made into a `fn` value.
+static mut G: *i32 = 0 as *i32;
+fn stash(r: &i32) { unsafe { G = r as *i32; } }
+fn apply(f: fn(&i32), r: &i32) { f(r); }
+fn bad() -> i32 {
+    let x = 1;
+    apply(stash, &x);
+    return 0;
+}
+fn main() -> i32 {
+    let _ = bad();
+    return unsafe { *G };
+}

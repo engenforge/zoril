@@ -1,0 +1,19 @@
+// name: Arena reset after a slice clone, read through the clone
+// expected: compile_reject
+// Was a known gap: impl<T: Clone> Clone for [T] declares #[borrows()], yet a slice's clone is the same view (return *self), so the result of s.clone() holds no borrow: a.reset() is accepted while the clone is read afterwards, and the read sees the arena's next allocation; returning or storing the clone of a frame view is refused (gap_77's sibling, the liveness route); route class: a #[borrows()] declaration narrower than the body's ties (gap_44), on a standard-library Clone impl
+// Refused: Clone for [T] declares no #[borrows()], so the clone keeps the &self default's tie to the arena's slice and the reset is a conflicting borrow.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v = Vec::<u8>.new_in(&a);
+    v.push(42 as u8);
+    let s = v.as_slice();
+    let c = s.clone();
+    a.reset();
+    let mut v2 = Vec::<u8>.new_in(&a);
+    v2.push(77 as u8);
+    return c[0] as i32;
+}

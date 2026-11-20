@@ -1,0 +1,25 @@
+// Growth (`Vec.push`, `Vec.resize` / `Vec.grow_to`), a getter, and a function storing a slice
+// release no parameter's storage (§3.1, _What invalidates_, item 2).
+// ORIGINS: do_push !releases
+// ORIGINS: do_resize !releases
+// ORIGINS: get_first !releases
+// ORIGINS: put !releases
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+
+fn do_push(v: &mut Vec<i32>) { v.push(42); }
+fn do_resize(v: &mut Vec<i32>) { v.resize(4, 42); }
+fn get_first(v: &Vec<i32>) -> i32 { return v.as_slice()[0]; }
+fn put(out: &mut [i32], v: &Vec<i32>) { *out = v.as_slice(); }
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    do_push(&mut v);
+    do_resize(&mut v);
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    put(&mut s, &v);
+    let r = get_first(&v) + s[0] - 84;
+    v.free();
+    return r;
+}

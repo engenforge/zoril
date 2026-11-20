@@ -1,0 +1,24 @@
+// A closure storing a view of a parameter into its owned capture, called through a known callee:
+// what the environment owns by the moved holder is not a value the closure stores, and the store
+// into the capture is no global edge of `f`, so `main` may pass a view of its own array (§3, _A
+// closure body's summary is stated over `__env`_).
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+struct Holder { s: [i32], keep: Vec<i32> }
+fn f(p: [i32]) -> i32 {
+    let mut h = Holder { s: @slice(0 as *i32, 0), keep: Vec::<i32>.new() };
+    let mut cl = |store: bool| -> i32 {
+        if store {
+            h = Holder { s: p, keep: Vec::<i32>.new() };
+            return 0;
+        }
+        return h.s[0];
+    };
+    let _ = cl(true);
+    return cl(false);
+}
+fn main() -> i32 {
+    let a = [5, 6];
+    return f(&a) - 5;
+}

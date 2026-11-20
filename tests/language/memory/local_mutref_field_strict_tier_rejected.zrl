@@ -1,0 +1,23 @@
+// Strict-tier twin (§3.1, holder one): writing a view into a local struct through a local &mut
+// gives v's borrow to w in the strict tier, so mutating v with v.push(1) while w.s is still
+// live is refused just like w.s = v.as_slice() is.
+// expected compile fail
+// EXPECT: cannot mutably borrow 'v' while it is already borrowed
+import "vec.zrl";
+use vec::Vec;
+
+struct W {
+    s: [i32],
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut w = W { s: @slice(0 as *i32, 0) };
+    let r = &mut w;
+    r.s = v.as_slice();
+    v.push(1);
+    let x = w.s[0];
+    v.free();
+    return x;
+}

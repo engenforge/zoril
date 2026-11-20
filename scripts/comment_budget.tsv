@@ -41,14 +41,14 @@ corpus/zrl/39_range_patterns.zrl	29	3	1	3
 corpus/zrl/40_wrapping_arithmetic.zrl	26	7	5	3
 corpus/zrl/41_float_comparisons.zrl	21	3	1	3
 corpus/zrl/42_traits_and_iterators.zrl	38	9	5	5
-src/ast.zrl	851	57	26	5
+src/ast.zrl	924	75	33	5
 src/builder.zrl	340	23	7	8
 src/check_zir.zrl	3544	470	145	13
 src/decimal.zrl	132	14	11	3
 src/diag.zrl	38	7	4	2
 src/driver.zrl	3	2	1	2
 src/driver/module.zrl	1197	196	84	11
-src/driver/state.zrl	266	31	14	8
+src/driver/state.zrl	287	42	21	8
 src/driver/types.zrl	712	63	30	8
 src/fmt/doc.zrl	222	32	15	8
 src/fmt/fmt.zrl	321	13	8	5
@@ -76,7 +76,7 @@ src/mono.zrl	1550	138	57	7
 src/pair_map.zrl	67	5	3	3
 src/parser.zrl	380	23	6	13
 src/parser/base.zrl	55	15	8	3
-src/parser/decl.zrl	817	35	22	3
+src/parser/decl.zrl	947	53	26	5
 src/parser/expr.zrl	722	47	30	5
 src/parser/module.zrl	353	51	27	6
 src/parser/pattern.zrl	235	10	7	2
@@ -85,7 +85,6 @@ src/parser/parse_type.zrl	191	16	12	2
 src/progress.zrl	12	3	3	1
 src/resolve.zrl	1978	175	94	7
 src/route_set.zrl	172	57	26	23
-src/summary_pass.zrl	657	13	9	4
 src/token.zrl	258	15	10	4
 src/verify.zrl	2244	236	101	9
 src/zil_print.zrl	888	69	30	11
@@ -94,7 +93,7 @@ src/zir_stats.zrl	166	22	8	8
 stdlib/args.zrl	57	38	16	6
 stdlib/bufio.zrl	352	38	38	1
 stdlib/bytevec.zrl	85	35	19	7
-stdlib/clone.zrl	71	32	22	5
+stdlib/clone.zrl	21	15	7	5
 stdlib/cmp.zrl	55	23	14	10
 stdlib/core.zrl	150	46	33	6
 stdlib/core0.zrl	131	45	25	4

@@ -1,0 +1,21 @@
+// name: A view of a parameter's field stored into a sibling field outlives a free() in the callee
+// expected: compile_reject
+// Refused at p.a.free(): storing p.a.as_slice() into p.s gives p.a's release-tier borrow to the frame's outside holder (§3.1, holder two), which conflicts with p.a.free().
+import "vec.zrl";
+use vec::Vec;
+struct P {
+    a: Vec<i32>,
+    s: [i32],
+}
+fn poison(p: &mut P) {
+    p.s = p.a.as_slice();
+    p.a.free();
+}
+fn main() -> i32 {
+    let mut p = P { a: Vec::<i32>.new(), s: @slice(0 as *i32, 0) };
+    p.a.push(42);
+    poison(&mut p);
+    let mut w = Vec::<i32>.new();
+    w.push(77);
+    return p.s[0];
+}

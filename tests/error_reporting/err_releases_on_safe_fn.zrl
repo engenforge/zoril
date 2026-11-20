@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: #[releases] applies only to an unsafe fn or an extern fn
+#[releases]
+fn bad(p: *mut u8) {}
+fn main() -> i32 { return 0; }

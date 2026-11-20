@@ -73,6 +73,10 @@ pub struct ILFunction {
     pub is_local: bool,
     pub is_pub: bool,
     pub must_use: bool,
+    // `#[fresh]` (ast::FnDecl.fresh): the result is memory only the caller reaches.
+    pub fresh: bool,
+    // `#[releases]` (ast::FnDecl.releases): the function releases storage its raw-pointer arguments reach.
+    pub releases: bool,
     pub arena_alloc_bytes: usize,
     pub doc_comment: u32,
     pub source_file: u32,
@@ -115,10 +119,17 @@ pub struct ILFunction {
     pub storage_known: bool,
     pub summary_ret_stack: bool,
     // Which parameters a returned reference/pointer may point into (bit i = parameter i,
-    // counted without sret/env): `#[borrows(...)]` if given, else Rust's elision rules.
-    // Consulted by the borrow checker and the region-escape verifier at each call.
+    // counted without sret/env): `#[borrows(...)]` if given, else Rust's elision rules, with the
+    // body's own ties added to the latter (check_zir::os_infer_ties). Consulted by the borrow
+    // checker and the region-escape verifier at each call.
     pub ret_ties: u64,
     pub has_borrows: bool,
+    // The `#[borrows(..)]` was written `#[unsafe(borrows(..))]`: trusted as declared, and written
+    // back that way into an interface.
+    pub borrows_trusted: bool,
+    // The body added ties to the elision default: the interface writes them out as
+    // `#[borrows(..)]`, since an importer would derive only the default from the signature.
+    pub ties_inferred: bool,
     // This function is (or is the imported interface of) the standard library's
     // `mem::Arena::{mark, reset_to}`, whose lifecycle the borrow checker exempts from the epoch
     // check (`src/check_zir.zrl`). Decided by `Driver.declare_function` from where the declaration
@@ -138,6 +149,39 @@ pub struct ILFunction {
     pub allocator_free: bool,
     pub buffer_external: bool,
     pub buffer_anchored: bool,
+    // The summary the origin sets give this body (doc/design/provenance.md §3, _The summary_;
+    // check_zir::store_origin_summary), read at a call in place of the masks above when
+    // `os_known`. `os_ret_addr`/`os_ret_contents` are the ParamAddr/ParamContents bits of the
+    // result's origins and `os_ret_flags` its ORIGIN_STATIC/ORIGIN_RODATA/ORIGIN_RAW/ORIGIN_UNKNOWN (a Frame
+    // origin reads as Unknown); `os_ret_fresh` is whether the result's storage holds a Frame or Unknown origin. The
+    // store edges are `os_edge_rows` rows of four u64 in the main arena: the stored value's code
+    // (0..63 ParamAddr(i), 64..127 ParamContents(i), 128 Static, 129 Unknown, 130 Rodata) and the target masks
+    // of ParamAddr bits, ParamContents bits, and bit 0 for a global.
+    pub os_known: bool,
+    pub os_ret_addr: u64,
+    pub os_ret_contents: u64,
+    pub os_ret_flags: u64,
+    pub os_ret_fresh: bool,
+    // The parameters the result may point into other than through what their referents hold as
+    // a borrow (ParamAddr, ParamOwned), every bit when the body cannot tell; and the held ties,
+    // `os_ret_contents` less those (doc/design/provenance.md §3, _Held ties_). A call's result
+    // reads a held tie as what the referent holds, nothing it owns. An import has `ret_held`.
+    pub os_ret_owned: u64,
+    pub os_ret_held: u64,
+    // The parameters an `#[unsafe(borrows(*p))]` declares held (bit i = user parameter i): the
+    // author vouches that the result points only into what the referent holds as a borrow.
+    pub ret_held_decl: u64,
+    pub os_releases: u64,
+    pub os_env_releases: u64,
+    pub os_edges: *mut u64,
+    pub os_edge_rows: usize,
+    // While this body is being lowered, its depth on the driver's lowering stack (1 for the
+    // outermost); 0 otherwise. A call to a function with a depth and no summary yet is a call into
+    // a recursive cycle: it takes an empty summary until the cycle's fixpoint.
+    pub os_depth: u32,
+    // A body of a recursive cycle whose root has not finished: its summary, and the ties
+    // os_infer_ties adds from it, are final only after Driver.os_fixpoint.
+    pub os_in_cycle: bool,
     // The declared result is a raw pointer. The IL type does not say (`&T` and `*T` share
     // `Ptr`), and a call's result needs it: `*f()` on a raw result needs `unsafe`.
 }

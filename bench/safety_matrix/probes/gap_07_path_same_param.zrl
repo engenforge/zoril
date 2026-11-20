@@ -1,7 +1,6 @@
 // name: Store escape when destination and source share one parameter
-// expected: known_gap
-// gap: Storage walk and escape checks filter out i == j when same parameter carries dest and source
-// observed: exit 77
+// expected: compile_reject
+// Refused at scope exit of 'a': OriginSets records stash_pair's Param(0) -> ParamContents(0) edge, which transfers 'a''s release-tier borrow to OUTSIDE_BORROWER so 'a' cannot go out of scope while out still views it.
 import "mem.zrl";
 use mem::Arena;
 import "vec.zrl";

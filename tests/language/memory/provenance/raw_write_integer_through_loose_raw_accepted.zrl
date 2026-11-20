@@ -1,0 +1,10 @@
+// expected exit 0
+//
+// Storing an integer through a loose raw pointer local is accepted.
+
+struct H { r: i32 }
+struct Slot { p: *mut i32 }
+
+fn slot_of(h: &mut H) -> Slot { return Slot { p: &mut h.r as *mut i32 }; }
+fn put(s: &Slot, r: i32) { unsafe { *s.p = r; } }
+fn main() -> i32 { let mut h = H { r: 1 }; let s = slot_of(&mut h); put(&s, 7); return h.r - 7; }

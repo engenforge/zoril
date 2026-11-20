@@ -1,0 +1,15 @@
+// expected exit 0
+// The twin of prov_reject_forward: the forwarded view is the caller's own, stored directly.
+import "lib_summary.zrl";
+use lib_summary::H;
+
+fn f(out: &mut H, view: [i32]) {
+    out.r = lib_summary::forward(view);
+}
+
+fn main() -> i32 {
+    let data = [5, 6];
+    let mut h = H { r: @slice(0 as *i32, 0), t: @slice(0 as *i32, 0) };
+    f(&mut h, &data);
+    return h.r[0] - 5;
+}

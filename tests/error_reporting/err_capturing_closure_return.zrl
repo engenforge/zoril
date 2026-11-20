@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: tests/error_reporting/err_capturing_closure_return.zrl:5:1: error: region escape: a pointer to local stack storage is written to memory that outlives this function
+// EXPECT: tests/error_reporting/err_capturing_closure_return.zrl:6:12: error: provenance: the returned value holds an address of this frame (return rule)
 // A capturing closure is a function value, but its environment lives in the frame that made
 // it: returning it is a region escape.
 fn make_adder(k: i32) -> fn(i32) -> i32 {

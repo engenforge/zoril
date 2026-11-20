@@ -42,7 +42,8 @@ impl Args {
     }
 
     // Returns the argument at index as a byte slice, or None if index is out of bounds.
-    #[borrows()]
+    // SAFETY: argv's strings are process memory, which outlives every Args.
+    #[unsafe(borrows())]
     pub fn get(self: &Args, index: usize) -> Option<[u8]> {
         // Compare in `usize`: `index as i32` truncated, so an index at or above 2^31 became a
         // small (or negative) i32, passed the guard and then read the wrong argument, or past the
@@ -80,8 +81,9 @@ impl Args {
         return self.index < self.argc;
     }
 
-    #[borrows()]
     // Yields the next argument as a byte slice, or None when all arguments have been consumed.
+    // The result is Args.get's, process memory that outlives every Args.
+    #[borrows()]
     pub fn next(self: &mut Args) -> Option<[u8]> {
         if self.index >= self.argc {
             return Option.None;

@@ -1,7 +1,6 @@
 // name: Stack reference stored out via fn value call
-// expected: known_gap
-// gap: Storage facts drops provenance for stack reference passed through fn value
-// observed: exit 77
+// expected: compile_reject
+// Refused by the provenance unknown-call store rule: origin sets track frame references passed through fn values.
 fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
 fn forward_fn_target(v: &i32) -> &i32 { return v; }
 fn escape_storer(out: &mut &i32) {

@@ -19,12 +19,26 @@ use vec::Vec;
 
 pub struct Attribute {
     pub has_borrows: bool,
+    pub borrows_trusted: bool,
     pub borrows: [u32],
+    pub borrows_held: [u32],
+    pub summary_held: u64,
     pub has_stores: bool,
+    pub stores_trusted: bool,
+    pub stores_span: Span,
     pub stores_from: [u32],
     pub stores_to: [u32],
     pub stores_static: [bool],
+    pub stores_contents: [bool],
     pub must_use: bool,
+    // `#[fresh]` (surface_syntax.md §2.5) and where it was written, for the error when it is on
+    // anything but an `unsafe fn` returning a raw pointer.
+    pub fresh: bool,
+    pub fresh_span: Span,
+    // `#[releases]` (surface_syntax.md §2.5) and where it was written, for the error when it is on
+    // anything but an `unsafe fn` or `extern fn` taking a raw pointer.
+    pub releases: bool,
+    pub releases_span: Span,
     pub derive_clone: bool,
     pub doc_comment: u32,
     pub has_summary: bool,
@@ -37,6 +51,7 @@ pub struct Attribute {
     pub summary_into: u64,
     pub summary_ret_stack: bool,
     pub summary_alloc: usize,
+    pub summary_os: [u64],
     // `#[export]`: an interface says this body-less extern declaration is a Zoril function with a
     // C ABI whose body lives in another module, so a call needs no `unsafe`.
     pub is_export: bool,
@@ -50,16 +65,27 @@ pub struct Attribute {
 impl Parser {
     // The `#[...]` attributes before a declaration, and its doc comment (`cur_comment`, captured
     // when the declaration's first token was lexed: the lexer has since read one token further).
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     fn parse_attributes(self: &mut Parser) -> Attribute {
         let mut attr = Attribute {
             has_borrows: false,
+            borrows_trusted: false,
             borrows: @slice(0 as *mut u32, 0 as usize),
+            borrows_held: @slice(0 as *mut u32, 0 as usize),
+            summary_held: 0 as u64,
             has_stores: false,
+            stores_trusted: false,
+            stores_span: self.cur.span,
             stores_from: @slice(0 as *mut u32, 0 as usize),
             stores_to: @slice(0 as *mut u32, 0 as usize),
             stores_static: @slice(0 as *mut bool, 0 as usize),
+            stores_contents: @slice(0 as *mut bool, 0 as usize),
             must_use: false,
+            fresh: false,
+            fresh_span: self.cur.span,
+            releases: false,
+            releases_span: self.cur.span,
             derive_clone: false,
             doc_comment: self.cur_comment,
             has_summary: false,
@@ -72,6 +98,7 @@ impl Parser {
             summary_into: 0 as u64,
             summary_ret_stack: false,
             summary_alloc: 0 as usize,
+            summary_os: @slice(0 as *mut u64, 0 as usize),
             is_export: false,
             saw_storage: false,
             saw_stores: false,
@@ -81,18 +108,31 @@ impl Parser {
         while self.is_kind(TokenKind.Hash) {
             self.next_token();
             self.expect(Token.LBracket);
+            if self.is_kind(TokenKind.KUnsafe) {
+                self.parse_unsafe_attribute(&mut attr);
+                self.expect(Token.RBracket);
+                continue;
+            }
             let name_id = self.cur.token.get_ident_id();
+            let name_span = self.cur.span;
             self.expect(Token.Ident(0 as u32));
             let name = self.intern_table.lookup(name_id);
             if name == "must_use" {
                 attr.must_use = true;
+            } else if name == "fresh" {
+                attr.fresh = true;
+                attr.fresh_span = name_span;
+            } else if name == "releases" {
+                attr.releases = true;
+                attr.releases_span = name_span;
             } else if name == "derive" {
                 self.parse_derive_list(&mut attr);
             } else if name == "borrows" {
                 attr.has_borrows = true;
-                attr.borrows = self.parse_name_list();
+                self.parse_borrows_list(&mut attr, false);
             } else if name == "stores" {
                 attr.has_stores = true;
+                attr.stores_span = name_span;
                 self.parse_stores_list(&mut attr);
             } else if name == "export" {
                 // Only an interface says this: in a source file it would let a C declaration be called
@@ -115,6 +155,33 @@ impl Parser {
         return attr;
     }
 
+    // `unsafe(borrows(a, ..))`: a `#[borrows(..)]` the compiler trusts where it names less than
+    // the body returns (doc/design/provenance.md §3, tier 3). The function stays safe to call;
+    // the attribute is the point of trust a reviewer reads, so no other claim takes this form.
+    fn parse_unsafe_attribute(self: &mut Parser, attr: &mut Attribute) {
+        self.next_token();
+        self.expect(Token.LParen);
+        let name_id = self.cur.token.get_ident_id();
+        let name_span = self.cur.span;
+        self.expect(Token.Ident(0 as u32));
+        if self.intern_table.lookup(name_id) == "borrows" {
+            attr.has_borrows = true;
+            attr.borrows_trusted = true;
+            self.parse_borrows_list(attr, true);
+        } else if self.intern_table.lookup(name_id) == "stores" {
+            attr.has_stores = true;
+            attr.stores_trusted = true;
+            attr.stores_span = name_span;
+            self.parse_stores_list(attr);
+        } else {
+            self.report_error(
+                "only #[borrows(..)] and an extern's #[stores(..)] can be marked unsafe",
+                name_span
+            );
+        }
+        self.expect(Token.RParen);
+    }
+
     // `(Clone)`: the only trait that can be derived.
     fn parse_derive_list(self: &mut Parser, attr: &mut Attribute) {
         self.expect(Token.LParen);
@@ -134,30 +201,52 @@ impl Parser {
 
     // `(a, b)` / `()`: `#[borrows]`'s parameter names, checked against the function's
     // parameters when it is lowered. The names are copied into the arena, so the result borrows
-    // nothing from the parser.
-    #[borrows()]
-    fn parse_name_list(self: &mut Parser) -> [u32] {
+    // nothing from the parser. `*a` (TRUSTED only, an `#[unsafe(borrows(..))]`) also goes into
+    // `attr.borrows_held`: the result is tied to what a's referent holds, not to the referent.
+    fn parse_borrows_list(self: &mut Parser, attr: &mut Attribute, trusted: bool) {
         let mut names = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+        let mut held = unsafe { Vec::<u32>.new_in_raw(self.arena) };
         self.expect(Token.LParen);
         while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
-            names.push(self.cur.token.get_ident_id());
+            let mut starred = false;
+            if self.is_kind(TokenKind.Star) {
+                if !trusted {
+                    self.report_error(
+                        "`*name` is written only in #[unsafe(borrows(..))]",
+                        self.cur.span
+                    );
+                }
+                starred = true;
+                self.next_token();
+            }
+            let id = self.cur.token.get_ident_id();
+            names.push(id);
+            if starred { held.push(id); }
             self.expect(Token.Ident(0 as u32));
             if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
         }
         self.expect(Token.RParen);
-        return names.as_slice();
+        attr.borrows = names.as_slice();
+        attr.borrows_held = held.as_slice();
     }
 
     fn parse_stores_list(self: &mut Parser, attr: &mut Attribute) {
         let mut froms = unsafe { Vec::<u32>.new_in_raw(self.arena) };
         let mut tos = unsafe { Vec::<u32>.new_in_raw(self.arena) };
         let mut stats = unsafe { Vec::<bool>.new_in_raw(self.arena) };
+        let mut conts = unsafe { Vec::<bool>.new_in_raw(self.arena) };
         for f in attr.stores_from { froms.push(*f); }
         for t in attr.stores_to { tos.push(*t); }
         for s in attr.stores_static { stats.push(*s); }
+        for c in attr.stores_contents { conts.push(*c); }
         let self_name = self.intern_table.intern("self");
         self.expect(Token.LParen);
         while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
+            let mut is_contents = false;
+            if self.is_kind(TokenKind.Star) {
+                is_contents = true;
+                self.next_token();
+            }
             let src = self.cur.token.get_ident_id();
             self.expect(Token.Ident(0 as u32));
             let mut dst = self_name;
@@ -175,18 +264,37 @@ impl Parser {
             froms.push(src);
             tos.push(dst);
             stats.push(is_static);
+            conts.push(is_contents);
             if self.is_kind(TokenKind.Comma) { self.next_token(); } else { break; }
         }
         self.expect(Token.RParen);
         attr.stores_from = froms.as_slice();
         attr.stores_to = tos.as_slice();
         attr.stores_static = stats.as_slice();
+        attr.stores_contents = conts.as_slice();
     }
 
     // `(key = value, ..)` of a `#[summary]` the compiler wrote into a `.zri`; unknown keys are
-    // skipped, so an older compiler reads a newer interface.
+    // skipped, so an older compiler reads a newer interface. The origin-set keys (`ret_addr`,
+    // `ret_contents`, `ret_flags`, `ret_fresh`, `decl_stores`, `decl_into`, `releases`, and per
+    // store edge `edge`, `edge_addr`, `edge_contents`, `edge_global`, in that order) become
+    // `attr.summary_os`; an interface without `ret_addr` carries none, and its importer keeps the
+    // older masks.
     fn parse_summary_args(self: &mut Parser, attr: &mut Attribute) {
         self.next_token();
+        let mut saw_os = false;
+        let mut os_head = unsafe { Vec::<u64>.new_in_raw(self.arena) };
+        let mut os_edges = unsafe { Vec::<u64>.new_in_raw(self.arena) };
+        let mut head = [
+            0 as u64,
+            0 as u64,
+            0 as u64,
+            0 as u64,
+            0 as u64,
+            0 as u64,
+            0 as u64,
+            0 as u64
+        ];
         while !self.is_kind(TokenKind.RParen) && !self.is_kind(TokenKind.Eof) {
             let key_id = self.cur.token.get_ident_id();
             self.expect(Token.Ident(0 as u32));
@@ -217,6 +325,28 @@ impl Parser {
                 attr.saw_storage = true;
             } else if key == "alloc" {
                 attr.summary_alloc = int_val as usize;
+            } else if key == "ret_addr" {
+                head[0] = int_val;
+                saw_os = true;
+            } else if key == "ret_held" {
+                attr.summary_held = int_val;
+            } else if key == "ret_contents" {
+                head[1] = int_val;
+            } else if key == "ret_flags" {
+                head[2] = int_val;
+            } else if key == "decl_stores" {
+                head[4] = int_val;
+            } else if key == "decl_into" {
+                head[5] = int_val;
+            } else if key == "releases" {
+                head[6] = int_val;
+            } else if key == "env_releases" {
+                head[7] = int_val;
+            } else if key == "edge"
+                || key == "edge_addr"
+                || key == "edge_contents"
+                || key == "edge_global" {
+                os_edges.push(int_val);
             } else {
                 is_int = false;
             }
@@ -225,18 +355,43 @@ impl Parser {
             } else if key == "ret_stack" {
                 attr.summary_ret_stack = self.cur.token.get_bool_val();
                 self.expect(Token.Bool(false));
+            } else if key == "ret_fresh" {
+                if self.cur.token.get_bool_val() { head[3] = 1 as u64; }
+                self.expect(Token.Bool(false));
             } else {
                 self.next_token();
             }
             if self.is_kind(TokenKind.Comma) { self.next_token(); }
         }
         self.expect(Token.RParen);
+        // The edge keys are read in the order the compiler writes them, four to a row.
+        if saw_os && os_edges.len() % 4 as usize != 0 as usize {
+            self.report_error(
+                "malformed #[summary]: an edge needs edge, edge_addr, edge_contents, edge_global",
+                self.cur.span
+            );
+        }
+        if saw_os {
+            let mut h = 0 as usize;
+            while h < 8 as usize { os_head.push(head[h]); h = h + 1 as usize; }
+            let ed = os_edges.as_slice();
+            let mut e = 0 as usize;
+            while e + 4 as usize <= ed.len {
+                os_head.push(ed[e]);
+                os_head.push(ed[e + 1 as usize]);
+                os_head.push(ed[e + 2 as usize]);
+                os_head.push(ed[e + 3 as usize]);
+                e = e + 4 as usize;
+            }
+            attr.summary_os = os_head.as_slice();
+        }
     }
 
     // `<T, U: Bound + Other>`, or none.
     // The result is built in the parser's arena, where it lives as long as the AST: a caller may
     // hold it across further `&mut self` calls.
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     fn parse_type_params(self: &mut Parser) -> [TypeParam] {
         let mut params = unsafe { Vec::<TypeParam>.new_in_raw(self.arena) };
         if !self.is_kind(TokenKind.Less) { return params.as_slice(); }
@@ -271,6 +426,7 @@ impl Parser {
         return true;
     }
 
+    #[borrows(self, attr)]
     fn parse_fn_decl(
         self: &mut Parser,
         is_pub: bool,
@@ -289,6 +445,51 @@ impl Parser {
         if self.is_kind(TokenKind.Arrow) {
             self.next_token();
             ret_ty = self.parse_type();
+        }
+        // `#[fresh]` is the author's claim that the result aliases nothing; it is only as good as
+        // an `unsafe` obligation, and only a raw pointer is made where that claim is made (§2.5). The
+        // parser sees the written type, not an alias's target, so the rule is on the spelling.
+        if attr.fresh {
+            let mut raw_result = false;
+            if ret_ty != 0 as TypeId {
+                match self.ast.types[ret_ty as usize] {
+                    Type.Ptr(_) | Type.PtrMut(_) => { raw_result = true; },
+                    _ => {},
+                }
+            }
+            if !is_unsafe {
+                self.report_error(
+                    "#[fresh] applies only to an unsafe fn: freshness is a claim its author makes, like any unsafe obligation",
+                    attr.fresh_span
+                );
+            } else if !raw_result {
+                self.report_error(
+                    "#[fresh] applies only to a function whose result type is written *T or *mut T (not an alias of one)",
+                    attr.fresh_span
+                );
+            }
+        }
+        if attr.releases {
+            let mut raw_param = false;
+            for p in params {
+                if p.ty != 0 as TypeId {
+                    match self.ast.types[p.ty as usize] {
+                        Type.Ptr(_) | Type.PtrMut(_) => { raw_param = true; },
+                        _ => {},
+                    }
+                }
+            }
+            if !is_unsafe && !is_extern {
+                self.report_error(
+                    "#[releases] applies only to an unsafe fn or an extern fn",
+                    attr.releases_span
+                );
+            } else if !raw_param {
+                self.report_error(
+                    "#[releases] applies only to a function taking a *T or *mut T parameter",
+                    attr.releases_span
+                );
+            }
         }
         let mut body = 0 as ExprId;
         if self.is_kind(TokenKind.LBrace) {
@@ -323,6 +524,26 @@ impl Parser {
             }
             self.expect(Token.Semi);
         }
+        if attr.stores_trusted && (!is_extern || body != 0 as ExprId) {
+            self.report_error(
+                "#[unsafe(stores(..))] is for an extern: a body's #[stores(..)] is checked against it",
+                attr.stores_span
+            );
+        } else if attr.has_stores && !attr.stores_trusted && is_extern && body == 0 as ExprId {
+            self.report_error(
+                "an extern's #[stores(..)] cannot be checked: write #[unsafe(stores(..))]",
+                attr.stores_span
+            );
+        }
+        if body != 0 as ExprId {
+            let mut has_contents_pair = false;
+            for sc in attr.stores_contents {
+                if *sc { has_contents_pair = true; }
+            }
+            if has_contents_pair {
+                self.report_error("the *p form is for an extern", attr.stores_span);
+            }
+        }
         return FnDecl {
             name: name,
             params: params,
@@ -334,6 +555,8 @@ impl Parser {
             is_unsafe: is_unsafe,
             is_variadic: is_variadic,
             must_use: attr.must_use,
+            fresh: attr.fresh && is_unsafe,
+            releases: attr.releases && (is_unsafe || is_extern),
             from_interface: self.file_path.len >= 4 as usize
                 && subslice_from(self.file_path, self.file_path.len - 4 as usize) == ".zri",
             type_params: tp,
@@ -351,12 +574,18 @@ impl Parser {
             has_storage: attr.saw_storage && attr.saw_stores && attr.saw_into,
             summary_ret_stack: attr.summary_ret_stack,
             summary_alloc: attr.summary_alloc,
+            summary_os: attr.summary_os,
             has_borrows: attr.has_borrows,
+            borrows_trusted: attr.borrows_trusted,
             borrows: attr.borrows,
+            borrows_held: attr.borrows_held,
+            summary_held: attr.summary_held,
             has_stores: attr.has_stores,
+            stores_trusted: attr.stores_trusted,
             stores_from: attr.stores_from,
             stores_to: attr.stores_to,
             stores_static: attr.stores_static,
+            stores_contents: attr.stores_contents,
             expr_start: expr_start,
             expr_end: self.ast.exprs.len() as u32,
             default_of: 0 as u32,
@@ -389,7 +618,8 @@ impl Parser {
 
     // `(a: A, mut b: B, self, ...)`: the parameters, and whether the list ends in `...`. A
     // bare `self` has its type from the `impl`.
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     fn parse_param_list(self: &mut Parser) -> ([Param], bool) {
         self.expect(Token.LParen);
         let mut params = unsafe { Vec::<Param>.new_in_raw(self.arena) };
@@ -495,6 +725,8 @@ impl Parser {
             is_unsafe: false,
             is_variadic: false,
             must_use: false,
+            fresh: false,
+            releases: false,
             from_interface: false,
             type_params: @slice(0 as *mut TypeParam, 0 as usize),
             doc_comment: 0 as u32,
@@ -511,13 +743,19 @@ impl Parser {
             summary_into: 0 as u64,
             summary_ret_stack: false,
             summary_alloc: 0 as usize,
+            summary_os: @slice(0 as *mut u64, 0 as usize),
             has_storage: false,
             has_borrows: false,
+            borrows_trusted: false,
             borrows: @slice(0 as *mut u32, 0 as usize),
+            borrows_held: @slice(0 as *mut u32, 0 as usize),
+            summary_held: 0 as u64,
             has_stores: false,
+            stores_trusted: false,
             stores_from: @slice(0 as *mut u32, 0 as usize),
             stores_to: @slice(0 as *mut u32, 0 as usize),
             stores_static: @slice(0 as *mut bool, 0 as usize),
+            stores_contents: @slice(0 as *mut bool, 0 as usize),
             expr_start: expr_start,
             expr_end: self.ast.exprs.len() as u32,
             default_of: 0 as u32,
@@ -720,6 +958,15 @@ impl Parser {
             let m_pub = self.eat_pub();
             let m_unsafe = self.eat_unsafe();
             if self.is_kind(TokenKind.KConst) {
+                if attr.fresh {
+                    self.report_error("#[fresh] applies only to an unsafe fn", attr.fresh_span);
+                }
+                if attr.releases {
+                    self.report_error(
+                        "#[releases] applies only to an unsafe fn or an extern fn",
+                        attr.releases_span
+                    );
+                }
                 let c = self.parse_const_decl(m_pub);
                 constants.push(c);
             } else {
@@ -832,12 +1079,28 @@ impl Parser {
     }
 
     // A declaration is built in the arena, so holding one does not keep the parser borrowed.
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     pub fn parse_declaration(self: &mut Parser) -> Decl {
         let attr = self.parse_attributes();
         let is_pub = self.eat_pub();
         if attr.derive_clone && !self.is_kind(TokenKind.KStruct) {
             self.report_error("derive(Clone) applies only to structs", self.cur.span);
+        }
+        if attr.fresh
+            && !self.is_kind(TokenKind.KFn)
+            && !self.is_kind(TokenKind.KUnsafe)
+            && !self.is_kind(TokenKind.KExtern) {
+            self.report_error("#[fresh] applies only to an unsafe fn", attr.fresh_span);
+        }
+        if attr.releases
+            && !self.is_kind(TokenKind.KFn)
+            && !self.is_kind(TokenKind.KUnsafe)
+            && !self.is_kind(TokenKind.KExtern) {
+            self.report_error(
+                "#[releases] applies only to an unsafe fn or an extern fn",
+                attr.releases_span
+            );
         }
         match self.cur.token.kind() {
             TokenKind.KImport => {

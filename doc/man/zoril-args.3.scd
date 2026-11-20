@@ -95,6 +95,7 @@ pub fn next(self: &mut Args) -> Option<[u8]>;
 ```
 
 	Yields the next argument as a byte slice, or None when all arguments have been consumed.
+	The result is Args.get's, process memory that outlives every Args.
 
 *args*
 ```

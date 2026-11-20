@@ -1,0 +1,26 @@
+// A known closure call reads the environment field by field: the holder moved into the closure
+// starts with an address of `f`'s own `seed`, and the closure stores the parameter view `p` into
+// it. The summary names `p`'s capture, and the caller maps it to the local `p` the environment was
+// built from, so `seed`'s address, which only the holder holds, is not what the call stores (§3,
+// _Calls through a known callee_).
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+struct Holder { s: &i32, keep: Vec<i32> }
+fn f(p: &i32) -> i32 {
+    let mut seed = 0;
+    let mut h = Holder { s: &seed, keep: Vec::<i32>.new() };
+    let mut cl = |store: bool| -> i32 {
+        if store {
+            h = Holder { s: p, keep: Vec::<i32>.new() };
+            return 0;
+        }
+        return *h.s;
+    };
+    let _ = cl(true);
+    return cl(false);
+}
+fn main() -> i32 {
+    let x = 3;
+    return f(&x) - 3;
+}

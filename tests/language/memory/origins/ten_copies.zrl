@@ -1,0 +1,18 @@
+// A chain of ten copies keeps the origin: the fixpoint has no depth limit (gap_10's shape).
+// ORIGINS: main c10 O={Frame(x)} S={}
+// expected exit 0
+fn main() -> i32 {
+    let x = 42;
+    let c0 = &x;
+    let c1 = c0;
+    let c2 = c1;
+    let c3 = c2;
+    let c4 = c3;
+    let c5 = c4;
+    let c6 = c5;
+    let c7 = c6;
+    let c8 = c7;
+    let c9 = c8;
+    let c10 = c9;
+    return *c10 - 42;
+}

@@ -1,0 +1,22 @@
+// A frame address stored inside `unsafe` through a `#[fresh]` result and the pointer returned.
+// Outside the provenance guarantee (documented in safety_model.md §3.2 and unsafe_policy.md §1):
+// accepted once the legacy region rule is retired.
+// expected exit 0
+#[fresh]
+unsafe fn block() -> *mut &i32 {
+    return @ptr_from_int<*mut &i32>(
+        @syscall(9, 0 as u64, 4096 as u64, 3 as u64, 34 as u64, -1 as i64 as u64, 0 as u64)
+    );
+}
+
+fn f() -> *mut &i32 {
+    let x = 5;
+    let p = unsafe { block() };
+    unsafe { *p = &x; }
+    return p;
+}
+
+fn main() -> i32 {
+    let p = f();
+    return 0;
+}

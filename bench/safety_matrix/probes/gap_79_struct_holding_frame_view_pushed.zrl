@@ -1,7 +1,6 @@
 // name: A struct holding a view of this frame is pushed into the caller's Vec
-// expected: known_gap
-// gap: out.push(H { s: s }) with s a [u8] view of the stack array buf: the struct literal carries the view, and the push stores it into the caller's Vec without the region-escape error that out.push(s) of the bare view gets, so the caller reads the dead frame (also through resize and extend_from_slice)
-// observed: exit 77
+// expected: compile_reject
+// Refused by the provenance call store rule: the struct literal carries the frame view pushed into out.
 import "vec.zrl";
 use vec::Vec;
 struct H { s: [u8] }

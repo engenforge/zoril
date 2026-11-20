@@ -1,0 +1,10 @@
+// expected compile fail
+// EXPECT: provenance: #[borrows(..)] leaves out 's'
+// A checked narrowing in an imported module is refused at its declaration in both builds.
+import "lib_narrow.zrl";
+use lib_narrow::{S, view};
+
+fn main() -> i32 {
+    let s = S { a: "hi" };
+    return view(&s).len as i32 - 2;
+}

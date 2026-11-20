@@ -11,7 +11,6 @@ import "bytevec.zrl";
 import "il_type.zrl";
 import "il_instr.zrl";
 import "il_cfg.zrl";
-import "summary_pass.zrl";
 import "vec.zrl";
 import "module_path.zrl";
 import "io.zrl";
@@ -24,7 +23,6 @@ use io::{Fd, write_all};
 use fmt::write_u64;
 use mem_raw::ArenaHeader;
 use module_path::sorted_unique_ids;
-use summary_pass::FuncSummary;
 use vec::Vec;
 
 pub struct InterfacePrinter {
@@ -34,7 +32,6 @@ pub struct InterfacePrinter {
     pub arena: *mut ArenaHeader,
     pub target_source_file: u32,
     pub module: *mut ILModule,
-    pub summaries: [FuncSummary],
     // Names used by this module's public generic bodies (see AST.collect_generic_body_refs).
     pub generic_refs: Vec<u32>,
     // This module was compiled from a root the compiler was told is the standard library
@@ -59,7 +56,6 @@ impl InterfacePrinter {
         arena: *mut ArenaHeader,
         target_source_file: u32,
         module: *mut ILModule,
-        summaries: [FuncSummary],
         source_is_stdlib: bool
     ) -> InterfacePrinter {
         return InterfacePrinter {
@@ -69,7 +65,6 @@ impl InterfacePrinter {
             arena: arena,
             target_source_file: target_source_file,
             module: module,
-            summaries: summaries,
             generic_refs: unsafe { Vec::<u32>.new_in_raw(arena) },
             source_is_stdlib: source_is_stdlib,
         };
@@ -186,25 +181,12 @@ impl InterfacePrinter {
 
     fn write_summary_attr(self: &InterfacePrinter, p_f: *mut ILFunction, indent: [u8]) {
         if p_f == 0 as *mut ILFunction { return; }
-        let tid = unsafe { (*p_f).id as usize };
-        if tid >= self.summaries.len { return; }
-        let summary = &self.summaries[tid];
         let alloc = unsafe { (*p_f).arena_alloc_bytes };
         self.write(indent);
-        self.write("#[summary(escape = ");
-        self.write_dec(summary.returns_param_mask);
-        self.write(", stash = ");
-        self.write_dec(summary.stashes_param_mask);
-        self.write(", escape_via = ");
-        self.write_dec(summary.returns_via_mask);
-        self.write(", stash_via = ");
-        self.write_dec(summary.stashes_via_mask);
-        self.write(", ret_stack = ");
-        if summary.returns_local_stack { self.write("true"); } else { self.write("false"); }
         // `alloc` (constant arena bytes the body allocates) is part of the interface on purpose: the
         // verifier's interprocedural arena-capacity check reads it from imported functions, so a
         // body edit that changes it must invalidate dependants (doc/spec/modular_compilation.md §2.3).
-        self.write(", alloc = ");
+        self.write("#[summary(alloc = ");
         self.write_dec(alloc as u64);
         // `storage`: parameters whose own storage the result may point into (ret_storage,
         // from the body); an importer ties a stack argument's frame to the result by it.
@@ -214,12 +196,56 @@ impl InterfacePrinter {
         self.write_dec(unsafe { (*p_f).stores_storage });
         self.write(", into = ");
         self.write_dec(unsafe { (*p_f).store_targets });
+        // The origin-set summary (doc/design/provenance.md §3, _The summary_): what `--provenance`
+        // reads at a call, the pairwise store edges and the result's origins, which the flat
+        // masks above cannot say. Absent when the body has none (an `unsafe fn`), and an importer
+        // then keeps the masks.
+        if unsafe { (*p_f).os_known } {
+            self.write(", ret_addr = ");
+            self.write_dec(unsafe { (*p_f).os_ret_addr });
+            self.write(", ret_contents = ");
+            self.write_dec(unsafe { (*p_f).os_ret_contents });
+            self.write(", ret_held = ");
+            self.write_dec(unsafe { (*p_f).os_ret_held });
+            self.write(", ret_flags = ");
+            self.write_dec(unsafe { (*p_f).os_ret_flags });
+            self.write(", ret_fresh = ");
+            if unsafe { (*p_f).os_ret_fresh } { self.write("true"); } else { self.write("false"); }
+            self.write(", decl_stores = ");
+            self.write_dec(unsafe { (*p_f).stores_declared_from });
+            self.write(", decl_into = ");
+            self.write_dec(unsafe { (*p_f).stores_declared_to });
+            self.write(", releases = ");
+            self.write_dec(unsafe { (*p_f).os_releases });
+            self.write(", env_releases = ");
+            self.write_dec(unsafe { (*p_f).os_env_releases });
+            let rows = unsafe { (*p_f).os_edge_rows };
+            if rows > 0 as usize {
+                // SAFETY: the function's own summary table, OS_EDGE_ROWS rows of four u64 in the
+                // main arena (check_zir::store_origin_summary).
+                let table = unsafe { @slice((*p_f).os_edges, rows * 4 as usize) };
+                let mut r = 0 as usize;
+                while r < rows {
+                    self.write(", edge = ");
+                    self.write_dec(table[r * 4 as usize]);
+                    self.write(", edge_addr = ");
+                    self.write_dec(table[r * 4 as usize + 1 as usize]);
+                    self.write(", edge_contents = ");
+                    self.write_dec(table[r * 4 as usize + 2 as usize]);
+                    self.write(", edge_global = ");
+                    self.write_dec(table[r * 4 as usize + 3 as usize]);
+                    r = r + 1 as usize;
+                }
+            }
+        }
         self.write(")]\n");
         // An explicit #[borrows(..)] is part of the signature's contract: importers check
-        // their calls against it. (The default rule is derived from the signature itself.)
-        if unsafe { (*p_f).has_borrows } {
+        // their calls against it. The default rule is derived from the signature itself, so ties
+        // the body added to it are written out the same way.
+        if unsafe { (*p_f).has_borrows || (*p_f).ties_inferred } {
             self.write(indent);
-            self.write("#[borrows(");
+            let trusted = unsafe { (*p_f).has_borrows && (*p_f).borrows_trusted };
+            self.write(if trusted { "#[unsafe(borrows(" } else { "#[borrows(" });
             let ties = unsafe { (*p_f).ret_ties };
             let sret_name = self.table.intern("__sret");
             let env_name = self.table.intern("__env");
@@ -232,6 +258,10 @@ impl InterfacePrinter {
                 if nm != sret_name && nm != env_name {
                     if user < 64 as usize && ((ties >> (user as u64)) & 1 as u64) != 0 as u64 {
                         if !first { self.write(", "); }
+                        let held_decl = unsafe { (*p_f).ret_held_decl };
+                        if trusted && ((held_decl >> (user as u64)) & 1 as u64) != 0 as u64 {
+                            self.write("*");
+                        }
                         self.write_ident(nm);
                         first = false;
                     }
@@ -239,8 +269,28 @@ impl InterfacePrinter {
                 }
                 pi = pi + 1 as usize;
             }
-            self.write(")]\n");
+            self.write(if trusted { "))]\n" } else { ")]\n" });
         }
+    }
+
+    fn write_stores_contract(self: &InterfacePrinter, f: &FnDecl, indent: [u8]) {
+        if !f.has_stores { return; }
+        self.write(indent);
+        self.write(if f.stores_trusted { "#[unsafe(stores(" } else { "#[stores(" });
+        let mut i = 0 as usize;
+        while i < f.stores_from.len {
+            if i > 0 as usize { self.write(", "); }
+            if i < f.stores_contents.len && f.stores_contents[i] { self.write("*"); }
+            self.write_ident(f.stores_from[i]);
+            self.write(" -> ");
+            if f.stores_static[i] {
+                self.write("static");
+            } else {
+                self.write_ident(f.stores_to[i]);
+            }
+            i = i + 1 as usize;
+        }
+        self.write(if f.stores_trusted { "))]\n" } else { ")]\n" });
     }
 
     // The contracts the author wrote as `#[borrows(..)]` and `#[stores(..)]` on a body this
@@ -250,32 +300,21 @@ impl InterfacePrinter {
     fn write_declared_contracts(self: &InterfacePrinter, f: &FnDecl, indent: [u8]) {
         if f.has_borrows {
             self.write(indent);
-            self.write("#[borrows(");
+            self.write(if f.borrows_trusted { "#[unsafe(borrows(" } else { "#[borrows(" });
             let mut i = 0 as usize;
             while i < f.borrows.len {
                 if i > 0 as usize { self.write(", "); }
+                let mut hi = 0 as usize;
+                while hi < f.borrows_held.len {
+                    if f.borrows_held[hi] == f.borrows[i] { self.write("*"); }
+                    hi = hi + 1 as usize;
+                }
                 self.write_ident(f.borrows[i]);
                 i = i + 1 as usize;
             }
-            self.write(")]\n");
+            self.write(if f.borrows_trusted { "))]\n" } else { ")]\n" });
         }
-        if f.has_stores {
-            self.write(indent);
-            self.write("#[stores(");
-            let mut i = 0 as usize;
-            while i < f.stores_from.len {
-                if i > 0 as usize { self.write(", "); }
-                self.write_ident(f.stores_from[i]);
-                self.write(" -> ");
-                if f.stores_static[i] {
-                    self.write("static");
-                } else {
-                    self.write_ident(f.stores_to[i]);
-                }
-                i = i + 1 as usize;
-            }
-            self.write(")]\n");
-        }
+        self.write_stores_contract(f, indent);
     }
 
     fn write(self: &InterfacePrinter, s: [u8]) {
@@ -1146,7 +1185,15 @@ impl InterfacePrinter {
         if f.must_use {
             self.write("#[must_use]\n");
         }
+        // `#[fresh]` is the author's claim about every call, so an importer needs it as the module does.
+        if f.fresh {
+            self.write("#[fresh]\n");
+        }
+        if f.releases {
+            self.write("#[releases]\n");
+        }
         if is_gen { self.write_declared_contracts(f, ""); }
+        if !is_gen && f.is_extern && !private_signature { self.write_stores_contract(f, ""); }
         if f.is_export {
             self.write("#[export]\n");
         }
@@ -1184,6 +1231,8 @@ impl InterfacePrinter {
         let mut i = 0 as usize;
         while i < t.methods.len {
             if t.methods[i].must_use { self.write("    #[must_use]\n"); }
+            if t.methods[i].fresh { self.write("    #[fresh]\n"); }
+            if t.methods[i].releases { self.write("    #[releases]\n"); }
             self.write_declared_contracts(&t.methods[i], "    ");
             self.write("    ");
             if t.methods[i].is_unsafe { self.write("unsafe "); }
@@ -1395,6 +1444,8 @@ impl InterfacePrinter {
             self.write_summary_attr(p_method, "    ");
         }
         if m.must_use { self.write("    #[must_use]\n"); }
+        if m.fresh { self.write("    #[fresh]\n"); }
+        if m.releases { self.write("    #[releases]\n"); }
         if is_gen { self.write_declared_contracts(m, "    "); }
         self.write("    ");
         if m.is_pub { self.write("pub "); }

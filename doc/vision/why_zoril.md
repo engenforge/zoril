@@ -9,8 +9,22 @@
 **Zoril** stands for **Zero Overhead Regional Inference Language**:
 
 - **Zero Overhead:** safety and abstraction should cost nothing (or close to nothing) at run time. Zoril has no garbage collector or reference counting; ownership, moves, and drops are checked at compile time, generics are monomorphized, and bounds checks are elided where the compiler can prove the index in range. How close the compiler gets to zero overhead is measured in [`doc/zero_overhead.md`](../zero_overhead.md).
-- **Regional:** memory is organized by regions (`'local`, `'static`, `'heap`, and arenas), and a pointer may not outlive the region it points into. This is checked: for stack frames by the escape analysis, and for arenas by tying a value to the handle it was allocated from, so resetting, freeing or outliving the arena while a value from it is live is a compile error ([`128_arena_use_after_reset.zrl`](../../bench/safety_matrix/probes/128_arena_use_after_reset.zrl), [`159_arena_tied_collection_outlives_block.zrl`](../../bench/safety_matrix/probes/159_arena_tied_collection_outlives_block.zrl)).
+- **Regional:** memory is organized by regions (`'local`, `'static`, `'heap`, and arenas), and a pointer may not outlive the region it points into. This is checked: for stack frames by the escape analysis, and for arenas by tying a value to the handle it was allocated from, so resetting, freeing or outliving the arena while a value from it is live is a compile error ([What Zoril Checks](../SAFETY.md#24-arenas)).
 - **Inference:** regions and escape behaviour are inferred, including across functions through interprocedural summaries, so programs carry no lifetime annotations.
+
+---
+
+## Design Principles
+
+The goals above, stated as the rules a decision about syntax or compiler design is checked against. When two of them pull apart, the earlier one wins.
+
+1. **Safety before convenience.** When the analysis cannot decide, the compiler refuses. A correct program may be refused while the analysis is imprecise; an unsafe one is never accepted to save effort. Precision improves later, each step backed by the rejection differential (`scripts/check_reject_diff.sh`).
+2. **No ownership notation in ordinary code.** What a function body proves is inferred, across modules through the summaries in each `.zri`. Annotations are optional.
+3. **The notation falls on library authors, not on their users.** An author may write a checked contract, for a stable API, or a trusted narrowing, to spare users a false refusal. Users of the library write neither.
+4. **Trust is spelled `unsafe` in the source.** Anything the compiler takes on faith is marked at the point of trust (an `unsafe` block, an `unsafe fn`, `#[unsafe(..)]`), so it can be found, counted and reviewed.
+5. **Comments never change compilation.** `// SAFETY:` comments are a review convention, checked by this repository's scripts, never read by the compiler.
+6. **Familiar to Rust developers** wherever that does not conflict with the principles above.
+7. **A small, inspectable toolchain, with one build configuration and zero run-time overhead** for the checks the compiler can prove.
 
 ---
 
@@ -26,13 +40,13 @@ Zoril is not a subset of Rust. It aims first at systems software: data-oriented,
 
 ## 2. What Zoril Does Today
 
-Every capability below is exercised by the running compiler (`build/zoril`) during `make test`, including the safety matrix in [`doc/spec/safety_model.md`](../spec/safety_model.md) (79 rows at the time of writing, with no row marked **GAP**).
+Every capability below is exercised by the running compiler (`build/zoril`) during `make test`, including the safety matrix in [`bench/safety_matrix/README.md`](../../bench/safety_matrix/README.md) (specified in [`doc/spec/safety_model.md`](../spec/safety_model.md)).
 
 ### A. One Build Configuration
 
 Languages with several build modes balance runtime checks against peak performance in different ways. Rust keeps bounds checks in release builds but, by default, turns integer-overflow panics into wrapping arithmetic. Zig checks bounds in `Debug` and `ReleaseSafe` and omits those checks in `ReleaseFast` for throughput. Both are deliberate choices that give programmers control.
 
-**Zoril has a single build configuration.** Bounds checks on array and slice reads and writes (`surface_syntax.md` §11.2.3, tested by probes `bench/safety_matrix/probes/10_oob_array_write.zrl` and `11_oob_slice_write.zrl`) are always present, and no option turns a runtime trap into undefined behaviour.
+**Zoril has a single build configuration.** Bounds checks on array and slice reads and writes ([`doc/spec/surface_syntax.md`](../spec/surface_syntax.md) §11.2.3, [What Zoril Checks](../SAFETY.md#3-checked-at-run-time)) are always present, and no option turns a runtime trap into undefined behaviour.
 
 Measurements in [`doc/language/language_comparison.md`](../language/language_comparison.md) show that this need not cost throughput in simple loops: when a loop guard dominates the index (`while i < 4096`), the compiler removes the bounds check, and the checked loop compiles to **byte-identical machine code** to an unchecked raw-pointer loop. Loops with irregular indexing still pay for their checks (see [`doc/zero_overhead.md`](../zero_overhead.md) §4).
 
@@ -40,8 +54,8 @@ Measurements in [`doc/language/language_comparison.md`](../language/language_com
 
 Zoril enforces an affine type system at compile time:
 
-- **Use-after-move and double-drop:** values of non-copy types (`Vec`, `String`, resources) move on assignment and function call. Reusing a moved binding or dropping a moved resource is a compile error (`tests/error_reporting/err_own_use_after_move.zrl`).
-- **Dangling stack pointers:** returning a pointer to local stack storage, directly or behind a cast, is a compile error (`surface_syntax.md` §11.2.4, `tests/error_reporting/ec_region_escape_return_cast.zrl`).
+- **Use-after-move and double-drop:** values of non-copy types (`Vec`, `String`, resources) move on assignment and function call. Reusing a moved binding or dropping a moved resource is a compile error ([What Zoril Checks](../SAFETY.md#21-ownership-moves-and-drops)).
+- **Dangling stack pointers:** returning a pointer to local stack storage, directly or behind a cast, is a compile error ([`doc/spec/surface_syntax.md`](../spec/surface_syntax.md) §11.2.4, [What Zoril Checks](../SAFETY.md#23-stack-regions-and-frames)).
 - **Escape through calls:** each function is summarized by where its result may point and which of its parameters it stores into, so a stack pointer handed back by a callee, or stored by a callee into longer-lived memory or a global, is also rejected (safety matrix row "Region Escape: Through a Call").
 
 > [!IMPORTANT]
@@ -51,7 +65,7 @@ Zoril enforces an affine type system at compile time:
 
 Typical application code is not expected to use `unsafe`. The standard library is written so that applications do not need it: raw memory access stays in runtime primitives and allocator abstractions (`stdlib/mem.zrl`, `stdlib/file.zrl`, `stdlib/args.zrl`), as [`doc/spec/unsafe_policy.md`](../spec/unsafe_policy.md) §4 describes.
 
-An example JSON tool written in Zoril (a CLI parser, query engine, and schema validator of about 2,000 non-comment lines, not yet published) contains no `unsafe { }` block (see `doc/SAFETY.md` §5.3). `scripts/marker_density.sh` reports 0.00% line density, no raw pointer casts (`as *T` / `as *mut T`) and no reference forgeries (`&*p` / `&mut *p`). It uses enums with payloads, exhaustive pattern matching, and `Result<T, E>` error propagation rather than raw pointers.
+An example JSON tool written in Zoril (a CLI parser, query engine, and schema validator of about 2,000 non-comment lines, not yet published) contains no `unsafe { }` block (see [`bench/safety_matrix/README.md`](../../bench/safety_matrix/README.md)). `scripts/marker_density.sh` reports 0.00% line density, no raw pointer casts (`as *T` / `as *mut T`) and no reference forgeries (`&*p` / `&mut *p`). It uses enums with payloads, exhaustive pattern matching, and `Result<T, E>` error propagation rather than raw pointers.
 
 ### D. A Small Compiler
 
@@ -69,25 +83,24 @@ Zoril learns from many languages. Comparisons below are context for its design c
 
 - **Context:** small, self-hosted, minimal-dependency toolchains targeting QBE. Zoril shares their backend and their aim of a small toolchain.
 - **Codebase sizes:** cproc ~9k lines of C; Hare's compiler, `harec`, ~23k lines of C, driven by the `hare` build tool; Zoril ~42k lines of Zoril; QBE ~15k lines of C.
-- **Execution speed:** on call-heavy code (`fib(38)` ×3), Zoril (732 ms) and Hare (690 ms) are close, reflecting the shared backend.
-- **Build speed:** Zoril compiles more slowly than Hare on clean builds (on the ~30k-LOC benchmark project, Hare compiles 14,094 lines a second, measured with `hare build`, and Zoril 3,912). The likely reasons are that Zoril checks more at compile time and that it is early alpha. `tools/zbuild` makes up for part of it by caching compiled modules, with interface-level early cutoff, to keep edit-rebuild cycles short (63 ms touch, 92 ms edit at 30k LOC; 12 ms touch, 26 ms edit on its 2,931-LOC benchmark project; the projects differ in size, so these are not head-to-head figures).
+- **Execution and build speed:** sharing the QBE backend puts Zoril and Hare in the same ballpark on call-heavy execution, while Hare compiles faster on clean builds because Zoril performs whole-body move and region-escape inference across function bodies. `tools/zbuild` recovers edit-cycle responsiveness through module-level caching and interface-level early cutoff (current throughput and latency numbers are recorded in [`doc/language/language_comparison.md`](../language/language_comparison.md)).
 - **Design:** both languages check bounds on reads and writes. Hare deliberately keeps memory management manual and explicit; Zoril experiments with adding compile-time move checking and stack escape checking on top of a similarly small toolchain.
 
 ### B. Zig
 
 - **Context:** a systems language built around explicit control, compile-time execution (`comptime`), and explicit allocators, with a mature standard library and growing ecosystem.
 - **Design:** Zig gives programmers control over safety per build mode and detects double-free and use-after-free at run time with its General Purpose Allocator in safe modes. Zoril tries a different point: use-after-move and stack escape checks at compile time, and bounds checks in every build.
-- **Performance:** Zig's LLVM backend produces considerably faster code than Zoril's QBE backend today (for example 130 ms against 732 ms on `fib`, and 537 ms against 726 ms on the array loop).
+- **Performance:** Zig's LLVM backend produces considerably faster machine code than Zoril's QBE backend today on compute- and loop-heavy benchmarks (recorded in [`doc/language/language_comparison.md`](../language/language_comparison.md)).
 
 ### C. Research Lineage: Cyclone, Vale, Austral
 
-These languages explored memory safety without a Rust-style general borrow checker, and Zoril builds on their ideas ([`doc/language/arena_based_languages.md`](../language/arena_based_languages.md)):
+These languages explored memory safety without a Rust-style general borrow checker, and Zoril builds on their ideas:
 
 - _Cyclone_ pioneered safe region-based memory management for C, including region-annotated pointers, and directly influenced Rust. Its annotations show how much a language must express when it checks regions across separately compiled code.
 - _Austral_ uses linear types with capability tokens: every linear value is consumed exactly once.
 - _Vale_ pairs references with generation counters checked at run time, and uses regions to remove many of those checks.
 
-Zoril's point in this space pairs arena allocation with affine values and region escape analysis inferred from function bodies, so that programs need neither lifetime annotations nor runtime generation checks. The cost of that choice is compile time and some conservative rejections (§2.B): the compiler analyses function bodies and carries the results in module interfaces, instead of reading lifetimes from signatures. The arena half of that goal is not reached yet: until it is, arena handles are planned to carry a run-time generation check.
+In contrast to Zig's explicit `ArenaAllocator` (which relies on spatial checks and testing tools rather than compile-time temporal proofs) or Go's experimental GC-backed arenas (where the garbage collector keeps blocks live if a reference escapes), Zoril pairs arena allocation with affine values and region escape analysis inferred from function bodies, so that programs need neither lifetime annotations nor runtime generation checks. The cost of that choice is compile time and some conservative rejections (§2.B): the compiler analyses function bodies and carries the results in module interfaces, instead of reading lifetimes from signatures. The arena half of that goal is not reached yet: until it is, arena handles are planned to carry a run-time generation check.
 
 ### D. Rust
 
@@ -112,4 +125,4 @@ Zoril is an early experiment, not an attempt to be everything to everyone. It is
 - **Application code without `unsafe`, built on small, auditable runtime primitives**
 - **A small toolchain that is easy to read, audit, and build from source**
 
-For language subtleties and contrasts with C and Rust semantics, see [`doc/language/gotchas_and_subtleties.md`](../language/gotchas_and_subtleties.md).
+For language subtleties and contrasts with C and Rust semantics, see [`doc/tour.md`](../tour.md#12-idioms-subtleties-and-contrasts-with-c-and-rust).

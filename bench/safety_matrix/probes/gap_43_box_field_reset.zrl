@@ -1,7 +1,6 @@
 // name: Arena reset after a field write into a Box's contents
-// expected: known_gap
-// gap: a slice of a Vec in arena a, written into a field of a Box's contents ((*b).s = v.as_slice()), is not held by the box: a.reset() is accepted while (*b).s is read afterwards; the same program with b a plain local struct is refused at the reset (cannot mutably borrow 'a')
-// observed: exit 77
+// expected: compile_reject
+// Refused at a.reset(): storing v.as_slice() into (*b).s gives v's borrow to b (§3.1, holder one), so b keeps a borrowed while (*b).s is still read after the reset.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

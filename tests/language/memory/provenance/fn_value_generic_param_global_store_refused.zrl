@@ -1,0 +1,15 @@
+// expected compile fail
+// EXPECT: fn value rule
+// A generic function instance that stores a parameter into a global cannot be made into a `fn` value.
+static mut G: *u8 = 0 as *u8;
+fn stash_g<T>(r: &T) { unsafe { G = r as *T as *u8; } }
+fn apply(f: fn(&i32), r: &i32) { f(r); }
+fn bad() -> i32 {
+    let x = 1;
+    apply(stash_g::<i32>, &x);
+    return 0;
+}
+fn main() -> i32 {
+    let _ = bad();
+    return unsafe { *(G as *i32) };
+}

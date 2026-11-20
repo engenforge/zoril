@@ -1,0 +1,19 @@
+// name: View read through a local reference to a local carrier stored into caller's slot
+// expected: accept
+// The accepted twin for reading a parameter's view out of a local carrier through a `let` reference:
+// provenance ties take_ref's result to what c.v points at (the caller's view), not to c's stack slot.
+struct Carrier { v: [i32] }
+fn take_ref(c: &Carrier) -> [i32] { return c.v; }
+
+fn f(out: &mut [i32], view: [i32]) {
+    let c = Carrier { v: view };
+    let r = &c;
+    *out = take_ref(r);
+}
+
+fn main() -> i32 {
+    let data = [42, 0];
+    let mut dest: [i32] = @slice(0 as *i32, 0);
+    f(&mut dest, &data);
+    return dest[0] - 42;
+}

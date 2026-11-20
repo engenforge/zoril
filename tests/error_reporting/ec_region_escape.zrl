@@ -3,7 +3,7 @@
 // global outlives the call that made `x`. The file used to pin the same rule for
 // `box(allocator)`, whose arena form is not implemented and is now rejected by the lowering
 // (see tests/error_reporting/err_box_allocator_not_implemented.zrl).
-// EXPECT: tests/error_reporting/ec_region_escape.zrl:11:5: error: region escape: a pointer to local stack storage is written to memory that outlives this function
+// EXPECT: tests/error_reporting/ec_region_escape.zrl:11:5: error: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
 static mut G: *mut i32 = 0 as *mut i32;
 
 fn stash() {

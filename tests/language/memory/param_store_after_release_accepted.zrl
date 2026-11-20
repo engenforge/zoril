@@ -1,0 +1,21 @@
+// Accepted twin of gap_87: releasing v before storing a fresh slice through out passes.
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+
+fn reset_then_store(out: &mut [i32], v: &mut Vec<i32>) {
+    v.free();
+    *v = Vec::<i32>.new();
+    v.push(42);
+    *out = v.as_slice();
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(7);
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    reset_then_store(&mut s, &mut v);
+    let diff = s[0] - 42;
+    v.free();
+    return diff;
+}

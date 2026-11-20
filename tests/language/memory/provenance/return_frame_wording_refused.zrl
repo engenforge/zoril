@@ -1,0 +1,14 @@
+// expected compile fail
+// EXPECT: the returned value holds an address of this frame (return rule)
+//
+// Returning a frame address prints the Frame-specific return rule wording.
+
+fn bad() -> &i32 {
+    let x = 1;
+    return &x;
+}
+
+fn main() -> i32 {
+    let _ = bad();
+    return 0;
+}

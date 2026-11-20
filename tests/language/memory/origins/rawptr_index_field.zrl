@@ -1,0 +1,12 @@
+// An index through a raw pointer is pointer arithmetic over what it points at, of the same type: a
+// field read after it keeps its type, so the address is ParamContents and not Unknown (Z-0068).
+// ORIGINS: a return O={ParamContents(0)} S={}
+// expected exit 0
+struct S { v: i32 }
+struct H { e: *mut S }
+fn a(self: &H, i: usize) -> &i32 { return unsafe { &self.e[i].v }; }
+fn main() -> i32 {
+    let mut s = S { v: 3 };
+    let h = H { e: &mut s as *mut S };
+    return *a(&h, 0 as usize) - 3;
+}

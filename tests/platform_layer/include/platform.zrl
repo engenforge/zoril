@@ -9,17 +9,27 @@ import "mem.zrl";
 pub struct CWindow {}
 
 extern fn create_window(w: i32, h: i32) -> *mut CWindow;
+// Display::run pairs every set_frame_callback with clear_frame_callback before returning,
+// so C retains no pointer past Display::run.
+#[unsafe(stores())]
 extern fn set_frame_callback(
     win: *mut CWindow,
     cb: extern "C" fn(*mut CWindow, *mut u8),
     userdata: *mut u8
 );
+#[unsafe(stores())]
 extern fn clear_frame_callback(win: *mut CWindow);
+#[unsafe(stores())]
 extern fn blit_rgba(win: *mut CWindow, rgba: *u8, w: i32, h: i32);
+#[unsafe(stores())]
 extern fn run(win: *mut CWindow);
+#[unsafe(stores())]
 extern fn window_has_userdata(win: *CWindow) -> i32;
+#[unsafe(stores())]
 extern fn window_frames(win: *CWindow) -> i32;
+#[unsafe(stores())]
 extern fn window_checksum(win: *CWindow) -> u64;
+#[unsafe(stores())]
 extern fn destroy(win: *mut CWindow);
 
 // What a frame callback gets: the window to draw into for the length of the call.
@@ -31,7 +41,7 @@ pub struct Frame {
 
 impl Frame {
     // Shows a frame of width x height RGBA pixels. A buffer of the wrong size is refused.
-    pub fn blit(self: &mut Frame, rgba: [u8]) -> bool {
+    pub fn blit(self: &Frame, rgba: [u8]) -> bool {
         if rgba.len != (self.width * self.height * 4) as usize {
             return false;
         }
@@ -43,16 +53,16 @@ impl Frame {
 // What the C callback carries: the application's handler (a closure with its state) behind one
 // pointer. Its one invariant is local: the userdata C hands back is the Dispatch that run() built.
 struct Dispatch {
-    handler: fn(&mut Frame),
+    handler: fn(Frame),
     width: i32,
     height: i32,
 }
 
 extern "C" fn trampoline(win: *mut CWindow, userdata: *mut u8) {
     let d = userdata as *mut Dispatch;
-    let mut frame = Frame { win: win, width: unsafe { (*d).width }, height: unsafe { (*d).height } };
+    let frame = Frame { win: win, width: unsafe { (*d).width }, height: unsafe { (*d).height } };
     let handler = unsafe { (*d).handler };
-    handler(&mut frame);
+    handler(frame);
 }
 
 // An open window. The C object is released when this is dropped.
@@ -77,13 +87,13 @@ impl Display {
 
     // Shows a frame from outside the callback.
     pub fn blit(self: &mut Display, rgba: [u8]) -> bool {
-        let mut frame = Frame { win: self.win, width: self.width, height: self.height };
+        let frame = Frame { win: self.win, width: self.width, height: self.height };
         return frame.blit(rgba);
     }
 
     // Runs the window's event loop (three frames for this stand-in), calling `handler(frame)` for
     // each. The handler is a closure, so whatever state it needs travels with it.
-    pub fn run(self: &mut Display, handler: fn(&mut Frame)) {
+    pub fn run(self: &mut Display, handler: fn(Frame)) {
         let mut d = Dispatch { handler: handler, width: self.width, height: self.height };
         unsafe {
             set_frame_callback(self.win, trampoline, &mut d as *mut Dispatch as *mut u8);

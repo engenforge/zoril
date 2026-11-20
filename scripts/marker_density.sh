@@ -234,5 +234,8 @@ printf "ptr-cast lines:   %d      (\`as *T\` / \`as *mut T\` — gated by @ptr_c
 # #[borrows(..)] is a trusted claim (doc/spec/unsafe_policy.md): count it with the markers.
 borrows_claims=$(printf "%s" "$files" | while IFS= read -r f; do if [ -n "$f" ]; then cat "$f"; fi; done 2>/dev/null | grep -c "^[[:space:]]*#\[borrows(" || true)
 printf "#[borrows] claims: %d      (trusted beyond the visible case; see unsafe_policy.md)\n" "$borrows_claims"
+# #[unsafe(borrows(..))] is trusted where it names less than the body returns: each is a marker.
+trusted_borrows=$(printf "%s" "$files" | while IFS= read -r f; do if [ -n "$f" ]; then cat "$f"; fi; done 2>/dev/null | grep -c "^[[:space:]]*#\[unsafe(borrows(" || true)
+printf "#[unsafe(borrows)]: %d     (narrower than the body returns, trusted; see unsafe_policy.md)\n" "$trusted_borrows"
 printf "ref-forge lines:  %d      (\`&*p\` / \`&mut *p\` from a raw pointer — what a pointer-creation-site boundary wraps)\n" "$tot_reforge"
 

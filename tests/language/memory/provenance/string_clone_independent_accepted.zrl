@@ -1,0 +1,15 @@
+// A String clone has its own bytes: `Clone for String` declares #[unsafe(borrows(*self))], so the
+// original can change while the clone lives (doc/design/provenance.md §3, _Held ties_).
+// expected exit 0
+import "string.zrl";
+import "clone.zrl";
+use string::String;
+
+fn main() -> i32 {
+    let mut s = String.new();
+    s.push_str("ab");
+    let c = s.clone();
+    s.push_str("cd");
+    s.clear();
+    return c.len() as i32 - 2;
+}

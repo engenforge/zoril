@@ -1,7 +1,6 @@
 // name: A callee copies a frame view between two locals the caller reaches through one argument
-// expected: known_gap
-// gap: copy_in(&mut r) with r = R { x: &mut wa, y: &wb } copies wb's arena view into wa, then *out = wa.s stores it out; the store summary's i != j filter drops the edge from parameter 0 to itself (gap_07's class, here through a struct of references); closed under --provenance by the body summary (ParamContents(0) -> ParamContents(0))
-// observed: exit 77
+// expected: compile_reject
+// Refused at *out = wa.s: OriginSets records ParamContents(0) -> ParamContents(0) on copy_in, transferring 'a''s release-tier borrow onto wa across the call.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

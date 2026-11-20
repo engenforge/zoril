@@ -15,6 +15,10 @@
 #     // SAFETY: <the invariant this block relies on>
 #     let p = unsafe { @slice(base, len) };
 #
+# A `#[unsafe(borrows(..))]` is checked the same way, counted with the blocks: it is a contract the
+# compiler trusts without proof, so the comment block directly above the attribute line says why
+# it holds. That comment covers the attribute only, not a block in the function it marks.
+#
 # `unsafe fn` declarations are not checked here: their contract is the caller's, and the stdlib
 # documents it in the prose above each one.
 #
@@ -39,6 +43,14 @@ for f in "$DIR"/*.zrl; do
     esac
 
     report="$(awk -v file="$disp" '
+        /^[ \t]*#\[unsafe\((borrows|stores)\(/ {
+            if (run) { n++; run = 0; next }
+            printf "%s:%d: %s\n", file, FNR, $0
+            n++
+            bad++
+            run = 0
+            next
+        }
         /unsafe \{/ {
             seen = index($0, "// SAFETY:")
             open = index($0, "unsafe {")

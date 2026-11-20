@@ -1,0 +1,15 @@
+// expected exit 0
+//
+// Vec<i32>.clone() of a local Vec through stdlib's declared memcpy is accepted.
+
+import "vec.zrl";
+import "clone.zrl";
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(10);
+    v.push(20);
+    let c = v.clone();
+    return c[0] + c[1] - 30;
+}

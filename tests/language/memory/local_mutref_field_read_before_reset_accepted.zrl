@@ -1,0 +1,33 @@
+// Accepted twin of gap_37: writing through a local &mut and reading the field before
+// a.reset() ends the borrow before the reset, so it is accepted.
+// expected exit 0
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+struct W {
+    s: [i32],
+    t: i32,
+}
+
+fn mk() -> W {
+    return W { s: @slice(0 as *i32, 0), t: 0 };
+}
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return 1; },
+    };
+    let mut v = Vec::<i32>.new_in(&a);
+    v.push(42);
+    let mut w = mk();
+    {
+        let r = &mut w;
+        r.s = v.as_slice();
+    }
+    let x = w.s[0];
+    a.reset();
+    return x - 42;
+}

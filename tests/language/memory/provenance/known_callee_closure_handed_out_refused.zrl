@@ -1,0 +1,26 @@
+// A closure handed to a callee as well as called through its local: the callee may call it and
+// write into its environment, which the caller cannot see field by field, so the later known call
+// reads the environment as one value, and the view of `x` that `apply` may have put into `h` is
+// refused when the call's result is stored out (§3, _Calls through a known callee_).
+// EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
+// expected compile fail
+struct Holder { s: &i32, d: &mut i32 }
+fn apply(g: fn(bool, &i32) -> &i32, v: &i32) { let _ = g(true, v); }
+fn f(out: &mut &i32, p: &i32, q: &mut i32) {
+    let x = 1;
+    let a = &x;
+    let mut h = Holder { s: p, d: q };
+    let mut cl = |m: bool, v: &i32| -> &i32 {
+        if m { h.s = v; }
+        return h.s;
+    };
+    apply(cl, a);
+    *out = cl(false, p);
+}
+fn main() -> i32 {
+    let y = 2;
+    let mut z = 3;
+    let mut o = &y;
+    f(&mut o, &y, &mut z);
+    return 0;
+}

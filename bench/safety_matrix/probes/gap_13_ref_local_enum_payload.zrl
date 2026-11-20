@@ -1,7 +1,6 @@
 // name: Stack reference stored out via enum payload
-// expected: known_gap
-// gap: Storage facts drops provenance for stack reference carried in enum payload
-// observed: exit 77
+// expected: compile_reject
+// Refused by the provenance store rule: origin sets track frame references through enum payloads.
 import "core.zrl";
 use core::Option;
 fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }

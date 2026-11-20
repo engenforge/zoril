@@ -1,0 +1,20 @@
+// arena_unwrap_literal_then_push_accepted with a `static`'s address, which stays Static (a literal is
+// read-only data, no destination at all): `unwrap` names the arena's storage by what the by-value
+// Result owns, not by what it holds, so the Static pushed into one Vec is no storage of the arena and
+// a push into another Vec in it stores nothing outside the frame (Z-0082).
+// expected exit 0
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+static K: i32 = 5;
+
+fn main() -> i32 {
+    let a = Arena.new(4096).unwrap();
+    let mut refs = Vec::<&i32>.new_in(&a);
+    refs.push(&K);
+    let mut w = Vec::<u64>.new_in(&a);
+    w.push(1 as u64);
+    return (refs.len() + w.len() - 2) as i32 + *refs[0] - 5;
+}

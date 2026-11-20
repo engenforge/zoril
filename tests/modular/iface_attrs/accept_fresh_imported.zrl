@@ -1,0 +1,14 @@
+// expected exit 0
+// `#[fresh]` declarations read back from the interface (a plain function, a generic one and a
+// method) are accepted where they were written, on an `unsafe fn` returning a raw pointer (Z-0078).
+import "lib.zrl";
+use lib::Cell;
+
+fn main() -> i32 {
+    let p = unsafe { lib::fresh_block(4096 as u64) };
+    let q = unsafe { lib::gen_fresh::<i32>(@ptr_from_int<*mut i32>(8192 as u64)) };
+    let c = Cell::<i32> { item: 1, slot: q };
+    let r = unsafe { c.impl_fresh() };
+    if p as u64 != 4096 as u64 || q as u64 != 8192 as u64 || r as u64 != 8192 as u64 { return 1; }
+    return 0;
+}

@@ -1,0 +1,10 @@
+// A write into a field of a local adds the value's origins to the whole local (field-insensitive).
+// ORIGINS: main w O={Frame(data)} S={}
+// expected exit 0
+struct W { s: [i32], t: i32 }
+fn main() -> i32 {
+    let data = [42, 0];
+    let mut w = W { s: @slice(0 as *i32, 0), t: 3 };
+    w.s = &data;
+    return w.s[0] - 42 + w.t - 3;
+}

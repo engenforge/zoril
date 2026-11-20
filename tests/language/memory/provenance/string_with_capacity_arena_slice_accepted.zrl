@@ -1,0 +1,22 @@
+// expected exit 0
+// Returning s.as_slice() from a String created with String.with_capacity(a, cap) ties the slice
+// to the caller's Arena `a`, not to the local String.
+import "mem.zrl";
+import "string.zrl";
+use mem::Arena;
+use string::String;
+
+fn make_greeting(a: &Arena, cap: usize) -> [u8] {
+    let mut s = String.with_capacity(a, cap);
+    s.push_str("hello");
+    return s.as_slice();
+}
+
+fn main() -> i32 {
+    let a = match Arena.new(4096) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return 1; },
+    };
+    let g = make_greeting(&a, 16 as usize);
+    return (g.len as i32) - 5;
+}

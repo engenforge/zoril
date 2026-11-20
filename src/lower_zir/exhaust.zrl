@@ -93,6 +93,7 @@ impl ZirLowerer {
 
     // The types of constructor C's fields: a variant's payload (its elements, when it is a
     // tuple), a tuple's elements, a struct's fields.
+    // The result is lowerer arena data, which no borrow of the lowerer guards (ZirLowerer.arena).
     #[borrows()]
     fn exh_ctor_field_types(self: &mut ZirLowerer, ty: u32, kind: u32, c: usize) -> [mut u32] {
         if kind == EXH_TYPE_ENUM {
@@ -176,6 +177,7 @@ impl ZirLowerer {
     // The sub-patterns of constructor pattern P, one per field of the constructor (ARITY), or
     // an empty slice when they cannot be lined up (then the row is left out, which can only
     // report a case as missing, never miss one).
+    // The result is lowerer arena data, which no borrow of the lowerer guards (ZirLowerer.arena).
     #[borrows()]
     fn exh_sub_patterns(
         self: &mut ZirLowerer,
@@ -246,7 +248,8 @@ impl ZirLowerer {
     }
 
     // Rows whose first pattern is an or-pattern become one row per alternative.
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     fn exh_expand_or(self: &mut ZirLowerer, rows: &Vec<[mut u32]>) -> Vec<[mut u32]> {
         let mut out = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
         let mut r = 0 as usize;
@@ -272,7 +275,14 @@ impl ZirLowerer {
                     _ => {},
                 }
             }
-            if !is_or { out.push(row); }
+            if !is_or {
+                // A row read out of a referenced Vec is an address into its buffer; a fresh
+                // copy keeps the recursion from tying every parameter to every other.
+                let copy = self.alloc_u32s(row.len);
+                let mut k = 0 as usize;
+                while k < row.len { copy[k] = row[k]; k = k + 1 as usize; }
+                out.push(copy);
+            }
             r = r + 1 as usize;
         }
         // Alternatives can themselves be or-patterns.
@@ -295,7 +305,8 @@ impl ZirLowerer {
 
     // The matrix specialised to constructor C (with ARITY fields): rows starting with C keep
     // its sub-patterns, wildcard rows get ARITY wildcards, other rows go.
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     fn exh_specialize(
         self: &mut ZirLowerer,
         rows: &Vec<[mut u32]>,
@@ -336,7 +347,8 @@ impl ZirLowerer {
     }
 
     // Rows starting with a wildcard, without it.
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     fn exh_default(
         self: &mut ZirLowerer,
         rows: &Vec<[mut u32]>,
@@ -441,7 +453,8 @@ impl ZirLowerer {
     }
 
     // Constructor C of TY applied to ARGS (the first ARITY witness columns; missing ones are `_`).
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     fn exh_render(
         self: &mut ZirLowerer,
         ty: u32,
@@ -819,7 +832,8 @@ impl ZirLowerer {
     // A value of type TY that the single pattern PAT does not match, or an empty slice when
     // PAT matches every value (it is irrefutable).
     // The rendered cases are arena data, so the caller may report after asking for them.
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn pattern_missing_case(self: &mut ZirLowerer, pat: PatternId, ty: u32) -> [u8] {
         let mut rows = unsafe { Vec::<[mut u32]>.new_in_raw(self.arena) };
         let row = self.alloc_u32s(1 as usize);

@@ -1,0 +1,12 @@
+// A struct inside a struct carries the view of a stack array into the caller's Vec (doc/design/provenance.md §3).
+// EXPECT: call store rule
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+struct H { s: [u8] }
+struct O { h: H }
+fn fill(out: &mut Vec<O>) {
+    let buf = [42 as u8; 16];
+    out.push(O { h: H { s: &buf } });
+}
+fn main() -> i32 { let mut v: Vec<O> = Vec.new(); fill(&mut v); return 0; }

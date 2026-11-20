@@ -1,0 +1,18 @@
+// A push into an owned capture stores the capture's own storage into the capture: the edge is from
+// what the environment reaches into it, not an `Unknown` (§3, _A closure body's summary is stated
+// over `__env`_). `__env` is parameter 1, after `k`, and the capture's own bit 2: the push writes
+// the environment's slot and what the capture reaches.
+// ORIGINS: _closure_0 store ParamContents(1) -> ParamContents(1) ParamContents(2)
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    let n = 3;
+    let mut f = |k: i32| -> i32 {
+        v.push(k + n);
+        return v.len() as i32;
+    };
+    let val = f(1);
+    return val - 1;
+}

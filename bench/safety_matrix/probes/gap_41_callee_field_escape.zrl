@@ -1,7 +1,6 @@
 // name: Frame view stored out after a callee writes it into a local's field
-// expected: known_gap
-// gap: a slice of a Vec in this frame's arena, written into a local struct's field by a callee through its &mut parameter (set_s(&mut w, v.as_slice())), is accepted and then stored out through *out = w.s; the same store written as w.s = v.as_slice() is refused (cannot store 'v')
-// observed: exit 77
+// expected: compile_reject
+// Refused at *out = w.s: holder three (§3.1) transfers v's borrow of a onto w across the call so the subsequent store out rejects the frame-local view.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

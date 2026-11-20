@@ -1,0 +1,11 @@
+// A struct literal holding a view of a stack array, pushed into the caller's Vec: the struct carries the view as the bare slice does (doc/design/provenance.md §3).
+// EXPECT: call store rule
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+struct H { s: [u8] }
+fn fill(out: &mut Vec<H>) {
+    let buf = [42 as u8; 16];
+    out.push(H { s: &buf });
+}
+fn main() -> i32 { let mut v: Vec<H> = Vec.new(); fill(&mut v); return 0; }

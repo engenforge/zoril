@@ -1,0 +1,18 @@
+// Vec.clone of a Vec holding views of this frame cannot be returned (doc/design/provenance.md §3).
+// EXPECT: the returned value holds an address of this frame (return rule)
+// expected compile fail
+import "vec.zrl";
+import "clone.zrl";
+use vec::Vec;
+
+fn views() -> Vec<[u8]> {
+    let buf = [42 as u8; 16];
+    let mut v = Vec::<[u8]>.new();
+    v.push(&buf);
+    return v.clone();
+}
+
+fn main() -> i32 {
+    let _ = views();
+    return 0;
+}

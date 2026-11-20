@@ -1,0 +1,7 @@
+// `@ptr_from_int` makes a Raw address: what the integer was made from (here Param(0), the integer
+// parameter) and Raw, which the return rule does not count (§3, _Raw operations_, Z-0063).
+// ORIGINS: mk3 p O={Param(0), Raw} S={}
+// expected exit 0
+struct H { p: *u8, n: u64 }
+fn mk3(n: u64) -> Box<H> { let p = @ptr_from_int<*u8>(n); return box H { p: p, n: n }; }
+fn main() -> i32 { let b = mk3(8 as u64); return b.n as i32 - 8; }

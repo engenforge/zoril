@@ -1,7 +1,6 @@
 // name: Frame view stored out after a closure writes it into a captured &mut local's field
-// expected: known_gap
-// gap: a slice of a Vec in this frame's arena, written into a local struct's field by a closure that captured a local &mut to it (|| { r.s = s; }), is accepted and then stored out through *out = w.s; written as w.s = s directly it is refused
-// observed: exit 77
+// expected: compile_reject
+// Refused at *out = w.s: holder three (§3.1) applies the closure's store summary to captured w so storing w.s out rejects the frame-local view.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

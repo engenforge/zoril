@@ -57,6 +57,7 @@ paths	-	stdlib	tests/stdlib tests/functional/stdlib
 paths	-	diagnostics	tests/error_reporting
 paths	-	integration	tests/integration tests/regressions tests/bootstrap corpus
 scenario	cross-module-safety-matrix	memory	./scripts/test_safety_matrix_cross_module.sh
+scenario	origins	memory	./scripts/test_origins.sh
 scenario	sha256-differential	stdlib	./scripts/test_sha256_differential.sh
 scenario	zilc-errors	diagnostics	./scripts/test_zilc_errors.sh
 scenario	incremental	integration	./scripts/test_incremental.sh --quiet

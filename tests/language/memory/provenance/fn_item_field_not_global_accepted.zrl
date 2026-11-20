@@ -1,0 +1,14 @@
+// A `fn` item in a struct field the callee reaches: a struct whose only handles are `fn` values
+// names no Static memory through them (§3, _Destination reach_).
+// expected exit 0
+struct M { f: fn(&i32) -> i32 }
+fn rd(p: &i32) -> i32 { return *p; }
+fn run(m: &M, p: &i32) -> i32 {
+    let g = m.f;
+    return g(p);
+}
+fn main() -> i32 {
+    let m = M { f: rd };
+    let x = 4;
+    return run(&m, &x) - 4;
+}

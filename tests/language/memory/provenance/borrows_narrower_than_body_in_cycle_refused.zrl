@@ -1,0 +1,17 @@
+// The same narrowing in a recursive body, whose ties are settled once its cycle's summaries are
+// final: it is checked there too (§3, _Checked contracts_).
+// EXPECT: provenance: #[borrows(..)] leaves out 's', which the result may point into
+// expected compile fail
+
+struct S { a: [u8] }
+
+#[borrows()]
+fn view(s: &S, n: u32) -> [u8] {
+    if n == 0 as u32 { return s.a; }
+    return view(s, n - 1 as u32);
+}
+
+fn main() -> i32 {
+    let s = S { a: "hi" };
+    return view(&s, 3 as u32).len as i32 - 2;
+}

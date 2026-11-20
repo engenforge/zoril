@@ -1,0 +1,13 @@
+// A clone of a `Vec` built in a local arena, made by a callee taking the `Vec` by reference: the
+// clone's storage is the arena the `Vec` points to, a local, so storing a view of it out is
+// refused (§3, _Details the transfer needs_).
+// EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
+// expected compile fail
+import "vec.zrl";
+import "mem.zrl";
+import "clone.zrl";
+use vec::Vec;
+use mem::Arena;
+fn mk(v: &Vec<i32>) -> Vec<i32> { return v.clone(); }
+fn bad(out: &mut [i32]) { let ar = Arena.new(4096).unwrap(); let mut v = Vec::<i32>.new_in(&ar); v.push(1); let c = mk(&v); *out = c.as_slice(); }
+fn main() -> i32 { let z = [0]; let mut o: [i32] = &z; bad(&mut o); return o[0]; }

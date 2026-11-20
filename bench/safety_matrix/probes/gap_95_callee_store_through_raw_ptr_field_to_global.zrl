@@ -1,0 +1,17 @@
+// name: A callee storing a frame address through a raw pointer to a global held in a struct field
+// expected: compile_reject
+// Refused by the provenance call store rule: os_dest_reach keeps Static on a loose raw pointer local.
+static mut G: *i32 = 0 as *i32;
+struct S { p: *mut *i32 }
+fn put(s: &S, r: &i32) { unsafe { *s.p = r as *i32; } }
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn stash() {
+    let x = 42;
+    let s = S { p: &mut G as *mut *i32 };
+    put(&s, &x);
+}
+fn main() -> i32 {
+    stash();
+    let _ = clobber_stack();
+    return unsafe { *G };
+}

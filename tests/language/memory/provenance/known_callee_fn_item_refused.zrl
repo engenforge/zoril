@@ -1,0 +1,12 @@
+// A `fn` item bound to a local is a known callee: its summary (store the second argument into the
+// first) refuses the frame view at the call through the local (§3, _Calls through a known callee_).
+// EXPECT: the callee stores an address of this frame into memory that outlives it (call store rule)
+// expected compile fail
+fn put(o: &mut [i32], v: [i32]) { *o = v; }
+fn f(out: &mut [i32]) {
+    let data = [1, 2];
+    let local: [i32] = &data;
+    let g: fn(&mut [i32], [i32]) = put;
+    g(out, local);
+}
+fn main() -> i32 { return 0; }

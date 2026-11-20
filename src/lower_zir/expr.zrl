@@ -173,6 +173,7 @@ impl ZirLowerer {
     // VAL as the value of a field of type FIELD_TY: an array reference becomes a slice, and a
     // value of another type converts implicitly (or is an error), as for `let` and arguments.
     // A non-Copy value is moved into the struct.
+    #[borrows(self, val)]
     fn struct_field_value(self: &mut ZirLowerer, val: Place, field_ty: u32, span: Span) -> Place {
         if field_ty == 0 as u32 || val.base == 0 as u32 { return val; }
         let val_src_ty = self.get_place_type(&val);
@@ -933,7 +934,8 @@ impl ZirLowerer {
         return Place { base: tmp, projections: @slice(0 as *mut Projection, 0 as usize) };
     }
 
-    #[borrows()]
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
     pub fn lower_expr_internal(self: &mut ZirLowerer, expr_id: ExprId, expected_ty: u32) -> Place {
         let expr_val: Expr = self.resolver.ast.exprs[expr_id as usize];
         let span = self.get_expr_span(expr_id);
@@ -1514,7 +1516,7 @@ impl ZirLowerer {
     // information either way (an integer and a float, a signed and an unsigned of one width)
     // is an error. A shift's count is not of the shifted type and is left alone.
     // The result is a pair of arena Places, like lower_expr's.
-    #[borrows()]
+    #[borrows(lhs, rhs)]
     fn unify_numeric_operands(
         self: &mut ZirLowerer,
         op: u32,
@@ -1541,7 +1543,7 @@ impl ZirLowerer {
 
     // A compound assignment's right side, converted to the target's type as an assignment's
     // is: implicitly when nothing is lost, else an error. A shift count is left alone.
-    #[borrows()]
+    #[borrows(rhs)]
     fn convert_compound_rhs(
         self: &mut ZirLowerer,
         op: u32,
@@ -2094,7 +2096,8 @@ impl ZirLowerer {
 
     // The type arguments of generic enum U_ORIG for a variant built with no explicit ones: the
     // expected type's, when it is an instance of U_ORIG, else inferred from the payload.
-    #[borrows()]
+    // SAFETY: the result is the module's type data or lowerer arena data (ZirLowerer.arena).
+    #[unsafe(borrows())]
     fn enum_type_args_from_context(
         self: &mut ZirLowerer,
         u_orig: u32,
@@ -2444,21 +2447,22 @@ impl ZirLowerer {
                     let param_base = self.call_param_base(func_idx, span);
                     self.check_arg_count(func_idx, param_base, args.len, false, span);
                     let params_len = self.module.functions[func_idx as usize].params_len;
+                    // The converted arguments go into a second vector: a value read out of
+                    // `lowered` keeps its borrow, so writing it back with `set` is refused.
+                    let mut checked = unsafe {
+                        Vec::<Place>.with_capacity_in_raw(self.arena, args.len)
+                    };
                     for ai in 0 as usize..args.len {
-                        if param_base + ai >= params_len { break; }
+                        let arg = lowered.as_slice()[ai];
+                        if param_base + ai >= params_len {
+                            checked.push(arg);
+                            continue;
+                        }
                         let param_ty = self.call_param_type(func_idx, param_base + ai);
-                        self.check_raw_arg_is_marked(
-                            func_idx,
-                            param_base + ai,
-                            &lowered.as_slice()[ai],
-                            span
-                        );
-                        lowered.set(
-                            ai,
-                            self.check_arg_against(lowered.as_slice()[ai], param_ty, span)
-                        );
+                        self.check_raw_arg_is_marked(func_idx, param_base + ai, &arg, span);
+                        checked.push(self.check_arg_against(arg, param_ty, span));
                     }
-                    return self.emit_direct_call(func_idx, lowered.as_slice(), span);
+                    return self.emit_direct_call(func_idx, checked.as_slice(), span);
                 },
                 CalleeLookup.Rejected => { return self.no_place(); },
                 CalleeLookup.NotDirect => {},
@@ -2675,6 +2679,7 @@ impl ZirLowerer {
 
     // ARG passed to a parameter of type PARAM_TY: converted where an implicit conversion is
     // allowed (or an array passed as a slice), a mismatch reported, and a moved value consumed.
+    #[borrows(self, arg)]
     fn check_arg_against(self: &mut ZirLowerer, arg: Place, param_ty: u32, span: Span) -> Place {
         let converted = self.convert_value_to(arg, param_ty, span);
         let result = self.reborrow_arg(converted, param_ty, span);
@@ -2686,7 +2691,7 @@ impl ZirLowerer {
     // callee then holds the referent borrowed, so a later mutation through `a` conflicts while
     // that borrow is live (task 2i). A reference built for this call (`f(&mut x)`) is already such
     // a borrow and is passed as it is, which is why a temporary source is skipped.
-    #[borrows()]
+    #[borrows(arg)]
     fn reborrow_arg(self: &mut ZirLowerer, arg: Place, param_ty: u32, span: Span) -> Place {
         if arg.base == 0 as u32 || param_ty == 0 as u32 { return arg; }
         if arg.base as usize > self.locals.len() { return arg; }
@@ -2713,7 +2718,7 @@ impl ZirLowerer {
     // array element, an enum payload - so none of them can turn an integer into a reference with
     // a cast nobody wrote.
     // The result is a Place of arena data, like lower_expr's.
-    #[borrows()]
+    #[borrows(arg)]
     fn convert_value_to(self: &mut ZirLowerer, arg: Place, param_ty: u32, span: Span) -> Place {
         // A `&[T; N]` where a slice is expected (a `fn` type's parameter) is that slice.
         let mut result = self.coerce_array_ref_to_slice(
@@ -3138,7 +3143,7 @@ impl ZirLowerer {
     // type wrote past the slot when `e` was larger and reinterpreted the payload when the error
     // types differed (probes gap_68 to gap_70). The result points into no lowerer storage, as
     // `lower_expr`'s does.
-    #[borrows()]
+    #[borrows(val_place)]
     fn lower_try_early_return(
         self: &mut ZirLowerer,
         val_place: Place,
@@ -3330,6 +3335,8 @@ impl ZirLowerer {
             is_unsafe: false,
             is_variadic: false,
             must_use: false,
+            fresh: false,
+            releases: false,
             from_interface: false,
             // A closure has no doc comment of its own, but its source file is meaningful: it is
             // written inline in its enclosing function's file (self.file_path; empty interns to 0,
@@ -3349,17 +3356,26 @@ impl ZirLowerer {
             summary_into: 0 as u64,
             summary_ret_stack: false,
             summary_alloc: 0 as usize,
+            summary_os: @slice(0 as *mut u64, 0 as usize),
             has_borrows: false,
+            borrows_trusted: false,
             borrows: @slice(0 as *mut u32, 0 as usize),
+            borrows_held: @slice(0 as *mut u32, 0 as usize),
+            summary_held: 0 as u64,
             has_stores: false,
+            stores_trusted: false,
             stores_from: @slice(0 as *mut u32, 0 as usize),
             stores_to: @slice(0 as *mut u32, 0 as usize),
             stores_static: @slice(0 as *mut bool, 0 as usize),
+            stores_contents: @slice(0 as *mut bool, 0 as usize),
             expr_start: 0 as u32,
             expr_end: 0 as u32,
             default_of: 0 as u32,
         };
-        let func_idx = self.mono.lower_closure_fn(&f, c_name);
+        let f_ptr = unsafe { zoril_allocator_alloc(self.arena, sizeof(FnDecl)) } as *mut FnDecl;
+        unsafe { *f_ptr = f; }
+        let f_slice = unsafe { @slice(f_ptr as *FnDecl, 1 as usize) };
+        let func_idx = self.mono.lower_closure_fn(&f_slice[0], c_name);
         if env_ptr != 0 as u32 { self.mono.register_zir_closure_env(func_idx, env_ptr); }
 
         // The closure as a value: its code and, when it captures, its environment.
@@ -3550,6 +3566,7 @@ impl ZirLowerer {
         // they do not switch off any other verification, per doc/spec/unsafe_policy.md §2.
         if b.is_unsafe {
             self.unsafe_depth = self.unsafe_depth + 1 as u32;
+            self.saw_unsafe = true;
         }
 
         let stmts = b.stmts;
@@ -3787,7 +3804,7 @@ impl ZirLowerer {
     // One branch's VALUE (at SPAN) as the type TY of the `if` or `match` (WHAT) it ends: a
     // primitive converts implicitly where a `let` would let it; any other difference is an
     // error. (Merging two `Option` instances unchecked copied one layout into the other.)
-    #[borrows()]
+    #[borrows(value)]
     pub fn branch_value_as(
         self: &mut ZirLowerer,
         value: Place,

@@ -1,0 +1,16 @@
+// A cycle member that stores nothing itself gets the edge of the callee it reaches through the
+// cycle from the fixpoint (Z-0059): `stash_b` only calls `stash_a`, still being lowered.
+// ORIGINS: stash_b store Param(1) -> Param(0)
+// expected exit 0
+fn stash_a(out: &mut [i32], s: [i32]) {
+    if false { stash_b(out, s); }
+    *out = s;
+}
+fn stash_b(out: &mut [i32], s: [i32]) { stash_a(out, s); }
+fn f(out: &mut [i32], view: [i32]) { stash_b(out, view); }
+fn main() -> i32 {
+    let data = [42, 0];
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    f(&mut s, &data);
+    return s[0] - 42;
+}

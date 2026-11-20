@@ -4,7 +4,7 @@
 // phi) names no slot, so the summary pass reads it as pointing at stack and fails closed; the callee
 // reads a pointer out of the carrier, and that pointer is the frame's local.
 struct Carrier { v: &i32 }
-static mut KEEP: usize = 0 as usize;
-fn keep(co: &Carrier) { KEEP = co.v as *i32 as usize; }
+static mut KEEP: *i32 = 0 as *i32;
+fn keep(co: &Carrier) { KEEP = co.v as *i32; }
 fn leak() { let x = 42; let c = Carrier { v: &x }; let r = &c; keep(r); }
 fn main() -> i32 { leak(); return 0; }

@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: tests/error_reporting/err_closure_escapes_into_vec.zrl:6:47: error: region escape: a pointer to local stack storage is written to memory that outlives this function
+// EXPECT: tests/error_reporting/err_closure_escapes_into_vec.zrl:6:47: error: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
 // Pushing a capturing closure into the caller's Vec stores this frame's environment there.
 import "vec.zrl";
 use vec::Vec;

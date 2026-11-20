@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: error: region escape: returning a pointer to local stack storage
+// EXPECT: error: provenance: the returned value holds an address of this frame (return rule)
 // Returning a reference into a by-value parameter Box dropped at return is rejected.
 fn inner(b: Box<i32>) -> &i32 {
     return &*b;

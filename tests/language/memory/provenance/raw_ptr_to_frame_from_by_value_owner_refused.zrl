@@ -1,0 +1,10 @@
+// The frame twin of raw_ptr_from_dropped_owner_accepted.zrl: the raw pointer `keep` stores holds an
+// address of the caller's frame, which a raw pointer may not carry out of the frame, so the call store
+// rule refuses it. What is checked is the address a raw pointer value carries, not whether the heap
+// storage it points to is still live.
+// EXPECT: call store rule
+// expected compile fail
+struct Buf { data: *mut u8 }
+fn keep(out: &mut *mut u8, b: Buf) { *out = b.data; }
+fn f(out: &mut *mut u8) { let mut x: u8 = 1; let b = Buf { data: &mut x as *mut u8 }; keep(out, b); }
+fn main() -> i32 { return 0; }

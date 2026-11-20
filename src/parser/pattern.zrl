@@ -36,7 +36,8 @@ impl Parser {
 
     // `(p, q, ..)` after a variant name: its payload patterns.
     // The list is built in the parser's arena, so allocating elsewhere in it is not a conflict.
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     fn parse_pattern_list(self: &mut Parser) -> [PatternId] {
         self.expect(Token.LParen);
         let mut pats = unsafe { Vec::<PatternId>.new_in_raw(self.arena) };

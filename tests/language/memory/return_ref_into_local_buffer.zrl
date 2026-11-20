@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: tests/language/memory/return_ref_into_local_buffer.zrl:8:1: error: cannot return 'v' a reference into storage owned by this frame (a collection, a box or an arena) cannot outlive the frame
+// EXPECT: tests/language/memory/return_ref_into_local_buffer.zrl:11:12: error: provenance: the returned value holds an address of this frame (return rule)
 // A reference into a local `Vec`'s storage cannot leave the frame: a reference into storage owned
 // by this frame cannot outlive the frame. A parameter's or a static arena's
 // buffer is the caller's and may escape (return_ref_into_param_arena.zrl, probes 278-283).

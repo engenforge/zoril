@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: an extern's #[stores(..)] cannot be checked: write #[unsafe(stores(..))]
+#[stores(s -> d)]
+extern fn cp(d: *mut u8, s: *u8, n: u64);
+fn main() -> i32 { return 0; }

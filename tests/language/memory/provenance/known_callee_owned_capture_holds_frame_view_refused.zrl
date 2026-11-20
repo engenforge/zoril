@@ -1,0 +1,19 @@
+// What an owned capture holds is still checked at a known call: the holder moved into the closure
+// holds a view of `f`'s array, and the closure stores it through a captured `&mut` parameter
+// (§3, _A closure body's summary is stated over `__env`_).
+// EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+struct Holder { s: [i32], keep: Vec<i32> }
+fn f(out: &mut [i32]) {
+    let a = [1, 2, 3];
+    let h = Holder { s: &a, keep: Vec::<i32>.new() };
+    let mut cl = || { *out = h.s; };
+    cl();
+}
+fn main() -> i32 {
+    let mut o: [i32] = @slice(0 as *i32, 0);
+    f(&mut o);
+    return 0;
+}

@@ -582,10 +582,8 @@ pub fn write_manifest(
         j = j + 1;
     }
 
-    let rc = save_manifest(ctx, &m);
-    if rc != 0 { return rc; }
     *manifest = m;
-    return 0;
+    return save_manifest(ctx, manifest);
 }
 
 fn name_in(names: &Vec<[u8]>, name: [u8]) -> bool {

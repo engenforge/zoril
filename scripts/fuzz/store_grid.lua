@@ -265,6 +265,9 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
         ret_sig = " -> " .. ret_type
     end
 
+    if ret_type == payload_type and is_ref then
+        emit('static DUMMY_ERR: i32 = 0;')
+    end
     emit('fn escape_storer(' .. func_args .. ')' .. ret_sig .. ' {')
 
     local err_ret = "return;"
@@ -272,7 +275,7 @@ local function generate_code(s, c, p, d, inv, is_safe_twin)
         err_ret = "return -1;"
     elseif ret_type == payload_type then
         if is_slice then err_ret = "return @slice(0 as *" .. elem_type .. ", 0);"
-        elseif is_ref then err_ret = "let dummy_err = 0; return &dummy_err;"
+        elseif is_ref then err_ret = "return &DUMMY_ERR;"
         elseif is_fn then err_ret = "return default_fn;"
         end
     end

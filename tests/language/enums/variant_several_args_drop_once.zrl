@@ -22,10 +22,11 @@ fn moved_on(fp: *mut u8) { let e = P.A(mk(fp), mk(fp)); consume_p(e); }
 fn generic(fp: *mut u8) { let e = G.A(mk(fp), mk(fp)); }
 fn generic_mixed(fp: *mut u8) { let e = G.A(3, mk(fp)); }
 fn generic_named(fp: *mut u8) { let e = G::<S, S>.A(mk(fp), mk(fp)); }
+static mut DROP_FLAG: u8 = 0 as u8;
 fn count(f: fn(*mut u8)) -> u8 {
-    let mut flag = 0 as u8;
-    f(&mut flag as *mut u8);
-    return flag;
+    DROP_FLAG = 0 as u8;
+    f(&mut DROP_FLAG as *mut u8);
+    return DROP_FLAG;
 }
 fn main() -> i32 {
     if count(named) != 2 as u8 { return 1; }

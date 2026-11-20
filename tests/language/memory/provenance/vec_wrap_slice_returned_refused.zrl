@@ -1,0 +1,25 @@
+// expected compile fail
+// EXPECT: the returned value holds an address of this frame (return rule)
+//
+// Wrapping a slice of a local Vec's buffer in a new Vec and returning it is
+// refused by the return rule.
+
+import "vec.zrl";
+use vec::Vec;
+
+fn wrap(v: &Vec<i32>) -> Vec<[i32]> {
+    let mut out = Vec::<[i32]>.new();
+    out.push(v.as_slice());
+    return out;
+}
+
+fn bad() -> Vec<[i32]> {
+    let mut v = Vec::<i32>.new();
+    v.push(1);
+    return wrap(&v);
+}
+
+fn main() -> i32 {
+    let w = bad();
+    return w.len() as i32;
+}

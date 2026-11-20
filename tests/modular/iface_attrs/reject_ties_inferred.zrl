@@ -1,0 +1,20 @@
+// expected compile fail
+// EXPECT: cannot mutably borrow 'a' while it is already borrowed
+// A result tied by the callee's body to its other argument keeps that argument's borrow across a
+// `.zri`, so the arena cannot be reset while it is read.
+import "lib_ties.zrl";
+import "mem.zrl";
+import "vec.zrl";
+use lib_ties::Picker;
+use mem::Arena;
+use vec::Vec;
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v = Vec::<u8>.new_in(&a);
+    v.push(42 as u8);
+    let p = Picker.new(@slice(0 as *u8, 0 as usize));
+    let r = p.pick(v.as_slice());
+    a.reset();
+    return r[0] as i32;
+}

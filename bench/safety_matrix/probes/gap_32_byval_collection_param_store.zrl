@@ -1,7 +1,6 @@
 // name: View of by-value collection parameter stored out
-// expected: known_gap
-// gap: By-value collection parameter treated as external instead of frame-owned storage; value is intact because collections are not freed at scope end (a leak, not a read of reused memory)
-// observed: exit 42
+// expected: compile_reject
+// Refused by the provenance store rule: a by-value owning parameter owns Frame(v) storage.
 import "vec.zrl";
 use vec::Vec;
 

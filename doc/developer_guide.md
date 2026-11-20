@@ -119,7 +119,7 @@ make -C bootstrap/stage0-c minimal
 make -C bootstrap/stage0-c test_all_minimal
 ```
 
-The two seed compilers and how they fit together are described in [`bootstrap/bootstrap_layering.md`](bootstrap/bootstrap_layering.md); the re-pin procedure and backport policy are in [`bootstrap/two_stage.md`](bootstrap/two_stage.md).
+How the two seed compilers fit together, along with the re-pin procedure and backport policy, is described in [`bootstrap/two_stage.md`](bootstrap/two_stage.md).
 
 ### Fuzzing
 
@@ -209,3 +209,14 @@ The rules a change follows, beyond the four in [CONTRIBUTING.md](../CONTRIBUTING
 The compiler is `src/`, with `stdlib/`, `tools/zilc` and `tools/zbuild` around it; see "Repository layout" in the [README](../README.md).
 
 `bootstrap/` holds the frozen seed compilers and accepts only narrow changes. `bootstrap/stage0-c/` takes correctness fixes, and small syntax or semantics alignments with `src/` that keep it able to build `bootstrap/stage1/` and pass its own suites, each with a regression test under `bootstrap/stage0-c/tests/fixed_bugs/` or in the functional suite. `bootstrap/stage1/` takes no hand edits, with two recorded exceptions: it changes by a re-pin (a newer snapshot that stage0-c can still build) or by a deliberate backport of a language feature the frozen compiler must parse, and `bootstrap/stage1/rt/runtime.s` follows `rt/runtime.s`, which the `runtimes` gate keeps byte-identical. Both directories contain a copy of most of `src/`, so make sure an edit lands outside them. See [`bootstrap/README.md`](../bootstrap/README.md).
+
+---
+
+## 6. Compiler Codebase Architecture and Conventions
+
+The compiler in `src/` follows a set of structural conventions intended to keep lowering, analysis, and diagnostics auditable:
+
+- **Pass decomposition by AST/IR kind:** Larger compiler passes (`lower_zir/`, `parser/`, `typecheck/`, `check_zir/`) are split into cohesive sub-modules (`decl.zrl` for top-level declarations, `stmt.zrl` for control flow and statements, `expr.zrl` for expression evaluation, `match.zrl` for pattern matching and destructuring, and `utils.zrl` for metadata lookups and registries) rather than multi-thousand-line monoliths.
+- **Shallow nesting via pattern helpers:** Match-heavy routines extract per-arm handlers (such as `lower_pattern_ident`, `lower_pattern_enum_variant`, `try_lower_enum_variant_member`, and `try_lower_impl_constant`) so control flow stays shallow and readable.
+- **Dedicated subsystem handlers:** Cross-cutting passes are isolated behind dedicated state structs with explicit interfaces (for example `Monomorphizer` isolating generic instantiation and caching from general expression lowering), and intermediate representations are constructed through declarative builder APIs (`ILBuilder` methods such as `emit_call` and `get_ptr_type`) rather than mutating module arrays directly.
+- **Consolidated diagnostics and explicit types:** Diagnostic prefixing and formatting share common helpers (such as `report_prefix`) to keep compiler messages uniform and avoid duplicate string literals, while `Option<T>`, `Result<T, E>`, named constants, slices/indexing, and `Vec<T>` are preferred over sentinel values, manual `(ptr, len, cap)` triplets, or raw pointer arithmetic.

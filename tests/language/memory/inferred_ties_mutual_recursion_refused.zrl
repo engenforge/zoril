@@ -1,0 +1,26 @@
+// expected compile fail
+// EXPECT: cannot mutably borrow 'v' while it is already borrowed
+// The mutual-recursion form: `pick` calls `hop`, which calls `pick` back.
+import "vec.zrl";
+use vec::Vec;
+struct S { k: i32 }
+impl S {
+    fn hop(self: &S, x: [u8], n: i32) -> [u8] { return self.pick(x, n); }
+    fn pick(self: &S, x: [u8], n: i32) -> [u8] {
+        if n == 0 { return x; }
+        let mut v = Vec::<u8>.new();
+        v.push(42 as u8);
+        let r = self.hop(v.as_slice(), n - 1);
+        v.clear();
+        let mut i = 0;
+        while i < 64 { v.push(77 as u8); i = i + 1; }
+        if r[0] == 42 as u8 { return x; }
+        return x;
+    }
+}
+fn main() -> i32 {
+    let s = S { k: 1 };
+    let d = [1 as u8; 4];
+    let r = s.pick(&d, 1);
+    return r[0] as i32;
+}

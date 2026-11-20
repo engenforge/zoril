@@ -1,6 +1,6 @@
 // expected compile fail
 // flags: --interproc-summary
-// EXPECT: error: region escape: the callee stores a pointer to local stack storage where it outlives this function
+// EXPECT: error: provenance: the callee stores an address of this frame into a global (call store rule)
 // (the IL verifier reports this call now: the callee's storage masks are unknown, so it assumes the
 // worst, and it runs before the summary pass that used to be the one to report it)
 // Cross-module test: callee stashes argument into global memory.

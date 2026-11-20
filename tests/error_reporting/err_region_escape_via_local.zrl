@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: region escape: returning a pointer to local stack storage
+// EXPECT: error: provenance: the returned value holds an address of this frame (return rule)
 // Keeping the address in a local first does not hide it.
 fn leak() -> *mut i32 {
     let mut x: i32 = 42;

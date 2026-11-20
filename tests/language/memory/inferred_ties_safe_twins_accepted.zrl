@@ -1,0 +1,29 @@
+// expected exit 0
+// The safe twins of the inferred_ties_* refusals: a result read before the reset, a view of `self`
+// alone (the arena the argument was built in stays free to reset), an integer result, and a
+// recursive call whose argument is not changed while its result is live.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct S { data: [u8] }
+impl S {
+    fn pick(self: &S, x: [u8]) -> [u8] { return x; }
+    fn view(self: &S) -> [u8] { return self.data; }
+    fn first(self: &S, x: [u8]) -> usize { return x[0] as usize; }
+    fn deep(self: &S, x: [u8], n: i32) -> [u8] { if n == 0 { return x; } return self.deep(x, n - 1); }
+}
+fn main() -> i32 {
+    let own = [7 as u8; 4];
+    let s = S { data: &own };
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v = Vec::<u8>.new_in(&a);
+    v.push(42 as u8);
+    let before = s.pick(v.as_slice())[0];
+    let n = s.first(v.as_slice());
+    let d = s.deep(v.as_slice(), 3)[0];
+    let w = s.view();
+    a.reset();
+    if before != 42 as u8 || n != 42 as usize || d != 42 as u8 { return 2; }
+    return w[0] as i32 - 7;
+}

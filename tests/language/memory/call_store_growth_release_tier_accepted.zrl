@@ -1,0 +1,18 @@
+// Release-tier twin for holder three (gap_96): calling put(&mut s, &v) records v's borrow
+// on s in the release tier, so growing v with v.push(1) while s is still read is accepted.
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+
+fn put(out: &mut [i32], v: &Vec<i32>) { *out = v.as_slice(); }
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    put(&mut s, &v);
+    v.push(1);
+    let diff = s[0] - 42;
+    v.free();
+    return diff;
+}

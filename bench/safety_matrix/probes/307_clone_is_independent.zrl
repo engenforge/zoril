@@ -1,7 +1,10 @@
-// name: A cloned collection has its own buffer, so both values stay usable
+// name: A cloned collection has its own buffer, so the original can change while the clone lives
 // expected: accept
-// The accepted twin of probes 303-306: `clone()` allocates a new buffer, so the two values are
-// independent owners.
+// `clone()` allocates a new buffer, so the two values are independent owners. The `Vec<u8>`
+// clone's body has no `unsafe`, so its tie is inferred for `u8` as held: only to what `v1` points
+// into (its arena), not to `v1` itself, and `v1.push(2)` does not conflict with `v2`. A `T` whose
+// clone points into its source keeps the tie to `v1` (gap_77, and
+// tests/language/memory/provenance/vec_clone_self_view_original_changed_refused.zrl).
 import "vec.zrl";
 import "clone.zrl";
 use vec::Vec;

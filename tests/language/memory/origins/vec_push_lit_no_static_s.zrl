@@ -1,0 +1,11 @@
+// A stored value grows the target's S only by what it owns: `v.push("lit")` puts Rodata in O(v),
+// never in S(v) (§3, _Details the transfer needs_).
+// ORIGINS: main v O={Rodata} S={Frame(_1)}
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+fn main() -> i32 {
+    let mut v = Vec::<[u8]>.new();
+    v.push("lit");
+    return v.len() as i32 - 1;
+}

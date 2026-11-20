@@ -1,0 +1,17 @@
+// An index into a Vec reaches its buffer, as codegen indexes it: a field read after it keeps its type,
+// so the element read through a parameter is ParamContents and not Unknown (Z-0068).
+// ORIGINS: g return O={ParamContents(0)} S={}
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+struct T { s: [u8] }
+struct D { id: u32, def: T }
+struct Md { types: Vec<D> }
+struct Mo { module: &mut Md }
+fn g(self: &mut Mo, i: usize) -> T { return self.module.types[i].def; }
+fn main() -> i32 {
+    let mut md = Md { types: Vec::<D>.new() };
+    md.types.push(D { id: 7 as u32, def: T { s: "ab" } });
+    let mut mo = Mo { module: &mut md };
+    return g(&mut mo, 0 as usize).s.len as i32 - 2;
+}

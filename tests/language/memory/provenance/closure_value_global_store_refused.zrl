@@ -1,0 +1,16 @@
+// gap_64: a closure storing a captured frame address into a global, handed to a function that
+// calls it. No caller of the closure knows its environment, so its summary's edge from what the
+// environment holds into a global is checked where it is made (§3, _A closure made into a value_).
+// EXPECT: provenance: the closure made here stores an address of this frame into a global when it is called (closure rule)
+// expected compile fail
+static mut G: *i32 = 0 as *i32;
+fn run(f: fn() -> unit) { f(); }
+fn stash() {
+    let x = 42;
+    let r = &x;
+    run(|| { G = r as *i32; });
+}
+fn main() -> i32 {
+    stash();
+    return 0;
+}

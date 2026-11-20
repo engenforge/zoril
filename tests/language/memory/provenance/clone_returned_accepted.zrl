@@ -1,0 +1,53 @@
+// Safe twin: cloning a borrowed Vec<u8>, an Option<i32>, an Option<[u8]> from a parameter view,
+// and resizing a caller's Vec<H> with a parameter view are accepted under --provenance.
+// expected exit 0
+import "vec.zrl";
+import "clone.zrl";
+use vec::Vec;
+
+struct H { s: [u8] }
+impl Clone for H { fn clone(self: &H) -> H { return H { s: self.s }; } }
+
+fn clone_param_vec(v: &Vec<u8>) -> Vec<u8> {
+    return v.clone();
+}
+
+fn clone_opt() -> Option<i32> {
+    let o = Option.Some(7);
+    return o.clone();
+}
+
+fn clone_opt_view(s: [u8]) -> Option<[u8]> {
+    let o = Option.Some(s);
+    return o.clone();
+}
+
+fn fill(out: &mut Vec<H>, b: [u8]) {
+    out.resize(1 as usize, H { s: b });
+}
+
+fn main() -> i32 {
+    let mut v: Vec<u8> = Vec.new();
+    v.push(11 as u8);
+    let v2 = clone_param_vec(&v);
+    if v2.len() != (1 as usize) || v2[0] != (11 as u8) { return 1; }
+
+    let oi = clone_opt();
+    match oi {
+        Some(n) => { if n != 7 { return 2; } },
+        None => { return 3; }
+    }
+
+    let buf = [42 as u8; 16];
+    let ov = clone_opt_view(&buf);
+    match ov {
+        Some(s) => { if s[0] != (42 as u8) { return 4; } },
+        None => { return 5; }
+    }
+
+    let mut hv: Vec<H> = Vec.new();
+    fill(&mut hv, &buf);
+    if hv.len() != (1 as usize) || hv[0].s[0] != (42 as u8) { return 6; }
+
+    return 0;
+}

@@ -1,0 +1,12 @@
+// A callee whose summary stores its second argument into its first: the caller's local gets the
+// stored value's origins.
+// ORIGINS: main w O={Frame(data)} S={}
+// expected exit 0
+struct W { s: [i32], t: i32 }
+fn set(dst: &mut W, v: [i32]) { dst.s = v; }
+fn main() -> i32 {
+    let data = [42, 0];
+    let mut w = W { s: @slice(0 as *i32, 0), t: 3 };
+    set(&mut w, &data);
+    return w.s[0] - 42 + w.t - 3;
+}

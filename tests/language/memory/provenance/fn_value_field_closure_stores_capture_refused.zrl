@@ -1,0 +1,13 @@
+// A closure capturing a `&mut` parameter and a local's address, kept in a struct field beside a
+// scalar and called through it with no argument: its environment reaches both, so the call may
+// store the one into the other (§3, _Calls through a `fn` value_).
+// EXPECT: unknown-call store rule
+// expected compile fail
+struct H { f: fn(), k: i32 }
+fn leak(out: &mut &i32) {
+    let x = 1;
+    let r = &x;
+    let h = H { f: || { *out = r; }, k: 0 };
+    h.f();
+}
+fn main() -> i32 { let y = 2; let mut p = &y; leak(&mut p); return *p; }

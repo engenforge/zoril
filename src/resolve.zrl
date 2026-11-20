@@ -170,7 +170,8 @@ impl SymbolTable {
 
     // Symbols are allocated one by one in the arena and never move, so the result does
     // not point into the table's (growable) bucket arrays.
-    #[borrows()]
+    // SAFETY: symbols are arena-allocated and never move (above).
+    #[unsafe(borrows())]
     pub fn lookup_ptr(self: &SymbolTable, name: u32) -> Option<&Symbol> {
         if self.count == 0 as usize { return Option.None; }
 
@@ -1481,7 +1482,8 @@ impl Resolver {
 
     // Why NAME is not found from the current module, for a note after the error: "" when
     // there is nothing to add. Built in the arena, so a caller may keep it across its own calls.
-    #[borrows()]
+    // SAFETY: the result is in the compilation's arena, which is never reset.
+    #[unsafe(borrows())]
     pub fn name_hint(self: &mut Resolver, name: u32) -> [u8] {
         let module = self.current_module;
         let mut out = unsafe { ByteVec.new_raw(self.arena) };
@@ -2202,7 +2204,8 @@ impl Resolver {
     // The result is a fresh arena list, not a view of the resolver: callers hold it across
     // further `&mut self` calls (the monomorphizer resolves an impl's signature and then binds
     // the trait's parameters).
-    #[borrows()]
+    // SAFETY: the result is in the compilation's arena, which is never reset.
+    #[unsafe(borrows())]
     pub fn resolve_type_list(self: &mut Resolver, types: [TypeId]) -> [u32] {
         let mut resolved = unsafe { Vec::<u32>.with_capacity_in_raw(self.arena, types.len) };
         for t in types { resolved.push(self.resolve_type(*t)); }

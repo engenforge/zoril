@@ -22,7 +22,7 @@ fn main() -> i32 {
     // The handler borrows the application's state for the length of the call and gets a Frame,
     // not the Display, so nothing here aliases what run() has borrowed. No `unsafe`, no cast.
     let a = &mut app;
-    display.run(|frame: &mut Frame| {
+    display.run(|frame: Frame| {
         let t = time::monotonic_ns();
         let mut i = 0;
         while i < 64 {

@@ -1,0 +1,11 @@
+// The same one level up: `via` passes a `fn` item to a generic `apply`, and its summary records no
+// store into a global, so `main` may pass a local's address (§3, _Calls through a `fn` value_).
+// expected exit 0
+fn same(p: &i32) -> &i32 { return p; }
+fn apply<T>(f: fn(T) -> T, x: T) -> T { return f(x); }
+fn via(p: &i32) -> &i32 { return apply::<&i32>(same, p); }
+fn main() -> i32 {
+    let x = 3;
+    let r = via(&x);
+    return *r - 3;
+}

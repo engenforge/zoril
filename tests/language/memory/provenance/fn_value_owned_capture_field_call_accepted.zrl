@@ -1,0 +1,24 @@
+// A closure that owns a struct holding a `fn` field and a `Vec`, stores a new `fn` value into the
+// field and calls through it: the call's environment is what the `fn` value holds, not the
+// storage the struct owns, so neither the call nor the earlier store is refused (§3, _Calls
+// through a `fn` value_).
+// expected exit 42
+import "vec.zrl";
+use vec::Vec;
+struct OwnedHolder { s: fn() -> i32, keep_non_copy: Vec<i32> }
+fn default_fn() -> i32 { return 0; }
+fn twin_fn() -> i32 { return 42; }
+fn run() -> i32 {
+    let routed = twin_fn;
+    let mut h = OwnedHolder { s: default_fn, keep_non_copy: Vec::<i32>.new() };
+    let mut c_owned = |store_mode: bool| -> i32 {
+        if store_mode {
+            h = OwnedHolder { s: routed, keep_non_copy: Vec::<i32>.new() };
+            return 0;
+        }
+        return h.s();
+    };
+    let _ = c_owned(true);
+    return c_owned(false);
+}
+fn main() -> i32 { return run(); }

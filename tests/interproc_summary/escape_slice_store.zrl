@@ -1,6 +1,6 @@
 // expected compile fail
 // flags: --interproc-summary
-// EXPECT: error: region escape: returning a pointer to local stack storage
+// EXPECT: error: provenance: the returned value holds an address of this frame (return rule)
 // Interprocedural summary pass test: slice/aggregate store escape
 
 fn dangle_slice_escape() -> *mut i64 {

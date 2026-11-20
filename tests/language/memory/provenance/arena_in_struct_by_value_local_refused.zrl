@@ -1,0 +1,14 @@
+// A `Vec` built by a callee in an arena held by value in a local struct passed by reference, then
+// stored out: the arena lies in the struct, so the store is refused (§3, _Details the transfer
+// needs_).
+// EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
+// expected compile fail
+import "vec.zrl";
+import "mem.zrl";
+import "clone.zrl";
+use vec::Vec;
+use mem::Arena;
+struct H2 { ar: Arena, k: i32 }
+fn mk(h: &H2) -> Vec<i32> { let mut v = Vec::<i32>.new_in(&h.ar); v.push(1); return v; }
+fn bad(out: &mut [i32]) { let h = H2 { ar: Arena.new(4096).unwrap(), k: 0 }; let v = mk(&h); *out = v.as_slice(); }
+fn main() -> i32 { let z = [0]; let mut o: [i32] = &z; bad(&mut o); return o[0]; }

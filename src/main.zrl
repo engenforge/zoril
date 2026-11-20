@@ -8,7 +8,6 @@ import "mono.zrl";
 import "builder.zrl";
 import "driver.zrl";
 import "verify.zrl";
-import "summary_pass.zrl";
 import "zil_print.zrl";
 import "interface_print.zrl";
 import "intern.zrl";
@@ -51,7 +50,6 @@ use mono::{Monomorphizer, mono_instantiate_type, mono_project_assoc_type};
 use progress::{VERBOSE, progress};
 use resolve::Resolver;
 use state::Driver;
-use summary_pass::{FuncSummary, InterprocSummaryPass};
 use sys::arg_to_slice;
 use vec::Vec;
 use version::version;
@@ -81,7 +79,6 @@ fn write_interface_file(
     table: &mut InternTable,
     arena: *mut ArenaHeader,
     m: &mut ILModule,
-    summaries: [FuncSummary],
     input_mod_id: [u8],
     input_is_stdlib: bool
 ) -> bool {
@@ -102,7 +99,6 @@ fn write_interface_file(
         arena,
         target_sf,
         m as *mut ILModule,
-        summaries,
         input_is_stdlib
     );
     ip.emit_interface();
@@ -117,6 +113,7 @@ struct Options {
     emit_interface: bool,
     emit_deps: bool,
     emit_zir_stats: bool,
+    emit_origins: bool,
     write_interface_path: [u8],
     iface_dir: [u8],
     require_interface: bool,
@@ -181,6 +178,9 @@ fn print_usage() {
         "  --emit-zir-stats         Print the ZIR constructs and CFG shape the input lowers to (no ZIL)\n"
     );
     print(
+        "  --emit-origins           Developer option: print each function's origin sets per local (no ZIL)\n"
+    );
+    print(
         "  --lower-all              Developer option: also lower and check the stdlib functions the program does not reach\n"
     );
     print("  -v, --verbose            Report each phase, file and function as it is compiled\n");
@@ -243,7 +243,7 @@ fn levenshtein(a: [u8], b: [u8]) -> u64 {
 
 fn suggest_option(arg: [u8]) -> [u8] {
     if arg == "--" { return ""; }
-    let opts: [[u8]; 25] = [
+    let opts: [[u8]; 26] = [
         "-h",
         "--help",
         "-V",
@@ -260,6 +260,7 @@ fn suggest_option(arg: [u8]) -> [u8] {
         "--require-interface",
         "--emit-deps",
         "--emit-zir-stats",
+        "--emit-origins",
         "--lower-all",
         "-v",
         "--verbose",
@@ -273,7 +274,7 @@ fn suggest_option(arg: [u8]) -> [u8] {
     let mut best_dist = 99 as u64;
     let mut best_opt: [u8] = "";
     let mut i = 0 as usize;
-    while i < 25 as usize {
+    while i < 26 as usize {
         let opt = opts[i];
         let d = levenshtein(arg, opt);
         if d < best_dist {
@@ -304,12 +305,13 @@ fn report_unknown_option(arg: [u8]) {
 }
 
 // The result's slices and its include list are arena data read through `arena`, not `table`/`argv`.
-#[borrows(arena)]
+#[borrows(arena, argv)]
 fn parse_args(argc: i32, argv: **u8, table: &mut InternTable, arena: *mut ArenaHeader) -> Options {
     let mut o = Options {
         input_path: "", output_path: "",
         compile_only: false, emit_interface: false, emit_deps: false,
         emit_zir_stats: false,
+        emit_origins: false,
         write_interface_path: "", iface_dir: "", require_interface: false, root: "",
         include_ids: unsafe { Vec::<u32>.new_in_raw(arena) },
         bad_args: false,
@@ -370,6 +372,8 @@ fn parse_args(argc: i32, argv: **u8, table: &mut InternTable, arena: *mut ArenaH
             o.emit_deps = true;
         } else if !end_of_options && arg == "--emit-zir-stats" {
             o.emit_zir_stats = true;
+        } else if !end_of_options && arg == "--emit-origins" {
+            o.emit_origins = true;
         } else if !end_of_options && arg == "--lower-all" {
             o.lower_all = true;
         } else if !end_of_options && arg == "--emit-zil" {
@@ -406,7 +410,7 @@ fn parse_args(argc: i32, argv: **u8, table: &mut InternTable, arena: *mut ArenaH
 // Without `-o`: `<module>.zri` for an interface, `<module>.zil` when compiling one module, else
 // out.zil. The result is a copy built in the arena (or a literal), so it borrows nothing from `o`:
 // `o.output_path = default_output_path(&o, arena)` must not leave `o` holding a borrow of itself.
-#[borrows()]
+#[borrows(arena)]
 fn default_output_path(o: &Options, arena: *mut ArenaHeader) -> [u8] {
     if !o.emit_interface && !o.compile_only { return "out.zil"; }
     let mut bv = unsafe { ByteVec.new_raw(arena) };
@@ -564,6 +568,7 @@ fn compile(
         (*driver).checked = o.checked;
         (*driver).hosted = o.hosted;
         (*driver).collect_zir_stats = o.emit_zir_stats;
+        (*driver).emit_origins = o.emit_origins;
         (*driver).lower_all = o.lower_all;
         (*monomorphizer).set_lowerer(driver_lower_fn_instance, driver as *mut u8);
         (*driver).lower_module();
@@ -582,19 +587,20 @@ fn compile(
     }
 
     progress("PROGRESS: Verifying...\n");
-    let verified = verify_module(o, m, table, arena, compile_only, target_source_file);
+    let verified_ok = verify_module(o, m, table, arena);
     if o.emit_zir_stats {
-        if verified.ok {
+        if verified_ok {
             print("verdict accept\n");
             return 0;
         }
         print("verdict reject\n");
         return 1;
     }
-    if !verified.ok { return 1; }
+    if o.emit_origins { return if verified_ok { 0 } else { 1 }; }
+    if !verified_ok { return 1; }
 
     // The methods nothing calls were lowered to be checked, and the checks above are what read
-    // those bodies (the IL verifier and the summary pass); the driver's own lowering checks ran
+    // those bodies (the IL verifier); the driver's own lowering checks ran
     // over each body as it was lowered. With both done, drop what the check added, so the ZIL, the
     // interface and the object are exactly what the program's *called* code lowers to
     // (ILModule.drop_check_only_code).
@@ -608,7 +614,6 @@ fn compile(
             table,
             arena,
             m,
-            verified.summaries,
             input_mod_id,
             input_is_stdlib
         ) {
@@ -623,7 +628,6 @@ fn compile(
             table,
             arena,
             m,
-            verified.summaries,
             input_mod_id,
             input_is_stdlib
         ) {
@@ -639,58 +643,17 @@ fn compile(
     return 0;
 }
 
-// The verifier and the summary pass in a scope of their own: the pass holds the module and the table
-// mutably, so it must be gone before the emitters borrow both again. The summaries are arena data.
-struct VerifyOutcome {
-    ok: bool,
-    summaries: [FuncSummary],
-}
-
-#[borrows(arena)]
+// The ZIL verifier (unless --no-verify). False after an error.
 fn verify_module(
     o: &Options,
     m: &mut ILModule,
     table: &mut InternTable,
-    arena: *mut ArenaHeader,
-    compile_only: bool,
-    target_source_file: u32
-) -> VerifyOutcome {
-    let mut summary_pass = InterprocSummaryPass.new(arena, m, table, o.input_path);
-    summary_pass.apply_conservative_defaults(compile_only, target_source_file);
-    let ok = check_module(o, &mut summary_pass, arena, compile_only);
-    return VerifyOutcome { ok: ok, summaries: summary_pass.summaries };
-}
-
-// The ZIL verifier (unless --no-verify), then the summary pass when an interface is written
-// or --interproc-summary asks for it. False after an error. The module and table come from the pass.
-fn check_module(
-    o: &Options,
-    summary_pass: &mut InterprocSummaryPass,
-    arena: *mut ArenaHeader,
-    compile_only: bool
+    arena: *mut ArenaHeader
 ) -> bool {
-    let wants_summaries = o.emit_interface || o.write_interface_path.len > 0 as usize;
-    if o.no_verify {
-        if wants_summaries { summary_pass.run(false); }
-        return true;
-    }
-    let mut verifier = Verifier.new(
-        arena,
-        summary_pass.module,
-        summary_pass.intern_table,
-        o.input_path
-    );
+    if o.no_verify { return true; }
+    let mut verifier = Verifier.new(arena, m, table, o.input_path);
     verifier.verify();
-    if verifier.had_error { return false; }
-    // A whole-program build sees every body, so it enforces the summaries as a separate build
-    // does (`zbuild` passes the flag): both modes then accept the same programs.
-    let enforce = o.interproc_summary || !compile_only;
-    if enforce || wants_summaries {
-        summary_pass.verbose = o.interproc_stats;
-        let pass_ok = summary_pass.run(enforce);
-        if enforce && (!pass_ok || summary_pass.had_error) { return false; }
-    }
-    return true;
+    return !verifier.had_error;
 }
 
 fn write_zil(o: &Options, m: &mut ILModule, table: &mut InternTable, input_mod_id: [u8]) -> bool {
@@ -831,7 +794,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
         eprint("zoril: error: no input file\n");
         return 1;
     }
-    if o.output_path.len == 0 as usize && !o.emit_deps && !o.emit_zir_stats {
+    if o.output_path.len == 0 as usize && !o.emit_deps && !o.emit_zir_stats && !o.emit_origins {
         o.output_path = default_output_path(&o, arena);
     }
     let (res, input_path) = read_source(o.input_path, o.root, arena);

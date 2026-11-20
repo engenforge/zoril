@@ -9,7 +9,10 @@
 #      or `expected compile fail`, read with the runner's own reader, `tr_expectations`;
 #   3. requires a warning-free build of a program that imports `vec` (a warning here once came from
 #      the interface's copy of `Vec::push` having lost its #[stores]), and the rejection of
-#      safety probe 194 (`Vec::clone_in`'s result borrows its arena), under zbuild.
+#      safety probe 194 (`Vec::clone_in`'s result borrows its arena), under zbuild;
+#   4. (below, 6) lib_summary.zrl's origin-set summaries (Z-0057): the interface writes each pairwise
+#      store edge, the overflow bit, ret_addr vs ret_contents and ret_fresh, and the prov_* programs
+#      built with --provenance, whole-program and under zbuild, agree on the header's outcome.
 cd "$(dirname "$0")/.." || exit 2
 . scripts/env.sh
 . scripts/lib/test_runner.sh
@@ -36,7 +39,9 @@ has_attr() {
 for want in \
     "gen_must_use|#[must_use]" "gen_borrows|#[borrows(b)]" "gen_stores|#[stores(val -> dst)]" \
     "impl_must_use|#[must_use]" "impl_borrows|#[borrows(self)]" "impl_stores|#[stores(val -> self)]" \
-    "area|#[must_use]" "first|#[borrows(self)]"; do
+    "area|#[must_use]" "first|#[borrows(self)]" \
+    "gen_fresh|#[fresh]" "fresh_block|#[fresh]" "impl_fresh|#[fresh]" "tr_fresh|#[fresh]" \
+    "release_block|#[releases]"; do
     item=${want%%|*}; attr=${want#*|}
     has_attr "$item" "$attr" || fail "the interface lost $attr on $item" "$dir/lib.zri"
 done
@@ -46,6 +51,18 @@ grep -q '^struct Hidden ' "$dir/lib.zri" || fail "the interface wrote a private 
 grep -q '^type HiddenAlias ' "$dir/lib.zri" || fail "the interface wrote a private alias as public" "$dir/lib.zri"
 grep -q '^#\[must_use\]$' "$dir/lib.zri" && grep -A1 '^#\[must_use\]$' "$dir/lib.zri" | grep -q '^pub struct Token' \
     || fail "the interface lost #[must_use] on struct Token" "$dir/lib.zri"
+
+# Ties a body adds to the elision default are written out, and a method the default covers gets none.
+run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -c --emit-interface -o "$dir/lib_ties.zri" "$src/lib_ties.zrl" > "$dir/emit_ties.log" 2>&1 \
+    || fail "lib_ties.zrl's interface was not written" "$dir/emit_ties.log"
+grep -B1 'fn pick(' "$dir/lib_ties.zri" | grep -qF '#[borrows(self, x)]' \
+    || fail "the interface lost the ties pick's body adds to the default" "$dir/lib_ties.zri"
+grep -B1 'fn view(' "$dir/lib_ties.zri" | grep -qF '#[borrows(' \
+    && fail "the interface wrote #[borrows] on view, whose ties are the default" "$dir/lib_ties.zri"
+# A trusted narrowing keeps its `unsafe` on a summarized method and on a generic body alike.
+grep -B1 'fn label(' "$dir/lib_ties.zri" | grep -qF '#[unsafe(borrows())]' \
+    || fail "the interface lost #[unsafe(borrows())] on label" "$dir/lib_ties.zri"
+has_attr gen_trusted '#[unsafe(borrows())]' || fail "the interface lost #[unsafe(borrows())] on gen_trusted" "$dir/lib.zri"
 
 for prog in "$src"/accept_*.zrl "$src"/reject_*.zrl "$src"/private_*.zrl; do
     [ -f "$prog" ] || continue
@@ -126,5 +143,117 @@ for t in err_method_in_two_modules err_private_method_cross_module err_cross_mod
         grep -qF -- "$want" "$dir/$t.log" || { echo "[FAIL] interface-attrs: $t: zbuild did not print: $want"; sed 's/^/       /' "$dir/$t.log"; exit 1; }
     done || exit 1
 done
+
+# 6. The origin-set summary an interface carries (Z-0057), read by `--provenance` at a call.
+run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -c --emit-interface -o "$dir/lib_summary.zri" "$src/lib_summary.zrl" > "$dir/emit_summary.log" 2>&1 \
+    || fail "lib_summary.zrl's interface was not written" "$dir/emit_summary.log"
+# summary_of ITEM: the #[summary(..)] line above `fn ITEM(`.
+summary_of() {
+    awk -v item="$1" '
+        /^[[:space:]]*#\[summary\(/ { s = $0; next }
+        $0 ~ ("fn " item "\\(") { print s; exit }' "$dir/lib_summary.zri"
+}
+want_summary() { # ITEM TEXT
+    summary_of "$1" | grep -qF -- "$2" || fail "the interface lost '$2' in the summary of $1" "$dir/lib_summary.zri"
+}
+want_summary pair "edge = 0, edge_addr = 4,"      # a -> x, not a -> y
+want_summary pair "edge = 1, edge_addr = 8,"      # b -> y
+summary_of pair | grep -qF "edge_addr = 12" && fail "pair's edges were conflated into one product" "$dir/lib_summary.zri"
+want_summary same "edge = 64, edge_addr = 1,"     # ParamContents(0) -> ParamAddr(0)
+want_summary put_owned "edge = 1, edge_addr = 1,"  # the moved owner w -> o, read by prov_accept_moved_owner.zrl
+want_summary p65 "edge = 127, edge_addr = 9223372036854775808," # ParamContents(63), the overflow bit
+want_summary fld "ret_addr = 1, ret_contents = 0"
+want_summary first "ret_addr = 0, ret_contents = 1"
+want_summary pair "decl_stores = 3, decl_into = 12"
+want_summary lit "ret_flags = 1"
+want_summary raw "ret_flags = 8"
+want_summary fresh "ret_fresh = true"
+want_summary first "ret_fresh = false"
+want_summary split_u "ret_fresh = true,"         # an `unsafe fn` writes its summary too (Z-0070)
+want_summary stash_u "edge = 1, edge_addr = 1,"  # its store edge v -> out
+want_summary kill "releases = 1"
+want_summary first "releases = 0"
+for prog in "$src"/prov_*.zrl; do
+    [ -f "$prog" ] || continue
+    name=$(basename "$prog" .zrl)
+    expect_fail=0; grep -q '^// expected compile fail' "$prog" && expect_fail=1
+    want_text=$(sed -n 's|^// EXPECT: *||p' "$prog" | head -1)
+    if run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib --emit-zil -o "$dir/$name.zil" "$prog" > "$dir/$name.whole.log" 2>&1; then
+        [ "$expect_fail" -eq 0 ] || fail "$name: the whole-program build accepted it" "$dir/$name.whole.log"
+    else
+        [ "$expect_fail" -eq 1 ] || fail "$name: the whole-program build rejected it" "$dir/$name.whole.log"
+    fi
+    if zb -o "$dir/$name.bin" "$prog" > "$dir/$name.zb.log" 2>&1; then
+        [ "$expect_fail" -eq 0 ] || fail "$name: zbuild accepted it" "$dir/$name.zb.log"
+        want=$(sed -n 's|^// expected exit \([0-9]*\).*|\1|p' "$prog" | head -1)
+        "$dir/$name.bin"; rc=$?
+        [ "$rc" -eq "${want:-0}" ] || fail "$name: zbuild's program exited $rc, expected ${want:-0}"
+    else
+        [ "$expect_fail" -eq 1 ] || fail "$name: zbuild rejected it" "$dir/$name.zb.log"
+        [ -z "$want_text" ] || grep -qF -- "$want_text" "$dir/$name.zb.log" || fail "$name: zbuild did not print: $want_text" "$dir/$name.zb.log"
+    fi
+done
+# prov_accept_trusted_forward passes under zbuild for the right reason only if `view`'s interface
+# keeps the body's tie beside the trusted declaration, which the call then reads instead.
+tv="$dir/cache/iface/$(printf '%s' "$src/lib_trusted_view.zri" | sed 's|/|%2F|g')"
+grep -B2 'fn view(' "$tv" 2>/dev/null | grep -q 'ret_contents = 1,' \
+    && grep -B1 'fn view(' "$tv" | grep -qF '#[unsafe(borrows())]' \
+    || fail "lib_trusted_view's interface lost view's ret_contents or its #[unsafe(borrows())]" "$tv"
+
+# 6b. ret_fresh is read back, not just written: a caller of `mix` (tied to its arena argument, and
+# fresh on the other path) owns storage of its own only through the bit, so dropping it from the
+# interface must change what `--emit-origins` prints for the result.
+fr="$dir/fresh"
+mkdir -p "$fr/off"
+key=$(printf '%s' "$src/lib_summary.zrl" | sed 's|/|%2F|g')
+run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -c --write-interface "$fr/${key%.zrl}.zri" -o "$fr/lib.zil" "$src/lib_summary.zrl" > "$fr/emit.log" 2>&1 \
+    || fail "lib_summary.zrl's interface was not written for the ret_fresh check" "$fr/emit.log"
+sed 's/ret_fresh = true/ret_fresh = false/' "$fr/${key%.zrl}.zri" > "$fr/off/${key%.zrl}.zri"
+origins_of() { # IFACE-DIR -> the result's line of origins_fresh_caller's `caller`
+    run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -I "$src" -c --iface-dir "$1" --emit-origins -o /dev/null "$src/origins_fresh_caller.zrl" 2>&1 \
+        | awk '/^origins / { on = ($2 == "caller"); next } on && $1 == "v" { print; exit }'
+}
+with_bit=$(origins_of "$fr"); without_bit=$(origins_of "$fr/off")
+case "$with_bit" in *"Frame("*) ;; *) fail "an imported ret_fresh result owns no storage of its own: '$with_bit'" ;; esac
+[ "$with_bit" != "$without_bit" ] || fail "ret_fresh is not read from the interface: both give '$with_bit'"
+
+# 6c. releases is read back from `.zri`, and agrees between whole-program and separate compilation.
+sed 's/releases = 1/releases = 0/' "$fr/${key%.zrl}.zri" > "$fr/off/${key%.zrl}.zri"
+releases_of_iface() {
+    run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -I "$src" -c --iface-dir "$1" --emit-origins -o /dev/null "$src/origins_releases_caller.zrl" 2>&1 \
+        | awk '/^origins / { on = ($2 == "caller"); next } on && $1 == "releases" { sub(/^  /, ""); print; exit }'
+}
+releases_whole=$(run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -I "$src" --emit-origins "$src/origins_releases_caller.zrl" 2>&1 \
+    | awk '/^origins / { on = ($2 == "caller"); next } on && $1 == "releases" { sub(/^  /, ""); print; exit }')
+releases_imported=$(releases_of_iface "$fr")
+releases_off=$(releases_of_iface "$fr/off")
+[ "$releases_whole" = "releases 0" ] || fail "whole-program origins_releases_caller gave '$releases_whole', expected 'releases 0'"
+[ "$releases_imported" = "$releases_whole" ] || fail "imported origins_releases_caller gave '$releases_imported', expected '$releases_whole'"
+[ -z "$releases_off" ] || fail "releases is not read from the interface: with releases = 0 it still gave '$releases_off'"
+
+# 6d. an extern's #[unsafe(stores(..))] is preserved in `.zri` above `extern fn`.
+ec_zri="$dir/cache/iface/$(printf '%s' "$src/lib_extern_copy.zri" | sed 's|/|%2F|g')"
+if [ ! -f "$ec_zri" ]; then
+    run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -c --write-interface "$fr/lib_extern_copy.zri" -o "$fr/lib_extern_copy.zil" "$src/lib_extern_copy.zrl" > "$fr/ec.log" 2>&1 \
+        || fail "lib_extern_copy.zrl's interface was not written" "$fr/ec.log"
+    ec_zri="$fr/lib_extern_copy.zri"
+fi
+grep -B1 'extern fn memcpy(' "$ec_zri" | grep -qF '#[unsafe(stores(*src -> dest))]' \
+    || fail "lib_extern_copy.zri lost #[unsafe(stores(*src -> dest))] above extern fn" "$ec_zri"
+
+# 6e. ret_held is written, carries an `unsafe(borrows(*p))` declaration across a `.zri`, and is read
+# back: with the key set to 0 an importer's result is no longer held.
+want_summary first "ret_held = 1"
+want_summary held_decl "ret_held = 1"
+grep -B1 'fn held_decl(' "$dir/lib_summary.zri" | grep -qF '#[unsafe(borrows(*h))]' \
+    || fail "the interface lost #[unsafe(borrows(*h))] on held_decl" "$dir/lib_summary.zri"
+sed 's/ret_held = 1/ret_held = 0/' "$fr/${key%.zrl}.zri" > "$fr/off/${key%.zrl}.zri"
+held_of_iface() { # IFACE-DIR -> the held line of origins_held_caller's `caller`
+    run_with_timeout -k 5s 60s "$ZORIL" -I stdlib=stdlib -I "$src" -c --iface-dir "$1" --emit-origins -o /dev/null "$src/origins_held_caller.zrl" 2>&1 \
+        | awk '/^origins / { on = ($2 == "caller"); next } on && $1 == "held" { sub(/^  /, ""); print; exit }'
+}
+held_with=$(held_of_iface "$fr"); held_off=$(held_of_iface "$fr/off")
+[ "$held_with" = "held ParamContents(0)" ] || fail "an imported held result is not held: '$held_with'"
+[ -z "$held_off" ] || fail "ret_held is not read from the interface: with ret_held = 0 it still gave '$held_off'"
 
 echo "[PASS] interface-attrs: attributes, visibility and unsafe survive a .zri; every generic or trait attribute of the standard library is in its interface; zbuild and the whole-program build agree on the fixtures and probe 194; private items, duplicate methods and exports are diagnosed as whole-program does"

@@ -1,0 +1,18 @@
+// name: A view of a parameter's Vec pushed into another parameter's Vec outlives a free() in the callee
+// expected: compile_reject
+// Refused at v.free(): out.push(v.as_slice()) stores v's view into caller memory via #[stores(item => self)], giving v's release-tier borrow to the frame's outside holder (§3.1, holder two).
+import "vec.zrl";
+use vec::Vec;
+fn k2(out: &mut Vec<[i32]>, v: &mut Vec<i32>) {
+    out.push(v.as_slice());
+    v.free();
+}
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut out = Vec::<[i32]>.new();
+    k2(&mut out, &mut v);
+    let mut w = Vec::<i32>.new();
+    w.push(77);
+    return out.as_slice()[0][0];
+}

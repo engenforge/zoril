@@ -1,3 +1,4 @@
+#[unsafe(stores())]
 extern fn write(fd: i32, buf: *u8, count: usize) -> isize;
 
 fn test_write(fd: i32, s: [u8]) {

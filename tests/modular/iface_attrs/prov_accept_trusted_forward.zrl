@@ -1,0 +1,13 @@
+// expected exit 0
+// A call to a trusted callee reads its declared ties, also across a `.zri`: `fwd` returns `view`'s
+// result, tied to no argument, so its own `#[borrows()]` leaves out nothing.
+import "lib_trusted_view.zrl";
+use lib_trusted_view::{S, view};
+
+#[borrows()]
+fn fwd(s: &S) -> [u8] { return view(s); }
+
+fn main() -> i32 {
+    let s = S { a: "hi" };
+    return fwd(&s).len as i32 - 2;
+}

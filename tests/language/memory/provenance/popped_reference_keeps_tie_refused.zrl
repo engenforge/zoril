@@ -1,0 +1,14 @@
+// A reference popped from a local `Vec<&i32>` (an `Option<&i32>`) keeps its tie to what the
+// `Vec` holds, so storing it out is refused (§3, _Scalars, casts and `extern`_).
+// EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+fn bad(out: &mut &i32) {
+    let x = 5;
+    let mut v = Vec::<&i32>.new();
+    v.push(&x);
+    let r = match v.pop() { Option.Some(p) => p, Option.None => { return; } };
+    *out = r;
+}
+fn main() -> i32 { let y = 2; let mut o = &y; bad(&mut o); return *o; }

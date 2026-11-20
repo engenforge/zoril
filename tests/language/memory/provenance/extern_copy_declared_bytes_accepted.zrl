@@ -1,0 +1,24 @@
+// expected exit 0
+//
+// Copying bytes of a local [u8; 8] into a caller-owned heap Vec<u8> through
+// a declared #[unsafe(stores(*s -> d))] memcpy is accepted.
+
+import "vec.zrl";
+use vec::Vec;
+
+#[unsafe(stores(*s -> d))]
+extern fn memcpy(d: *mut u8, s: *u8, n: u64) -> *mut u8;
+
+fn copy_bytes(out: &mut Vec<u8>) {
+    let buf = [1 as u8, 2 as u8, 3 as u8, 4 as u8, 5 as u8, 6 as u8, 7 as u8, 8 as u8];
+    out.resize(8 as usize, 0 as u8);
+    unsafe {
+        let _ = memcpy(out.as_mut_ptr(), &buf[0] as *u8, 8 as u64);
+    }
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<u8>.new();
+    copy_bytes(&mut v);
+    return (v[0] as i32) - 1;
+}

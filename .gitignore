@@ -12,6 +12,7 @@ tests/**/*.out
 !bootstrap/stage0-c/lib/rt/*.s
 !bootstrap/stage1/rt/runtime.s
 !tests/integration/external_stub.s
+!tests/language/memory/provenance/extern_one_pointer_keep.s
 !tools/zilc/test/*.ssa
 !scripts/qbe_probe/*.ssa
 
@@ -32,7 +33,8 @@ vgcore.*
 # Cache and local artifacts
 .zoril-cache/
 
-# Task files: the orphan `tasks` branch, mounted here as a worktree (AGENTS.md, Working on tasks)
-/doc/tasks/
+# Task files: the orphan `tasks` branch, mounted here as a worktree (AGENTS.md, Working on tasks).
+# No trailing slash, so a symlink to another checkout's mount is ignored too.
+/doc/tasks
 # Benchmark and density records: the orphan `records` branch, mounted here as a worktree
-/bench/records/
+/bench/records

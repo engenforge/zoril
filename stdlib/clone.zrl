@@ -10,14 +10,24 @@ import "string.zrl";
 use string::String;
 use vec::Vec;
 
+// An empty Vec on the allocator of v. It is here, not in vec.zrl, because the pinned stage1
+// compiles vec.zrl and does not parse `borrows(*v)`.
+// SAFETY: the result records only the arena `v` allocates from, which `v` holds as a borrow;
+// it owns nothing of `v`'s buffer.
+#[unsafe(borrows(* v))]
+fn vec_empty_like<T>(v: &Vec<T>) -> Vec<T> {
+    // SAFETY: the pointer is the arena `v` (a live Vec) allocates from, and `new_in_raw` only
+    // records it.
+    return unsafe { Vec::<T>.new_in_raw(v.raw_arena()) };
+}
+
 // Clones each element into a new Vec on the same allocator.
+// The body has no `unsafe`, so whether the clone is tied only to what `self` holds is inferred
+// for each `T`: for a `T` whose clone may point into its source, it keeps `self` borrowed.
 impl<T: Clone> Clone for Vec<T> {
     // Creates an explicit duplicate copy of the value.
-    #[borrows()]
     fn clone(self: &Vec<T>) -> Vec<T> {
-        // SAFETY: the pointer is the arena `self` (a live Vec) allocates from, and `new_in_raw`
-        // only records it.
-        let mut out = unsafe { Vec::<T>.new_in_raw(self.raw_arena()) };
+        let mut out = vec_empty_like(self);
         let mut i = 0 as usize;
         while i < self.len() {
             out.push(self.get(i).unwrap().clone());
@@ -31,7 +41,9 @@ impl<T: Clone> Clone for Vec<T> {
 // String's own arena via the raw escape hatch (an `&Arena` is not available here).
 impl Clone for String {
     // Creates an explicit duplicate copy of the value.
-    #[borrows()]
+    // SAFETY: the clone's bytes are its own copy and it records only the arena `self` allocates
+    // from, which `self` holds as a borrow.
+    #[unsafe(borrows(* self))]
     fn clone(self: &String) -> String {
         // SAFETY: the pointer is the arena `self` (a live String) allocates from, and
         // `clone_in_raw` only records it.

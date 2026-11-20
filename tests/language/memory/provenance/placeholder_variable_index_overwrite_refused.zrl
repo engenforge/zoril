@@ -1,0 +1,6 @@
+// An array slot overwritten at a variable index: any element may still be the local's address, so
+// storing one out is refused (§3, _Transfer_).
+// EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
+// expected compile fail
+fn bad(out: &mut &i32, p: &i32, i: usize) { let seed = 0; let mut a = [&seed, &seed]; a[i] = p; *out = a[0]; }
+fn main() -> i32 { let y = 2; let mut o = &y; bad(&mut o, &y, 1); return *o; }

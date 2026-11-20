@@ -1,7 +1,6 @@
 // name: A binding of a match on a reference to a local enum is returned
-// expected: known_gap
-// gap: let r = &e; return match r { E.A(x) => x, .. }: matching through a reference binds the payload by reference, a pointer into the local enum e, and the old rules do not read the binding as derived from r, so the return is accepted (also with if let on &e and with &mut e); refused under --provenance by the return rule
-// observed: exit 77
+// expected: compile_reject
+// Refused by the provenance return rule: matching through a reference binds the payload with the scrutinee's frame origin.
 struct P { a: i32 }
 enum E { A(P), B(i32) }
 fn leak(n: i32) -> &P {

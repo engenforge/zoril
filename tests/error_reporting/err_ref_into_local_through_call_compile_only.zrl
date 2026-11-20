@@ -1,6 +1,6 @@
 // expected compile fail
 // flags: -c
-// EXPECT: tests/error_reporting/err_ref_into_local_through_call_compile_only.zrl:8:1: error: region escape: returning a pointer to local stack storage
+// EXPECT: tests/error_reporting/err_ref_into_local_through_call_compile_only.zrl:8:48: error: provenance: the returned value holds an address of this frame (return rule)
 // A call's result pointing into a stack argument is caught under separate compilation (-c)
 // by the ZIL verifier (tie_call_result_storage), where summary_pass does not run.
 struct C { v: i32 }

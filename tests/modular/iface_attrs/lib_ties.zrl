@@ -1,0 +1,25 @@
+// Ties a body adds to the elision default, which an importer cannot derive from the signature:
+// the interface writes them as `#[borrows(..)]` (scripts/test_interface_attrs.sh).
+pub struct Picker { data: [u8] }
+
+impl Picker {
+    pub fn new(data: [u8]) -> Picker { return Picker { data: data }; }
+
+    // Returns its other argument: the `&self` default ties the result to `self` alone, the body
+    // to `x` too.
+    pub fn pick(self: &Picker, x: [u8]) -> [u8] {
+        if self.data.len > x.len { return self.data; }
+        return x;
+    }
+
+    // Returns a view `self` holds: the default already covers it.
+    pub fn view(self: &Picker) -> [u8] { return self.data; }
+}
+
+impl Picker {
+    // A trusted narrowing: the `&self` default would tie the result to `self`, and the interface
+    // keeps the `unsafe` form, so an importer trusts it the same way.
+    // SAFETY: the result is a string literal, which outlives every Picker.
+    #[unsafe(borrows())]
+    pub fn label(self: &Picker) -> [u8] { return "*"; }
+}

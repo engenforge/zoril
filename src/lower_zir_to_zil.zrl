@@ -104,7 +104,8 @@ impl ZirToZilLowerer {
     // it across the `&mut self` calls that lower the body. This is sound only while nothing pushes
     // to `zir_module.funcs` during a body's lowering (which would reallocate the vector's backing
     // buffer and invalidate `self.current_func`).
-    #[borrows()]
+    // SAFETY: the driver keeps the body being lowered alive for the lowerer's life.
+    #[unsafe(borrows())]
     fn cur_func(self: &ZirToZilLowerer) -> &ZirFunction {
         return unsafe { &*self.current_func };
     }
@@ -151,7 +152,8 @@ impl ZirToZilLowerer {
 
     // A ZIL block for each ZIR block, the first being START (the current one).
     // The result is a fresh scratch-arena array, not a view of this lowerer.
-    #[borrows()]
+    // SAFETY: the result is scratch-arena data, reset only once the lowerer is gone.
+    #[unsafe(borrows())]
     fn create_blocks(self: &mut ZirToZilLowerer, func: &ZirFunction, start: u32) -> [mut u32] {
         let blocks = unsafe {
             @slice(

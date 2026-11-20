@@ -1,0 +1,19 @@
+// The clone of a local Vec<u8> is its own copy, so it can be returned: a u8's clone points into
+// nothing, so the clone's held tie, inferred for this T, reads what the original holds, not the
+// buffer it owns (doc/design/provenance.md §3, _Held ties_).
+// expected exit 0
+import "vec.zrl";
+import "clone.zrl";
+use vec::Vec;
+
+fn f() -> Vec<u8> {
+    let mut v = Vec::<u8>.new();
+    v.push(1);
+    v.push(2);
+    return v.clone();
+}
+
+fn main() -> i32 {
+    let c = f();
+    return c.len() as i32 + *c.get(1).unwrap() as i32 - 4;
+}

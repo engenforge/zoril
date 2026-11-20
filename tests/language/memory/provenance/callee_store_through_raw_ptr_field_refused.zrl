@@ -1,0 +1,17 @@
+// gap_95 under --provenance: a callee stores a frame address through a raw pointer to a static mut that a struct field holds.
+// expected compile fail
+// EXPECT: provenance: the callee stores an address of this frame into memory that outlives it (call store rule)
+static mut G: *i32 = 0 as *i32;
+struct S { p: *mut *i32 }
+fn put(s: &S, r: &i32) { unsafe { *s.p = r as *i32; } }
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn stash() {
+    let x = 42;
+    let s = S { p: &mut G as *mut *i32 };
+    put(&s, &x);
+}
+fn main() -> i32 {
+    stash();
+    let _ = clobber_stack();
+    return unsafe { *G };
+}

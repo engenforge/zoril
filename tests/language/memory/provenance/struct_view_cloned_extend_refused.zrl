@@ -1,0 +1,14 @@
+// extend_from_slice stores the slice's elements (clones of them once a user Clone runs), and each holds a
+// view of a stack array: the caller's Vec would get a view of this frame (doc/design/provenance.md §3).
+// EXPECT: call store rule
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+struct H { s: [u8] }
+impl Clone for H { fn clone(self: &H) -> H { return H { s: self.s }; } }
+fn fill(out: &mut Vec<H>) {
+    let buf = [42 as u8; 16];
+    let a = [H { s: &buf }];
+    out.extend_from_slice(&a);
+}
+fn main() -> i32 { let mut v: Vec<H> = Vec.new(); fill(&mut v); return 0; }

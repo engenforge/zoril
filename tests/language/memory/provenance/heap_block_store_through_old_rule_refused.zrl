@@ -1,0 +1,18 @@
+// A frame address stored inside `unsafe` through a heap block from the allocator's null-arena
+// path, and the block returned. Outside the provenance guarantee (safety_model.md §3.2,
+// unsafe_policy.md §1): accepted once the legacy region rule is retired.
+// expected exit 0
+import "mem_raw.zrl";
+use mem_raw::{ArenaHeader, zoril_allocator_alloc};
+
+fn f() -> *mut &i32 {
+    let x = 5;
+    let p = unsafe { zoril_allocator_alloc(0 as *mut ArenaHeader, 8 as u64) } as *mut &i32;
+    unsafe { *p = &x; }
+    return p;
+}
+
+fn main() -> i32 {
+    let p = f();
+    return 0;
+}

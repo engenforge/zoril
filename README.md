@@ -20,8 +20,8 @@ Zoril is an early experiment in a combination that has not been explored much: c
 ### Key Highlights
 
 - **Small toolchain:** `zoril`, `zilc` and the `qbe` backend are about **1.5 MB** of stripped binaries, built from ~42k lines of Zoril and ~15k lines of C (QBE). See [Zero Overhead](doc/zero_overhead.md).
-- **Memory safety checks in every build:** array and slice bounds are checked at run time (exit 134); ownership, moves, borrows, stack regions and arenas are checked at compile time; no check is compiled out. Each claim is backed by probes in the [79-row safety matrix](doc/spec/safety_model.md). No row is marked **GAP**; the open holes are listed as known gaps in [What Zoril Checks](doc/SAFETY.md), which also says what is checked, what is checked at run time and what is left to the programmer.
-- **Fuzzed:** the release bar of 2,638,155 generated programs compiled and ran with no fault on the previous code, and a shorter session of 755,772 programs did the same on this code, each built whole-program and with `zbuild`; a full release-bar run on this code is planned. See [bench/fuzz/README.md](bench/fuzz/README.md).
+- **Memory safety checks in every build:** array and slice bounds are checked at run time (exit 134); ownership, moves, borrows, stack regions and arenas are checked at compile time; no check is compiled out. Each property is backed by executable probes in the [safety matrix](bench/safety_matrix/README.md) (specified in [Safety Model](doc/spec/safety_model.md)), while known holes in checked code and the boundary with `unsafe` are documented in [What Zoril Checks](doc/SAFETY.md).
+- **Fuzzed:** tested with a differential fuzzer against `rustc` across both whole-program and `zbuild` builds (with `--checked` instrumentation, value canaries, and drop accounting); current run budgets and findings live in [bench/fuzz/README.md](bench/fuzz/README.md).
 - **No lifetime annotations:** ownership without lifetime parameters in signatures, using arenas and analysis of function bodies. See [Why Zoril](doc/vision/why_zoril.md).
 - **No C runtime dependency:** executables link a small assembly runtime that makes Linux system calls directly: no libc and no dynamic linker.
 - **Compact Native Binaries:** a program that only returns is **~10 KB** (**~8.5 KB** stripped), the getting-started hello world **~18 KB** (**~14 KB** stripped), and through `zbuild` **~32 KB** (**~23 KB** stripped). They are static Linux x86-64 ELF files.
@@ -340,6 +340,13 @@ zoril -I <stdlib>  --emit-zil  ->  zilc  ->  qbe  ->  as  ->  ld  (with runtime.
 
 `PREFIX` is the directory holding `lib/zoril/` and `share/zoril/`: `/usr/local` after `sudo make install`, or the one you gave `make install PREFIX=...`.
 
+## Documentation
+
+- **Getting Started & Language Guide:** [Getting Started](doc/getting_started.md), [Tour of Zoril](doc/tour.md), [What Zoril Checks](doc/SAFETY.md), [Stability Statement](doc/STABILITY.md), [Known Issues](KNOWN_ISSUES.md), [Roadmap](doc/ROADMAP.md)
+- **Vision & Benchmarks:** [Why Zoril](doc/vision/why_zoril.md), [Zero Overhead](doc/zero_overhead.md), [Language Comparison](doc/language/language_comparison.md)
+- **Language & Toolchain Specifications:** [Surface Syntax](doc/spec/surface_syntax.md), [Standard Library](doc/spec/standard_library.md), [Safety Model](doc/spec/safety_model.md), [Unsafe Policy](doc/spec/unsafe_policy.md), [ABI](doc/spec/abi.md), [Modular Compilation](doc/spec/modular_compilation.md), [Intermediate Language](doc/spec/intermediate_language.md), [ZIR](doc/spec/zir.md), [Formatter (`zoril fmt`)](doc/tools/fmt.md)
+- **Contributor Guides & Verification Ledgers:** [Developer Guide](doc/developer_guide.md), [Dependencies](doc/dependencies.md), [Reproducible Builds](doc/reproducible_builds.md), [Two-Stage Bootstrap](doc/bootstrap/two_stage.md), [Provenance Design](doc/design/provenance.md), [Safety Verification Ledger](bench/safety_matrix/README.md), [Checked-Program Fuzzer](bench/fuzz/README.md)
+
 ## Repository layout
 
 - `src/` — the self-hosted compiler frontend (`main.zrl`, lexer, parser, AST, ZIR, verification pass, ZIL emitter, formatter).
@@ -354,7 +361,7 @@ zoril -I <stdlib>  --emit-zil  ->  zilc  ->  qbe  ->  as  ->  ld  (with runtime.
 
 ## Testing
 
-- `make test` runs the standard verification suite: compiler unit tests, syntax checks, error-reporting tests, standard library safety assertions, runtime consistency, and the 519-probe safety matrix across 79 rows.
+- `make test` runs the standard verification suite: compiler unit tests, syntax checks, error-reporting tests, standard library safety assertions, runtime consistency, and the [safety matrix](bench/safety_matrix/README.md).
 - For developer-specific pre-merge verification (`make preflight`, `make preflight-changed`), mutation testing, toolchain dependency matrix testing (`make deps-matrix`), and reproducible release validation (`make repro-check`), see the [Developer Guide](doc/developer_guide.md).
 
 ## Contributing and roadmap

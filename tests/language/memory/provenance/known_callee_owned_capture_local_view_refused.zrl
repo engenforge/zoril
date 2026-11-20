@@ -1,0 +1,24 @@
+// A view of a local `Vec` stored into an owned capture through a known call: the capture outlives
+// the call, so the call store rule refuses the frame address, as before the moved holder's own
+// storage was left out of the check (§3, _A closure body's summary is stated over `__env`_).
+// EXPECT: provenance: the callee stores an address of this frame into a global (call store rule)
+// expected compile fail
+import "vec.zrl";
+use vec::Vec;
+struct Holder { s: [i32], keep: Vec<i32> }
+fn f() -> i32 {
+    let mut h = Holder { s: @slice(0 as *i32, 0), keep: Vec::<i32>.new() };
+    let mut v = Vec::<i32>.new();
+    v.push(9);
+    let r = v.as_slice();
+    let mut cl = |store: bool| -> i32 {
+        if store {
+            h = Holder { s: r, keep: Vec::<i32>.new() };
+            return 0;
+        }
+        return h.s[0];
+    };
+    let _ = cl(true);
+    return cl(false);
+}
+fn main() -> i32 { return f(); }

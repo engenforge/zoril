@@ -1,0 +1,15 @@
+// A closure local handed by `&mut` to a callee that reassigns it is no known callee (§3, _Calls
+// through a known callee_). Known as the first closure, the call would only store the parameter's
+// view into a local; the replacement stores the frame view into the caller's memory.
+// EXPECT: unknown-call store rule
+// expected compile fail
+fn swap_in(slot: &mut fn(&mut [i32], &mut [i32]), g: fn(&mut [i32], &mut [i32])) { *slot = g; }
+fn f(out: &mut [i32]) {
+    let data = [1, 2];
+    let mut lv: [i32] = &data;
+    let mut cl = |o: &mut [i32], v: &mut [i32]| { *o = *v; };
+    let g = |o: &mut [i32], v: &mut [i32]| { *v = *o; };
+    swap_in(&mut cl, g);
+    cl(&mut lv, out);
+}
+fn main() -> i32 { return 0; }

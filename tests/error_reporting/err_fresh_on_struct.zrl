@@ -1,0 +1,6 @@
+// expected compile fail
+// EXPECT: tests/error_reporting/err_fresh_on_struct.zrl:4:3: error: #[fresh] applies only to an unsafe fn
+// `#[fresh]` on an item that is not a function (Z-0078).
+#[fresh]
+struct S { x: i32 }
+fn main() -> i32 { return 0; }

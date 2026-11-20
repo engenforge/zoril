@@ -1,0 +1,16 @@
+// gap_64 through two callers: the closure is checked where it is made, whoever calls it (§3, _A
+// closure made into a value_).
+// EXPECT: provenance: the closure made here stores an address of this frame into a global when it is called (closure rule)
+// expected compile fail
+static mut G: *i32 = 0 as *i32;
+fn run(f: fn() -> unit) { f(); }
+fn run2(f: fn() -> unit) { run(f); }
+fn stash() {
+    let x = 42;
+    let r = &x;
+    run2(|| { G = r as *i32; });
+}
+fn main() -> i32 {
+    stash();
+    return 0;
+}

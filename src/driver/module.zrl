@@ -36,14 +36,39 @@ use il_type::{ILArray, ILPRIM_U8, ILPrimitive, ILSlice, ILTYPE_ARRAY, ILTYPE_BOX
 use io::eprint;
 use intern::InternTable;
 use lower_zir_to_zil::ZirToZilLowerer;
-use mem_raw::{arena_reset, zoril_allocator_alloc};
+use mem_raw::{ARENA_HEADER_SIZE, ARENA_POISON, ArenaHeader, memset, zoril_allocator_alloc};
 use mono::INFER_RESULT;
 use progress::progress_name;
 use resolve::SymbolKind;
-use state::Driver;
+use state::{Driver, NO_LOW, OsPending};
 use types::{CONST_FORM_ERROR, CONST_FORM_NOT_CONST, CONST_FORM_STRING, ConstInit};
 use vec::Vec;
 use zir::ZirModule;
+
+// Resets `self.scratch_arena` back to a mark taken on entry to the body pass; allocations prior
+// to that mark (and separate driver fields such as `self.intern_table`) are untouched, so
+// omitting `#[releases]` prevents field-insensitive summaries from conflating them with `Driver`.
+unsafe fn reset_driver_scratch(arena: *mut ArenaHeader, offset: u64) {
+    let old_offset = (*arena).offset;
+    if offset < old_offset {
+        let released = ((*arena).start as u64 + ARENA_HEADER_SIZE + offset) as *mut u8;
+        memset(released, ARENA_POISON, old_offset - offset);
+    }
+    (*arena).offset = offset;
+}
+
+static mut ICE_NOTE_PTR: *mut u8 = 0 as *mut u8;
+
+fn ice_buf_append(buf: *mut u8, pos: usize, s: [u8]) -> usize {
+    let mut n = pos;
+    let mut i = 0 as usize;
+    while i < s.len && n < 512 as usize {
+        unsafe { *((buf as usize + n) as *mut u8) = s[i]; }
+        n = n + 1 as usize;
+        i = i + 1 as usize;
+    }
+    return n;
+}
 
 impl Driver {
 
@@ -104,6 +129,50 @@ impl Driver {
         };
     }
 
+    // The parameters `#[unsafe(borrows(*p))]` declares held (bit i = user parameter i): the result
+    // is tied to what p's referent holds, not to the referent. Names that match no parameter are
+    // reported by compute_ret_ties.
+    fn compute_ret_held_decl(self: &mut Driver, f: &FnDecl) -> u64 {
+        let mut mask = 0 as u64;
+        let mut bi = 0 as usize;
+        while bi < f.borrows_held.len {
+            let mut pi = 0 as usize;
+            while pi < f.params.len && pi < 64 as usize {
+                if f.params[pi].name == f.borrows_held[bi] {
+                    let ty_id = f.params[pi].ty;
+                    let is_ref = ty_id != 0 as TypeId
+                        && (ty_id as usize) < self.resolver.ast.types.len()
+                        && match self.resolver.ast.types[ty_id as usize] {
+                            Type.Ref(_) | Type.RefMut(_) => true,
+                            _ => false,
+                        };
+                    if is_ref {
+                        mask = mask | ((1 as u64) << (pi as u64));
+                    } else {
+                        self.report_error_concat(
+                            "`*name` in #[unsafe(borrows(..))] needs a reference parameter: ",
+                            self.resolver.intern_table.lookup(f.borrows_held[bi]),
+                            if f.body != 0 as ExprId {
+                                self.resolver.ast.expr_spans[f.body as usize]
+                            } else {
+                                Span {
+                                    start: 0 as u32,
+                                    end: 0 as u32,
+                                    line: 0 as u32,
+                                    col: 0 as u32
+                                }
+                            }
+                        );
+                        eprint("\n");
+                    }
+                }
+                pi = pi + 1 as usize;
+            }
+            bi = bi + 1 as usize;
+        }
+        return mask;
+    }
+
     // Which parameters a returned reference or pointer may point into (bit i = user
     // parameter i). `#[borrows(..)]` names them. Otherwise: `self` if the function has a
     // reference `self`, else every parameter whose type can hold a reference. (Rust's
@@ -152,19 +221,33 @@ impl Driver {
         return mask;
     }
 
+    fn param_index(self: &Driver, f: &FnDecl, name: u32) -> usize {
+        let mut pi = 0 as usize;
+        while pi < f.params.len && pi < 63 as usize {
+            if f.params[pi].name == name { return pi; }
+            pi = pi + 1 as usize;
+        }
+        return 63 as usize;
+    }
+
     fn compute_stores_declared(self: &mut Driver, f: &FnDecl) -> (u64, u64) {
         let mut from = 0 as u64;
         let mut to = 0 as u64;
         if !f.has_stores { return (from, to); }
         let mut bi = 0 as usize;
         while bi < f.stores_from.len && bi < f.stores_to.len {
-            from = from | self.param_bit(f, f.stores_from[bi], true);
+            let is_contents = f.is_extern && bi < f.stores_contents.len && f.stores_contents[bi];
+            let sbit = self.param_bit(f, f.stores_from[bi], true);
             let is_static = bi < f.stores_static.len && f.stores_static[bi];
-            if is_static {
-                // Bit 63: the target is a global (src/verify.zrl, STORE_GLOBAL_BIT).
-                to = to | 0x8000000000000000 as u64;
+            // Bit 63: the target is a global (src/verify.zrl, STORE_GLOBAL_BIT).
+            let tbit = if is_static {
+                0x8000000000000000 as u64
             } else {
-                to = to | self.param_bit(f, f.stores_to[bi], false);
+                self.param_bit(f, f.stores_to[bi], false)
+            };
+            if !is_contents {
+                from = from | sbit;
+                to = to | tbit;
             }
             bi = bi + 1 as usize;
         }
@@ -534,9 +617,12 @@ impl Driver {
         span: Span,
         cv: &ConstInit
     ) -> bool {
+        // SAFETY: the scratch arena is the driver's own and live; the initializer's temporary
+        // ZIR is allocated above SCRATCH_OFFSET and discarded here, leaving prior allocations intact.
         let scratch_offset = unsafe { (*self.scratch_arena).offset };
         let ok = self.check_global_initializer_in_scratch(value, ty, form, span, cv);
-        unsafe { arena_reset(self.scratch_arena, scratch_offset); }
+        // SAFETY: as at SCRATCH_OFFSET above: nothing allocated past it outlives this check.
+        unsafe { reset_driver_scratch(self.scratch_arena, scratch_offset); }
         return ok;
     }
 
@@ -878,13 +964,21 @@ impl Driver {
 
     // An internal error's note: "while compiling `NAME` (FILE)".
     fn set_ice_context(self: &mut Driver, name: u32) {
-        let mut note = unsafe { ByteVec.new_raw(self.arena) };
-        note.push_slice("while compiling `");
-        note.push_slice(self.intern_table.lookup(name));
-        note.push_slice("` (");
-        note.push_slice(self.file_path);
-        note.push_slice(")");
-        set_ice_note(note.as_slice());
+        if ICE_NOTE_PTR as usize == 0 as usize {
+            ICE_NOTE_PTR = unsafe {
+                zoril_allocator_alloc(0 as *mut ArenaHeader, 512 as u64)
+            } as *mut u8;
+        }
+        let buf = ICE_NOTE_PTR;
+        let mut n = 0 as usize;
+        n = ice_buf_append(buf, n, "while compiling `");
+        n = ice_buf_append(buf, n, self.intern_table.lookup(name));
+        n = ice_buf_append(buf, n, "` (");
+        n = ice_buf_append(buf, n, self.file_path);
+        n = ice_buf_append(buf, n, ")");
+        // SAFETY: ICE_NOTE_PTR is a 512-byte process-lifetime heap buffer and n <= 512.
+        let note = unsafe { @slice(buf as *u8, n) };
+        set_ice_note(note);
     }
 
     fn unit_type(self: &mut Driver) -> u32 {
@@ -894,7 +988,8 @@ impl Driver {
     // F's IL parameters: the hidden result pointer (IS_SRET) and environment (NEEDS_ENV), then
     // F's own, an aggregate passed by pointer.
     // The parameter list is a fresh arena list, not a view of the driver.
-    #[borrows()]
+    // SAFETY: the result is in the compilation's arena, which is never reset.
+    #[unsafe(borrows())]
     fn il_params(
         self: &mut Driver,
         f: &FnDecl,
@@ -974,7 +1069,62 @@ impl Driver {
         let is_local = self.is_local_function(f, name);
         let owner_len = self.owner_len_of(name);
         let ret_ties = self.compute_ret_ties(f);
-        let (decl_from, decl_to) = self.compute_stores_declared(f);
+        let ret_held_decl = self.compute_ret_held_decl(f);
+        let (mut decl_from, mut decl_to) = self.compute_stores_declared(f);
+        // An import's origin-set summary (summary_os), written by the compiler that built the
+        // interface; empty when it has none. os_call clears the flat `stores`/`into` masks for a known
+        // summary and re-adds only the declared ones, so those come with it.
+        let os = f.summary_os;
+        let has_os = os.len >= 8 as usize;
+        let mut os_rows = if has_os { (os.len - 8 as usize) / 4 as usize } else { 0 as usize };
+        if has_os {
+            decl_from = decl_from | os[4];
+            decl_to = decl_to | os[5];
+        }
+        let mut os_edges = 0 as *mut u64;
+        if os_rows > 0 as usize {
+            // SAFETY: the main arena outlives every body's checks, as for a body's own summary
+            // (check_zir::store_origin_summary); the block holds `os_rows * 4` u64, all written
+            // by the loop below before it is read.
+            os_edges = unsafe { zoril_allocator_alloc(self.arena, os_rows * 32 + 8) as *mut u64 };
+            let dst = unsafe { @slice(os_edges, os_rows * 4 as usize) };
+            let mut q = 0 as usize;
+            while q < os_rows * 4 as usize {
+                dst[q] = os[8 + q];
+                q = q + 1 as usize;
+            }
+        } else if f.is_extern
+            && f.body == 0 as ExprId
+            && f.has_stores
+            && f.stores_from.len > 0 as usize {
+            os_rows = f.stores_from.len;
+            // SAFETY: the main arena outlives every body's checks; the block holds `os_rows * 4` u64,
+            // all written by the loop below before it is read.
+            os_edges = unsafe { zoril_allocator_alloc(self.arena, os_rows * 32 + 8) as *mut u64 };
+            let dst = unsafe { @slice(os_edges, os_rows * 4 as usize) };
+            let mut bi = 0 as usize;
+            while bi < os_rows {
+                let sidx = self.param_index(f, f.stores_from[bi]);
+                let is_contents = bi < f.stores_contents.len && f.stores_contents[bi];
+                let code = if is_contents { 64 as usize + sidx } else { sidx };
+                let is_static = bi < f.stores_static.len && f.stores_static[bi];
+                let didx = if is_static {
+                    63 as usize
+                } else {
+                    self.param_index(f, f.stores_to[bi])
+                };
+                let addr = if is_static || didx >= 63 as usize {
+                    0 as u64
+                } else {
+                    (1 as u64) << (didx as u64)
+                };
+                dst[bi * 4 as usize] = code as u64;
+                dst[bi * 4 as usize + 1 as usize] = addr;
+                dst[bi * 4 as usize + 2 as usize] = 0 as u64;
+                dst[bi * 4 as usize + 3 as usize] = if is_static { 1 as u64 } else { 0 as u64 };
+                bi = bi + 1 as usize;
+            }
+        }
         let decl_span = if f.body != 0 as ExprId {
             self.resolver.ast.expr_spans[f.body as usize]
         } else {
@@ -1000,6 +1150,8 @@ impl Driver {
             is_extern: f.is_extern
                 && f.body
                     == 0 as ExprId, is_export: f.is_export, is_unsafe: f.is_unsafe, is_local: is_local, is_pub: f.is_pub, must_use: f.must_use,
+            fresh: f.fresh,
+            releases: f.releases,
             arena_alloc_bytes: if f.has_summary { f.summary_alloc } else { 0 as usize },
             doc_comment: f.doc_comment,
             source_file: source_file,
@@ -1023,7 +1175,7 @@ impl Driver {
             },
             stores_storage: if f.has_summary { f.summary_stores } else { 0 as u64 },
             store_targets: if f.has_summary { f.summary_into } else { 0 as u64 },
-            has_stores_declared: f.has_stores,
+            has_stores_declared: f.has_stores || (has_os && (os[4] | os[5]) != 0 as u64),
             stores_declared_from: decl_from,
             stores_declared_to: decl_to,
             decl_span: decl_span,
@@ -1041,6 +1193,8 @@ impl Driver {
                 || (f.is_extern && !f.is_export)
                 || (f.body != 0 as ExprId && !lowers_body),
             has_borrows: f.has_borrows,
+            borrows_trusted: f.borrows_trusted,
+            ties_inferred: false,
             // How the borrow checker identifies the arena lifecycle primitives; decided here from
             // where the declaration was loaded from, never from a user file's name
             // (doc/spec/modular_compilation.md).
@@ -1051,6 +1205,20 @@ impl Driver {
             allocator_free: arena_op == ARENA_OP_ALLOCATOR_FREE,
             buffer_external: arena_op == ARENA_OP_BUFFER_EXTERNAL,
             buffer_anchored: arena_op == ARENA_OP_BUFFER_ANCHORED,
+            os_known: has_os,
+            os_ret_addr: if has_os { os[0] } else { 0 as u64 },
+            os_ret_contents: if has_os { os[1] } else { 0 as u64 },
+            os_ret_flags: if has_os { os[2] } else { 0 as u64 },
+            os_ret_fresh: has_os && os[3] != 0 as u64,
+            os_ret_owned: 0xffffffffffffffff as u64,
+            os_ret_held: if has_os { f.summary_held } else { 0 as u64 },
+            ret_held_decl: ret_held_decl,
+            os_releases: if has_os { os[6] } else { 0 as u64 },
+            os_env_releases: if has_os { os[7] } else { 0 as u64 },
+            os_edges: os_edges,
+            os_edge_rows: os_rows,
+            os_depth: 0 as u32,
+            os_in_cycle: false,
         });
     }
 
@@ -1159,17 +1327,162 @@ impl Driver {
 
     // F's body through the pipeline: lowered to ZIR, checked, then lowered to ZIL in the
     // function being built (its own parameters from ZIR_ARG_START). The body's value, or None
-    // when lowering or checking it failed. The ZIR lives in the scratch arena, reset after.
+    // when lowering or checking it failed. The ZIR lives in the scratch arena, reset after, except
+    // for a body of a recursive cycle: a callee is lowered inside its caller's body, so
+    // the cycle's bodies are the ones on the lowering stack when one calls another still on it.
+    // Such a body keeps its ZIR until the cycle's root (the outermost of them) finishes, whose own
+    // reset frees them all after Driver.os_fixpoint.
     fn run_body_passes(
         self: &mut Driver,
         f: &FnDecl,
         name: u32,
         zir_arg_start: u32
     ) -> Option<SSAId> {
+        let idx = self.builder.current_func_idx as usize;
+        self.os_low.push(NO_LOW);
+        let depth = self.os_low.len() as u32;
+        self.module.get_function_mut(idx).os_depth = depth;
+        let pending_start = self.os_pending.len();
+        // SAFETY: the scratch arena is the driver's own and live; body passes allocate above
+        // SCRATCH_OFFSET and discard their scratch data once this body (or its cycle) finishes.
         let scratch_offset = unsafe { (*self.scratch_arena).offset };
         let result = self.run_body_passes_in_scratch(f, name, zir_arg_start);
-        unsafe { arena_reset(self.scratch_arena, scratch_offset); }
+        let low = self.os_low[depth as usize - 1 as usize];
+        let _ = self.os_low.pop();
+        self.module.get_function_mut(idx).os_depth = 0 as u32;
+        if low < depth {
+            // A member below the root: the caller is in the cycle too.
+            let parent = depth as usize - 2 as usize;
+            if low < self.os_low[parent] { self.os_low[parent] = low; }
+            return result;
+        }
+        if self.os_pending.len() > pending_start { self.os_fixpoint(pending_start); }
+        // SAFETY: as at SCRATCH_OFFSET above: nothing allocated past it outlives this body pass.
+        unsafe { reset_driver_scratch(self.scratch_arena, scratch_offset); }
         return result;
+    }
+
+    // A recursive cycle's root has finished: its bodies (os_pending from START) are recomputed with
+    // one another's summaries until none grows, then checked once with the final ones, and printed
+    // for `--emit-origins` (doc/design/provenance.md §3, _The summary_).
+    fn os_fixpoint(self: &mut Driver, start: usize) {
+        let sret_name = self.intern_table.intern("__sret");
+        let mut grew = true;
+        while grew {
+            grew = false;
+            let mut k = start;
+            while k < self.os_pending.len() {
+                if self.os_pass_pending(k, sret_name, false) { grew = true; }
+                k = k + 1 as usize;
+            }
+        }
+        let mut k = start;
+        while k < self.os_pending.len() {
+            let _ = self.os_pass_pending(k, sret_name, true);
+            k = k + 1 as usize;
+        }
+        let mut v = start;
+        while v < self.os_pending.len() {
+            self.verify_pending(v, sret_name);
+            v = v + 1 as usize;
+        }
+        while self.os_pending.len() > start { let _ = self.os_pending.pop(); }
+    }
+
+    // Runs ZirVerifier for pending cycle member K once every member has its converged
+    // origin summary, ret_ties and os_in_cycle = false.
+    fn verify_pending(self: &mut Driver, k: usize, sret_name: u32) {
+        let e = self.os_pending[k];
+        // SAFETY: the scratch arena is the driver's own and live; the verifier's state is
+        // allocated above MARK and dropped by the reset below, leaving the kept ZIR intact.
+        let mark = unsafe { (*self.scratch_arena).offset };
+        let origins_ptr = unsafe {
+            zoril_allocator_alloc(self.scratch_arena, sizeof(check_zir::OriginSets) as u64)
+        } as *mut check_zir::OriginSets;
+        unsafe {
+            *origins_ptr = check_zir::compute_origins_zir(
+                self.scratch_arena,
+                self.module,
+                &e.zir,
+                sret_name,
+                self.intern_table,
+                check_zir::PROVENANCE_OFF,
+                e.file_path
+            );
+        }
+        let zf_ptr = unsafe {
+            zoril_allocator_alloc(self.scratch_arena, sizeof(zir::ZirFunction) as u64)
+        } as *mut zir::ZirFunction;
+        unsafe { *zf_ptr = e.zir; }
+        let zf_slice = unsafe { @slice(zf_ptr, 1 as usize) };
+        let zm_ptr = unsafe {
+            zoril_allocator_alloc(self.scratch_arena, sizeof(ZirModule) as u64)
+        } as *mut ZirModule;
+        unsafe { *zm_ptr = ZirModule { funcs: zf_slice }; }
+        let zm_slice = unsafe { @slice(zm_ptr, 1 as usize) };
+        let mut zir_ver = ZirVerifier.new(
+            self.scratch_arena,
+            &mut zm_slice[0],
+            self.module,
+            self.intern_table,
+            origins_ptr
+        );
+        zir_ver.file_path = e.file_path;
+        zir_ver.verify();
+        if self.collect_zir_stats {
+            self.zir_stats.note_reject_via(zir_ver.reject_via);
+        }
+        if zir_ver.had_error {
+            self.had_error = true;
+        }
+        // SAFETY: as at MARK above: nothing allocated past it outlives this pass.
+        unsafe { reset_driver_scratch(self.scratch_arena, mark); }
+    }
+
+    // One origin pass over pending body K, in a scratch region released after it. With CHECK the
+    // rules apply and the sets are printed for `--emit-origins`; otherwise only the summary is
+    // updated. Returns whether the summary grew.
+    fn os_pass_pending(self: &mut Driver, k: usize, sret_name: u32, check: bool) -> bool {
+        let e = self.os_pending[k];
+        // SAFETY: the scratch arena is the driver's own and live; the pass's sets are allocated
+        // above MARK and dropped by the reset below, which leaves the kept ZIR beneath it intact.
+        let mark = unsafe { (*self.scratch_arena).offset };
+        let mut origins = check_zir::compute_origins_zir(
+            self.scratch_arena,
+            self.module,
+            &e.zir,
+            sret_name,
+            self.intern_table,
+            if check { e.rules } else { check_zir::PROVENANCE_OFF },
+            e.file_path
+        );
+        if origins.errors > 0 as u32 {
+            self.had_error = true;
+        }
+        let grew = check_zir::store_origin_summary(
+            self.arena,
+            self.module,
+            e.func_idx as usize,
+            &mut origins
+        );
+        if check {
+            let refused = check_zir::os_infer_ties(
+                &mut origins,
+                self.module,
+                self.intern_table,
+                e.func_idx as usize
+            );
+            if refused > 0 as u32 {
+                self.had_error = true;
+            }
+            self.module.get_function_mut(e.func_idx as usize).os_in_cycle = false;
+        }
+        if check && self.emit_origins && e.source_file == self.target_source_file {
+            check_zir::print_origins(&origins, &e.zir, self.module, self.intern_table);
+        }
+        // SAFETY: as at MARK above: nothing allocated past it outlives this pass.
+        unsafe { reset_driver_scratch(self.scratch_arena, mark); }
+        return grew;
     }
 
     fn run_body_passes_in_scratch(
@@ -1198,47 +1511,122 @@ impl Driver {
         zir_low.current_source_file = current_source_file;
         zir_low.compile_only = self.compile_only;
         zir_low.implicit_self_ty = self.implicit_self_ty;
-        let mut zir_func = zir_low.lower_function(f, name);
+        let zf_ptr = unsafe {
+            zoril_allocator_alloc(self.scratch_arena, sizeof(zir::ZirFunction) as u64)
+        } as *mut zir::ZirFunction;
+        unsafe { *zf_ptr = zir_low.lower_function(f, name); }
+        let zf_slice = unsafe { @slice(zf_ptr, 1 as usize) };
         if zir_low.had_error {
             self.had_error = true;
             return Option.None;
         }
         // A closure's result found in its body (never an aggregate, see infer_result_from).
-        if zir_low.infer_ret && zir_func.ret_ty != 0 as u32 {
+        if zir_low.infer_ret && zf_slice[0].ret_ty != 0 as u32 {
             let p_func = self.module.get_function_mut(self.builder.current_func_idx as usize);
-            p_func.ret_ty = zir_func.ret_ty;
+            p_func.ret_ty = zf_slice[0].ret_ty;
         }
         // The function's own ret_storage, from its canonical ZIR: the borrow checker below reads
         // it at every call site, and the IL verifier recomputes it later from the lowered body.
         check_zir::compute_ret_storage_zir(
             self.scratch_arena,
             self.module,
-            &zir_func,
+            &zf_slice[0],
             self.builder.current_func_idx as u32
         );
+        // Computed for every body; `--provenance` also applies its rules (doc/design/provenance.md
+        // §3), beside the old ones.
+        let sret_name = self.intern_table.intern("__sret");
+        // An `unsafe fn` body is checked like any other: only the addresses it makes from integers
+        // are exempt (ORIGIN_RAW, §3, _Raw operations_).
+        let rules = check_zir::PROVENANCE_ON;
+        // A body in a recursive cycle (it, or a body nested in it, calls one still being lowered)
+        // is computed now for the summary its callers in the cycle read, and checked when the
+        // cycle's root finishes, with the final summaries (Driver.os_fixpoint).
+        let depth = self.os_low.len();
+        let open = check_zir::zir_open_call_depth(self.module, &zf_slice[0]);
+        if open < self.os_low[depth - 1 as usize] { self.os_low[depth - 1 as usize] = open; }
+        let low = self.os_low[depth - 1 as usize];
+        let in_cycle = low != NO_LOW && low as usize <= depth;
+        let origins_ptr = unsafe {
+            zoril_allocator_alloc(self.scratch_arena, sizeof(check_zir::OriginSets) as u64)
+        } as *mut check_zir::OriginSets;
+        unsafe {
+            *origins_ptr = check_zir::compute_origins_zir(
+                self.scratch_arena,
+                self.module,
+                &zf_slice[0],
+                sret_name,
+                self.intern_table,
+                if in_cycle { check_zir::PROVENANCE_OFF } else { rules },
+                self.file_path
+            );
+        }
+        let origins_slice = unsafe { @slice(origins_ptr, 1 as usize) };
+        if origins_slice[0].errors > 0 as u32 {
+            self.had_error = true;
+        }
+        // The body's summary, for the calls lowered after it; an `unsafe fn`'s too, since an address
+        // it makes from an integer is Raw, not Unknown (§3, _Raw operations_).
+        let _ = check_zir::store_origin_summary(
+            self.arena,
+            self.module,
+            self.builder.current_func_idx as usize,
+            &mut origins_slice[0]
+        );
+        if !in_cycle {
+            let idx = self.builder.current_func_idx as usize;
+            if check_zir::os_infer_ties(&mut origins_slice[0], self.module, self.intern_table, idx)
+                > 0 as u32 {
+                self.had_error = true;
+            }
+        }
+        if in_cycle {
+            self.module.get_function_mut(self.builder.current_func_idx as usize).os_in_cycle = true;
+            self.os_pending.push(OsPending {
+                func_idx: self.builder.current_func_idx as u32,
+                zir: zf_slice[0],
+                file_path: self.file_path,
+                source_file: current_source_file,
+                rules: rules,
+            });
+        } else if self.emit_origins && current_source_file == self.target_source_file {
+            check_zir::print_origins(
+                &origins_slice[0],
+                &zf_slice[0],
+                self.module,
+                self.intern_table
+            );
+        }
         // `--emit-zir-stats`: a census of the canonical ZIR, before this frame's scratch arena is
         // reset (the counter arrays are part of the Driver, so nothing is allocated here).
         if self.collect_zir_stats {
-            self.zir_stats.note_function(&zir_func);
+            self.zir_stats.note_function(&zf_slice[0]);
         }
-        let mut zm = ZirModule { funcs: unsafe { @slice(&mut zir_func, 1 as usize) } };
+        let zm_ptr = unsafe {
+            zoril_allocator_alloc(self.scratch_arena, sizeof(ZirModule) as u64)
+        } as *mut ZirModule;
+        unsafe { *zm_ptr = ZirModule { funcs: zf_slice }; }
+        let zm_slice = unsafe { @slice(zm_ptr, 1 as usize) };
 
-        let mut zir_ver = ZirVerifier.new(
-            self.scratch_arena,
-            &mut zm,
-            self.module,
-            self.intern_table
-        );
-        zir_ver.file_path = self.file_path;
-        zir_ver.verify();
-        // The routes this body's reported rejections travelled through; `--emit-zir-stats`
-        // prints their union, and the route-coverage gate counts only those.
-        if self.collect_zir_stats {
-            self.zir_stats.note_reject_via(zir_ver.reject_via);
-        }
-        if zir_ver.had_error {
-            self.had_error = true;
-            return Option.None;
+        if !in_cycle {
+            let mut zir_ver = ZirVerifier.new(
+                self.scratch_arena,
+                &mut zm_slice[0],
+                self.module,
+                self.intern_table,
+                origins_ptr
+            );
+            zir_ver.file_path = self.file_path;
+            zir_ver.verify();
+            // The routes this body's reported rejections travelled through; `--emit-zir-stats`
+            // prints their union, and the route-coverage gate counts only those.
+            if self.collect_zir_stats {
+                self.zir_stats.note_reject_via(zir_ver.reject_via);
+            }
+            if zir_ver.had_error {
+                self.had_error = true;
+                return Option.None;
+            }
         }
 
         let mut zir_to_zil = ZirToZilLowerer.new(
@@ -1247,7 +1635,7 @@ impl Driver {
             self.resolver,
             self.mono,
             self.intern_table,
-            &mut zm,
+            &mut zm_slice[0],
             self.module,
             self.builder,
             self.sret_ssa,

@@ -1,0 +1,32 @@
+// Regression test: sibling route of Bug 5 — &Wrap (shared reference to a struct carrying
+// &mut Vec<i32>) passed to an unknown fn value must be treated as releasable.
+// expected compile fail
+// EXPECT: cannot mutably borrow 'w.v' while it is already borrowed
+import "vec.zrl";
+use vec::Vec;
+
+struct Wrap {
+    v: &mut Vec<i32>,
+}
+
+fn kill_ref_wrap(w: &Wrap) {
+    w.v.free();
+}
+
+fn run(f: fn(&Wrap), w: &Wrap) {
+    f(w);
+}
+
+fn store_and_kill(out: &mut [i32], w: &Wrap) {
+    *out = w.v.as_slice();
+    run(kill_ref_wrap, w);
+}
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut s: [i32] = @slice(0 as *i32, 0);
+    let w = Wrap { v: &mut v };
+    store_and_kill(&mut s, &w);
+    return s[0] - 42;
+}

@@ -1,0 +1,18 @@
+// name: A frame view read through a local reference to a local struct, stored out of the frame
+// expected: compile_reject
+// Refused by the provenance store rule: origin sets follow reads through a reference to a local aggregate.
+struct S { v: &i32 }
+fn clobber_stack() -> i32 { let arr = [77; 16]; return arr[0]; }
+fn escape_storer(out: &mut &i32) {
+    let x = 42;
+    let s = S { v: &x };
+    let r = &s;
+    *out = r.v;
+}
+fn main() -> i32 {
+    let seed = 0;
+    let mut dest_val: &i32 = &seed;
+    escape_storer(&mut dest_val);
+    let _ = clobber_stack();
+    return *dest_val;
+}

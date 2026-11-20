@@ -19,7 +19,7 @@
 # which would turn this whole gate into a second whole-program run; so the first cell is also compiled
 # against an empty interface, which must fail.
 #
-# Usage: check_store_grid_modular.sh [--record] [--jobs N]
+# Usage: check_store_grid_modular.sh [--record] [--provenance] [--jobs N]
 set -u
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT" || exit 2
@@ -28,6 +28,7 @@ cd "$REPO_ROOT" || exit 2
 ZORIL=${ZORIL_CC:-$REPO_ROOT/build/zoril}
 JOBS=$(nproc_count 2>/dev/null || echo 4)
 RECORD=0
+PROV=
 WORK_DIR=build/store_grid_modular
 EXPECTED_FILE=bench/fuzz/store_grid_modular_expected_failures.txt
 TWINS_FILE=bench/fuzz/store_grid_modular_twin_rejections.txt
@@ -35,9 +36,17 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --record) RECORD=1; shift ;;
         --jobs|-j) JOBS="$2"; shift 2 ;;
-        *) echo "Usage: $0 [--record] [--jobs N]" >&2; exit 2 ;;
+        --provenance) PROV=--provenance; shift ;;
+        *) echo "Usage: $0 [--record] [--provenance] [--jobs N]" >&2; exit 2 ;;
     esac
 done
+# --provenance builds the callee module and every cell under the origin-set rules, which read the
+# pairwise store edges of the callee's interface (Z-0057); its cells and records are kept apart.
+if [ -n "$PROV" ]; then
+    WORK_DIR=build/store_grid_modular_prov
+    EXPECTED_FILE=bench/fuzz/store_grid_modular_prov_expected_failures.txt
+    TWINS_FILE=bench/fuzz/store_grid_modular_prov_twin_rejections.txt
+fi
 # One list of safety diagnostics for both grids: check_store_grid.sh passes it, or it is read from there.
 SAFETY_REGEX=${STORE_GRID_SAFETY_REGEX:-$(sed -n 's/^SAFETY_REGEX="\(.*\)"$/\1/p' scripts/check_store_grid.sh)}
 if [ -z "$SAFETY_REGEX" ]; then
@@ -81,18 +90,18 @@ WORKER="$WORK_DIR/worker.sh"
 cat << 'EOF' > "$WORKER"
 #!/bin/sh
 . scripts/lib/portability.sh
-ZORIL="$1"; WORK_DIR="$2"; SAFETY_REGEX="$3"; shift 3
+ZORIL="$1"; WORK_DIR="$2"; SAFETY_REGEX="$3"; PROV="$4"; shift 4
 for cell in "$@"; do
     d="$WORK_DIR/$cell"
     k=$(printf '%s' "$d/pathmod" | sed 's|/|%2F|g')
     mkdir -p "$d/iface"
-    if ! out=$(run_with_timeout -k 2s 60s "$ZORIL" -c -I stdlib=stdlib -I "$d" --interproc-summary \
+    if ! out=$(run_with_timeout -k 2s 60s "$ZORIL" -c -I stdlib=stdlib -I "$d" $PROV --interproc-summary \
             --write-interface "$d/iface/$k.zri" -o "$d/pathmod.zil" "$d/pathmod.zrl" 2>&1 < /dev/null); then
         echo "GEN_ERR callee $cell: $out" | head -n 1
         continue
     fi
     for side in unsafe twin; do
-        if out=$(run_with_timeout -k 2s 60s "$ZORIL" -c -I stdlib=stdlib -I "$d" --interproc-summary \
+        if out=$(run_with_timeout -k 2s 60s "$ZORIL" -c -I stdlib=stdlib -I "$d" $PROV --interproc-summary \
                 --iface-dir "$d/iface" -o /dev/null "$d/$side.zrl" 2>&1 < /dev/null); then
             [ "$side" = unsafe ] && echo "UNSAFE_FAIL $cell"
         elif printf '%s\n' "$out" | grep -q -E "$SAFETY_REGEX"; then
@@ -104,7 +113,7 @@ for cell in "$@"; do
 done
 EOF
 chmod +x "$WORKER"
-xargs -P "$JOBS" -n 10 "$WORKER" "$ZORIL" "$WORK_DIR" "$SAFETY_REGEX" < "$MANIFEST" > "$WORK_DIR/results.raw"
+xargs -P "$JOBS" -n 10 "$WORKER" "$ZORIL" "$WORK_DIR" "$SAFETY_REGEX" "$PROV" < "$MANIFEST" > "$WORK_DIR/results.raw"
 grep '^UNSAFE_FAIL ' "$WORK_DIR/results.raw" | awk '{print $2}' | sort > "$WORK_DIR/failing.txt"
 grep '^TWIN_REJECT ' "$WORK_DIR/results.raw" | awk '{print $2}' | sort > "$WORK_DIR/twins.txt"
 grep '^GEN_ERR ' "$WORK_DIR/results.raw" > "$WORK_DIR/generator_errors.txt"

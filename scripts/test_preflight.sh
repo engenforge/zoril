@@ -449,7 +449,7 @@ out=$(PREFLIGHT_SELFHOST="$tmp/stub_pass.sh" PREFLIGHT_MUTATION="$tmp/stub_pass.
       PREFLIGHT_REJECT_BASE=HEAD PREFLIGHT_REJECT_DIFF="$tmp/stub_fail_reject_diff.sh" \
       PREFLIGHT_BENCH="$tmp/stub_pass.sh" PREFLIGHT_CHECKED="$tmp/stub_pass.sh" PREFLIGHT_CALIBRATE="$tmp/stub_pass.sh" \
       ./scripts/preflight.sh --changed 2>&1) || rc=$?
-if git diff --quiet HEAD -- src/summary_pass.zrl src/check_zir.zrl src/verify.zrl src/main.zrl src/interface_print.zrl src/driver src/lower_zir src/parser src/parser.zrl src/ast.zrl stdlib 2>/dev/null; then
+if git diff --quiet HEAD -- src/check_zir.zrl src/verify.zrl src/main.zrl src/interface_print.zrl src/driver src/lower_zir src/parser src/parser.zrl src/ast.zrl stdlib 2>/dev/null; then
     if [ $rc -eq 0 ] && echo "$out" | grep -qF "[SKIP] reject-diff"; then
         pass "the rejection differential is skipped, saying so, when no checker differs from its base"
     else

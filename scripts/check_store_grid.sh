@@ -72,8 +72,9 @@ TOTAL_VALID=$(wc -l < "$MANIFEST" | tr -d ' ')
 SUMMARY_TEXT=$(lua "$REPO_ROOT/scripts/fuzz/store_grid.lua" --summary)
 
 # Step 2: Combined parallel check of unsafe cells and safe twins with right-reason oracle
-# Safety diagnostic patterns (compiler store/escape and borrow-checker rejections)
-SAFETY_REGEX="cannot store|cannot return|region escape|cannot mutably borrow|cannot borrow|while it is .*borrowed|use of moved value|use of dropped value|cannot move out of|cannot assign to .* borrowed|storage owned by this frame|cannot outlive the frame|cannot drop value|cannot move borrowed value"
+# Safety diagnostic patterns (compiler store/escape and borrow-checker rejections, and the
+# origin-set rules of `zoril --provenance`)
+SAFETY_REGEX="cannot store|cannot return|region escape|cannot mutably borrow|cannot borrow|while it is .*borrowed|use of moved value|use of dropped value|cannot move out of|cannot assign to .* borrowed|storage owned by this frame|cannot outlive the frame|cannot drop value|cannot move borrowed value|provenance: "
 
 WORKER_SCRIPT="$WORK_DIR/check_worker.sh"
 cat << 'EOF' > "$WORKER_SCRIPT"

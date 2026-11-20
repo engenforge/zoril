@@ -31,6 +31,27 @@ pub unsafe fn mmap_or_trap(
     return @ptr_from_int<*mut u8>(ret);
 }
 
+// Maps LENGTH bytes of private, anonymous, read-write memory, returning the kernel's result as a
+// pointer: a new mapping (a null hint and no `MAP_FIXED`, so it overlaps none the process holds) or
+// -errno, which `syscall_failed(p as u64 as i64)` detects.
+// CALLER OBLIGATION: test the result with `syscall_failed` before using it as an address.
+#[fresh]
+pub unsafe fn mmap_anon(length: u64) -> *mut u8 {
+    return @ptr_from_int<*mut u8>(
+        @syscall(9, 0 as u64, length, 3 as u64, 34 as u64, -1 as i64 as u64, 0 as u64)
+    );
+}
+
+// Maps LENGTH bytes of private, anonymous, read-write memory, as `mmap_anon`; traps on kernel failure.
+// CALLER OBLIGATION: the caller unmaps the result, with LENGTH, at most once.
+pub unsafe fn mmap_anon_or_trap(length: u64) -> *mut u8 {
+    let p = mmap_anon(length);
+    if syscall_failed(p as u64 as i64) {
+        zoril_user_trap("mmap_anon_or_trap: syscall failed");
+    }
+    return p;
+}
+
 // CALLER OBLIGATION: addr and length must specify a currently valid mapped memory range.
 pub unsafe fn munmap_or_trap(addr: *u8, length: u64) {
     if syscall_failed(@syscall(11, addr as u64, length)) {

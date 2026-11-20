@@ -293,7 +293,8 @@ impl Parser {
         );
     }
 
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     pub fn parse_block(self: &mut Parser) -> BlockExpr {
         self.expect(Token.LBrace);
         let mut stmts = unsafe { Vec::<StmtId>.new_in_raw(self.arena) };

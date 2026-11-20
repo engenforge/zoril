@@ -125,7 +125,7 @@ check_normative_sentences() {
         in_fence { next }
         /^#/ { next }
         # A readable entry mirrors a matrix row (check_entries_match), whose Proven by cell carries the citation.
-        /^- \*\*.*\[side: [^]]*; evidence: [^]]*; probes: ([0-9]+|n\/a)\]\(\.\.\/\.\.\/bench\/safety_matrix\/matrix\.md\)$/ { flush_item(); next }
+        /^- \*\*.*\[side: [^]]*; evidence: [^]]*; probes: ([0-9]+|n\/a)\]\((\.\.\/\.\.\/bench\/safety_matrix\/)?matrix\.md\)$/ { flush_item(); next }
 
         /^[ \t]*$/ {
             flush_item()
@@ -436,10 +436,13 @@ entries_expected() {
         ev = $10; probes = n
         if ($8 == "N/A") { ev = "n/a"; probes = "n/a" }
         prop = $2; sub(/\(§/, "(surface_syntax.md §", prop)
-        printf "- %s: %s [side: %s; evidence: %s; probes: %s](../../bench/safety_matrix/matrix.md)\n", prop, $3, side, ev, probes
+        printf "- %s: %s [side: %s; evidence: %s; probes: %s](matrix.md)\n", prop, $3, side, ev, probes
     }' "$1"
 }
-entries_actual() { grep -E '^- \*\*.*\[side: [^]]*; evidence: [^]]*; probes: ([0-9]+|n/a)\]\(\.\./\.\./bench/safety_matrix/matrix\.md\)$' "$1" || true; }
+entries_actual() {
+    grep -E '^- \*\*.*\[side: [^]]*; evidence: [^]]*; probes: ([0-9]+|n/a)\]\((\.\./\.\./bench/safety_matrix/)?matrix\.md\)$' "$1" \
+        | sed 's|\](\.\./\.\./bench/safety_matrix/matrix\.md)$|](matrix.md)|' || true
+}
 # BusyBox diff writes only the unified format, so read that: "< " is a line of $2 (the matrix) alone, "> " one of $1 (the page).
 entries_diff() {
     ed_a=$(mktemp "${TMPDIR:-/tmp}/zoril_entries.XXXXXX") || return 2
@@ -519,21 +522,16 @@ if [ "${1:-}" = "--list-citations" ]; then
     if [ $# -ge 2 ] && [ -f "$2" ]; then
         list_normative_citations "$2" "${3:-$REPO_ROOT}"
     else
-        list_normative_citations "$REPO_ROOT/doc/spec/safety_model.md" "$REPO_ROOT"
+        list_normative_citations "$REPO_ROOT/bench/safety_matrix/README.md" "$REPO_ROOT"
         list_normative_citations "$REPO_ROOT/bench/safety_matrix/matrix.md" "$REPO_ROOT"
-        if [ -f "$REPO_ROOT/doc/spec/unsafe_policy.md" ]; then
-            list_normative_citations "$REPO_ROOT/doc/spec/unsafe_policy.md" "$REPO_ROOT"
-        fi
-        if [ -f "$REPO_ROOT/doc/spec/surface_syntax.md" ]; then
-            list_normative_citations "$REPO_ROOT/doc/spec/surface_syntax.md" "$REPO_ROOT"
-        fi
     fi
     exit 0
 fi
 
-DOC="${1:-$REPO_ROOT/doc/spec/safety_model.md}"
+DOC="${1:-$REPO_ROOT/bench/safety_matrix/README.md}"
 MATRIX="${2:-$REPO_ROOT/bench/safety_matrix/matrix.md}"
 SPEC="$REPO_ROOT/doc/spec/surface_syntax.md"
+SM_SPEC="$REPO_ROOT/doc/spec/safety_model.md"
 POLICY="$REPO_ROOT/doc/spec/unsafe_policy.md"
 
 if [ ! -f "$DOC" ] || [ ! -f "$MATRIX" ]; then
@@ -642,7 +640,7 @@ if [ -f "$SPEC" ]; then
     # Collect every heading number (e.g. "11.2.1") in surface_syntax.md.
     sections="$(grep -oE '^#{2,4}[ \t]+[0-9]+(\.[0-9]+)+' "$SPEC" | grep -oE '[0-9]+(\.[0-9]+)+' | sort -u)"
     missing=0
-    for ref in $(grep -ohE '§[0-9]+\.[0-9]+(\.[0-9]+)?' "$DOC" "$MATRIX" | sed 's/§//' | sort -u); do
+    for ref in $(grep -ohE '§[0-9]+\.[0-9]+(\.[0-9]+)?' "$DOC" "$MATRIX" "$SM_SPEC" 2>/dev/null | sed 's/§//' | sort -u); do
         if ! printf '%s\n' "$sections" | grep -qx "$ref"; then
             note "cited §$ref has no matching section in surface_syntax.md"
             missing=1
@@ -745,7 +743,7 @@ done
 
 # ── The Known gaps table lists exactly the known_gap probes ────────────────────
 listed=$(awk '/^### Known gaps/ { on = 1; next } on && /^#/ { on = 0 } on' "$DOC" \
-    | grep -oE 'bench/safety_matrix/probes/[A-Za-z0-9_]+\.zrl' | xargs -n1 basename 2>/dev/null | sort -u)
+    | grep -oE '(bench/safety_matrix/)?probes/[A-Za-z0-9_]+\.zrl' | xargs -n1 basename 2>/dev/null | sort -u)
 marked=$(grep -l '^// expected: known_gap' "$REPO_ROOT"/bench/safety_matrix/probes/*.zrl 2>/dev/null \
     | xargs -n1 basename 2>/dev/null | sort -u)
 if [ "$listed" = "$marked" ]; then
@@ -772,6 +770,9 @@ fi
 check_doc_links "$DOC" "$REPO_ROOT"
 check_doc_links "$MATRIX" "$REPO_ROOT"
 check_entries_match "$DOC" "$MATRIX"
+if [ -f "$SM_SPEC" ]; then
+    check_doc_links "$SM_SPEC" "$REPO_ROOT"
+fi
 if [ -f "$POLICY" ]; then
     check_doc_links "$POLICY" "$REPO_ROOT"
 fi
@@ -780,14 +781,10 @@ if [ -f "$SPEC" ]; then
 fi
 
 # ── Normative safety sentences must cite tests ───────────────────────────────
+# Enforced on the safety-evidence ledger and matrix; safety_model.md, unsafe_policy.md,
+# and surface_syntax.md are self-contained specs whose claims are traced there.
 check_normative_sentences "$DOC" "$REPO_ROOT"
 check_normative_sentences "$MATRIX" "$REPO_ROOT"
-if [ -f "$POLICY" ]; then
-    check_normative_sentences "$POLICY" "$REPO_ROOT"
-fi
-if [ -f "$SPEC" ]; then
-    check_normative_sentences "$SPEC" "$REPO_ROOT"
-fi
 
 # ── No public safe stdlib function takes a raw pointer it dereferences ────────
 check_stdlib_raw_ptr_deref() {
@@ -876,36 +873,21 @@ END {
 }
 check_stdlib_raw_ptr_deref
 
-# ── the counts the documents state must match the matrix ───────────────────────
-# README.md, doc/STABILITY.md and doc/vision/why_zoril.md each state a row count, the README also
-# states a probe count, and the README says whether any row is marked **GAP**. Those are the numbers a
-# reader sees first, and the reason this check exists is that "four open gaps" outlived two of the
-# holes it counted: a count that drifts is invisible until someone reads it next to the matrix.
+# ── the counts the ledger states must match the matrix ──────────────────────────
+# bench/safety_matrix/README.md states the row count, the probe count, and whether any row is marked **GAP**.
 check_document_counts() {
-    readme="$REPO_ROOT/README.md"
-    stab="$REPO_ROOT/doc/STABILITY.md"
-    vision="$REPO_ROOT/doc/vision/why_zoril.md"
-
-    n=$(grep -oE '[0-9]+-row safety matrix' "$readme" | head -n1 | grep -oE '^[0-9]+' || true)
-    if [ "$n" = "$total" ]; then ok "README row count ($n) matches the matrix"
-    else note "README says $n rows; the matrix has $total"; fi
+    n=$(grep -oE '[0-9]+-row safety matrix' "$DOC" | head -n1 | grep -oE '^[0-9]+' || true)
+    if [ "$n" = "$total" ]; then ok "safety-matrix ledger row count ($n) matches the matrix"
+    else note "safety-matrix ledger says $n rows; the matrix has $total"; fi
 
     # The gap statement, in both directions: a closed gap must not still be claimed, and an open one
     # must not be hidden behind a stale sentence.
-    if grep -qF 'No row is marked **GAP**' "$readme"; then
-        if [ "$gap" -eq 0 ]; then ok "README states no row is marked **GAP**, and none is"
-        else note "README says no row is marked **GAP**, but $gap row(s) are"; fi
+    if grep -qF 'No row above is marked **GAP**' "$DOC"; then
+        if [ "$gap" -eq 0 ]; then ok "safety-matrix ledger states no row is marked **GAP**, and none is"
+        else note "safety-matrix ledger says no row is marked **GAP**, but $gap row(s) are"; fi
     elif [ "$gap" -eq 0 ]; then
-        note "no row is marked **GAP**, but the README does not say so"
+        note "no row is marked **GAP**, but the safety-matrix ledger does not say so"
     fi
-
-    n=$(grep -oE 'All [0-9]+ rows are under continuous' "$stab" | grep -oE '[0-9]+' || true)
-    if [ "$n" = "$total" ]; then ok "STABILITY row count ($n) matches the matrix"
-    else note "STABILITY says $n rows; the matrix has $total"; fi
-
-    n=$(grep -oE '\([0-9]+ rows at the time of writing' "$vision" | grep -oE '[0-9]+' || true)
-    if [ "$n" = "$total" ]; then ok "why_zoril row count ($n) matches the matrix"
-    else note "why_zoril says $n rows; the matrix has $total"; fi
 }
 check_document_counts
 

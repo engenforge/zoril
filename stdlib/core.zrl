@@ -238,7 +238,6 @@ impl Clone for isize {
 
 impl<T: Clone> Clone for Option<T> {
     // Creates an explicit duplicate copy of the value.
-    #[borrows()]
     fn clone(self: &Option<T>) -> Option<T> {
         // Matched through the reference: `T` may own storage, so `match *self` would move it out
         // of the borrow. The ergonomic binding is `&T`, which `clone` copies.
@@ -254,7 +253,6 @@ impl<T: Clone> Clone for Option<T> {
 // and a `Vec` clone then duplicates its elements rather than sharing them.
 impl<T: Clone> Clone for [T] {
     // Creates an explicit duplicate copy of the value.
-    #[borrows()]
     fn clone(self: &[T]) -> [T] {
         return *self;
     }

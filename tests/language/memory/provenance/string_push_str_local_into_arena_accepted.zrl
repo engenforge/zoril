@@ -1,0 +1,24 @@
+// expected exit 0
+// Copying bytes from a local String into an arena-backed String with push_str
+// copies non-address-carrying u8 values and must not tie the output to the local String.
+import "mem.zrl";
+import "string.zrl";
+use mem::Arena;
+use string::String;
+
+fn copy_into_arena(a: &Arena) -> [u8] {
+    let mut tmp = String.new();
+    tmp.push_str("hi");
+    let mut out = String.new_in(a);
+    out.push_str(tmp.as_slice());
+    return out.as_slice();
+}
+
+fn main() -> i32 {
+    let a = match Arena.new(4096) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return 1; },
+    };
+    let s = copy_into_arena(&a);
+    return (s.len as i32) - 2;
+}

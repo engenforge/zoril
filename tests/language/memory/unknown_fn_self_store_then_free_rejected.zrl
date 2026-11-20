@@ -1,0 +1,30 @@
+// Regression test: apply_unknown_store_borrows must include j == i (self-store) so calling
+// an unknown fn(&mut Pair) keeps p borrowed in the release tier and refuses p.v.free().
+// expected compile fail
+// EXPECT: cannot mutably borrow 'p.v' while it is already borrowed
+import "vec.zrl";
+use vec::Vec;
+
+struct Pair {
+    v: Vec<i32>,
+    s: [i32],
+}
+
+fn store_self(p: &mut Pair) {
+    p.s = p.v.as_slice();
+}
+
+fn noop(p: &mut Pair) {}
+
+fn run(c: bool) -> i32 {
+    let mut p = Pair { v: Vec::<i32>.new(), s: @slice(0 as *i32, 0) };
+    p.v.push(42);
+    let f: fn(&mut Pair) = if c { store_self } else { noop };
+    f(&mut p);
+    p.v.free();
+    return p.s[0] - 42;
+}
+
+fn main() -> i32 {
+    return run(true);
+}

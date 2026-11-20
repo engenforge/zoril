@@ -1,0 +1,11 @@
+// A `match` binding reads the payload back through the payload's address, so it gets what the
+// enum holds, not the enum's own slot (gap_13, gap_36).
+// ORIGINS: main item O={Frame(x)} S={}
+// expected exit 0
+import "core.zrl";
+use core::Option;
+fn main() -> i32 {
+    let x = 42;
+    let carrier = Option.Some(&x);
+    return match carrier { Option.Some(item) => *item - 42, Option.None => 1 };
+}

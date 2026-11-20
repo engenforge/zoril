@@ -1,0 +1,16 @@
+// expected compile fail
+// EXPECT: fn value rule
+// A `fn` value storing a parameter into a global, returned by a call, is refused where made.
+static mut G: *i32 = 0 as *i32;
+fn stash(r: &i32) { unsafe { G = r as *i32; } }
+fn get_stash() -> fn(&i32) { return stash; }
+fn bad() -> i32 {
+    let x = 1;
+    let f = get_stash();
+    f(&x);
+    return 0;
+}
+fn main() -> i32 {
+    let _ = bad();
+    return unsafe { *G };
+}

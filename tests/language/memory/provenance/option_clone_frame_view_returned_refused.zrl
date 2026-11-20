@@ -1,0 +1,16 @@
+// Option.clone of an Option holding a view of this frame cannot be returned (doc/design/provenance.md §3).
+// EXPECT: the returned value holds an address of this frame (return rule)
+// expected compile fail
+import "core.zrl";
+import "clone.zrl";
+
+fn view() -> Option<[u8]> {
+    let buf = [42 as u8; 16];
+    let o: Option<[u8]> = Option.Some(&buf);
+    return o.clone();
+}
+
+fn main() -> i32 {
+    let _ = view();
+    return 0;
+}

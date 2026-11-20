@@ -1,0 +1,6 @@
+// A tuple slot built from a local's address, stored out, then overwritten: the store saw the
+// placeholder, so it is refused (§3, _Transfer_).
+// EXPECT: provenance: a value holding an address of this frame is stored into memory that outlives it (store rule)
+// expected compile fail
+fn bad(out: &mut &i32, p: &i32) { let seed = 0; let mut t = (&seed, 1); *out = t.0; t.0 = p; }
+fn main() -> i32 { let y = 2; let mut o = &y; bad(&mut o, &y); return *o; }

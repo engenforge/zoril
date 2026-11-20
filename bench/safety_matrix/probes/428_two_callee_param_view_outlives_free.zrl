@@ -1,0 +1,21 @@
+// name: Two-callee form where one stores a view into a parameter struct and the next frees it
+// expected: compile_reject
+// Refused at kill(v): fill(h, v) transfers v's release-tier borrow to the frame's outside holder through h (§3.1, holder three), so kill(v) cannot release v.
+import "vec.zrl";
+use vec::Vec;
+
+struct H { s: [i32], }
+
+fn fill(h: &mut H, v: &mut Vec<i32>) { h.s = v.as_slice(); }
+fn kill(v: &mut Vec<i32>) { v.free(); }
+fn both(h: &mut H, v: &mut Vec<i32>) { fill(h, v); kill(v); }
+
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut h = H { s: @slice(0 as *i32, 0) };
+    both(&mut h, &mut v);
+    let mut w = Vec::<i32>.new();
+    w.push(77);
+    return h.s[0];
+}

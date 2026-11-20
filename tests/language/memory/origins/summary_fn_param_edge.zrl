@@ -1,0 +1,11 @@
+// A call through a `fn` parameter stores what the environment reaches into itself (gap_52's
+// shape), so the caller checks the captures of the closure it hands in (§3, _The summary_).
+// ORIGINS: call_it store ParamContents(0) -> ParamContents(0)
+// expected exit 0
+fn call_it(g: fn()) { g(); }
+fn main() -> i32 {
+    let mut n = 0;
+    let r = &mut n;
+    call_it(|| { *r = *r + 1; });
+    return n - 1;
+}

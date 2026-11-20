@@ -1,0 +1,23 @@
+// name: Arena reset after an unannotated &self method returns its other parameter
+// expected: compile_reject
+// Was a known gap: the &self elision default ties a method's result to self alone, and it is trusted, not checked against the body: pick(self: &S, x: [u8]) -> [u8] returns x, so s.pick(v.as_slice()) holds no borrow of the arena, a.reset() is accepted while the result is read, and the read sees the arena's next allocation; route class: an elision default narrower than the body's ties (gap_44's declaration form), also through a trait impl (gap_101)
+// Refused: a function with no #[borrows(..)] has its body's ties added to the elision default, so the result keeps the argument's borrow.
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct S { k: i32 }
+impl S {
+    fn pick(self: &S, x: [u8]) -> [u8] { return x; }
+}
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let mut v = Vec::<u8>.new_in(&a);
+    v.push(42 as u8);
+    let s = S { k: 1 };
+    let r = s.pick(v.as_slice());
+    a.reset();
+    let mut v2 = Vec::<u8>.new_in(&a);
+    v2.push(77 as u8);
+    return r[0] as i32;
+}

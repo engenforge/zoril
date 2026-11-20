@@ -1,0 +1,21 @@
+// name: A view of a parameter's Vec stored through a trait method outlives a free() in the callee
+// expected: compile_reject
+// Refused at v.free(): storing v.as_slice() into self.s gives v's release-tier borrow to the frame's outside holder (§3.1, holder two), which conflicts with v.free().
+import "vec.zrl";
+use vec::Vec;
+trait Put {
+    fn put(self: &mut Self, v: &mut Vec<i32>);
+}
+struct S { s: [i32] }
+impl Put for S {
+    fn put(self: &mut S, v: &mut Vec<i32>) { self.s = v.as_slice(); v.free(); }
+}
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    let mut x = S { s: @slice(0 as *i32, 0) };
+    x.put(&mut v);
+    let mut w = Vec::<i32>.new();
+    w.push(77);
+    return x.s[0];
+}

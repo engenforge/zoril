@@ -1,7 +1,6 @@
 // name: A local Vec holding views of this frame is moved into a callee that pushes it into the caller's Vec
-// expected: known_gap
-// gap: put_v(out, w) with fn put_v(o: &mut Vec<Vec<[i32]>>, w: Vec<[i32]>) { o.push(w); } and w a local Vec<[i32]> holding a view of the stack array buf: a by-value collection argument is not read for the frame views it holds; refused under --provenance by the call store rule
-// observed: exit 77
+// expected: compile_reject
+// Refused by the provenance call store rule: a by-value collection argument carries the frame views it holds.
 import "vec.zrl";
 use vec::Vec;
 fn put_v(o: &mut Vec<Vec<[i32]>>, w: Vec<[i32]>) { o.push(w); }

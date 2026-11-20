@@ -1,0 +1,5 @@
+// expected compile fail
+// EXPECT: the *p form is for an extern
+#[stores(*s -> d)]
+fn cp(d: *mut &i32, s: *&i32) { unsafe { *d = *s; } }
+fn main() -> i32 { return 0; }

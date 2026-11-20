@@ -1,0 +1,27 @@
+// A raw pointer copied out of an owner the callee then drops is accepted: `keep` stores the buffer
+// pointer of a `Buf` whose `Drop` frees the buffer, so the caller's slot dangles. A raw pointer in
+// checked code carries no promise about what it points to (safety_model.md, "Raw pointers in checked
+// code"); the dereference that would read the freed block needs `unsafe`, where the programmer checks.
+// expected exit 0
+import "mem_raw.zrl";
+struct Buf { data: *mut u8 }
+impl Buf {
+    fn new() -> Buf {
+        // SAFETY: a fresh 16-byte heap block, freed once by drop.
+        return Buf { data: unsafe { mem_raw::heap_alloc(16 as u64) } };
+    }
+}
+impl Drop for Buf {
+    fn drop(self: &mut Buf) {
+        // SAFETY: the block new allocated, freed once.
+        unsafe { mem_raw::heap_free(self.data as *u8, 16 as u64); }
+    }
+}
+fn keep(out: &mut *mut u8, b: Buf) { *out = b.data; }
+fn f(out: &mut *mut u8) { let b = Buf.new(); keep(out, b); }
+fn main() -> i32 {
+    let mut p: *mut u8 = 0 as *mut u8;
+    f(&mut p);
+    if p == 0 as *mut u8 { return 1; }
+    return 0;
+}

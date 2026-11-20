@@ -1,0 +1,23 @@
+// A struct holding a view is pushed wherever the view outlives the Vec: a view of the caller's array
+// passed in, of an array in the same frame as the Vec, and a string literal; and an aggregate value
+// produced by an `if` is passed by value to a storing callee (doc/design/provenance.md §3).
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+struct H { s: [u8] }
+enum T { A(u32), B([u32]) }
+fn fill(out: &mut Vec<H>, b: [u8]) { out.push(H { s: b }); }
+fn fill_static(out: &mut Vec<H>) { out.push(H { s: "static" }); }
+fn put(v: &mut Vec<T>, m: bool, x: u32) { v.push(if m { T.A(x) } else { T.A(x + 1 as u32) }); }
+fn main() -> i32 {
+    let buf = [42 as u8; 16];
+    let mut v: Vec<H> = Vec.new();
+    fill(&mut v, &buf);
+    v.push(H { s: &buf });
+    fill_static(&mut v);
+    if v[0].s[0] != 42 as u8 || v[1].s[1] != 42 as u8 { return 1; }
+    if v[2].s.len != 6 as usize { return 2; }
+    let mut t: Vec<T> = Vec.new();
+    put(&mut t, false, 1 as u32);
+    return match t[0] { T.A(n) => n as i32 - 2, T.B(_) => 3, };
+}

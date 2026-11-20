@@ -1,0 +1,10 @@
+// Building an enum value writes its payload, so the enum holds the payload's origins (gap_13).
+// ORIGINS: main carrier O={Frame(x)} S={}
+// expected exit 0
+import "core.zrl";
+use core::Option;
+fn main() -> i32 {
+    let x = 42;
+    let carrier = Option.Some(&x);
+    return match carrier { Option.Some(item) => *item - 42, Option.None => 1 };
+}

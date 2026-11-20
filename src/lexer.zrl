@@ -37,9 +37,11 @@ pub struct Lexer {
 }
 
 impl Lexer {
-    // The table and the arena are kept as raw pointers, which hold no reference, so the only
-    // parameter the result points into is the source buffer.
-    #[borrows(source)]
+    // The table and the arena are kept as raw pointers; the result also points into the source
+    // buffer and the arena.
+    // SAFETY: a lexer must not outlive the table it was given; every caller lexes within the call
+    // that holds the table, so no borrow of it is kept.
+    #[unsafe(borrows(source, arena))]
     pub fn new(source: [u8], table: &mut InternTable, arena: *mut ArenaHeader) -> Lexer {
         return Lexer {
             source: source,
@@ -237,7 +239,8 @@ impl Lexer {
 
     // A view of the source text, read into the compilation's arena and never freed while it runs,
     // so it outlives the lexer and a caller may intern while holding it (reviewed in 2i.13).
-    #[borrows()]
+    // SAFETY: a view of the source text, which callers keep for the whole compilation.
+    #[unsafe(borrows())]
     fn text_from(self: &Lexer, start: u64) -> [u8] {
         return subslice(self.source, start as usize, (self.pos - start) as usize);
     }

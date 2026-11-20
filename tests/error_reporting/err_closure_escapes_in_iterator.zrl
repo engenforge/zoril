@@ -1,5 +1,5 @@
 // expected compile fail
-// EXPECT: region escape
+// EXPECT: error: provenance: the returned value holds an address of this frame (return rule)
 // An iterator adapter holding a capturing closure cannot outlive the frame the closure's
 // environment lives in.
 import "iter.zrl";

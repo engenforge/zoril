@@ -38,6 +38,7 @@ pub fn clone(self: &String) -> String;
 ```
 
 	Creates an explicit duplicate copy of the value.
+	from, which self holds as a borrow.
 
 # RETURN VALUES AND ERRORS
 

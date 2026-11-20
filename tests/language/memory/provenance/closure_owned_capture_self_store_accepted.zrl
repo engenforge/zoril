@@ -1,0 +1,19 @@
+// A closure that owns a `Vec` and pushes to it stores the capture's own storage back into the
+// capture, which the environment owns: the body is accepted, as a local `Vec`'s push is (§3, _A
+// closure body's summary is stated over `__env`_). The call in the creating frame is still an
+// unknown call, so the closure is made and not called here.
+// expected exit 0
+import "vec.zrl";
+use vec::Vec;
+struct H { v: Vec<i32>, n: i32 }
+fn main() -> i32 {
+    let mut v = Vec::<i32>.new();
+    let mut h = H { v: Vec::<i32>.new(), n: 0 };
+    let mut cl = |k: i32| -> i32 {
+        v.push(k);
+        h.v.push(k);
+        h.n = h.n + 1;
+        return v.len() as i32 + h.n;
+    };
+    return 0;
+}

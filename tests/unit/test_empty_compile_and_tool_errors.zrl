@@ -1,4 +1,5 @@
 import "core.zrl";
+import "mem.zrl";
 import "mem_raw.zrl";
 import "io.zrl";
 import "file.zrl";
@@ -60,7 +61,11 @@ fn test_empty_file_compiles(arena: *mut ArenaHeader, pid: u64) -> bool {
         let _ = f.close();
     }
 
-    let mut cmd = unsafe { Command.new_raw("./build/zoril", arena) };
+    let cmd_arena = match mem::Arena.new(65536) {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let mut cmd = Command.new("./build/zoril", &cmd_arena);
     cmd.arg("-c");
     cmd.arg(empty_zrl);
     cmd.arg("-o");

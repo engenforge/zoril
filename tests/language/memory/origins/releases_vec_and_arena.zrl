@@ -1,0 +1,42 @@
+// The releasing primitives (`zoril_allocator_free`, `arena_free`, `arena_reset`) and the
+// standard-library and user wrappers above them propagate `releases 0` in their summaries
+// (§3.1, _What invalidates_, item 2).
+// ORIGINS: do_arena_reset releases 0
+// ORIGINS: do_arena_reset_to releases 0
+// ORIGINS: do_raw_reset releases 0
+// ORIGINS: do_raw_free releases 0
+// ORIGINS: kill releases 0
+// ORIGINS: kill_wrap releases 0
+// ORIGINS: kill_outer releases 0
+// expected exit 0
+import "mem.zrl";
+import "mem_raw.zrl";
+import "vec.zrl";
+use mem::{Arena, ArenaMark};
+use mem_raw::{ArenaHeader, arena_free, arena_reset};
+use vec::Vec;
+
+fn do_arena_reset(a: &mut Arena) { a.reset(); }
+fn do_arena_reset_to(a: &mut Arena, m: ArenaMark) { a.reset_to(m); }
+unsafe fn do_raw_reset(h: *mut ArenaHeader) { arena_reset(h, 0); }
+unsafe fn do_raw_free(h: *mut ArenaHeader) { arena_free(h); }
+fn kill(v: &mut Vec<i32>) { v.free(); }
+fn kill_wrap(v: &mut Vec<i32>) { kill(v); }
+fn kill_outer(v: &mut Vec<i32>) { kill_wrap(v); }
+
+fn main() -> i32 {
+    let mut a = match Arena.new(65536) { Result.Ok(a) => a, Result.Err(_) => { return 2; } };
+    let m = a.mark();
+    do_arena_reset_to(&mut a, m);
+    do_arena_reset(&mut a);
+    let mut v = Vec::<i32>.new();
+    v.push(42);
+    kill_outer(&mut v);
+    if false {
+        unsafe {
+            do_raw_reset(0 as *mut ArenaHeader);
+            do_raw_free(0 as *mut ArenaHeader);
+        }
+    }
+    return 0;
+}

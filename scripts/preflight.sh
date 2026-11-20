@@ -116,7 +116,7 @@ record_step calibrate $(( $(date +%s) - cal_start ))
 # acceptance differs from the base: the checkers, what reaches them (the parser, the lowering, the
 # driver, the interface printer, main), and stdlib (whose summaries affect what checkers refuse).
 REJECT_DIFF_CMD="${PREFLIGHT_REJECT_DIFF:-./scripts/check_reject_diff.sh}"
-REJECT_PATHS="src/summary_pass.zrl src/check_zir.zrl src/verify.zrl src/main.zrl src/interface_print.zrl src/driver src/lower_zir src/parser src/parser.zrl src/ast.zrl stdlib"
+REJECT_PATHS="src/check_zir.zrl src/verify.zrl src/main.zrl src/interface_print.zrl src/driver src/lower_zir src/parser src/parser.zrl src/ast.zrl stdlib"
 if [ -n "${PREFLIGHT_REJECT_BASE:-}" ]; then
     reject_base="$PREFLIGHT_REJECT_BASE"; reject_why="PREFLIGHT_REJECT_BASE"
 elif [ -n "$PF_BASE" ]; then

@@ -1,0 +1,8 @@
+// expected compile fail
+// EXPECT: the callee stores an address of this frame into memory that outlives it (call store rule)
+// The must-reject twin: `stash_u`'s store edge `v -> out` comes back from the interface, so a view
+// of this frame passed as `v` is refused by the callee-summary rule (Z-0070).
+import "lib_summary.zrl";
+
+fn f(h: &mut lib_summary::H) { let x: [i32; 2] = [1, 2]; unsafe { lib_summary::stash_u(h, &x); } }
+fn main() -> i32 { return 0; }

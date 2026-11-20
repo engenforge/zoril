@@ -1,7 +1,6 @@
 // name: Closure stores a frame view through an external &mut three hops from its environment
-// expected: known_gap
-// gap: the same store as gap_47 with one more local reference (rr = &r, the closure writes *rr.out), so a rule that follows a fixed number of hops from the closure environment still misses it
-// observed: exit 77
+// expected: compile_reject
+// Refused at scope exit of 'a': the OriginSets fixpoint resolves arbitrary reference hops from closure captures to out and transfers 'a''s release-tier borrow to OUTSIDE_BORROWER.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

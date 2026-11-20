@@ -581,7 +581,8 @@ impl Parser {
 
     // `<A, B>`, the `<` being the current token.
     // The list is arena data, so a caller may keep it while parsing further.
-    #[borrows()]
+    // SAFETY: the result is in Parser.arena, which nothing resets while its output is in use.
+    #[unsafe(borrows())]
     fn parse_type_arg_list(self: &mut Parser) -> [TypeId] {
         self.next_token();
         let mut type_args = unsafe { Vec::<TypeId>.new_in_raw(self.arena) };

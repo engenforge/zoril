@@ -1,0 +1,1 @@
+pub extern fn memcpy(dest: *mut u8, src: *u8, size: u64);

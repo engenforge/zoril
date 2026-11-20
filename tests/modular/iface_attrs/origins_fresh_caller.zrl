@@ -1,0 +1,10 @@
+// Not a test program: scripts/test_interface_attrs.sh compiles it against lib_summary's interface
+// with and without `ret_fresh` and requires `--emit-origins` to differ for `v`.
+import "lib_summary.zrl";
+import "mem.zrl";
+use mem::Arena;
+
+fn caller(a: &Arena, pick: bool) -> i32 {
+    let v = lib_summary::mix(a, pick);
+    return v.len() as i32;
+}

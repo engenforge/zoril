@@ -1522,17 +1522,13 @@ local HOLES = {
       z = { "{",
             "    let hx: i32 = 7;",
             "    let mut hh = FnStoreH { p: &hx };",
-            "    let hf: fn(&mut FnStoreH, &i32) = fn_store_put;",
-            "    let hn: i32 = 9;",
-            "    hf(&mut hh, &hn);",
+            "    fn_store_call(&mut hh, fn_store_put);",
             "    if *hh.p != 9 { return 92; }",
             "}" },
       r = { "{",
             "    let hx: i32 = 7;",
             "    let mut hh = FnStoreH { p: &hx };",
-            "    let hf: fn(&mut FnStoreH, &i32) = fn_store_put;",
-            "    let hn: i32 = 9;",
-            "    hf(&mut hh, &hn);",
+            "    fn_store_call(&mut hh, fn_store_put);",
             "    if *hh.p != 9 { std::process::exit(92); }",
             "}" } },
 }
@@ -2209,26 +2205,14 @@ local function hole_local_buffer_view_drop()
 end
 
 local function hole_fn_value_store_stack()
-    local h, f, n, m = fresh("hfs"), fresh("hff"), 7 + rnd(20), 30 + rnd(20)
+    local h, n = fresh("hfs"), 7 + rnd(20)
     local function body(lang)
         local exit = exit92(lang)
-        if lang == "rust" then
-            return { "{",
-                "    let " .. h .. "_x: i32 = " .. n .. ";",
-                "    let mut " .. h .. " = FnStoreH { p: &" .. h .. "_x };",
-                "    let " .. f .. ": fn(&mut FnStoreH, &i32) = fn_store_put;",
-                "    let " .. h .. "_n: i32 = " .. m .. ";",
-                "    " .. f .. "(&mut " .. h .. ", &" .. h .. "_n);",
-                "    if *" .. h .. ".p != " .. m .. " { " .. exit .. "; }",
-                "}" }
-        end
         return { "{",
             "    let " .. h .. "_x: i32 = " .. n .. ";",
             "    let mut " .. h .. " = FnStoreH { p: &" .. h .. "_x };",
-            "    let " .. f .. ": fn(&mut FnStoreH, &i32) = fn_store_put;",
-            "    let " .. h .. "_n: i32 = " .. m .. ";",
-            "    " .. f .. "(&mut " .. h .. ", &" .. h .. "_n);",
-            "    if *" .. h .. ".p != " .. m .. " { " .. exit .. "; }",
+            "    fn_store_call(&mut " .. h .. ", fn_store_put);",
+            "    if *" .. h .. ".p != 9 { " .. exit .. "; }",
             "}" }
     end
     return hole_node("fn_value_store_stack", body("zoril"), body("rust"))
@@ -2936,9 +2920,11 @@ local function print_decls(lang)
         if lang == "rust" then
             add("struct FnStoreH<'a> { p: &'a i32 }")
             add("fn fn_store_put<'a>(h: &mut FnStoreH<'a>, p: &'a i32) { h.p = p; }")
+            add("fn fn_store_call(h: &mut FnStoreH, f: fn(&mut FnStoreH, &i32)) { let hn: i32 = 9; f(h, &hn); }")
         else
             add("struct FnStoreH { p: &i32 }")
             add("fn fn_store_put(h: &mut FnStoreH, p: &i32) { h.p = p; }")
+            add("fn fn_store_call(h: &mut FnStoreH, f: fn(&mut FnStoreH, &i32)) { let hn: i32 = 9; f(h, &hn); }")
         end
     end
     if P.needs_grow_vec then

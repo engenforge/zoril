@@ -1,0 +1,16 @@
+// expected compile fail
+// EXPECT: fn value rule
+// A closure storing a parameter into a global, placed in a struct field, is refused where made.
+static mut G: *i32 = 0 as *i32;
+struct BoxFn { f: fn(&i32) }
+fn run(b: BoxFn, r: &i32) { (b.f)(r); }
+fn bad() -> i32 {
+    let x = 1;
+    let b = BoxFn { f: |q: &i32| { unsafe { G = q as *i32; } } };
+    run(b, &x);
+    return 0;
+}
+fn main() -> i32 {
+    let _ = bad();
+    return unsafe { *G };
+}

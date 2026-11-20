@@ -1,7 +1,6 @@
 // name: Arena slice stored out via 65th parameter
-// expected: known_gap
-// gap: Parameter bitmask overflow at index >= 64 drops arena slice storage provenance
-// observed: exit 77
+// expected: compile_reject
+// Refused at scope exit of 'a': OriginSets tracks dynamic bitsets past 64 parameters and transfers 'a''s release-tier borrow to OUTSIDE_BORROWER across the call.
 import "mem.zrl";
 import "vec.zrl";
 use mem::Arena;

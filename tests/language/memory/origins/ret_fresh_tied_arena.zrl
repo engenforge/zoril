@@ -1,0 +1,15 @@
+// A result tied to an arena argument that also owns fresh storage (`ret_fresh`): its S keeps the
+// call's own Frame beside the arena's (§3, _The summary_).
+// ORIGINS: main w O={Frame(a)} S={Frame(a), Frame(_16)}
+// expected exit 0
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+struct W { v: Vec<i32>, a: &Arena }
+fn mk(a: &Arena) -> W { return W { v: Vec::<i32>.new(), a: a }; }
+fn main() -> i32 {
+    let a = match Arena.new(4096) { Result.Ok(a) => a, Result.Err(_) => { return 1; } };
+    let w = mk(&a);
+    return w.v.len() as i32;
+}
