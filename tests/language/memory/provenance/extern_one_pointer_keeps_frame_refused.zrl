@@ -4,7 +4,7 @@
 // link: tests/language/memory/provenance/extern_one_pointer_keep.s
 //
 // A one-pointer undeclared extern that keeps its argument in C static memory
-// hides a frame address from put's caller (id:eb38n, F9).
+// hides a frame address from put's caller.
 
 extern fn keep(p: *i32);
 extern fn kept() -> *i32;

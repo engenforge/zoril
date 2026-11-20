@@ -12,6 +12,7 @@ tests/**/*.out
 !bootstrap/stage0-c/lib/rt/*.s
 !bootstrap/stage1/rt/runtime.s
 !tests/integration/external_stub.s
+!tests/language/memory/provenance/extern_one_pointer_keep.s
 !tools/zilc/test/*.ssa
 !scripts/qbe_probe/*.ssa
 

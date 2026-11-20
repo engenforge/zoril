@@ -3,7 +3,7 @@
 // EXPECT: extern store rule
 //
 // Calling through an extern "C" fn value with a frame address is refused
-// under --provenance (id:eb38n).
+// under --provenance.
 
 #[unsafe(stores())]
 extern fn get_cb() -> extern "C" fn(*u8);

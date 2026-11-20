@@ -356,7 +356,6 @@ check_nongit_dir() {
                 bootstrap/*/tests/fixtures/*.ssa|*/bootstrap/*/tests/fixtures/*.ssa) continue ;;
                 tests/integration/external_stub.s|*/tests/integration/external_stub.s) continue ;;
                 tests/language/memory/provenance/extern_one_pointer_keep.s|*/tests/language/memory/provenance/extern_one_pointer_keep.s) continue ;;
-            tests/language/memory/provenance/extern_one_pointer_keep.s|*/tests/language/memory/provenance/extern_one_pointer_keep.s) continue ;;
                 */lib/rt/*.s|lib/rt/*.s) continue ;;
                 bootstrap/*/src/*.ssa|*/bootstrap/*/src/*.ssa|bootstrap/*/stage0/*.ssa|*/bootstrap/*/stage0/*.ssa) continue ;;
                 bootstrap/*/proof/*|*/bootstrap/*/proof/*) continue ;;
