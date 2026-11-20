@@ -1,0 +1,25 @@
+// flags: --provenance
+// expected compile fail
+// EXPECT: call store rule
+// EXPECT: return rule
+//
+// Pushing a frame view into a clone of a parameter Vec and returning it is
+// refused by both the call store rule (the clone shares the parameter's arena)
+// and the return rule.
+
+import "vec.zrl";
+import "clone.zrl";
+use vec::Vec;
+
+fn f(v: &Vec<[u8]>) -> Vec<[u8]> {
+    let buf = [42 as u8; 16];
+    let mut c = v.clone();
+    c.push(&buf);
+    return c;
+}
+
+fn main() -> i32 {
+    let v = Vec::<[u8]>.new();
+    let c = f(&v);
+    return c.len() as i32 - 1;
+}

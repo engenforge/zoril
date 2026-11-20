@@ -1,0 +1,29 @@
+// flags: --provenance
+// expected compile fail
+// EXPECT: the returned value holds an address of this frame (return rule)
+//
+// A Vec allocated in an Arena stored inside a local Vec<Arena>'s buffer cannot
+// outlive the local Vec<Arena>.
+
+import "mem.zrl";
+import "vec.zrl";
+use mem::Arena;
+use vec::Vec;
+
+fn alloc_in(v: &Vec<Arena>) -> Vec<u8> {
+    let a = v.get(0 as usize).unwrap();
+    let mut out = Vec::<u8>.new_in(a);
+    out.push(7 as u8);
+    return out;
+}
+
+fn bad() -> Vec<u8> {
+    let mut arenas = Vec::<Arena>.new();
+    arenas.push(Arena.new(4096 as usize).unwrap());
+    return alloc_in(&arenas);
+}
+
+fn main() -> i32 {
+    let out = bad();
+    return out.len() as i32;
+}
