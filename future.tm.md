@@ -308,6 +308,16 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
     - **Lead:** the method-as-value and path routes (`SymbolKind.Method` in `direct_callee` and in the identifier lowering, `src/lower_zir/expr.zrl`) call `self.resolver.resolve_type(imp.target_ty)` outside the impl's scope, so the impl's own `T` is not defined. Static generic calls do not infer the method's type arguments from the arguments, as receiver calls do (`infer_method_type_args`).
     - **Do:** diagnose both and split into `+AI-G` tasks. Once the static and path routes work, add their `impl<T: Copy>` cases to `tests/error_reporting/err_impl_block_bound.zrl` (they reach id:z0175's bound check, `check_method_type_arg_bounds`).
 
+- [ ] +types +AI-D @main Path call T::m(..) and method value T::m of a trait method with impl type parameters only in trait arguments fail with type mismatch id:21ehe
+    > **Created:** 2026-11-21
+    > **Branch:** `main`
+
+    - **Found by:** check-in id:3nrvs, probing sibling routes of id:z0032 (`git:100e5ac`).
+    - **Placed:** in `future.tm.md` beside id:7v42z: a false refusal on path calls and method values (related to id:7v42z's `SymbolKind.Method` paths), not a soundness hole.
+    - **Reproducer:** with `trait Source<T> { fn pull(self: &Self, fallback: T) -> T; }`, `struct S { x: i32 }`, `impl<T: Copy> Source<T> for S { fn pull(self: &S, fallback: T) -> T { return fallback; } }`: (1) `S::pull(&s, 42)` fails with `error: type mismatch: expected &S, found i32` (`S.pull(&s, 42)` and `s.pull(42)` work); (2) `let f: fn(&S, i32) -> i32 = S::pull;` fails with `error: type mismatch: expected fn(&S, i32) -> i32, found fn(&S, S)`.
+    - **Cause:** `SymbolKind.Method` in `direct_callee` (`src/lower_zir/expr.zrl:2651`) and `lower_ident_expr` (`src/lower_zir/expr.zrl:1150`) call `self.mono.instantiate_method(f, method_type_args, 0, f.name, imp, self_ty)` without calling `infer_unbound_impl_args` (or unifying against `expected_ty` for a method value), leaving `T` unbound (`0`, which resolves to `self_ty` `S`).
+    - **Do:** infer unbound `impl_args` from `args` (starting at parameter 1 when `f` has a receiver) in `direct_callee`'s `SymbolKind.Method` arm and pass them to `check_method_type_arg_bounds_with_impl_args` and `instantiate_method_with_impl_args`; for `lower_ident_expr`'s `SymbolKind.Method` arm, unify `f`'s parameter/return types against `expected_ty` when `expected_ty` is a `fn` type, or report a clear diagnostic if `T` remains unconstrained.
+
 - [ ] +diagnostics +AI-D @main A refused call does not cascade into `internal error: could not resolve the type of an operator operand` id:gsjhz
     > **Created:** 2026-11-14
     > **Branch:** `main`
@@ -336,6 +346,16 @@ Today a `Box` is never freed and never runs its contents' `Drop` (`KNOWN_ISSUES.
 
     - **Reproducer:** `struct S { p: i32 }`, `impl Drop for S { fn drop(self: &mut S) {} }`, then `fn pick(r: &S) -> S {` on line 3 and `return *r;` on line 4: the compiler prints `3:1: error: cannot move out of borrow`, the function's first column, not `4:12`. `tests/language/memory/element_move/element_returned.zrl` shows the same for `return a[0];` (`8:1: error: cannot move out of an array or slice element`). The same refusals on a `let` are reported at the expression.
     - **Not settled:** where the position is lost (the `return` terminator's span in the lowering, or `check_place_use`'s caller in `src/check_zir.zrl`), and which other refusals on a returned value share it. A session that takes this up finds that first, then writes the numbered **Checks:** (a test that states the line and column, and the change taken out to watch it fail).
+
+- [ ] +diagnostics +AI-D @main collect_pattern_bindings in or-patterns treats a bare enum variant inside a tuple, struct or enum sub-pattern as a variable binding id:w6yge
+    > **Created:** 2026-11-21
+    > **Branch:** `main`
+
+    - **Found by:** check-in id:3nrvs, probing sibling routes of id:vdgj4 (`git:d4a660d`).
+    - **Placed:** in `future.tm.md` under "Types, diagnostics and the standard library": a false refusal on an unprefixed unit enum variant inside an or-pattern's sub-pattern, not a soundness hole.
+    - **Reproducer:** `enum E { A(i32), B(i32), C } fn f(t: (E, i32)) -> i32 { match t { (E.C, x) | (C, x) => { return x; }, _ => { return 0; }, } }` fails with `error: a binding in an or-pattern must appear in every alternative: 'C' is missing from one`, even though `(C, x)` alone matches `E.C` (because `lower_tuple_pattern` passes element type `tys[i]` to `lower_pattern_ident`, where `get_variant_index(scrut_ty, name)` sees `C` is a variant of `E`).
+    - **Cause:** `collect_pattern_bindings` (`src/lower_zir/lower_match.zrl:1203`) passes `0 as u32` as `ty` when recursing into `Pattern.EnumVariant`, `Pattern.Tuple`, and `Pattern.Struct`, so `get_variant_index(ty, name)` is skipped for sub-patterns.
+    - **Do:** thread the sub-pattern's type (peeled through `pattern_through_ref`, tuple element type, struct field type, or variant payload type) through `collect_pattern_bindings`, matching `lower_pattern_at`.
 
 ## Decisions and hygiene
 
@@ -643,6 +663,16 @@ Standalone tasks developed and committed directly on `main`:
       echo '        _ => 0,'; echo '    }'; echo '}'; echo 'fn main() -> i32 { return f((E.A, E.B, E.C, E.D, E.F)); }'; } > /tmp/u.zrl
       ```
     - **Lead, not yet verified:** `warn_unreachable_arms` runs `exh_useful` once per arm against every arm before it, and each call specialises (copies) every row at every level in `self.arena`, which is never reclaimed during a function's lowering. So both the time and the memory grow with arms² × columns. Diagnose first: measure where the arena goes (per pass: `warn_unreachable_arms`, `lint_wildcard_arm`, `check_match_exhaustiveness`), then decide between a scratch arena reset per arm, sharing unchanged row tails, and a size limit past which the check gives up quietly (as `depth > 32` already does). The provenance rules constrain `src/lower_zir/exhaust.zrl` (see id:z0089 and id:z0085).
+
+- [ ] +diagnostics +AI-G @main Mark SAW_FIRST_DECL per file and call validate_source_bytes in zoril fmt id:mzbpk
+    > **Created:** 2026-11-21
+    > **Branch:** `main`
+
+    - **Found by:** check-in id:3nrvs, probing sibling routes of id:z0015 (`git:19487dd`).
+    - **Placed:** in `future.tm.md` under `main` branch items: a minor diagnostic wording refinement, not blocking anything.
+    - **Found:** (1) `SAW_FIRST_DECL` (`src/diag.zrl`) is set by `mark_first_decl()` when the root file parses `import "bad.zrl";`, and is not reset while `load_file_at` parses `bad.zrl`, so if `bad.zrl` is English prose, the stopping line after 20 errors omits `(the file does not look like Zoril source)`. (2) `format_source` (`src/fmt/fmt.zrl:101`) calls `scan` before `validate_source_bytes`, so `zoril fmt` on a file with a NUL byte or invalid UTF-8 prints `the file has a token the lexer rejects` instead of `file contains a NUL byte (not Zoril source)` / `file is not valid UTF-8 (not Zoril source)`.
+    - **Do:** save and reset `SAW_FIRST_DECL` around `(*sub_parser).parse_module()` in `Parser::load_file_at` (`src/parser/module.zrl`), and call `if !validate_source_bytes(path, source) { return Option.None; }` at the top of `format_source` (`src/fmt/fmt.zrl`).
+    - **Checks:** C1 `import "bad.zrl";` where `bad.zrl` is prose prints `(the file does not look like Zoril source)` on the stopping line. C2 `build/zoril fmt --check` on a NUL-byte file and an invalid-UTF-8 file prints the one-line refusal from `validate_source_bytes`. C3 with the reset / call removed, C1 and C2 fail. C4 `make test` and `make preflight-changed`, each `Total:` line quoted.
 
 ## `testinfra` branch: the test runner in Zoril and test-path portability, paused (from `active.tm.md`, 2026-11-14)
 

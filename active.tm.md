@@ -762,18 +762,25 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C7: `build/z0015/zoril_nolim` (without the counter check) printed all `25` error lines on `err25.zrl`.
       - C8: removed the `zoril` and `zbuild` error-flooding entry from `KNOWN_ISSUES.md`; `make test` passed (`Total: 4133 run, 4133 passed, 0 failed, 2 skipped (144.7s)`); `make preflight-changed` passed (`Total: 1561 run, 1561 passed, 0 failed, 0 skipped (111.1s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.5s)`); `scripts/check_fuzz_fresh.sh` reports `STALE` for `src/`, `stdlib/`, `tools/zilc`, `tools/zbuild`, `rt/`.
 
-- [ ] +review +AI-D @main @checkin Check-in: review the main +AI-G batch (z0032, 7sb2k, 5342d, z0182, vdgj4, z0015) id:3nrvs
+- [x] +review +AI-D @main @checkin Check-in: review the main +AI-G batch (z0032, 7sb2k, 5342d, z0182, vdgj4, z0015) id:3nrvs
     > **Created:** 2026-11-20
     > **Branch:** `main`
     > **Depends:** id:z0032, id:7sb2k, id:5342d, id:z0182, id:vdgj4, id:z0015
+    > **Completed:** 2026-11-21 git:19487dd
 
     - **Placed:** directly after id:z0015, the last of the `@main` `+AI-G` batch it reviews, by the check-in id:22qty (`AGENTS.md`, Check-ins, step 3: the next `@checkin` after the next batch). No `@checkin` followed the batch when it was promoted.
     - **Review:** the steps of `AGENTS.md` Check-ins; re-run each task's numbered checks and each **Awaiting review:** bullet.
+    - **Review recorded (2026-11-21, git:19487dd):**
+      1. **Queue and commits read:** reviewed `git show 100e5ac 4abe936 44a38ae e033ae5 d4a660d 19487dd`.
+      2. **Re-ran batch checks and gates:** `./scripts/test.sh` on all 9 new/modified tests (`Total: 10 run, 10 passed, 0 failed, 0 skipped (0.1s)`), `sh scripts/test_modular_mangling.sh` (`PASS: all modular mangling acceptance tests passed.`), `sh scripts/test_zbuild_errors.sh` (`[PASS] zbuild-errors: 471 of 481 compile-fail tests give their expected diagnostics through the installed zbuild (6 skipped for compiler flags, 4 allowed to differ) in 3 s`), and `sh scripts/test_man_pages.sh` (`[PASS] man-pages: all pages build cleanly and match tools and stdlib`).
+      3. **Sibling probes (`build/3nrvs/`):** `id:z0032` (`100e5ac`): default trait methods (`impl<T: Copy> Source<T> for S {}`), methods with their own `<U: Copy>` beside the impl's `<T: Copy>`, receiver calls through a generic bound `fn call_pull<X: Source<i32>>(x: &X)` and `X.pull(x, 42)` all pass; `X: Source<NoCopy>` is refused with `type NoCopy does not implement trait Copy`. Two sibling routes were not updated: path calls `S::pull(&s, 42)` and method values `let f: fn(&S, i32) -> i32 = S::pull;` go through `SymbolKind.Method` in `direct_callee` and `lower_ident_expr` (`src/lower_zir/expr.zrl`), which resolve `imp.target_ty` without `infer_unbound_impl_args` and fail with `type mismatch: expected &S, found i32` / `found fn(&S, S)` (filed `id:21ehe` in `future.tm.md` beside `id:7v42z`). `id:7sb2k` (`4abe936`): probed path calls `S::id::<i32, i32>(&s, 1)` and `S::plain::<i32>(&s, 2)` — both refused with the expected diagnostics (`wrong number of type arguments for generic method`, `type arguments given to a method that is not generic`). `id:5342d` (`44a38ae`): verified `write_global_name` qualifies globals by canonical module stem in both whole-program and `-c` modes while leaving unnamed string/slice literals (`!global_has_own_name`) local, and `scripts/check_static_image_determinism.sh` matches `::NAME`. `id:z0182` (`e033ae5`): probed `Vec.clear()` on an empty `Vec`, `Vec.resize(len, val)` with `new_len == len` (drops only `val`), and repeated `Vec.clear()` calls (`DROP_COUNT` stays 2, no double drop). `id:vdgj4` (`d4a660d`): probed nested or-patterns in struct fields (`W { e: E.A(x) | E.B(y) }`), `if let E.A(x) | E.B(y) = e`, 3-alternative `E.A(x) | E.B(x) | E.C`, tuple `(E.A(x), _) | (E.C, _)`, and nested `(E.A(_) | E.B(y)) | E.C` — all refused with `a binding in an or-pattern must appear in every alternative`. Found a sibling edge case: `collect_pattern_bindings` passes `0 as u32` as the inner type when recursing into `EnumVariant`, `Tuple`, and `Struct`, so a bare unit enum variant inside a sub-pattern (`(E.C, x) | (C, x)`) has `ty == 0` and `C` is treated as a variable binding by `collect_pattern_bindings` (filed `id:w6yge` in `future.tm.md`). `id:z0015` (`19487dd`): verified `--error-limit`, UTF-8/NUL checks, and `zbuild --error-limit`; found two minor follow-ups (`SAW_FIRST_DECL` not reset when `load_file_at` parses an imported file, and `zoril fmt` not calling `validate_source_bytes` before `scan`; filed `id:mzbpk` in `future.tm.md`).
+      4. **Plan edits:** added check-in `id:rvjcz` after the `@zil` `+AI-G` batch (`id:qpc8d`..`id:egsdq`, blocking `id:0mbg3`), added check-in `id:rz4da` after the pre-renewal `@main` `+AI-G` batch (`id:z0014`..`id:r1shp`, blocking `id:v2f8h`), made `id:ts1jg` depend on `id:3nrvs`, and added follow-up tasks `id:21ehe`, `id:w6yge`, and `id:mzbpk` in `future.tm.md`. No tasks moved, re-tagged, or re-prioritized.
 
 - [ ] +types +diagnostics +AI-D @main A pattern that moves several values out of a tuple or struct is accepted id:ts1jg
     > **Created:** 2026-11-14
     > **Context:** found by id:z0176's sibling probes.
     > **Branch:** `main`
+    > **Depends:** id:3nrvs
 
     - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, first of the `main` `+AI-D` group after the `+AI-G` group; order inside the group is not critical. Re-probe against id:z0176's arm-scope change first.
     - **Placed:** in `future.tm.md`: a false refusal (the safe side), no task depends on it; after id:z0176's fix, whose arm-scope change it should be re-probed against.
@@ -867,11 +874,19 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
     - **Not ready:** ZL1 writes this task's **Do:** and **Checks:**. Scope (decision 4, the small step): zilc runs `src/verify.zrl` on what it parses, as the compiler does after lowering, so hand-written ZIL gets the same ZIL-level checks (stack-address escape, constant arena allocations) that compiled programs get. Not a borrow checker; that question is id:ahd1c.
 
+- [ ] +zil +review +AI-D @zil @checkin Check-in: review the ZIL +AI-G batch (qpc8d, htrqb, ehh6m, egsdq) id:rvjcz
+    > **Created:** 2026-11-21
+    > **Branch:** `zil`
+    > **Depends:** id:qpc8d, id:htrqb, id:ehh6m, id:egsdq
+
+    - **Placed:** directly after id:egsdq (ZL5), the last of the `@zil` `+AI-G` batch (ZL2..ZL5), by the check-in id:3nrvs (`AGENTS.md`, Check-ins, step 3).
+    - **Review:** the steps of `AGENTS.md` Check-ins; re-run each task's numbered checks and probe the sibling routes.
+
 - [ ] +zil +safety +audit +AI-D @zil ZL6 Which common mistakes in hand-written ZIL zilc can catch from what ZIL says id:0mbg3
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decision in id:ahd1c (`future.tm.md`)
     > **Branch:** `zil`
-    > **Depends:** id:egsdq
+    > **Depends:** id:egsdq, id:rvjcz
 
     - **Placed:** after ZL5, which gives zilc the ZIL verifier this task extends.
 
@@ -937,10 +952,18 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Do:** add compositional builders and feature tags to `scripts/fuzz/gen.lua` (with matching Rust twin emission) for: (1) `Vec::extend_from_slice` and `.clone()` copying views into an external container (`gap_56`, `gap_77`, `gap_78`, `gap_80`); (2) an owned `Vec` or struct holding frame views pushed or moved into a callee (`gap_59`–`gap_63`, `gap_79`); (3) a frame view read through a local reference to a local struct or passed in a by-value aggregate to a callee that stores it out (`gap_97`, `gap_98`).
     - **Checks:** C1 `lua scripts/fuzz/gen.lua --features` lists the new tags. C2 `make fuzz-short` runs cleanly with 0 `gen-bug`s and covers all new tags. C3 `make fuzz-calibrate` passes. C4 `make test-changed BASE=HEAD`, its `Total:` quoted.
 
+- [ ] +review +AI-D @main @checkin Check-in: review the pre-renewal main +AI-G batch (z0014, z0016, mskex, 4ngz8, r1shp) id:rz4da
+    > **Created:** 2026-11-21
+    > **Branch:** `main`
+    > **Depends:** id:z0014, id:z0016, id:mskex, id:4ngz8, id:r1shp
+
+    - **Placed:** directly after id:r1shp, the last of the pre-renewal `@main` `+AI-G` batch, by the check-in id:3nrvs (`AGENTS.md`, Check-ins, step 3).
+    - **Review:** the steps of `AGENTS.md` Check-ins; re-run each task's numbered checks and probe the sibling routes.
+
 - [ ] +fuzz +safety +release +AI-D @main Renew the fuzz record (make fuzz-release) after the provenance and ZIL series id:v2f8h
     > **Created:** 2026-11-20
     > **Branch:** `main`
-    > **Depends:** id:w3vde, id:0mbg3, id:mskex, id:4ngz8, id:r1shp
+    > **Depends:** id:w3vde, id:0mbg3, id:mskex, id:4ngz8, id:r1shp, id:rz4da
 
     - **Placed:** after the remaining `@zil` tasks (id:0mbg3) and the generator-debt tasks id:mskex, id:4ngz8 and id:r1shp, and before the release task (id:jtk00), per the maintainer's request (2026-11-20), so the renewed record covers the provenance route classes.
     - **Do:** on a clean `main` tree with `rustc` available, run the release-bar fuzz renewal (`make fuzz-release`, per `id:z0003` and `bench/fuzz/README.md`), triage any findings, update `bench/fuzz/README.md` with the renewed record and commit hashes, and verify `scripts/check_fuzz_fresh.sh` reports fresh for `src/`, `stdlib/`, `tools/zilc`, `tools/zbuild`, and `rt/`.
