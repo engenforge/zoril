@@ -600,6 +600,26 @@ if [ "$print_plan" -eq 1 ]; then
     exit 0
 fi
 
+# The five stage0c-* suite gates all run `make -C $STAGE0_DIR test_*`, which depends on
+# `$STAGE0_DIR/build/zoril-c`. Build it once before the pool starts so parallel workers do not
+# compile and link stage0-c concurrently when `scripts/test.sh --gates` is invoked directly.
+if grep -qE '^gate:stage0c-(unit|corpus|docs|error-locations|functional) ' "$PLAN" 2>/dev/null; then
+    mkdir -p build
+    ${MAKE:-make} --no-print-directory -C "$STAGE0_DIR" all > build/stage0c-build.log 2>&1 || {
+        cat build/stage0c-build.log >&2
+        echo "building stage0-C failed" >&2
+        exit 2
+    }
+fi
+if grep -q '^gate:stage0c-fixed-bugs ' "$PLAN" 2>/dev/null && [ ! -x "$STAGE0_DIR/build/zoril-c.release" ]; then
+    mkdir -p build
+    ${MAKE:-make} --no-print-directory -C "$STAGE0_DIR" release > build/stage0c-release.log 2>&1 || {
+        cat build/stage0c-release.log >&2
+        echo "building stage0-C release failed" >&2
+        exit 2
+    }
+fi
+
 # ------------------------------------------------------------------ run
 # Workers finish in any order; results print in plan order as soon as every earlier
 # item is done, so output never interleaves and is the same at any --jobs.

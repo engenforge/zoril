@@ -119,12 +119,12 @@ endif
 
 $(TARGET_BIN): $(OBJS)
 	@mkdir -p $(BUILD_DIR)
-	@$(CC) $(LDFLAGS) $^ -o $@.tmp && mv -f $@.tmp $@
+	@$(CC) $(LDFLAGS) $^ -o $@.tmp.$$$$ && mv -f $@.tmp.$$$$ $@
 	@if [ "$(QUIET)" -ne 1 ]; then echo "Successfully built $@"; fi
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -c $< -o $@
+	@$(CC) $(CFLAGS) $(if $(DEPFLAGS),-MF $(@:.o=.d.tmp.$$$$) -MT $@) -c $< -o $@.tmp.$$$$ && $(if $(DEPFLAGS),mv -f $(@:.o=.d.tmp.$$$$) $(@:.o=.d) &&) mv -f $@.tmp.$$$$ $@
 
 # zoril-c.o must be rebuilt whenever version.h changes (git hash or date).
 $(OBJ_DIR)/zoril-c.o: $(VERSION_H)
@@ -309,7 +309,7 @@ test_unit_valgrind:
 .PHONY: cproc
 cproc: $(VERSION_H)
 	@mkdir -p $(BUILD_DIR)
-	@CPP=$(CPROC_CPP) $(CPROC) $(CPROC_CFLAGS) $(SRCS) -o $(BUILD_DIR)/zoril-c.cproc.tmp $(CPROC_LDFLAGS) && mv -f $(BUILD_DIR)/zoril-c.cproc.tmp $(BUILD_DIR)/zoril-c.cproc
+	@CPP=$(CPROC_CPP) $(CPROC) $(CPROC_CFLAGS) $(SRCS) -o $(BUILD_DIR)/zoril-c.cproc.tmp.$$$$ $(CPROC_LDFLAGS) && mv -f $(BUILD_DIR)/zoril-c.cproc.tmp.$$$$ $(BUILD_DIR)/zoril-c.cproc
 	@if [ "$(QUIET)" -ne 1 ]; then echo "Successfully built build/zoril-c.cproc"; fi
 
 .PHONY: FORCE
@@ -317,18 +317,18 @@ FORCE:
 
 $(BUILD_DIR)/bin/cpp: FORCE
 	@mkdir -p $(BUILD_DIR)/bin
-	@printf '#!/bin/sh\ncmd="%s"\ncase "$$cmd" in\n    *mcpp*)\n        args=""\n        for a in "$$@"; do\n            case "$$a" in\n                -undef) args="$$args -N" ;;\n                *) args="$$args $$a" ;;\n            esac\n        done\n        musl_inc=""\n        if [ -d /usr/lib/musl/include ]; then\n            musl_inc="-I /usr/lib/musl/include"\n        elif [ -d /usr/include/musl ]; then\n            musl_inc="-I /usr/include/musl"\n        elif [ -d /usr/include/x86_64-linux-musl ]; then\n            musl_inc="-I /usr/include/x86_64-linux-musl"\n        fi\n        exec $$cmd -e utf8 $$musl_inc $$args ;;\n    *)\n        exec $$cmd "$$@" ;;\nesac\n' "$(MINIMAL_CPP)" > $@.tmp
-	@chmod +x $@.tmp
-	@if cmp -s $@.tmp $@ 2>/dev/null; then rm -f $@.tmp; else mv $@.tmp $@; fi
+	@printf '#!/bin/sh\ncmd="%s"\ncase "$$cmd" in\n    *mcpp*)\n        args=""\n        for a in "$$@"; do\n            case "$$a" in\n                -undef) args="$$args -N" ;;\n                *) args="$$args $$a" ;;\n            esac\n        done\n        musl_inc=""\n        if [ -d /usr/lib/musl/include ]; then\n            musl_inc="-I /usr/lib/musl/include"\n        elif [ -d /usr/include/musl ]; then\n            musl_inc="-I /usr/include/musl"\n        elif [ -d /usr/include/x86_64-linux-musl ]; then\n            musl_inc="-I /usr/include/x86_64-linux-musl"\n        fi\n        exec $$cmd -e utf8 $$musl_inc $$args ;;\n    *)\n        exec $$cmd "$$@" ;;\nesac\n' "$(MINIMAL_CPP)" > $@.tmp.$$$$ && \
+	chmod +x $@.tmp.$$$$ && \
+	if cmp -s $@.tmp.$$$$ $@ 2>/dev/null; then rm -f $@.tmp.$$$$; else mv -f $@.tmp.$$$$ $@; fi
 
 $(BUILD_DIR)/bin/qbe: FORCE
 	@mkdir -p $(BUILD_DIR)/bin
 	@case "$(BACKEND_BIN)" in \
 	    */*) \
 	        _cmd="$$(cd "$$(dirname "$(BACKEND_BIN)")" 2>/dev/null && pwd)/$$(basename "$(BACKEND_BIN)")"; \
-	        printf '#!/bin/sh\nexec "%s" "$$@"\n' "$$_cmd" > $@.tmp && \
-	        chmod +x $@.tmp && \
-	        if cmp -s $@.tmp $@ 2>/dev/null; then rm -f $@.tmp; else mv $@.tmp $@; fi ;; \
+	        printf '#!/bin/sh\nexec "%s" "$$@"\n' "$$_cmd" > $@.tmp.$$$$ && \
+	        chmod +x $@.tmp.$$$$ && \
+	        if cmp -s $@.tmp.$$$$ $@ 2>/dev/null; then rm -f $@.tmp.$$$$; else mv -f $@.tmp.$$$$ $@; fi ;; \
 	    *) rm -f $@ ;; \
 	esac
 
@@ -337,9 +337,9 @@ $(BUILD_DIR)/bin/as: FORCE
 	@case "$(ASSEMBLER_BIN)" in \
 	    */*) \
 	        _cmd="$$(cd "$$(dirname "$(ASSEMBLER_BIN)")" 2>/dev/null && pwd)/$$(basename "$(ASSEMBLER_BIN)")"; \
-	        printf '#!/bin/sh\nexec "%s" "$$@"\n' "$$_cmd" > $@.tmp && \
-	        chmod +x $@.tmp && \
-	        if cmp -s $@.tmp $@ 2>/dev/null; then rm -f $@.tmp; else mv $@.tmp $@; fi ;; \
+	        printf '#!/bin/sh\nexec "%s" "$$@"\n' "$$_cmd" > $@.tmp.$$$$ && \
+	        chmod +x $@.tmp.$$$$ && \
+	        if cmp -s $@.tmp.$$$$ $@ 2>/dev/null; then rm -f $@.tmp.$$$$; else mv -f $@.tmp.$$$$ $@; fi ;; \
 	    *) rm -f $@ ;; \
 	esac
 
@@ -348,9 +348,9 @@ $(BUILD_DIR)/bin/ld: FORCE
 	@case "$(LINKER_BIN)" in \
 	    */*) \
 	        _cmd="$$(cd "$$(dirname "$(LINKER_BIN)")" 2>/dev/null && pwd)/$$(basename "$(LINKER_BIN)")"; \
-	        printf '#!/bin/sh\nexec "%s" "$$@"\n' "$$_cmd" > $@.tmp && \
-	        chmod +x $@.tmp && \
-	        if cmp -s $@.tmp $@ 2>/dev/null; then rm -f $@.tmp; else mv $@.tmp $@; fi ;; \
+	        printf '#!/bin/sh\nexec "%s" "$$@"\n' "$$_cmd" > $@.tmp.$$$$ && \
+	        chmod +x $@.tmp.$$$$ && \
+	        if cmp -s $@.tmp.$$$$ $@ 2>/dev/null; then rm -f $@.tmp.$$$$; else mv -f $@.tmp.$$$$ $@; fi ;; \
 	    *) rm -f $@ ;; \
 	esac
 
@@ -370,7 +370,7 @@ minimal: $(VERSION_H) $(BUILD_DIR)/bin/cpp $(BUILD_DIR)/bin/qbe $(BUILD_DIR)/bin
 	        fi ;; \
 	esac
 	@mkdir -p $(BUILD_DIR)
-	@PATH="$(CURDIR)/$(BUILD_DIR)/bin:$$PATH" $(CPROC) $(CPROC_CFLAGS) $(SRCS) -o $(BUILD_DIR)/zoril-c.minimal.tmp $(CPROC_LDFLAGS) && mv -f $(BUILD_DIR)/zoril-c.minimal.tmp $(BUILD_DIR)/zoril-c.minimal
+	@PATH="$(CURDIR)/$(BUILD_DIR)/bin:$$PATH" $(CPROC) $(CPROC_CFLAGS) $(SRCS) -o $(BUILD_DIR)/zoril-c.minimal.tmp.$$$$ $(CPROC_LDFLAGS) && mv -f $(BUILD_DIR)/zoril-c.minimal.tmp.$$$$ $(BUILD_DIR)/zoril-c.minimal
 	@if [ "$(MINIMAL_LINK_SEED)" -eq 1 ]; then \
 	    ln -sf zoril-c.minimal $(BUILD_DIR)/zoril-c.release; \
 	    ln -sf zoril-c.minimal $(BUILD_DIR)/zoril-c; \
