@@ -1,5 +1,41 @@
 # Completed Archive
 
+- [x] +zil +safety +AI-G @zil ZL6d Reject use-after-drop and double-drop in src/verify.zrl id:pkcsy
+    > **Created:** 2026-11-21
+    > **Branch:** `zil`
+    > **Depends:** id:djynw
+    > **Completed:** 2026-11-21 git:e8ff7c5
+
+    - **Placed:** after `id:djynw` (ZL6c), Rank 4 `drop`-lifetime checks in `src/verify.zrl`.
+    - **Do:**
+      1. In `src/verify.zrl` (`verify_instr` for `ILInstr.Drop(ssa)`): before setting `OwnerState.Dropped`, check `self.current_map.get_state(ssa)`; if it is already `OwnerState.Dropped`, report `double drop: value was already dropped`.
+      2. In `src/verify.zrl` (`check_ssa_access(ssa, span)` or on operand reads before `verify_instr`): if `self.current_map.get_state(ssa)` is `OwnerState.Dropped`, report `use after drop: value was already dropped` (avoid duplicate error when the instruction itself is `ILInstr.Drop(ssa)`, which reports `double drop`).
+      3. Verify `ILInstr.Store` to a dropped stack slot still resets the slot to `OwnerState.Owned` in `mark_store`, and `corpus/zil/05_ownership_move.zil`, `06_ownership_drop.zil`, `13_slices.zil` still compile cleanly.
+      4. Add negative ZIL tests under `tests/zilc/` with `// EXPECT:` headers: `use_after_drop.zil` and `double_drop.zil`.
+    - **Checks:**
+      - C1 (before): run `timeout -k 5s 30s build/zilc <file> -o /dev/null` on `use_after_drop.zil` and `double_drop.zil` before editing `src/verify.zrl`; quote exit code `0` for each.
+      - C2 (after): rebuild `build/zoril` and `build/zilc`; `sh scripts/test_zilc_errors.sh` passes all checks including both new tests (quote both `[PASS]` lines).
+      - C3 (control): `./scripts/test.sh corpus/zil` passes all 24 tests including `05_ownership_move.zil`, `06_ownership_drop.zil`, and `13_slices.zil` (quote `Total:`).
+      - C4 (take-out): temporarily revert the `OwnerState.Dropped` check in `src/verify.zrl`, rebuild `build/zilc`, and show `sh scripts/test_zilc_errors.sh` fails on `use_after_drop.zil` and `double_drop.zil`; restore and rebuild.
+      - C5: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` pass on `zil` (quote `Total:` lines and `reject-diff: base verdicts: fresh (no cache)`; note fuzz record is stale for `src/` and `tools/zilc/`).
+      - Ends with `**Awaiting review:**` bullet for check-in `id:mf9gq`.
+    - **Completion:**
+      - Implemented in `src/verify.zrl` (`is_state_dropped`, `ILInstr.Drop` double-drop check, `check_ssa_access` use-after-drop check, `check_ssa_defined` for `Store.ptr`/`Drop`/`EndBorrow`/`Release`, and removed implicit `OwnerState.Dropped` from `dec_use` so loop Pass 2 does not false-positive on loop-invariant borrows/values).
+      - C1 (before): `for f in tests/zilc/use_after_drop.zil tests/zilc/double_drop.zil; do timeout -k 5s 30s build/zilc "$f" -o /dev/null; echo "$f: exit=$?"; done` -> both exited `0`.
+      - C2 (after): `sh scripts/test_zilc_errors.sh` -> `[PASS] tests/zilc/double_drop.zil`, `[PASS] tests/zilc/use_after_drop.zil` (all 29 checks passed).
+      - C3 (control): `./scripts/test.sh corpus/zil` -> `Total: 25 run, 25 passed, 0 failed, 0 skipped (0.2s)` (all 24 corpus/zil tests passed, including `05_ownership_move.zil`, `06_ownership_drop.zil`, `13_slices.zil`).
+      - C4 (take-out): reverted the `OwnerState.Dropped` checks in `src/verify.zrl`, rebuilt, `sh scripts/test_zilc_errors.sh` failed with `[FAIL] tests/zilc/double_drop.zil` and `[FAIL] tests/zilc/use_after_drop.zil`; restored and rebuilt.
+      - C5: `make test` (`build/zl6d_make_test.log`): `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (144.8s)`. `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (`build/zl6d_preflight.log`): `reject-diff: base verdicts: fresh (no cache); base front end 115 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against 7c3b0071a628890b2812e9bbb51aaa79be938fb6`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (108.2s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.3s)`. Fuzz record is stale for `src/` and `tools/zilc/`.
+    - **Awaiting review:** check-in `id:mf9gq`.
+    - **Completion:**
+      - Implemented in `src/verify.zrl` (`is_global_addr` allocated/zeroed beside `points_to_stack`, set on `GlobalAddr`, propagated through `Cast`/`FieldAddr`/`Add`/`Move`/`Borrow`, checked in `mark_store`, and `points_to_stack` propagated through `Phi` predecessors).
+      - C1 (before): `for f in tests/zilc/stack_escape_global.zil tests/zilc/stack_escape_phi.zil; do timeout -k 5s 30s build/zilc "$f" -o /dev/null; echo "$f: exit=$?"; done` -> both exited `0`.
+      - C2 (after): `sh scripts/test_zilc_errors.sh` -> `[PASS] tests/zilc/stack_escape_global.zil`, `[PASS] tests/zilc/stack_escape_phi.zil` (all 27 checks passed).
+      - C3 (control): storing `slice_ptr` of `string_const "ok"` into a global compiled with `build/zilc` (`control exit=0`).
+      - C4 (take-out): reverted `is_global_addr` store check in `src/verify.zrl`, rebuilt, `sh scripts/test_zilc_errors.sh` failed with `[FAIL] tests/zilc/stack_escape_global.zil: expected a failure with: region escape: storing a pointer to local stack storage into a global`; restored and rebuilt.
+      - C5: `make test` (`build/zl6c_make_test.log`): `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (148.2s)`. `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (`build/zl6c_preflight.log`): `reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against 7c3b0071a628890b2812e9bbb51aaa79be938fb6`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (108.0s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.3s)`. Fuzz record is stale for `src/` and `tools/zilc/`.
+    - **Awaiting review:** check-in `id:mf9gq`.
+
 - [x] +zil +safety +AI-G @zil ZL6c Reject storing local stack pointers into globals and propagate points_to_stack through Phi in src/verify.zrl id:djynw
     > **Created:** 2026-11-21
     > **Branch:** `zil`
