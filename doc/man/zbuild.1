@@ -5,7 +5,7 @@
 .nh
 .ad l
 .\" Begin generated content:
-.TH "zbuild" "1" "2026\-11\-20"
+.TH "zbuild" "1" "2026\-11\-21"
 .PP
 .SH NAME
 .PP
@@ -149,6 +149,11 @@ Path to the Zoril runtime assembly object (\fBruntime.\&o\fR).\& By default, \fB
 \fB\-\-checked\fR
 .RS 4
 Developer option, not a user\-facing mode: build the program with \fBzoril \-\-checked\fR, which instruments it for memory\-safety testing.\& The mode is part of the toolchain id, so objects built with and without it are never reused for each other.\& A release build is unaffected.\&
+.PP
+.RE
+\fB\-\-error\-limit\fR <n>
+.RS 4
+Pass \fB\-\-error\-limit <n>\fR to every \fBzoril \-c\fR invocation, stopping after <n> errors per module (default: 20; 0 removes the limit).\&
 .PP
 .RE
 .SH ENVIRONMENT

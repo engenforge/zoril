@@ -99,6 +99,9 @@ binary at *../share/zoril/stdlib*).
 *--checked*
 	Developer option, not a user-facing mode: build the program with *zoril --checked*, which instruments it for memory-safety testing. The mode is part of the toolchain id, so objects built with and without it are never reused for each other. A release build is unaffected.
 
+*--error-limit* <n>
+	Pass *--error-limit <n>* to every *zoril -c* invocation, stopping after <n> errors per module (default: 20; 0 removes the limit).
+
 # ENVIRONMENT
 
 *BACKEND_BIN*

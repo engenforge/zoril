@@ -40,6 +40,7 @@ pub struct Options {
     // `--hosted`: link into a libc process through `cc` (part of the toolchain id).
     pub hosted: bool,
     pub cc: [u8],
+    pub error_limit: [u8],
 }
 
 pub fn default_options(arena: *mut ArenaHeader) -> Options {
@@ -54,6 +55,7 @@ pub fn default_options(arena: *mut ArenaHeader) -> Options {
         checked: false,
         hosted: false,
         cc: "",
+        error_limit: "",
     };
 }
 
@@ -93,7 +95,10 @@ pub fn print_usage() {
         "                             runtime_hosted.o (see the FFI section of the getting-started guide)\n"
     );
     print(
-        "    --cc <path>              The C compiler driver used to link with --hosted (default: cc)\n\n"
+        "    --cc <path>              The C compiler driver used to link with --hosted (default: cc)\n"
+    );
+    print(
+        "    --error-limit <n>        Stop after <n> errors per module (default: 20, 0 for no limit)\n\n"
     );
     print("ENVIRONMENT:\n");
     print("    BACKEND_BIN              Default path to backend binary (default: qbe)\n");
@@ -169,6 +174,7 @@ pub fn parse_args(argc: i32, argv: **u8, opts: &mut Options) -> i32 {
             || arg == "--as"
             || arg == "--ld"
             || arg == "--cc"
+            || arg == "--error-limit"
             || arg == "--runtime" {
             if !args.has_next() {
                 return usage_error("missing value for ", arg);
@@ -205,6 +211,8 @@ pub fn parse_args(argc: i32, argv: **u8, opts: &mut Options) -> i32 {
                 opts.ld = val;
             } else if arg == "--cc" {
                 opts.cc = val;
+            } else if arg == "--error-limit" {
+                opts.error_limit = val;
             } else {
                 opts.runtime = val;
             }

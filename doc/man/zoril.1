@@ -5,7 +5,7 @@
 .nh
 .ad l
 .\" Begin generated content:
-.TH "zoril" "1" "2026\-11\-20"
+.TH "zoril" "1" "2026\-11\-21"
 .PP
 .SH NAME
 .PP
@@ -133,6 +133,11 @@ Name the program'\&s entry \fBzoril_main\fR instead of \fBmain\fR, for a program
 \fB\-\-checked\fR
 .RS 4
 Developer option, not a user\-facing mode.\& Instrument the emitted program for memory\-safety testing: released arena space stays poisoned and is never handed out again, a local'\&s slot is poisoned where its scope ends, a dropped value is poisoned and a second drop of it traps (exit 134), and a heap block released twice traps instead of unmapping whatever lives there now.\& A release build contains none of it \- the instrumentation is emitted only under this flag, so the emitted ZIL of a program does not change \- and it is not a safety mode: nothing about what the compiler accepts changes.\& See \fBmake test\-checked\fR in \fBdoc/developer_guide.\&md\fR.\&
+.PP
+.RE
+\fB\-\-error\-limit\fR <n>
+.RS 4
+Stop after <n> errors (default: 20; 0 removes the limit).\& When the limit is reached before the first declaration is parsed, the stopping message notes that the file does not look like Zoril source.\& Files containing a NUL byte or invalid UTF\-8 are refused with one line before lexing.\&
 .PP
 .RE
 \fB\-\-\fR

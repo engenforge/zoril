@@ -83,6 +83,9 @@ The compiler accepts exactly one input file. Specifying more than one input file
 *--checked*
 	Developer option, not a user-facing mode. Instrument the emitted program for memory-safety testing: released arena space stays poisoned and is never handed out again, a local's slot is poisoned where its scope ends, a dropped value is poisoned and a second drop of it traps (exit 134), and a heap block released twice traps instead of unmapping whatever lives there now. A release build contains none of it - the instrumentation is emitted only under this flag, so the emitted ZIL of a program does not change - and it is not a safety mode: nothing about what the compiler accepts changes. See *make test-checked* in *doc/developer_guide.md*.
 
+*--error-limit* <n>
+	Stop after <n> errors (default: 20; 0 removes the limit). When the limit is reached before the first declaration is parsed, the stopping message notes that the file does not look like Zoril source. Files containing a NUL byte or invalid UTF-8 are refused with one line before lexing.
+
 *--*
 	Terminate option processing. All subsequent arguments are treated as input file paths, even if they begin with a dash *-*.
 

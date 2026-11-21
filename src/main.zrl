@@ -34,7 +34,7 @@ use ast::AST;
 use file::read_file_raw;
 use base::{LoadState, Parser};
 use bytevec::ByteVec;
-use diag::{lint_named, set_lint};
+use diag::{lint_named, set_error_limit, set_lint, validate_source_bytes};
 use fmt::fmt_main;
 use fsys::exe_dir_raw;
 use il_cfg::{ILModule, canonical_module_stem, extract_module_name};
@@ -184,6 +184,7 @@ fn print_usage() {
         "  --lower-all              Developer option: also lower and check the stdlib functions the program does not reach\n"
     );
     print("  -v, --verbose            Report each phase, file and function as it is compiled\n");
+    print("  --error-limit <n>        Stop after <n> errors (default: 20, 0 for no limit)\n");
     print("  -W <lint> | -A <lint>    Turn a lint on (warn) or off (allow): wildcard-arm,\n");
     print("                           redundant-cast (off by default)\n");
     print(
@@ -243,7 +244,7 @@ fn levenshtein(a: [u8], b: [u8]) -> u64 {
 
 fn suggest_option(arg: [u8]) -> [u8] {
     if arg == "--" { return ""; }
-    let opts: [[u8]; 26] = [
+    let opts: [[u8]; 27] = [
         "-h",
         "--help",
         "-V",
@@ -269,12 +270,13 @@ fn suggest_option(arg: [u8]) -> [u8] {
         "--checked",
         "--hosted",
         "--no-verify",
-        "--interproc-summary"
+        "--interproc-summary",
+        "--error-limit"
     ];
     let mut best_dist = 99 as u64;
     let mut best_opt: [u8] = "";
     let mut i = 0 as usize;
-    while i < 26 as usize {
+    while i < 27 as usize {
         let opt = opts[i];
         let d = levenshtein(arg, opt);
         if d < best_dist {
@@ -333,6 +335,34 @@ fn parse_args(argc: i32, argv: **u8, table: &mut InternTable, arena: *mut ArenaH
                 match lint_named(lint_name) {
                     Option.Some(lint) => { set_lint(lint, arg == "-W"); },
                     Option.None => { cli_error("unknown lint ", lint_name); o.bad_args = true; },
+                }
+            } else {
+                cli_error("option requires an argument: ", arg);
+                o.bad_args = true;
+            }
+        } else if !end_of_options && arg == "--error-limit" {
+            i = i + 1 as i32;
+            if i < argc {
+                let value = unsafe { arg_to_slice(argv, i) };
+                if value.len == 0 as usize {
+                    cli_error("invalid --error-limit: ", value);
+                    o.bad_args = true;
+                } else {
+                    let mut n = 0 as u64;
+                    let mut valid_num = true;
+                    for ch in value {
+                        if *ch < '0' as u8 || *ch > '9' as u8 {
+                            valid_num = false;
+                            break;
+                        }
+                        n = n * 10 as u64 + (*ch - '0' as u8) as u64;
+                    }
+                    if valid_num {
+                        set_error_limit(n);
+                    } else {
+                        cli_error("invalid --error-limit: ", value);
+                        o.bad_args = true;
+                    }
                 }
             } else {
                 cli_error("option requires an argument: ", arg);
@@ -834,6 +864,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
     // the interface the compile may write records it for the next compile
     // (`// zri-stdlib: 1`).
     let stdlib_input = input_is_stdlib(&o, &mr, table, arena);
+    if !validate_source_bytes(o.input_path, source) { return 1; }
     let ast = parse_program(&o, source, mr, input_mod_id, table, arena, stdlib_input);
     if ast as usize == 0 as usize { return 1; }
     // Non-null (checked above): the AST parse_program built in the arena.

@@ -126,6 +126,10 @@ fn compile_to_object(ctx: &BuildCtx, path: [u8], src_file: [u8], action_key: [u8
     c1.arg("--interproc-summary");
     if ctx.opts.checked { c1.arg("--checked"); }
     if ctx.opts.hosted { c1.arg("--hosted"); }
+    if ctx.opts.error_limit.len > 0 as usize {
+        c1.arg("--error-limit");
+        c1.arg(ctx.opts.error_limit);
+    }
     c1.arg("--write-interface");
     c1.arg(iface_file(ctx, path));
     c1.arg("-o");

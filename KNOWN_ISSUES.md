@@ -57,13 +57,6 @@ For functions containing tens of thousands of instructions in a single basic blo
 
 `v0.1.0-alpha` targets **Linux x86_64**. Portability to other operating systems (FreeBSD, OpenBSD, macOS, Windows) and CPU architectures (AArch64, RISC-V) is planned for future milestones; see [the roadmap](doc/ROADMAP.md#portability).
 
-### `zoril` and `zbuild` print every error a file produces
-
-- **Symptom:** given a file that is not Zoril source, `zoril` (and `zbuild`, which passes its output through) reports an error for nearly every token: 300 KB of random bytes produce about 140,000 error lines, and 160 KB of English prose about 33,000.
-- **What works:** a Zoril program's errors are reported in full, and the first one is where to start.
-- **Workaround:** `zoril ... 2>&1 | head -20`.
-- **Fix planned (post-release):** a default limit on the number of errors, with an option to change it, and a one-line refusal of a file that contains a NUL byte, is not UTF-8, or produces only errors before its first declaration.
-
 ### `zilc` skips text it does not recognise between declarations
 
 - **Symptom:** `zilc` reads a declaration where its first word says one starts, and steps over anything else at the top level of a file. A file of random bytes is therefore accepted with no message and lowered to an empty program, and a stray word can be read as the start of a declaration it was not meant to be. A malformed declaration is still reported, at its line, and `zilc` stops there.

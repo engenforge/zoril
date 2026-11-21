@@ -5,12 +5,100 @@ import "io.zrl";
 import "fmt.zrl";
 import "ast.zrl";
 use ast::Span;
-use io::{eprint, stderr};
+use io::{eprint, exit, stderr};
 use fmt::write_u64;
+
+pub static mut ERROR_LIMIT: u64 = 20;
+pub static mut ERROR_COUNT: u64 = 0;
+pub static mut SAW_FIRST_DECL: bool = false;
+
+pub fn set_error_limit(limit: u64) {
+    unsafe { ERROR_LIMIT = limit; }
+}
+
+pub fn mark_first_decl() {
+    unsafe { SAW_FIRST_DECL = true; }
+}
+
+// Rejects a NUL byte or invalid UTF-8 with one diagnostic line before lexing starts.
+pub fn validate_source_bytes(file: [u8], bytes: [u8]) -> bool {
+    let mut i = 0 as usize;
+    while i < bytes.len {
+        let b = bytes[i];
+        if b == 0 as u8 {
+            eprint(file);
+            eprint(": error: file contains a NUL byte (not Zoril source)\n");
+            return false;
+        }
+        if b < 0x80 as u8 {
+            i = i + 1 as usize;
+        } else if (b & 0xe0 as u8) == 0xc0 as u8 {
+            if i + 1 as usize >= bytes.len
+                || b < 0xc2 as u8
+                || (bytes[i + 1 as usize] & 0xc0 as u8) != 0x80 as u8 {
+                eprint(file);
+                eprint(": error: file is not valid UTF-8 (not Zoril source)\n");
+                return false;
+            }
+            i = i + 2 as usize;
+        } else if (b & 0xf0 as u8) == 0xe0 as u8 {
+            if i + 2 as usize >= bytes.len
+                || (bytes[i + 1 as usize] & 0xc0 as u8) != 0x80 as u8
+                || (bytes[i + 2 as usize] & 0xc0 as u8) != 0x80 as u8
+                || (b == 0xe0 as u8 && bytes[i + 1 as usize] < 0xa0 as u8)
+                || (b == 0xed as u8 && bytes[i + 1 as usize] >= 0xa0 as u8) {
+                eprint(file);
+                eprint(": error: file is not valid UTF-8 (not Zoril source)\n");
+                return false;
+            }
+            i = i + 3 as usize;
+        } else if (b & 0xf8 as u8) == 0xf0 as u8 {
+            if i + 3 as usize >= bytes.len
+                || (bytes[i + 1 as usize] & 0xc0 as u8) != 0x80 as u8
+                || (bytes[i + 2 as usize] & 0xc0 as u8) != 0x80 as u8
+                || (bytes[i + 3 as usize] & 0xc0 as u8) != 0x80 as u8
+                || (b == 0xf0 as u8 && bytes[i + 1 as usize] < 0x90 as u8)
+                || (b > 0xf4 as u8)
+                || (b == 0xf4 as u8 && bytes[i + 1 as usize] >= 0x90 as u8) {
+                eprint(file);
+                eprint(": error: file is not valid UTF-8 (not Zoril source)\n");
+                return false;
+            }
+            i = i + 4 as usize;
+        } else {
+            eprint(file);
+            eprint(": error: file is not valid UTF-8 (not Zoril source)\n");
+            return false;
+        }
+    }
+    return true;
+}
 
 // `FILE:LINE:COL: KIND: `, the start of a diagnostic (`FILE: KIND: ` for a span with no line, an
 // interface's declaration); the caller writes the message and the newline.
 pub fn diag_start(file: [u8], span: Span, kind: [u8]) {
+    if kind == "error" {
+        let lim = unsafe { ERROR_LIMIT };
+        if lim > 0 as u64 {
+            let count = unsafe { ERROR_COUNT };
+            if count >= lim {
+                eprint("zoril: error: ");
+                if !unsafe { SAW_FIRST_DECL } {
+                    eprint(
+                        "too many errors before the first declaration (the file does not look like Zoril source); "
+                    );
+                } else {
+                    eprint("too many errors; ");
+                }
+                eprint("stopping after ");
+                let mut err = stderr();
+                let _ = write_u64(&mut err, lim);
+                eprint(" (use --error-limit N to change, 0 for no limit)\n");
+                exit(1 as i32);
+            }
+            unsafe { ERROR_COUNT = count + 1 as u64; }
+        }
+    }
     eprint(file);
     if span.line == 0 as u32 {
         eprint(": ");

@@ -21,7 +21,7 @@ use file::read_file_raw;
 use il_cfg::{canonical_module_stem, extract_module_name};
 use base::{FileModule, Parser};
 use bytevec::ByteVec;
-use diag::diag_start;
+use diag::{diag_start, mark_first_decl, validate_source_bytes};
 use io::{close, eprint, read};
 use os_linux::open;
 use lexer::Lexer;
@@ -127,15 +127,22 @@ impl Parser {
             }
             match self.parse_declaration() {
                 Decl.None => {},
-                Decl.Import(path_id) => { if !fmt_only { self.load_import(path_id); } },
+                Decl.Import(path_id) => {
+                    mark_first_decl();
+                    if !fmt_only { self.load_import(path_id); }
+                },
                 Decl.Struct(s) => {
+                    mark_first_decl();
                     self.ast.alloc_decl_at(Decl.Struct(s), decl_span);
                     if self.derive_clone_next && !fmt_only {
                         let derived = self.derive_clone_impl(&s, decl_span);
                         self.ast.alloc_decl_at(Decl.Impl(derived), decl_span);
                     }
                 },
-                decl => { self.ast.alloc_decl_at(decl, decl_span); },
+                decl => {
+                    mark_first_decl();
+                    self.ast.alloc_decl_at(decl, decl_span);
+                },
             }
             self.derive_clone_next = false;
         }
@@ -347,6 +354,10 @@ impl Parser {
 
         let source = self.read_file_to_string(c_path(read_path, self.arena));
         if source.len == 0 as usize { return false; }
+        if !validate_source_bytes(display_path, source) {
+            self.had_error = true;
+            return true;
+        }
         // A .zri carries the identity of the module it was emitted from.
         let final_mod = zri_recorded_module(source, module_path);
         let final_mod_id = self.intern_table.intern(final_mod);
