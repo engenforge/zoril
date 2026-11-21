@@ -6,12 +6,12 @@ zbuild - Incremental compilation driver for the Zoril language
 
 # SYNOPSIS
 
-*zbuild* [_options_] <entry.zrl>++
+*zbuild* [_options_] <entry.zrl|entry.zil>++
 *zbuild* *--gc* [*--cache-dir* <dir>]
 
 # DESCRIPTION
 
-*zbuild* is the incremental compilation driver for the Zoril systems programming language. It orchestrates the multi-stage compilation pipeline (*zoril*(1), *zilc*(1), *qbe*(1), *as*(1), and *ld*(1)) across the complete dependency graph reachable from the entry module.
+*zbuild* is the incremental compilation driver for the Zoril systems programming language. For a *.zrl* entry, it orchestrates the multi-stage compilation pipeline (*zoril*(1), *zilc*(1), *qbe*(1), *as*(1), and *ld*(1)) across the complete dependency graph reachable from the entry module. For a *.zil* entry, it skips module discovery and *zoril*(1) and builds the single ZIL module through *zilc*(1), *qbe*(1), *as*(1), and the linker.
 
 # COMPILATION CACHE AND INCREMENTAL REBUILDS
 

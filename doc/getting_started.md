@@ -113,7 +113,16 @@ zoril -I <stdlib>  --emit-zil  ->  zilc  ->  qbe  ->  as  ->  ld  (with runtime.
 
 ### Starting from ZIL
 
-A program written directly in ZIL, the Zoril Intermediate Language, skips step 1 and starts at `zilc`. ZIL is specified in [`doc/spec/intermediate_language.md`](spec/intermediate_language.md), and `corpus/zil/` in the source tree has one small program per group of opcodes, each with its expected exit code in its first line:
+A program written directly in ZIL, the Zoril Intermediate Language, skips step 1 and starts at `zilc`. ZIL is specified in [`doc/spec/intermediate_language.md`](spec/intermediate_language.md), and `corpus/zil/` in the source tree has one small program per group of opcodes, each with its expected exit code in its first line.
+
+You can build a `.zil` file directly with `zbuild`:
+
+```sh
+zbuild -o 01_arithmetic 01_arithmetic.zil
+./01_arithmetic; echo $?    # 30
+```
+
+Or run the four steps by hand:
 
 ```sh
 zilc 01_arithmetic.zil 01_arithmetic.ssa
@@ -123,7 +132,7 @@ ld -o 01_arithmetic $PREFIX/lib/zoril/runtime.o 01_arithmetic.o
 ./01_arithmetic; echo $?    # 30
 ```
 
-With no output file, `zilc` writes the SSA to standard output, so the first three steps can be one pipeline: `zilc 01_arithmetic.zil | qbe | as -o 01_arithmetic.o`. `zbuild` builds `.zrl` programs only.
+With no output file, `zilc` writes the SSA to standard output, so the first three steps can be one pipeline: `zilc 01_arithmetic.zil | qbe | as -o 01_arithmetic.o`.
 
 `zilc` checks a ZIL program's types, but the ownership and region checks run in `zoril`, before it writes ZIL. Hand-written ZIL therefore has none of the guarantees in [What Zoril Checks](SAFETY.md): like `unsafe` code, it is correct only as far as its author made it so.
 

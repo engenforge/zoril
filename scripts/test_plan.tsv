@@ -95,6 +95,7 @@ scenario	scdoc-min	integration	./scripts/test_scdoc_min.sh
 scenario	stray-files-selftest	integration	./scripts/check_stray_files.sh --selftest
 scenario	bench-step-failed	integration	./scripts/test_bench_step_failed.sh
 scenario	zbuild-errors	integration	./scripts/test_zbuild_errors.sh
+scenario	zbuild-zil	integration	./scripts/test_zbuild_zil.sh
 scenario	zbuild-diff	integration	./scripts/test_zbuild_diff.sh
 scenario	user-paths	integration	./scripts/test_user_paths.sh
 scenario	qbe-arg-order	integration	./scripts/test_qbe_arg_order.sh

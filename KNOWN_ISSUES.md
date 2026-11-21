@@ -57,12 +57,6 @@ For functions containing tens of thousands of instructions in a single basic blo
 
 `v0.1.0-alpha` targets **Linux x86_64**. Portability to other operating systems (FreeBSD, OpenBSD, macOS, Windows) and CPU architectures (AArch64, RISC-V) is planned for future milestones; see [the roadmap](doc/ROADMAP.md#portability).
 
-### `zbuild` builds `.zrl` programs only
-
-- **Symptom:** `zbuild prog.zil` parses the ZIL as Zoril and prints a page of `expected declaration` errors.
-- **Workaround:** build a ZIL file with `zilc`, `qbe`, `as` and `ld`, as in "Starting from ZIL" in [Getting Started](doc/getting_started.md#starting-from-zil).
-- **Fix planned (post-release):** `zbuild` builds a `.zil` file through the same steps, and refuses any other input with one line.
-
 ---
 
 ## 4. Separate Compilation (`zoril -c` and `tools/zbuild`)

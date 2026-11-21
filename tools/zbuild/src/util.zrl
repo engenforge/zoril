@@ -134,6 +134,17 @@ pub fn join_path(dir: [u8], name: [u8], arena: *mut ArenaHeader) -> [u8] {
     return s.as_slice();
 }
 
+pub fn str_ends_with(s: [u8], suffix: [u8]) -> bool {
+    if s.len < suffix.len { return false; }
+    let off = s.len - suffix.len;
+    let mut i = 0 as usize;
+    while i < suffix.len {
+        if s[off + i] != suffix[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
 pub fn fail(msg: [u8]) -> i32 {
     eprint("error: ");
     eprint(msg);

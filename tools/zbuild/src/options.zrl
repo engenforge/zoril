@@ -62,7 +62,7 @@ pub fn default_options(arena: *mut ArenaHeader) -> Options {
 pub fn print_usage() {
     print("zbuild: Incremental compilation driver for Zoril\n\n");
     print("USAGE:\n");
-    print("    zbuild [OPTIONS] <entry.zrl>\n\n");
+    print("    zbuild [OPTIONS] <entry.zrl|entry.zil>\n\n");
     print("OPTIONS:\n");
     print("    -h, --help               Print this help message\n");
     print("    -V, --version            Display version and exit\n");

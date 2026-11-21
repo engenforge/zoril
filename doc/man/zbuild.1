@@ -13,13 +13,13 @@ zbuild \- Incremental compilation driver for the Zoril language
 .PP
 .SH SYNOPSIS
 .PP
-\fBzbuild\fR [\fIoptions\fR] <entry.\&zrl>
+\fBzbuild\fR [\fIoptions\fR] <entry.\&zrl|entry.\&zil>
 .br
 \fBzbuild\fR \fB\-\-gc\fR [\fB\-\-cache\-dir\fR <dir>]
 .PP
 .SH DESCRIPTION
 .PP
-\fBzbuild\fR is the incremental compilation driver for the Zoril systems programming language.\& It orchestrates the multi\-stage compilation pipeline (\fBzoril\fR(1), \fBzilc\fR(1), \fBqbe\fR(1), \fBas\fR(1), and \fBld\fR(1)) across the complete dependency graph reachable from the entry module.\&
+\fBzbuild\fR is the incremental compilation driver for the Zoril systems programming language.\& For a \fB.\&zrl\fR entry, it orchestrates the multi\-stage compilation pipeline (\fBzoril\fR(1), \fBzilc\fR(1), \fBqbe\fR(1), \fBas\fR(1), and \fBld\fR(1)) across the complete dependency graph reachable from the entry module.\& For a \fB.\&zil\fR entry, it skips module discovery and \fBzoril\fR(1) and builds the single ZIL module through \fBzilc\fR(1), \fBqbe\fR(1), \fBas\fR(1), and the linker.\&
 .PP
 .SH COMPILATION CACHE AND INCREMENTAL REBUILDS
 .PP

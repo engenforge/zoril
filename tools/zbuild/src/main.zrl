@@ -35,7 +35,7 @@ use mem_raw::{ArenaHeader, arena_init};
 use module_path::{basename, find_project_root, get_cwd, is_within_dir, make_absolute, normalize_path, rel_within_dir, split_include_arg};
 use options::{Options, default_options, parse_args};
 use tools::{Tools, resolve_tools};
-use util::{fail2, fail_reason, file_exists, join_path, read_file_to_slice};
+use util::{fail, fail2, fail_reason, file_exists, join_path, read_file_to_slice, str_ends_with};
 use vec::Vec;
 
 fn prepare_cache(ctx: &BuildCtx) -> i32 {
@@ -131,6 +131,15 @@ pub fn main(argc: i32, argv: **u8) -> i32 {
         return run_gc_only(&opts, cwd, arena);
     }
 
+    let is_zil = str_ends_with(opts.entry, ".zil");
+    let is_zrl = str_ends_with(opts.entry, ".zrl");
+    if !is_zil && !is_zrl {
+        return fail("entry file must end in .zrl or .zil");
+    }
+    if is_zil && opts.checked {
+        return fail("--checked is not supported for .zil inputs");
+    }
+
     // Default stdlib search path: installed (<prefix>/share/zoril/stdlib). It is passed to the
     // compiler in the *named* form `-I stdlib=<dir>`, which is what designates a standard library:
     // the compiler trusts a declaration with the arena lifecycle contract only when its file came
@@ -223,8 +232,14 @@ pub fn main(argc: i32, argv: **u8) -> i32 {
             Vec::<usize>.new_in_raw(arena)
         },
     };
-    let rc_graph = discover_graph(&ctx, entry, abs_entry, &mut g);
-    if rc_graph != 0 { return rc_graph; }
+    if is_zil {
+        g.paths.push(entry);
+        g.files.push(abs_entry);
+        g.order.push(0 as usize);
+    } else {
+        let rc_graph = discover_graph(&ctx, entry, abs_entry, &mut g);
+        if rc_graph != 0 { return rc_graph; }
+    }
 
     let mut results = unsafe { Vec::<ModResult>.new_in_raw(arena) };
     let mut n = 0 as usize;

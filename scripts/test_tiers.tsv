@@ -171,6 +171,7 @@ scripts/test_uncalled_method_emit.sh	scripts_test_uncalled_method_emit	portabili
 scripts/test_user_paths.sh	scripts_test_user_paths	portability no-new-deps	-	-	-	user-paths	-	script	user workflow test selects user-paths scenario
 scripts/test_zbuild_diff.sh	scripts_test_zbuild_diff	portability no-new-deps	-	-	-	zbuild-diff	-	script	zbuild differential test selects zbuild-diff scenario
 scripts/test_zbuild_errors.sh	scripts_test_zbuild_errors	portability no-new-deps	-	-	-	zbuild-errors	-	script	zbuild error reporting test selects zbuild-errors scenario
+scripts/test_zbuild_zil.sh	scripts_test_zbuild_zil	portability no-new-deps	-	-	-	zbuild-zil	-	script	zbuild .zil root test selects zbuild-zil scenario
 scripts/test_zbuild_link.sh	scripts_test_zbuild_link	portability no-new-deps	-	-	-	zbuild-link	-	script	zbuild linkage test selects zbuild-link scenario
 scripts/test_zilc_errors.sh	scripts_test_zilc_errors	portability no-new-deps	-	-	-	zilc-errors	-	script	zilc diagnostic test selects zilc-errors scenario
 scripts/unsafe_scan.sh	scripts_unsafe_scan	unsafe-scan portability no-new-deps	-	-	-	-	-	script	unsafe scan tool selects unsafe-scan gate
