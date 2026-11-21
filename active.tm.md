@@ -6,26 +6,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [x] +zil +safety +review +AI-D @zil @checkin Check-in: review ZL6 common-mistake checks (0r49n, epx51, djynw, pkcsy) id:mf9gq
-    > **Created:** 2026-11-21
-    > **Branch:** `zil`
-    > **Depends:** id:0r49n, id:epx51, id:djynw, id:pkcsy
-    > **Completed:** 2026-11-21 git:e8ff7c5
-
-    - **Placed:** directly after `id:pkcsy` (ZL6d), the last of the ZL6 `+AI-G` batch, per `AGENTS.md` Check-ins.
-    - **Review:** the steps of `AGENTS.md` Check-ins; re-run each task's numbered checks and probe sibling routes (e.g. `slice_load`/`slice_store` on non-slice, variadic call arity, `variant_match` undefined target, `alloc 'local` stored into global field via `field_addr`, `drop` in one branch vs sibling branch).
-    - **Review findings (2026-11-21, commits `90862da`, `48a1568`, `78690b9`, `e8ff7c5`):**
-      - Re-ran checks: `sh scripts/test_zilc_errors.sh` passed all 29 checks; `./scripts/test.sh corpus/zil` passed (`Total: 25 run, 25 passed, 0 failed, 0 skipped (0.2s)`).
-      - **ZL6a (`id:0r49n`, `90862da`) — PASS:** reviewed diff (including `src/lower_zir_to_zil.zrl` emitting `SlicePtr` instead of `Load` on `ILTYPE_SLICE` casts). Probed sibling routes: `slice_load` and `slice_store` on `i64` rejected (`rc=1`), `load` on `Slice<u8, 'local>` rejected (`rc=1`), `syscall` with 6 args accepted (`rc=0`) and 7 args rejected (`rc=1`), non-variadic `call` with 3 args for 2 params rejected (`rc=1`), variadic `call` with 0 args for 1 fixed param rejected (`rc=1`), variadic `call` with 1 or 2 args accepted (`rc=0`).
-      - **ZL6b (`id:epx51`, `48a1568`) — PASS:** reviewed diff; confirmed `VariantMatchInstr` in `src/il_instr.zrl:226` has no block targets. Probed sibling routes: empty block `@b0:` rejected (`rc=1`, `block ends without a terminator`), `branch` with undefined `then_block` or undefined `else_block` rejected (`rc=1`, `branch/jump target names no defined block`), `unreachable` terminator accepted (`rc=0`).
-      - **ZL6c (`id:djynw`, `78690b9`) — PASS with sibling gaps:** probed `alloc 'local` stored into global via `field_addr`, `cast`, `add`, `slice_construct`, and `phi(borrow(alloc 'local))` — all rejected (`rc=1`, `region escape: storing a pointer to local stack storage into a global`). **Sibling gaps found:** `is_global_addr` is not propagated through `ILInstr.Phi` (`phi [@b1: v2_global, @b2: v3_global]; store v4, v1_local` exited `0`) or `ILInstr.RegionCast` (`region_cast 'local, v2_global; store v3, v1_local` exited `0`). Added to follow-up `id:4d7m6` (ZL6e).
-      - **ZL6d (`id:pkcsy`, `e8ff7c5`) — TWO DEFECTS FOUND (follow-up `id:4d7m6` ZL6e):**
-        1. **False positive on valid CFG sibling branches:** `src/verify.zrl` mutates a single linear `self.current_map` across blocks in block-list order (it does not clone `current_map` across branches). Probing `branch v0, @b1, @b2` with `drop v1` in `@b1` and `drop v1` (or `load v1; drop v1`) in mutually exclusive `@b2` falsely fails (`rc=1`, `double drop` / `use after drop`). Meanwhile `call`/`borrow`/`ret` after drop and `drop` of an outer `BoxMut` inside a loop are rejected (`rc=1`), and `alloc 'heap` + `drop` inside a loop body passes (`rc=0`).
-        2. **False negative on `store` through dropped non-stack pointer:** `check_instr_operands` skipped `is_state_dropped` for all `ILInstr.Store(s)` pointers (and `mark_store` unconditionally resets `base` to `OwnerState.Owned`), so `v1: BoxMut<i32> = alloc 'heap, i32; drop v1; store v1, v2; load v1; drop v1` is silently accepted (`rc=0`). Only stack slots (`is_stack_slot[s.ptr]`) should allow reinitialization via `store`; storing through a dropped heap pointer must report `use after drop`.
-        3. **Cleanup:** `is_state_owned` (`src/verify.zrl:233`) has no remaining callers after `dec_use` dropped its implicit `OwnerState.Dropped` transition; remove in `id:4d7m6`.
-      - **Bookkeeping note:** in `doc/tasks/completed.tm.md`, `id:epx51` and `id:pkcsy` each carried a duplicated `Completion:` block from the preceding task (already swept; noted here).
-      - **Plan update:** added `id:4d7m6` (ZL6e, `+AI-G`, `@zil`) and follow-up check-in `id:rrgct` (`+AI-D`, `@zil`, `@checkin`) directly below, and added `id:rrgct` to `id:v2f8h`'s `Depends:`.
-
 - [ ] +zil +safety +AI-G @zil ZL6e Make drop tracking CFG-aware, reject store-after-drop on non-stack pointers, and propagate is_global_addr through Phi/RegionCast in src/verify.zrl id:4d7m6
     > **Created:** 2026-11-21
     > **Branch:** `zil`
