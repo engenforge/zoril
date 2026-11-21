@@ -1,0 +1,90 @@
+// expected exit 0
+import "stdlib/vec.zrl";
+import "stdlib/mem.zrl";
+
+use vec::Vec;
+use mem::Arena;
+
+static mut DROP_COUNT: i32 = 0;
+static mut LAST_ID: i32 = 0;
+static mut ORDER_OK: bool = true;
+
+struct Item {
+    id: i32,
+}
+
+impl Clone for Item {
+    pub fn clone(self: &Item) -> Item {
+        return Item { id: self.id };
+    }
+}
+
+impl Drop for Item {
+    fn drop(self: &mut Item) {
+        DROP_COUNT = DROP_COUNT + 1;
+        if LAST_ID != 0 && self.id >= LAST_ID {
+            ORDER_OK = false;
+        }
+        LAST_ID = self.id;
+    }
+}
+
+fn reset_counters() {
+    DROP_COUNT = 0;
+    LAST_ID = 0;
+    ORDER_OK = true;
+}
+
+fn main() -> i32 {
+    // 1. Vec.clear() drops all elements, last first.
+    let mut v1 = Vec::<Item>.new();
+    v1.push(Item { id: 1 });
+    v1.push(Item { id: 2 });
+    v1.push(Item { id: 3 });
+    reset_counters();
+    v1.clear();
+    let c1 = DROP_COUNT;
+    let o1 = ORDER_OK;
+    v1.free();
+    if c1 != 3 || !o1 { return 1; }
+
+    // 2. Vec.resize(1, ...) shrinking drops the 2 removed elements, last first (plus the value arg).
+    let mut v2 = Vec::<Item>.new();
+    v2.push(Item { id: 10 });
+    v2.push(Item { id: 20 });
+    v2.push(Item { id: 30 });
+    reset_counters();
+    v2.resize(1 as usize, Item { id: 99 });
+    // Elements 30, 20 are dropped (2 drops), and the unused `value` (id: 99) is dropped at resize exit.
+    let c2 = DROP_COUNT;
+    if c2 != 3 { return 2; }
+    // Remaining element (id: 10) is still live and dropped on pop.
+    reset_counters();
+    if let Option.Some(rem) = v2.pop() {
+        if rem.id != 10 { return 3; }
+    } else {
+        return 4;
+    }
+    if DROP_COUNT != 1 { return 5; }
+    v2.free();
+
+    // 3. Arena-backed Vec: clear and resize shrinking still drop removed elements.
+    let mut arena = match Arena.new(4096 as usize) {
+        Result.Ok(a) => a,
+        Result.Err(_) => { return 10; },
+    };
+    let mut va = Vec::<Item>.new_in(&arena);
+    va.push(Item { id: 1 });
+    va.push(Item { id: 2 });
+    va.push(Item { id: 3 });
+    va.push(Item { id: 4 });
+    reset_counters();
+    va.resize(2 as usize, Item { id: 99 });
+    if DROP_COUNT != 3 { return 6; }
+    reset_counters();
+    va.clear();
+    if DROP_COUNT != 2 { return 7; }
+    arena.drop();
+
+    return 0;
+}

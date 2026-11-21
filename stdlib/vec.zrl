@@ -291,9 +291,21 @@ impl<T> Vec<T> {
         self.len = n;
     }
 
+    // Drops elements in `[new_len, self.len)` from last to first, updating `len` to `new_len`.
+    fn drop_tail(self: &mut Vec<T>, new_len: usize) {
+        while self.len > new_len {
+            let idx = self.len - 1 as usize;
+            self.len = idx;
+            // SAFETY: `idx` was inside `0..old_len`, so the slot is inside the allocation and
+            // holds an initialized element; `len` was decremented first so it is not read again.
+            let old = unsafe { *((self.data as usize + idx * sizeof(T)) as *mut T) };
+            @drop(old);
+        }
+    }
+
     // Removes all elements from the vector without deallocating backing storage.
     pub fn clear(self: &mut Vec<T>) {
-        self.len = 0 as usize;
+        self.drop_tail(0 as usize);
     }
 
     // Returns the elements as an immutable slice.
@@ -387,7 +399,7 @@ impl<T: Clone> Vec<T> {
     // value. Shrinking keeps the first new_len.
     pub fn resize(self: &mut Vec<T>, new_len: usize, value: T) {
         if new_len <= self.len {
-            self.len = new_len;
+            self.drop_tail(new_len);
             return;
         }
         self.grow_to(new_len);
