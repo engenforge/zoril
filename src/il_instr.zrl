@@ -86,6 +86,7 @@ pub const IL_INSTR_STRUCT_CONSTRUCT: u32 = 69;
 pub const IL_INSTR_TUPLE_CONSTRUCT: u32 = 70;
 pub const IL_INSTR_BORROW: u32 = 71;
 pub const IL_INSTR_UNREACHABLE: u32 = 72;
+pub const IL_INSTR_SLICE_PTR: u32 = 73;
 
 pub type SSAId = u32;
 pub type BlockId = u32;
@@ -177,6 +178,7 @@ pub enum ILInstr {
     Borrow(BorrowInstr), // 71
     // Control never reaches here (after a call that exits). Ends a block with no successor.
     Unreachable, // 72
+    SlicePtr(SSAId), // 73
 }
 
 pub struct CastInstr {
@@ -400,6 +402,7 @@ impl ILInstr {
             ILInstr.Load(x)
                 | ILInstr.Drop(x)
                 | ILInstr.SliceLen(x)
+                | ILInstr.SlicePtr(x)
                 | ILInstr.Move(x)
                 | ILInstr.IsSome(x)
                 | ILInstr.Unwrap(x)
@@ -421,6 +424,7 @@ impl ILInstr {
             ILInstr.Load(x)
                 | ILInstr.Drop(x)
                 | ILInstr.SliceLen(x)
+                | ILInstr.SlicePtr(x)
                 | ILInstr.Move(x)
                 | ILInstr.IsSome(x)
                 | ILInstr.Unwrap(x)
@@ -476,6 +480,7 @@ impl ILInstr {
             ILInstr.Load(x)
                 | ILInstr.Drop(x)
                 | ILInstr.SliceLen(x)
+                | ILInstr.SlicePtr(x)
                 | ILInstr.Move(x)
                 | ILInstr.IsSome(x)
                 | ILInstr.Unwrap(x)
@@ -503,6 +508,7 @@ impl ILInstr {
             ILInstr.Load(x)
                 | ILInstr.Drop(x)
                 | ILInstr.SliceLen(x)
+                | ILInstr.SlicePtr(x)
                 | ILInstr.Move(x)
                 | ILInstr.IsSome(x)
                 | ILInstr.Unwrap(x)
@@ -536,6 +542,7 @@ impl ILInstr {
             ILInstr.Load(x)
                 | ILInstr.Drop(x)
                 | ILInstr.SliceLen(x)
+                | ILInstr.SlicePtr(x)
                 | ILInstr.Move(x)
                 | ILInstr.IsSome(x)
                 | ILInstr.Unwrap(x)
@@ -550,6 +557,28 @@ impl ILInstr {
                 | ILInstr.Neg(x)
                 | ILInstr.Not(x) => *x,
             _ => ICE("ILInstr.get_SliceLen on another variant")
+        };
+    }
+    pub fn get_SlicePtr(self: &ILInstr) -> SSAId {
+        return match self {
+            ILInstr.Load(x)
+                | ILInstr.Drop(x)
+                | ILInstr.SliceLen(x)
+                | ILInstr.SlicePtr(x)
+                | ILInstr.Move(x)
+                | ILInstr.IsSome(x)
+                | ILInstr.Unwrap(x)
+                | ILInstr.Ret(x)
+                | ILInstr.FDClose(x)
+                | ILInstr.IORingSetup(x)
+                | ILInstr.IORingClose(x)
+                | ILInstr.Likely(x)
+                | ILInstr.Unlikely(x)
+                | ILInstr.EndBorrow(x)
+                | ILInstr.Release(x)
+                | ILInstr.Neg(x)
+                | ILInstr.Not(x) => *x,
+            _ => ICE("ILInstr.get_SlicePtr on another variant")
         };
     }
     pub fn get_SliceConstruct(self: &ILInstr) -> &SliceConstructInstr {
@@ -581,6 +610,7 @@ impl ILInstr {
             ILInstr.Load(x)
                 | ILInstr.Drop(x)
                 | ILInstr.SliceLen(x)
+                | ILInstr.SlicePtr(x)
                 | ILInstr.Move(x)
                 | ILInstr.IsSome(x)
                 | ILInstr.Unwrap(x)
@@ -683,6 +713,7 @@ impl ILInstr {
             ILInstr.Load(x)
                 | ILInstr.Drop(x)
                 | ILInstr.SliceLen(x)
+                | ILInstr.SlicePtr(x)
                 | ILInstr.Move(x)
                 | ILInstr.IsSome(x)
                 | ILInstr.Unwrap(x)
@@ -716,6 +747,7 @@ impl ILInstr {
             ILInstr.Load(x)
                 | ILInstr.Drop(x)
                 | ILInstr.SliceLen(x)
+                | ILInstr.SlicePtr(x)
                 | ILInstr.Move(x)
                 | ILInstr.IsSome(x)
                 | ILInstr.Unwrap(x)
@@ -749,6 +781,7 @@ impl ILInstr {
             ILInstr.Load(x)
                 | ILInstr.Drop(x)
                 | ILInstr.SliceLen(x)
+                | ILInstr.SlicePtr(x)
                 | ILInstr.Move(x)
                 | ILInstr.IsSome(x)
                 | ILInstr.Unwrap(x)
@@ -776,6 +809,7 @@ impl ILInstr {
             ILInstr.Load(x)
                 | ILInstr.Drop(x)
                 | ILInstr.SliceLen(x)
+                | ILInstr.SlicePtr(x)
                 | ILInstr.Move(x)
                 | ILInstr.IsSome(x)
                 | ILInstr.Unwrap(x)

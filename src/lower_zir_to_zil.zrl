@@ -2455,47 +2455,7 @@ impl ZirToZilLowerer {
         let str_slice = self.intern_table.lookup(id);
         let u8_ty = self.get_primitive_type(ILPRIM_U8);
         let slice_ty = (*self.builder).get_slice_type(u8_ty);
-        let ptr_ty = (*self.builder).get_ptr_type(slice_ty);
-        let usize_ty = self.get_primitive_type(ILPRIM_USIZE);
-
-        // Allocate a {ptr, len} slice struct on the stack (in the entry block)
-        let saved_blk = (*self.builder).current_block_idx;
-        (*self.builder).switch_to_block((*self.builder).entry_block_idx);
-        let slice_slot = (*self.builder).emit_with_type(
-            ILInstr.Alloc(AllocInstr {
-                region: Region.Local,
-                ty: slice_ty,
-                allocator: NO_SSA as u32
-            }),
-            ptr_ty
-        );
-        (*self.builder).switch_to_block(saved_blk);
-
-        // Store ptr field (offset 0): the intern table address of the string data.
-        // The field-address pointers below are cast to point at their actual field
-        // type (not the whole slice_ty aggregate), so each store is a plain field
-        // store rather than a 16-byte aggregate copy.
-        let str_ptr_ssa = (*self.builder).emit_with_type(
-            ILInstr.StringConst(str_slice),
-            (*self.builder).get_ptr_type(u8_ty)
-        );
-        let ptr_field_ptr_ty = (*self.builder).get_ptr_type((*self.builder).get_ptr_type(u8_ty));
-        let ptr_field_ptr = (*self.builder).emit_cast(slice_slot, ptr_field_ptr_ty);
-        (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: ptr_field_ptr, val: str_ptr_ssa }));
-
-        // Store len field (offset 8)
-        let len_off = (*self.builder).emit_const_u64(8 as u64, usize_ty);
-        let usize_ptr_ty = (*self.builder).get_ptr_type(usize_ty);
-        let len_ptr = (*self.builder).emit_with_type(
-            ILInstr.Add(ILBinaryOp { lhs: slice_slot, rhs: len_off }),
-            usize_ptr_ty
-        );
-        let len_val = (*self.builder).emit_const_u64(str_slice.len as u64, usize_ty);
-        (*self.builder).emit(ILInstr.Store(StoreInstr { ptr: len_ptr, val: len_val }));
-
-        // Return pointer to the slice struct (type *[u8], passed as 'l' in calls)
-        return slice_slot;
-        return NO_SSA as u32;
+        return (*self.builder).emit_with_type(ILInstr.StringConst(str_slice), slice_ty);
     }
 
     // FuncAddr(id)
@@ -3339,12 +3299,16 @@ impl ZirToZilLowerer {
                     unsafe { local_slots[local_id as usize] = val_ssa; }
                     // The slot is now another place's address, not storage of this temporary's
                     // own: `Use` of an aggregate returns its place's address, `EnumPayload` a
-                    // payload's, `GetEnv` the caller's environment. `--checked` must not poison
-                    // that storage when this temporary's borrow ends, because it is still live
+                    // payload's, `GetEnv` the caller's environment, and `StringConst` a static
+                    // rodata slice header. `--checked` must not poison that storage when this
+                    // temporary's borrow ends, because it is still live or read-only
                     // (the post-EndBorrow investigation's finding, 2026-10-18).
                     let mut aliases = false;
                     match *rvalue {
-                        ZirRvalue.Use(_) | ZirRvalue.EnumPayload(_, _, _) | ZirRvalue.GetEnv => {
+                        ZirRvalue.Use(_)
+                            | ZirRvalue.EnumPayload(_, _, _)
+                            | ZirRvalue.GetEnv
+                            | ZirRvalue.StringConst(_) => {
                             aliases = true;
                         },
                         _ => {},

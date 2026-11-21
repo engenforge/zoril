@@ -1666,6 +1666,10 @@ impl ZilParser {
             instr_opt = Option.Some(
                 ILInstr.SliceLen(self.parse_ssa_id_with_name(self.current_func))
             );
+        } else if op_str == "slice_ptr" {
+            instr_opt = Option.Some(
+                ILInstr.SlicePtr(self.parse_ssa_id_with_name(self.current_func))
+            );
         } else if op_str == "slice_construct" {
             let ptr = self.parse_ssa_id_with_name(self.current_func);
             self.match_lit(",");

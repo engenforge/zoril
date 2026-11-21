@@ -128,6 +128,7 @@ fn first_undefined_operand(f: &ILFunction, instr: ILInstr) -> SSAId {
             | ILInstr.Load(ssa)
             | ILInstr.Drop(ssa)
             | ILInstr.SliceLen(ssa)
+            | ILInstr.SlicePtr(ssa)
             | ILInstr.IsSome(ssa)
             | ILInstr.Unwrap(ssa)
             | ILInstr.Move(ssa)
@@ -228,6 +229,7 @@ fn instr_opcode(instr: ILInstr) -> [u8] {
         ILInstr.SliceLoad(_) => "slice_load",
         ILInstr.SliceStore(_) => "slice_store",
         ILInstr.SliceLen(_) => "slice_len",
+        ILInstr.SlicePtr(_) => "slice_ptr",
         ILInstr.SliceConstruct(_) => "slice_construct",
         ILInstr.ArrayConstruct(_) => "array_construct",
         ILInstr.ArrayLoad(_) => "array_load",

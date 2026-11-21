@@ -475,6 +475,7 @@ impl ZilPrinter {
             ILInstr.SliceLoad(s) => { self.emit_op2("slice_load", s.base, s.idx); },
             ILInstr.SliceStore(s) => { self.emit_op3("slice_store", s.base, s.idx, s.val); },
             ILInstr.SliceLen(v) => { self.emit_unop("slice_len", v); },
+            ILInstr.SlicePtr(v) => { self.emit_unop("slice_ptr", v); },
             ILInstr.SliceConstruct(s) => { self.emit_op2("slice_construct", s.ptr, s.len); },
             ILInstr.ArrayConstruct(args) => {
                 self.zil_write("array_construct ");

@@ -47,7 +47,7 @@ overflow_op = "wrapping_add" | "saturating_add" | "checked_add" ;
 mem_op      = "alloc" | "load" | "store" | "drop" ;
 safety_op   = "bounds_check" | "move" | "borrow" | "borrow_mut" | "end_borrow"
             | "release" | "region_cast" | "cast" ;
-slice_op    = "slice_load" | "slice_store" | "slice_len" | "slice_construct" ;
+slice_op    = "slice_load" | "slice_store" | "slice_len" | "slice_ptr" | "slice_construct" ;
 array_op    = "array_construct" | "array_load" | "array_store" ;
 sum_op      = "is_some" | "unwrap" | "variant_match" | "sum_construct" ;
 aggregate_op = "struct_construct" | "tuple_construct" ;
@@ -89,7 +89,7 @@ Notes on the grammar above (divergences from a "clean room" ZIL design that the 
 - `global_def` carries **both** a numeric `global_id` (`g<N>`) and the global's source `name`, e.g. `global g0: [u8; 14] greeting = { ... }`. An ID-only or name-only form is not produced.
 - `tuple_type`: a one-element tuple `(T,)` is printed with a trailing comma to disambiguate it from a parenthesised type; tuples of two or more elements have no trailing comma.
 - `var_type` is printed as the type variable's source name (e.g. `T`) when interned, or the literal text `var` when the name is empty (this occurs for synthetic/anonymous type variables introduced during generic resolution).
-- `elem_addr`, `slice_data`, `bitcast`, `wrapping_sub`, `wrapping_mul`, `checked_sub`, and `checked_mul` are **not** opcodes (`src/il_instr.zrl` has no corresponding `IL_INSTR_*` constants). `cast` (§5.5) performs numeric and pointer type conversion.
+- `elem_addr`, `bitcast`, `wrapping_sub`, `wrapping_mul`, `checked_sub`, and `checked_mul` are **not** opcodes (`src/il_instr.zrl` has no corresponding `IL_INSTR_*` constants). `cast` (§5.5) performs numeric and pointer type conversion.
 - **`ssa_id`/`block_id` carry optional source-name hints** ("deobfuscated" form, mirroring the equivalent feature in the QBE emitter): when `ILFunction.ssa_names[id]` / `BasicBlock.name` records a source-level name, the printer emits `v<name>_<id>` / `@<name>_<id>` instead of the bare `v<id>` / `@b<id>` forms — e.g. `vcount_7`, `@loop_body_3`. The trailing `_<id>` is always present and is what makes the form unambiguous: a reader can recover the numeric SSA/block id by taking the suffix after the last `_`, regardless of whether a name hint was present. Compiler internals (e.g. temporaries with no source name) always print the bare numeric form.
 - **Source-correlated `//` comments** appear above instructions when the originating source line carries an associated comment (`ILModule.instr_comments` / `instr_spans`), in the form `// <line>: <source text>`, e.g. `// 13: let _t1 = "..."`. A run of consecutive instructions that map to the same comment text and source line is annotated only once, not per-instruction. These are documentation-only; a parser may skip any line beginning with `//`.
 
@@ -328,16 +328,17 @@ The optional allocator operand on `alloc` allows custom allocators (arena, page,
 
 **Reserved, not yet emitted**: `borrow`, `borrow_mut`, `end_borrow`, and `release` are fully defined in `ILInstr` and handled by the verifier (which treats `end_borrow`/`release` as ending a borrow's lifetime by marking the borrower SSA value `Moved`) and by the textual printer, but **no lowering pass currently constructs them** — `grep`-ing the lowering sources for `ILInstr.Borrow`/`EndBorrow`/`Release` turns up only the `enum`/accessor definitions, the verifier's handling, and the printer's emission code. A textual ZIL reader/parser must still accept them (they are part of the grammar and may appear in hand-written or future-emitted ZIL), but real `--emit-zil` output will not contain them today.
 
-### 5.6 Slice Operations (4 opcodes)
+### 5.6 Slice Operations (5 opcodes)
 
 | Opcode            | Syntax                                          | Description                                               |
 | ----------------- | ----------------------------------------------- | --------------------------------------------------------- |
 | `slice_load`      | `vN: T = slice_load vS, vI`                     | Load element from slice at index                          |
 | `slice_store`     | `slice_store vS, vI, vV`                        | Store element to slice at index                           |
 | `slice_len`       | `vN: u64 = slice_len vS`                        | Get slice length                                          |
+| `slice_ptr`       | `vN: Ptr<T, 'local> = slice_ptr vS`             | Get slice data pointer                                    |
 | `slice_construct` | `vN: Slice<T, 'local> = slice_construct vP, vL` | Create a fat-pointer slice from a data pointer and length |
 
-`slice_data` (extracting the raw data pointer from a fat slice) has no `IL_INSTR_*` counterpart and is not emitted; it has been removed from this revision of the spec. Element addressing for slices is performed inline by `slice_load`/`slice_store` (see also `field_addr`/§5.9 for struct-field addressing — there is likewise no separate `elem_addr` opcode).
+Element addressing for slices is performed inline by `slice_load`/`slice_store` (see also `field_addr`/§5.9 for struct-field addressing — there is likewise no separate `elem_addr` opcode).
 
 ### 5.7 Array Operations (3 opcodes)
 
@@ -536,7 +537,7 @@ File descriptors (`fd`) and I/O rings (`async_context`) are linear resources:
 
 ### 7. Complete Opcode Summary
 
-Total: 68 opcodes (one per `IL_INSTR_*` constant in `src/il_instr.zrl`, `IL_INSTR_ADD = 0` through `IL_INSTR_RELEASE = 67`; `borrow`/`borrow_mut` share a single constant, `IL_INSTR_BORROW`, distinguished by the `is_mut` flag — see §5.5).
+Total: 69 opcodes (one per `IL_INSTR_*` constant in `src/il_instr.zrl`; `borrow`/`borrow_mut` share a single constant, `IL_INSTR_BORROW`, distinguished by the `is_mut` flag — see §5.5).
 
 - **Arithmetic**
   - Count: 12
@@ -554,8 +555,8 @@ Total: 68 opcodes (one per `IL_INSTR_*` constant in `src/il_instr.zrl`, `IL_INST
   - Count: 7
   - Opcodes: bounds_check, move, borrow / borrow_mut, end_borrow, release, region_cast, cast
 - **Slice**
-  - Count: 4
-  - Opcodes: slice_load, slice_store, slice_len, slice_construct
+  - Count: 5
+  - Opcodes: slice_load, slice_store, slice_len, slice_ptr, slice_construct
 - **Array**
   - Count: 3
   - Opcodes: array_construct, array_load, array_store
@@ -578,7 +579,7 @@ Total: 68 opcodes (one per `IL_INSTR_*` constant in `src/il_instr.zrl`, `IL_INST
   - Count: 3
   - Opcodes: async_setup, async_enter, async_close
 
-(12+6+3+4+7+4+3+4+2+12+4+4+3 = 68.)
+(12+6+3+4+7+5+3+4+2+12+4+4+3 = 69.)
 
 The opcodes `borrow`/`borrow_mut`, `end_borrow`, `release`, `likely`, and `unlikely` are _reserved_: defined and handled by the verifier/printer, but never constructed by any lowering pass today (§5.5, §5.11).
 
