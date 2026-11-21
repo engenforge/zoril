@@ -62,11 +62,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: take-out check — restored `|| op_str == "bitcast"` in `tools/zilc/src/zil_parse.zrl`, rebuilt `build/zilc`, and `sh scripts/test_zilc_errors.sh` exited 1 (`[FAIL] tests/zilc/bitcast_rejected.zil`); restored and rebuilt `build/zilc`.
       - C4: `make test`: `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (146.0s)`; `make preflight-changed PREFLIGHT_BASE=HEAD`: `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, `[PASS] fuzz-calibrate: all 23 calibration programs are in their fixed state (21 refused, 2 accepted with one drop)`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (107.7s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.4s)`. Fuzz record is stale for `tools/zilc/` (renewed in `id:v2f8h`).
 
-- [ ] +zil +tests +AI-G @zil ZL4 Corpus and per-file tests check the program's output, not only its exit code id:ehh6m
+- [x] +zil +tests +AI-G @zil ZL4 Corpus and per-file tests check the program's output, not only its exit code id:ehh6m
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decisions in id:1kaye (`future.tm.md`), 2026-11-13
     > **Branch:** `zil`
     > **Depends:** id:htrqb
+    > **Completed:** 2026-11-21 git:5f25ee4
 
     - **Placed:** after ZL3.
 
@@ -80,6 +81,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: plant trailing bytes into a scratch test's stdout (simulating `id:1kaye`'s 4 KB over-read) with a matching exit code 0: `./scripts/test.sh <scratch>` fails with `output mismatch` (quote `[FAIL]` line).
       - C3: take-out check — temporarily disable the `cmp -s` check in `scripts/lib/test_runner.sh` and show the planted-output test passes vacuously; restore.
       - C4: `make test` passes (quoting `Total:` line).
+    - **Completion note:**
+      - C1: 6 printing corpus programs and their `.stdout` files: `corpus/zil/15_io_syscall.zil.stdout` (`IL Syscall\n`), `corpus/zrl/01_hello_syscall.zrl.stdout` (`Hello, Zoril!\n`), `corpus/zrl/17_strings_and_escapes.zrl.stdout` (`line1\nline2\n`), `corpus/zrl/18_ffi_and_extern.zrl.stdout` (`Hello from Zoril via direct syscall!\n`), `corpus/zrl/27_syscall_io.zrl.stdout` (`=== Zoril Syscall Demo ===\nThe answer is: 42\n`), `corpus/zrl/38_large_enum_pass_by_value.zrl.stdout` (`pass: match Ident\npass: match Number\npass: match Eof\npass: method Ident\n`). `./scripts/test.sh corpus/` passed: `Total: 67 run, 67 passed, 0 failed, 0 skipped (0.5s)`.
+      - C2: `sh scripts/test_test_headers.sh` verified `stdout_ok` passed and `stdout_mismatch` (trailing `"extra"` bytes, exit 0) failed with `[FAIL] build/test-headers/cases/stdout_mismatch.zrl (output mismatch)`.
+      - C3: take-out check — disabled `cmp -s` with `false &&` in `scripts/lib/test_runner.sh`, and `sh scripts/test_test_headers.sh` reported `[FAIL] stdout_mismatch: expected '[FAIL] build/test-headers/cases/stdout_mismatch.zrl (output mismatch)', got: [PASS] build/test-headers/cases/stdout_mismatch.zrl (37ms)`; restored.
+      - C4: `make test`: `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (146.1s)`.
 
 - [ ] +zil +safety +AI-G @zil ZL5 zilc runs the ZIL verifier that the compiler runs id:egsdq
     > **Created:** 2026-11-13
