@@ -1,0 +1,34 @@
+// expected exit 0
+// An impl's type parameter that appears only in the trait's arguments (`impl<T: Copy> Source<T> for S`)
+// is bound from the call, checked against its bounds, and mangled into the method name.
+trait Source<T> {
+    fn pull(self: &Self, fallback: T) -> T;
+}
+
+struct S { x: i32 }
+
+impl<T: Copy> Source<T> for S {
+    fn pull(self: &S, fallback: T) -> T { return fallback; }
+}
+
+trait Pair<A, B> {
+    fn combine(self: &Self, b: B) -> (A, B);
+}
+
+struct Wrap<A> { a: A }
+
+impl<A: Copy, B: Copy> Pair<A, B> for Wrap<A> {
+    fn combine(self: &Wrap<A>, b: B) -> (A, B) { return (self.a, b); }
+}
+
+fn main() -> i32 {
+    let s = S { x: 1 };
+    let n = s.pull(42);
+    let flag = s.pull(true);
+    let m = S.pull(&s, 10);
+    let w = Wrap { a: 7 };
+    let p = w.combine(3 as u8);
+    if !flag { return 1; }
+    if p.0 != 7 || p.1 != (3 as u8) { return 2; }
+    return n - 42 + m - 10;
+}

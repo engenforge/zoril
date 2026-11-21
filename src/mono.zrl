@@ -317,6 +317,28 @@ impl Monomorphizer {
         imp: &ImplDecl,
         self_ty: u32
     ) -> u32 {
+        let no_args = @slice(0 as *mut u32, 0 as usize);
+        return self.instantiate_method_with_impl_args(
+            f,
+            type_args,
+            self_name,
+            method_name,
+            imp,
+            self_ty,
+            no_args
+        );
+    }
+
+    pub fn instantiate_method_with_impl_args(
+        self: &mut Monomorphizer,
+        f: &FnDecl,
+        type_args: [u32],
+        self_name: u32,
+        method_name: u32,
+        imp: &ImplDecl,
+        self_ty: u32,
+        impl_args: [u32]
+    ) -> u32 {
         // Extract receiver type args and struct decl_id from self_ty (the IL type for the receiver).
         // In Zoril, `impl Foo<T>` sets imp.type_params.len=0 (T is not an explicit impl type param).
         // The struct's type params and base name come from the AST struct/enum declaration.
@@ -377,11 +399,34 @@ impl Monomorphizer {
             self.get_type_mangled_name_to(self_ty, ty_buf);
             self.intern_table.intern(ty_buf.as_slice())
         };
+        let no_args = @slice(0 as *mut u32, 0 as usize);
+        // The impl's parameters then the method's own, bound to the receiver's arguments then
+        // the method's. A trait's default method sees the trait's parameters instead, bound
+        // to the impl's trait arguments (`T` of `Source<T>` is `i64` in `impl Source<i64>`).
+        let scope = self.impl_scope_with_bound(
+            imp,
+            self_ty,
+            struct_type_params,
+            recv_type_args,
+            impl_args,
+            no_args
+        );
         let mut method_full = unsafe { ByteVec.new_raw(self.arena) };
         method_full.push_slice(self.intern_table.lookup(effective_type_name));
         method_full.push_slice("::");
         method_full.push_slice(self.intern_table.lookup(method_name));
-        let mangled_name = self.instance_name(method_full.as_slice(), type_args);
+        let mut mangle_args = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+        if imp.type_params.len > 0 as usize {
+            for i in 0 as usize..imp.type_params.len {
+                if i < scope.args.len
+                    && scope.args[i] != 0 as u32
+                    && !self.resolver.type_mentions_name(imp.target_ty, imp.type_params[i].name) {
+                    mangle_args.push(scope.args[i]);
+                }
+            }
+        }
+        for a in type_args { mangle_args.push(*a); }
+        let mangled_name = self.instance_name(method_full.as_slice(), mangle_args.as_slice());
 
         // By module too: two modules can each have a type of one name.
         for i in 0 as usize..self.module.functions.len() {
@@ -393,10 +438,6 @@ impl Monomorphizer {
             }
         }
 
-        // The impl's parameters then the method's own, bound to the receiver's arguments then
-        // the method's. A trait's default method sees the trait's parameters instead, bound
-        // to the impl's trait arguments (`T` of `Source<T>` is `i64` in `impl Source<i64>`).
-        let scope = self.impl_scope(imp, self_ty, struct_type_params, recv_type_args);
         if imp.trait_name != 0 as u32
             && f.default_of == 0 as u32
             && (!self.impl_is_concrete(imp) || f.type_params.len > 0 as usize) {
@@ -944,12 +985,46 @@ impl Monomorphizer {
         ty_params: [TypeParam],
         ty_args: [u32]
     ) -> ImplScope {
+        let no_args = @slice(0 as *mut u32, 0 as usize);
+        return self.impl_scope_with_bound(imp, self_ty, ty_params, ty_args, no_args, no_args);
+    }
+
+    // `impl_scope` with pre-bound `bound_impl_args` (e.g. inferred at a call site) and optional
+    // concrete `trait_args` unified against `imp.trait_type_args` for parameters not bound by the
+    // target type.
+    // SAFETY: the result is the compilation's arena data (its own, the module's or the AST's).
+    #[unsafe(borrows(imp, ty_params, ty_args))]
+    fn impl_scope_with_bound(
+        self: &mut Monomorphizer,
+        imp: &ImplDecl,
+        self_ty: u32,
+        ty_params: [TypeParam],
+        ty_args: [u32],
+        bound_impl_args: [u32],
+        trait_args: [u32]
+    ) -> ImplScope {
         if imp.type_params.len == 0 as usize {
             return ImplScope { params: ty_params, args: ty_args };
         }
         let mut args = unsafe { Vec::<u32>.with_capacity_in_raw(self.arena, imp.type_params.len) };
-        for tp in imp.type_params { args.push(0 as u32); }
+        for i in 0 as usize..imp.type_params.len {
+            let init = if i < bound_impl_args.len { bound_impl_args[i] } else { 0 as u32 };
+            args.push(init);
+        }
         self.bind_impl_params(imp.target_ty, self_ty, imp.type_params, &mut args, 0 as usize);
+        if trait_args.len > 0 as usize {
+            for k in 0 as usize..imp.trait_type_args.len {
+                if k < trait_args.len {
+                    self.bind_impl_params(
+                        imp.trait_type_args[k],
+                        trait_args[k],
+                        imp.type_params,
+                        &mut args,
+                        0 as usize
+                    );
+                }
+            }
+        }
         return ImplScope { params: imp.type_params, args: args.as_slice() };
     }
 

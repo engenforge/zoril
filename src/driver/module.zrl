@@ -729,6 +729,7 @@ impl Driver {
         }
         if !self.compile_only
             || imp.source_file != self.target_source_file
+            || imp.type_params.len > 0 as usize
             || self.is_generic_instance(base_ty) {
             self.resolver.current_module = saved_module;
             return;

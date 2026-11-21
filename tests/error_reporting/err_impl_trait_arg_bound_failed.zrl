@@ -1,0 +1,23 @@
+// expected compile fail
+// EXPECT: error: type `NoCopy` does not implement trait `Copy`
+trait Source<T> {
+    fn pull(self: &Self, fallback: T) -> T;
+}
+
+struct S { x: i32 }
+
+impl<T: Copy> Source<T> for S {
+    fn pull(self: &S, fallback: T) -> T { return fallback; }
+}
+
+struct NoCopy { v: i32 }
+
+impl Drop for NoCopy {
+    fn drop(self: &mut NoCopy) {}
+}
+
+fn main() -> i32 {
+    let s = S { x: 1 };
+    let n = s.pull(NoCopy { v: 1 });
+    return n.v - 1;
+}

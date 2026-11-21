@@ -1,0 +1,12 @@
+// expected compile fail
+// EXPECT: error: type parameter `T` is not constrained by the impl target type or trait arguments
+struct S { x: i32 }
+
+impl<T> S {
+    fn get(self: &S) -> i32 { return self.x; }
+}
+
+fn main() -> i32 {
+    let s = S { x: 0 };
+    return s.get();
+}

@@ -1937,23 +1937,52 @@ impl ZirLowerer {
                 return Option.Some(self.no_place());
             }
             let type_name = self.get_type_decl(resolved_ty).name;
-            if !self.check_method_type_arg_bounds(&imp, m_fn, resolved_ty, type_args, span) {
+            let mut impl_args = self.mono.impl_type_args(&imp, resolved_ty);
+            let mut infers_impl = false;
+            for a in impl_args { if *a == 0 as u32 { infers_impl = true; } }
+            let mut early_args = unsafe { Vec::<Place>.with_capacity_in_raw(self.arena, args.len) };
+            if infers_impl {
+                for ai in 0 as usize..args.len {
+                    early_args.push(self.lower_operand(args, ai, 0 as u32));
+                }
+                impl_args = self.infer_unbound_impl_args(
+                    &imp,
+                    m_fn,
+                    impl_args,
+                    early_args.as_slice(),
+                    0 as usize,
+                    span
+                );
+                if impl_args.len == 0 as usize { return Option.Some(self.no_place()); }
+            }
+            if !self.check_method_type_arg_bounds_with_impl_args(
+                &imp,
+                m_fn,
+                impl_args,
+                type_args,
+                span
+            ) {
                 return Option.Some(self.no_place());
             }
-            let func_idx = self.mono.instantiate_method(
+            let func_idx = self.mono.instantiate_method_with_impl_args(
                 m_fn,
                 type_args,
                 type_name,
                 member,
                 &imp,
-                resolved_ty
+                resolved_ty,
+                impl_args
             );
             let param_base = self.call_param_base(func_idx, span);
             self.check_arg_count(func_idx, param_base, args.len, false, span);
             let mut lowered = unsafe { Vec::<Place>.with_capacity_in_raw(self.arena, args.len) };
             for ai in 0 as usize..args.len {
                 let param_ty = self.call_param_type(func_idx, param_base + ai);
-                let arg = self.lower_operand(args, ai, param_ty);
+                let arg = if infers_impl {
+                    early_args.as_slice()[ai]
+                } else {
+                    self.lower_operand(args, ai, param_ty)
+                };
                 self.check_raw_arg_is_marked(func_idx, param_base + ai, &arg, span);
                 lowered.push(
                     if param_ty != 0 as u32 {
@@ -2205,25 +2234,44 @@ impl ZirLowerer {
             if !self.check_method_visible(m_decl.is_pub, m_sf, m.member, span) {
                 return Option.Some(self.no_place());
             }
+            let mut impl_self_ty = current_ty;
+            let p_target = &self.resolver.ast.types[imp.target_ty as usize];
+            let t_tag = p_target.get_tag();
+            let is_immutable_slice_impl = (t_tag == TYPE_SLICE
+                || (t_tag >= TYPE_PTR
+                    && t_tag <= TYPE_REFMUT
+                    && self.resolver.ast.types[p_target.get_Ptr() as usize].get_tag()
+                        == TYPE_SLICE));
+            if is_immutable_slice_impl {
+                if let ILType.Slice(sl) = self.get_type_decl(current_ty).def {
+                    if sl.mutable {
+                        impl_self_ty = self.get_slice_type(sl.element);
+                    }
+                }
+            }
+            let mut impl_args = self.mono.impl_type_args(imp, impl_self_ty);
+            let mut infers_impl = false;
+            for a in impl_args { if *a == 0 as u32 { infers_impl = true; } }
             // A generic method called with no `::<..>` has its arguments lowered first and its
-            // type arguments read off them, as a generic function does.
+            // type arguments read off them, as a generic function does. An impl parameter not
+            // fixed by `impl_self_ty` (`impl<T: Copy> Source<T> for S`) is inferred the same way.
             let infers = type_args.len == 0 as usize && m_decl.type_params.len > 0 as usize;
             let mut early_args = unsafe { Vec::<Place>.with_capacity_in_raw(self.arena, args.len) };
             let mut method_type_args = type_args;
-            if infers {
+            if infers || infers_impl {
                 // A closure argument with untyped parameters waits for the others: its
                 // parameter's type, resolved with the type arguments they decide, types it, and
                 // its result then decides the rest (`it.map(|x| *x * 2)` gives U).
                 let mut deferred = false;
                 for ai in 0 as usize..args.len {
-                    if self.is_untyped_closure(args[ai]) {
+                    if infers && self.is_untyped_closure(args[ai]) {
                         early_args.push(self.no_place());
                         deferred = true;
                     } else {
                         early_args.push(self.lower_operand(args, ai, 0 as u32));
                     }
                 }
-                if deferred {
+                if infers && deferred {
                     let partial = self.read_method_type_args(m_decl, early_args.as_slice());
                     for ai in 0 as usize..args.len {
                         if early_args.as_slice()[ai].base != 0 as u32
@@ -2240,41 +2288,44 @@ impl ZirLowerer {
                         early_args.set(ai, self.lower_expr(args[ai], expected));
                     }
                 }
-                method_type_args = self.infer_method_type_args(m_decl, early_args.as_slice(), span);
-                if method_type_args.len == 0 as usize { return Option.Some(self.no_place()); }
-            }
-            let mut impl_self_ty = current_ty;
-            let p_target = &self.resolver.ast.types[imp.target_ty as usize];
-            let t_tag = p_target.get_tag();
-            let is_immutable_slice_impl = (t_tag == TYPE_SLICE
-                || (t_tag >= TYPE_PTR
-                    && t_tag <= TYPE_REFMUT
-                    && self.resolver.ast.types[p_target.get_Ptr() as usize].get_tag()
-                        == TYPE_SLICE));
-            if is_immutable_slice_impl {
-                if let ILType.Slice(sl) = self.get_type_decl(current_ty).def {
-                    if sl.mutable {
-                        impl_self_ty = self.get_slice_type(sl.element);
-                    }
+                if infers_impl {
+                    impl_args = self.infer_unbound_impl_args(
+                        imp,
+                        m_decl,
+                        impl_args,
+                        early_args.as_slice(),
+                        1 as usize,
+                        span
+                    );
+                    if impl_args.len == 0 as usize { return Option.Some(self.no_place()); }
+                }
+                if infers {
+                    method_type_args = self.infer_method_type_args(
+                        m_decl,
+                        early_args.as_slice(),
+                        span
+                    );
+                    if method_type_args.len == 0 as usize { return Option.Some(self.no_place()); }
                 }
             }
             let impl_name = self.get_type_decl(impl_self_ty).name;
-            if !self.check_method_type_arg_bounds(
+            if !self.check_method_type_arg_bounds_with_impl_args(
                 imp,
                 m_decl,
-                impl_self_ty,
+                impl_args,
                 method_type_args,
                 span
             ) {
                 return Option.Some(self.no_place());
             }
-            let func_idx = self.mono.instantiate_method(
+            let func_idx = self.mono.instantiate_method_with_impl_args(
                 m_decl,
                 method_type_args,
                 impl_name,
                 m.member,
                 imp,
-                impl_self_ty
+                impl_self_ty,
+                impl_args
             );
             let recv_index = self.call_param_base(func_idx, span);
             self.check_arg_count(func_idx, recv_index, args.len, true, span);
@@ -2322,7 +2373,7 @@ impl ZirLowerer {
             final_args.push(receiver_final_place);
             for ai in 0 as usize..args.len {
                 let param_ty = self.call_param_type(func_idx, recv_index + 1 as usize + ai);
-                let arg = if infers {
+                let arg = if infers || infers_impl {
                     early_args.as_slice()[ai]
                 } else {
                     self.lower_operand(args, ai, param_ty)

@@ -1623,11 +1623,70 @@ impl ZirLowerer {
         type_args: [u32],
         span: Span
     ) -> bool {
-        let module = if f.source_file != 0 as u32 { f.source_file } else { imp.source_file };
         let impl_args = self.mono.impl_type_args(imp, self_ty);
+        return self.check_method_type_arg_bounds_with_impl_args(imp, f, impl_args, type_args, span);
+    }
+
+    pub fn check_method_type_arg_bounds_with_impl_args(
+        self: &mut ZirLowerer,
+        imp: &ImplDecl,
+        f: &FnDecl,
+        impl_args: [u32],
+        type_args: [u32],
+        span: Span
+    ) -> bool {
+        let module = if f.source_file != 0 as u32 { f.source_file } else { imp.source_file };
         let impl_hold = self.check_type_param_bounds(imp.type_params, impl_args, module, span);
         let own_hold = self.check_type_param_bounds(f.type_params, type_args, module, span);
         return impl_hold && own_hold;
+    }
+
+    // Binds any of IMP's type parameters that SELF_TY did not fix (`impl<T: Copy> Source<T> for S`)
+    // from the call's lowered arguments EARLY_ARGS against F's parameters starting at PARAM_OFFSET
+    // (1 for a receiver method call, 0 for a static call). Reports and returns an empty slice if
+    // any parameter remains unbound.
+    // SAFETY: the result is lowerer arena data, which no borrow of it guards (ZirLowerer.arena).
+    #[unsafe(borrows())]
+    pub fn infer_unbound_impl_args(
+        self: &mut ZirLowerer,
+        imp: &ImplDecl,
+        f: &FnDecl,
+        base_impl_args: [u32],
+        early_args: [Place],
+        param_offset: usize,
+        span: Span
+    ) -> [u32] {
+        let mut inferred = unsafe {
+            Vec::<u32>.with_capacity_in_raw(self.arena, imp.type_params.len)
+        };
+        for i in 0 as usize..imp.type_params.len {
+            let init = if i < base_impl_args.len { base_impl_args[i] } else { 0 as u32 };
+            inferred.push(init);
+        }
+        for ai in 0 as usize..early_args.len {
+            if ai + param_offset >= f.params.len { break; }
+            if early_args[ai].base == 0 as u32 { continue; }
+            self.try_infer_type_arg(
+                f.params[ai + param_offset].ty,
+                self.get_place_type(&early_args[ai]),
+                imp.type_params,
+                inferred.as_mut_ptr()
+            );
+        }
+        let sf = if f.source_file != 0 as u32 { f.source_file } else { imp.source_file };
+        self.infer_type_args_from_bounds(imp.type_params, sf, inferred.as_mut_ptr());
+        for ti in 0 as usize..imp.type_params.len {
+            if inferred.as_slice()[ti] == 0 as u32 {
+                self.report_prefix(span);
+                eprint("cannot infer type argument `");
+                eprint(self.intern_table.lookup(imp.type_params[ti].name));
+                eprint("` of method `");
+                eprint(self.intern_table.lookup(f.name));
+                eprint("`\n");
+                return @slice(0 as *mut u32, 0 as usize);
+            }
+        }
+        return inferred.as_slice();
     }
 
     // Each bound on TYPE_PARAMS, as written in MODULE, holds for the matching TYPE_ARGS (an

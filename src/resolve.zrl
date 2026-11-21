@@ -1056,6 +1056,30 @@ impl Resolver {
                     }
                     self.check_type_names(imp.target_ty, &params, module);
                     for t in imp.trait_type_args { self.check_type_names(*t, &params, module); }
+                    for tp in imp.type_params {
+                        let mut used = self.type_mentions_name(imp.target_ty, tp.name);
+                        if !used {
+                            for t in imp.trait_type_args {
+                                if self.type_mentions_name(*t, tp.name) {
+                                    used = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if !used {
+                            self.had_error = true;
+                            diag_start(
+                                self.intern_table.lookup(module),
+                                self.ast.decl_spans[i],
+                                "error"
+                            );
+                            eprint("type parameter `");
+                            eprint(self.intern_table.lookup(tp.name));
+                            eprint(
+                                "` is not constrained by the impl target type or trait arguments\n"
+                            );
+                        }
+                    }
                     for c in imp.constants { self.check_type_names(c.ty, &params, module); }
                     for a in imp.assoc_types { self.check_type_names(a.ty, &params, module); }
                     // A trait's default method copied in is checked in the trait.
@@ -1076,6 +1100,40 @@ impl Resolver {
         self.check_bounds(f.type_params, &params, module);
         for p in f.params { self.check_type_names(p.ty, &params, module); }
         self.check_type_names(f.ret_ty, &params, module);
+    }
+
+    // Whether AST type TY mentions the type parameter NAME anywhere inside it.
+    pub fn type_mentions_name(self: &Resolver, ty: TypeId, name: u32) -> bool {
+        if ty == 0 as TypeId { return false; }
+        return match self.ast.types[ty as usize] {
+            Type.Path(path) => {
+                if path.0 == name && path.1.len == 0 as usize { return true; }
+                for a in path.1 {
+                    if self.type_mentions_name(*a, name) { return true; }
+                }
+                false
+            },
+            Type.Ref(inner)
+                | Type.RefMut(inner)
+                | Type.Ptr(inner)
+                | Type.PtrMut(inner)
+                | Type.Slice(inner)
+                | Type.SliceMut(inner) => self.type_mentions_name(inner, name),
+            Type.Array(a) => self.type_mentions_name(a.0, name),
+            Type.Tuple(elems) => {
+                for e in elems {
+                    if self.type_mentions_name(*e, name) { return true; }
+                }
+                false
+            },
+            Type.Fn(f) => {
+                for p in f.params {
+                    if self.type_mentions_name(*p, name) { return true; }
+                }
+                self.type_mentions_name(f.ret_ty, name)
+            },
+            Type.Primitive(_) => false,
+        };
     }
 
     // Each bound of TYPE_PARAMS (`T: iter::Iterator`, `S: Source<T>`) names a trait in scope
