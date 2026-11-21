@@ -6,25 +6,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [x] +tools +AI-G @main id:z0014 `zilc` refuses text it does not recognise between declarations, and a file that is not ZIL
-    > **Created:** 2026-11-03
-    > **Branch:** `main`
-    > **Depends:** id:rrgct
-    > **Completed:** 2026-11-21 git:54077fa
-
-    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, after id:0mbg3 (the `@zil` series), not before: ZL2 and ZL3 edit `tools/zilc/src/zil_parse.zrl` and the `corpus/zil/` files this task's checks run on, and a later edit of the same parser avoids a conflict.
-    - **Reordered (2026-11-21, maintainer request):** placed after the generator batch (`id:mskex`, `id:4ngz8`, `id:r1shp`) and gated on `id:rrgct` (the final `@zil` check-in before `zil` merges to `main`); can be batched with `id:z0016` in one `+AI-G` session.
-    - **Now:** `zilc` exits 0 with no message on random bytes, and on `printf '\x01\x02 zz garbage\n'` it writes a stray global parsed out of the word `garbage`. `ZilParser.parse_module` (`tools/zilc/src/zil_parse.zrl`) dispatches on a declaration's first byte and skips any other byte, so text between declarations is dropped silently.
-    - **Do:** at top level, after trivia, accept only the declaration forms of `doc/spec/intermediate_language.md` and report anything else as `zilc: line N: expected a declaration, found '<token>'` with exit 1; before parsing, refuse a NUL byte or invalid UTF-8 with one line. Keep the first-error behaviour.
-    - **Checks:**
-      - C1: before the change, `printf '\x01\x02 zz garbage\n' > build/z14/g.zil; timeout 10 build/zilc build/z14/g.zil -o build/z14/g.ssa; echo $?` and the `.ssa` it writes; quote both (exit 0 and a stray global today).
-      - C2: one `tests/zilc/` case per refusal: a stray word between two functions, control bytes, a NUL byte, invalid UTF-8; each fails before the change (run the new tests against the old `build/zilc` and quote) and passes after.
-      - C3: each refusal's message is the one in **Do** (`zilc: line N: expected a declaration, found '<token>'`, or the one-line NUL/UTF-8 refusal), with exit 1; quote each.
-      - C4: every file in `corpus/zil/` still compiles and gives its expected exit (`./scripts/test.sh corpus/zil` or the scenario that runs them); quote its `Total:` line.
-      - C5: take the top-level check out (a scratch edit) and watch the stray-word case pass silently again; restore.
-      - C6: the `KNOWN_ISSUES.md` entry removed or updated; `make test` and `make preflight-changed`, each `Total:` line quoted; the completion note says the fuzz record is stale for `tools/zilc/`.
-    - **Completed note:** added `validate_source_utf8` in `tools/zilc/src/main.zrl` and top-level keyword/fn-id dispatch (`at_word`, `at_fn_id`, `unexpected_top_level_error`) plus `extern fn` `{}` consumption in `tools/zilc/src/zil_parse.zrl`; updated `tests/zilc/declaration_no_progress.zil` and removed the `KNOWN_ISSUES.md` entry. C1: before the change, `build/zilc build/z14/g.zil -o build/z14/g.ssa` exited `exit=0` and wrote `export data $z2g0E = { l 0 }`. C2: all 4 new cases (`stray_word_between_decls.zil`, `control_bytes.zil`, `nul_byte.zil`, `invalid_utf8.zil`) failed against old `build/zilc` in `sh scripts/test_zilc_errors.sh` and all 33 `tests/zilc/*.zil` + 4 CLI checks pass after. C3: `zilc: line 7: expected a declaration, found 'garbage'` (`exit=1`), `zilc: line 2: expected a declaration, found '\x01'` (`exit=1`), `zilc: error: input contains NUL byte` (`exit=1`), `zilc: error: input is not valid UTF-8` (`exit=1`). C4: `./scripts/test.sh corpus/zil` passed (`Total: 25 run, 25 passed, 0 failed, 0 skipped (0.2s)`). C5: scratch-removing `unexpected_top_level_error` in `parse_module` caused `stray_word_between_decls.zil` to exit `scratch_exit=0` silently; restored. C6: `KNOWN_ISSUES.md` entry removed; `make test` exited 0 (`Total: 4130 run, 4130 passed, 0 failed, 2 skipped (145.3s)`); `make preflight-changed` exited 0 (`Total: 1562 run, 1562 passed, 0 failed, 0 skipped (110.9s)` checked, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.4s)` git scenarios); the fuzz record is stale for `tools/zilc/`.
-
 - [ ] +tools +AI-G @main id:z0016 `zbuild` builds a program written in ZIL, and refuses any other input with one line
     > **Created:** 2026-11-03
     > **Branch:** `main`
