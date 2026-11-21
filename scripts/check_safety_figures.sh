@@ -283,6 +283,21 @@ if [ "$SELFTEST" -eq 1 ]; then
     if [ $? -eq 0 ] || ! printf '%s' "$out" | grep -q '§5\.3'; then
         echo "[FAIL] selftest M5: --milestone did not fail on mismatched §5.3 sentence"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
     fi
+    write_m1_doc
+
+    # M6: when known_gap is 0 ("No `known_gap` probes remain open"), --probes passes, and fails if a known_gap probe exists.
+    sed 's/tracked as 1 `known_gap` probes/No `known_gap` probes remain open/' "$tmp/m1/bench/safety_matrix/README.md" > "$tmp/m1/bench/safety_matrix/README.md.zero"
+    mv "$tmp/m1/bench/safety_matrix/README.md.zero" "$tmp/m1/bench/safety_matrix/README.md"
+    out=$(SAFETY_FIGURES_IN_SELFTEST=1 "$SELF" --repo "$tmp/m1" --probes 2>&1)
+    if [ $? -eq 0 ] || ! printf '%s' "$out" | grep -q '§6 says tracked as 0 known_gap probes; the tree has 1'; then
+        echo "[FAIL] selftest M6: --probes did not fail when Known gaps says 0 but tree has 1"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
+    fi
+    rm -f "$tmp/m1/bench/safety_matrix/probes/p3.zrl"
+    sed 's/keeps 3 probes/keeps 2 probes/; s/3-probe safety matrix/2-probe safety matrix/; s/\*\*1 `known_gap`\*\*/\*\*0 `known_gap`\*\*/' "$tmp/m1/bench/safety_matrix/README.md" > "$tmp/m1/bench/safety_matrix/README.md.zero2"
+    mv "$tmp/m1/bench/safety_matrix/README.md.zero2" "$tmp/m1/bench/safety_matrix/README.md"
+    if ! out=$(SAFETY_FIGURES_IN_SELFTEST=1 "$SELF" --repo "$tmp/m1" --probes 2>&1); then
+        echo "[FAIL] selftest M6: --probes failed when Known gaps says 0 and tree has 0"; printf '%s\n' "$out" | sed 's/^/       /'; fail=1
+    fi
 
     if [ "$fail" -ne 0 ]; then
         echo "FAIL: the safety-figures check does not behave as its own documentation says."
@@ -406,6 +421,9 @@ if [ "$PROBES" -eq 1 ]; then
         fi
     done
     have=$(grep -oE 'tracked as [0-9]+ `known_gap` probes' "$DOC" | head -n1 | grep -oE '[0-9]+' || true)
+    if [ -z "$have" ] && grep -qF 'No `known_gap` probes remain open' "$DOC"; then
+        have=0
+    fi
     if [ "$have" != "$p_known_gap" ]; then
         echo "[FAIL] safety-figures: §6 says tracked as ${have:-missing} known_gap probes; the tree has $p_known_gap"
         bad=1
