@@ -667,16 +667,21 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - `make test` passed: `Total: 4126 run, 4126 passed, 0 failed, 2 skipped (143.7s)`.
       - `make preflight-changed` passed: `[PASS] reject-diff: 3874 newly accepted (none that must be refused, or all allowed), 17261 newly refused, of 69179 programs against 8100386dabb4f4219d7252c8de47b21b2c0be6e1`, `Total: 1556 run, 1556 passed, 0 failed, 0 skipped (110.8s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.5s)`.
 
-- [ ] +types +diagnostics +AI-G @main A call with turbofish checks the number of type arguments id:7sb2k
+- [x] +types +diagnostics +AI-G @main A call with turbofish checks the number of type arguments id:7sb2k
     > **Created:** 2026-11-14
     > **Context:** found by id:z0100's probes.
     > **Branch:** `main`
+    > **Completed:** 2026-11-21 git:4abe936
 
     - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the `main` `+AI-G` group after id:w3vde; order inside the group is not critical.
     - **Placed:** in `future.tm.md`: a diagnostic gap, not a soundness hole; no task depends on it.
 
     - **Found:** a call ignores a wrong number of type arguments: `id::<i32, i32>(3)` with `fn id<T>(x: T) -> T` and `g::<i32>(3)` with a non-generic `g` both compile and run (exit 0 for `return id::<i32, i32>(3) - 3;`), and `id::<>(3)` infers `T`. The value form refuses each since git:dc006a0 (`a generic function named as a value needs one type argument for each of its type parameters`, `type arguments given to a function that is not generic`). `direct_callee` in `src/lower_zir/expr.zrl` passes `type_args` to `instantiate_function` without comparing the count with `ff.type_params.len`; a method call (`instantiate_method`) is the twin to probe.
     - **Do:** refuse a count that is not zero and not the declaration's (zero still infers), and type arguments on a non-generic function, at the call as the value form does; an error test per form; `make test`, `make preflight-changed` (the differential lists the newly refused programs).
+    - **Checks recorded (2026-11-21, git:4abe936):**
+      - `./scripts/test.sh tests/error_reporting/err_call_turbofish_wrong_count.zrl tests/error_reporting/err_method_turbofish_wrong_count.zrl tests/language/generics/call_empty_turbofish_infers.zrl` passed (`Total: 4 run, 4 passed, 0 failed, 0 skipped (0.1s)`).
+      - `make test` passed: `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (144.3s)`.
+      - `make preflight-changed` passed: `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against d9ce4430f3a87182dc7bccc21a6fe439e159b0e8`, `Total: 1559 run, 1559 passed, 0 failed, 0 skipped (111.0s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.4s)`.
 
 - [ ] +modular +AI-G @main Two modules that each define a private const of the same name fail to assemble: the const's symbol is not qualified by its module id:5342d
     > **Created:** 2026-11-14
