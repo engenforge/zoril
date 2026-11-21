@@ -6,10 +6,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +zil +safety +AI-G @zil ZL5b Propagate stack-pointer and borrows storage flow through ILInstr.SlicePtr in src/verify.zrl id:1dwwz
+- [x] +zil +safety +AI-G @zil ZL5b Propagate stack-pointer and borrows storage flow through ILInstr.SlicePtr in src/verify.zrl id:1dwwz
     > **Created:** 2026-11-21
     > **Branch:** `zil`
     > **Depends:** id:rvjcz
+    > **Completed:** 2026-11-21 git:ad3b8c8
 
     - **Found by:** check-in `id:rvjcz` probing ZL5 (`id:egsdq`) sibling routes.
     - **Placed:** directly after `id:rvjcz` and before `id:0mbg3` (ZL6), so `src/verify.zrl` catches stack-pointer escapes through `slice_ptr` before ZL6 audits `zilc`'s remaining checks.
@@ -25,6 +26,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4 (take-out): revert the `points_to_stack` propagation for `ILInstr.SlicePtr` in `src/verify.zrl`, rebuild `build/zilc`, and show `sh scripts/test_zilc_errors.sh` fails on `tests/zilc/slice_ptr_stack_escape.zil`; restore and rebuild.
       - C5: `make test` and `make preflight-changed` pass on `zil` (quoting `Total:` lines; note fuzz record is stale for `src/` and `tools/zilc/`).
       - Ends with `**Awaiting review:**` bullet for check-in `id:ks44a`.
+    - **Completed note (2026-11-21):**
+      - C1 (before): `timeout -k 5s 30s build/zilc tests/zilc/slice_ptr_stack_escape.zil -o /dev/null` exited `0`.
+      - C2 (after): rebuilt `build/zoril` and `build/zilc`; `timeout -k 5s 30s build/zilc tests/zilc/slice_ptr_stack_escape.zil -o /dev/null` exited `1` with `tests/zilc/slice_ptr_stack_escape.zil:12:5: error: region escape: returning a pointer to local stack storage`; `sh scripts/test_zilc_errors.sh` passed all 18 checks.
+      - C3 (control): hand-written ZIL returning `slice_ptr` of `string_const "hello"` compiled with `build/zilc` (`exit=0`).
+      - C4 (take-out): reverted `points_to_stack` propagation for `ILInstr.SlicePtr` in `src/verify.zrl` and rebuilt `build/zilc`; `sh scripts/test_zilc_errors.sh` failed with `[FAIL] tests/zilc/slice_ptr_stack_escape.zil: expected a failure with: region escape: returning a pointer to local stack storage`; restored and rebuilt (`[PASS] tests/zilc/slice_ptr_stack_escape.zil`).
+      - C5: `make test` passed (`Total: 4130 run, 4130 passed, 0 failed, 2 skipped (147.0s)`); `REJECT_DIFF_NO_CACHE=1 make preflight-changed` passed (`reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against 7c3b0071a628890b2812e9bbb51aaa79be938fb6`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (108.1s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.1s)`). Fuzz record (`bench/fuzz/README.md`) is stale for `src/` and `tools/zilc/`.
+    - **Awaiting review:** check-in `id:ks44a` — re-run `tests/zilc/slice_ptr_stack_escape.zil`, `sh scripts/test_zilc_errors.sh`, and probe sibling routes (`slice_ptr` through `phi`, `cast`, or stored into a global/out-param).
 
 - [ ] +zil +safety +review +AI-D @zil @checkin Check-in: review ZL5b SlicePtr verifier fix (1dwwz) id:ks44a
     > **Created:** 2026-11-21
