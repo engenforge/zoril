@@ -158,6 +158,9 @@ pub struct Verifier {
     // out of a stack slot but does not point at it.
     pub points_to_stack: [mut bool],
     pub is_global_addr: [mut bool],
+    pub is_dropped: [mut bool],
+    pub block_dropped_out: [mut bool],
+    pub block_visited: [mut bool],
     // The value, or the memory a stack slot names, contains a pointer to this frame's
     // stack: set by storing one into a slot (or a field or element of it), carried by
     // move and memcpy. Copying it into memory that outlives the frame is an escape.
@@ -202,6 +205,9 @@ impl Verifier {
             is_stack_slot: @slice(0 as *mut bool, 0 as usize),
             points_to_stack: @slice(0 as *mut bool, 0 as usize),
             is_global_addr: @slice(0 as *mut bool, 0 as usize),
+            is_dropped: @slice(0 as *mut bool, 0 as usize),
+            block_dropped_out: @slice(0 as *mut bool, 0 as usize),
+            block_visited: @slice(0 as *mut bool, 0 as usize),
             holds_stack_ptr: @slice(0 as *mut bool, 0 as usize),
             stack_base: @slice(0 as *mut u32, 0 as usize),
             is_alloc_result: @slice(0 as *mut bool, 0 as usize),
@@ -228,20 +234,6 @@ impl Verifier {
 
     fn has_drop_impl(self: &mut Verifier, type_id: u32) -> bool {
         return self.module.drop_fn_index(self.intern_table, type_id) != NO_DROP_FN;
-    }
-
-    fn is_state_owned(self: &Verifier, state: OwnerState) -> bool {
-        match state {
-            OwnerState.Owned => { return true; },
-            OwnerState.Uninit | OwnerState.Moved | OwnerState.Dropped => { return false; },
-        }
-    }
-
-    fn is_state_dropped(self: &Verifier, state: OwnerState) -> bool {
-        match state {
-            OwnerState.Dropped => { return true; },
-            OwnerState.Uninit | OwnerState.Owned | OwnerState.Moved => { return false; },
-        }
     }
 
     fn get_ultimate_base(self: &Verifier, ssa: SSAId) -> SSAId {
@@ -1365,10 +1357,15 @@ impl Verifier {
         }
         self.current_ssa = func.params_len as u32;
 
+        let mut has_drop = false;
         for i in 0 as usize..func.blocks_len {
             let p_block = self.module.blocks[func.block_ids()[i] as usize];
             for j in 0 as usize..p_block.instructions_len {
                 let instr = self.module.instrs[p_block.instr_ids()[j] as usize];
+                match instr {
+                    ILInstr.Drop(_) => { has_drop = true; },
+                    _ => {},
+                }
                 self.count_uses(&instr);
             }
         }
@@ -1381,7 +1378,32 @@ impl Verifier {
                 );
             }
         }
-        for i in 0 as usize..func.blocks_len { self.check_block(func.block_ids()[i]); }
+        let track_drop = has_drop && ssa_count > 0 as usize;
+        if track_drop {
+            let total = func.blocks_len * ssa_count;
+            unsafe {
+                self.block_dropped_out = @slice(
+                    zoril_allocator_alloc(self.arena, total) as *mut bool,
+                    total
+                );
+                self.block_visited = @slice(
+                    zoril_allocator_alloc(self.arena, func.blocks_len) as *mut bool,
+                    func.blocks_len
+                );
+            }
+            for k in 0 as usize..total { self.block_dropped_out[k] = false; }
+            for k in 0 as usize..func.blocks_len { self.block_visited[k] = false; }
+        }
+        let blocks = func.block_ids();
+        for i in 0 as usize..func.blocks_len {
+            if track_drop {
+                self.load_drop_state_from_preds(blocks, func.blocks_len, i, ssa_count);
+            }
+            self.check_block(blocks[i]);
+            if track_drop {
+                self.save_drop_state(i, ssa_count);
+            }
+        }
 
         // Operand types: a mismatch is ZIL the compiler should not have produced.
         for issue in type_check_function(self.module, func, self.arena).as_slice() {
@@ -1395,11 +1417,59 @@ impl Verifier {
         // order, with the states the first pass left: what a later iteration sees.
         let in_loop = self.loop_blocks(func);
         for i in 0 as usize..func.blocks_len {
-            if in_loop[i] { self.check_block(func.block_ids()[i]); }
+            if in_loop[i] {
+                if track_drop {
+                    self.load_drop_state_from_preds(blocks, func.blocks_len, i, ssa_count);
+                }
+                self.check_block(blocks[i]);
+                if track_drop {
+                    self.save_drop_state(i, ssa_count);
+                }
+            }
         }
 
         self.file_path = saved_file_path;
         return true;
+    }
+
+    fn load_drop_state_from_preds(
+        self: &mut Verifier,
+        blocks: [u32],
+        blocks_len: usize,
+        block_pos: usize,
+        ssa_count: usize
+    ) {
+        let target_id = blocks[block_pos];
+        for k in 0 as usize..ssa_count {
+            self.is_dropped[k] = false;
+        }
+        for p in 0 as usize..blocks_len {
+            if !self.block_visited[p] { continue; }
+            let p_block = &self.module.blocks[blocks[p] as usize];
+            if p_block.instructions_len == 0 as usize { continue; }
+            let last_idx = p_block.instr_ids()[p_block.instructions_len - 1 as usize];
+            let jumps_to_target = match self.module.instrs[last_idx as usize] {
+                ILInstr.Jmp(t) => t == target_id,
+                ILInstr.Branch(br) => br.then_block == target_id || br.else_block == target_id,
+                _ => false,
+            };
+            if jumps_to_target {
+                let base = p * ssa_count;
+                for k in 0 as usize..ssa_count {
+                    if self.block_dropped_out[base + k] {
+                        self.is_dropped[k] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    fn save_drop_state(self: &mut Verifier, block_pos: usize, ssa_count: usize) {
+        let base = block_pos * ssa_count;
+        for k in 0 as usize..ssa_count {
+            self.block_dropped_out[base + k] = self.is_dropped[k];
+        }
+        self.block_visited[block_pos] = true;
     }
 
     // The per-SSA analysis tables, sized for N ids and cleared.
@@ -1445,6 +1515,10 @@ impl Verifier {
                 zoril_allocator_alloc(self.arena, uses_len * 1) as *mut bool,
                 uses_len
             );
+            self.is_dropped = @slice(
+                zoril_allocator_alloc(self.arena, uses_len * 1) as *mut bool,
+                uses_len
+            );
             self.holds_stack_ptr = @slice(
                 zoril_allocator_alloc(self.arena, uses_len * 1) as *mut bool,
                 uses_len
@@ -1478,6 +1552,7 @@ impl Verifier {
             self.is_stack_slot[k] = false;
             self.points_to_stack[k] = false;
             self.is_global_addr[k] = false;
+            self.is_dropped[k] = false;
             self.holds_stack_ptr[k] = false;
             self.stack_base[k] = 0 as u32;
             self.is_alloc_result[k] = false;
@@ -1561,6 +1636,9 @@ impl Verifier {
     fn check_instr(self: &mut Verifier, instr: &ILInstr, ssa: SSAId, span: Span) {
         if self.has_result(ssa) {
             self.ssa_spans[ssa as usize] = span;
+            if ssa < self.uses.len as u32 {
+                self.is_dropped[ssa as usize] = false;
+            }
         }
 
         // 1. Check ownership of operands
@@ -1660,21 +1738,39 @@ impl Verifier {
                 if self.has_result(ssa) && ssa < self.uses.len as u32 {
                     self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
                     for pr in phi.preds {
-                        if pr.val < self.uses.len as u32
-                            && (self.is_stack_slot[pr.val as usize]
-                                || self.points_to_stack[pr.val as usize]) {
-                            self.points_to_stack[ssa as usize] = true;
+                        if pr.val < self.uses.len as u32 {
+                            if self.is_stack_slot[pr.val as usize]
+                                || self.points_to_stack[pr.val as usize] {
+                                self.points_to_stack[ssa as usize] = true;
+                            }
+                            if self.is_global_addr[pr.val as usize] {
+                                self.is_global_addr[ssa as usize] = true;
+                            }
                         }
                     }
                 }
             },
-            ILInstr.Drop(ssa) => {
-                if ssa != 0 as u32 && ssa < self.uses.len as u32 {
-                    if self.is_state_dropped(self.current_map.get_state(ssa)) {
+            ILInstr.RegionCast(rc) => {
+                if self.has_result(ssa) && ssa < self.uses.len as u32 {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                    if rc.val < self.uses.len as u32 {
+                        if self.is_stack_slot[rc.val as usize]
+                            || self.points_to_stack[rc.val as usize] {
+                            self.points_to_stack[ssa as usize] = true;
+                        }
+                        if self.is_global_addr[rc.val as usize] {
+                            self.is_global_addr[ssa as usize] = true;
+                        }
+                    }
+                }
+            },
+            ILInstr.Drop(drop_ssa) => {
+                if drop_ssa != 0 as u32 && drop_ssa < self.uses.len as u32 {
+                    if self.is_dropped[drop_ssa as usize] {
                         self.report_error("double drop: value was already dropped", span);
                     }
-                    self.current_map.set_state(ssa, OwnerState.Dropped, self.arena);
-                    self.dec_use(ssa);
+                    self.is_dropped[drop_ssa as usize] = true;
+                    self.dec_use(drop_ssa);
                 }
             },
             // Everything else produces an owned result and carries no special ownership
@@ -1709,7 +1805,6 @@ impl Verifier {
                 | ILInstr.ArrayConstruct(_)
                 | ILInstr.ArrayLoad(_)
                 | ILInstr.ArrayStore(_)
-                | ILInstr.RegionCast(_)
                 | ILInstr.IsSome(_)
                 | ILInstr.Unwrap(_)
                 | ILInstr.Branch(_)
@@ -1828,7 +1923,10 @@ impl Verifier {
             }
         }
         if base != 0 as u32 && base < self.uses.len as u32 {
-            self.current_map.set_state(base, OwnerState.Owned, self.arena);
+            if self.is_stack_slot[base as usize] || !self.is_dropped[base as usize] {
+                self.current_map.set_state(base, OwnerState.Owned, self.arena);
+                self.is_dropped[base as usize] = false;
+            }
         }
 
         // Propagate the borrow base when storing a pointer
@@ -2297,7 +2395,7 @@ impl Verifier {
 
     fn check_ssa_access(self: &mut Verifier, ssa: SSAId, span: Span) {
         if !self.check_ssa_defined(ssa, span) { return; }
-        if self.is_state_dropped(self.current_map.get_state(ssa)) {
+        if ssa < self.uses.len as u32 && self.is_dropped[ssa as usize] {
             self.report_error("use after drop: value was already dropped", span);
         }
         self.dec_use(ssa);
@@ -2359,7 +2457,14 @@ impl Verifier {
             },
             ILInstr.Borrow(b) => { self.check_ssa_access(b.val, span); },
             ILInstr.Store(s) => {
-                if self.check_ssa_defined(s.ptr, span) { self.dec_use(s.ptr); }
+                if self.check_ssa_defined(s.ptr, span) {
+                    if s.ptr < self.uses.len as u32
+                        && !self.is_stack_slot[s.ptr as usize]
+                        && self.is_dropped[s.ptr as usize] {
+                        self.report_error("use after drop: value was already dropped", span);
+                    }
+                    self.dec_use(s.ptr);
+                }
                 self.check_ssa_access(s.val, span);
             },
             ILInstr.Alloc(a) => {
