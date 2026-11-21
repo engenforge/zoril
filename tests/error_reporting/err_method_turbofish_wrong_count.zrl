@@ -1,0 +1,19 @@
+// expected compile fail
+// EXPECT: error: wrong number of type arguments for generic method
+// EXPECT: error: type arguments given to a method that is not generic
+// EXPECT: error: type arguments given to a method that is not generic
+struct S { x: i32 }
+
+impl S {
+    fn id<T>(self: &S, v: T) -> T { return v; }
+    fn plain(self: &S, v: i32) -> i32 { return v; }
+    fn sm(v: i32) -> i32 { return v; }
+}
+
+fn main() -> i32 {
+    let s = S { x: 0 };
+    let a = s.id::<i32, i32>(1);
+    let b = s.plain::<i32>(2);
+    let c = S.sm::<i32>(3);
+    return a + b + c;
+}

@@ -1937,6 +1937,9 @@ impl ZirLowerer {
                 return Option.Some(self.no_place());
             }
             let type_name = self.get_type_decl(resolved_ty).name;
+            if !self.check_call_type_arg_count(type_args.len, m_fn.type_params.len, true, span) {
+                return Option.Some(self.no_place());
+            }
             let mut impl_args = self.mono.impl_type_args(&imp, resolved_ty);
             let mut infers_impl = false;
             for a in impl_args { if *a == 0 as u32 { infers_impl = true; } }
@@ -2232,6 +2235,9 @@ impl ZirLowerer {
                 imp.source_file
             };
             if !self.check_method_visible(m_decl.is_pub, m_sf, m.member, span) {
+                return Option.Some(self.no_place());
+            }
+            if !self.check_call_type_arg_count(type_args.len, m_decl.type_params.len, true, span) {
                 return Option.Some(self.no_place());
             }
             let mut impl_self_ty = current_ty;
@@ -2537,6 +2543,42 @@ impl ZirLowerer {
         return true;
     }
 
+    // Checks that explicit TYPE_ARGS on a call match TYPE_PARAMS_LEN: 0 (omitted or `::<>`) is
+    // allowed and lets inference run; any other count must match TYPE_PARAMS_LEN, and any type
+    // argument on a non-generic function or method is refused.
+    fn check_call_type_arg_count(
+        self: &mut ZirLowerer,
+        type_args_len: usize,
+        type_params_len: usize,
+        is_method: bool,
+        span: Span
+    ) -> bool {
+        if type_args_len == 0 as usize { return true; }
+        if type_params_len == 0 as usize {
+            self.report_error(
+                if is_method {
+                    "type arguments given to a method that is not generic"
+                } else {
+                    "type arguments given to a function that is not generic"
+                },
+                span
+            );
+            return false;
+        }
+        if type_args_len != type_params_len {
+            self.report_error(
+                if is_method {
+                    "wrong number of type arguments for generic method"
+                } else {
+                    "wrong number of type arguments for generic function"
+                },
+                span
+            );
+            return false;
+        }
+        return true;
+    }
+
     // The function NAME calls directly: a lowered function, a function declaration
     // (instantiated, generic ones only when FINAL, with TYPE_ARGS or inferred from ARGS), or a
     // method by its path. Rejected when it is private to another module (reported).
@@ -2559,11 +2601,22 @@ impl ZirLowerer {
                 if !self.check_fn_visible(p_func.is_pub, p_func.source_file, name, span) {
                     return CalleeLookup.Rejected;
                 }
+                if !self.check_call_type_arg_count(type_args.len, 0 as usize, false, span) {
+                    return CalleeLookup.Rejected;
+                }
                 return CalleeLookup.Found(func_idx);
             },
             SymbolKind.Global(decl_id) => {
                 if let Decl.Fn(ff) = self.resolver.ast.decls[decl_id as usize] {
                     if !self.check_fn_visible(ff.is_pub, ff.source_file, name, span) {
+                        return CalleeLookup.Rejected;
+                    }
+                    if !self.check_call_type_arg_count(
+                        type_args.len,
+                        ff.type_params.len,
+                        false,
+                        span
+                    ) {
                         return CalleeLookup.Rejected;
                     }
                     if !is_final {
@@ -2605,6 +2658,9 @@ impl ZirLowerer {
                 // `T::m(..)` and `T.m(..)` are the same method reached the same way; a private one
                 // is no more nameable through the path than through a receiver.
                 if !self.check_method_visible(f.is_pub, f_sf, f.name, span) {
+                    return CalleeLookup.Rejected;
+                }
+                if !self.check_call_type_arg_count(type_args.len, f.type_params.len, true, span) {
                     return CalleeLookup.Rejected;
                 }
                 if !is_final && f.type_params.len != 0 as usize { return CalleeLookup.NotDirect; }
