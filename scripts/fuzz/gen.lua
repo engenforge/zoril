@@ -94,6 +94,8 @@ local function feature_list()
         -- indirect closure, fn-value forwarding, and mutual-recursion route builders (id:mskex)
         "closure-captures-indirect-mut-holder", "closure-passed-to-fn-param",
         "closure-param-forwards-view", "mutual-recursion-store-through-local",
+        -- release-tier liveness, inner-block callee store, and method-elision route builders (id:4ngz8)
+        "release-tier-liveness", "inner-block-callee-store", "method-elision-view-reset",
     }
     table.sort(fs)
     return fs
@@ -1082,6 +1084,184 @@ STMT.mutual_recursion_local_store = function()
     } }
 end
 
+STMT.release_tier_liveness = function()
+    P.needs_arena = true
+    P.needs_rel_liveness = true
+    local escape = chance(boundary_pct)
+    local variant = rnd(4)
+    local a, v, arr, w, r, b, s = fresh("rla"), fresh("rlv"), fresh("rlr"), fresh("rlw"), fresh("rlp"), fresh("rlb"), fresh("rls")
+    tag("release-tier-liveness")
+    tag("arena-value")
+    tag("arena-reset")
+    local z_lines = {
+        "{",
+        "    let mut " .. a .. " = match Arena.new(65536) { Result.Ok(x) => x, Result.Err(_) => { return 1; } };",
+        "    let mut " .. v .. " = Vec::<u64>.new_in(&" .. a .. ");",
+        "    " .. v .. ".push(7 as u64);",
+        "    let " .. arr .. ": [u64; 2] = [1, 2];",
+    }
+    local r_lines = {
+        "{",
+        "    let mut " .. a .. " = Arena::new(65536).unwrap();",
+        "    let mut " .. v .. " = ArenaVec::<u64>::new_in(&" .. a .. ");",
+        "    " .. v .. ".push(7);",
+        "    let " .. arr .. ": [u64; 2] = [1, 2];",
+    }
+    if variant == 1 then
+        table.insert(z_lines, "    let mut " .. w .. " = RelBox { s: &" .. arr .. " };")
+        table.insert(z_lines, "    { let " .. r .. " = &mut " .. w .. "; " .. r .. ".s = " .. v .. ".as_slice(); }")
+        table.insert(r_lines, "    let mut " .. w .. " = RelBox { s: &" .. arr .. " };")
+        table.insert(r_lines, "    { let " .. r .. " = &mut " .. w .. "; " .. r .. ".s = " .. v .. ".as_slice(); }")
+        if escape then
+            table.insert(z_lines, "    " .. a .. ".reset();")
+            table.insert(z_lines, "    if " .. w .. ".s[0] != 7 as u64 { return 92; }")
+            table.insert(r_lines, "    " .. a .. ".reset();")
+            table.insert(r_lines, "    if " .. w .. ".s[0] != 7 { std::process::exit(92); }")
+        else
+            table.insert(z_lines, "    if " .. w .. ".s[0] != 7 as u64 { return 92; }")
+            table.insert(z_lines, "    " .. a .. ".reset();")
+            table.insert(r_lines, "    if " .. w .. ".s[0] != 7 { std::process::exit(92); }")
+            table.insert(r_lines, "    " .. a .. ".reset();")
+        end
+    elseif variant == 2 then
+        table.insert(z_lines, "    let mut " .. s .. ": [u64] = &" .. arr .. ";")
+        table.insert(z_lines, "    rel_put(&mut " .. s .. ", &" .. v .. ");")
+        table.insert(r_lines, "    let mut " .. s .. ": &[u64] = &" .. arr .. ";")
+        table.insert(r_lines, "    rel_put(&mut " .. s .. ", &" .. v .. ");")
+        if escape then
+            table.insert(z_lines, "    " .. a .. ".reset();")
+            table.insert(z_lines, "    if " .. s .. "[0] != 7 as u64 { return 92; }")
+            table.insert(r_lines, "    " .. a .. ".reset();")
+            table.insert(r_lines, "    if " .. s .. "[0] != 7 { std::process::exit(92); }")
+        else
+            table.insert(z_lines, "    if " .. s .. "[0] != 7 as u64 { return 92; }")
+            table.insert(z_lines, "    " .. a .. ".reset();")
+            table.insert(r_lines, "    if " .. s .. "[0] != 7 { std::process::exit(92); }")
+            table.insert(r_lines, "    " .. a .. ".reset();")
+        end
+    elseif variant == 3 then
+        table.insert(z_lines, "    let mut " .. b .. ": Box<RelBox> = box RelBox { s: &" .. arr .. " };")
+        table.insert(z_lines, "    (*" .. b .. ").s = " .. v .. ".as_slice();")
+        table.insert(r_lines, "    let mut " .. b .. ": Box<RelBox<'_>> = Box::new(RelBox { s: &" .. arr .. " });")
+        table.insert(r_lines, "    (*" .. b .. ").s = " .. v .. ".as_slice();")
+        if escape then
+            table.insert(z_lines, "    " .. a .. ".reset();")
+            table.insert(z_lines, "    if (*" .. b .. ").s[0] != 7 as u64 { return 92; }")
+            table.insert(r_lines, "    " .. a .. ".reset();")
+            table.insert(r_lines, "    if (*" .. b .. ").s[0] != 7 { std::process::exit(92); }")
+        else
+            table.insert(z_lines, "    if (*" .. b .. ").s[0] != 7 as u64 { return 92; }")
+            table.insert(z_lines, "    " .. a .. ".reset();")
+            table.insert(r_lines, "    if (*" .. b .. ").s[0] != 7 { std::process::exit(92); }")
+            table.insert(r_lines, "    " .. a .. ".reset();")
+        end
+    else
+        table.insert(z_lines, "    let mut " .. s .. ": [u64] = &" .. arr .. ";")
+        table.insert(z_lines, "    rel_put(&mut " .. s .. ", &" .. v .. ");")
+        table.insert(r_lines, "    let mut " .. s .. ": &[u64] = &" .. arr .. ";")
+        table.insert(r_lines, "    rel_put(&mut " .. s .. ", &" .. v .. ");")
+        if escape then
+            table.insert(z_lines, "    rel_kill(&mut " .. a .. ");")
+            table.insert(z_lines, "    if " .. s .. "[0] != 7 as u64 { return 92; }")
+            table.insert(r_lines, "    rel_kill(&mut " .. a .. ");")
+            table.insert(r_lines, "    if " .. s .. "[0] != 7 { std::process::exit(92); }")
+        else
+            table.insert(z_lines, "    if " .. s .. "[0] != 7 as u64 { return 92; }")
+            table.insert(z_lines, "    rel_kill(&mut " .. a .. ");")
+            table.insert(r_lines, "    if " .. s .. "[0] != 7 { std::process::exit(92); }")
+            table.insert(r_lines, "    rel_kill(&mut " .. a .. ");")
+        end
+    end
+    table.insert(z_lines, "}")
+    table.insert(r_lines, "}")
+    return { k = "Raw", z = z_lines, r = r_lines }
+end
+
+STMT.inner_block_callee_store = function()
+    P.needs_ib_slot = true
+    local escape = chance(boundary_pct)
+    local use_fn = chance(50)
+    local outer, other, inner, slot, f = fresh("ibo"), fresh("ibx"), fresh("ibi"), fresh("ibs"), fresh("ibf")
+    tag("inner-block-callee-store")
+    tag("borrow-inside-a-block")
+    if use_fn then tag("function-pointer-call") end
+    local z_lines = {
+        "{",
+        "    let " .. outer .. ": i32 = 7;",
+        "    let " .. other .. ": i32 = 11;",
+        "    let mut " .. slot .. " = IbSlot { p: &" .. outer .. " };",
+        "    {",
+    }
+    local r_lines = {
+        "{",
+        "    let " .. outer .. ": i32 = 7;",
+        "    let " .. other .. ": i32 = 11;",
+        "    let mut " .. slot .. " = IbSlot { p: &" .. outer .. " };",
+        "    {",
+    }
+    local src = escape and inner or other
+    if escape then
+        table.insert(z_lines, "        let " .. inner .. ": i32 = 11;")
+        table.insert(r_lines, "        let " .. inner .. ": i32 = 11;")
+    end
+    if use_fn then
+        table.insert(z_lines, "        let " .. f .. ": fn(&mut IbSlot, &i32) = ib_put;")
+        table.insert(z_lines, "        " .. f .. "(&mut " .. slot .. ", &" .. src .. ");")
+        table.insert(r_lines, "        let " .. f .. ": for<'a> fn(&mut IbSlot<'a>, &'a i32) = ib_put;")
+        table.insert(r_lines, "        " .. f .. "(&mut " .. slot .. ", &" .. src .. ");")
+    else
+        table.insert(z_lines, "        ib_put(&mut " .. slot .. ", &" .. src .. ");")
+        table.insert(r_lines, "        ib_put(&mut " .. slot .. ", &" .. src .. ");")
+    end
+    table.insert(z_lines, "    }")
+    table.insert(z_lines, "    if *" .. slot .. ".p != 11 { return 92; }")
+    table.insert(z_lines, "}")
+    table.insert(r_lines, "    }")
+    table.insert(r_lines, "    if *" .. slot .. ".p != 11 { std::process::exit(92); }")
+    table.insert(r_lines, "}")
+    return { k = "Raw", z = z_lines, r = r_lines }
+end
+
+STMT.method_elision_reset = function()
+    P.needs_arena = true
+    P.needs_view_pick = true
+    local escape = chance(boundary_pct)
+    local a, v, vp, s = fresh("mea"), fresh("mev"), fresh("mep"), fresh("mes")
+    tag("method-elision-view-reset")
+    tag("arena-value")
+    tag("arena-reset")
+    local z_lines = {
+        "{",
+        "    let mut " .. a .. " = match Arena.new(65536) { Result.Ok(x) => x, Result.Err(_) => { return 1; } };",
+        "    let mut " .. v .. " = Vec::<u64>.new_in(&" .. a .. ");",
+        "    " .. v .. ".push(7 as u64);",
+        "    let " .. vp .. " = ViewPick { tag: 1 };",
+        "    let " .. s .. ": [u64] = " .. vp .. ".pick(" .. v .. ".as_slice());",
+    }
+    local r_lines = {
+        "{",
+        "    let mut " .. a .. " = Arena::new(65536).unwrap();",
+        "    let mut " .. v .. " = ArenaVec::<u64>::new_in(&" .. a .. ");",
+        "    " .. v .. ".push(7);",
+        "    let " .. vp .. " = ViewPick { tag: 1 };",
+        "    let " .. s .. ": &[u64] = " .. vp .. ".pick(" .. v .. ".as_slice());",
+    }
+    if escape then
+        table.insert(z_lines, "    " .. a .. ".reset();")
+        table.insert(z_lines, "    if " .. s .. "[0] != 7 as u64 { return 92; }")
+        table.insert(r_lines, "    " .. a .. ".reset();")
+        table.insert(r_lines, "    if " .. s .. "[0] != 7 { std::process::exit(92); }")
+    else
+        table.insert(z_lines, "    if " .. s .. "[0] != 7 as u64 { return 92; }")
+        table.insert(z_lines, "    " .. a .. ".reset();")
+        table.insert(r_lines, "    if " .. s .. "[0] != 7 { std::process::exit(92); }")
+        table.insert(r_lines, "    " .. a .. ".reset();")
+    end
+    table.insert(z_lines, "}")
+    table.insert(r_lines, "}")
+    return { k = "Raw", z = z_lines, r = r_lines }
+end
+
 -- One statement per (family, position), for the mismatch stream only - it is deliberately *not* in
 -- `BUILDERS`, because a program that carries a mismatch never runs: the crash oracle sees none of it,
 -- and every other feature generated beside it goes untested once the compiler stops there. The
@@ -1144,6 +1324,9 @@ local BUILDERS = {
     { "closure_passed_to_fn_param", STMT.closure_passed_to_fn_param, 5 },
     { "closure_param_forwards_view", STMT.closure_param_forwards_view, 5 },
     { "mutual_recursion_local_store", STMT.mutual_recursion_local_store, 5 },
+    { "release_tier_liveness", STMT.release_tier_liveness, 5 },
+    { "inner_block_callee_store", STMT.inner_block_callee_store, 5 },
+    { "method_elision_reset", STMT.method_elision_reset, 5 },
 }
 
 --- The calibration stream: one program per known memory-safety hole -------------------------------
@@ -3180,6 +3363,38 @@ local function print_decls(lang)
             if P.needs_mrec_escape then
                 add("fn mrec_escape(out: &mut [u64]) { let arr: [u64; 2] = [11, 12]; mrec_a(out, &arr, 2); }")
             end
+        end
+    end
+    if P.needs_rel_liveness then
+        add("")
+        if lang == "rust" then
+            add("struct RelBox<'a> { s: &'a [u64] }")
+            add("fn rel_put<'a>(out: &mut &'a [u64], v: &'a ArenaVec<u64>) { *out = v.as_slice(); }")
+            add("fn rel_kill(a: &mut Arena) { a.reset(); }")
+        else
+            add("struct RelBox { s: [u64] }")
+            add("fn rel_put(out: &mut [u64], v: &Vec<u64>) { *out = v.as_slice(); }")
+            add("fn rel_kill(a: &mut Arena) { a.reset(); }")
+        end
+    end
+    if P.needs_ib_slot then
+        add("")
+        if lang == "rust" then
+            add("struct IbSlot<'a> { p: &'a i32 }")
+            add("fn ib_put<'a>(s: &mut IbSlot<'a>, v: &'a i32) { s.p = v; }")
+        else
+            add("struct IbSlot { p: &i32 }")
+            add("fn ib_put(s: &mut IbSlot, v: &i32) { s.p = v; }")
+        end
+    end
+    if P.needs_view_pick then
+        add("")
+        if lang == "rust" then
+            add("struct ViewPick { tag: i32 }")
+            add("impl ViewPick { fn pick<'a>(&self, s: &'a [u64]) -> &'a [u64] { s } }")
+        else
+            add("struct ViewPick { tag: i32 }")
+            add("impl ViewPick { pub fn pick(self: &ViewPick, s: [u64]) -> [u64] { return s; } }")
         end
     end
     if P.needs_grow_vec then
