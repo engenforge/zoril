@@ -37,11 +37,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: take-out check — reverted `IL_INSTR_STRING_CONST` in `tools/zilc/src/qbe.zrl` to `copy $S<id>`, rebuilt `build/zilc`, and `corpus/zil/15_io_syscall.zil` printed `0` bytes; restored and rebuilt `build/zilc`.
       - C5: `make test`: `Total: 4134 run, 4134 passed, 0 failed, 2 skipped (146.1s)`; `make preflight-changed PREFLIGHT_BASE=HEAD`: `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, `[5] fixpoint — gen3.zil vs gen4.zil must be identical`, `[PASS] fuzz-calibrate: all 23 calibration programs are in their fixed state (21 refused, 2 accepted with one drop)`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against 7c3b0071a628890b2812e9bbb51aaa79be938fb6`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (107.8s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.3s)`. Fuzz record is stale for `src/` and `tools/zilc/` (renewed in `id:v2f8h`).
 
-- [ ] +zil +AI-G @zil ZL3 One spelling for cast: zilc refuses bitcast and the corpus is rewritten id:htrqb
+- [x] +zil +AI-G @zil ZL3 One spelling for cast: zilc refuses bitcast and the corpus is rewritten id:htrqb
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decisions in id:1kaye (`future.tm.md`), 2026-11-13
     > **Branch:** `zil`
     > **Depends:** id:qpc8d
+    > **Completed:** 2026-11-21 git:40af734
 
     - **Placed:** after ZL2: the corpus files it rewrites are the ones ZL2 changes.
 
@@ -54,6 +55,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: `timeout -k 5s 30s build/zilc <bitcast-test.zil> -o /dev/null` exits 1 and prints the diagnostic naming `cast` (quote output); `./scripts/test_zilc_errors.sh` passes.
       - C3: take-out check — temporarily restore `|| op_str == "bitcast"` in `zil_parse.zrl`, rebuild `build/zilc`, and show `scripts/test_zilc_errors.sh` fails; restore.
       - C4: `make test` and `make preflight-changed` pass (quoting `Total:` lines; note fuzz record is stale for `tools/zilc/`).
+    - **Completion note:**
+      - Also added the four rewritten `corpus/zil/` files (`02_comparison.zil`, `12_enums_sum.zil`, `13_slices.zil`, `24_tuples.zil`) to `bootstrap/stage0-c/tests/outside_dialect.txt` because `stage0-C` only accepts `bitcast`.
+      - C1: `grep -rn 'bitcast' corpus/zil/` printed nothing.
+      - C2: `timeout -k 5s 30s build/zilc tests/zilc/bitcast_rejected.zil -o /dev/null` exited 1 and printed `zilc: line 6: unknown opcode 'bitcast' (use 'cast')`; `sh scripts/test_zilc_errors.sh` passed all 16 checks.
+      - C3: take-out check — restored `|| op_str == "bitcast"` in `tools/zilc/src/zil_parse.zrl`, rebuilt `build/zilc`, and `sh scripts/test_zilc_errors.sh` exited 1 (`[FAIL] tests/zilc/bitcast_rejected.zil`); restored and rebuilt `build/zilc`.
+      - C4: `make test`: `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (146.0s)`; `make preflight-changed PREFLIGHT_BASE=HEAD`: `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, `[PASS] fuzz-calibrate: all 23 calibration programs are in their fixed state (21 refused, 2 accepted with one drop)`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (107.7s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.4s)`. Fuzz record is stale for `tools/zilc/` (renewed in `id:v2f8h`).
 
 - [ ] +zil +tests +AI-G @zil ZL4 Corpus and per-file tests check the program's output, not only its exit code id:ehh6m
     > **Created:** 2026-11-13
