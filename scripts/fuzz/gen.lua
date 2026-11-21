@@ -91,6 +91,9 @@ local function feature_list()
         "fn-value", "store-through-parameter", "stack-pointer-store",
         -- the program's helpers, types and statics live in a library module its `main` imports (Z2)
         "multi-module", "module-contract-attribute", "library-private-item", "user-trait-default-method", "private-trait-impl", "library-generic-impl-shapes", "box-allocator-in-interface", "impl-in-another-module", "private-item-across-modules", "module-name-not-an-identifier", "module-name-shape", "root-name-leading-digit", "stdlib-generic-contract",
+        -- indirect closure, fn-value forwarding, and mutual-recursion route builders (id:mskex)
+        "closure-captures-indirect-mut-holder", "closure-passed-to-fn-param",
+        "closure-param-forwards-view", "mutual-recursion-store-through-local",
     }
     table.sort(fs)
     return fs
@@ -887,6 +890,198 @@ STMT.ref_helper_forms = function()
     } }
 end
 
+STMT.closure_indirect_mut_holder = function()
+    P.needs_mut_slot = true
+    local two_hops = chance(50)
+    local escape = chance(boundary_pct)
+    local a, b, d, w, r, rr, s, c = fresh("msa"), fresh("msb"), fresh("msd"), fresh("msw"), fresh("msr"), fresh("msrr"), fresh("mss"), fresh("msc")
+    tag("closure-captures-indirect-mut-holder")
+    tag("closure-capturing-a-reference")
+    if escape then
+        P.needs_mut_slot_escape = true
+        local fn_name = two_hops and "mut_slot_escape_two" or "mut_slot_escape_one"
+        return { k = "Raw", z = {
+            "{",
+            "    let " .. a .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. d .. ": [u64] = &" .. a .. ";",
+            "    " .. fn_name .. "(&mut " .. d .. ");",
+            "    if " .. d .. "[0] != 11 { return 92; }",
+            "}",
+        }, r = {
+            "{",
+            "    let " .. a .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. d .. ": &[u64] = &" .. a .. ";",
+            "    " .. fn_name .. "(&mut " .. d .. ");",
+            "    if " .. d .. "[0] != 11 { std::process::exit(92); }",
+            "}",
+        } }
+    end
+    local z_lines = {
+        "{",
+        "    let " .. a .. ": [u64; 2] = [7, 8];",
+        "    let " .. b .. ": [u64; 2] = [11, 12];",
+        "    let mut " .. d .. ": [u64] = &" .. a .. ";",
+        "    let mut " .. w .. " = MutSlot { out: &mut " .. d .. " };",
+        "    let mut " .. r .. " = &mut " .. w .. ";",
+        "    let " .. s .. ": [u64] = &" .. b .. ";",
+    }
+    local r_lines = {
+        "{",
+        "    let " .. a .. ": [u64; 2] = [7, 8];",
+        "    let " .. b .. ": [u64; 2] = [11, 12];",
+        "    let mut " .. d .. ": &[u64] = &" .. a .. ";",
+        "    let mut " .. w .. " = MutSlot { out: &mut " .. d .. " };",
+        "    let mut " .. r .. " = &mut " .. w .. ";",
+        "    let " .. s .. ": &[u64] = &" .. b .. ";",
+    }
+    if two_hops then
+        table.insert(z_lines, "    let " .. rr .. " = &mut " .. r .. ";")
+        table.insert(z_lines, "    let " .. c .. " = || { *(*" .. rr .. ").out = " .. s .. "; };")
+        table.insert(r_lines, "    let " .. rr .. " = &mut " .. r .. ";")
+        table.insert(r_lines, "    let mut " .. c .. " = || { *(*" .. rr .. ").out = " .. s .. "; };")
+    else
+        table.insert(z_lines, "    let " .. c .. " = || { *" .. r .. ".out = " .. s .. "; };")
+        table.insert(r_lines, "    let mut " .. c .. " = || { *" .. r .. ".out = " .. s .. "; };")
+    end
+    table.insert(z_lines, "    " .. c .. "();")
+    table.insert(z_lines, "    if " .. d .. "[0] != 11 { return 92; }")
+    table.insert(z_lines, "}")
+    table.insert(r_lines, "    " .. c .. "();")
+    table.insert(r_lines, "    if " .. d .. "[0] != 11 { std::process::exit(92); }")
+    table.insert(r_lines, "}")
+    return { k = "Raw", z = z_lines, r = r_lines }
+end
+
+STMT.closure_passed_to_fn_param = function()
+    P.needs_fn_cb = true
+    local escape = chance(boundary_pct)
+    tag("closure-passed-to-fn-param")
+    tag("fn-value")
+    tag("closure-capturing-a-reference")
+    if escape then
+        P.needs_fn_cb_escape = true
+        local a, d = fresh("cba"), fresh("cbd")
+        return { k = "Raw", z = {
+            "{",
+            "    let " .. a .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. d .. ": [u64] = &" .. a .. ";",
+            "    escape_cb(&mut " .. d .. ");",
+            "    if " .. d .. "[0] != 11 { return 92; }",
+            "}",
+        }, r = {
+            "{",
+            "    let " .. a .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. d .. ": &[u64] = &" .. a .. ";",
+            "    escape_cb(&mut " .. d .. ");",
+            "    if " .. d .. "[0] != 11 { std::process::exit(92); }",
+            "}",
+        } }
+    end
+    local n, r = fresh("cbn"), fresh("cbr")
+    return { k = "Raw", z = {
+        "{",
+        "    let mut " .. n .. ": i32 = 0;",
+        "    let " .. r .. " = &mut " .. n .. ";",
+        "    call_cb(|| { *" .. r .. " = *" .. r .. " + 1; });",
+        "    if " .. n .. " != 1 { return 92; }",
+        "}",
+    }, r = {
+        "{",
+        "    let mut " .. n .. ": i32 = 0;",
+        "    let " .. r .. " = &mut " .. n .. ";",
+        "    call_cb(|| { *" .. r .. " = *" .. r .. " + 1; });",
+        "    if " .. n .. " != 1 { std::process::exit(92); }",
+        "}",
+    } }
+end
+
+STMT.closure_param_forwards_view = function()
+    P.needs_fwd_cb = true
+    local escape = chance(boundary_pct)
+    tag("closure-param-forwards-view")
+    tag("fn-value")
+    if escape then
+        local x, out, inner = fresh("fcx"), fresh("fco"), fresh("fci")
+        return { k = "Raw", z = {
+            "{",
+            "    let " .. x .. ": i32 = 1;",
+            "    let mut " .. out .. ": &i32 = &" .. x .. ";",
+            "    {",
+            "        let " .. inner .. ": i32 = 7;",
+            "        " .. out .. " = fwd_cb(|q| { return q; }, &" .. inner .. ");",
+            "    }",
+            "    if *" .. out .. " != 7 { return 92; }",
+            "}",
+        }, r = {
+            "{",
+            "    let " .. x .. ": i32 = 1;",
+            "    let mut " .. out .. ": &i32 = &" .. x .. ";",
+            "    {",
+            "        let " .. inner .. ": i32 = 7;",
+            "        " .. out .. " = fwd_cb(|q| q, &" .. inner .. ");",
+            "    }",
+            "    if *" .. out .. " != 7 { std::process::exit(92); }",
+            "}",
+        } }
+    end
+    local x, r = fresh("fcx"), fresh("fcr")
+    return { k = "Raw", z = {
+        "{",
+        "    let " .. x .. ": i32 = 7;",
+        "    let " .. r .. ": &i32 = fwd_cb(|q| { return q; }, &" .. x .. ");",
+        "    if *" .. r .. " != 7 { return 92; }",
+        "}",
+    }, r = {
+        "{",
+        "    let " .. x .. ": i32 = 7;",
+        "    let " .. r .. ": &i32 = fwd_cb(|q| q, &" .. x .. ");",
+        "    if *" .. r .. " != 7 { std::process::exit(92); }",
+        "}",
+    } }
+end
+
+STMT.mutual_recursion_local_store = function()
+    P.needs_mrec_store = true
+    local escape = chance(boundary_pct)
+    local a, b, d = fresh("mra"), fresh("mrb"), fresh("mrd")
+    tag("mutual-recursion-store-through-local")
+    if escape then
+        P.needs_mrec_escape = true
+        return { k = "Raw", z = {
+            "{",
+            "    let " .. a .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. d .. ": [u64] = &" .. a .. ";",
+            "    mrec_escape(&mut " .. d .. ");",
+            "    if " .. d .. "[0] != 11 { return 92; }",
+            "}",
+        }, r = {
+            "{",
+            "    let " .. a .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. d .. ": &[u64] = &" .. a .. ";",
+            "    mrec_escape(&mut " .. d .. ");",
+            "    if " .. d .. "[0] != 11 { std::process::exit(92); }",
+            "}",
+        } }
+    end
+    return { k = "Raw", z = {
+        "{",
+        "    let " .. a .. ": [u64; 2] = [7, 8];",
+        "    let " .. b .. ": [u64; 2] = [11, 12];",
+        "    let mut " .. d .. ": [u64] = &" .. a .. ";",
+        "    mrec_a(&mut " .. d .. ", &" .. b .. ", 2);",
+        "    if " .. d .. "[0] != 11 { return 92; }",
+        "}",
+    }, r = {
+        "{",
+        "    let " .. a .. ": [u64; 2] = [7, 8];",
+        "    let " .. b .. ": [u64; 2] = [11, 12];",
+        "    let mut " .. d .. ": &[u64] = &" .. a .. ";",
+        "    mrec_a(&mut " .. d .. ", &" .. b .. ", 2);",
+        "    if " .. d .. "[0] != 11 { std::process::exit(92); }",
+        "}",
+    } }
+end
+
 -- One statement per (family, position), for the mismatch stream only - it is deliberately *not* in
 -- `BUILDERS`, because a program that carries a mismatch never runs: the crash oracle sees none of it,
 -- and every other feature generated beside it goes untested once the compiler stops there. The
@@ -945,6 +1140,10 @@ local BUILDERS = {
     { "destructure_plain", STMT.destructure_plain, 4 },
     { "match_ref_enum", STMT.match_ref_enum, 4 },
     { "ref_helper_forms", STMT.ref_helper_forms, 4 },
+    { "closure_indirect_mut_holder", STMT.closure_indirect_mut_holder, 5 },
+    { "closure_passed_to_fn_param", STMT.closure_passed_to_fn_param, 5 },
+    { "closure_param_forwards_view", STMT.closure_param_forwards_view, 5 },
+    { "mutual_recursion_local_store", STMT.mutual_recursion_local_store, 5 },
 }
 
 --- The calibration stream: one program per known memory-safety hole -------------------------------
@@ -2925,6 +3124,62 @@ local function print_decls(lang)
             add("struct FnStoreH { p: &i32 }")
             add("fn fn_store_put(h: &mut FnStoreH, p: &i32) { h.p = p; }")
             add("fn fn_store_call(h: &mut FnStoreH, f: fn(&mut FnStoreH, &i32)) { let hn: i32 = 9; f(h, &hn); }")
+        end
+    end
+    if P.needs_mut_slot then
+        add("")
+        if lang == "rust" then
+            add("struct MutSlot<'a, 'b> { out: &'a mut &'b [u64] }")
+            if P.needs_mut_slot_escape then
+                add("fn mut_slot_escape_one<'a>(out: &mut &'a [u64]) { let arr: [u64; 2] = [11, 12]; let mut w = MutSlot { out: out }; let mut r = &mut w; let mut c = || { *r.out = &arr; }; c(); }")
+                add("fn mut_slot_escape_two<'a>(out: &mut &'a [u64]) { let arr: [u64; 2] = [11, 12]; let mut w = MutSlot { out: out }; let mut r = &mut w; let rr = &mut r; let mut c = || { *(*rr).out = &arr; }; c(); }")
+            end
+        else
+            add("struct MutSlot { out: &mut [u64] }")
+            if P.needs_mut_slot_escape then
+                add("fn mut_slot_escape_one(out: &mut [u64]) { let arr: [u64; 2] = [11, 12]; let mut w = MutSlot { out: out }; let r = &mut w; let s: [u64] = &arr; let c = || { *r.out = s; }; c(); }")
+                add("fn mut_slot_escape_two(out: &mut [u64]) { let arr: [u64; 2] = [11, 12]; let mut w = MutSlot { out: out }; let mut r = &mut w; let rr = &mut r; let s: [u64] = &arr; let c = || { *(*rr).out = s; }; c(); }")
+            end
+        end
+    end
+    if P.needs_fn_cb then
+        add("")
+        if lang == "rust" then
+            add("fn call_cb(mut g: impl FnMut()) { g(); }")
+            if P.needs_fn_cb_escape then
+                add("fn escape_cb<'a>(out: &mut &'a [u64]) { let arr: [u64; 2] = [11, 12]; call_cb(|| { *out = &arr; }); }")
+            end
+        else
+            add("fn call_cb(g: fn()) { g(); }")
+            if P.needs_fn_cb_escape then
+                add("fn escape_cb(out: &mut [u64]) { let arr: [u64; 2] = [11, 12]; call_cb(|| { *out = &arr; }); }")
+            end
+        end
+    end
+    if P.needs_fwd_cb then
+        add("")
+        if lang == "rust" then
+            add("fn fwd_cb<'a>(f: impl Fn(&'a i32) -> &'a i32, p: &'a i32) -> &'a i32 { f(p) }")
+        else
+            add("fn fwd_cb(f: fn(&i32) -> &i32, p: &i32) -> &i32 { return f(p); }")
+        end
+    end
+    if P.needs_mrec_store then
+        add("")
+        if lang == "rust" then
+            add("struct MrecSlot<'a, 'b> { out: &'a mut &'b [u64] }")
+            add("fn mrec_a<'a>(out: &mut &'a [u64], v: &'a [u64], n: i32) { let mut w = MrecSlot { out: out }; let r = &mut w; if n <= 0 { *r.out = v; } else { mrec_b(r.out, v, n - 1); } }")
+            add("fn mrec_b<'a>(out: &mut &'a [u64], v: &'a [u64], n: i32) { mrec_a(out, v, n - 1); }")
+            if P.needs_mrec_escape then
+                add("fn mrec_escape<'a>(out: &mut &'a [u64]) { let arr: [u64; 2] = [11, 12]; mrec_a(out, &arr, 2); }")
+            end
+        else
+            add("struct MrecSlot { out: &mut [u64] }")
+            add("fn mrec_a(out: &mut [u64], v: [u64], n: i32) { let mut w = MrecSlot { out: out }; let r = &mut w; if n <= 0 { *r.out = v; } else { mrec_b(r.out, v, n - 1); } }")
+            add("fn mrec_b(out: &mut [u64], v: [u64], n: i32) { mrec_a(out, v, n - 1); }")
+            if P.needs_mrec_escape then
+                add("fn mrec_escape(out: &mut [u64]) { let arr: [u64; 2] = [11, 12]; mrec_a(out, &arr, 2); }")
+            end
         end
     end
     if P.needs_grow_vec then
