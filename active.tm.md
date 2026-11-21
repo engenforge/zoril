@@ -6,18 +6,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [x] +fuzz +safety +AI-G @main Fuzzer generator: add release-tier liveness, inner-block callee store, and method-elision route builders id:4ngz8
-    > **Created:** 2026-11-20
-    > **Branch:** `main`
-    > **Completed:** 2026-11-21 git:53c8c67
-
-    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the generator group before the fuzz renewal id:v2f8h, which depends on it.
-    - **Placed:** before id:z0013 and the post-provenance fuzz renewal (id:a85sp item 3, generator debt).
-    - **Reordered (2026-11-21, maintainer request):** moved before `id:z0014` so the `@main` generator batch (`id:mskex`, `id:4ngz8`, `id:r1shp` — all editing `scripts/fuzz/gen.lua`) can run immediately on `main` (in one `+AI-G` session, or in parallel with `id:4d7m6` on `zil`) without waiting for `zil` to merge.
-    - **Do:** add compositional builders and feature tags to `scripts/fuzz/gen.lua` (with matching Rust twin emission) for: (1) release-tier liveness: a view stored through a local `&mut`, `&mut` parameter, `self`, `Box`, or two-callee `put`+`kill` followed by `free`/`reset` (`gap_37`–`gap_39`, `gap_43`, `gap_87`, `gap_96`, `425`–`428`); (2) a callee (direct or `fn` value) storing an inner-block local reference into an outer-block struct (`430`–`433`, `id:nhk9n`); (3) a `&self` method returning a view from another parameter followed by `reset` (`gap_44`, `gap_99`–`gap_101`).
-    - **Checks:** C1 `lua scripts/fuzz/gen.lua --features` lists the new tags. C2 `make fuzz-short` runs cleanly with 0 `gen-bug`s and covers all new tags. C3 `make fuzz-calibrate` passes. C4 `make test-changed BASE=HEAD`, its `Total:` quoted.
-    - **Completed note:** added `release_tier_liveness`, `inner_block_callee_store`, and `method_elision_reset` to `scripts/fuzz/gen.lua` with matching Rust twins and boundary/escape shapes. C1: `lua scripts/fuzz/gen.lua --features` lists `release-tier-liveness`, `inner-block-callee-store`, and `method-elision-view-reset`. C2: `make fuzz-short` exited 0 with `fuzz-totals: progs=126 accepted=35 traps=3 rejected=50 candidates=0 faults=0 inferdiff=0 genbug=0 diffs=1 expired=0 ran=35 mprogs=24 maccepted=0 mrej=21 mowning=193 mtotal=515 known=65 knownfault=0 knownfixed=24 knownskipped=38 knownblind=0 vchecked=65 vunchecked=4 t134=3 t136=0 zbuilt=185 modediffs=0` and `fuzz: coverage 101/101 features`. C3: `make fuzz-calibrate` exited 0 with `fuzz-calibrate: 26/26 calibration program(s) are in their fixed state (22 refused, 2 accepted with one drop)`. C4: `make test-changed BASE=HEAD` exited 0 with `Total: 23 run, 23 passed, 0 failed, 0 skipped (27.2s)`.
-
 - [ ] +fuzz +safety +AI-G @main Fuzzer generator: add container-of-views, extend_from_slice/Clone, and by-value aggregate route builders id:r1shp
     > **Created:** 2026-11-20
     > **Branch:** `main`
