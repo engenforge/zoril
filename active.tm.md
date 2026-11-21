@@ -653,14 +653,19 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - **C4:** `sh scripts/check_store_grid.sh` on `d9ce443`: `[PASS] store-grid-modular: all 0 expected failing cells match (318 two-module cells, 0 over-rejected twins, 0 generator errors)`, `[PASS] store-grid: all 0 expected failing cells match (34320 valid cells, 42 over-rejected twins, 0 hole classes, 0 generator errors in 119s)`.
       - The fuzz record is stale for the whole series (`src/`, `stdlib/`, `tools/`, `rt/`); its renewal is id:v2f8h.
 
-- [ ] +generics +types +AI-G @main id:z0032 G1 `impl<T: Copy> Source<T> for S` fails to bind `T` when it appears only in the trait's arguments
+- [x] +generics +types +AI-G @main id:z0032 G1 `impl<T: Copy> Source<T> for S` fails to bind `T` when it appears only in the trait's arguments
     > **Created:** 2026-11-03
     > **Context:** Rejected in both build modes.
     > **Branch:** `main`
+    > **Completed:** 2026-11-21 git:100e5ac
 
     - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, first of the `main` `+AI-G` group that follows the merge of `provenance` (id:w3vde); order inside the group is not critical.
     - **Reproducer:** `trait Source<T> { fn pull(self: &Self, fallback: T) -> T; } struct S { x: i32 } impl<T: Copy> Source<T> for S { fn pull(self: &S, fallback: T) -> T { return fallback; } } fn main() -> i32 { let s = S { x: 1 }; return s.pull(42) - 42; }` gives `type mismatch: expected &S, found bool`.
     - **Cause:** `impl_scope` (`src/mono.zrl`) binds an `impl`'s type parameters only by matching its target type. **Direction:** unify the trait's type arguments to bind the rest, mangle the bound arguments into the method name, and reject a parameter that appears in neither at the `impl` header.
+    - **Checks recorded (2026-11-21, git:100e5ac):**
+      - Reproducer (`tests/language/generics/impl_trait_arg_binds_param.zrl`, `tests/error_reporting/err_impl_unconstrained_type_param.zrl`, `tests/error_reporting/err_impl_trait_arg_bound_failed.zrl`) passed (`Total: 4 run, 4 passed, 0 failed, 0 skipped (0.1s)`).
+      - `make test` passed: `Total: 4126 run, 4126 passed, 0 failed, 2 skipped (143.7s)`.
+      - `make preflight-changed` passed: `[PASS] reject-diff: 3874 newly accepted (none that must be refused, or all allowed), 17261 newly refused, of 69179 programs against 8100386dabb4f4219d7252c8de47b21b2c0be6e1`, `Total: 1556 run, 1556 passed, 0 failed, 0 skipped (110.8s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.5s)`.
 
 - [ ] +types +diagnostics +AI-G @main A call with turbofish checks the number of type arguments id:7sb2k
     > **Created:** 2026-11-14
