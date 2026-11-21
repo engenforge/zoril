@@ -677,3 +677,9 @@ date	commit	zoril_version	host_id	governor	status	kind	workload	zoril_ms	cproc_m
 2026-11-21-18-43-51	7c3b007-dirty	0.1.0-alpha-306-g7c3b007-dirty	a52c24a80e04	powersave	ok	run	qsort	465	425	364	1.277	42994176
 2026-11-21-18-43-51	7c3b007-dirty	0.1.0-alpha-306-g7c3b007-dirty	a52c24a80e04	powersave	ok	run	sha	253	233	140	1.807	71240906
 2026-11-21-18-43-51	7c3b007-dirty	0.1.0-alpha-306-g7c3b007-dirty	a52c24a80e04	powersave	ok	run	vm	433	329	330	1.312	84900189
+2026-11-21-18-57-53	d771472-dirty	0.1.0-alpha-307-gd771472-dirty	a52c24a80e04	powersave	ok	run	array_loop	833	806	139	5.993	143420513
+2026-11-21-18-57-53	d771472-dirty	0.1.0-alpha-307-gd771472-dirty	a52c24a80e04	powersave	ok	run	fib	697	786	191	3.649	7202391
+2026-11-21-18-57-53	d771472-dirty	0.1.0-alpha-307-gd771472-dirty	a52c24a80e04	powersave	ok	run	particles	627	626	240	2.612	86149532
+2026-11-21-18-57-53	d771472-dirty	0.1.0-alpha-307-gd771472-dirty	a52c24a80e04	powersave	ok	run	qsort	463	423	360	1.286	42994176
+2026-11-21-18-57-53	d771472-dirty	0.1.0-alpha-307-gd771472-dirty	a52c24a80e04	powersave	ok	run	sha	252	245	140	1.800	71240906
+2026-11-21-18-57-53	d771472-dirty	0.1.0-alpha-307-gd771472-dirty	a52c24a80e04	powersave	ok	run	vm	433	302	310	1.397	84900189
