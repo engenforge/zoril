@@ -1,5 +1,56 @@
 # Completed Archive
 
+- [x] +zil +safety +audit +AI-D @zil ZL6 Which common mistakes in hand-written ZIL zilc can catch from what ZIL says id:0mbg3
+    > **Created:** 2026-11-13
+    > **Context:** the maintainer's decision in id:ahd1c (`future.tm.md`)
+    > **Branch:** `zil`
+    > **Depends:** id:egsdq, id:rvjcz, id:1dwwz, id:ks44a
+    > **Completed:** 2026-11-21
+
+    - **Placed:** after ZL5, which gives zilc the ZIL verifier this task extends.
+
+    - **Why:** ZIL is not checked for memory safety, but zilc should catch the mistakes that are easy to see in ZIL as designed and that happen most often (the maintainer, id:ahd1c).
+    - **Do:** list candidate checks, each with a three-line ZIL program that shows the mistake, and say for each whether ZIL as written carries what the check needs. Candidates to start from: a value used after a `move` or `drop` in the same function, a `drop` twice, a `slice_load`/`slice_store` with no dominating `bounds_check` (spec §6.3), the address of an `alloc 'local` returned or stored into a global, a `slice_len` or `slice_ptr` on a value that is not a slice, a `syscall` with an argument count its stub does not take, and a block with no terminator. Corpus mistakes count as evidence of what is common: id:1kaye's string over-read is one. Rank them by how often they would fire and how simple they are, and split each chosen check into an `+AI-G` task with its own numbered **Checks:** and a take-out.
+    - **Checks:** C1: every candidate has its program and its answer here, with the zilc output today (`timeout -k 5s 30s build/zilc <file>`). C2: the chosen checks are tasks, placed after this one, with a check-in after them.
+    - **Audit results (2026-11-21, `build/zilc` at `ad3b8c8`, cross-checked against `build/zoril --emit-zil` on `src/main.zrl` (538,925 lines: `slice_len=0 slice_ptr=0 slice_load=0 slice_store=0 bounds_check=0 move=11164 drop=0`), `tests/stdlib/test_stdlib_bufio.zrl` (30,182 lines: `unterminated=0 immut_store=1433 same_blk_uam=1`), and all 24 `corpus/zil/` files):**
+      - **C1 — Candidate 1a/1b (use after `move` in the same function):**
+        - Program 1a: `type T0: struct { x: i32 }; f0: i32 main() { @b0: v1: i32 = const 7; v2: T0 = struct_construct T0, v1; v3: T0 = move v2; v4: T0 = move v2; ret v1 }` -> `zilc` today: `exit=0` (no output).
+        - Program 1b: `f0: i32 main() { @b0: v1: PtrMut<i32, 'local> = alloc 'local, i32; v2: i32 = const 7; store v1, v2; v3: PtrMut<i32, 'local> = move v1; v4: i32 = load v1; ret v4 }` -> `zilc` today: `exit=0`.
+        - **Does ZIL carry what the check needs? NO.** ZIL has no `Copy` marker on types, and Zoril's lowerer emits `move` on stack slots of `Copy` aggregates and keeps reading fields from the slot in the same block (probed in `test_stdlib_bufio.zrl` at `@entry_2002`: `vbuf_13: Ptr<Slice<u8, 'local>, 'local> = move vbuf_5` followed by `v15: Ptr<u64, 'local> = field_addr vbuf_5, 1`). **Not chosen.**
+      - **C1 — Candidate 1c & 2 (use after `drop` and double `drop`):**
+        - Program 1c: `f0: i32 main() { @b0: v1: PtrMut<i32, 'local> = alloc 'local, i32; v2: i32 = const 7; store v1, v2; drop v1; v3: i32 = load v1; ret v3 }` -> `zilc` today: `exit=0`.
+        - Program 2: `f0: i32 main() { @b0: v1: PtrMut<i32, 'local> = alloc 'local, i32; drop v1; drop v1; v2: i32 = const 0; ret v2 }` -> `zilc` today: `exit=0`.
+        - **Does ZIL carry what the check needs? YES.** `zoril` never emits `ILInstr.Drop` (`drop=0` in `src/main.zrl`), so `drop` only appears in hand-written ZIL; `src/verify.zrl` already sets `OwnerState.Dropped` on `ILInstr.Drop` (line 2219) and clones `current_map` across CFG branches, so rejecting `OwnerState.Dropped` in `ILInstr.Drop` and `check_ssa_access` is ~20 lines with zero Zoril false positives. **Chosen (Rank 4 -> `id:pkcsy` ZL6d).**
+      - **C1 — Candidate 3 (`slice_load`/`slice_store` without dominating `bounds_check`, spec §6.3):**
+        - Program: `f0: u8 main() { @b0: v1: Slice<u8, 'local> = string_const "hi"; v2: i64 = const 5; v3: u8 = slice_load v1, v2; ret v3 }` -> `zilc` today: `exit=0`.
+        - **Does ZIL carry what the check needs? NO (as designed).** `BoundsCheckInstr` takes `(idx, len)` rather than `(collection, idx)` (spec §6.3 prose disagrees with the IR), `tools/zilc/src/qbe.zrl` lowers `IL_INSTR_BOUNDS_CHECK` to a no-op (line 2666), and `zoril` emits 0 `bounds_check`/`slice_load`/`slice_store`. Checking only for some `bounds_check` without matching `len == slice_len(base)` and without runtime trapping would be theatrical safety. **Not chosen.**
+      - **C1 — Candidate 4 (address of `alloc 'local` returned or stored into a global, plus `phi` sibling):**
+        - Program 4a (direct return): `f0: PtrMut<i32, 'local> leak() { @b0: v1: PtrMut<i32, 'local> = alloc 'local, i32; ret v1 }` -> `zilc` today: `exit=1` (`error: region escape: returning a pointer to local stack storage`) — **already caught**.
+        - Program 4b (stored into global): `global g0: PtrMut<i32, 'local> = zeroinit; f0: void leak() { @b0: v1: PtrMut<i32, 'local> = alloc 'local, i32; v2: PtrMut<PtrMut<i32, 'local>, 'local> = global_addr g0; store v2, v1; ret }` -> `zilc` today: `exit=0`.
+        - Program 4c (returned via `phi`): `f0: PtrMut<i32, 'local> leak(v0: bool, v1: PtrMut<i32, 'local>) { @b0: branch v0, @b1, @b2; @b1: v2: PtrMut<i32, 'local> = alloc 'local, i32; jump @b3; @b2: jump @b3; @b3: v3: PtrMut<i32, 'local> = phi [@b1: v2, @b2: v1]; ret v3 }` -> `zilc` today: `exit=0`.
+        - **Does ZIL carry what the check needs? YES.** `src/verify.zrl` already tracks `is_stack_slot`/`points_to_stack` and `ILInstr.GlobalAddr`; tracking `is_global_addr` (propagated through `Cast`/`FieldAddr`/`Add`/`Move`/`Borrow`) to reject storing a stack pointer into a global, plus propagating `points_to_stack` through `Phi`, is ~30 lines. **Chosen (Rank 3 -> `id:djynw` ZL6c).**
+      - **C1 — Candidate 5 (`slice_len` or `slice_ptr` on a non-slice, the `id:1kaye` bug class):**
+        - Program 5a: `f0: i64 main() { @b0: v1: PtrMut<u8, 'local> = alloc 'local, u8; v2: i64 = slice_len v1; ret v2 }` -> `zilc` today: `exit=0`.
+        - Program 5b: `f0: Ptr<u8, 'local> bad() { @b0: v1: i32 = const 42; v2: Ptr<u8, 'local> = slice_ptr v1; ret v2 }` -> `zilc` today: `exit=0`.
+        - **Does ZIL carry what the check needs? YES.** `f.get_ssa_type(ssa)` distinguishes `ILType.Slice` from pointers/primitives; applies identically to `slice_len`, `slice_ptr`, `slice_load`, and `slice_store` (~15 lines in `src/il_typecheck.zrl`, zero false positives on Zoril ZIL or `corpus/zil/`). **Chosen (Rank 1 -> `id:0r49n` ZL6a).**
+      - **C1 — Candidate 6 (`syscall` with >6 data arguments):**
+        - Program: `f0: i64 main() { @b0: v0: i64 = const 1; v1: i64 = syscall v0, v0, v0, v0, v0, v0, v0, v0; ret v1 }` -> `zilc` today: `exit=0` (emits `call $__zoril_syscall_7`, fails at link time).
+        - **Does ZIL carry what the check needs? YES.** `SyscallInstr.args.len > 6` (~6 lines in `src/il_typecheck.zrl`; `rt/runtime.s` only provides `__zoril_syscall_0..6`). **Chosen (Rank 1 -> `id:0r49n` ZL6a).**
+      - **C1 — Candidate 7 & 11 (block with no terminator, and jump/branch to undefined block):**
+        - Program 7: `f0: i32 main() { @b0: v1: i32 = const 42 }` -> `zilc` today: `exit=0` (emits unterminated QBE block).
+        - Program 11: `f0: i32 main() { @b0: jump @b99 }` -> `zilc` today: `exit=0` (emits `jmp @b1`, cryptic QBE error).
+        - **Does ZIL carry what the check needs? YES.** Every defined block in `f.block_ids()` must be non-empty and end with `Ret`/`Jmp`/`Branch`/`Unreachable`/`VariantMatch`, and every target block ID of `Jmp`/`Branch`/`VariantMatch` must appear in `f.block_ids()`. Verified `unterminated=0` on `test_stdlib_bufio.zrl` and all 24 `corpus/zil/` files (~30 lines in `src/il_typecheck.zrl`). **Chosen (Rank 2 -> `id:epx51` ZL6b).**
+      - **C1 — Extra Candidate 8 (`call` with wrong argument count):**
+        - Program: `f0: i32 add(v0: i32, v1: i32) { @b0: v2: i32 = add v0, v1; ret v2 }; f1: i32 main() { @b0: v1: i32 = const 1; v2: i32 = call f0(v1); ret v2 }` -> `zilc` today: `exit=0` (`src/il_typecheck.zrl` line 409 stops at `min(args.len, params_len)` without checking arity).
+        - **Does ZIL carry what the check needs? YES.** `callee.params_len` and `callee.is_variadic` are on `ILFunction` (~10 lines in `src/il_typecheck.zrl`). **Chosen (Rank 1 -> `id:0r49n` ZL6a).**
+      - **C1 — Extra Candidate 9 (`load` from a non-pointer, structural twin of `store`):**
+        - Program: `f0: i32 main() { @b0: v1: i32 = const 42; v2: i32 = load v1; ret v2 }` -> `zilc` today: `exit=0` (`src/il_typecheck.zrl` line 341 omits the `pointee(m, pt) == 0` guard that `Store` has at line 306).
+        - **Does ZIL carry what the check needs? YES.** Identical 8-line guard to `Store` in `src/il_typecheck.zrl`. **Chosen (Rank 1 -> `id:0r49n` ZL6a).**
+      - **C1 — Extra Candidate 10 (`store` through immutable `Ptr<T, 'r>`, spec §6.6):**
+        - Program: `f0: i32 main() { @b0: v1: PtrMut<i32, 'local> = alloc 'local, i32; v2: Ptr<i32, 'local> = cast v1; v3: i32 = const 7; store v2, v3; ret v3 }` -> `zilc` today: `exit=0`.
+        - **Does ZIL carry what the check needs? NO.** Zoril's lowerer types `alloc 'local, T` as `Ptr<T, 'local>` and stores through it 1,433 times in `test_stdlib_bufio.zrl`. **Not chosen.**
+      - **C2:** Chosen checks split into four `+AI-G` tasks placed directly below (`id:0r49n` ZL6a, `id:epx51` ZL6b, `id:djynw` ZL6c, `id:pkcsy` ZL6d) followed by check-in `id:mf9gq`; `id:v2f8h` updated to depend on `id:mf9gq`.
+
 - [x] +zil +safety +AI-G @zil ZL5b Propagate stack-pointer and borrows storage flow through ILInstr.SlicePtr in src/verify.zrl id:1dwwz
     > **Created:** 2026-11-21
     > **Branch:** `zil`
