@@ -70,5 +70,12 @@ good compile_fail_expect "// expected compile fail\n// EXPECT: expected\nfn main
 good expect_with_fail "// expected compile fail\n// EXPECT: expected\nfn main() -> i32 { return 0 }\n"
 good prose "// expecting a slice\n$MAIN"
 
+# Sibling .stdout fixture checks: exact match passes; mismatch (including trailing bytes) fails.
+printf 'ok\n' > "$P/stdout_ok.zrl.stdout"
+good stdout_ok "// expected exit 0\nfn main() -> i32 { let s = \"ok\\n\"; unsafe { let _ = @syscall(1, 1, s.ptr as u64, s.len as u64); } return 0; }\n"
+
+printf 'ok\n' > "$P/stdout_mismatch.zrl.stdout"
+check stdout_mismatch "[FAIL] $P/stdout_mismatch.zrl (output mismatch)" "// expected exit 0\nfn main() -> i32 { let s = \"ok\\nextra\"; unsafe { let _ = @syscall(1, 1, s.ptr as u64, s.len as u64); } return 0; }\n"
+
 [ "$errors" -eq 0 ] || exit 1
 echo "[PASS] test headers: every malformed case failed, every control passed"

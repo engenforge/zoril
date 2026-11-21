@@ -313,12 +313,19 @@ tr_run_file() {
 
     # The program's stdout and stderr follow this line in the log.
     [ "$TR_VERBOSE" -eq 1 ] && echo "\$ $_bin" >> "$_log"
-    run_timed "$_bin" < /dev/null >> "$_log" 2>&1
+    run_timed "$_bin" < /dev/null > "$_dir/stdout.out" 2> "$_dir/stderr.out"
     _rc=$?
+    cat "$_dir/stdout.out" "$_dir/stderr.out" >> "$_log"
     [ $_rc -eq 130 ] && exit 130
     [ "$TR_VERBOSE" -eq 1 ] && echo "exit code: $_rc" >> "$_log"
     if [ $_rc -eq "$T_EXIT" ]; then
-        _tr_done PASS ""
+        if [ -f "$_file.stdout" ] && ! cmp -s "$_file.stdout" "$_dir/stdout.out"; then
+            _exp=$(head -c 200 "$_file.stdout" | tr '\0' '?')
+            _act=$(head -c 200 "$_dir/stdout.out" | tr '\0' '?')
+            _tr_done FAIL "output mismatch" "${_exp:-<empty>} ($(wc -c < "$_file.stdout" | tr -d ' ') B)" "${_act:-<empty>} ($(wc -c < "$_dir/stdout.out" | tr -d ' ') B)"
+        else
+            _tr_done PASS ""
+        fi
     elif is_timeout_exit $_rc; then
         _tr_done FAIL "TIMEOUT: run"
     else
