@@ -6,10 +6,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +zil +safety +AI-G @zil ZL6d Reject use-after-drop and double-drop in src/verify.zrl id:pkcsy
+- [x] +zil +safety +AI-G @zil ZL6d Reject use-after-drop and double-drop in src/verify.zrl id:pkcsy
     > **Created:** 2026-11-21
     > **Branch:** `zil`
     > **Depends:** id:djynw
+    > **Completed:** 2026-11-21 git:e8ff7c5
 
     - **Placed:** after `id:djynw` (ZL6c), Rank 4 `drop`-lifetime checks in `src/verify.zrl`.
     - **Do:**
@@ -24,6 +25,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4 (take-out): temporarily revert the `OwnerState.Dropped` check in `src/verify.zrl`, rebuild `build/zilc`, and show `sh scripts/test_zilc_errors.sh` fails on `use_after_drop.zil` and `double_drop.zil`; restore and rebuild.
       - C5: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` pass on `zil` (quote `Total:` lines and `reject-diff: base verdicts: fresh (no cache)`; note fuzz record is stale for `src/` and `tools/zilc/`).
       - Ends with `**Awaiting review:**` bullet for check-in `id:mf9gq`.
+    - **Completion:**
+      - Implemented in `src/verify.zrl` (`is_state_dropped`, `ILInstr.Drop` double-drop check, `check_ssa_access` use-after-drop check, `check_ssa_defined` for `Store.ptr`/`Drop`/`EndBorrow`/`Release`, and removed implicit `OwnerState.Dropped` from `dec_use` so loop Pass 2 does not false-positive on loop-invariant borrows/values).
+      - C1 (before): `for f in tests/zilc/use_after_drop.zil tests/zilc/double_drop.zil; do timeout -k 5s 30s build/zilc "$f" -o /dev/null; echo "$f: exit=$?"; done` -> both exited `0`.
+      - C2 (after): `sh scripts/test_zilc_errors.sh` -> `[PASS] tests/zilc/double_drop.zil`, `[PASS] tests/zilc/use_after_drop.zil` (all 29 checks passed).
+      - C3 (control): `./scripts/test.sh corpus/zil` -> `Total: 25 run, 25 passed, 0 failed, 0 skipped (0.2s)` (all 24 corpus/zil tests passed, including `05_ownership_move.zil`, `06_ownership_drop.zil`, `13_slices.zil`).
+      - C4 (take-out): reverted the `OwnerState.Dropped` checks in `src/verify.zrl`, rebuilt, `sh scripts/test_zilc_errors.sh` failed with `[FAIL] tests/zilc/double_drop.zil` and `[FAIL] tests/zilc/use_after_drop.zil`; restored and rebuilt.
+      - C5: `make test` (`build/zl6d_make_test.log`): `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (144.8s)`. `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (`build/zl6d_preflight.log`): `reject-diff: base verdicts: fresh (no cache); base front end 115 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against 7c3b0071a628890b2812e9bbb51aaa79be938fb6`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (108.2s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.3s)`. Fuzz record is stale for `src/` and `tools/zilc/`.
+    - **Awaiting review:** check-in `id:mf9gq`.
     - **Completion:**
       - Implemented in `src/verify.zrl` (`is_global_addr` allocated/zeroed beside `points_to_stack`, set on `GlobalAddr`, propagated through `Cast`/`FieldAddr`/`Add`/`Move`/`Borrow`, checked in `mark_store`, and `points_to_stack` propagated through `Phi` predecessors).
       - C1 (before): `for f in tests/zilc/stack_escape_global.zil tests/zilc/stack_escape_phi.zil; do timeout -k 5s 30s build/zilc "$f" -o /dev/null; echo "$f: exit=$?"; done` -> both exited `0`.
