@@ -735,9 +735,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` exited 0 (`reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against d9ce4430f3a87182dc7bccc21a6fe439e159b0e8`, `Total: 1561 run, 1561 passed, 0 failed, 0 skipped (107.7s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.3s)`).
       - C4: `make test` passed: `Total: 4133 run, 4133 passed, 0 failed, 2 skipped (144.6s)`.
 
-- [ ] +diagnostics +AI-G @main id:z0015 `zoril` stops after a bounded number of errors, and says when a file does not look like Zoril source
+- [x] +diagnostics +AI-G @main id:z0015 `zoril` stops after a bounded number of errors, and says when a file does not look like Zoril source
     > **Created:** 2026-11-03
     > **Branch:** `main`
+    > **Completed:** 2026-11-21 git:19487dd
 
     - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, last of the `main` `+AI-G` group after id:w3vde; it touches `src/diag.zrl`, which stage1 compiles, so use only what the pinned stage1 accepts.
     - **Now:** 300 KB of random bytes named `junk.zrl` gives about 139,000 error lines (12 MB); 160 KB of prose about 33,000. `zbuild` passes the same output through. Reproduce: `head -c 300000 /dev/urandom > junk.zrl; ./build/zoril -I stdlib=stdlib --emit-zil -o o.zil junk.zrl 2>&1 | wc -l`.
@@ -751,6 +752,15 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C6: `rm build/zoril && make` (stage1 builds `src/diag.zrl`) and `make`, no warning.
       - C7: take the counter's check out (a scratch edit) and watch C2 fail; restore.
       - C8: the `KNOWN_ISSUES.md` entry removed or updated; `make test` and `make preflight-changed`, each `Total:` line quoted; the fuzz record is stale for `src/`.
+    - **Checks recorded (2026-11-21, git:19487dd):**
+      - C1: before the change, `build/z0015/junk.zrl` gave `111854` lines; max `EXPECT:` count per file under `tests/` was `8` (`tests/language/modules/strict_name_errors.zrl`, `tests/error_reporting/err_unsafe_fn_value_outside_unsafe.zrl`).
+      - C2: on `build/z0015/err25.zrl` (25 type errors): default gave `rc=1` with 20 error lines + stopping line (`21` lines total: `zoril: error: too many errors; stopping after 20 (use --error-limit N to change, 0 for no limit)`); `--error-limit 0` gave `25` error lines (`rc=1`); `--error-limit 3` gave 3 error lines + stopping line (`4` lines total, `rc=1`).
+      - C3: NUL byte gave `1` line (`file contains a NUL byte (not Zoril source)`); invalid UTF-8 gave `1` line (`file is not valid UTF-8 (not Zoril source)`); 160 KB prose gave `21` lines ending with `zoril: error: too many errors before the first declaration (the file does not look like Zoril source); stopping after 20 (use --error-limit N to change, 0 for no limit)`; `junk.zrl` gave `1` line (`file is not valid UTF-8 (not Zoril source)`).
+      - C4: `zbuild --error-limit 3` on `err25.zrl` gave `4` lines, `--error-limit 0` gave `25` lines; `sh scripts/test_zbuild_errors.sh` passed (`[PASS] zbuild-errors: 471 of 481 compile-fail tests give their expected diagnostics through the installed zbuild (6 skipped for compiler flags, 4 allowed to differ) in 4 s`).
+      - C5: `zoril --help` and `zbuild --help` both list `--error-limit <n>`, `make man` regenerated `doc/man/zoril.1` and `doc/man/zbuild.1`, and `sh scripts/test_man_pages.sh` passed (`[PASS] man-pages: all pages build cleanly and match tools and stdlib`).
+      - C6: `rm -f build/zoril && make` succeeded (`EXIT=0`, 0 warnings, `Fixpoint reached: 22855648 bytes of ZIL, identical across two self-hosted generations`).
+      - C7: `build/z0015/zoril_nolim` (without the counter check) printed all `25` error lines on `err25.zrl`.
+      - C8: removed the `zoril` and `zbuild` error-flooding entry from `KNOWN_ISSUES.md`; `make test` passed (`Total: 4133 run, 4133 passed, 0 failed, 2 skipped (144.7s)`); `make preflight-changed` passed (`Total: 1561 run, 1561 passed, 0 failed, 0 skipped (111.1s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.5s)`); `scripts/check_fuzz_fresh.sh` reports `STALE` for `src/`, `stdlib/`, `tools/zilc`, `tools/zbuild`, `rt/`.
 
 - [ ] +review +AI-D @main @checkin Check-in: review the main +AI-G batch (z0032, 7sb2k, 5342d, z0182, vdgj4, z0015) id:3nrvs
     > **Created:** 2026-11-20
