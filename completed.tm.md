@@ -1,5 +1,17 @@
 # Completed Archive
 
+- [x] +fuzz +safety +AI-G @main Fuzzer generator: add indirect closure, fn-value forwarding, and mutual-recursion route builders id:mskex
+    > **Created:** 2026-11-20
+    > **Branch:** `main`
+    > **Completed:** 2026-11-21 git:835f299
+
+    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the generator group before the fuzz renewal id:v2f8h, which depends on it.
+    - **Placed:** before id:z0013 and the post-provenance fuzz renewal (id:a85sp item 3, generator debt).
+    - **Reordered (2026-11-21, maintainer request):** moved before `id:z0014` so the `@main` generator batch (`id:mskex`, `id:4ngz8`, `id:r1shp` — all editing `scripts/fuzz/gen.lua`) can run immediately on `main` (in one `+AI-G` session, or in parallel with `id:4d7m6` on `zil`) without waiting for `zil` to merge.
+    - **Do:** add compositional builders and feature tags to `scripts/fuzz/gen.lua` (with matching Rust twin emission) for: (1) closures capturing `&Holder` / `&&Holder` where `Holder` holds `&mut` (`gap_47`, `gap_48`); (2) a capturing closure passed to a `fn(...)` callee that invokes it (`gap_52`) or forwards a view through a closure parameter (`gap_55`); (3) mutually recursive helpers storing a view through a local (`gap_28`, `gap_54`).
+    - **Checks:** C1 `lua scripts/fuzz/gen.lua --features` lists the new tags. C2 `make fuzz-short` runs cleanly with 0 `gen-bug`s and covers all new tags. C3 `make fuzz-calibrate` passes. C4 `make test-changed BASE=HEAD`, its `Total:` quoted.
+    - **Completed note:** added `closure_indirect_mut_holder`, `closure_passed_to_fn_param`, `closure_param_forwards_view`, and `mutual_recursion_local_store` to `scripts/fuzz/gen.lua` with matching Rust twins and boundary/escape shapes. C1: `lua scripts/fuzz/gen.lua --features` lists `closure-captures-indirect-mut-holder`, `closure-param-forwards-view`, `closure-passed-to-fn-param`, and `mutual-recursion-store-through-local`. C2: `make fuzz-short` exited 0 with `fuzz-totals: progs=126 accepted=32 traps=0 rejected=56 candidates=0 faults=0 inferdiff=0 genbug=0 diffs=1 expired=0 ran=32 mprogs=24 maccepted=0 mrej=21 mowning=195 mtotal=510 known=62 knownfault=0 knownfixed=24 knownskipped=36 knownblind=0 vchecked=77 vunchecked=7 t134=0 t136=0 zbuilt=182 modediffs=0`, `fuzz: coverage 96/98 features`, `fuzz: never generated: impl-in-another-module owned-box-passed-as-borrow` (all 4 new tags covered). C3: `make fuzz-calibrate` exited 0 with `fuzz-calibrate: 26/26 calibration program(s) are in their fixed state (22 refused, 2 accepted with one drop)`. C4: `make test-changed BASE=HEAD` exited 0 with `Total: 23 run, 23 passed, 0 failed, 0 skipped (27.1s)`.
+
 - [x] +zil +safety +review +AI-D @zil @checkin Check-in: review ZL6e drop CFG-awareness, store-after-drop, and global_addr Phi/RegionCast fixes (4d7m6) id:rrgct
     > **Created:** 2026-11-21
     > **Branch:** `zil`
