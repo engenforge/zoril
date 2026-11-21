@@ -6,18 +6,6 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [x] +fuzz +safety +AI-G @main Fuzzer generator: add container-of-views, extend_from_slice/Clone, and by-value aggregate route builders id:r1shp
-    > **Created:** 2026-11-20
-    > **Branch:** `main`
-    > **Completed:** 2026-11-21 git:5341f26
-
-    - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the generator group before the fuzz renewal id:v2f8h, which depends on it.
-    - **Placed:** before id:z0013 and the post-provenance fuzz renewal (id:a85sp item 3, generator debt).
-    - **Reordered (2026-11-21, maintainer request):** moved before `id:z0014` so the `@main` generator batch (`id:mskex`, `id:4ngz8`, `id:r1shp` — all editing `scripts/fuzz/gen.lua`) can run immediately on `main` (in one `+AI-G` session, or in parallel with `id:4d7m6` on `zil`) without waiting for `zil` to merge.
-    - **Do:** add compositional builders and feature tags to `scripts/fuzz/gen.lua` (with matching Rust twin emission) for: (1) `Vec::extend_from_slice` and `.clone()` copying views into an external container (`gap_56`, `gap_77`, `gap_78`, `gap_80`); (2) an owned `Vec` or struct holding frame views pushed or moved into a callee (`gap_59`–`gap_63`, `gap_79`); (3) a frame view read through a local reference to a local struct or passed in a by-value aggregate to a callee that stores it out (`gap_97`, `gap_98`).
-    - **Checks:** C1 `lua scripts/fuzz/gen.lua --features` lists the new tags. C2 `make fuzz-short` runs cleanly with 0 `gen-bug`s and covers all new tags. C3 `make fuzz-calibrate` passes. C4 `make test-changed BASE=HEAD`, its `Total:` quoted.
-    - **Completed note:** added `vec_extend_and_clone_views`, `owned_container_moved_views`, and `by_value_aggregate_and_local_struct_ref` to `scripts/fuzz/gen.lua` with matching Rust twins and boundary/escape shapes. C1: `lua scripts/fuzz/gen.lua --features` lists `vec-extend-and-clone-views`, `owned-container-moved-views`, and `by-value-aggregate-and-local-struct-ref`. C2: `make fuzz-short` exited 0 with `fuzz-totals: progs=126 accepted=28 traps=0 rejected=61 candidates=0 faults=0 inferdiff=0 genbug=0 diffs=2 expired=0 ran=28 mprogs=24 maccepted=0 mrej=21 mowning=190 mtotal=464 known=61 knownfault=0 knownfixed=24 knownskipped=35 knownblind=0 vchecked=70 vunchecked=4 t134=0 t136=0 zbuilt=178 modediffs=0`, `fuzz: coverage 103/104 features`, `fuzz: never generated: if-let-binding-through-reference` (all 3 new tags covered). C3: `make fuzz-calibrate` exited 0 with `fuzz-calibrate: 26/26 calibration program(s) are in their fixed state (22 refused, 2 accepted with one drop)`. C4: `make test-changed BASE=HEAD` exited 0 with `Total: 23 run, 23 passed, 0 failed, 0 skipped (28.0s)`.
-
 - [ ] +tools +AI-G @main id:z0014 `zilc` refuses text it does not recognise between declarations, and a file that is not ZIL
     > **Created:** 2026-11-03
     > **Branch:** `main`
