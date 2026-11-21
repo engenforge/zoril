@@ -6,10 +6,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +zil +decision +AI-D @zil ZL1 Settle the slice form of string_const and the slice_ptr opcode, and check what the pinned stage1 feeds zilc id:m6vm3
+- [x] +zil +decision +AI-D @zil ZL1 Settle the slice form of string_const and the slice_ptr opcode, and check what the pinned stage1 feeds zilc id:m6vm3
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decisions in id:1kaye (`future.tm.md`), 2026-11-13
-    > **Branch:** `zil` (new, off `main`; created when ZL1 starts)
+    > **Branch:** `zil` (created off `main` at git:7c3b007)
+    > **Completed:** 2026-11-21 git:7c3b007
 
     - **Placed:** after the provenance series (`id:z0017`), before ZL2 to ZL6. Nothing in `testinfra` depends on it. ZL4 changes the per-file runner, which `testinfra` rewrites (id:z0139).
 
@@ -18,46 +19,94 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Decide, and write into ZL2 to ZL5 as their **Do:** and numbered **Checks:**:** (a) What a slice-typed `string_const` lowers to in zilc's QBE output: a static `{ptr, len}` pair beside the bytes, whose address is the value, or another layout. It must match how the front end's slice slots are laid out (pointer at offset 0, `usize` length at 8, today's `v5` slot in `--emit-zil`). (b) How the front end uses it: copy the pair into the slot, or use the value directly. (c) `slice_ptr`'s syntax, typing and spec entry beside `slice_len` (`doc/spec/intermediate_language.md` §5), and whether the front end's cast-and-load idiom is replaced by it. (d) What the pinned stage1 feeds to which zilc: does any path pass ZIL written by `bootstrap/stage1/` to the new `build/zilc`, `zilc-boot` included? If one does, the new zilc must also accept the old form until a re-pin, which is the maintainer's. (e) Which recorded figures change (`corpus/zrl_whole_program_zil.sha256`, the safety figures) and how each is recomputed.
     - **Also place:** the statement, decided in id:ahd1c, that ZIL is not checked for memory safety (`doc/spec/intermediate_language.md` and `doc/spec/safety_model.md`: the claims cover programs compiled from Zoril source, and zilc catches the common mistakes listed by ZL6). Put it into one of ZL2 to ZL5, or into a task of its own.
     - **Checks:** C1: each of (a) to (e) answered here, with the command that showed it for (d). C2: ZL2 to ZL5 each have a **Do:** and numbered **Checks:**, with a take-out check.
+    - **Settled (2026-11-21):**
+      - **(a) QBE lowering of slice-typed `string_const`:** in `tools/zilc/src/qbe.zrl`, `emit_string_data_sections` emits the NUL-terminated byte array `data $S<id> = { b ..., b 0 }` and immediately beside it a static 16-byte slice header `data $SS<id> = align 8 { l $S<id>, l <len> }` (pointer at offset 0, `usize` length at offset 8 — identical to every stack slice slot in ZIL/QBE). `IL_INSTR_STRING_CONST` emits `%vN =l copy $SS<id>` (and skips stack allocation in the entry-block aggregate-alloca loop at `qbe.zrl:1438`, which already excludes `IL_INSTR_STRING_CONST`). This makes `slice_len vN` (`loadl (vN + 8)`) and `slice_ptr vN` (`loadl vN`) work directly on `vN` with zero runtime initialization cost, and matches `is_aggregate(Slice)` where slice SSA values are 64-bit addresses of `{ptr, len}` pairs.
+      - **(b) Front end lowering (`src/lower_zir_to_zil.zrl`):** `lower_rv_string_const` emits a single `vN: Slice<u8, 'local> = string_const "..."` and returns `vN` directly (no entry-block `alloc`, no `cast`, no two `store`s). Because `lower_stmt` marks `ZirRvalue.StringConst` in `local_owns` as non-owning (`aliases = true`, beside `Use`, `EnumPayload`, `GetEnv`) so `--checked` never poisons the read-only `$SS<id>` header at `EndBorrow`, and because `Let`/`Assign` into a non-tmp local already `memcpy`s 16 bytes from `val_ssa` into the local's stack slot (and `Ret` / `Call` pass the address of the `{ptr, len}` pair), using `vN` directly is both smaller and faster.
+      - **(c) `slice_ptr` opcode:** add `IL_INSTR_SLICE_PTR = 73` and `ILInstr.SlicePtr(SSAId)` in `src/il_instr.zrl` (and handle it in `src/zil_print.zrl`, `src/il_typecheck.zrl`, `src/verify.zrl`, `tools/zilc/src/zil_parse.zrl`, and `tools/zilc/src/qbe.zrl`). Syntax: `vN: Ptr<T, 'local> = slice_ptr vS` (accepting `Slice<T, 'r>` or `Ptr<Slice<T, 'r>, 'r2>` as `vS`, and returning `Ptr<T, 'local>` / `RawPtr<T>`). QBE lowering: `%vN =l loadl %vS` (mirrors `slice_len`, which emits `add %vS, 8` then `loadl`). Document `slice_ptr` beside `slice_len` in `doc/spec/intermediate_language.md` §1, §5.6, and §7 (69 opcodes). Keep the front end's existing `load_slice_data_ptr` cast-and-load idiom unchanged for now (or optionally switch it in a later cleanup) so ZL2 stays minimal and focused; only `lower_rv_string_const` changes in front-end emission.
+      - **(d) What pinned `stage1` feeds to which `zilc`:** checked via `grep -rn "build/zoril-stage1" Makefile scripts/` (and `scripts/bootstrap_zoril.sh`, `scripts/selfhost-check.sh`). Every invocation of `build/zoril-stage1` pairs it exclusively with `build/zilc-stage1`: (1) `Makefile:185-186` (`build/zilc-boot` runs `./build/zoril-stage1 ... --emit-zil` -> `./build/zilc-stage1`); (2) `scripts/bootstrap_zoril.sh:41-48` (`cc=build/zoril-stage1`, `zc=build/zilc-stage1`); (3) `scripts/selfhost-check.sh:174` (`generation ./build/zoril-stage1 ... build/zilc-stage1`). No path passes ZIL written by `bootstrap/stage1/` to the new `build/zilc` or `build/zilc-boot`. Therefore the new `zilc` does **not** need backward compatibility with pointer-typed `string_const`; `string_const` has one form (`Slice<u8, 'local>`) everywhere.
+      - **(e) Recorded figures that change:** `corpus/zrl_whole_program_zil.sha256` changes in ZL2 because `lower_rv_string_const` emits `vN: Slice<u8, 'local> = string_const "..."` instead of the `alloc` + `cast` + `store` sequence; recompute with `UPDATE_GOLDEN=1 sh scripts/test_incremental.sh` in ZL2. Milestone safety figures (`bench/safety_matrix/README.md`) are not updated per task (`AGENTS.md` "Milestone figures are refreshed only at milestones"). The `fuzz-fresh` record becomes stale for `src/` and `tools/zilc/` (noted in ZL2/ZL3/ZL5 completion notes; renewed in `id:v2f8h`).
+      - **Placement of the `id:ahd1c` safety-scope statement:** placed in ZL5 (`id:egsdq`), which wires `src/verify.zrl` into `zilc` and updates `doc/spec/intermediate_language.md` and `doc/spec/safety_model.md` to state clearly that Zoril's memory-safety claims cover programs compiled from Zoril source, while hand-written ZIL is checked by `zilc`'s type check and ZIL verifier (plus the common-mistake checks of ZL6), not for full memory safety.
+      - **Checks answered:** C1: (a)-(e) answered above with `grep -rn "build/zoril-stage1" Makefile scripts/` for (d). C2: ZL2 (`id:qpc8d`), ZL3 (`id:htrqb`), ZL4 (`id:ehh6m`), and ZL5 (`id:egsdq`) updated below with concrete **Do:** and numbered **Checks:** including take-out checks.
 
 - [ ] +zil +AI-G @zil ZL2 string_const gives a Slice in the front end and in zilc, read back with slice_ptr id:qpc8d
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decisions in id:1kaye (`future.tm.md`), 2026-11-13
-    > **Branch:** `zil` (new, off `main`; created when ZL1 starts)
+    > **Branch:** `zil`
     > **Depends:** id:m6vm3
 
     - **Placed:** after ZL1, which settles it.
 
-    - **Not ready:** ZL1 writes this task's **Do:** and **Checks:**. Scope: the front end emits the slice form, zilc lowers it, the type check and `src/verify.zrl` type it, `slice_ptr` is added, the spec matches, and `corpus/zil/15_io_syscall.zil` and `19_fd_io.zil` are rewritten to print exactly their strings.
+    - **Do:**
+      1. Add `IL_INSTR_SLICE_PTR: u32 = 73` and `ILInstr.SlicePtr(SSAId)` in `src/il_instr.zrl` (updating all exhaustive `match`es/accessors in `src/il_instr.zrl`, `src/zil_print.zrl`, `src/il_typecheck.zrl`, `src/verify.zrl`, `tools/zilc/src/zil_parse.zrl`, and `tools/zilc/src/qbe.zrl`). In `zil_parse.zrl`, parse `slice_ptr <ssa>` beside `slice_len`. In `qbe.zrl`, lower `IL_INSTR_SLICE_PTR` to `%vN =l loadl %vS`.
+      2. In `tools/zilc/src/qbe.zrl`: in `emit_string_data_sections`, emit `data $SS<id> = align 8 { l $S<id>, l <len> }` beside `data $S<id> = { b ..., b 0 }`; in `IL_INSTR_STRING_CONST`, emit `%vN =l copy $SS<id>`.
+      3. In `src/lower_zir_to_zil.zrl`: in `lower_rv_string_const`, emit `ILInstr.StringConst(str_slice)` with type `slice_ty` (`Slice<u8, 'local>`) and return that SSA id directly (removing the entry-block `alloc`, `cast`, and two `store`s). In `lower_stmt`'s `ZirStmt.Let` for `LOCAL_KIND_TMP`, add `ZirRvalue.StringConst(_)` to the `aliases = true` match so `--checked` never poisons `$SS<id>` on `EndBorrow`.
+      4. In `src/il_typecheck.zrl`: check `ILInstr.SlicePtr(ssa)` operand is defined (and add `"slice_ptr"` to `instr_opcode`).
+      5. Rewrite `corpus/zil/15_io_syscall.zil` and `corpus/zil/19_fd_io.zil` to use `slice_ptr` instead of `bitcast` on their `string_const` values so `15_io_syscall.zil` writes exactly `"IL Syscall\n"` (11 bytes) and `19_fd_io.zil` passes the exact path/data pointers and length.
+      6. Update `doc/spec/intermediate_language.md` (§1 grammar, §5.6 Slice Operations, §7 Opcode Summary — 69 opcodes) to document `slice_ptr` beside `slice_len` and remove the stale `slice_data` note.
+      7. Regenerate `corpus/zrl_whole_program_zil.sha256` with `UPDATE_GOLDEN=1 sh scripts/test_incremental.sh`.
+    - **Checks:**
+      - C1: `build/zoril --emit-zil` on a program with a string literal emits `Slice<u8, 'local> = string_const "..."` (quote the line).
+      - C2: run `corpus/zil/15_io_syscall.zil` through `build/zilc` -> `qbe` -> `as` -> `ld` and pipe stdout to `wc -c`: prints `11` bytes and exact text `IL Syscall\n`; `corpus/zil/19_fd_io.zil` exits 0.
+      - C3: `make test-checked` (or `./scripts/test.sh --flags --checked` on a string-literal test) passes without faulting on `$SS<id>` poisoning.
+      - C4: take-out check — revert `IL_INSTR_STRING_CONST` in `qbe.zrl` to `copy $S<id>` (scratch edit) and show `15_io_syscall.zil` fails / prints wrong byte count; restore.
+      - C5: `make test` and `make preflight-changed` pass on `zil` (quoting `Total:` lines and selfhost fixpoint; note fuzz record is stale for `src/` and `tools/zilc/`).
 
 - [ ] +zil +AI-G @zil ZL3 One spelling for cast: zilc refuses bitcast and the corpus is rewritten id:htrqb
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decisions in id:1kaye (`future.tm.md`), 2026-11-13
-    > **Branch:** `zil` (new, off `main`; created when ZL1 starts)
+    > **Branch:** `zil`
     > **Depends:** id:qpc8d
 
     - **Placed:** after ZL2: the corpus files it rewrites are the ones ZL2 changes.
 
-    - **Not ready:** ZL1 writes this task's **Do:** and **Checks:**. Scope: `tools/zilc/src/zil_parse.zrl` refuses `bitcast` with a diagnostic that names `cast`, and the six corpus files that use it (`02_comparison`, `12_enums_sum`, `13_slices`, `15_io_syscall`, `19_fd_io`, `24_tuples`) use `cast`. The spec's line 92 stays true.
+    - **Do:**
+      1. In `tools/zilc/src/zil_parse.zrl` (around line 2022), remove `|| op_str == "bitcast"` from the `cast` branch; add an explicit refusal branch for `op_str == "bitcast"` that reports a parse error naming `cast` (e.g. `unknown opcode 'bitcast' (use 'cast')`) and exits 1.
+      2. Rewrite the remaining corpus files that use `bitcast` (`corpus/zil/02_comparison.zil`, `12_enums_sum.zil`, `13_slices.zil`, `24_tuples.zil`, plus verify `15_io_syscall.zil` and `19_fd_io.zil` have none) to use `cast`.
+      3. Add a negative test under `tests/zilc/` (and wire it into `scripts/test_zilc_errors.sh`) asserting that `bitcast` is rejected with exit 1 and a diagnostic naming `cast`.
+    - **Checks:**
+      - C1: `grep -rn 'bitcast' corpus/zil/` prints nothing.
+      - C2: `timeout -k 5s 30s build/zilc <bitcast-test.zil> -o /dev/null` exits 1 and prints the diagnostic naming `cast` (quote output); `./scripts/test_zilc_errors.sh` passes.
+      - C3: take-out check — temporarily restore `|| op_str == "bitcast"` in `zil_parse.zrl`, rebuild `build/zilc`, and show `scripts/test_zilc_errors.sh` fails; restore.
+      - C4: `make test` and `make preflight-changed` pass (quoting `Total:` lines; note fuzz record is stale for `tools/zilc/`).
 
 - [ ] +zil +tests +AI-G @zil ZL4 Corpus and per-file tests check the program's output, not only its exit code id:ehh6m
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decisions in id:1kaye (`future.tm.md`), 2026-11-13
-    > **Branch:** `zil` (new, off `main`; created when ZL1 starts)
+    > **Branch:** `zil`
     > **Depends:** id:htrqb
 
     - **Placed:** after ZL3.
 
-    - **Not ready:** ZL1 writes this task's **Do:** and **Checks:**. Scope (decision 3): a per-file test can state its expected output (a header directive or a sibling file, chosen in ZL1, read by the one header reader, `tr_expectations`, or by its replacement in `ztest`). Every `corpus/zil/` program and every corpus program that prints states its output. A check plants the 4 KB over-read of id:1kaye and shows that the test fails.
+    - **Do:**
+      1. Add an optional sibling `.stdout` file convention (`<test>.stdout`, e.g. `corpus/zil/15_io_syscall.zil.stdout`) — or `// expected output: <text>` for single-line output — to `scripts/lib/test_runner.sh`. Prefer sibling `<file>.stdout` (handles multi-line output, trailing newlines, and exact byte comparison via `cmp -s` without header-escaping ambiguity, and avoids touching the strict header grammar in `tr_expectations` / `test_test_headers.sh`). In `tr_run_file`, capture the executed binary's stdout separately into `$_dir/stdout.out` (keeping stderr in `$_log` or `$_dir/stderr.out` and appending stdout to `$_log` as before). When `$_file.stdout` exists, compare `$_dir/stdout.out` against `$_file.stdout` with `cmp -s`; on mismatch, fail with `"output mismatch"` and a short diff in `TR_EXPECTED`/`TR_ACTUAL`.
+      2. Ensure `tr_discover` in `scripts/lib/test_runner.sh` and `scripts/check_stray_files.sh` / `scripts/check_test_strength.sh` ignore `*.stdout` sibling files (they are fixtures, not tests).
+      3. Add `.stdout` files for every printing program in `corpus/zil/` (`15_io_syscall.zil.stdout`) and `corpus/zrl/` (`01_hello_syscall.zrl.stdout`, `17_strings_and_escapes.zrl.stdout`, `18_ffi_and_extern.zrl.stdout`, `27_syscall_io.zrl.stdout`, `38_large_enum_pass_by_value.zrl.stdout`, plus any other `corpus/` program that writes to stdout).
+      4. Add a test case (e.g. in `scripts/test_test_headers.sh` or a small scenario) that verifies a program whose stdout differs from its `.stdout` file (including trailing garbage bytes like the 4 KB over-read of `id:1kaye`) fails with `output mismatch`.
+    - **Checks:**
+      - C1: list every `corpus/` program that writes to stdout and its new `.stdout` file; `./scripts/test.sh corpus/` passes (quote `Total:`).
+      - C2: plant trailing bytes into a scratch test's stdout (simulating `id:1kaye`'s 4 KB over-read) with a matching exit code 0: `./scripts/test.sh <scratch>` fails with `output mismatch` (quote `[FAIL]` line).
+      - C3: take-out check — temporarily disable the `cmp -s` check in `scripts/lib/test_runner.sh` and show the planted-output test passes vacuously; restore.
+      - C4: `make test` passes (quoting `Total:` line).
 
 - [ ] +zil +safety +AI-G @zil ZL5 zilc runs the ZIL verifier that the compiler runs id:egsdq
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decisions in id:1kaye (`future.tm.md`), 2026-11-13
-    > **Branch:** `zil` (new, off `main`; created when ZL1 starts)
+    > **Branch:** `zil`
     > **Depends:** id:ehh6m
 
-    - **Placed:** after ZL4, last in the series. A check-in follows it, added by ZL1 with the series' other check-ins.
+    - **Placed:** after ZL4, last in the series. Check-in `id:rvjcz` follows it.
 
-    - **Not ready:** ZL1 writes this task's **Do:** and **Checks:**. Scope (decision 4, the small step): zilc runs `src/verify.zrl` on what it parses, as the compiler does after lowering, so hand-written ZIL gets the same ZIL-level checks (stack-address escape, constant arena allocations) that compiled programs get. Not a borrow checker; that question is id:ahd1c.
+    - **Do:**
+      1. In `tools/zilc/src/main.zrl`, import `verify.zrl` (`use verify::Verifier;`) and run `Verifier.new(arena, &mut module, &mut table, in_path).verify()` after `operand_types_ok` (skipping `check_stores_claims` if `zilc` parses standalone ZIL without `#[stores]` metadata, or ensuring `Verifier.verify()` passes cleanly on all `corpus/zil/` and compiler-emitted `.zil` files). If `verify()` returns non-zero, exit 1 without emitting QBE output.
+      2. Verify `closure-private-names` passes for `tools/zilc/src/main.zrl` (importing `verify.zrl` brings `src/diag.zrl` into zilc's closure; ensure no private name collision and that `build/zilc-boot` still builds cleanly through `stage1`).
+      3. Add negative ZIL tests under `tests/zilc/` (wired into `scripts/test_zilc_errors.sh`) showing `zilc` rejects a hand-written ZIL file that returns the address of an `alloc 'local` (`region escape: returning a pointer to local stack storage`).
+      4. Place the `id:ahd1c` safety-scope statement in `doc/spec/intermediate_language.md` (§6) and `doc/spec/safety_model.md`: Zoril's memory-safety guarantees cover programs compiled from Zoril source; hand-written ZIL is checked by `zilc` for operand types and ZIL-level verification (stack-address escapes, constant arena bounds, and the common-mistake checks of ZL6), not for full memory safety.
+    - **Checks:**
+      - C1: `timeout -k 5s 30s build/zilc <stack-escape.zil> -o /dev/null` exits 1 with `region escape` diagnostic (quote output); `./scripts/test_zilc_errors.sh` passes.
+      - C2: every file in `corpus/zil/` still compiles and passes (`./scripts/test.sh corpus/zil/`, quote `Total:`).
+      - C3: `make closure-private-names` and `make selfhost-build-check` pass (`zilc-boot` builds through `stage1`).
+      - C4: take-out check — temporarily comment out the `Verifier.verify()` call in `tools/zilc/src/main.zrl`, rebuild `build/zilc`, and show C1's stack-escape test is accepted; restore.
+      - C5: `scripts/check_safety_model.sh` and `make test` and `make preflight-changed` pass (quoting `Total:` lines; note fuzz record is stale for `tools/zilc/`).
 
 - [ ] +zil +review +AI-D @zil @checkin Check-in: review the ZIL +AI-G batch (qpc8d, htrqb, ehh6m, egsdq) id:rvjcz
     > **Created:** 2026-11-21
