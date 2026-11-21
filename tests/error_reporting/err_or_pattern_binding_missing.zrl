@@ -1,0 +1,44 @@
+// expected compile fail
+// EXPECT: a binding in an or-pattern must appear in every alternative
+// EXPECT: a binding in an or-pattern must appear in every alternative
+// EXPECT: a binding in an or-pattern must appear in every alternative
+enum I {
+    A(i32),
+    B(i32),
+}
+
+struct S {
+    x: i32,
+}
+
+impl Drop for S {
+    fn drop(self: &mut S) {}
+}
+
+enum O {
+    A(S, i32),
+    D,
+}
+
+fn diff_names(x: I) -> i32 {
+    match x {
+        I.A(n) | I.B(m) => { return 1; },
+    }
+}
+
+fn missing_drop(x: O) {
+    match x {
+        O.A(s, _) | O.D => {},
+        _ => {},
+    }
+}
+
+fn missing_in_one(x: I) -> i32 {
+    match x {
+        I.A(n) | I.B => { return n; },
+    }
+}
+
+fn main() -> i32 {
+    return diff_names(I.A(1)) + missing_in_one(I.A(2));
+}

@@ -415,6 +415,15 @@ impl ZirLowerer {
                 );
             },
             Pattern.Or(pats) => {
+                if !self.check_or_pattern_bindings(pats, scrut_ty, span) {
+                    let mut bi = 0 as usize;
+                    while bi < pats.len {
+                        self.declare_pattern_bindings(pats[bi]);
+                        bi = bi + 1 as usize;
+                    }
+                    self.terminate(ZirTerminator.Jmp(fail_block));
+                    return;
+                }
                 let mut pi = 0 as usize;
                 let bool_ty = self.get_primitive_type(ILPrimitive.Bool);
                 self.pattern_or_depth = self.pattern_or_depth + 1 as u32;
@@ -1187,6 +1196,87 @@ impl ZirLowerer {
         return unsafe {
             @slice(zoril_allocator_alloc(self.arena, (n + 1 as usize) * 4) as *mut u32, n)
         };
+    }
+
+    // Collects the variable names bound by PAT_ID into OUT (skipping enum variants of TY,
+    // constants, and wildcards).
+    fn collect_pattern_bindings(
+        self: &mut ZirLowerer,
+        pat_id: PatternId,
+        ty: u32,
+        out: &mut Vec<u32>
+    ) {
+        if pat_id as usize >= self.resolver.ast.patterns.len() { return; }
+        let pat: Pattern = self.resolver.ast.patterns[pat_id as usize];
+        match pat {
+            Pattern.Ident(name) => {
+                let is_variant = ty != 0 as u32 && self.get_variant_index(ty, name).is_some();
+                if !is_variant && !self.is_const_ident(name) { out.push(name); }
+            },
+            Pattern.MutIdent(name) => { out.push(name); },
+            Pattern.EnumVariant(vp) => {
+                for p in vp.payload { self.collect_pattern_bindings(*p, 0 as u32, out); }
+            },
+            Pattern.Tuple(elems) => {
+                for e in elems { self.collect_pattern_bindings(*e, 0 as u32, out); }
+            },
+            Pattern.Struct(sp) => {
+                for f in sp.fields { self.collect_pattern_bindings(f.pattern, 0 as u32, out); }
+            },
+            Pattern.Or(alts) => {
+                if alts.len > 0 as usize {
+                    self.collect_pattern_bindings(alts[0], ty, out);
+                }
+            },
+            Pattern.Literal(_) | Pattern.Wildcard | Pattern.Range(_) => {},
+        }
+    }
+
+    fn or_pattern_has_name(self: &ZirLowerer, names: [u32], target: u32) -> bool {
+        for n in names { if *n == target { return true; } }
+        return false;
+    }
+
+    // Checks that every alternative in an or-pattern binds the same set of variable names.
+    // Reports once at SPAN if an alternative is missing a binding that another has.
+    fn check_or_pattern_bindings(
+        self: &mut ZirLowerer,
+        pats: [PatternId],
+        scrut_ty: u32,
+        span: Span
+    ) -> bool {
+        if pats.len <= 1 as usize { return true; }
+        let mut first = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+        self.collect_pattern_bindings(pats[0], scrut_ty, &mut first);
+        let mut pi = 1 as usize;
+        while pi < pats.len {
+            let mut alt = unsafe { Vec::<u32>.new_in_raw(self.arena) };
+            self.collect_pattern_bindings(pats[pi], scrut_ty, &mut alt);
+            let mut missing = 0 as u32;
+            for n in first.as_slice() {
+                if !self.or_pattern_has_name(alt.as_slice(), *n) {
+                    missing = *n;
+                    break;
+                }
+            }
+            if missing == 0 as u32 {
+                for n in alt.as_slice() {
+                    if !self.or_pattern_has_name(first.as_slice(), *n) {
+                        missing = *n;
+                        break;
+                    }
+                }
+            }
+            if missing != 0 as u32 {
+                self.report_prefix(span);
+                eprint("a binding in an or-pattern must appear in every alternative: '");
+                eprint(self.intern_table.lookup(missing));
+                eprint("' is missing from one\n");
+                return false;
+            }
+            pi = pi + 1 as usize;
+        }
+        return true;
     }
 
     // Each alternative of an or-pattern (`A(x) | B(x)`) binds into the same local, which takes
