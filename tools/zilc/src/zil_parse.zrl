@@ -1666,6 +1666,10 @@ impl ZilParser {
             instr_opt = Option.Some(
                 ILInstr.SliceLen(self.parse_ssa_id_with_name(self.current_func))
             );
+        } else if op_str == "slice_ptr" {
+            instr_opt = Option.Some(
+                ILInstr.SlicePtr(self.parse_ssa_id_with_name(self.current_func))
+            );
         } else if op_str == "slice_construct" {
             let ptr = self.parse_ssa_id_with_name(self.current_func);
             self.match_lit(",");
@@ -2019,9 +2023,15 @@ impl ZilParser {
             instr_opt = Option.Some(
                 ILInstr.Unlikely(self.parse_ssa_id_with_name(self.current_func))
             );
-        } else if op_str == "cast" || op_str == "bitcast" {
+        } else if op_str == "cast" {
             let val = self.parse_ssa_id_with_name(self.current_func);
             instr_opt = Option.Some(ILInstr.Cast(CastInstr { val: val, target_ty: result_type }));
+        } else if op_str == "bitcast" {
+            eprint("zilc: line ");
+            let mut err = stderr();
+            let _ = write_u64(&mut err, start_line as u64);
+            eprint(": unknown opcode 'bitcast' (use 'cast')\n");
+            exit(1);
         } else if op_str == "get_env" || op_str == "getenv" {
             instr_opt = Option.Some(ILInstr.GetEnv);
         } else if op_str == "end_borrow" {

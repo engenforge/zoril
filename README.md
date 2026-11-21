@@ -24,7 +24,7 @@ Zoril is an early experiment in a combination that has not been explored much: c
 - **Fuzzed:** tested with a differential fuzzer against `rustc` across both whole-program and `zbuild` builds (with `--checked` instrumentation, value canaries, and drop accounting); current run budgets and findings live in [bench/fuzz/README.md](bench/fuzz/README.md).
 - **No lifetime annotations:** ownership without lifetime parameters in signatures, using arenas and analysis of function bodies. See [Why Zoril](doc/vision/why_zoril.md).
 - **No C runtime dependency:** executables link a small assembly runtime that makes Linux system calls directly: no libc and no dynamic linker.
-- **Compact Native Binaries:** a program that only returns is **~10 KB** (**~8.5 KB** stripped), the getting-started hello world **~18 KB** (**~14 KB** stripped), and through `zbuild` **~32 KB** (**~23 KB** stripped). They are static Linux x86-64 ELF files.
+- **Compact Native Binaries:** a program that only returns is **~10 KB** (**~8.5 KB** stripped), the getting-started hello world **~18 KB** (**~14 KB** stripped), and through `zbuild` **~38 KB** (**~25 KB** stripped). They are static Linux x86-64 ELF files.
 - **Low abstraction overhead:** checked code runs at **1.05x (geometric mean)** of equivalent C compiled with cproc on the same backend. See [Zero Overhead](doc/zero_overhead.md).
 - **Incremental rebuilds:** `zbuild` rebuilds in **12 ms** after a touch and **26 ms** after an edit on the 2,931-LOC benchmark project (AMD Ryzen 7 3700X). See [Language Comparison](doc/language/language_comparison.md).
 - **Familiar to Rust developers:** `let`, `fn`, `match`, `struct`, `enum`, `impl` and `trait` follow Rust's syntax.

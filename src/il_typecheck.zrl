@@ -14,7 +14,7 @@ import "il_instr.zrl";
 import "il_cfg.zrl";
 use bytevec::ByteVec;
 use il_cfg::{ILFunction, ILModule};
-use il_instr::{ILInstr, NO_SSA, SSAId};
+use il_instr::{BlockId, ILInstr, NO_SSA, SSAId};
 use il_type::{ILPrimitive, IL_TYPEDEF_STRUCT};
 use mem_raw::ArenaHeader;
 use vec::Vec;
@@ -45,11 +45,60 @@ pub fn type_check_function(
                 issues.push(TypeIssue { instr_idx: idx, message: undef });
                 continue;
             }
+            match m.instrs[idx as usize] {
+                ILInstr.Jmp(target) => {
+                    if !block_defined_in_fn(f, target) {
+                        issues.push(TypeIssue {
+                            instr_idx: idx,
+                            message: "branch/jump target names no defined block",
+                        });
+                    }
+                },
+                ILInstr.Branch(br) => {
+                    if !block_defined_in_fn(f, br.then_block)
+                        || !block_defined_in_fn(f, br.else_block) {
+                        issues.push(TypeIssue {
+                            instr_idx: idx,
+                            message: "branch/jump target names no defined block",
+                        });
+                    }
+                },
+                _ => {},
+            }
             let msg = instr_type_issue(m, f, m.instrs[idx as usize], ssa, arena);
             if msg.len > 0 as usize { issues.push(TypeIssue { instr_idx: idx, message: msg }); }
         }
+        if b.instructions_len == 0 as usize {
+            issues.push(TypeIssue {
+                instr_idx: 0 as u32,
+                message: "block ends without a terminator"
+            });
+        } else {
+            let last_idx = b.instr_ids()[b.instructions_len - 1 as usize];
+            if !is_terminator(m.instrs[last_idx as usize]) {
+                issues.push(TypeIssue {
+                    instr_idx: last_idx,
+                    message: "block ends without a terminator"
+                });
+            }
+        }
     }
     return issues;
+}
+
+fn is_terminator(instr: ILInstr) -> bool {
+    return match instr {
+        ILInstr.Ret(_) | ILInstr.Jmp(_) | ILInstr.Branch(_) | ILInstr.Unreachable => true,
+        _ => false,
+    };
+}
+
+fn block_defined_in_fn(f: &ILFunction, target: BlockId) -> bool {
+    let ids = f.block_ids();
+    for i in 0 as usize..f.blocks_len {
+        if ids[i] == target { return true; }
+    }
+    return false;
 }
 
 // Append V in decimal.
@@ -128,6 +177,7 @@ fn first_undefined_operand(f: &ILFunction, instr: ILInstr) -> SSAId {
             | ILInstr.Load(ssa)
             | ILInstr.Drop(ssa)
             | ILInstr.SliceLen(ssa)
+            | ILInstr.SlicePtr(ssa)
             | ILInstr.IsSome(ssa)
             | ILInstr.Unwrap(ssa)
             | ILInstr.Move(ssa)
@@ -228,6 +278,7 @@ fn instr_opcode(instr: ILInstr) -> [u8] {
         ILInstr.SliceLoad(_) => "slice_load",
         ILInstr.SliceStore(_) => "slice_store",
         ILInstr.SliceLen(_) => "slice_len",
+        ILInstr.SlicePtr(_) => "slice_ptr",
         ILInstr.SliceConstruct(_) => "slice_construct",
         ILInstr.ArrayConstruct(_) => "array_construct",
         ILInstr.ArrayLoad(_) => "array_load",
@@ -338,8 +389,38 @@ fn instr_type_issue(
         },
         ILInstr.Load(src) => {
             let pt = f.get_ssa_type(src);
+            if src != NO_SSA as u32 && pt != 0 as u32 && pointee(m, pt) == 0 as u32 {
+                let mut out = unsafe { ByteVec.new_raw(arena) };
+                out.push_slice("load through ");
+                push_type_name(m, pt, out);
+                out.push_slice(
+                    ", which is not a pointer (the address operand must be pointer-typed)"
+                );
+                return out.as_slice();
+            }
             if !prim_eq(m, pointee(m, pt), res) {
                 return describe2(m, "load of ", res, " through ", pt, arena);
+            }
+        },
+        ILInstr.SliceLen(src) => {
+            let msg = slice_operand_issue(m, f, "slice_len", src, arena);
+            if msg.len > 0 as usize { return msg; }
+        },
+        ILInstr.SlicePtr(src) => {
+            let msg = slice_operand_issue(m, f, "slice_ptr", src, arena);
+            if msg.len > 0 as usize { return msg; }
+        },
+        ILInstr.SliceLoad(sl) => {
+            let msg = slice_operand_issue(m, f, "slice_load", sl.base, arena);
+            if msg.len > 0 as usize { return msg; }
+        },
+        ILInstr.SliceStore(ss) => {
+            let msg = slice_operand_issue(m, f, "slice_store", ss.base, arena);
+            if msg.len > 0 as usize { return msg; }
+        },
+        ILInstr.Syscall(s) => {
+            if s.args.len > 6 as usize {
+                return "syscall with more than 6 arguments (runtime supports 0..6)";
             }
         },
         ILInstr.Add(op)
@@ -400,9 +481,18 @@ fn instr_type_issue(
             }
         },
         ILInstr.Call(c) => {
-            if (c.func_idx as usize) < m.functions.len() {
-                let callee = &m.functions[c.func_idx as usize];
+            let p_callee = m.callee(&c);
+            if p_callee != 0 as *mut ILFunction {
+                let callee = unsafe { &*p_callee };
                 if !callee.is_variadic {
+                    if c.args.len != callee.params_len {
+                        let mut out = unsafe { ByteVec.new_raw(arena) };
+                        out.push_slice("call expected ");
+                        push_dec(out, callee.params_len as u64);
+                        out.push_slice(" arguments, got ");
+                        push_dec(out, c.args.len as u64);
+                        return out.as_slice();
+                    }
                     for i in 0 as usize..c.args.len {
                         if i >= callee.params_len { break; }
                         let at = f.get_ssa_type(c.args[i]);
@@ -418,6 +508,13 @@ fn instr_type_issue(
                             );
                         }
                     }
+                } else if c.args.len < callee.params_len {
+                    let mut out = unsafe { ByteVec.new_raw(arena) };
+                    out.push_slice("variadic call expected at least ");
+                    push_dec(out, callee.params_len as u64);
+                    out.push_slice(" arguments, got ");
+                    push_dec(out, c.args.len as u64);
+                    return out.as_slice();
                 }
             }
         },
@@ -486,6 +583,34 @@ fn field_base_ok(m: &ILModule, base: u32, idx: u32) -> bool {
         },
         _ => true,
     };
+}
+
+// Whether TY is a slice type (or 0 / out-of-range, which is left to other checks).
+fn is_slice_type(m: &ILModule, ty: u32) -> bool {
+    if ty == 0 as u32 || ty as usize > m.types.len() { return true; }
+    return match m.types[ty as usize - 1 as usize].def {
+        ILType.Slice(_) => true,
+        _ => false,
+    };
+}
+
+fn slice_operand_issue(
+    m: &ILModule,
+    f: &ILFunction,
+    op_name: [u8],
+    ssa: SSAId,
+    arena: *mut ArenaHeader
+) -> [u8] {
+    let ty = f.get_ssa_type(ssa);
+    if ssa != NO_SSA as u32 && ty != 0 as u32 && !is_slice_type(m, ty) {
+        let mut out = unsafe { ByteVec.new_raw(arena) };
+        out.push_slice(op_name);
+        out.push_slice(" of ");
+        push_type_name(m, ty, out);
+        out.push_slice(", which is not a slice");
+        return out.as_slice();
+    }
+    return "";
 }
 
 // What pointer type TY points at; 0 if it is not a pointer.

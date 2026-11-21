@@ -8,6 +8,8 @@ The per-row probe table lives in [`bench/safety_matrix/matrix.md`](../../bench/s
 
 ## 1. Verification Architecture
 
+Zoril's memory-safety guarantees cover programs compiled from Zoril source (`.zrl`). Hand-written ZIL (`.zil`) is checked by `zilc` for operand types and ZIL-level verification (stack-address escapes, constant arena bounds, and common-mistake checks), not for full memory safety.
+
 Zoril checks memory and type safety through a **three-level pipeline** whose checks remain active in every build configuration:
 
 ```text

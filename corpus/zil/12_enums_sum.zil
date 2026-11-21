@@ -9,7 +9,7 @@ f1: i32 main() {
     v2: T1 = sum_construct T1, 1, v1
     v3: PtrMut<T1, 'local> = alloc 'local, T1
     v4: unit = store v3, v2
-    v5: Ptr<T1, 'local> = bitcast v3
+    v5: Ptr<T1, 'local> = cast v3
     v8: bool = variant_match v5, T1, 1
     branch v8, @b1, @b2
   @b1:

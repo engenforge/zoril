@@ -17,7 +17,7 @@ f1: i32 main() {
     v7: unit = store v6, v5
 
     // Load both fields and add them
-    v8: Ptr<(i32, i32), 'local> = bitcast v1
+    v8: Ptr<(i32, i32), 'local> = cast v1
     v9: Ptr<i32, 'local> = field_addr v8, 0
     v10: i32 = load v9
     v11: Ptr<i32, 'local> = field_addr v8, 1

@@ -20,6 +20,10 @@
 corpus/zrl/21_allocators.zrl: Arena handle and Vec::new_in(&Arena) with Drop are outside the stage0-C dialect, §1.6
 corpus/zrl/31_hashmap.zrl: stdlib/hashmap.zrl uses multiple trait bounds (K: Hash + Eq), §3.9
 corpus/zrl/42_traits_and_iterators.zrl: associated types and trait default methods, §3.13
+corpus/zil/02_comparison.zil: uses 'cast' instead of stage0-C's 'bitcast'
+corpus/zil/12_enums_sum.zil: uses 'cast' instead of stage0-C's 'bitcast'
+corpus/zil/13_slices.zil: uses 'cast' instead of stage0-C's 'bitcast'
+corpus/zil/24_tuples.zil: uses 'cast' instead of stage0-C's 'bitcast'
 tests/functional/stdlib/hashmap_basic.zrl: stdlib/hashmap.zrl uses multiple trait bounds (K: Hash + Eq), §3.9
 tests/functional/enums/match_guard.zrl: match guards (`Pat if cond =>`), §3.5
 tests/functional/stdlib/result_map.zrl: generic code with function-typed values, §3.7

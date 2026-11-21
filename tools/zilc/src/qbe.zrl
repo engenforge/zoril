@@ -7,7 +7,7 @@ import "intern.zrl";
 import "bytevec.zrl";
 import "io.zrl";
 use il_cfg::{ILFunction, ILModule, is_unmangled_symbol_name};
-use il_instr::{BlockId, CallInstr, ILInstr, IL_INSTR_ADD, IL_INSTR_ALLOC, IL_INSTR_AND, IL_INSTR_ARRAY_CONSTRUCT, IL_INSTR_ARRAY_LOAD, IL_INSTR_ARRAY_STORE, IL_INSTR_BORROW, IL_INSTR_BOUNDS_CHECK, IL_INSTR_BRANCH, IL_INSTR_CALL, IL_INSTR_CALL_PTR, IL_INSTR_CAST, IL_INSTR_CHECKED_ADD, IL_INSTR_CHECKED_MUL, IL_INSTR_CHECKED_SUB, IL_INSTR_CMP_EQ, IL_INSTR_CMP_GE, IL_INSTR_CMP_GT, IL_INSTR_CMP_LE, IL_INSTR_CMP_LT, IL_INSTR_CMP_NE, IL_INSTR_CONST, IL_INSTR_DIV, IL_INSTR_DROP, IL_INSTR_END_BORROW, IL_INSTR_FDCLOSE, IL_INSTR_FDOPEN, IL_INSTR_FDREAD, IL_INSTR_FDWRITE, IL_INSTR_FIELD_ADDR, IL_INSTR_FUNC_ADDR, IL_INSTR_GETENV, IL_INSTR_GLOBAL_ADDR, IL_INSTR_IORING_CLOSE, IL_INSTR_IORING_ENTER, IL_INSTR_IORING_SETUP, IL_INSTR_IS_SOME, IL_INSTR_JMP, IL_INSTR_LIKELY, IL_INSTR_LOAD, IL_INSTR_MOVE, IL_INSTR_MUL, IL_INSTR_NEG, IL_INSTR_NOT, IL_INSTR_OR, IL_INSTR_PARAM, IL_INSTR_PHI, IL_INSTR_REGION_CAST, IL_INSTR_RELEASE, IL_INSTR_REM, IL_INSTR_RET, IL_INSTR_SATURATING_ADD, IL_INSTR_SHL, IL_INSTR_SHR, IL_INSTR_SLICE_CONSTRUCT, IL_INSTR_SLICE_LEN, IL_INSTR_SLICE_LOAD, IL_INSTR_SLICE_STORE, IL_INSTR_STORE, IL_INSTR_STRING_CONST, IL_INSTR_STRUCT_CONSTRUCT, IL_INSTR_SUB, IL_INSTR_SUM_CONSTRUCT, IL_INSTR_SYSCALL, IL_INSTR_TUPLE_CONSTRUCT, IL_INSTR_UNLIKELY, IL_INSTR_UNREACHABLE, IL_INSTR_UNWRAP, IL_INSTR_VARIANT_MATCH, IL_INSTR_WRAPPING_ADD, IL_INSTR_WRAPPING_MUL, IL_INSTR_WRAPPING_SUB, IL_INSTR_XOR, NO_SSA, SSAId};
+use il_instr::{BlockId, CallInstr, ILInstr, IL_INSTR_ADD, IL_INSTR_ALLOC, IL_INSTR_AND, IL_INSTR_ARRAY_CONSTRUCT, IL_INSTR_ARRAY_LOAD, IL_INSTR_ARRAY_STORE, IL_INSTR_BORROW, IL_INSTR_BOUNDS_CHECK, IL_INSTR_BRANCH, IL_INSTR_CALL, IL_INSTR_CALL_PTR, IL_INSTR_CAST, IL_INSTR_CHECKED_ADD, IL_INSTR_CHECKED_MUL, IL_INSTR_CHECKED_SUB, IL_INSTR_CMP_EQ, IL_INSTR_CMP_GE, IL_INSTR_CMP_GT, IL_INSTR_CMP_LE, IL_INSTR_CMP_LT, IL_INSTR_CMP_NE, IL_INSTR_CONST, IL_INSTR_DIV, IL_INSTR_DROP, IL_INSTR_END_BORROW, IL_INSTR_FDCLOSE, IL_INSTR_FDOPEN, IL_INSTR_FDREAD, IL_INSTR_FDWRITE, IL_INSTR_FIELD_ADDR, IL_INSTR_FUNC_ADDR, IL_INSTR_GETENV, IL_INSTR_GLOBAL_ADDR, IL_INSTR_IORING_CLOSE, IL_INSTR_IORING_ENTER, IL_INSTR_IORING_SETUP, IL_INSTR_IS_SOME, IL_INSTR_JMP, IL_INSTR_LIKELY, IL_INSTR_LOAD, IL_INSTR_MOVE, IL_INSTR_MUL, IL_INSTR_NEG, IL_INSTR_NOT, IL_INSTR_OR, IL_INSTR_PARAM, IL_INSTR_PHI, IL_INSTR_REGION_CAST, IL_INSTR_RELEASE, IL_INSTR_REM, IL_INSTR_RET, IL_INSTR_SATURATING_ADD, IL_INSTR_SHL, IL_INSTR_SHR, IL_INSTR_SLICE_CONSTRUCT, IL_INSTR_SLICE_LEN, IL_INSTR_SLICE_LOAD, IL_INSTR_SLICE_PTR, IL_INSTR_SLICE_STORE, IL_INSTR_STORE, IL_INSTR_STRING_CONST, IL_INSTR_STRUCT_CONSTRUCT, IL_INSTR_SUB, IL_INSTR_SUM_CONSTRUCT, IL_INSTR_SYSCALL, IL_INSTR_TUPLE_CONSTRUCT, IL_INSTR_UNLIKELY, IL_INSTR_UNREACHABLE, IL_INSTR_UNWRAP, IL_INSTR_VARIANT_MATCH, IL_INSTR_WRAPPING_ADD, IL_INSTR_WRAPPING_MUL, IL_INSTR_WRAPPING_SUB, IL_INSTR_XOR, NO_SSA, SSAId};
 use il_type::{ILPRIM_BOOL, ILPRIM_CHAR, ILPRIM_F32, ILPRIM_F64, ILPRIM_I16, ILPRIM_I32, ILPRIM_I64, ILPRIM_I8, ILPRIM_ISIZE, ILPRIM_NEVER, ILPRIM_U16, ILPRIM_U32, ILPRIM_U64, ILPRIM_U8, ILPRIM_UNIT, ILPRIM_USIZE, ILTYPE_ARRAY, ILTYPE_BOXED, ILTYPE_BOXEDMUT, ILTYPE_PRIMITIVE, ILTYPE_PTR, ILTYPE_PTRMUT, ILTYPE_SLICE, ILTYPE_TUPLE, ILTYPE_USER, IL_TYPEDEF_ENUM, IL_TYPEDEF_STRUCT, is_any_pointer_tag};
 use intern::InternTable;
 use bytevec::ByteVec;
@@ -1247,6 +1247,14 @@ impl QBEEmitter {
                                     si = si + 1 as usize;
                                 }
                                 self.qbe_write(" b 0 }\n");
+                                // Emit: data $SS<seq_id> = align 8 { l $S<seq_id>, l <len> }
+                                self.qbe_write("data $SS");
+                                self.write_u64(count as u64);
+                                self.qbe_write(" = align 8 { l $S");
+                                self.write_u64(count as u64);
+                                self.qbe_write(", l ");
+                                self.write_u64(str_slice.len as u64);
+                                self.qbe_write(" }\n");
                                 count = count + 1 as usize;
                             }
                         },
@@ -1744,7 +1752,16 @@ impl QBEEmitter {
         } else if tag == IL_INSTR_STORE {
             let s = instr.get_Store();
             let val_ty = self.get_ssa_type(s.val);
-            if self.is_aggregate(val_ty) {
+            let ptr_ty = self.get_ssa_type(s.ptr);
+            let ptr_inner = self.get_ptr_inner_type(ptr_ty);
+            let mut store_ptr_as_word = false;
+            if ptr_inner != 0 as u32 {
+                let ptag = self.module.types[ptr_inner as usize - 1 as usize].def.get_tag();
+                if is_any_pointer_tag(ptag) {
+                    store_ptr_as_word = true;
+                }
+            }
+            if !store_ptr_as_word && self.is_aggregate(val_ty) {
                 self.emit_memcpy(
                     s.ptr,
                     s.val,
@@ -1755,7 +1772,11 @@ impl QBEEmitter {
                 );
             } else if !self.is_unit_type(val_ty) {
                 self.qbe_write("    store");
-                self.emit_store_suffix(val_ty);
+                if store_ptr_as_word {
+                    self.qbe_write("l");
+                } else {
+                    self.emit_store_suffix(val_ty);
+                }
                 self.qbe_write(" ");
                 self.emit_ssa(s.val);
                 self.qbe_write(", ");
@@ -1795,7 +1816,11 @@ impl QBEEmitter {
         } else if tag == IL_INSTR_FIELD_ADDR {
             let f = instr.get_FieldAddr();
             let struct_ptr_ty = self.get_ssa_type(f.val);
-            let struct_ty = self.get_ptr_inner_type(struct_ptr_ty);
+            let struct_ty = if self.is_aggregate(struct_ptr_ty) {
+                struct_ptr_ty
+            } else {
+                self.get_ptr_inner_type(struct_ptr_ty)
+            };
             let off = self.get_field_offset(struct_ty, f.field_idx);
             self.qbe_write("    ");
             self.emit_ssa(ssa);
@@ -1860,6 +1885,7 @@ impl QBEEmitter {
             // callee's declared parameter count says where they start.
             let mut callee_is_variadic = false;
             let mut callee_named = 0 as usize;
+            let mut callee_func = 0 as *ILFunction;
 
             if tag == IL_INSTR_CALL {
                 let mut is_fid = false;
@@ -1884,6 +1910,7 @@ impl QBEEmitter {
                     }
                     if (fid as usize) < self.module.functions.len() {
                         let p_func = self.module.functions[fid as usize];
+                        callee_func = &self.module.functions[fid as usize] as *ILFunction;
                         if p_func.name != 0 as u32 {
                             name_id = p_func.name;
                             let mut name_buf2 = unsafe { ByteVec.new_raw(self.module.arena) };
@@ -1896,6 +1923,7 @@ impl QBEEmitter {
                     }
                 } else {
                     let p_func = self.module.find_function_by_name(name_id);
+                    callee_func = p_func;
                     if p_func as usize != 0 as usize {
                         is_extern = unsafe { (*p_func).has_c_symbol() }; // non-null: an entry of the table
                         callee_is_variadic = unsafe { (*p_func).is_variadic };
@@ -2033,9 +2061,23 @@ impl QBEEmitter {
                 }
 
                 let mut force_ptr = false;
-                if tag == IL_INSTR_CALL {
-                    if name == "memcpy" || name == "memset" || name == "memcmp" {
-                        if self.is_aggregate(arg_ty) {
+                if self.is_aggregate(arg_ty) {
+                    if tag == IL_INSTR_CALL {
+                        if name == "memcpy" || name == "memset" || name == "memcmp" {
+                            force_ptr = true;
+                        } else if callee_func as usize != 0 as usize && j < callee_named {
+                            let param_ty = unsafe { (*callee_func).param(j).ty };
+                            if param_ty != 0 as u32 {
+                                let ptag = self.module.types[param_ty as usize
+                                    - 1 as usize].def.get_tag();
+                                if is_any_pointer_tag(ptag) {
+                                    force_ptr = true;
+                                }
+                            }
+                        }
+                    } else if tag == IL_INSTR_CALL_PTR {
+                        if self.module.types[arg_ty as usize - 1 as usize].def.get_tag()
+                            == ILTYPE_SLICE {
                             force_ptr = true;
                         }
                     }
@@ -2265,7 +2307,7 @@ impl QBEEmitter {
             }
             self.qbe_write("    ");
             self.emit_ssa(ssa);
-            self.qbe_write(" =l copy $S");
+            self.qbe_write(" =l copy $SS");
             self.write_u64(seq_id as u64);
             self.qbe_write("\n");
         } else if tag == IL_INSTR_GLOBAL_ADDR {
@@ -2635,6 +2677,13 @@ impl QBEEmitter {
             self.emit_ssa(ssa);
             self.qbe_write(" =l loadl ");
             self.emit_ssa(addr_reg);
+            self.qbe_write("\n");
+        } else if tag == IL_INSTR_SLICE_PTR {
+            let base = instr.get_SlicePtr();
+            self.qbe_write("    ");
+            self.emit_ssa(ssa);
+            self.qbe_write(" =l loadl ");
+            self.emit_ssa(base);
             self.qbe_write("\n");
         } else if tag == IL_INSTR_FDOPEN {
             let o = instr.get_FDOpen();
