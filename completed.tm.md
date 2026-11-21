@@ -1,5 +1,34 @@
 # Completed Archive
 
+- [x] +zil +safety +AI-G @zil ZL6c Reject storing local stack pointers into globals and propagate points_to_stack through Phi in src/verify.zrl id:djynw
+    > **Created:** 2026-11-21
+    > **Branch:** `zil`
+    > **Depends:** id:epx51
+    > **Completed:** 2026-11-21 git:78690b9
+
+    - **Placed:** after `id:epx51` (ZL6b), Rank 3 local stack-pointer escape checks in `src/verify.zrl`.
+    - **Do:**
+      1. In `src/verify.zrl`, add a per-function `is_global_addr: [mut bool]` array (allocated and zeroed beside `points_to_stack`). Set `is_global_addr[ssa] = true` on `ILInstr.GlobalAddr(_)`, and propagate it through `Cast`, `FieldAddr`, `Add`, `Move`, and `Borrow` (when the source has `is_global_addr`).
+      2. In `src/verify.zrl` (`mark_store` / `ILInstr.Store(s)`): if `s.ptr < self.uses.len as u32 && self.is_global_addr[s.ptr as usize]` and `s.val < self.uses.len as u32 && (self.is_stack_slot[s.val as usize] || self.points_to_stack[s.val as usize])`, report `region escape: storing a pointer to local stack storage into a global`.
+      3. In `src/verify.zrl` (`verify_instr` for `ILInstr.Phi(phi)`): if any predecessor `pr.val` has `is_stack_slot[pr.val] || points_to_stack[pr.val]`, set `points_to_stack[ssa] = true`.
+      4. Add negative ZIL tests under `tests/zilc/` with `// EXPECT:` headers: `stack_escape_global.zil` and `stack_escape_phi.zil`.
+      5. Ensure storing a `string_const` / `slice_ptr(string_const)` or heap pointer into a global remains accepted (control).
+    - **Checks:**
+      - C1 (before): run `timeout -k 5s 30s build/zilc <file> -o /dev/null` on `stack_escape_global.zil` and `stack_escape_phi.zil` before editing `src/verify.zrl`; quote exit code `0` for each.
+      - C2 (after): rebuild `build/zoril` and `build/zilc`; `sh scripts/test_zilc_errors.sh` passes all checks including both new tests (quote both `[PASS]` lines).
+      - C3 (control): a hand-written ZIL program storing `slice_ptr` of `string_const "ok"` into a global compiles with `build/zilc` (`exit=0`).
+      - C4 (take-out): temporarily revert the `is_global_addr` store check in `src/verify.zrl`, rebuild `build/zilc`, and show `sh scripts/test_zilc_errors.sh` fails on `stack_escape_global.zil`; restore and rebuild.
+      - C5: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` pass on `zil` (quote `Total:` lines and `reject-diff: base verdicts: fresh (no cache)`; note fuzz record is stale for `src/` and `tools/zilc/`).
+      - Ends with `**Awaiting review:**` bullet for check-in `id:mf9gq`.
+    - **Completion:**
+      - Implemented in `src/verify.zrl` (`is_global_addr` allocated/zeroed beside `points_to_stack`, set on `GlobalAddr`, propagated through `Cast`/`FieldAddr`/`Add`/`Move`/`Borrow`, checked in `mark_store`, and `points_to_stack` propagated through `Phi` predecessors).
+      - C1 (before): `for f in tests/zilc/stack_escape_global.zil tests/zilc/stack_escape_phi.zil; do timeout -k 5s 30s build/zilc "$f" -o /dev/null; echo "$f: exit=$?"; done` -> both exited `0`.
+      - C2 (after): `sh scripts/test_zilc_errors.sh` -> `[PASS] tests/zilc/stack_escape_global.zil`, `[PASS] tests/zilc/stack_escape_phi.zil` (all 27 checks passed).
+      - C3 (control): storing `slice_ptr` of `string_const "ok"` into a global compiled with `build/zilc` (`control exit=0`).
+      - C4 (take-out): reverted `is_global_addr` store check in `src/verify.zrl`, rebuilt, `sh scripts/test_zilc_errors.sh` failed with `[FAIL] tests/zilc/stack_escape_global.zil: expected a failure with: region escape: storing a pointer to local stack storage into a global`; restored and rebuilt.
+      - C5: `make test` (`build/zl6c_make_test.log`): `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (148.2s)`. `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (`build/zl6c_preflight.log`): `reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against 7c3b0071a628890b2812e9bbb51aaa79be938fb6`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (108.0s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.3s)`. Fuzz record is stale for `src/` and `tools/zilc/`.
+    - **Awaiting review:** check-in `id:mf9gq`.
+
 - [x] +zil +safety +AI-G @zil ZL6b Reject unterminated blocks and undefined jump/branch targets in src/il_typecheck.zrl id:epx51
     > **Created:** 2026-11-21
     > **Branch:** `zil`
