@@ -14,7 +14,7 @@ import "il_instr.zrl";
 import "il_cfg.zrl";
 use bytevec::ByteVec;
 use il_cfg::{ILFunction, ILModule};
-use il_instr::{ILInstr, NO_SSA, SSAId};
+use il_instr::{BlockId, ILInstr, NO_SSA, SSAId};
 use il_type::{ILPrimitive, IL_TYPEDEF_STRUCT};
 use mem_raw::ArenaHeader;
 use vec::Vec;
@@ -45,11 +45,60 @@ pub fn type_check_function(
                 issues.push(TypeIssue { instr_idx: idx, message: undef });
                 continue;
             }
+            match m.instrs[idx as usize] {
+                ILInstr.Jmp(target) => {
+                    if !block_defined_in_fn(f, target) {
+                        issues.push(TypeIssue {
+                            instr_idx: idx,
+                            message: "branch/jump target names no defined block",
+                        });
+                    }
+                },
+                ILInstr.Branch(br) => {
+                    if !block_defined_in_fn(f, br.then_block)
+                        || !block_defined_in_fn(f, br.else_block) {
+                        issues.push(TypeIssue {
+                            instr_idx: idx,
+                            message: "branch/jump target names no defined block",
+                        });
+                    }
+                },
+                _ => {},
+            }
             let msg = instr_type_issue(m, f, m.instrs[idx as usize], ssa, arena);
             if msg.len > 0 as usize { issues.push(TypeIssue { instr_idx: idx, message: msg }); }
         }
+        if b.instructions_len == 0 as usize {
+            issues.push(TypeIssue {
+                instr_idx: 0 as u32,
+                message: "block ends without a terminator"
+            });
+        } else {
+            let last_idx = b.instr_ids()[b.instructions_len - 1 as usize];
+            if !is_terminator(m.instrs[last_idx as usize]) {
+                issues.push(TypeIssue {
+                    instr_idx: last_idx,
+                    message: "block ends without a terminator"
+                });
+            }
+        }
     }
     return issues;
+}
+
+fn is_terminator(instr: ILInstr) -> bool {
+    return match instr {
+        ILInstr.Ret(_) | ILInstr.Jmp(_) | ILInstr.Branch(_) | ILInstr.Unreachable => true,
+        _ => false,
+    };
+}
+
+fn block_defined_in_fn(f: &ILFunction, target: BlockId) -> bool {
+    let ids = f.block_ids();
+    for i in 0 as usize..f.blocks_len {
+        if ids[i] == target { return true; }
+    }
+    return false;
 }
 
 // Append V in decimal.
