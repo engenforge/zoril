@@ -157,6 +157,7 @@ pub struct Verifier {
     // needs the former only: `let p = mmap_or_trap(...); return p;` reads a pointer
     // out of a stack slot but does not point at it.
     pub points_to_stack: [mut bool],
+    pub is_global_addr: [mut bool],
     // The value, or the memory a stack slot names, contains a pointer to this frame's
     // stack: set by storing one into a slot (or a field or element of it), carried by
     // move and memcpy. Copying it into memory that outlives the frame is an escape.
@@ -200,6 +201,7 @@ impl Verifier {
             borrow_is_mut: @slice(0 as *mut bool, 0 as usize),
             is_stack_slot: @slice(0 as *mut bool, 0 as usize),
             points_to_stack: @slice(0 as *mut bool, 0 as usize),
+            is_global_addr: @slice(0 as *mut bool, 0 as usize),
             holds_stack_ptr: @slice(0 as *mut bool, 0 as usize),
             stack_base: @slice(0 as *mut u32, 0 as usize),
             is_alloc_result: @slice(0 as *mut bool, 0 as usize),
@@ -1432,6 +1434,10 @@ impl Verifier {
                 zoril_allocator_alloc(self.arena, uses_len * 1) as *mut bool,
                 uses_len
             );
+            self.is_global_addr = @slice(
+                zoril_allocator_alloc(self.arena, uses_len * 1) as *mut bool,
+                uses_len
+            );
             self.holds_stack_ptr = @slice(
                 zoril_allocator_alloc(self.arena, uses_len * 1) as *mut bool,
                 uses_len
@@ -1464,6 +1470,7 @@ impl Verifier {
             self.borrow_is_mut[k] = false;
             self.is_stack_slot[k] = false;
             self.points_to_stack[k] = false;
+            self.is_global_addr[k] = false;
             self.holds_stack_ptr[k] = false;
             self.stack_base[k] = 0 as u32;
             self.is_alloc_result[k] = false;
@@ -1564,6 +1571,9 @@ impl Verifier {
                     if b.val < self.uses.len as u32 {
                         self.points_to_stack[ssa as usize] = self.is_stack_slot[b.val as usize]
                             || self.points_to_stack[b.val as usize];
+                        if self.is_global_addr[b.val as usize] {
+                            self.is_global_addr[ssa as usize] = true;
+                        }
                     }
                     self.borrow_is_mut[ssa as usize] = b.is_mut;
                 }
@@ -1606,6 +1616,11 @@ impl Verifier {
                             || self.points_to_stack[op.lhs as usize]) {
                         self.points_to_stack[ssa as usize] = true;
                     }
+                    if is_ptr
+                        && op.lhs < self.uses.len as u32
+                        && self.is_global_addr[op.lhs as usize] {
+                        self.is_global_addr[ssa as usize] = true;
+                    }
                 }
             },
             ILInstr.SliceConstruct(sc) => {
@@ -1625,6 +1640,24 @@ impl Verifier {
                         && (self.is_stack_slot[src as usize]
                             || self.points_to_stack[src as usize]) {
                         self.points_to_stack[ssa as usize] = true;
+                    }
+                }
+            },
+            ILInstr.GlobalAddr(_) => {
+                if self.has_result(ssa) && ssa < self.uses.len as u32 {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                    self.is_global_addr[ssa as usize] = true;
+                }
+            },
+            ILInstr.Phi(phi) => {
+                if self.has_result(ssa) && ssa < self.uses.len as u32 {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                    for pr in phi.preds {
+                        if pr.val < self.uses.len as u32
+                            && (self.is_stack_slot[pr.val as usize]
+                                || self.points_to_stack[pr.val as usize]) {
+                            self.points_to_stack[ssa as usize] = true;
+                        }
                     }
                 }
             },
@@ -1666,11 +1699,9 @@ impl Verifier {
                 | ILInstr.Unwrap(_)
                 | ILInstr.Branch(_)
                 | ILInstr.Jmp(_)
-                | ILInstr.GlobalAddr(_)
                 | ILInstr.VariantMatch(_)
                 | ILInstr.SumConstruct(_)
                 | ILInstr.Syscall(_)
-                | ILInstr.Phi(_)
                 | ILInstr.StringConst(_)
                 | ILInstr.FuncAddr(_)
                 | ILInstr.FDOpen(_)
@@ -1725,6 +1756,9 @@ impl Verifier {
                 if self.points_to_stack[src as usize] {
                     self.points_to_stack[ssa as usize] = true;
                 }
+                if self.is_global_addr[src as usize] {
+                    self.is_global_addr[ssa as usize] = true;
+                }
                 if self.holds_stack(src) {
                     self.holds_stack_ptr[ssa as usize] = true;
                 }
@@ -1750,6 +1784,15 @@ impl Verifier {
     }
 
     fn mark_store(self: &mut Verifier, s: StoreInstr, span: Span) {
+        if s.ptr < self.uses.len as u32
+            && self.is_global_addr[s.ptr as usize]
+            && s.val < self.uses.len as u32
+            && (self.is_stack_slot[s.val as usize] || self.points_to_stack[s.val as usize]) {
+            self.report_error(
+                "region escape: storing a pointer to local stack storage into a global",
+                span
+            );
+        }
         // Classified before the bookkeeping below, which makes the destination
         // look derived from the stored value.
         let dst_is_stack = self.is_stack_addr(s.ptr);
@@ -2113,6 +2156,9 @@ impl Verifier {
                 if is_stack {
                     self.points_to_stack[ssa as usize] = true;
                 }
+                if self.is_global_addr[c.val as usize] {
+                    self.is_global_addr[ssa as usize] = true;
+                }
                 let has_parent = self.borrowed_from[c.val as usize] != 0 as u32;
                 if has_parent {
                     self.borrowed_from[ssa as usize] = c.val;
@@ -2183,6 +2229,9 @@ impl Verifier {
                         self.is_stack_slot[ssa as usize] = true;
                         self.points_to_stack[ssa as usize] = self.points_to_stack[fa.val as usize];
                     }
+                    if self.is_global_addr[fa.val as usize] {
+                        self.is_global_addr[ssa as usize] = true;
+                    }
                 }
             }
         } else {
@@ -2194,6 +2243,9 @@ impl Verifier {
                         || self.points_to_stack[fa.val as usize] {
                         self.is_stack_slot[ssa as usize] = true;
                         self.points_to_stack[ssa as usize] = self.points_to_stack[fa.val as usize];
+                    }
+                    if self.is_global_addr[fa.val as usize] {
+                        self.is_global_addr[ssa as usize] = true;
                     }
                 }
                 self.borrow_is_mut[ssa as usize] = is_mut;
