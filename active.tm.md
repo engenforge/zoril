@@ -683,9 +683,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - `make test` passed: `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (144.3s)`.
       - `make preflight-changed` passed: `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against d9ce4430f3a87182dc7bccc21a6fe439e159b0e8`, `Total: 1559 run, 1559 passed, 0 failed, 0 skipped (111.0s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.4s)`.
 
-- [ ] +modular +AI-G @main Two modules that each define a private const of the same name fail to assemble: the const's symbol is not qualified by its module id:5342d
+- [x] +modular +AI-G @main Two modules that each define a private const of the same name fail to assemble: the const's symbol is not qualified by its module id:5342d
     > **Created:** 2026-11-14
     > **Branch:** `main`
+    > **Completed:** 2026-11-21 git:44a38ae
 
     - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the `main` `+AI-G` group after id:w3vde; order inside the group is not critical.
     - **Placed:** in `future.tm.md`: found by check-in id:9y3ke; a build failure on a correct program, not a soundness hole.
@@ -693,6 +694,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
     - **Found (2026-11-14, `main` at git:b26ca47):** modules `ma.zrl` with `const LIM: i32 = 1;` and `mb.zrl` with `const LIM: i32 = 2;`, each read by a `pub fn`, imported by one `main`: `build/zoril` emits both as the symbol `z3LIME`, and the assembler fails with ``Error: symbol `z3LIME' is already defined`` (`build/z135/priv/const/`). Functions are qualified by their module (`z6stdlib3mem5Arena4dropE`); a const is not. The program is correct and should build.
     - **Do:** qualify a const's symbol by its module, as a function's is, in whole-program and separate compilation (the `.zri` names the symbol the importer references). Probe a `pub const` read from another module, a `static`, and a const of the same name in a module and in the program's root.
     - **Checks:** C1 the program above builds and exits 0, whole-program and through `zbuild` (a test under `tests/modular/`). C2 take the change out and watch C1 fail to assemble. C3 `make test` and `make preflight-changed`, each `Total:` quoted.
+    - **Checks recorded (2026-11-21, git:44a38ae):**
+      - C1: `tests/modular/private_const/main.zrl` (with `ma_lib.zrl`, `mb_lib.zrl`, `pub const PUB_VAL`, private `LIM`/`SVAL` in both modules and root) passed whole-program (`./scripts/test.sh tests/modular/private_const`: `Total: 2 run, 2 passed, 0 failed, 0 skipped (0.1s)`) and via `zbuild` + `sh scripts/test_modular_mangling.sh` (`[PASS] private consts and statics qualify by module in whole-program and zbuild`).
+      - C2: `build/5342d/zoril_base` (with `src/zil_print.zrl` reverted) failed to assemble `tests/modular/private_const/main.zrl` with `Error: symbol \`z3LIME' is already defined` and `Error: symbol \`z4SVALE' is already defined`.
+      - C3: `make test` passed: `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (144.0s)`. `make preflight-changed` passed: `Total: 1559 run, 1559 passed, 0 failed, 0 skipped (111.1s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.5s)`.
 
 - [ ] +stdlib +tests +AI-G @main id:z0182 `Vec.resize` shrinking and `Vec.clear` drop the elements they remove
     > **Created:** 2026-11-11
