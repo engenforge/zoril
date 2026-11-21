@@ -6,10 +6,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +zil +safety +AI-G @zil ZL6a Reject non-slice slice ops, non-pointer load, >6-arg syscall, and wrong call arity in src/il_typecheck.zrl id:0r49n
+- [x] +zil +safety +AI-G @zil ZL6a Reject non-slice slice ops, non-pointer load, >6-arg syscall, and wrong call arity in src/il_typecheck.zrl id:0r49n
     > **Created:** 2026-11-21
     > **Branch:** `zil`
     > **Depends:** id:0mbg3
+    > **Completed:** 2026-11-21 git:90862da
 
     - **Placed:** directly after `id:0mbg3` (ZL6), Rank 1 common-mistake checks in `src/il_typecheck.zrl`.
     - **Do:**
@@ -24,6 +25,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3 (take-out): temporarily revert the `SliceLen`/`SlicePtr` check in `src/il_typecheck.zrl`, rebuild `build/zilc`, and show `sh scripts/test_zilc_errors.sh` fails on `slice_len_non_slice.zil` and `slice_ptr_non_slice.zil`; restore and rebuild.
       - C4: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` pass on `zil` (quote `Total:` lines and `reject-diff: base verdicts: fresh (no cache)`; note fuzz record is stale for `src/` and `tools/zilc/`).
       - Ends with `**Awaiting review:**` bullet for check-in `id:mf9gq`.
+    - **Completion:**
+      - Implemented in `src/il_typecheck.zrl` (`is_slice_type`, `slice_operand_issue` for `SliceLen`/`SlicePtr`/`SliceLoad`/`SliceStore`, `pointee(m, pt) == 0` in `Load`, `s.args.len > 6` in `Syscall`, `m.callee(&c)` arity checks in `Call`) and fixed `src/lower_zir_to_zil.zrl` (emit `SlicePtr` instead of `Load` when casting an `ILTYPE_SLICE` SSA value to a pointer-like type, caught by `tests/functional/basic/lower_edge_cases.zrl` and `tests/bootstrap/clobbered_args.zrl`).
+      - C1 (before): `for f in tests/zilc/slice_len_non_slice.zil tests/zilc/slice_ptr_non_slice.zil tests/zilc/load_non_pointer.zil tests/zilc/syscall_too_many_args.zil tests/zilc/call_wrong_arity.zil; do timeout -k 5s 30s build/zilc "$f" -o /dev/null; echo "$f: exit=$?"; done` -> all 5 exited `0`.
+      - C2 (after): `make build/zoril build/zilc && sh scripts/test_zilc_errors.sh` -> `[PASS] tests/zilc/call_wrong_arity.zil`, `[PASS] tests/zilc/load_non_pointer.zil`, `[PASS] tests/zilc/slice_len_non_slice.zil`, `[PASS] tests/zilc/slice_ptr_non_slice.zil`, `[PASS] tests/zilc/syscall_too_many_args.zil` (all 23 checks passed).
+      - C3 (take-out): reverted `SliceLen`/`SlicePtr` in `src/il_typecheck.zrl`, rebuilt, `sh scripts/test_zilc_errors.sh` failed with `[FAIL] tests/zilc/slice_len_non_slice.zil` and `[FAIL] tests/zilc/slice_ptr_non_slice.zil`; restored and rebuilt.
+      - C4: `make test` (`build/zl6a_make_test2.log`): `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (147.4s)`. `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (`build/zl6a_preflight.log`): `reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against 7c3b0071a628890b2812e9bbb51aaa79be938fb6`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (108.1s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.4s)`. Fuzz record is stale for `src/` and `tools/zilc/`.
+    - **Awaiting review:** check-in `id:mf9gq`.
 
 - [ ] +zil +safety +AI-G @zil ZL6b Reject unterminated blocks and undefined jump/branch targets in src/il_typecheck.zrl id:epx51
     > **Created:** 2026-11-21
@@ -41,6 +49,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3 (take-out): temporarily revert the terminator check in `src/il_typecheck.zrl`, rebuild `build/zilc`, and show `sh scripts/test_zilc_errors.sh` fails on `block_no_terminator.zil`; restore and rebuild.
       - C4: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` pass on `zil` (quote `Total:` lines and `reject-diff: base verdicts: fresh (no cache)`; note fuzz record is stale for `src/` and `tools/zilc/`).
       - Ends with `**Awaiting review:**` bullet for check-in `id:mf9gq`.
+    - **Completion:**
+      - Implemented in `src/il_typecheck.zrl` (`is_slice_type`, `slice_operand_issue` for `SliceLen`/`SlicePtr`/`SliceLoad`/`SliceStore`, `pointee(m, pt) == 0` in `Load`, `s.args.len > 6` in `Syscall`, `m.callee(&c)` arity checks in `Call`) and fixed `src/lower_zir_to_zil.zrl` (emit `SlicePtr` instead of `Load` when casting an `ILTYPE_SLICE` SSA value to a pointer-like type, caught by `tests/functional/basic/lower_edge_cases.zrl` and `tests/bootstrap/clobbered_args.zrl`).
+      - C1 (before): `for f in tests/zilc/slice_len_non_slice.zil tests/zilc/slice_ptr_non_slice.zil tests/zilc/load_non_pointer.zil tests/zilc/syscall_too_many_args.zil tests/zilc/call_wrong_arity.zil; do timeout -k 5s 30s build/zilc "$f" -o /dev/null; echo "$f: exit=$?"; done` -> all 5 exited `0`.
+      - C2 (after): `make build/zoril build/zilc && sh scripts/test_zilc_errors.sh` -> `[PASS] tests/zilc/call_wrong_arity.zil`, `[PASS] tests/zilc/load_non_pointer.zil`, `[PASS] tests/zilc/slice_len_non_slice.zil`, `[PASS] tests/zilc/slice_ptr_non_slice.zil`, `[PASS] tests/zilc/syscall_too_many_args.zil` (all 23 checks passed).
+      - C3 (take-out): reverted `SliceLen`/`SlicePtr` in `src/il_typecheck.zrl`, rebuilt, `sh scripts/test_zilc_errors.sh` failed with `[FAIL] tests/zilc/slice_len_non_slice.zil` and `[FAIL] tests/zilc/slice_ptr_non_slice.zil`; restored and rebuilt.
+      - C4: `make test` (`build/zl6a_make_test2.log`): `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (147.4s)`. `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (`build/zl6a_preflight.log`): `reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against 7c3b0071a628890b2812e9bbb51aaa79be938fb6`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (108.1s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.4s)`. Fuzz record is stale for `src/` and `tools/zilc/`.
+    - **Awaiting review:** check-in `id:mf9gq`.
 
 - [ ] +zil +safety +AI-G @zil ZL6c Reject storing local stack pointers into globals and propagate points_to_stack through Phi in src/verify.zrl id:djynw
     > **Created:** 2026-11-21
