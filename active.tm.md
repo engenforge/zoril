@@ -6,13 +6,53 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +zil +safety +review +AI-D @zil @checkin Check-in: review ZL6 common-mistake checks (0r49n, epx51, djynw, pkcsy) id:mf9gq
+- [x] +zil +safety +review +AI-D @zil @checkin Check-in: review ZL6 common-mistake checks (0r49n, epx51, djynw, pkcsy) id:mf9gq
     > **Created:** 2026-11-21
     > **Branch:** `zil`
     > **Depends:** id:0r49n, id:epx51, id:djynw, id:pkcsy
+    > **Completed:** 2026-11-21 git:e8ff7c5
 
     - **Placed:** directly after `id:pkcsy` (ZL6d), the last of the ZL6 `+AI-G` batch, per `AGENTS.md` Check-ins.
     - **Review:** the steps of `AGENTS.md` Check-ins; re-run each task's numbered checks and probe sibling routes (e.g. `slice_load`/`slice_store` on non-slice, variadic call arity, `variant_match` undefined target, `alloc 'local` stored into global field via `field_addr`, `drop` in one branch vs sibling branch).
+    - **Review findings (2026-11-21, commits `90862da`, `48a1568`, `78690b9`, `e8ff7c5`):**
+      - Re-ran checks: `sh scripts/test_zilc_errors.sh` passed all 29 checks; `./scripts/test.sh corpus/zil` passed (`Total: 25 run, 25 passed, 0 failed, 0 skipped (0.2s)`).
+      - **ZL6a (`id:0r49n`, `90862da`) — PASS:** reviewed diff (including `src/lower_zir_to_zil.zrl` emitting `SlicePtr` instead of `Load` on `ILTYPE_SLICE` casts). Probed sibling routes: `slice_load` and `slice_store` on `i64` rejected (`rc=1`), `load` on `Slice<u8, 'local>` rejected (`rc=1`), `syscall` with 6 args accepted (`rc=0`) and 7 args rejected (`rc=1`), non-variadic `call` with 3 args for 2 params rejected (`rc=1`), variadic `call` with 0 args for 1 fixed param rejected (`rc=1`), variadic `call` with 1 or 2 args accepted (`rc=0`).
+      - **ZL6b (`id:epx51`, `48a1568`) — PASS:** reviewed diff; confirmed `VariantMatchInstr` in `src/il_instr.zrl:226` has no block targets. Probed sibling routes: empty block `@b0:` rejected (`rc=1`, `block ends without a terminator`), `branch` with undefined `then_block` or undefined `else_block` rejected (`rc=1`, `branch/jump target names no defined block`), `unreachable` terminator accepted (`rc=0`).
+      - **ZL6c (`id:djynw`, `78690b9`) — PASS with sibling gaps:** probed `alloc 'local` stored into global via `field_addr`, `cast`, `add`, `slice_construct`, and `phi(borrow(alloc 'local))` — all rejected (`rc=1`, `region escape: storing a pointer to local stack storage into a global`). **Sibling gaps found:** `is_global_addr` is not propagated through `ILInstr.Phi` (`phi [@b1: v2_global, @b2: v3_global]; store v4, v1_local` exited `0`) or `ILInstr.RegionCast` (`region_cast 'local, v2_global; store v3, v1_local` exited `0`). Added to follow-up `id:4d7m6` (ZL6e).
+      - **ZL6d (`id:pkcsy`, `e8ff7c5`) — TWO DEFECTS FOUND (follow-up `id:4d7m6` ZL6e):**
+        1. **False positive on valid CFG sibling branches:** `src/verify.zrl` mutates a single linear `self.current_map` across blocks in block-list order (it does not clone `current_map` across branches). Probing `branch v0, @b1, @b2` with `drop v1` in `@b1` and `drop v1` (or `load v1; drop v1`) in mutually exclusive `@b2` falsely fails (`rc=1`, `double drop` / `use after drop`). Meanwhile `call`/`borrow`/`ret` after drop and `drop` of an outer `BoxMut` inside a loop are rejected (`rc=1`), and `alloc 'heap` + `drop` inside a loop body passes (`rc=0`).
+        2. **False negative on `store` through dropped non-stack pointer:** `check_instr_operands` skipped `is_state_dropped` for all `ILInstr.Store(s)` pointers (and `mark_store` unconditionally resets `base` to `OwnerState.Owned`), so `v1: BoxMut<i32> = alloc 'heap, i32; drop v1; store v1, v2; load v1; drop v1` is silently accepted (`rc=0`). Only stack slots (`is_stack_slot[s.ptr]`) should allow reinitialization via `store`; storing through a dropped heap pointer must report `use after drop`.
+        3. **Cleanup:** `is_state_owned` (`src/verify.zrl:233`) has no remaining callers after `dec_use` dropped its implicit `OwnerState.Dropped` transition; remove in `id:4d7m6`.
+      - **Bookkeeping note:** in `doc/tasks/completed.tm.md`, `id:epx51` and `id:pkcsy` each carried a duplicated `Completion:` block from the preceding task (already swept; noted here).
+      - **Plan update:** added `id:4d7m6` (ZL6e, `+AI-G`, `@zil`) and follow-up check-in `id:rrgct` (`+AI-D`, `@zil`, `@checkin`) directly below, and added `id:rrgct` to `id:v2f8h`'s `Depends:`.
+
+- [ ] +zil +safety +AI-G @zil ZL6e Make drop tracking CFG-aware, reject store-after-drop on non-stack pointers, and propagate is_global_addr through Phi/RegionCast in src/verify.zrl id:4d7m6
+    > **Created:** 2026-11-21
+    > **Branch:** `zil`
+    > **Depends:** id:mf9gq
+
+    - **Placed:** directly after check-in `id:mf9gq`, fixing the two ZL6d defects and two ZL6c sibling gaps found during the ZL6 review.
+    - **Do:**
+      1. **CFG-aware drop tracking in `src/verify.zrl`:** during the `count_uses` scan in `verify_function`, record `has_drop: bool` (whether any instruction in `func` is `ILInstr.Drop(_)`); when `has_drop == false` (all Zoril-compiled functions), skip per-block drop snapshots for zero extra overhead. Add a per-function `is_dropped: [mut bool]` array (allocated/zeroed in `reset_ssa_tables` beside `is_global_addr`). When `has_drop == true`, allocate `block_dropped_out` (`func.blocks_len * ssa_count` bools, zeroed) and `block_visited` (`func.blocks_len` bools, zeroed); before each `check_block(block_ids[i])` call (both Pass 1 and Pass 2 `in_loop` blocks), clear `self.is_dropped[0..ssa_count]` to `false`, then for every block index `p` with `block_visited[p] == true` whose terminator (`ILInstr.Jmp(t)` or `ILInstr.Branch(br)`) targets `block_ids[i]`, OR `block_dropped_out[p * ssa_count + k]` into `self.is_dropped[k]`; after `check_block`, copy `self.is_dropped[0..ssa_count]` into `block_dropped_out[i * ssa_count .. (i + 1) * ssa_count]` and set `block_visited[i] = true`. In `check_instr`, whenever an instruction defines a result SSA (`self.has_result(ssa) && ssa < self.uses.len as u32`), clear `self.is_dropped[ssa as usize] = false`; on `ILInstr.Drop(ssa)`, check `self.is_dropped[ssa as usize]` for `double drop: value was already dropped` and set `self.is_dropped[ssa as usize] = true`; in `check_ssa_access`, check `self.is_dropped[ssa as usize]` for `use after drop: value was already dropped`.
+      2. **Reject `store` through dropped non-stack pointer in `src/verify.zrl`:** in `check_instr_operands` for `ILInstr.Store(s)`, when `self.check_ssa_defined(s.ptr, span)` is true, if `s.ptr < self.uses.len as u32 && !self.is_stack_slot[s.ptr as usize] && self.is_dropped[s.ptr as usize]`, report `use after drop: value was already dropped` (still calling `self.dec_use(s.ptr)`). In `mark_store`, only clear `self.is_dropped[base as usize] = false` (and reset `OwnerState.Owned`) when `self.is_stack_slot[base as usize]` or `!self.is_dropped[base as usize]`, so storing through a dropped heap `BoxMut` does not revive it.
+      3. **Propagate `is_global_addr` through `ILInstr.Phi` and `ILInstr.RegionCast` (and `points_to_stack` through `ILInstr.RegionCast`) in `src/verify.zrl`:** in `ILInstr.Phi(phi)`, if any `pr.val < self.uses.len as u32 && self.is_global_addr[pr.val as usize]`, set `self.is_global_addr[ssa as usize] = true`. Move `ILInstr.RegionCast(rc)` out of the default arm in `check_instr`, set `OwnerState.Owned`, propagate `points_to_stack` from `is_stack_slot[rc.val] || points_to_stack[rc.val]`, and propagate `is_global_addr` from `is_global_addr[rc.val]`.
+      4. **Dead-code cleanup:** remove unused `is_state_owned` (`src/verify.zrl:233`).
+      5. **Tests:** add negative ZIL tests under `tests/zilc/` (`store_after_drop_heap.zil`, `drop_join_use_after_drop.zil`, `stack_escape_global_phi.zil`, `stack_escape_global_region_cast.zil`) and verify the positive sibling-branch drop control (`drop v1` in `@b1`, `load v1; drop v1` in `@b2`) compiles with `build/zilc` exit `0`.
+    - **Checks:**
+      - C1 (before): run `timeout -k 5s 30s build/zilc <file> -o /dev/null` on `store_after_drop_heap.zil`, `stack_escape_global_phi.zil`, and `stack_escape_global_region_cast.zil` (all exit `0` today), and on the sibling-branch drop control (exits `1` today with `use after drop` / `double drop`); quote all four outputs.
+      - C2 (after): rebuild `build/zoril` and `build/zilc`; `sh scripts/test_zilc_errors.sh` passes all checks including the 4 new negative tests (quote their `[PASS]` lines).
+      - C3 (controls): sibling-branch drop (`@b1: drop v1`, `@b2: load v1; drop v1`) compiles with `exit=0`; `alloc 'heap` + `drop` inside a loop compiles with `exit=0`; outer `alloc 'heap` dropped inside a loop is rejected (`double drop`, `exit=1`); `./scripts/test.sh corpus/zil` passes all 24 tests (quote `Total:`).
+      - C4 (take-out): temporarily revert the `ILInstr.Store` non-stack dropped check in `src/verify.zrl`, rebuild `build/zilc`, and show `sh scripts/test_zilc_errors.sh` fails on `store_after_drop_heap.zil`; restore and rebuild.
+      - C5: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` pass on `zil` (quote `Total:` lines and `reject-diff: base verdicts: fresh (no cache)`; note fuzz record is stale for `src/` and `tools/zilc/`).
+      - Ends with `**Awaiting review:**` bullet for check-in `id:rrgct`.
+
+- [ ] +zil +safety +review +AI-D @zil @checkin Check-in: review ZL6e drop CFG-awareness, store-after-drop, and global_addr Phi/RegionCast fixes (4d7m6) id:rrgct
+    > **Created:** 2026-11-21
+    > **Branch:** `zil`
+    > **Depends:** id:4d7m6
+
+    - **Placed:** directly after `id:4d7m6` (ZL6e), per `AGENTS.md` Check-ins.
+    - **Review:** the steps of `AGENTS.md` Check-ins; re-run `id:4d7m6`'s numbered checks and probe sibling routes (e.g. stack-slot reinit after drop `alloc 'local; drop; store; load`, nested diamond drop, `region_cast` of `alloc 'local` returned directly).
 
 - [ ] +tools +AI-G @main id:z0014 `zilc` refuses text it does not recognise between declarations, and a file that is not ZIL
     > **Created:** 2026-11-03
@@ -83,7 +123,7 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 - [ ] +fuzz +safety +release +AI-D @main Renew the fuzz record (make fuzz-release) after the provenance and ZIL series id:v2f8h
     > **Created:** 2026-11-20
     > **Branch:** `main`
-    > **Depends:** id:w3vde, id:0mbg3, id:mf9gq, id:mskex, id:4ngz8, id:r1shp, id:rz4da
+    > **Depends:** id:w3vde, id:0mbg3, id:mf9gq, id:rrgct, id:mskex, id:4ngz8, id:r1shp, id:rz4da
 
     - **Placed:** after the remaining `@zil` tasks (id:0mbg3) and the generator-debt tasks id:mskex, id:4ngz8 and id:r1shp, and before the release task (id:jtk00), per the maintainer's request (2026-11-20), so the renewed record covers the provenance route classes.
     - **Do:** on a clean `main` tree with `rustc` available, run the release-bar fuzz renewal (`make fuzz-release`, per `id:z0003` and `bench/fuzz/README.md`), triage any findings, update `bench/fuzz/README.md` with the renewed record and commit hashes, and verify `scripts/check_fuzz_fresh.sh` reports fresh for `src/`, `stdlib/`, `tools/zilc`, `tools/zbuild`, and `rt/`.
