@@ -96,6 +96,9 @@ local function feature_list()
         "closure-param-forwards-view", "mutual-recursion-store-through-local",
         -- release-tier liveness, inner-block callee store, and method-elision route builders (id:4ngz8)
         "release-tier-liveness", "inner-block-callee-store", "method-elision-view-reset",
+        -- container-of-views, extend_from_slice/Clone, and by-value aggregate route builders (id:r1shp)
+        "vec-extend-and-clone-views", "owned-container-moved-views",
+        "by-value-aggregate-and-local-struct-ref",
     }
     table.sort(fs)
     return fs
@@ -1262,6 +1265,219 @@ STMT.method_elision_reset = function()
     return { k = "Raw", z = z_lines, r = r_lines }
 end
 
+STMT.vec_extend_and_clone_views = function()
+    P.needs_vec_clone = true
+    local escape = chance(boundary_pct)
+    local use_clone = chance(50)
+    local buf, out, src, v, c = fresh("ecb"), fresh("eco"), fresh("ecs"), fresh("ecv"), fresh("ecc")
+    tag("vec-extend-and-clone-views")
+    if use_clone then
+        if escape then
+            P.needs_vec_clone_escape = true
+            return { k = "Raw", z = {
+                "{",
+                "    let " .. c .. " = clone_views_escape();",
+                "    if " .. c .. ".as_slice()[0][0] != 7 as u64 { return 92; }",
+                "}",
+            }, r = {
+                "{",
+                "    let " .. c .. " = clone_views_escape();",
+                "    if " .. c .. "[0][0] != 7 { std::process::exit(92); }",
+                "}",
+            } }
+        end
+        return { k = "Raw", z = {
+            "{",
+            "    let " .. buf .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. v .. ": Vec<[u64]> = Vec::<[u64]>.new();",
+            "    " .. v .. ".push(&" .. buf .. ");",
+            "    let " .. c .. " = " .. v .. ".clone();",
+            "    if " .. c .. ".as_slice()[0][0] != 7 as u64 { return 92; }",
+            "}",
+        }, r = {
+            "{",
+            "    let " .. buf .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. v .. ": Vec<&[u64]> = Vec::new();",
+            "    " .. v .. ".push(&" .. buf .. ");",
+            "    let " .. c .. " = " .. v .. ".clone();",
+            "    if " .. c .. "[0][0] != 7 { std::process::exit(92); }",
+            "}",
+        } }
+    else
+        if escape then
+            P.needs_vec_extend_escape = true
+            return { k = "Raw", z = {
+                "{",
+                "    let mut " .. out .. ": Vec<[u64]> = Vec::<[u64]>.new();",
+                "    ext_escape(&mut " .. out .. ");",
+                "    if " .. out .. ".as_slice()[0][0] != 7 as u64 { return 92; }",
+                "}",
+            }, r = {
+                "{",
+                "    let mut " .. out .. ": Vec<&[u64]> = Vec::new();",
+                "    ext_escape(&mut " .. out .. ");",
+                "    if " .. out .. "[0][0] != 7 { std::process::exit(92); }",
+                "}",
+            } }
+        end
+        return { k = "Raw", z = {
+            "{",
+            "    let " .. buf .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. out .. ": Vec<[u64]> = Vec::<[u64]>.new();",
+            "    let " .. src .. ": [[u64]; 1] = [&" .. buf .. "];",
+            "    " .. out .. ".extend_from_slice(&" .. src .. ");",
+            "    if " .. out .. ".as_slice()[0][0] != 7 as u64 { return 92; }",
+            "}",
+        }, r = {
+            "{",
+            "    let " .. buf .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. out .. ": Vec<&[u64]> = Vec::new();",
+            "    let " .. src .. ": [&[u64]; 1] = [&" .. buf .. "];",
+            "    " .. out .. ".extend_from_slice(&" .. src .. ");",
+            "    if " .. out .. "[0][0] != 7 { std::process::exit(92); }",
+            "}",
+        } }
+    end
+end
+
+STMT.owned_container_moved_views = function()
+    P.needs_vec_clone = true
+    P.needs_moved_views = true
+    local escape = chance(boundary_pct)
+    local use_vec = chance(50)
+    local buf, v, w = fresh("mvb"), fresh("mvv"), fresh("mvw")
+    tag("owned-container-moved-views")
+    if escape then
+        P.needs_moved_views_escape = true
+        if use_vec then
+            return { k = "Raw", z = {
+                "{",
+                "    let " .. v .. " = ret_moved_vec();",
+                "    if " .. v .. ".as_slice()[0][0] != 7 as u64 { return 92; }",
+                "}",
+            }, r = {
+                "{",
+                "    let " .. v .. " = ret_moved_vec();",
+                "    if " .. v .. "[0][0] != 7 { std::process::exit(92); }",
+                "}",
+            } }
+        else
+            return { k = "Raw", z = {
+                "{",
+                "    let " .. w .. " = ret_moved_wrap();",
+                "    if " .. w .. ".s[0] != 7 as u64 { return 92; }",
+                "}",
+            }, r = {
+                "{",
+                "    let " .. w .. " = ret_moved_wrap();",
+                "    if " .. w .. ".s[0] != 7 { std::process::exit(92); }",
+                "}",
+            } }
+        end
+    end
+    if use_vec then
+        return { k = "Raw", z = {
+            "{",
+            "    let " .. buf .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. v .. ": Vec<[u64]> = Vec::<[u64]>.new();",
+            "    " .. v .. ".push(&" .. buf .. ");",
+            "    if move_view_vec(" .. v .. ") != 7 as u64 { return 92; }",
+            "}",
+        }, r = {
+            "{",
+            "    let " .. buf .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. v .. ": Vec<&[u64]> = Vec::new();",
+            "    " .. v .. ".push(&" .. buf .. ");",
+            "    if move_view_vec(" .. v .. ") != 7 { std::process::exit(92); }",
+            "}",
+        } }
+    else
+        return { k = "Raw", z = {
+            "{",
+            "    let " .. buf .. ": [u64; 2] = [7, 8];",
+            "    let " .. w .. " = ViewWrap { s: &" .. buf .. " };",
+            "    if move_view_wrap(" .. w .. ") != 7 as u64 { return 92; }",
+            "}",
+        }, r = {
+            "{",
+            "    let " .. buf .. ": [u64; 2] = [7, 8];",
+            "    let " .. w .. " = ViewWrap { s: &" .. buf .. " };",
+            "    if move_view_wrap(" .. w .. ") != 7 { std::process::exit(92); }",
+            "}",
+        } }
+    end
+end
+
+STMT.by_value_aggregate_and_local_struct_ref = function()
+    P.needs_agg_view = true
+    local escape = chance(boundary_pct)
+    local byval = chance(50)
+    local a, b, out, av, av2, r = fresh("ava"), fresh("avb"), fresh("avo"), fresh("av1"), fresh("av2"), fresh("avr")
+    tag("by-value-aggregate-and-local-struct-ref")
+    if escape then
+        P.needs_agg_view_escape = true
+        local fn_name = byval and "agg_byval_escape" or "agg_local_ref_escape"
+        return { k = "Raw", z = {
+            "{",
+            "    let " .. a .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. out .. ": [u64] = &" .. a .. ";",
+            "    " .. fn_name .. "(&mut " .. out .. ");",
+            "    if " .. out .. "[0] != 11 as u64 { return 92; }",
+            "}",
+        }, r = {
+            "{",
+            "    let " .. a .. ": [u64; 2] = [7, 8];",
+            "    let mut " .. out .. ": &[u64] = &" .. a .. ";",
+            "    " .. fn_name .. "(&mut " .. out .. ");",
+            "    if " .. out .. "[0] != 11 { std::process::exit(92); }",
+            "}",
+        } }
+    end
+    if byval then
+        return { k = "Raw", z = {
+            "{",
+            "    let " .. a .. ": [u64; 2] = [7, 8];",
+            "    let " .. b .. ": [u64; 2] = [11, 12];",
+            "    let mut " .. out .. ": [u64] = &" .. a .. ";",
+            "    let " .. av .. " = AggView { s: &" .. b .. ", tag: 1 };",
+            "    agg_store(&mut " .. out .. ", " .. av .. ");",
+            "    if " .. out .. "[0] != 11 as u64 { return 92; }",
+            "}",
+        }, r = {
+            "{",
+            "    let " .. a .. ": [u64; 2] = [7, 8];",
+            "    let " .. b .. ": [u64; 2] = [11, 12];",
+            "    let mut " .. out .. ": &[u64] = &" .. a .. ";",
+            "    let " .. av .. " = AggView { s: &" .. b .. ", tag: 1 };",
+            "    agg_store(&mut " .. out .. ", " .. av .. ");",
+            "    if " .. out .. "[0] != 11 { std::process::exit(92); }",
+            "}",
+        } }
+    else
+        return { k = "Raw", z = {
+            "{",
+            "    let " .. a .. ": [u64; 2] = [7, 8];",
+            "    let " .. av .. " = AggView { s: &" .. a .. ", tag: 1 };",
+            "    let " .. r .. " = &" .. av .. ";",
+            "    let mut " .. out .. ": [u64] = &" .. a .. ";",
+            "    let " .. av2 .. " = AggView { s: " .. r .. ".s, tag: 2 };",
+            "    agg_store(&mut " .. out .. ", " .. av2 .. ");",
+            "    if " .. out .. "[0] != 7 as u64 { return 92; }",
+            "}",
+        }, r = {
+            "{",
+            "    let " .. a .. ": [u64; 2] = [7, 8];",
+            "    let " .. av .. " = AggView { s: &" .. a .. ", tag: 1 };",
+            "    let " .. r .. " = &" .. av .. ";",
+            "    let mut " .. out .. ": &[u64] = &" .. a .. ";",
+            "    let " .. av2 .. " = AggView { s: " .. r .. ".s, tag: 2 };",
+            "    agg_store(&mut " .. out .. ", " .. av2 .. ");",
+            "    if " .. out .. "[0] != 7 { std::process::exit(92); }",
+            "}",
+        } }
+    end
+end
+
 -- One statement per (family, position), for the mismatch stream only - it is deliberately *not* in
 -- `BUILDERS`, because a program that carries a mismatch never runs: the crash oracle sees none of it,
 -- and every other feature generated beside it goes untested once the compiler stops there. The
@@ -1327,6 +1543,9 @@ local BUILDERS = {
     { "release_tier_liveness", STMT.release_tier_liveness, 5 },
     { "inner_block_callee_store", STMT.inner_block_callee_store, 5 },
     { "method_elision_reset", STMT.method_elision_reset, 5 },
+    { "vec_extend_and_clone_views", STMT.vec_extend_and_clone_views, 5 },
+    { "owned_container_moved_views", STMT.owned_container_moved_views, 5 },
+    { "by_value_aggregate_and_local_struct_ref", STMT.by_value_aggregate_and_local_struct_ref, 5 },
 }
 
 --- The calibration stream: one program per known memory-safety hole -------------------------------
@@ -3395,6 +3614,68 @@ local function print_decls(lang)
         else
             add("struct ViewPick { tag: i32 }")
             add("impl ViewPick { pub fn pick(self: &ViewPick, s: [u64]) -> [u64] { return s; } }")
+        end
+    end
+    if P.needs_vec_clone and lang ~= "rust" then
+        if not P.needs_arena then
+            add("import \"vec.zrl\";")
+            add("use vec::Vec;")
+        end
+        add("import \"clone.zrl\";")
+        add("")
+    end
+    if P.needs_vec_clone_escape then
+        add("")
+        if lang == "rust" then
+            add("fn clone_views_escape<'a>() -> Vec<&'a [u64]> { let buf: [u64; 2] = [7, 8]; let mut v: Vec<&[u64]> = Vec::new(); v.push(&buf); v.clone() }")
+        else
+            add("fn clone_views_escape() -> Vec<[u64]> { let buf: [u64; 2] = [7, 8]; let mut v: Vec<[u64]> = Vec::<[u64]>.new(); v.push(&buf); return v.clone(); }")
+        end
+    end
+    if P.needs_vec_extend_escape then
+        add("")
+        if lang == "rust" then
+            add("fn ext_escape<'a>(out: &mut Vec<&'a [u64]>) { let buf: [u64; 2] = [7, 8]; let src: [&[u64]; 1] = [&buf]; out.extend_from_slice(&src); }")
+        else
+            add("fn ext_escape(out: &mut Vec<[u64]>) { let buf: [u64; 2] = [7, 8]; let src: [[u64]; 1] = [&buf]; out.extend_from_slice(&src); }")
+        end
+    end
+    if P.needs_moved_views then
+        add("")
+        if lang == "rust" then
+            add("struct ViewWrap<'a> { s: &'a [u64] }")
+            add("fn move_view_vec(v: Vec<&[u64]>) -> u64 { v[0][0] }")
+            add("fn move_view_wrap(w: ViewWrap<'_>) -> u64 { w.s[0] }")
+            if P.needs_moved_views_escape then
+                add("fn ret_moved_vec<'a>() -> Vec<&'a [u64]> { let buf: [u64; 2] = [7, 8]; let mut v: Vec<&[u64]> = Vec::new(); v.push(&buf); v }")
+                add("fn ret_moved_wrap<'a>() -> ViewWrap<'a> { let buf: [u64; 2] = [7, 8]; ViewWrap { s: &buf } }")
+            end
+        else
+            add("struct ViewWrap { s: [u64] }")
+            add("fn move_view_vec(v: Vec<[u64]>) -> u64 { return v.as_slice()[0][0]; }")
+            add("fn move_view_wrap(w: ViewWrap) -> u64 { return w.s[0]; }")
+            if P.needs_moved_views_escape then
+                add("fn ret_moved_vec() -> Vec<[u64]> { let buf: [u64; 2] = [7, 8]; let mut v: Vec<[u64]> = Vec::<[u64]>.new(); v.push(&buf); return v; }")
+                add("fn ret_moved_wrap() -> ViewWrap { let buf: [u64; 2] = [7, 8]; return ViewWrap { s: &buf }; }")
+            end
+        end
+    end
+    if P.needs_agg_view then
+        add("")
+        if lang == "rust" then
+            add("struct AggView<'a> { s: &'a [u64], tag: i32 }")
+            add("fn agg_store<'a>(out: &mut &'a [u64], a: AggView<'a>) { *out = a.s; }")
+            if P.needs_agg_view_escape then
+                add("fn agg_byval_escape<'a>(out: &mut &'a [u64]) { let buf: [u64; 2] = [11, 12]; let av = AggView { s: &buf, tag: 1 }; agg_store(out, av); }")
+                add("fn agg_local_ref_escape<'a>(out: &mut &'a [u64]) { let buf: [u64; 2] = [11, 12]; let av = AggView { s: &buf, tag: 1 }; let r = &av; *out = r.s; }")
+            end
+        else
+            add("struct AggView { s: [u64], tag: i32 }")
+            add("fn agg_store(out: &mut [u64], a: AggView) { *out = a.s; }")
+            if P.needs_agg_view_escape then
+                add("fn agg_byval_escape(out: &mut [u64]) { let buf: [u64; 2] = [11, 12]; let av = AggView { s: &buf, tag: 1 }; agg_store(out, av); }")
+                add("fn agg_local_ref_escape(out: &mut [u64]) { let buf: [u64; 2] = [11, 12]; let av = AggView { s: &buf, tag: 1 }; let r = &av; *out = r.s; }")
+            end
         end
     end
     if P.needs_grow_vec then
