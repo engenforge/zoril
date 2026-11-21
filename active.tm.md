@@ -699,15 +699,20 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: `build/5342d/zoril_base` (with `src/zil_print.zrl` reverted) failed to assemble `tests/modular/private_const/main.zrl` with `Error: symbol \`z3LIME' is already defined` and `Error: symbol \`z4SVALE' is already defined`.
       - C3: `make test` passed: `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (144.0s)`. `make preflight-changed` passed: `Total: 1559 run, 1559 passed, 0 failed, 0 skipped (111.1s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.5s)`.
 
-- [ ] +stdlib +tests +AI-G @main id:z0182 `Vec.resize` shrinking and `Vec.clear` drop the elements they remove
+- [x] +stdlib +tests +AI-G @main id:z0182 `Vec.resize` shrinking and `Vec.clear` drop the elements they remove
     > **Created:** 2026-11-11
     > **Context:** by id:z0174.
     > **Branch:** `main`
+    > **Completed:** 2026-11-21 git:e033ae5
 
     - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the `main` `+AI-G` group after id:w3vde; order inside the group is not critical.
     - **Now:** `resize(new_len, value)` with `new_len < len`, and `clear()`, only set `len`: the removed elements are never dropped. A leak, not a memory hole (nothing reads them again), but it breaks "drop exactly once" for a `T` with a `Drop`, as `truncate`/`clear` do in Rust.
     - **Do:** drop each removed element, last first, before setting `len`; probe a `Drop` counter through both, and an arena-backed `Vec` (whose `free` is a no-op).
     - **Checks:** C1 a run-time test counting one drop per removed element for both; C2 take the drop out and watch it count 0; C3 `make test`, its `Total:` quoted.
+    - **Checks recorded (2026-11-21, git:e033ae5):**
+      - C1: `./scripts/test.sh tests/stdlib/test_vec_resize_clear_drop.zrl` passed (`Total: 2 run, 2 passed, 0 failed, 0 skipped (0.1s)`), verifying last-first drop count for `Vec.clear`, `Vec.resize` shrinking, and arena-backed `Vec`.
+      - C2: with `self.drop_tail(...)` replaced by `self.len = ...` in `build/z0182/stdlib_nodrop/vec.zrl`, `tests/stdlib/test_vec_resize_clear_drop.zrl` exited `1` (`DROP_COUNT == 0`).
+      - C3: `make test` passed: `Total: 4132 run, 4132 passed, 0 failed, 2 skipped (144.8s)`. `make preflight-changed` passed: `Total: 1560 run, 1560 passed, 0 failed, 0 skipped (107.8s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.4s)`.
 
 - [ ] +tests +AI-G @main An or-pattern whose alternatives bind different names is refused with a clear diagnostic id:vdgj4
     > **Created:** 2026-11-14
