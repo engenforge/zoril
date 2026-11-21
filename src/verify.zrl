@@ -237,6 +237,13 @@ impl Verifier {
         }
     }
 
+    fn is_state_dropped(self: &Verifier, state: OwnerState) -> bool {
+        match state {
+            OwnerState.Dropped => { return true; },
+            OwnerState.Uninit | OwnerState.Owned | OwnerState.Moved => { return false; },
+        }
+    }
+
     fn get_ultimate_base(self: &Verifier, ssa: SSAId) -> SSAId {
         let mut curr = ssa;
         let mut depth = 0 as usize;
@@ -1661,6 +1668,15 @@ impl Verifier {
                     }
                 }
             },
+            ILInstr.Drop(ssa) => {
+                if ssa != 0 as u32 && ssa < self.uses.len as u32 {
+                    if self.is_state_dropped(self.current_map.get_state(ssa)) {
+                        self.report_error("double drop: value was already dropped", span);
+                    }
+                    self.current_map.set_state(ssa, OwnerState.Dropped, self.arena);
+                    self.dec_use(ssa);
+                }
+            },
             // Everything else produces an owned result and carries no special ownership
             // effect. Every variant is named (rather than a `_` arm) so a new ILInstr cannot
             // silently default to "owned": `// exhaustive:` above keeps it that way.
@@ -1686,7 +1702,6 @@ impl Verifier {
                 | ILInstr.CheckedAdd(_)
                 | ILInstr.CheckedSub(_)
                 | ILInstr.CheckedMul(_)
-                | ILInstr.Drop(_)
                 | ILInstr.BoundsCheck(_)
                 | ILInstr.SliceLoad(_)
                 | ILInstr.SliceStore(_)
@@ -2262,21 +2277,11 @@ impl Verifier {
         if ssa == 0 as u32 || ssa as usize >= self.uses.len { return; }
         if self.remaining_uses[ssa as usize] > 0 as u32 {
             self.remaining_uses[ssa as usize] = self.remaining_uses[ssa as usize] - 1 as u32;
-            if self.remaining_uses[ssa as usize] == 0 as u32 {
-                let state = self.current_map.get_state(ssa);
-                if self.is_state_owned(state) {
-                    let is_borrow = self.borrowed_from[ssa as usize] != 0 as u32;
-                    let is_copy = self.is_copy_type_ssa(ssa);
-                    if !is_copy || is_borrow {
-                        self.current_map.set_state(ssa, OwnerState.Dropped, self.arena);
-                    }
-                }
-            }
         }
     }
 
-    fn check_ssa_access(self: &mut Verifier, ssa: SSAId, span: Span) {
-        if ssa == 0 as u32 { return; }
+    fn check_ssa_defined(self: &mut Verifier, ssa: SSAId, span: Span) -> bool {
+        if ssa == 0 as u32 { return false; }
         // Every operand a required position names must be a value this function defines.
         // NO_SSA in such a position is the `{ } *r = 5` shape after lowering: the address came
         // from an instruction with no operand, and the store then faulted at run time.
@@ -2285,7 +2290,15 @@ impl Verifier {
                 "invalid ZIL (a compiler bug): an instruction names an operand that no value defines",
                 span
             );
-            return;
+            return false;
+        }
+        return true;
+    }
+
+    fn check_ssa_access(self: &mut Verifier, ssa: SSAId, span: Span) {
+        if !self.check_ssa_defined(ssa, span) { return; }
+        if self.is_state_dropped(self.current_map.get_state(ssa)) {
+            self.report_error("use after drop: value was already dropped", span);
         }
         self.dec_use(ssa);
     }
@@ -2331,11 +2344,14 @@ impl Verifier {
                 | ILInstr.IORingClose(ssa)
                 | ILInstr.Likely(ssa)
                 | ILInstr.Unlikely(ssa)
-                | ILInstr.Move(ssa)
-                | ILInstr.Drop(ssa)
-                | ILInstr.EndBorrow(ssa)
-                | ILInstr.Release(ssa) => {
+                | ILInstr.Move(ssa) => {
                 self.check_ssa_access(ssa, span);
+            },
+            ILInstr.Drop(ssa) => {
+                let _ = self.check_ssa_defined(ssa, span);
+            },
+            ILInstr.EndBorrow(ssa) | ILInstr.Release(ssa) => {
+                if self.check_ssa_defined(ssa, span) { self.dec_use(ssa); }
             },
             // A `ret` with no value spells its operand as NO_SSA; only a defined value is read.
             ILInstr.Ret(ssa) => {
@@ -2343,7 +2359,7 @@ impl Verifier {
             },
             ILInstr.Borrow(b) => { self.check_ssa_access(b.val, span); },
             ILInstr.Store(s) => {
-                self.check_ssa_access(s.ptr, span);
+                if self.check_ssa_defined(s.ptr, span) { self.dec_use(s.ptr); }
                 self.check_ssa_access(s.val, span);
             },
             ILInstr.Alloc(a) => {
