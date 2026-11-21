@@ -677,7 +677,28 @@ impl ZirVerifier {
             i = i + 1 as usize;
         }
         if !is_move { return; }
+        self.check_place_move_allowed(place, span, state, locals);
+        let loc = &locals[place.base as usize - 1 as usize];
+        let is_temp = (loc.kind == LOCAL_KIND_TMP || loc.name_id == 0 as u32)
+            && place.projections.len == 0 as usize
+            && self.is_moved_temp_type(loc.ty);
+        let is_copy = self.is_copy_type(self.get_place_type(place, locals))
+            || (place.projections.len == 0 as usize && loc.is_copy);
+        if is_copy && !is_temp { return; }
+        if !loc.is_copy || is_temp {
+            state.ownership[place.base as usize] = OWN_MOVED;
+            state.maybe_live[place.base as usize] = false;
+        }
+    }
 
+    fn check_place_move_allowed(
+        self: &mut ZirVerifier,
+        place: &Place,
+        span: Span,
+        state: &mut ZirAnalysisState,
+        locals: [Local]
+    ) {
+        if place.base == 0 as u32 || place.base > locals.len as u32 { return; }
         let loc = &locals[place.base as usize - 1 as usize];
         // A temporary holding a raw pointer, a `&mut`, or a box is moved even when its type is
         // Copy: those are the linear, ownership-like forms. A *shared* reference is Copy in the
@@ -736,10 +757,6 @@ impl ZirVerifier {
         if self.is_borrowed_by_other(place, state, locals) {
             self.report_var_error("cannot move borrowed value", place.base, "", span, locals);
             return;
-        }
-        if !loc.is_copy || is_temp {
-            state.ownership[place.base as usize] = OWN_MOVED;
-            state.maybe_live[place.base as usize] = false;
         }
     }
 
@@ -2795,10 +2812,21 @@ impl ZirVerifier {
                 let is_cap_alias = local_id != 0 as u32
                     && (local_id as usize) <= locals.len
                     && locals[local_id as usize - 1 as usize].is_capture_alias;
+                let is_pat_bind = local_id != 0 as u32
+                    && (local_id as usize) <= locals.len
+                    && locals[local_id as usize - 1 as usize].is_pattern_binding;
                 if is_cap_alias {
                     if let ZirRvalue.Use(p) = *rv {
                         self.cur_rv = rv_bit(rv);
                         self.check_place_use(&p, false, span, state, locals);
+                    } else {
+                        self.check_rvalue_use(rv, span, state, locals, func);
+                    }
+                } else if is_pat_bind {
+                    if let ZirRvalue.Use(p) = *rv {
+                        self.cur_rv = rv_bit(rv);
+                        self.check_place_use(&p, false, span, state, locals);
+                        self.check_place_move_allowed(&p, span, state, locals);
                     } else {
                         self.check_rvalue_use(rv, span, state, locals, func);
                     }

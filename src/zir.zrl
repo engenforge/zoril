@@ -61,6 +61,10 @@ pub struct Local {
     // never owns the value, so a move out of it is rejected rather than copied (which would leave
     // two owners and drop the value twice).
     pub is_capture_alias: bool,
+    // Bound by a by-value pattern (`bind_pattern_name`): its initializer reads its sub-place from
+    // the scrutinee while the rest of the pattern (and later arms if this arm fails) still tests
+    // disjoint parts; the scrutinee as a whole is consumed where the pattern succeeds (`consume_place`).
+    pub is_pattern_binding: bool,
     // For the compiler-generated local holding a closure's environment: the span of the closure
     // expression, so a diagnostic can name it ("the environment of the closure created at
     // line:col") instead of "variable (id: N)". Zero for every other local.

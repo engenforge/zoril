@@ -423,16 +423,30 @@ impl ZirLowerer {
         let prev_has_guard = self.pattern_has_guard;
         let prev_entry_block = self.pattern_entry_block;
         let prev_in_drop_type = self.pattern_in_drop_type;
+        let prev_bound_base = self.pattern_bound_base;
+        let prev_alt_locals_base = self.pattern_alt_locals_base;
         let skipped_base = self.pattern_skipped.len();
+        let bound_base = self.pattern_bound_names.len();
+        let alt_locals_base = self.pattern_alt_locals.len();
         self.pattern_binds_fresh = true;
         self.pattern_moved = false;
         self.pattern_or_depth = 0 as u32;
         self.pattern_has_guard = false;
         self.pattern_entry_block = self.current_block_idx;
         self.pattern_in_drop_type = 0 as u32;
+        self.pattern_bound_base = bound_base;
+        self.pattern_alt_locals_base = alt_locals_base;
 
         self.lower_pattern(init_place, ty, pat, pass_block, fail_block);
 
+        while self.pattern_bound_names.len() > bound_base {
+            self.pattern_bound_names.pop();
+        }
+        while self.pattern_alt_locals.len() > alt_locals_base {
+            self.pattern_alt_locals.pop();
+        }
+        self.pattern_bound_base = prev_bound_base;
+        self.pattern_alt_locals_base = prev_alt_locals_base;
         let pat_moves = self.pattern_moved;
         self.pattern_binds_fresh = prev_binds_fresh;
         self.pattern_moved = prev_moved;

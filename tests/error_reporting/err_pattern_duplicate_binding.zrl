@@ -1,0 +1,28 @@
+// A pattern cannot bind the same variable name more than once in the same alternative, nor name
+// the same struct field twice.
+// expected compile fail
+// EXPECT: identifier bound more than once in the same pattern: a
+// EXPECT: struct pattern names a field twice: a
+// EXPECT: identifier bound more than once in the same pattern: x
+struct S { p: *mut u8 }
+impl Drop for S {
+    fn drop(self: &mut S) {}
+}
+struct W2 { a: S, b: S }
+
+fn dup_tuple(t: (S, S)) {
+    let (a, a) = t;
+}
+
+fn dup_struct_field(w: W2) {
+    let W2 { a: x, a: y, .. } = w;
+}
+
+fn dup_in_or_alternative(t: (i32, i32)) {
+    match t {
+        (x, x) | (x, 1) => {},
+        _ => {},
+    }
+}
+
+fn main() -> i32 { return 0; }
