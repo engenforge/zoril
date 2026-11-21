@@ -1,5 +1,32 @@
 # Completed Archive
 
+- [x] +zil +safety +AI-G @zil ZL6a Reject non-slice slice ops, non-pointer load, >6-arg syscall, and wrong call arity in src/il_typecheck.zrl id:0r49n
+    > **Created:** 2026-11-21
+    > **Branch:** `zil`
+    > **Depends:** id:0mbg3
+    > **Completed:** 2026-11-21 git:90862da
+
+    - **Placed:** directly after `id:0mbg3` (ZL6), Rank 1 common-mistake checks in `src/il_typecheck.zrl`.
+    - **Do:**
+      1. In `src/il_typecheck.zrl` (`instr_type_issue`), for `ILInstr.SliceLen(src)`, `ILInstr.SlicePtr(src)`, `ILInstr.SliceLoad(sl)` (`sl.base`), and `ILInstr.SliceStore(ss)` (`ss.base`): check that the operand's type (when defined and non-zero) is `ILType.Slice`; otherwise return a clear diagnostic naming the opcode and operand type (e.g. `slice_len of ... which is not a slice`).
+      2. In `src/il_typecheck.zrl` (`instr_type_issue`), for `ILInstr.Load(src)`: add the `pointee(m, pt) == 0` check matching `ILInstr.Store` (line 306), returning `load through <ty>, which is not a pointer (the address operand must be pointer-typed)`.
+      3. In `src/il_typecheck.zrl` (`instr_type_issue`), for `ILInstr.Syscall(s)`: if `s.args.len > 6 as usize`, return `syscall with more than 6 arguments (runtime supports 0..6)`.
+      4. In `src/il_typecheck.zrl` (`instr_type_issue`), for `ILInstr.Call(c)`: when `(c.func_idx as usize) < m.functions.len()`, reject `c.args.len != callee.params_len` for non-variadic callees and `c.args.len < callee.params_len` for variadic callees, naming the expected and actual argument counts.
+      5. Add negative ZIL tests under `tests/zilc/` with `// EXPECT:` headers (verified by `scripts/test_zilc_errors.sh`): `slice_len_non_slice.zil`, `slice_ptr_non_slice.zil`, `load_non_pointer.zil`, `syscall_too_many_args.zil`, `call_wrong_arity.zil`.
+    - **Checks:**
+      - C1 (before): run `timeout -k 5s 30s build/zilc <file> -o /dev/null` on all five new `tests/zilc/` files before editing `src/il_typecheck.zrl`; quote exit code `0` for each.
+      - C2 (after): rebuild `build/zoril` and `build/zilc`; `sh scripts/test_zilc_errors.sh` passes all checks including the 5 new tests (quote the 5 `[PASS]` lines).
+      - C3 (take-out): temporarily revert the `SliceLen`/`SlicePtr` check in `src/il_typecheck.zrl`, rebuild `build/zilc`, and show `sh scripts/test_zilc_errors.sh` fails on `slice_len_non_slice.zil` and `slice_ptr_non_slice.zil`; restore and rebuild.
+      - C4: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` pass on `zil` (quote `Total:` lines and `reject-diff: base verdicts: fresh (no cache)`; note fuzz record is stale for `src/` and `tools/zilc/`).
+      - Ends with `**Awaiting review:**` bullet for check-in `id:mf9gq`.
+    - **Completion:**
+      - Implemented in `src/il_typecheck.zrl` (`is_slice_type`, `slice_operand_issue` for `SliceLen`/`SlicePtr`/`SliceLoad`/`SliceStore`, `pointee(m, pt) == 0` in `Load`, `s.args.len > 6` in `Syscall`, `m.callee(&c)` arity checks in `Call`) and fixed `src/lower_zir_to_zil.zrl` (emit `SlicePtr` instead of `Load` when casting an `ILTYPE_SLICE` SSA value to a pointer-like type, caught by `tests/functional/basic/lower_edge_cases.zrl` and `tests/bootstrap/clobbered_args.zrl`).
+      - C1 (before): `for f in tests/zilc/slice_len_non_slice.zil tests/zilc/slice_ptr_non_slice.zil tests/zilc/load_non_pointer.zil tests/zilc/syscall_too_many_args.zil tests/zilc/call_wrong_arity.zil; do timeout -k 5s 30s build/zilc "$f" -o /dev/null; echo "$f: exit=$?"; done` -> all 5 exited `0`.
+      - C2 (after): `make build/zoril build/zilc && sh scripts/test_zilc_errors.sh` -> `[PASS] tests/zilc/call_wrong_arity.zil`, `[PASS] tests/zilc/load_non_pointer.zil`, `[PASS] tests/zilc/slice_len_non_slice.zil`, `[PASS] tests/zilc/slice_ptr_non_slice.zil`, `[PASS] tests/zilc/syscall_too_many_args.zil` (all 23 checks passed).
+      - C3 (take-out): reverted `SliceLen`/`SlicePtr` in `src/il_typecheck.zrl`, rebuilt, `sh scripts/test_zilc_errors.sh` failed with `[FAIL] tests/zilc/slice_len_non_slice.zil` and `[FAIL] tests/zilc/slice_ptr_non_slice.zil`; restored and rebuilt.
+      - C4: `make test` (`build/zl6a_make_test2.log`): `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (147.4s)`. `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (`build/zl6a_preflight.log`): `reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against 7c3b0071a628890b2812e9bbb51aaa79be938fb6`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (108.1s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.4s)`. Fuzz record is stale for `src/` and `tools/zilc/`.
+    - **Awaiting review:** check-in `id:mf9gq`.
+
 - [x] +zil +safety +audit +AI-D @zil ZL6 Which common mistakes in hand-written ZIL zilc can catch from what ZIL says id:0mbg3
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decision in id:ahd1c (`future.tm.md`)
