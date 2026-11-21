@@ -714,9 +714,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: with `self.drop_tail(...)` replaced by `self.len = ...` in `build/z0182/stdlib_nodrop/vec.zrl`, `tests/stdlib/test_vec_resize_clear_drop.zrl` exited `1` (`DROP_COUNT == 0`).
       - C3: `make test` passed: `Total: 4132 run, 4132 passed, 0 failed, 2 skipped (144.8s)`. `make preflight-changed` passed: `Total: 1560 run, 1560 passed, 0 failed, 0 skipped (107.8s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.4s)`.
 
-- [ ] +tests +AI-G @main An or-pattern whose alternatives bind different names is refused with a clear diagnostic id:vdgj4
+- [x] +tests +AI-G @main An or-pattern whose alternatives bind different names is refused with a clear diagnostic id:vdgj4
     > **Created:** 2026-11-14
     > **Branch:** `main`
+    > **Completed:** 2026-11-21 git:d4a660d
 
     - **Promoted (main, 2026-11-20, the maintainer's request):** from `future.tm.md` for the next release, in the `main` `+AI-G` group after id:w3vde; order inside the group is not critical.
     - **Placed:** in `future.tm.md` by the check-in id:vvtam: a spec rule not enforced and a poor diagnostic, not a hole (a binding missing from the alternative that matched is caught as `use of uninitialized variable` when it is read).
@@ -728,6 +729,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C2: with the new check commented out, C1 fails (`I.A(n) | I.B(m)` compiles).
       - C3: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` exits 0. Quote the `fresh (no cache)` line and list every newly refused program with its reason; any test in `tests/` that is newly refused is a finding to report, not one to rewrite.
       - C4: full `make test` passes; quote the `Total:` line.
+    - **Checks recorded (2026-11-21, git:d4a660d):**
+      - C1: `./scripts/test.sh tests/error_reporting/err_or_pattern_binding_missing.zrl` passed (`Total: 2 run, 2 passed, 0 failed, 0 skipped (0.1s)`), and `build/zoril --emit-zil` printed `a binding in an or-pattern must appear in every alternative: '<name>' is missing from one` once for each of the three functions (`25:9`, `31:9`, `38:9`).
+      - C2: with `build/vdgj4/zoril_base` (without the new check), `err_or_pattern_binding_missing.zrl` failed (`Total: 2 run, 1 passed, 1 failed, 0 skipped`).
+      - C3: `REJECT_DIFF_NO_CACHE=1 make preflight-changed` exited 0 (`reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against d9ce4430f3a87182dc7bccc21a6fe439e159b0e8`, `Total: 1561 run, 1561 passed, 0 failed, 0 skipped (107.7s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.3s)`).
+      - C4: `make test` passed: `Total: 4133 run, 4133 passed, 0 failed, 2 skipped (144.6s)`.
 
 - [ ] +diagnostics +AI-G @main id:z0015 `zoril` stops after a bounded number of errors, and says when a file does not look like Zoril source
     > **Created:** 2026-11-03
