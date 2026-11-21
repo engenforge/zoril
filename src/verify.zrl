@@ -636,6 +636,7 @@ impl Verifier {
                         ILInstr.RegionCast(rc) => { from = rc.val; },
                         ILInstr.Borrow(b) => { from = b.val; },
                         ILInstr.SliceConstruct(sc) => { from = sc.ptr; },
+                        ILInstr.SlicePtr(src) => { from = src; },
                         ILInstr.Phi(phi) => {
                             for pr in phi.preds {
                                 if ok && (pr.val as usize) < n {
@@ -717,8 +718,6 @@ impl Verifier {
                             | ILInstr.SliceLoad(_)
                             | ILInstr.SliceStore(_)
                             | ILInstr.SliceLen(_)
-                            | ILInstr.SlicePtr(_)
-                            | ILInstr.SlicePtr(_)
                             | ILInstr.ArrayConstruct(_)
                             | ILInstr.ArrayLoad(_)
                             | ILInstr.ArrayStore(_)
@@ -1619,6 +1618,16 @@ impl Verifier {
                     }
                 }
             },
+            ILInstr.SlicePtr(src) => {
+                if self.has_result(ssa) && ssa < self.uses.len as u32 {
+                    self.current_map.set_state(ssa, OwnerState.Owned, self.arena);
+                    if src < self.uses.len as u32
+                        && (self.is_stack_slot[src as usize]
+                            || self.points_to_stack[src as usize]) {
+                        self.points_to_stack[ssa as usize] = true;
+                    }
+                }
+            },
             // Everything else produces an owned result and carries no special ownership
             // effect. Every variant is named (rather than a `_` arm) so a new ILInstr cannot
             // silently default to "owned": `// exhaustive:` above keeps it that way.
@@ -1649,7 +1658,6 @@ impl Verifier {
                 | ILInstr.SliceLoad(_)
                 | ILInstr.SliceStore(_)
                 | ILInstr.SliceLen(_)
-                | ILInstr.SlicePtr(_)
                 | ILInstr.ArrayConstruct(_)
                 | ILInstr.ArrayLoad(_)
                 | ILInstr.ArrayStore(_)
