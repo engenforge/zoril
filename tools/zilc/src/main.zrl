@@ -13,6 +13,7 @@ import "qbe.zrl";
 import "sys.zrl";
 import "version.zrl";
 import "file.zrl";
+import "verify.zrl";
 use file::{read_file_raw, read_stdin_raw};
 use il_cfg::ILModule;
 use il_typecheck::type_check_function;
@@ -23,6 +24,7 @@ use os_linux::open;
 use mem_raw::{ArenaHeader, arena_init, memcpy, zoril_allocator_alloc};
 use qbe::QBEEmitter;
 use sys::arg_to_slice;
+use verify::Verifier;
 use version::version;
 use zil_parse::ZilParser;
 
@@ -210,6 +212,8 @@ fn main(argc: i32, argv: **u8) -> i32 {
     }
     let parser_name = name_buf.as_slice();
     if !operand_types_ok(module, table, arena) { return 1; }
+    let mut verifier = Verifier.new(arena, module, table, in_path);
+    if verifier.verify() != 0 { return 1; }
 
     let mut qbe = QBEEmitter.new(arena, module, table, out_fd);
     qbe.module_doc = parser_doc;

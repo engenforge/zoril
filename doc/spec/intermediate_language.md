@@ -472,6 +472,8 @@ There is no generic `elem_addr` opcode: array/slice element access goes through 
 
 ## 6. Safety Rules and Error Catalog
 
+Zoril's memory-safety guarantees cover programs compiled from Zoril source (`.zrl`), where the front end runs both the ZIR-level ownership/borrow/region verifier and the ZIL verifier (`src/verify.zrl`). Hand-written ZIL (`.zil`) is checked by `zilc` for operand types and ZIL-level verification (stack-address escapes, constant arena bounds, and common-mistake checks), not for full memory safety.
+
 The Zoril Verifier ensures safety by checking for the following rules.
 
 ### 6.1 Ownership and Move Semantics
