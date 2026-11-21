@@ -57,12 +57,6 @@ For functions containing tens of thousands of instructions in a single basic blo
 
 `v0.1.0-alpha` targets **Linux x86_64**. Portability to other operating systems (FreeBSD, OpenBSD, macOS, Windows) and CPU architectures (AArch64, RISC-V) is planned for future milestones; see [the roadmap](doc/ROADMAP.md#portability).
 
-### `zilc` skips text it does not recognise between declarations
-
-- **Symptom:** `zilc` reads a declaration where its first word says one starts, and steps over anything else at the top level of a file. A file of random bytes is therefore accepted with no message and lowered to an empty program, and a stray word can be read as the start of a declaration it was not meant to be. A malformed declaration is still reported, at its line, and `zilc` stops there.
-- **What works:** every ZIL file `zoril --emit-zil` writes, and hand-written ZIL whose top level holds only declarations and comments (see "Starting from ZIL" in [Getting Started](doc/getting_started.md#starting-from-zil); `zilc` checks types, while the ownership and region checks run in `zoril`).
-- **Fix planned (post-release):** text between declarations, a NUL byte and invalid UTF-8 become errors.
-
 ### `zbuild` builds `.zrl` programs only
 
 - **Symptom:** `zbuild prog.zil` parses the ZIL as Zoril and prints a page of `expected declaration` errors.

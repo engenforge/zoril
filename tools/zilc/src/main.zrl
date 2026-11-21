@@ -69,6 +69,92 @@ fn str_after_prefix(s: [u8], prefix_len: usize) -> [u8] {
     return unsafe { @slice((s.ptr as usize + prefix_len) as *u8, s.len - prefix_len) };
 }
 
+// Returns 0 if valid UTF-8 with no NUL bytes, 1 if a NUL byte is present, 2 if invalid UTF-8.
+fn validate_source_utf8(s: [u8]) -> i32 {
+    let mut i = 0 as usize;
+    while i < s.len {
+        let b = s[i];
+        if b == 0 as u8 { return 1; }
+        if b < 0x80 as u8 {
+            i = i + 1 as usize;
+        } else if b >= 0xC2 as u8 && b <= 0xDF as u8 {
+            if i + 1 as usize >= s.len { return 2; }
+            let b1 = s[i + 1 as usize];
+            if b1 < 0x80 as u8 || b1 > 0xBF as u8 { return 2; }
+            i = i + 2 as usize;
+        } else if b == 0xE0 as u8 {
+            if i + 2 as usize >= s.len { return 2; }
+            let b1 = s[i + 1 as usize];
+            let b2 = s[i + 2 as usize];
+            if b1 < 0xA0 as u8 || b1 > 0xBF as u8 || b2 < 0x80 as u8 || b2 > 0xBF as u8 {
+                return 2;
+            }
+            i = i + 3 as usize;
+        } else if (b >= 0xE1 as u8 && b <= 0xEC as u8) || (b >= 0xEE as u8 && b <= 0xEF as u8) {
+            if i + 2 as usize >= s.len { return 2; }
+            let b1 = s[i + 1 as usize];
+            let b2 = s[i + 2 as usize];
+            if b1 < 0x80 as u8 || b1 > 0xBF as u8 || b2 < 0x80 as u8 || b2 > 0xBF as u8 {
+                return 2;
+            }
+            i = i + 3 as usize;
+        } else if b == 0xED as u8 {
+            if i + 2 as usize >= s.len { return 2; }
+            let b1 = s[i + 1 as usize];
+            let b2 = s[i + 2 as usize];
+            if b1 < 0x80 as u8 || b1 > 0x9F as u8 || b2 < 0x80 as u8 || b2 > 0xBF as u8 {
+                return 2;
+            }
+            i = i + 3 as usize;
+        } else if b == 0xF0 as u8 {
+            if i + 3 as usize >= s.len { return 2; }
+            let b1 = s[i + 1 as usize];
+            let b2 = s[i + 2 as usize];
+            let b3 = s[i + 3 as usize];
+            if b1 < 0x90 as u8
+                || b1 > 0xBF as u8
+                || b2 < 0x80 as u8
+                || b2 > 0xBF as u8
+                || b3 < 0x80 as u8
+                || b3 > 0xBF as u8 {
+                return 2;
+            }
+            i = i + 4 as usize;
+        } else if b >= 0xF1 as u8 && b <= 0xF3 as u8 {
+            if i + 3 as usize >= s.len { return 2; }
+            let b1 = s[i + 1 as usize];
+            let b2 = s[i + 2 as usize];
+            let b3 = s[i + 3 as usize];
+            if b1 < 0x80 as u8
+                || b1 > 0xBF as u8
+                || b2 < 0x80 as u8
+                || b2 > 0xBF as u8
+                || b3 < 0x80 as u8
+                || b3 > 0xBF as u8 {
+                return 2;
+            }
+            i = i + 4 as usize;
+        } else if b == 0xF4 as u8 {
+            if i + 3 as usize >= s.len { return 2; }
+            let b1 = s[i + 1 as usize];
+            let b2 = s[i + 2 as usize];
+            let b3 = s[i + 3 as usize];
+            if b1 < 0x80 as u8
+                || b1 > 0x8F as u8
+                || b2 < 0x80 as u8
+                || b2 > 0xBF as u8
+                || b3 < 0x80 as u8
+                || b3 > 0xBF as u8 {
+                return 2;
+            }
+            i = i + 4 as usize;
+        } else {
+            return 2;
+        }
+    }
+    return 0;
+}
+
 // Operand types (src/il_typecheck.zrl): ZIL with a value of the wrong type for an instruction
 // is rejected, naming the function and the instruction, rather than miscompiled.
 fn operand_types_ok(m: &ILModule, table: &InternTable, arena: *mut ArenaHeader) -> bool {
@@ -174,6 +260,16 @@ fn main(argc: i32, argv: **u8) -> i32 {
 
     if source.len == 0 as usize {
         eprint("error: empty input\n");
+        return 1;
+    }
+
+    let utf8_status = validate_source_utf8(source);
+    if utf8_status == 1 {
+        eprint("zilc: error: input contains NUL byte\n");
+        return 1;
+    }
+    if utf8_status == 2 {
+        eprint("zilc: error: input is not valid UTF-8\n");
         return 1;
     }
 

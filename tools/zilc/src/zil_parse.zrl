@@ -1456,6 +1456,9 @@ impl ZilParser {
         self.current_func_id = id;
 
         if is_extern {
+            if self.match_lit("{") {
+                self.match_lit("}");
+            }
             self.current_func = 0 as *mut ILFunction;
             return;
         }
@@ -2106,56 +2109,101 @@ impl ZilParser {
         return false;
     }
 
+    fn is_word_char(b: u8) -> bool {
+        return (b >= 'a' as u8 && b <= 'z' as u8)
+            || (b >= 'A' as u8 && b <= 'Z' as u8)
+            || (b >= '0' as u8 && b <= '9' as u8)
+            || b == '_' as u8;
+    }
+
+    fn at_word(self: &ZilParser, lit: [u8]) -> bool {
+        let p = self.pos as usize;
+        if p + lit.len > self.source.len { return false; }
+        let mut i = 0 as usize;
+        while i < lit.len {
+            if self.source[p + i] != lit[i] { return false; }
+            i = i + 1 as usize;
+        }
+        if p + lit.len < self.source.len && Self.is_word_char(self.source[p + lit.len]) {
+            return false;
+        }
+        return true;
+    }
+
+    fn at_fn_id(self: &ZilParser) -> bool {
+        let mut p = self.pos as usize;
+        if p >= self.source.len || self.source[p] != 'f' as u8 { return false; }
+        p = p + 1 as usize;
+        let mut digits = 0 as usize;
+        while p < self.source.len && self.source[p] >= '0' as u8 && self.source[p] <= '9' as u8 {
+            digits = digits + 1 as usize;
+            p = p + 1 as usize;
+        }
+        if digits == 0 as usize { return false; }
+        return p >= self.source.len || !Self.is_word_char(self.source[p]);
+    }
+
+    fn unexpected_top_level_error(self: &ZilParser, start: u64) {
+        eprint("zilc: line ");
+        let mut err = stderr();
+        let _ = write_u64(&mut err, self.line as u64);
+        eprint(": expected a declaration, found '");
+        let p = start as usize;
+        if p < self.source.len {
+            let b = self.source[p];
+            if Self.is_word_char(b) {
+                let mut end = p + 1 as usize;
+                while end < self.source.len
+                    && Self.is_word_char(self.source[end])
+                    && (end - p) < 64 as usize {
+                    end = end + 1 as usize;
+                }
+                eprint(subslice(self.source, p, end - p));
+            } else if b >= 0x21 as u8 && b <= 0x7e as u8 {
+                eprint(subslice(self.source, p, 1 as usize));
+            } else {
+                let hex = "0123456789abcdef";
+                let hi = (b >> 4) as usize;
+                let lo = (b & 15 as u8) as usize;
+                let esc: [u8; 4] = ['\\' as u8, 'x' as u8, hex[hi], hex[lo]];
+                eprint(&esc);
+            }
+        }
+        eprint("'\n");
+        exit(1);
+    }
+
     pub fn parse_module(self: &mut ZilParser) {
         self.scan_module_doc();
         while true {
             self.skip_trivia();
-            if self.peek() == 0 as u8 {
+            if self.pos >= self.source.len as u64 {
                 break;
             }
-            // The dispatch below must consume something. It does not when a byte looks like the
-            // start of a declaration and the declaration does not follow: the leftovers of a type
-            // spelling this zilc does not know used to re-enter the `t` branch forever, burning the
-            // build's whole timeout with no message (2026-10-13). A dropped declaration would be a
-            // silent miscompile, so say which byte is stuck and stop.
             let start = self.pos;
-            let c = self.peek();
-            if c == 'm' as u8 {
-                if self.match_lit("module") {
-                    self.skip_trivia();
-                    let m_id = self.parse_ident();
-                    if m_id != 0 as u32 {
-                        self.module_name = self.intern_table.lookup(m_id);
-                    }
-                    if self.peek() == ';' as u8 { self.advance(); }
-                    continue;
+            if self.at_word("module") {
+                self.match_lit("module");
+                self.skip_trivia();
+                let m_id = self.parse_ident();
+                if m_id != 0 as u32 {
+                    self.module_name = self.intern_table.lookup(m_id);
                 }
-                self.advance();
-            } else if c == 't' as u8 {
+                if self.peek() == ';' as u8 { self.advance(); }
+                continue;
+            } else if self.at_word("type") {
                 self.parse_type_def();
-            } else if c == 'g' as u8 || c == 'c' as u8 {
+            } else if self.at_word("global") || self.at_word("const") || self.at_extern_global() {
                 self.parse_global();
-            } else if c == 'e' as u8 && self.at_extern_global() {
-                self.parse_global();
-            } else if c == 'f' as u8 || c == 'e' as u8 {
+            } else if self.at_word("extern") || self.at_word("export") || self.at_fn_id() {
                 self.parse_function(false);
-            } else if c == 'l' as u8 {
-                if self.match_lit("local") {
-                    self.parse_function(true);
-                } else {
-                    self.advance();
-                }
+            } else if self.at_word("local") {
+                self.match_lit("local");
+                self.parse_function(true);
             } else {
-                self.advance();
+                self.unexpected_top_level_error(start);
             }
             if self.pos == start {
-                eprint("zilc: line ");
-                let mut err = stderr();
-                let _ = write_u64(&mut err, self.line as u64);
-                eprint(": cannot read `");
-                eprint(subslice(self.source, start as usize, 1 as usize));
-                eprint("`: not a declaration this zilc knows\n");
-                exit(1);
+                self.unexpected_top_level_error(start);
             }
         }
     }
