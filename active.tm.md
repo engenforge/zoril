@@ -6,10 +6,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +zil +safety +AI-G @zil ZL6c Reject storing local stack pointers into globals and propagate points_to_stack through Phi in src/verify.zrl id:djynw
+- [x] +zil +safety +AI-G @zil ZL6c Reject storing local stack pointers into globals and propagate points_to_stack through Phi in src/verify.zrl id:djynw
     > **Created:** 2026-11-21
     > **Branch:** `zil`
     > **Depends:** id:epx51
+    > **Completed:** 2026-11-21 git:78690b9
 
     - **Placed:** after `id:epx51` (ZL6b), Rank 3 local stack-pointer escape checks in `src/verify.zrl`.
     - **Do:**
@@ -25,6 +26,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4 (take-out): temporarily revert the `is_global_addr` store check in `src/verify.zrl`, rebuild `build/zilc`, and show `sh scripts/test_zilc_errors.sh` fails on `stack_escape_global.zil`; restore and rebuild.
       - C5: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` pass on `zil` (quote `Total:` lines and `reject-diff: base verdicts: fresh (no cache)`; note fuzz record is stale for `src/` and `tools/zilc/`).
       - Ends with `**Awaiting review:**` bullet for check-in `id:mf9gq`.
+    - **Completion:**
+      - Implemented in `src/verify.zrl` (`is_global_addr` allocated/zeroed beside `points_to_stack`, set on `GlobalAddr`, propagated through `Cast`/`FieldAddr`/`Add`/`Move`/`Borrow`, checked in `mark_store`, and `points_to_stack` propagated through `Phi` predecessors).
+      - C1 (before): `for f in tests/zilc/stack_escape_global.zil tests/zilc/stack_escape_phi.zil; do timeout -k 5s 30s build/zilc "$f" -o /dev/null; echo "$f: exit=$?"; done` -> both exited `0`.
+      - C2 (after): `sh scripts/test_zilc_errors.sh` -> `[PASS] tests/zilc/stack_escape_global.zil`, `[PASS] tests/zilc/stack_escape_phi.zil` (all 27 checks passed).
+      - C3 (control): storing `slice_ptr` of `string_const "ok"` into a global compiled with `build/zilc` (`control exit=0`).
+      - C4 (take-out): reverted `is_global_addr` store check in `src/verify.zrl`, rebuilt, `sh scripts/test_zilc_errors.sh` failed with `[FAIL] tests/zilc/stack_escape_global.zil: expected a failure with: region escape: storing a pointer to local stack storage into a global`; restored and rebuilt.
+      - C5: `make test` (`build/zl6c_make_test.log`): `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (148.2s)`. `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (`build/zl6c_preflight.log`): `reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against 7c3b0071a628890b2812e9bbb51aaa79be938fb6`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (108.0s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.3s)`. Fuzz record is stale for `src/` and `tools/zilc/`.
+    - **Awaiting review:** check-in `id:mf9gq`.
 
 - [ ] +zil +safety +AI-G @zil ZL6d Reject use-after-drop and double-drop in src/verify.zrl id:pkcsy
     > **Created:** 2026-11-21
@@ -44,6 +53,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4 (take-out): temporarily revert the `OwnerState.Dropped` check in `src/verify.zrl`, rebuild `build/zilc`, and show `sh scripts/test_zilc_errors.sh` fails on `use_after_drop.zil` and `double_drop.zil`; restore and rebuild.
       - C5: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` pass on `zil` (quote `Total:` lines and `reject-diff: base verdicts: fresh (no cache)`; note fuzz record is stale for `src/` and `tools/zilc/`).
       - Ends with `**Awaiting review:**` bullet for check-in `id:mf9gq`.
+    - **Completion:**
+      - Implemented in `src/verify.zrl` (`is_global_addr` allocated/zeroed beside `points_to_stack`, set on `GlobalAddr`, propagated through `Cast`/`FieldAddr`/`Add`/`Move`/`Borrow`, checked in `mark_store`, and `points_to_stack` propagated through `Phi` predecessors).
+      - C1 (before): `for f in tests/zilc/stack_escape_global.zil tests/zilc/stack_escape_phi.zil; do timeout -k 5s 30s build/zilc "$f" -o /dev/null; echo "$f: exit=$?"; done` -> both exited `0`.
+      - C2 (after): `sh scripts/test_zilc_errors.sh` -> `[PASS] tests/zilc/stack_escape_global.zil`, `[PASS] tests/zilc/stack_escape_phi.zil` (all 27 checks passed).
+      - C3 (control): storing `slice_ptr` of `string_const "ok"` into a global compiled with `build/zilc` (`control exit=0`).
+      - C4 (take-out): reverted `is_global_addr` store check in `src/verify.zrl`, rebuilt, `sh scripts/test_zilc_errors.sh` failed with `[FAIL] tests/zilc/stack_escape_global.zil: expected a failure with: region escape: storing a pointer to local stack storage into a global`; restored and rebuilt.
+      - C5: `make test` (`build/zl6c_make_test.log`): `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (148.2s)`. `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (`build/zl6c_preflight.log`): `reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against 7c3b0071a628890b2812e9bbb51aaa79be938fb6`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (108.0s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.3s)`. Fuzz record is stale for `src/` and `tools/zilc/`.
+    - **Awaiting review:** check-in `id:mf9gq`.
 
 - [ ] +zil +safety +review +AI-D @zil @checkin Check-in: review ZL6 common-mistake checks (0r49n, epx51, djynw, pkcsy) id:mf9gq
     > **Created:** 2026-11-21
