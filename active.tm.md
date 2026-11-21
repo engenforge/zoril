@@ -6,11 +6,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +zil +AI-G @zil ZL2 string_const gives a Slice in the front end and in zilc, read back with slice_ptr id:qpc8d
+- [x] +zil +AI-G @zil ZL2 string_const gives a Slice in the front end and in zilc, read back with slice_ptr id:qpc8d
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decisions in id:1kaye (`future.tm.md`), 2026-11-13
     > **Branch:** `zil`
     > **Depends:** id:m6vm3
+    > **Completed:** 2026-11-21 git:d771472
 
     - **Placed:** after ZL1, which settles it.
 
@@ -28,6 +29,13 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `make test-checked` (or `./scripts/test.sh --flags --checked` on a string-literal test) passes without faulting on `$SS<id>` poisoning.
       - C4: take-out check — revert `IL_INSTR_STRING_CONST` in `qbe.zrl` to `copy $S<id>` (scratch edit) and show `15_io_syscall.zil` fails / prints wrong byte count; restore.
       - C5: `make test` and `make preflight-changed` pass on `zil` (quoting `Total:` lines and selfhost fixpoint; note fuzz record is stale for `src/` and `tools/zilc/`).
+    - **Completion note:**
+      - Also fixed three QBE lowering interactions in `tools/zilc/src/qbe.zrl` exposed by `Slice<u8, 'local> = string_const`: `IL_INSTR_FIELD_ADDR` handles aggregate `f.val` directly (instead of `get_ptr_inner_type` returning 0), `IL_INSTR_CALL`/`IL_INSTR_CALL_PTR` pass `Slice` / pointer-typed parameters with `l` (`force_ptr`) instead of `:T_N` by-value struct, and `IL_INSTR_STORE` stores `storel` when `s.ptr` points to a pointer (`Ptr<Ptr<...>>`). Updated `README.md` binary size figures (`~38 KB` / `~25 KB` stripped) for `binary-sizes`.
+      - C1: `build/zoril --emit-zil corpus/zrl/01_hello_syscall.zrl -I stdlib=stdlib -o build/zl2/01.zil` emitted `v8: Slice<u8, 'local> = string_const "Hello, Zoril!\n"`.
+      - C2: `corpus/zil/15_io_syscall.zil` printed `11` bytes and exact text `IL Syscall\n`; `corpus/zil/19_fd_io.zil` exited `0`.
+      - C3: `make test-checked` (via `make preflight-changed PREFLIGHT_BASE=HEAD`) passed all 1562 tests without faulting on `$SS<id>` poisoning: `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (107.8s)`.
+      - C4: take-out check — reverted `IL_INSTR_STRING_CONST` in `tools/zilc/src/qbe.zrl` to `copy $S<id>`, rebuilt `build/zilc`, and `corpus/zil/15_io_syscall.zil` printed `0` bytes; restored and rebuilt `build/zilc`.
+      - C5: `make test`: `Total: 4134 run, 4134 passed, 0 failed, 2 skipped (146.1s)`; `make preflight-changed PREFLIGHT_BASE=HEAD`: `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, `[5] fixpoint — gen3.zil vs gen4.zil must be identical`, `[PASS] fuzz-calibrate: all 23 calibration programs are in their fixed state (21 refused, 2 accepted with one drop)`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against 7c3b0071a628890b2812e9bbb51aaa79be938fb6`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (107.8s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.3s)`. Fuzz record is stale for `src/` and `tools/zilc/` (renewed in `id:v2f8h`).
 
 - [ ] +zil +AI-G @zil ZL3 One spelling for cast: zilc refuses bitcast and the corpus is rewritten id:htrqb
     > **Created:** 2026-11-13
