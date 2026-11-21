@@ -2425,7 +2425,13 @@ impl ZirToZilLowerer {
             if is_target_ptr_like {
                 let elem_ty = self.get_slice_element_type(place_ty);
                 let ptr_ty = (*self.builder).get_ptr_type(elem_ty);
-                val = (*self.builder).emit_with_type(ILInstr.Load(val), ptr_ty);
+                let val_ty = (*self.builder).get_ssa_type(val);
+                if val_ty != 0 as u32
+                    && (*self.builder.get_type_decl(val_ty)).def.get_tag() == ILTYPE_SLICE {
+                    val = (*self.builder).emit_with_type(ILInstr.SlicePtr(val), ptr_ty);
+                } else {
+                    val = (*self.builder).emit_with_type(ILInstr.Load(val), ptr_ty);
+                }
             }
         }
         // A cast whose source is a pointer to exactly the target aggregate type (e.g.

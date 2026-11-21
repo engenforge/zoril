@@ -340,8 +340,38 @@ fn instr_type_issue(
         },
         ILInstr.Load(src) => {
             let pt = f.get_ssa_type(src);
+            if src != NO_SSA as u32 && pt != 0 as u32 && pointee(m, pt) == 0 as u32 {
+                let mut out = unsafe { ByteVec.new_raw(arena) };
+                out.push_slice("load through ");
+                push_type_name(m, pt, out);
+                out.push_slice(
+                    ", which is not a pointer (the address operand must be pointer-typed)"
+                );
+                return out.as_slice();
+            }
             if !prim_eq(m, pointee(m, pt), res) {
                 return describe2(m, "load of ", res, " through ", pt, arena);
+            }
+        },
+        ILInstr.SliceLen(src) => {
+            let msg = slice_operand_issue(m, f, "slice_len", src, arena);
+            if msg.len > 0 as usize { return msg; }
+        },
+        ILInstr.SlicePtr(src) => {
+            let msg = slice_operand_issue(m, f, "slice_ptr", src, arena);
+            if msg.len > 0 as usize { return msg; }
+        },
+        ILInstr.SliceLoad(sl) => {
+            let msg = slice_operand_issue(m, f, "slice_load", sl.base, arena);
+            if msg.len > 0 as usize { return msg; }
+        },
+        ILInstr.SliceStore(ss) => {
+            let msg = slice_operand_issue(m, f, "slice_store", ss.base, arena);
+            if msg.len > 0 as usize { return msg; }
+        },
+        ILInstr.Syscall(s) => {
+            if s.args.len > 6 as usize {
+                return "syscall with more than 6 arguments (runtime supports 0..6)";
             }
         },
         ILInstr.Add(op)
@@ -402,9 +432,18 @@ fn instr_type_issue(
             }
         },
         ILInstr.Call(c) => {
-            if (c.func_idx as usize) < m.functions.len() {
-                let callee = &m.functions[c.func_idx as usize];
+            let p_callee = m.callee(&c);
+            if p_callee != 0 as *mut ILFunction {
+                let callee = unsafe { &*p_callee };
                 if !callee.is_variadic {
+                    if c.args.len != callee.params_len {
+                        let mut out = unsafe { ByteVec.new_raw(arena) };
+                        out.push_slice("call expected ");
+                        push_dec(out, callee.params_len as u64);
+                        out.push_slice(" arguments, got ");
+                        push_dec(out, c.args.len as u64);
+                        return out.as_slice();
+                    }
                     for i in 0 as usize..c.args.len {
                         if i >= callee.params_len { break; }
                         let at = f.get_ssa_type(c.args[i]);
@@ -420,6 +459,13 @@ fn instr_type_issue(
                             );
                         }
                     }
+                } else if c.args.len < callee.params_len {
+                    let mut out = unsafe { ByteVec.new_raw(arena) };
+                    out.push_slice("variadic call expected at least ");
+                    push_dec(out, callee.params_len as u64);
+                    out.push_slice(" arguments, got ");
+                    push_dec(out, c.args.len as u64);
+                    return out.as_slice();
                 }
             }
         },
@@ -488,6 +534,34 @@ fn field_base_ok(m: &ILModule, base: u32, idx: u32) -> bool {
         },
         _ => true,
     };
+}
+
+// Whether TY is a slice type (or 0 / out-of-range, which is left to other checks).
+fn is_slice_type(m: &ILModule, ty: u32) -> bool {
+    if ty == 0 as u32 || ty as usize > m.types.len() { return true; }
+    return match m.types[ty as usize - 1 as usize].def {
+        ILType.Slice(_) => true,
+        _ => false,
+    };
+}
+
+fn slice_operand_issue(
+    m: &ILModule,
+    f: &ILFunction,
+    op_name: [u8],
+    ssa: SSAId,
+    arena: *mut ArenaHeader
+) -> [u8] {
+    let ty = f.get_ssa_type(ssa);
+    if ssa != NO_SSA as u32 && ty != 0 as u32 && !is_slice_type(m, ty) {
+        let mut out = unsafe { ByteVec.new_raw(arena) };
+        out.push_slice(op_name);
+        out.push_slice(" of ");
+        push_type_name(m, ty, out);
+        out.push_slice(", which is not a slice");
+        return out.as_slice();
+    }
+    return "";
 }
 
 // What pointer type TY points at; 0 if it is not a pointer.
