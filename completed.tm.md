@@ -1,5 +1,30 @@
 # Completed Archive
 
+- [x] +zil +safety +review +AI-D @zil @checkin Check-in: review ZL6e drop CFG-awareness, store-after-drop, and global_addr Phi/RegionCast fixes (4d7m6) id:rrgct
+    > **Created:** 2026-11-21
+    > **Branch:** `zil`
+    > **Depends:** id:4d7m6
+    > **Completed:** 2026-11-21 git:a7fcf3c
+
+    - **Placed:** directly after `id:4d7m6` (ZL6e), per `AGENTS.md` Check-ins.
+    - **Review:** the steps of `AGENTS.md` Check-ins; re-run `id:4d7m6`'s numbered checks and probe sibling routes (e.g. stack-slot reinit after drop `alloc 'local; drop; store; load`, nested diamond drop, `region_cast` of `alloc 'local` returned directly).
+    - **Review findings (2026-11-21, git:a7fcf3c):**
+      - Reviewed `git show a7fcf3c` (`src/verify.zrl` and 4 new `tests/zilc/` negative tests). All 5 items of `id:4d7m6`'s **Do** are cleanly implemented: `has_drop`-gated per-block `block_dropped_out`/`block_visited` CFG-aware drop propagation across Pass 1 and Pass 2 (`in_loop`), `ILInstr.Store` non-stack dropped pointer check + `mark_store` guard, `is_global_addr` propagation through `ILInstr.Phi` and `ILInstr.RegionCast` (plus `points_to_stack` through `ILInstr.RegionCast`), and removal of dead `is_state_owned`/`is_state_dropped`.
+      - Re-ran `id:4d7m6` checks: `sh scripts/test_zilc_errors.sh` passed all 33 checks (`[PASS]` on `drop_join_use_after_drop.zil`, `stack_escape_global_phi.zil`, `stack_escape_global_region_cast.zil`, `store_after_drop_heap.zil`); `./scripts/test.sh corpus/zil` -> `Total: 25 run, 25 passed, 0 failed, 0 skipped (0.2s)`. Verified `build/zl6e_preflight.log` (`reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `0 newly accepted, 0 newly refused, of 69179 programs`).
+      - Sibling-route probes against `build/zilc`:
+        - Stack-slot reinit after drop (`alloc 'local; store; drop; store; load`) and struct-field reinit after drop: `exit=0` (expected).
+        - Sibling-branch drop (`@b1: drop v1`, `@b2: load v1; drop v1`): `exit=0` (expected).
+        - Nested diamond drop (`@b3` drops `v1`, `@b4` skips, `@b5`/`@b2` join at `@b6: load v1`): `exit=1` (`use after drop: value was already dropped`).
+        - Drop-join double drop (`@b1: drop v1`, `@b2` skips, `@b3: drop v1`): `exit=1` (`double drop: value was already dropped`).
+        - Non-RPO acyclic drop (`@b0 -> @b2: drop v1 -> @b1: load v1`): `exit=1` (`use after drop: value was already dropped`, caught by Pass 2).
+        - Loop `alloc 'heap` + `drop` inside loop: `exit=0` (expected); outer `alloc 'heap` dropped in 2-block loop: `exit=1` (`double drop: value was already dropped`).
+        - `region_cast 'static` of `alloc 'local` returned directly: `exit=1` (`region escape: returning a pointer to local stack storage`).
+        - `field_addr` on `global_addr` storing `alloc 'local`: `exit=1` (`region escape: storing a pointer to local stack storage into a global`).
+      - Unrelated pre-existing observations (non-blocking for `zil` merge):
+        - Single-block self-loop (`@b1: drop v1; branch v0, @b1, @b2`) exits `0` because `Verifier.loop_blocks` (`src/verify.zrl:1598`) scans `0..i` instead of `0..i + 1`. Filed in `future.tm.md` as `id:27amc`.
+        - Storing through a `region_cast` alias of a dropped heap pointer (`v4 = region_cast 'heap, v1; drop v1; store v4, v2`) exits `0` (per-SSA `is_dropped` does not track drop across pointer aliases; noted as accepted scope for ZIL verifier).
+      - Plan check: next `@checkin` (`id:rz4da`) is already in place after the pre-renewal `@main` `+AI-G` batch (`id:mskex`, `id:4ngz8`, `id:r1shp`, `id:z0014`, `id:z0016`). Branch `zil` is ready for the maintainer's merge to `main`.
+
 - [x] +zil +safety +AI-G @zil ZL6e Make drop tracking CFG-aware, reject store-after-drop on non-stack pointers, and propagate is_global_addr through Phi/RegionCast in src/verify.zrl id:4d7m6
     > **Created:** 2026-11-21
     > **Branch:** `zil`
