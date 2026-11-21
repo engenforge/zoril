@@ -114,19 +114,54 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4: take-out check — commented out `verifier.verify()` in `tools/zilc/src/main.zrl`, rebuilt `build/zilc`, and `tests/zilc/stack_escape.zil` exited `0`; restored and rebuilt `build/zilc`.
       - C5: `sh scripts/check_safety_model.sh`: `PASS: safety_model.md is self-consistent.`; `make test`: `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (147.6s)`; `make preflight-changed PREFLIGHT_BASE=HEAD`: `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, `[PASS] fuzz-calibrate: all 23 calibration programs are in their fixed state (21 refused, 2 accepted with one drop)`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (107.9s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.2s)`. Fuzz record is stale for `tools/zilc/` (renewed in `id:v2f8h`).
 
-- [ ] +zil +review +AI-D @zil @checkin Check-in: review the ZIL +AI-G batch (qpc8d, htrqb, ehh6m, egsdq) id:rvjcz
+- [x] +zil +review +AI-D @zil @checkin Check-in: review the ZIL +AI-G batch (qpc8d, htrqb, ehh6m, egsdq) id:rvjcz
     > **Created:** 2026-11-21
     > **Branch:** `zil`
     > **Depends:** id:qpc8d, id:htrqb, id:ehh6m, id:egsdq
+    > **Completed:** 2026-11-21 git:9af8182
 
     - **Placed:** directly after id:egsdq (ZL5), the last of the `@zil` `+AI-G` batch (ZL2..ZL5), by the check-in id:3nrvs (`AGENTS.md`, Check-ins, step 3).
     - **Review:** the steps of `AGENTS.md` Check-ins; re-run each task's numbered checks and probe the sibling routes.
+    - **Review findings (2026-11-21, commits `d771472..9af8182`):**
+      - Re-ran checks across ZL2..ZL5: `build/zoril --emit-zil corpus/zrl/01_hello_syscall.zrl` emits `v8: Slice<u8, 'local> = string_const "Hello, Zoril!\n"`; `grep -rn 'bitcast' corpus/zil/` is empty; `sh scripts/test_zilc_errors.sh` passed all 17 checks; `sh scripts/test_test_headers.sh` passed including `stdout_ok` and `stdout_mismatch`; `sh scripts/check_safety_model.sh` passed (`safety model: 79 rows — 78 proven, 0 GAP (1 N/A)`); `./scripts/test.sh corpus/` passed (`Total: 67 run, 67 passed, 0 failed, 0 skipped (0.5s)`); `sh scripts/check_portability.sh` passed.
+      - Probed ZL2 sibling routes (normal, `--checked`, and `zbuild`): direct calls (`[u8]`, `&[u8]`), `fn` pointer calls (`fn([u8])`, `fn(&[u8])` with string literal and array slice), returning `[u8]` and struct holding `[u8]`, loop/branch temporary string literals under `--checked` (no rodata poisoning), storing `&"hello"` into `let r: &[u8]` — all passed.
+      - Audited ZL4 corpus stdout: all 6 of 66 corpus tests with non-empty stdout have matching `.stdout` fixtures (0 missed); `tools/ztest/` delegates to `scripts/test.sh` so it inherits `.stdout` checking. Minor note: `scripts/lib/test_runner.sh` uses `head -c 200` for failure preview (non-POSIX flag, supported on GNU/BSD/macOS, passes `check_portability.sh`).
+      - **Bug found in ZL2/ZL5 (`src/verify.zrl`):** `ILInstr.SlicePtr` was placed in the no-op arms of both storage-flow / `#[borrows(..)]` analysis (`src/verify.zrl` lines 720–721, where `| ILInstr.SlicePtr(_)` is also duplicated) and `verify_instr` stack-pointer propagation (`src/verify.zrl` line 1652). Probed in hand-written ZIL: returning `slice_construct` of `alloc 'local` is rejected (`error: region escape: returning a pointer to local stack storage`), whereas returning `slice_ptr` of that same slice is silently accepted (`rc=0`). Returning `string_const` and `slice_ptr(string_const)` are both accepted (`rc=0`).
+      - **Plan edits:** added `id:1dwwz` (`ZL5b`, `+AI-G`) after `id:rvjcz` to propagate storage-flow and `points_to_stack` through `ILInstr.SlicePtr` (and remove the duplicate match arm) with a negative test, followed by check-in `id:ks44a`; updated `id:0mbg3` `Depends:` to include `id:1dwwz, id:ks44a`.
+
+- [ ] +zil +safety +AI-G @zil ZL5b Propagate stack-pointer and borrows storage flow through ILInstr.SlicePtr in src/verify.zrl id:1dwwz
+    > **Created:** 2026-11-21
+    > **Branch:** `zil`
+    > **Depends:** id:rvjcz
+
+    - **Found by:** check-in `id:rvjcz` probing ZL5 (`id:egsdq`) sibling routes.
+    - **Placed:** directly after `id:rvjcz` and before `id:0mbg3` (ZL6), so `src/verify.zrl` catches stack-pointer escapes through `slice_ptr` before ZL6 audits `zilc`'s remaining checks.
+    - **Do:**
+      1. In `src/verify.zrl`, move `ILInstr.SlicePtr(src)` out of the no-op arm in the storage-flow analysis (lines 720–721, removing both duplicate entries) and add `ILInstr.SlicePtr(src) => { from = src; },` beside `ILInstr.SliceConstruct(sc) => { from = sc.ptr; },` (line 638).
+      2. In `src/verify.zrl`, move `ILInstr.SlicePtr(src)` out of the no-op arm in `verify_instr` (line 1652) and propagate `self.is_stack_slot[src] || self.points_to_stack[src]` to `self.points_to_stack[ssa]` beside `ILInstr.SliceConstruct` (line 1612), setting `OwnerState.Owned` on `ssa`.
+      3. Add `tests/zilc/slice_ptr_stack_escape.zil` (returning `slice_ptr` of `slice_construct` over `alloc 'local`) with `// EXPECT: region escape: returning a pointer to local stack storage`, verified by `scripts/test_zilc_errors.sh`.
+      4. Ensure returning `string_const` and `slice_ptr(string_const)` remain accepted by `zilc` (neither is a stack slot).
+    - **Checks:**
+      - C1 (before): run `timeout -k 5s 30s build/zilc tests/zilc/slice_ptr_stack_escape.zil -o /dev/null` before editing `src/verify.zrl` and quote exit code `0`.
+      - C2 (after): rebuild `build/zoril` and `build/zilc`; `timeout -k 5s 30s build/zilc tests/zilc/slice_ptr_stack_escape.zil -o /dev/null` exits 1 with `region escape: returning a pointer to local stack storage`; `sh scripts/test_zilc_errors.sh` passes all checks.
+      - C3 (control): a hand-written ZIL function returning `slice_ptr` of `string_const "hello"` still compiles with `build/zilc` (exit 0).
+      - C4 (take-out): revert the `points_to_stack` propagation for `ILInstr.SlicePtr` in `src/verify.zrl`, rebuild `build/zilc`, and show `sh scripts/test_zilc_errors.sh` fails on `tests/zilc/slice_ptr_stack_escape.zil`; restore and rebuild.
+      - C5: `make test` and `make preflight-changed` pass on `zil` (quoting `Total:` lines; note fuzz record is stale for `src/` and `tools/zilc/`).
+      - Ends with `**Awaiting review:**` bullet for check-in `id:ks44a`.
+
+- [ ] +zil +safety +review +AI-D @zil @checkin Check-in: review ZL5b SlicePtr verifier fix (1dwwz) id:ks44a
+    > **Created:** 2026-11-21
+    > **Branch:** `zil`
+    > **Depends:** id:1dwwz
+
+    - **Placed:** directly after `id:1dwwz` (`+safety` `+AI-G` fix) and before `id:0mbg3`, per `AGENTS.md` Check-ins.
+    - **Review:** the steps of `AGENTS.md` Check-ins; re-run `id:1dwwz`'s numbered checks and probe sibling routes (e.g. `slice_ptr` through `phi`, `cast`, or stored into a global/out-param).
 
 - [ ] +zil +safety +audit +AI-D @zil ZL6 Which common mistakes in hand-written ZIL zilc can catch from what ZIL says id:0mbg3
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decision in id:ahd1c (`future.tm.md`)
     > **Branch:** `zil`
-    > **Depends:** id:egsdq, id:rvjcz
+    > **Depends:** id:egsdq, id:rvjcz, id:1dwwz, id:ks44a
 
     - **Placed:** after ZL5, which gives zilc the ZIL verifier this task extends.
 
