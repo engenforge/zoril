@@ -667,19 +667,19 @@ impl ZilPrinter {
         return true;
     }
 
-    // `-c` writes a global module-qualified ("a::util::COUNT"), as it does a function, so the
-    // module that defines it and one that imports it name one symbol (zilc mangles a name with
-    // `::` by its components, whatever the module header says).
+    // Writes a global module-qualified ("a::util::COUNT") in both whole-program and `-c` mode,
+    // as a function's name is, so two modules with a private const or static of the same name
+    // get distinct symbols and an importer names the same symbol the definer emits.
     fn write_global_name(self: &ZilPrinter, g: &ILGlobal) {
-        if self.compile_only && g.source_file != 0 as u32 {
-            let stem = canonical_module_stem(
-                self.module.arena,
-                self.intern_table.lookup(g.source_file)
-            );
-            if stem.len > 0 as usize {
-                self.zil_write(stem);
-                self.zil_write("::");
-            }
+        let path = if g.source_file != 0 as u32 {
+            self.intern_table.lookup(g.source_file)
+        } else {
+            self.entry_path
+        };
+        let stem = canonical_module_stem(self.module.arena, path);
+        if stem.len > 0 as usize {
+            self.zil_write(stem);
+            self.zil_write("::");
         }
         self.zil_write(self.intern_table.lookup(g.name));
     }

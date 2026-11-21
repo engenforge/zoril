@@ -98,4 +98,19 @@ for m in lib_a lib_b; do
 done
 echo "  [PASS] drop is exported, its private callee is local, and the two modules link and run"
 
+# ── Test 5: private consts and statics of the same name across modules ─────
+echo "5. Private const/static qualification across modules (whole-program and zbuild)..."
+PC=tests/modular/private_const
+run_with_timeout -k 5s 30s "$ZORIL_BIN" -I stdlib=stdlib --emit-zil -o "$WORK_DIR/pc_wp.zil" "$PC/main.zrl"
+"$ZILC_BIN" "$WORK_DIR/pc_wp.zil" "$WORK_DIR/pc_wp.ssa"
+"$BACKEND_BIN" -o "$WORK_DIR/pc_wp.s" "$WORK_DIR/pc_wp.ssa"
+"$ASSEMBLER_BIN" -o "$WORK_DIR/pc_wp.o" "$WORK_DIR/pc_wp.s"
+"$LINKER_BIN" -o "$WORK_DIR/pc_wp.bin" "$WORK_DIR/pc_wp.o" "$RT_HOST"
+"$WORK_DIR/pc_wp.bin" </dev/null || { echo "FAIL: private_const whole-program exited $?"; exit 1; }
+rm -rf "$WORK_DIR/pc_cache"
+run_with_timeout -k 5s 120s "$ZBUILD_BIN" -I stdlib=stdlib --cache-dir "$WORK_DIR/pc_cache" -o "$WORK_DIR/pc_zb.bin" "$PC/main.zrl" >"$WORK_DIR/pc_zb.log" 2>&1 \
+    || { echo "FAIL: private_const does not build under zbuild"; cat "$WORK_DIR/pc_zb.log"; exit 1; }
+"$WORK_DIR/pc_zb.bin" </dev/null || { echo "FAIL: private_const zbuild exited $?"; exit 1; }
+echo "  [PASS] private consts and statics qualify by module in whole-program and zbuild"
+
 echo "PASS: all modular mangling acceptance tests passed."

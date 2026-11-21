@@ -70,7 +70,7 @@ fi
 
 # image_of FILE NAME — the emitted byte list of the global NAME, comma-separated.
 image_of() {
-    sed -n "s/.* $2 = {\(.*\)}$/\1/p" "$1" | head -n 1
+    sed -n "s/.*[:: ]$2 = {\(.*\)}$/\1/p" "$1" | head -n 1
 }
 
 # The partly-written image: the tag, then only zeros. A payload or padding byte that is not a zero

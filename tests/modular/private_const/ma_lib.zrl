@@ -1,0 +1,7 @@
+const LIM: i32 = 1;
+static SVAL: i32 = 10;
+pub const PUB_VAL: i32 = 100;
+
+pub fn get_a() -> i32 {
+    return LIM + SVAL;
+}

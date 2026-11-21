@@ -1,0 +1,14 @@
+// expected exit 0
+import "ma_lib.zrl";
+import "mb_lib.zrl";
+
+const LIM: i32 = 3;
+static SVAL: i32 = 30;
+
+fn main() -> i32 {
+    if ma_lib::get_a() != 11 { return 1; }
+    if mb_lib::get_b() != 22 { return 2; }
+    if ma_lib::PUB_VAL != 100 { return 3; }
+    if LIM != 3 || SVAL != 30 { return 4; }
+    return 0;
+}
