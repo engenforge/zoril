@@ -6,10 +6,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +zil +safety +AI-G @zil ZL6e Make drop tracking CFG-aware, reject store-after-drop on non-stack pointers, and propagate is_global_addr through Phi/RegionCast in src/verify.zrl id:4d7m6
+- [x] +zil +safety +AI-G @zil ZL6e Make drop tracking CFG-aware, reject store-after-drop on non-stack pointers, and propagate is_global_addr through Phi/RegionCast in src/verify.zrl id:4d7m6
     > **Created:** 2026-11-21
     > **Branch:** `zil`
     > **Depends:** id:mf9gq
+    > **Completed:** 2026-11-21 git:a7fcf3c
 
     - **Placed:** directly after check-in `id:mf9gq`, fixing the two ZL6d defects and two ZL6c sibling gaps found during the ZL6 review.
     - **Do:**
@@ -25,6 +26,14 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C4 (take-out): temporarily revert the `ILInstr.Store` non-stack dropped check in `src/verify.zrl`, rebuild `build/zilc`, and show `sh scripts/test_zilc_errors.sh` fails on `store_after_drop_heap.zil`; restore and rebuild.
       - C5: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` pass on `zil` (quote `Total:` lines and `reject-diff: base verdicts: fresh (no cache)`; note fuzz record is stale for `src/` and `tools/zilc/`).
       - Ends with `**Awaiting review:**` bullet for check-in `id:rrgct`.
+    - **Completion:**
+      - Implemented in `src/verify.zrl` (per-function `is_dropped` + `has_drop`-gated `block_dropped_out`/`block_visited` CFG-aware drop propagation across Pass 1 and Pass 2 `in_loop` blocks, `ILInstr.Store` non-stack dropped pointer check in `check_operands` + `mark_store` guard, `is_global_addr` propagation through `ILInstr.Phi` and `ILInstr.RegionCast`, `points_to_stack` propagation through `ILInstr.RegionCast`, and removal of unused `is_state_owned`/`is_state_dropped`).
+      - C1 (before): `tests/zilc/store_after_drop_heap.zil: exit=0`, `tests/zilc/stack_escape_global_phi.zil: exit=0`, `tests/zilc/stack_escape_global_region_cast.zil: exit=0`; sibling-branch drop control exited `1` with `error: use after drop: value was already dropped` and `error: double drop: value was already dropped`.
+      - C2 (after): `make build/zoril build/zilc && sh scripts/test_zilc_errors.sh` -> `[PASS] tests/zilc/drop_join_use_after_drop.zil`, `[PASS] tests/zilc/stack_escape_global_phi.zil`, `[PASS] tests/zilc/stack_escape_global_region_cast.zil`, `[PASS] tests/zilc/store_after_drop_heap.zil` (all 33 checks passed).
+      - C3 (controls): sibling-branch drop (`@b1: drop v1`, `@b2: load v1; drop v1`) compiled `exit=0`; `alloc 'heap` + `drop` inside loop compiled `exit=0`; outer `alloc 'heap` dropped inside loop rejected (`error: double drop: value was already dropped`, `exit=1`); `./scripts/test.sh corpus/zil` -> `Total: 25 run, 25 passed, 0 failed, 0 skipped (0.2s)`.
+      - C4 (take-out): reverted `ILInstr.Store` non-stack dropped check in `src/verify.zrl`, rebuilt, `sh scripts/test_zilc_errors.sh` failed with `[FAIL] tests/zilc/store_after_drop_heap.zil: expected a failure with: use after drop: value was already dropped` (`takeout_rc=1`); restored and rebuilt (`sh scripts/test_zilc_errors.sh` passed all 33 checks).
+      - C5: `make test` (`build/zl6e_make_test.log`): `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (145.1s)`. `REJECT_DIFF_NO_CACHE=1 make preflight-changed` (`build/zl6e_preflight.log`): `reject-diff: base verdicts: fresh (no cache); base front end 114 s`, `[PASS] reject-diff: 0 newly accepted (none that must be refused, or all allowed), 0 newly refused, of 69179 programs against 7c3b0071a628890b2812e9bbb51aaa79be938fb6`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (108.3s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.3s)`. Fuzz record is stale for `src/` and `tools/zilc/`.
+    - **Awaiting review:** check-in `id:rrgct` — re-run `sh scripts/test_zilc_errors.sh` and probe sibling routes (stack-slot reinit after drop `alloc 'local; drop; store; load`, nested diamond drop, `region_cast` of `alloc 'local` returned directly).
 
 - [ ] +zil +safety +review +AI-D @zil @checkin Check-in: review ZL6e drop CFG-awareness, store-after-drop, and global_addr Phi/RegionCast fixes (4d7m6) id:rrgct
     > **Created:** 2026-11-21
