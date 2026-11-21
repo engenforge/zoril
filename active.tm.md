@@ -87,11 +87,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: take-out check — disabled `cmp -s` with `false &&` in `scripts/lib/test_runner.sh`, and `sh scripts/test_test_headers.sh` reported `[FAIL] stdout_mismatch: expected '[FAIL] build/test-headers/cases/stdout_mismatch.zrl (output mismatch)', got: [PASS] build/test-headers/cases/stdout_mismatch.zrl (37ms)`; restored.
       - C4: `make test`: `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (146.1s)`.
 
-- [ ] +zil +safety +AI-G @zil ZL5 zilc runs the ZIL verifier that the compiler runs id:egsdq
+- [x] +zil +safety +AI-G @zil ZL5 zilc runs the ZIL verifier that the compiler runs id:egsdq
     > **Created:** 2026-11-13
     > **Context:** the maintainer's decisions in id:1kaye (`future.tm.md`), 2026-11-13
     > **Branch:** `zil`
     > **Depends:** id:ehh6m
+    > **Completed:** 2026-11-21 git:9af8182
 
     - **Placed:** after ZL4, last in the series. Check-in `id:rvjcz` follows it.
 
@@ -106,6 +107,12 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - C3: `make closure-private-names` and `make selfhost-build-check` pass (`zilc-boot` builds through `stage1`).
       - C4: take-out check — temporarily comment out the `Verifier.verify()` call in `tools/zilc/src/main.zrl`, rebuild `build/zilc`, and show C1's stack-escape test is accepted; restore.
       - C5: `scripts/check_safety_model.sh` and `make test` and `make preflight-changed` pass (quoting `Total:` lines; note fuzz record is stale for `tools/zilc/`).
+    - **Completion note:**
+      - C1: `timeout -k 5s 30s build/zilc tests/zilc/stack_escape.zil -o /dev/null` exited 1 with `tests/zilc/stack_escape.zil:9:5: error: region escape: returning a pointer to local stack storage`; `sh scripts/test_zilc_errors.sh` passed all 17 checks.
+      - C2: `./scripts/test.sh corpus/zil/` passed: `Total: 25 run, 25 passed, 0 failed, 0 skipped (0.2s)`.
+      - C3: `./scripts/test.sh --gate closure-private-names` passed (`closure-private-names: tools/zilc/src/main.zrl: 29 modules, no shared private name`, `Total: 3 run, 3 passed, 0 failed, 0 skipped (0.4s)`); `build/zilc-boot` built cleanly through `stage1` and `make selfhost-build-check` passed (`PASS (build only — fixpoint not checked)`).
+      - C4: take-out check — commented out `verifier.verify()` in `tools/zilc/src/main.zrl`, rebuilt `build/zilc`, and `tests/zilc/stack_escape.zil` exited `0`; restored and rebuilt `build/zilc`.
+      - C5: `sh scripts/check_safety_model.sh`: `PASS: safety_model.md is self-consistent.`; `make test`: `Total: 4130 run, 4130 passed, 0 failed, 2 skipped (147.6s)`; `make preflight-changed PREFLIGHT_BASE=HEAD`: `PASS — a clean copy of the tree builds with the default rules, and the compiler reproduces itself.`, `[PASS] fuzz-calibrate: all 23 calibration programs are in their fixed state (21 refused, 2 accepted with one drop)`, `Total: 1562 run, 1562 passed, 0 failed, 0 skipped (107.9s)`, `Total: 8 run, 8 passed, 0 failed, 0 skipped (103.2s)`. Fuzz record is stale for `tools/zilc/` (renewed in `id:v2f8h`).
 
 - [ ] +zil +review +AI-D @zil @checkin Check-in: review the ZIL +AI-G batch (qpc8d, htrqb, ehh6m, egsdq) id:rvjcz
     > **Created:** 2026-11-21
