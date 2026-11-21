@@ -500,6 +500,19 @@ Standalone tasks developed and committed directly on `main`:
     - **Do:** carry each generic body's source positions in the `.zri` (or map interface lines back to the source's), so the error names the source's line in both builds; the warning of the entry above can then be given too. A case for `tests/modular/iface_attrs/` (what the interface loses).
     - **Checks:** C1 gap_76 under `zbuild` names `stdlib/vec.zrl:431:60` (or wherever the whole-program build does); remove its `// zbuild:` line and the `KNOWN_ISSUES.md` entry, and `sh scripts/run_safety_matrix.sh --zbuild` (or the `safety-matrix-zbuild` gate) passes; C2 take the change out and watch the gate report `for another reason`; C3 `make test` and `make preflight-changed`, each `Total:` quoted.
 
+- [ ] +zil +safety +AI-G @main Include single-block self-loops in Verifier.loop_blocks (src/verify.zrl) id:27amc
+    > **Created:** 2026-11-21
+    > **Branch:** `main`
+
+    - **Found by:** check-in `id:rrgct` (pre-existing off-by-one in `Verifier.loop_blocks`, unrelated to ZL6e).
+    - **Now:** `Verifier.loop_blocks` (`src/verify.zrl:1598`) scans `for k in 0 as usize..i` for backward jump/branch targets, excluding `k == i`. A single-block self-loop (`@b0: v1 = alloc 'heap, i32; jump @b1; @b1: drop v1; branch v0, @b1, @b2`) is therefore omitted from `in_loop`, skipped in Pass 2, and accepted with `exit=0` instead of reporting `double drop: value was already dropped`.
+    - **Do:** widen the loop in `Verifier.loop_blocks` to `for k in 0 as usize..i + 1 as usize` so a block that jumps or branches to itself is marked `in_loop[i] = true` and re-checked in Pass 2. Add a negative ZIL test `tests/zilc/drop_self_loop.zil` expecting `double drop: value was already dropped`, plus a positive control where `alloc 'heap` and `drop` both live inside the self-loop.
+    - **Checks:**
+      - C1 (before): `timeout -k 5s 30s build/zilc tests/zilc/drop_self_loop.zil -o /dev/null` exits `0`; quote output.
+      - C2 (after): rebuild `build/zoril` and `build/zilc`; `sh scripts/test_zilc_errors.sh` passes including `[PASS] tests/zilc/drop_self_loop.zil`, and the positive self-loop alloc+drop control exits `0`.
+      - C3 (take-out): temporarily revert `..i + 1 as usize` back to `..i`, rebuild `build/zilc`, and show `sh scripts/test_zilc_errors.sh` fails on `drop_self_loop.zil`; restore and rebuild.
+      - C4: `make test` and `REJECT_DIFF_NO_CACHE=1 make preflight-changed` pass (quote `Total:` lines and `reject-diff: base verdicts: fresh (no cache)`; note fuzz record is stale for `src/` and `tools/zilc/`).
+
 - [ ] +diagnostics +AI-G @main id:z0177 `?` on an enum with `Some` and a payload-carrying `None` reports one error
     > **Created:** 2026-11-11
     > **Context:** by id:z0168's second review.
