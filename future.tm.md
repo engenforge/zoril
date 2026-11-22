@@ -687,6 +687,16 @@ Standalone tasks developed and committed directly on `main`:
     - **Do:** save and reset `SAW_FIRST_DECL` around `(*sub_parser).parse_module()` in `Parser::load_file_at` (`src/parser/module.zrl`), and call `if !validate_source_bytes(path, source) { return Option.None; }` at the top of `format_source` (`src/fmt/fmt.zrl`).
     - **Checks:** C1 `import "bad.zrl";` where `bad.zrl` is prose prints `(the file does not look like Zoril source)` on the stopping line. C2 `build/zoril fmt --check` on a NUL-byte file and an invalid-UTF-8 file prints the one-line refusal from `validate_source_bytes`. C3 with the reset / call removed, C1 and C2 fail. C4 `make test` and `make preflight-changed`, each `Total:` line quoted.
 
+- [ ] +tools +AI-G @main `zilc` refuses malformed declarations starting with a valid keyword id:rzqcc
+    > **Created:** 2026-11-22
+    > **Branch:** `main`
+
+    - **Found by:** check-in id:rz4da, probing sibling routes of id:z0014 (`git:54077fa`).
+    - **Placed:** in `future.tm.md` under `main` branch items: a sibling parser hardening follow-up, not blocking the release.
+    - **Found:** `ZilParser.parse_module` (`tools/zilc/src/zil_parse.zrl`) rejects unrecognized text between declarations, but once it dispatches on a valid keyword (`local`, `extern`, `export`, `global`, `const`, or `f0`), `parse_function` and `parse_global` silently return/skip on malformed bodies (e.g. `local garbage`, `extern garbage`, `export garbage`, `f0 garbage`, `global garbage`, `const garbage` all exit 0 with no output).
+    - **Do:** report a line-numbered parse error and exit 1 in `parse_function` and `parse_global` (`tools/zilc/src/zil_parse.zrl`) when expected tokens after a declaration keyword (`fn` id, `:`, `=`, etc.) are missing.
+    - **Checks:** C1 before the change, `local garbage`, `extern garbage`, `export garbage`, `f0 garbage`, `global garbage`, and `const garbage` each exit 0. C2 after, add `tests/zilc/` negative cases covering malformed function and global declarations; each exits 1 with a line-numbered message and `sh scripts/test_zilc_errors.sh` passes. C3 `./scripts/test.sh corpus/zil` passes, `Total:` quoted. C4 taking the check out causes the new tests to fail; restored. C5 `make test` and `make preflight-changed`, each `Total:` line quoted; note the fuzz record is stale for `tools/zilc/`.
+
 ## `testinfra` branch: the test runner in Zoril and test-path portability, paused (from `active.tm.md`, 2026-11-14)
 
 Paused by the maintainer on 2026-11-14 in favour of open soundness holes. These tasks finish replacing `scripts/test.sh`'s parallel pool with `build/ztest` and remove the test path's last non-portable tools (`AGENTS.md`, Portability: `flock`, `mkfifo`, `setsid`, `xargs -P`, `read -t`), then make the runner more convenient. None of them fixes a bug. As paused, `make test` runs `test.sh`'s pool, and `make test RUNNER=ztest` runs the same plan one item at a time. Moved here in their order, with their check-ins and milestone merges.
