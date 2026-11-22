@@ -91,12 +91,12 @@ local function feature_list()
         "fn-value", "store-through-parameter", "stack-pointer-store",
         -- the program's helpers, types and statics live in a library module its `main` imports (Z2)
         "multi-module", "module-contract-attribute", "library-private-item", "user-trait-default-method", "private-trait-impl", "library-generic-impl-shapes", "box-allocator-in-interface", "impl-in-another-module", "private-item-across-modules", "module-name-not-an-identifier", "module-name-shape", "root-name-leading-digit", "stdlib-generic-contract",
-        -- indirect closure, fn-value forwarding, and mutual-recursion route builders (id:mskex)
+        -- indirect closure, fn-value forwarding, and mutual-recursion route builders
         "closure-captures-indirect-mut-holder", "closure-passed-to-fn-param",
         "closure-param-forwards-view", "mutual-recursion-store-through-local",
-        -- release-tier liveness, inner-block callee store, and method-elision route builders (id:4ngz8)
+        -- release-tier liveness, inner-block callee store, and method-elision route builders
         "release-tier-liveness", "inner-block-callee-store", "method-elision-view-reset",
-        -- container-of-views, extend_from_slice/Clone, and by-value aggregate route builders (id:r1shp)
+        -- container-of-views, extend_from_slice/Clone, and by-value aggregate route builders
         "vec-extend-and-clone-views", "owned-container-moved-views",
         "by-value-aggregate-and-local-struct-ref",
     }
@@ -4380,6 +4380,7 @@ if mode ~= "mismatch" and mode ~= "calibration" then
                 local taken = {}
                 if P.needs_arena then taken.mem = true; taken.vec = true end
                 if P.needs_string_view then taken.string = true end
+                if P.needs_vec_clone then taken.vec = true; taken.clone = true end
                 local lib_names = {}
                 for _, nm in ipairs(LIB_NAMES) do if not taken[nm] then table.insert(lib_names, nm) end end
                 local pick = ((seed * 7 + i * 13) % #lib_names) + 1
