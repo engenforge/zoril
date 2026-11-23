@@ -6,9 +6,10 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
-- [ ] +tests +AI-G @main Isolate hardcoded temp paths in tests/stdlib/ against parallel zbuild-diff collisions id:mnszq
+- [x] +tests +AI-G @main Isolate hardcoded temp paths in tests/stdlib/ against parallel zbuild-diff collisions id:mnszq
     > **Created:** 2026-11-23
     > **Branch:** `main`
+    > **Completed:** 2026-11-23 git:f3c9ec1
 
     - **Placed:** before id:bmkh4 (parallel test-isolation race that causes intermittent failures in `make test` and `make test-checked`).
     - **Found by:** Debian 13 (trixie) evaluation on 2026-11-23 (`make test-checked` at `-j 16`): run 1 failed `zbuild-diff` on `tests/stdlib/test_proc_cwd_env.zrl` (exit 12); run 2 passed `zbuild-diff` and failed `tests/stdlib/test_proc_cwd_env.zrl` in `Stdlib` (exit 44).
@@ -25,6 +26,11 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
       - In `test_stdlib_small_api_fixes.zrl`, preserve the non-NUL-terminated subslice check by formatting `build/test_sub_<pid>.tmp___\0` and taking `.sub(0, len - 3)`.
       - Do not print temp paths to stdout (so `zbuild-diff`'s stdout comparison remains deterministic across PIDs).
     - **Checks:** C1 deterministic parallel stress check: build each of the 7 tests and run two copies concurrently in a loop (e.g., 20 iterations of `bin & bin & wait`) — confirm `test_proc_cwd_env` fails before the fix and all 7 pass 20/20 iterations after. C2 `make test-checked` passes twice in a row with `0 failed` under parallel execution, quoting `Total:`. C3 `make test` passes with `0 failed`, quoting `Total:`. C4 running all 7 tests leaves no leftover `/tmp/zoril_proc_*`, `/tmp/test_zoril_buf_*`, `build/test_fd_*`, `build/test_small_api_*`, or `build/test_sub*` files or directories.
+    - **Completion (2026-11-23):**
+      - C1: baseline `test_proc_cwd_env` failed `18` out of `40` runs (`20x2`); after the fix, all 7 tests (`test_proc_cwd_env`, `test_proc_new_group`, `test_proc_spawn_inherited_stdio`, `test_proc_kill_reaped`, `test_stdlib_bufio`, `test_stdlib_fd`, `test_stdlib_small_api_fixes`) passed with `0 failures out of 40 runs (20x2)` each.
+      - C2: `make test-checked` passed twice in a row: run 1 `Total: 1563 run, 1563 passed, 0 failed, 0 skipped (111.1s)`; run 2 `Total: 1563 run, 1563 passed, 0 failed, 0 skipped (111.1s)`.
+      - C3: `make test` passed: `Total: 4131 run, 4131 passed, 0 failed, 2 skipped (146.7s)`.
+      - C4: `ls -d /tmp/zoril_proc_* /tmp/test_zoril_buf_* build/test_fd_* build/test_small_api_* build/test_sub*` reported `No such file or directory` for all five patterns after both the 20x2 stress loop and `make test`.
 
 - [ ] +release +AI-D @main Cut v0.2.0 release: build/verify dist tarballs, final release commit, and tag id:bmkh4
     > **Created:** 2026-11-23
