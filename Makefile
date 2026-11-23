@@ -553,7 +553,7 @@ install-files:
 	$(INSTALL_DIR) $(DESTDIR)$(DOCDIR)
 	$(INSTALL_DATA) README.md LICENSE NOTICE KNOWN_ISSUES.md CHANGELOG.md CONTRIBUTING.md SECURITY.md $(DESTDIR)$(DOCDIR)/
 	$(INSTALL_DIR) $(DESTDIR)$(DOCDIR)/doc
-	$(INSTALL_DATA) doc/getting_started.md doc/dependencies.md doc/tour.md doc/SAFETY.md doc/developer_guide.md doc/ROADMAP.md doc/STABILITY.md doc/zero_overhead.md doc/reproducible_builds.md $(DESTDIR)$(DOCDIR)/doc/
+	$(INSTALL_DATA) doc/getting_started.md doc/dependencies.md doc/tour.md doc/SAFETY.md doc/developer_guide.md doc/ROADMAP.md doc/STABILITY.md doc/zero_overhead.md doc/reproducible_builds.md doc/release_checklist.md $(DESTDIR)$(DOCDIR)/doc/
 	$(INSTALL_DIR) $(DESTDIR)$(MANDIR)/man1 $(DESTDIR)$(MANDIR)/man3 $(DESTDIR)$(MANDIR)/man7
 	$(INSTALL_DATA) $(MAN_PAGES_1) $(DESTDIR)$(MANDIR)/man1/
 	$(INSTALL_DATA) $(MAN_PAGES_3) $(DESTDIR)$(MANDIR)/man3/
