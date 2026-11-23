@@ -10,7 +10,7 @@ The counts in this ledger and the marker-density rows below are as of **0.1.0-al
 
 The repository keeps 539 probes in [`probes/`](probes) for the 79-row safety matrix (making up the 539-probe safety matrix), each recording its expectation in its first lines: **441 `compile_reject`**, **79 `accept`**, **8 `runtime_trap`**, **11 `runtime_fault`**, and **0 `known_gap`**. `scripts/run_safety_matrix.sh` runs all of them and fails when an observation differs from the recorded expectation; `make test` gates it (`safety-matrix`) together with `safety-model` (`scripts/check_safety_model.sh`), which keeps this ledger, [`matrix.md`](matrix.md), and the probes consistent in both directions.
 
-In differential fuzzing against `rustc`, the shorter `--release` session on this codebase compiled and ran **755,772** programs across both whole-program and `zbuild` builds (following the **2,638,155** release-bar run on the previous code; see [`bench/fuzz/README.md`](../fuzz/README.md)).
+In differential fuzzing against `rustc`, the release-bar `--release` run on this codebase compiled and ran **2,528,508** programs across both whole-program and `zbuild` builds (0 faults, 0 unclassified candidates, 0 mode-diffs, 104/104 features; see [`bench/fuzz/README.md`](../fuzz/README.md)).
 
 ---
 

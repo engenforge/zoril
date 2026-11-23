@@ -8,7 +8,7 @@ The fuzzer looks for programs that Zoril accepts but should not: a checked-code 
 
 **What it cannot reach.** The programs are small (about 30 lines), come from the subset Zoril and Rust share, use little of the standard library, never write `defer`, have `id<T>` as their only generic, use `i32` for every integer, and contain no `unsafe`, so the `unsafe` boundary is not fuzzed. [What Zoril Checks](../../doc/SAFETY.md) §5.2 states the limits in full.
 
-**The records** below are the release-bar run, a shorter session on the released code, and the findings. The fuzz-record gates (`make test` runs them) check that the records describe the code in the tree.
+**The records** below are the release-bar run and the findings. The fuzz-record gates (`make test` runs them) check that the records describe the code in the tree.
 
 ## How a program is judged
 
@@ -122,80 +122,48 @@ Rows 16 and 18 were _valid Rust programs_ all along: their defect was a drop cou
 
 When a fix changes a row, update this table and `scripts/fuzz_calibrate.sh` together; a row whose state differs from the table fails `make fuzz-calibrate`, which `make test` and `make preflight` run.
 
-## The release-bar run (2026-10-26/27)
+## The release-bar run (2026-11-22/23)
 
-The release bar is a fixed budget of programs that **compiled and ran** (the crash oracle's sample): **2,500,000**, a budget the project set for the alpha. The run used the compositional generator in `--mode mix` (the main stream, the fixed calibration programs and the mismatch stream) on the compiler sources named by the fingerprint below, through the shipping pipeline (`build/zoril` -> `build/zilc` -> `qbe` -> `as` -> `ld`), with every oracle on: the `rustc` differential oracle, the checked build, the value canaries, the drop accounting, the expected-value oracle and runtime trap checks.
+The release bar is a fixed budget of programs that **compiled and ran** (the crash oracle's sample): **2,500,000**, a budget the project set for the alpha. The run used the compositional generator in `--mode mix` (the main stream, the fixed calibration programs and the mismatch stream) on the compiler sources named by the fingerprint below, through the shipping pipeline (`build/zoril` -> `build/zilc` -> `qbe` -> `as` -> `ld`), with every oracle on: the `rustc` differential oracle, the checked build, mode-diff (whole-program vs staged `zbuild`), the value canaries, the drop accounting, the expected-value oracle and runtime trap checks.
 
-Two machine-readable lines make the record checkable rather than remembered. The **fingerprint** is one content hash per compiler-source directory (`src/`, `stdlib/`, `tools/zilc/`, `tools/zbuild/`, `rt/`; `zbuild` is part of the fuzzed pipeline, so a record that covers it carries all five; the release-bar record below names four, because its run did not use `zbuild`, and `scripts/check_fuzz_fresh.sh` reports it as naming no hash for `tools/zbuild`. A record with the fifth hash covers whole-program and separate compilation, of single-module and multi-module programs), taken over that directory's files **excluding Markdown** (`scripts/lib/fuzz_fresh.sh` computes it; the run prints the same line). A document is not a compiler input, so editing `rt/README.md`, `tools/zilc/README.md` or any other page leaves the record fresh, while adding, removing, renaming or editing a code file changes its directory's hash. `scripts/check_fuzz_fresh.sh` compares the record's hashes with the working tree and names the directory whose code differs, while the recording step of a release runs the same check with `--strict`, which refuses while they differ. The **headline** is the figure every page that cites this record must quote, and the same gate checks that they do (`doc/SAFETY.md` §7 requires it in the same commit as the record).
+Two machine-readable lines make the record checkable rather than remembered. The **fingerprint** is one content hash per compiler-source directory (`src/`, `stdlib/`, `tools/zilc/`, `tools/zbuild/`, `rt/`; `zbuild` is part of the fuzzed pipeline, so a record that covers it carries all five, covering whole-program and separate compilation of single-module and multi-module programs), taken over that directory's files **excluding Markdown** (`scripts/lib/fuzz_fresh.sh` computes it; the run prints the same line). A document is not a compiler input, so editing `rt/README.md`, `tools/zilc/README.md` or any other page leaves the record fresh, while adding, removing, renaming or editing a code file changes its directory's hash. `scripts/check_fuzz_fresh.sh` compares the record's hashes with the working tree and names the directory whose code differs, while the recording step of a release runs the same check with `--strict`, which refuses while they differ. The **headline** is the figure every page that cites this record must quote, and the same gate checks that they do (`doc/SAFETY.md` §7 requires it in the same commit as the record).
 
-fingerprint: src=04b389ba8541f70f8cfc02413aec882b15208d2ce68cc35577242b44fc26e170 stdlib=3a2baf7989471d2e670e476c9ff00579a1f0e9f127aaa75abaaad50e11f293e2 tools/zilc=6cb7e9022111c38a4bebe6b55605b1053672bcd2b34ff75c015b9b3e12e80ef8 rt=e73757dc5dda9d36520c45fd2f06a36755f9c71bb7b43d1e5379f71b5ca7ce31
+fingerprint: src=a70b6b75cdf1cd673ffdd9e4a8338cf2dac0b8cce776e8891616bd682d913b90 stdlib=87acc18a5e4554558cd1c3edb25c4bc3e3094127a0874dad4322ba63d06f74d0 tools/zilc=2626b5c64b939541cadd0c95b85106143892f13fce19e9c26998dd69aecb4285 tools/zbuild=be62d296717d41aadc1266199e851826ce85b6b615cc85f6499bfab1d0ad6760 rt=41d323141d5fa12a516378fb9a12d0965aa9ce31ffd41197cc8eedc9ee1b7773
 
-It was taken with the earlier `git ls-tree` hash and cannot be recomputed in this repository; the next release-bar run replaces both records.
+headline: 2528508 programs compiled and ran
 
-headline: 2638155 programs compiled and ran
+Launched as `make fuzz-release` (`--jobs 16 --seeds 1-882000 --count 8 --mode mix --ran 2500000 --release`) on commit `7400b3f` (`0.1.0-alpha-323-g7400b3f`), from 2026-11-22T01:23:27Z to 2026-11-23T00:44:33Z.
 
-Launched as `make fuzz-release-start SEEDS=1-882000 RAN=2500000` on the sources the fingerprint below names, from 2026-10-26T13:29:53Z to 2026-10-27T07:00:56Z.
-
-- **Compiler:** the release build of those sources, through the shipping pipeline
-- **Oracles:** `rustc` 1.99.1, checked build, canaries, drop accounting, expected-value oracle, runtime trap checks, all on
+- **Compiler:** the release build of those sources (`0.1.0-alpha-323-g7400b3f`), through the shipping pipeline
+- **Oracles:** `rustc` 1.100.0 (`0ef1bc386 2026-11-09`), checked build, mode-diff (`zbuild`), canaries, drop accounting, expected-value oracle, runtime trap checks, all on
 - **Seeds:** 1 - 882,000 (x 8), over 16 workers
-- **Programs generated:** **7,056,025** in the main stream
-- **Compiled and ran:** **2,638,155** (37.4%), 5.5% over the bar
-- **Rejected by Zoril:** 1,967,783
-- **Traps:** 48,239 (39,748 exit 134, 8,491 exit 136)
+- **Programs generated:** **7,056,026** in the main stream
+- **Compiled and ran:** **2,528,508** (35.8%), 1.1% over the bar
+- **Rejected by Zoril:** 2,465,492 in the main stream (2,465,513 total including 21 in the mismatch stream)
+- **Traps:** 39,457 (32,774 with exit 134, 6,683 with exit 136)
 - **Faults:** **0** (no signal other than expected traps, no canary or drop-count mismatch, no poison read, no value checksum mismatch, no timeout)
 - **`rustc` candidates:** **0**
 - **Generator bugs (`[GEN-BUG]`):** 0
 - **Expired allowlist entries:** 0
-- **Mismatch stream:** 17 programs, in worker 0: 15 refused, 2 known-hole programs (`raw_tuple_pattern_deref`, `raw_enum_pattern_deref`), refused and counted under known holes; **0 accepted**
-- **Known holes (reported apart from the search):** 2,450,089 marked programs: **0 still open**, 23 fixed, 2,344,839 not reached, **0 faulted with the switch off**
-- **Expected-value oracle:** 4,960,253 programs carried a checksum (exit 93 on a mismatch), 332,180 could not be followed by the generator's interpreter; 0 mismatches
-- **Listed differences (`[DIFF]`):** **33,141**, all `E0503`
-- **Audited `[DIFF]` sample:** **1,005/1,005** decided shape
-- **Infer-diffs (`[INFER-DIFF]`):** 8,949
-- **Value mix:** 15,165,311 of 41,655,480 values own something (36%)
-- **Feature coverage:** **80/80 features**
-- **Wall time:** **17 h 31 min** (16 workers; about 111 generated and 41 compiled-and-ran programs a second)
+- **Mismatch stream:** 24 programs: 21 refused (the expected outcome), **0 accepted**
+- **Known holes (reported apart from the search):** 2,062,029 marked programs: **0 still open**, 24 fixed, 1,989,943 not reached, **0 faulted with the switch off**, 72,062 not reproduced in this run
+- **Expected-value oracle:** 5,052,233 programs carried a checksum (exit 93 on a mismatch), 239,859 could not be followed by the generator's interpreter; 0 mismatches
+- **Mode-diff (whole-program vs staged `zbuild`):** 9,584,558 builds compared, **0 disagreements**
+- **Listed differences (`[DIFF]`):** **28,087**
+- **Infer-diffs (`[INFER-DIFF]`):** 6,177
+- **Value mix:** 13,147,646 of 35,534,091 values own something (37%)
+- **Feature coverage:** **104/104 features**
+- **Wall time:** **23h21m** (16 workers; 83 generated and 30 compiled-and-ran programs a second)
 
 Notes on the record:
 
-- **Zero faults and zero candidates:** no checked-code crash, signal other than expected traps, or oracle mismatch occurred across the 2,638,155 programs that compiled and ran, and no program Zoril accepted was flagged as an unclassified candidate by the `rustc` differential oracle.
-- **Listed differences:** exactly one entry was active in `intended_differences.txt`: `E0503 write-through-mut-ref 2027-01-12`, and every `[DIFF]` line names only `E0503`. An audit sample of every 33rd `[DIFF]` program - 1,005 of them, 60 to 66 from each of the 16 workers, seeds 48 to 881,695 - was regenerated from the worker logs' seeds with the run's generator: each one is accepted by Zoril (exiting 0 or with the expected runtime trap), and its twin carries exactly one `rustc` error, `E0503`, on a `*rmN = x;` line with `rmN` unused afterwards. The sample found no masked error.
-- **Runtime traps:** 48,239 programs trapped on bounds checks (39,748 exit 134) or division/modulo by zero (8,491 exit 136), exactly matching the exit codes predicted by the generator's trap analyzer.
-- **Expected-value oracle:** 4,960,253 programs carried a checksum evaluated ahead of time by the generator's interpreter; zero value-faults occurred. 332,180 programs had constructs the interpreter could not evaluate (unfolded loops, etc.) and were recorded as unchecked.
-- **Coverage report:** all 80 declared generator features were generated during the run.
-- **Infer-diffs:** Zoril's borrow check rejected 8,949 programs `rustc` accepts; a rejection is a usability gap, not a safety finding, and the classes were not analysed.
-
-## The short session on the launched code
-
-The release bar above was met on earlier code: its fingerprint differs from this one. This shorter `--release` session ran on the code released here, with every oracle of the release-bar run and the mode-diff reading on. It is a short session, not the release bar; a full release-bar run on this code is planned soon, and when it is recorded it replaces this section.
-
-entry: short-session
-
-fingerprint: src=739469d75be0826ba7b5655a44353b7c44b0da2a25d413f94fa4f702b6fdadfd stdlib=680bd150220da9d2dad342a370dd920038dbee90f2a37e4efc8bd2a7240940e0 tools/zilc=25ab204e8ac8478c685cccb1c82bb7e3ad73b97a5e839381fdf7af80b6b73c4f tools/zbuild=5664b1d790a3a42c2d7f55e2a31791d948a61a291f94e85e39c543c882d8da2b rt=de1a3469762ab9ba50a0918cac4f6fa5f6807aeeecd9f47595bcab8aa82b4afb
-
-headline: 755772 programs compiled and ran
-
-Launched as `make fuzz-session SEEDS=1-247000 RELEASE=1`.
-
-- **Seeds:** 1 - 247,000 (x 8), over 16 workers
-- **Programs generated:** **1,976,026** in the main stream
-- **Compiled and ran:** **755,772** (38.2%)
-- **Rejected by Zoril:** 533,501
-- **Traps:** 13,540 (11,237 with exit 134, 2,303 with exit 136)
-- **Faults:** **0**
-- **`rustc` candidates:** **0**
-- **Generator bugs (`[GEN-BUG]`):** 0
-- **Expired allowlist entries:** 0
-- **Mismatch stream:** 24 programs, 21 refused, **0 accepted**
-- **Known holes (reported apart from the search):** 686,756 marked programs: **0 still open**, 24 fixed, 656,980 not reached, **0 faulted with the switch off**
-- **Expected-value oracle:** 1,388,126 programs carried a checksum (exit 93 on a mismatch), 93,833 could not be followed by the generator's interpreter
-- **Mode-diff (whole-program vs `zbuild`):** 2,731,822 builds compared, **0 disagreements**
-- **Listed differences (`[DIFF]`):** **8,898**
-- **Infer-diffs (`[INFER-DIFF]`):** 2,446
-- **Value mix:** 4,182,336 of 11,485,453 values own something (36%)
-- **Feature coverage:** **94/94 features**
-- **Wall time:** **7h14m** (16 workers; about 75 generated and 28 compiled-and-ran programs a second)
+- **Zero faults and zero candidates:** no checked-code crash, signal other than expected traps, or oracle mismatch occurred across the 2,528,508 programs that compiled and ran, and no program Zoril accepted was flagged as an unclassified candidate by the `rustc` differential oracle.
+- **Mode-diff:** 9,584,558 builds compared whole-program compilation against staged `zbuild` across single-module and multi-module programs, with 0 disagreements.
+- **Listed differences:** one entry was active in `intended_differences.txt`: `E0503 write-through-mut-ref 2027-01-12` (28,087 programs).
+- **Runtime traps:** 39,457 programs trapped on bounds checks or division/modulo by zero (32,774 exit 134, 6,683 exit 136), matching the exit codes predicted by the generator's trap analyzer.
+- **Expected-value oracle:** 5,052,233 programs carried a checksum evaluated ahead of time by the generator's interpreter; zero value-faults occurred. 239,859 programs had constructs the interpreter could not evaluate and were recorded as unchecked.
+- **Coverage report:** all 104 declared generator features were generated during the run.
+- **Infer-diffs:** Zoril's borrow check rejected 6,177 programs `rustc` accepts; a rejection is a usability gap, not a safety finding.
 
 ## Findings
 
