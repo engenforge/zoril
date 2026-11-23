@@ -3,7 +3,7 @@
 - [x] +tests +AI-G @main Isolate hardcoded temp paths in tests/stdlib/ against parallel zbuild-diff collisions id:mnszq
     > **Created:** 2026-11-23
     > **Branch:** `main`
-    > **Completed:** 2026-11-23 git:f3c9ec1
+    > **Completed:** 2026-11-23 git:ded90e9
 
     - **Placed:** before id:bmkh4 (parallel test-isolation race that causes intermittent failures in `make test` and `make test-checked`).
     - **Found by:** Debian 13 (trixie) evaluation on 2026-11-23 (`make test-checked` at `-j 16`): run 1 failed `zbuild-diff` on `tests/stdlib/test_proc_cwd_env.zrl` (exit 12); run 2 passed `zbuild-diff` and failed `tests/stdlib/test_proc_cwd_env.zrl` in `Stdlib` (exit 44).
