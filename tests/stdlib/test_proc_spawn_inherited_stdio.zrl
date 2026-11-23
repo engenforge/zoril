@@ -89,20 +89,66 @@ fn contains(hay: [u8], needle: [u8]) -> bool {
     return false;
 }
 
+fn unlink_file(path: [u8]) {
+    // SAFETY: unlink(87) of a NUL-terminated path created by this test.
+    let _ = unsafe { @syscall(87, path.ptr as u64, 0 as u64) };
+}
+
+fn format_temp_path(prefix: [u8], pid: u64, suffix: [u8], buf: &mut [u8; 96]) -> [u8] {
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        buf[i] = prefix[i];
+        i = i + 1 as usize;
+    }
+    let mut digits: [u8; 20] = [0 as u8; 20];
+    let mut dcount = 0 as usize;
+    let mut n = pid;
+    if n == 0 as u64 {
+        digits[0] = '0' as u8;
+        dcount = 1 as usize;
+    } else {
+        while n > 0 as u64 {
+            let rem = (n % 10 as u64) as u8;
+            digits[dcount] = '0' as u8 + rem;
+            dcount = dcount + 1 as usize;
+            n = n / 10 as u64;
+        }
+    }
+    let mut d = dcount;
+    while d > 0 as usize {
+        d = d - 1 as usize;
+        buf[i] = digits[d];
+        i = i + 1 as usize;
+    }
+    let mut s = 0 as usize;
+    while s < suffix.len {
+        buf[i] = suffix[s];
+        i = i + 1 as usize;
+        s = s + 1 as usize;
+    }
+    buf[i] = 0 as u8;
+    // SAFETY: `buf[0..i]` was just initialized and `buf[i]` holds the trailing NUL for syscalls.
+    return unsafe { @slice(&buf[0] as *u8, i) };
+}
+
 // `set_stdout(stderr())`: the child's redirected stdout and its inherited stderr must both reach
 // the file the parent's fd 2 points at.
 fn test_stdout_from_stderr(arena: *mut ArenaHeader) -> bool {
-    let path = "/tmp/zoril_proc_redirect_a.txt\0";
+    let mut path_buf = [0 as u8; 96];
+    let pid = unsafe { @syscall(39) } as u64;
+    let path = format_temp_path("/tmp/zoril_proc_redirect_a_", pid, ".txt", &mut path_buf);
     let file = open_read_write(path);
     if file < 0 { return false; }
     let saved = save_fd(2);
     if saved < 0 {
         close_fd(file);
+        unlink_file(path);
         return false;
     }
     if dup_to(file, 2) < 0 {
         close_fd(file);
         close_fd(saved);
+        unlink_file(path);
         return false;
     }
     let mut cmd = unsafe { Command.new_raw("/bin/sh", arena) };
@@ -114,13 +160,20 @@ fn test_stdout_from_stderr(arena: *mut ArenaHeader) -> bool {
     let _ = dup_to(saved, 2);
     close_fd(saved);
     close_fd(file);
-    if res.is_err() || !res.ok().unwrap().is_success() { return false; }
+    if res.is_err() || !res.ok().unwrap().is_success() {
+        unlink_file(path);
+        return false;
+    }
 
     let report = open_read_only(path);
-    if report < 0 { return false; }
+    if report < 0 {
+        unlink_file(path);
+        return false;
+    }
     let p_buf = unsafe { @alloca<[u8; 64]>(1) } as *mut u8;
     let n = read_all(report, p_buf, CAP);
     close_fd(report);
+    unlink_file(path);
     let seen = unsafe { @slice(p_buf, n) };
     // Both writes landed: the redirected stdout, and the child's inherited stderr for `1>&2`.
     return contains(seen, "out") && contains(seen, "err");
@@ -128,7 +181,9 @@ fn test_stdout_from_stderr(arena: *mut ArenaHeader) -> bool {
 
 // `set_stdin(stdout())` with stdout left inherited: the child reads fd 1 and writes fd 1.
 fn test_stdin_from_stdout(arena: *mut ArenaHeader) -> bool {
-    let path = "/tmp/zoril_proc_redirect_b.txt\0";
+    let mut path_buf = [0 as u8; 96];
+    let pid = unsafe { @syscall(39) } as u64;
+    let path = format_temp_path("/tmp/zoril_proc_redirect_b_", pid, ".txt", &mut path_buf);
     let file = open_read_write(path);
     if file < 0 { return false; }
     write_fd(file, "hello\n");
@@ -136,11 +191,13 @@ fn test_stdin_from_stdout(arena: *mut ArenaHeader) -> bool {
     let saved = save_fd(1);
     if saved < 0 {
         close_fd(file);
+        unlink_file(path);
         return false;
     }
     if dup_to(file, 1) < 0 {
         close_fd(file);
         close_fd(saved);
+        unlink_file(path);
         return false;
     }
     let mut cmd = unsafe { Command.new_raw("/bin/sh", arena) };
@@ -154,6 +211,7 @@ fn test_stdin_from_stdout(arena: *mut ArenaHeader) -> bool {
     let p_buf = unsafe { @alloca<[u8; 64]>(1) } as *mut u8;
     let n = read_all(file, p_buf, CAP);
     close_fd(file);
+    unlink_file(path);
     let seen = unsafe { @slice(p_buf, n) };
     if res.is_err() || !res.ok().unwrap().is_success() { return false; }
     // The seed "hello\n" plus the echo "hello": one "hello" alone means the child's fd 1, which its

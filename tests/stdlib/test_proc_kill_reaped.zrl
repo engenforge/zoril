@@ -11,7 +11,7 @@ import "proc.zrl";
 import "io.zrl";
 import "vec.zrl";
 use io::{eprint, Error};
-use mem_raw::{ArenaHeader, arena_init};
+use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
 use proc::{Command, Child, wait_any, try_wait_any};
 use vec::Vec;
 
@@ -134,8 +134,48 @@ fn running(pid: i64) -> bool {
 }
 
 fn unlink_file(path: [u8]) {
-    // SAFETY: unlink(87) of a NUL-terminated literal path.
+    // SAFETY: unlink(87) of a NUL-terminated path created by this test.
     let _ = unsafe { @syscall(87, path.ptr as u64, 0 as u64) };
+}
+
+fn format_temp_path(arena: *mut ArenaHeader, prefix: [u8], pid: u64, suffix: [u8]) -> [u8] {
+    // SAFETY: 96 bytes in `arena` outlives the Command that stores this path.
+    let raw = unsafe { zoril_allocator_alloc(arena, 96 as u64) };
+    let mut buf = unsafe { @slice(raw, 96 as usize) };
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        buf[i] = prefix[i];
+        i = i + 1 as usize;
+    }
+    let mut digits: [u8; 20] = [0 as u8; 20];
+    let mut dcount = 0 as usize;
+    let mut n = pid;
+    if n == 0 as u64 {
+        digits[0] = '0' as u8;
+        dcount = 1 as usize;
+    } else {
+        while n > 0 as u64 {
+            let rem = (n % 10 as u64) as u8;
+            digits[dcount] = '0' as u8 + rem;
+            dcount = dcount + 1 as usize;
+            n = n / 10 as u64;
+        }
+    }
+    let mut d = dcount;
+    while d > 0 as usize {
+        d = d - 1 as usize;
+        buf[i] = digits[d];
+        i = i + 1 as usize;
+    }
+    let mut s = 0 as usize;
+    while s < suffix.len {
+        buf[i] = suffix[s];
+        i = i + 1 as usize;
+        s = s + 1 as usize;
+    }
+    buf[i] = 0 as u8;
+    // SAFETY: `buf[0..i]` was just initialized and `buf[i]` holds the trailing NUL for syscalls.
+    return unsafe { @slice(&buf[0] as *u8, i) };
 }
 
 // The pid the shell wrote to PATH, polled for up to five seconds; 0 if none appeared.
@@ -182,11 +222,26 @@ fn spawn_sh(arena: *mut ArenaHeader, script: [u8], grouped: bool) -> Child {
     return cmd.spawn().ok().unwrap();
 }
 
+fn spawn_sh_with_arg(arena: *mut ArenaHeader, script: [u8], arg1: [u8], grouped: bool) -> Child {
+    let mut cmd = unsafe { Command.new_raw("/bin/sh", arena) };
+    cmd.arg("-c");
+    cmd.arg(script);
+    cmd.arg("_");
+    cmd.arg(arg1);
+    if grouped {
+        cmd.set_new_group();
+    }
+    return cmd.spawn().ok().unwrap();
+}
+
 // C1: a reaped group leader's group is not signalled.
 fn reaped_group(arena: *mut ArenaHeader) -> i32 {
-    unlink_file("/tmp/zoril_proc_kill_reaped.pid\0");
-    let mut kid = spawn_sh(arena, "sleep 30 & echo $! > /tmp/zoril_proc_kill_reaped.pid", true);
-    let gpid = read_pid_file("/tmp/zoril_proc_kill_reaped.pid\0");
+    let pid = unsafe { @syscall(39) } as u64;
+    let path = format_temp_path(arena, "/tmp/zoril_proc_kill_reaped_", pid, ".pid");
+    unlink_file(path);
+    let mut kid = spawn_sh_with_arg(arena, "sleep 30 & echo $! > \"$1\"", path, true);
+    let gpid = read_pid_file(path);
+    unlink_file(path);
     if gpid == 0 as i64 {
         kill_pid(kid.pid);
         return 1;

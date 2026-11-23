@@ -21,8 +21,47 @@ use string::String;
 use hashmap::HashMap;
 use iter::range;
 
+fn format_temp_path(prefix: [u8], pid: u64, suffix: [u8], buf: &mut [u8; 96]) -> [u8] {
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        buf[i] = prefix[i];
+        i = i + 1 as usize;
+    }
+    let mut digits: [u8; 20] = [0 as u8; 20];
+    let mut dcount = 0 as usize;
+    let mut n = pid;
+    if n == 0 as u64 {
+        digits[0] = '0' as u8;
+        dcount = 1 as usize;
+    } else {
+        while n > 0 as u64 {
+            let rem = (n % 10 as u64) as u8;
+            digits[dcount] = '0' as u8 + rem;
+            dcount = dcount + 1 as usize;
+            n = n / 10 as u64;
+        }
+    }
+    let mut d = dcount;
+    while d > 0 as usize {
+        d = d - 1 as usize;
+        buf[i] = digits[d];
+        i = i + 1 as usize;
+    }
+    let mut s = 0 as usize;
+    while s < suffix.len {
+        buf[i] = suffix[s];
+        i = i + 1 as usize;
+        s = s + 1 as usize;
+    }
+    buf[i] = 0 as u8;
+    // SAFETY: `buf[0..i]` was just initialized and `buf[i]` holds the trailing NUL for syscalls.
+    return unsafe { @slice(&buf[0] as *u8, i) };
+}
+
 fn test_open_flags_and_options() -> bool {
-    let tmp_path = "build/test_small_api_open.tmp";
+    let mut tmp_buf = [0 as u8; 96];
+    let pid = unsafe { @syscall(39) } as u64;
+    let tmp_path = format_temp_path("build/test_small_api_open_", pid, ".tmp", &mut tmp_buf);
 
     // Test OpenOptions creation and writing
     let mut f = match File.options().write(true).create(true).truncate(true).open(tmp_path) {
@@ -31,76 +70,127 @@ fn test_open_flags_and_options() -> bool {
     };
     match fmt::write_u64(&mut f, 12345 as u64) {
         Ok(_) => {},
-        Err(_) => { return false; },
+        Err(_) => {
+            let _ = f.close();
+            unsafe { @syscall(87, tmp_path.ptr as u64) };
+            return false;
+        },
     }
     let _ = f.close();
 
     // Test OpenOptions reading
     let mut f_read = match File.options().read(true).open(tmp_path) {
         Ok(file) => file,
-        Err(_) => { return false; },
+        Err(_) => {
+            unsafe { @syscall(87, tmp_path.ptr as u64) };
+            return false;
+        },
     };
     let mut buf: [u8; 16] = [0; 16];
     let n = match io::read(f_read.fd(), &mut buf) {
         Ok(count) => count,
-        Err(_) => { return false; },
+        Err(_) => {
+            let _ = f_read.close();
+            unsafe { @syscall(87, tmp_path.ptr as u64) };
+            return false;
+        },
     };
     let _ = f_read.close();
-    if n != 5 { return false; }
+    if n != 5 {
+        unsafe { @syscall(87, tmp_path.ptr as u64) };
+        return false;
+    }
     if buf[0] != '1' as u8 || buf[1] != '2' as u8 || buf[2] != '3' as u8 || buf[3] != '4' as u8 || buf[4] != '5' as u8 {
+        unsafe { @syscall(87, tmp_path.ptr as u64) };
         return false;
     }
 
     // Test OpenOptions appending without write(true)
     let mut f_app = match File.options().append(true).open(tmp_path) {
         Ok(file) => file,
-        Err(_) => { return false; },
+        Err(_) => {
+            unsafe { @syscall(87, tmp_path.ptr as u64) };
+            return false;
+        },
     };
     match fmt::write_u64(&mut f_app, 6789 as u64) {
         Ok(_) => {},
-        Err(_) => { return false; },
+        Err(_) => {
+            let _ = f_app.close();
+            unsafe { @syscall(87, tmp_path.ptr as u64) };
+            return false;
+        },
     }
     let _ = f_app.close();
 
     // Test non-NUL-terminated subslice in File.open and file::read_file
-    let full_sub = "build/test_sub.tmp___";
-    let sub_path = full_sub.sub(0, 18); // "build/test_sub.tmp"
+    let mut full_sub_buf = [0 as u8; 96];
+    let full_sub = format_temp_path("build/test_sub_", pid, ".tmp___", &mut full_sub_buf);
+    let sub_path = full_sub.sub(0, full_sub.len - 3); // "build/test_sub_<pid>.tmp"
+    let mut exact_buf = [0 as u8; 96];
+    let exact_target = format_temp_path("build/test_sub_", pid, ".tmp", &mut exact_buf);
     let mut f_sub = match File.options().write(true).create(true).truncate(true).open(sub_path) {
         Ok(file) => file,
-        Err(_) => { return false; },
+        Err(_) => {
+            unsafe { @syscall(87, tmp_path.ptr as u64) };
+            return false;
+        },
     };
     match io::write_all(&mut f_sub, "subslice_ok") {
         Ok(_) => {},
-        Err(_) => { return false; },
+        Err(_) => {
+            let _ = f_sub.close();
+            unsafe { @syscall(87, exact_target.ptr as u64) };
+            unsafe { @syscall(87, tmp_path.ptr as u64) };
+            return false;
+        },
     }
     let _ = f_sub.close();
 
     let a_sub = match Arena.new(4096) {
         Ok(a) => a,
-        Err(_) => { return false; },
+        Err(_) => {
+            unsafe { @syscall(87, exact_target.ptr as u64) };
+            unsafe { @syscall(87, tmp_path.ptr as u64) };
+            return false;
+        },
     };
     let content = match read_file(sub_path, &a_sub) {
         Ok(c) => c,
-        Err(_) => { return false; },
+        Err(_) => {
+            let _ = fsys::unlink_path(exact_target, &a_sub);
+            unsafe { @syscall(87, tmp_path.ptr as u64) };
+            return false;
+        },
     };
-    if content != "subslice_ok" { return false; }
+    if content != "subslice_ok" {
+        let _ = fsys::unlink_path(exact_target, &a_sub);
+        unsafe { @syscall(87, tmp_path.ptr as u64) };
+        return false;
+    }
 
     // Verify the exact file exists on disk, not the over-read string with trailing underscores
-    let exact_target = "build/test_sub.tmp";
     match os_linux::open_file(exact_target, O_RDONLY, 0) {
         Ok(mut f_ex) => { let _ = f_ex.close(); },
-        Err(_) => { return false; },
+        Err(_) => {
+            let _ = fsys::unlink_path(exact_target, &a_sub);
+            unsafe { @syscall(87, tmp_path.ptr as u64) };
+            return false;
+        },
     }
-    let overread_target = "build/test_sub.tmp___";
+    let overread_target = full_sub;
     match os_linux::open_file(overread_target, O_RDONLY, 0) {
         Ok(mut f_bad) => {
             let _ = f_bad.close();
             let _ = fsys::unlink_path(overread_target, &a_sub);
+            let _ = fsys::unlink_path(exact_target, &a_sub);
+            unsafe { @syscall(87, tmp_path.ptr as u64) };
             return false; // MUST NOT have created the overread file!
         },
         Err(_) => {},
     }
     let _ = fsys::unlink_path(exact_target, &a_sub);
+    unsafe { @syscall(87, tmp_path.ptr as u64) };
 
     // Verify constants
     if O_RDONLY != 0 { return false; }
@@ -110,7 +200,6 @@ fn test_open_flags_and_options() -> bool {
     if O_TRUNC != 512 { return false; }
     if O_APPEND != 1024 { return false; }
 
-    unsafe { @syscall(87, tmp_path.ptr as u64) };
     return true;
 }
 

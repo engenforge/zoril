@@ -9,7 +9,7 @@ import "mem_raw.zrl";
 import "proc.zrl";
 import "io.zrl";
 use io::Fd;
-use mem_raw::{ArenaHeader, arena_init};
+use mem_raw::{ArenaHeader, arena_init, zoril_allocator_alloc};
 use proc::Command;
 
 const CAP: usize = 8192;
@@ -28,8 +28,67 @@ fn close_fd(fd: i32) {
 }
 
 fn make_dir(path: [u8]) {
-    // SAFETY: mkdir(83) on a NUL-terminated literal path. An existing directory is fine.
+    // SAFETY: mkdir(83) on a NUL-terminated path. An existing directory is fine.
     let _ = unsafe { @syscall(83, path.ptr as u64, 493 as u64) };
+}
+
+fn remove_dir(path: [u8]) {
+    // SAFETY: rmdir(84) on a NUL-terminated path created by this test.
+    let _ = unsafe { @syscall(84, path.ptr as u64) };
+}
+
+fn unlink_file(path: [u8]) {
+    // SAFETY: unlink(87) on a NUL-terminated path created by this test.
+    let _ = unsafe { @syscall(87, path.ptr as u64, 0 as u64) };
+}
+
+fn format_temp_path_raw(raw: *mut u8, prefix: [u8], pid: u64, suffix: [u8]) -> [u8] {
+    // SAFETY: caller provides a writable 96-byte buffer that outlives the returned slice.
+    let mut buf = unsafe { @slice(raw, 96 as usize) };
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        buf[i] = prefix[i];
+        i = i + 1 as usize;
+    }
+    let mut digits: [u8; 20] = [0 as u8; 20];
+    let mut dcount = 0 as usize;
+    let mut n = pid;
+    if n == 0 as u64 {
+        digits[0] = '0' as u8;
+        dcount = 1 as usize;
+    } else {
+        while n > 0 as u64 {
+            let rem = (n % 10 as u64) as u8;
+            digits[dcount] = '0' as u8 + rem;
+            dcount = dcount + 1 as usize;
+            n = n / 10 as u64;
+        }
+    }
+    let mut d = dcount;
+    while d > 0 as usize {
+        d = d - 1 as usize;
+        buf[i] = digits[d];
+        i = i + 1 as usize;
+    }
+    let mut s = 0 as usize;
+    while s < suffix.len {
+        buf[i] = suffix[s];
+        i = i + 1 as usize;
+        s = s + 1 as usize;
+    }
+    buf[i] = 0 as u8;
+    // SAFETY: `buf[0..i]` was just initialized and `buf[i]` holds the trailing NUL for syscalls.
+    return unsafe { @slice(&buf[0] as *u8, i) };
+}
+
+fn format_temp_path_arena(arena: *mut ArenaHeader, prefix: [u8], pid: u64, suffix: [u8]) -> [u8] {
+    // SAFETY: 96 bytes in `arena` outlives the Command that stores this path.
+    let raw = unsafe { zoril_allocator_alloc(arena, 96 as u64) };
+    return format_temp_path_raw(raw, prefix, pid, suffix);
+}
+
+fn format_temp_path(prefix: [u8], pid: u64, suffix: [u8], buf: &mut [u8; 96]) -> [u8] {
+    return format_temp_path_raw(&mut buf[0] as *mut u8, prefix, pid, suffix);
 }
 
 fn contains(hay: [u8], needle: [u8]) -> bool {
@@ -63,7 +122,9 @@ fn has_var(out: [u8], prefix: [u8], line_prefix: [u8]) -> bool {
 // Runs CMD with its stdout in a scratch file and returns what it wrote into BUF's first bytes;
 // -1 when the spawn or the child failed.
 fn capture(cmd: &mut Command, buf: *mut u8) -> i64 {
-    let path = "/tmp/zoril_proc_cwd_env.out\0";
+    let mut path_buf = [0 as u8; 96];
+    let pid = unsafe { @syscall(39) } as u64;
+    let path = format_temp_path("/tmp/zoril_proc_cwd_env_", pid, ".out", &mut path_buf);
     let fd = open_scratch(path);
     if fd < 0 { return -1 as i64; }
     // SAFETY: `fd` is the open descriptor just returned, which stays open until `capture` closes it.
@@ -71,6 +132,7 @@ fn capture(cmd: &mut Command, buf: *mut u8) -> i64 {
     let res = cmd.status();
     if res.is_err() || !res.ok().unwrap().is_success() {
         close_fd(fd);
+        unlink_file(path);
         return -1 as i64;
     }
     // SAFETY: lseek(8) to offset 0 of the descriptor opened above.
@@ -86,6 +148,7 @@ fn capture(cmd: &mut Command, buf: *mut u8) -> i64 {
         total = total + n as usize;
     }
     close_fd(fd);
+    unlink_file(path);
     return total as i64;
 }
 
@@ -96,23 +159,30 @@ fn text(buf: *mut u8, n: i64) -> [u8] {
 
 // C1: pwd prints the directory the child was started in.
 fn cwd_is_set(arena: *mut ArenaHeader, buf: *mut u8) -> i32 {
-    make_dir("/tmp/zoril_proc_cwd_env_dir\0");
+    let pid = unsafe { @syscall(39) } as u64;
+    let dir_path = format_temp_path_arena(arena, "/tmp/zoril_proc_cwd_env_dir_", pid, "");
+    make_dir(dir_path);
     let mut cmd = unsafe { Command.new_raw("/bin/sh", arena) };
     cmd.arg("-c");
     cmd.arg("pwd");
-    cmd.set_current_dir("/tmp/zoril_proc_cwd_env_dir");
+    cmd.set_current_dir(dir_path);
     let n = capture(&mut cmd, buf);
+    remove_dir(dir_path);
     if n < 0 { return 1; }
-    if !contains(text(buf, n), "/tmp/zoril_proc_cwd_env_dir\n") { return 2; }
+    let mut expected_buf = [0 as u8; 96];
+    let expected_line = format_temp_path("/tmp/zoril_proc_cwd_env_dir_", pid, "\n", &mut expected_buf);
+    if !contains(text(buf, n), expected_line) { return 2; }
     return 0;
 }
 
 // C2: a directory that does not exist fails the spawn with ENOENT, and no child is left.
 fn cwd_missing(arena: *mut ArenaHeader) -> i32 {
+    let pid = unsafe { @syscall(39) } as u64;
+    let dir_path = format_temp_path_arena(arena, "/tmp/zoril_proc_cwd_env_no_such_dir_", pid, "");
     let mut cmd = unsafe { Command.new_raw("/bin/sh", arena) };
     cmd.arg("-c");
     cmd.arg("exit 0");
-    cmd.set_current_dir("/tmp/zoril_proc_cwd_env_no_such_dir");
+    cmd.set_current_dir(dir_path);
     let r = cmd.spawn();
     if r.is_ok() { return 1; }
     if r.err().unwrap().linux_errno() != 2 { return 2; }

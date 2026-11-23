@@ -491,8 +491,47 @@ fn test_buf_buffer_and_read_trait() -> bool {
     return true;
 }
 
+fn format_temp_path(prefix: [u8], pid: u64, suffix: [u8], buf: &mut [u8; 96]) -> [u8] {
+    let mut i = 0 as usize;
+    while i < prefix.len {
+        buf[i] = prefix[i];
+        i = i + 1 as usize;
+    }
+    let mut digits: [u8; 20] = [0 as u8; 20];
+    let mut dcount = 0 as usize;
+    let mut n = pid;
+    if n == 0 as u64 {
+        digits[0] = '0' as u8;
+        dcount = 1 as usize;
+    } else {
+        while n > 0 as u64 {
+            let rem = (n % 10 as u64) as u8;
+            digits[dcount] = '0' as u8 + rem;
+            dcount = dcount + 1 as usize;
+            n = n / 10 as u64;
+        }
+    }
+    let mut d = dcount;
+    while d > 0 as usize {
+        d = d - 1 as usize;
+        buf[i] = digits[d];
+        i = i + 1 as usize;
+    }
+    let mut s = 0 as usize;
+    while s < suffix.len {
+        buf[i] = suffix[s];
+        i = i + 1 as usize;
+        s = s + 1 as usize;
+    }
+    buf[i] = 0 as u8;
+    // SAFETY: `buf[0..i]` was just initialized and `buf[i]` holds the trailing NUL for syscalls.
+    return unsafe { @slice(&buf[0] as *u8, i) };
+}
+
 fn test_buf_writer_file_into_inner() -> bool {
-    let path = "/tmp/test_zoril_buf_writer_into_inner.tmp";
+    let mut path_buf = [0 as u8; 96];
+    let pid = unsafe { @syscall(39) } as u64;
+    let path = format_temp_path("/tmp/test_zoril_buf_writer_into_inner_", pid, ".tmp", &mut path_buf);
     let f = match File.create(path) {
         Ok(f) => f,
         Err(_) => { return false; },
@@ -501,33 +540,50 @@ fn test_buf_writer_file_into_inner() -> bool {
         let mut writer = BufWriter::<File>.with_capacity(f, 64 as usize);
         match write_all(&mut writer, "hello from bufwriter file") {
             Ok(_) => {},
-            Err(_) => { return false; },
+            Err(_) => {
+                unsafe { @syscall(87, path.ptr); }
+                return false;
+            },
         }
         let inner_res = writer.into_inner();
         let mut f_recovered = match inner_res {
             Ok(inner) => inner,
-            Err(_) => { return false; },
+            Err(_) => {
+                unsafe { @syscall(87, path.ptr); }
+                return false;
+            },
         };
         // Verify f_recovered is still a valid open file by writing more data to it
         match write_all(&mut f_recovered, " and extra") {
             Ok(_) => {},
-            Err(_) => { return false; },
+            Err(_) => {
+                let _ = f_recovered.close();
+                unsafe { @syscall(87, path.ptr); }
+                return false;
+            },
         }
         let _ = f_recovered.close();
     }
     // Now verify the contents written to the file
     let mut f_read = match os_linux::open_file(path, 0 as u64, 0 as u64) {
         Ok(f) => f,
-        Err(_) => { return false; },
+        Err(_) => {
+            unsafe { @syscall(87, path.ptr); }
+            return false;
+        },
     };
     let mut read_buf = Vec::<u8>.new();
     read_buf.resize(64 as usize, 0 as u8);
     let n = match f_read.read(read_buf.as_mut_slice()) {
         Ok(bytes) => bytes,
-        Err(_) => { return false; },
+        Err(_) => {
+            let _ = f_read.close();
+            unsafe { @syscall(87, path.ptr); }
+            return false;
+        },
     };
     let _ = f_read.close();
-    // SAFETY: path is a null-terminated string literal for unlink syscall.
+    // SAFETY: path is NUL-terminated for unlink syscall.
     unsafe { @syscall(87, path.ptr); }
     let expected = "hello from bufwriter file and extra";
     if n != expected.len { return false; }
@@ -551,7 +607,9 @@ fn test_buf_writer_string_into_inner() -> bool {
 }
 
 fn test_buf_reader_file_into_inner() -> bool {
-    let path = "/tmp/test_zoril_buf_reader_into_inner.tmp";
+    let mut path_buf = [0 as u8; 96];
+    let pid = unsafe { @syscall(39) } as u64;
+    let path = format_temp_path("/tmp/test_zoril_buf_reader_into_inner_", pid, ".tmp", &mut path_buf);
     let mut f_write = match File.create(path) {
         Ok(f) => f,
         Err(_) => { return false; },
@@ -559,22 +617,35 @@ fn test_buf_reader_file_into_inner() -> bool {
     let data = "abcdefghijklmnop";
     match write_all(&mut f_write, data) {
         Ok(_) => {},
-        Err(_) => { return false; },
+        Err(_) => {
+            let _ = f_write.close();
+            unsafe { @syscall(87, path.ptr); }
+            return false;
+        },
     }
     let _ = f_write.close();
 
     let f_read = match os_linux::open_file(path, 0 as u64, 0 as u64) {
         Ok(f) => f,
-        Err(_) => { return false; },
+        Err(_) => {
+            unsafe { @syscall(87, path.ptr); }
+            return false;
+        },
     };
     let mut reader = BufReader::<File>.with_capacity(f_read, 8 as usize);
     let mut chunk = Vec::<u8>.new();
     chunk.resize(4 as usize, 0 as u8);
     let n = match reader.read(chunk.as_mut_slice()) {
         Ok(bytes) => bytes,
-        Err(_) => { return false; },
+        Err(_) => {
+            unsafe { @syscall(87, path.ptr); }
+            return false;
+        },
     };
-    if n != 4 as usize { return false; }
+    if n != 4 as usize {
+        unsafe { @syscall(87, path.ptr); }
+        return false;
+    }
 
     let mut f_recovered = reader.into_inner();
     // f_recovered should still be open and readable without errors
@@ -582,10 +653,14 @@ fn test_buf_reader_file_into_inner() -> bool {
     rest.resize(16 as usize, 0 as u8);
     let n2 = match f_recovered.read(rest.as_mut_slice()) {
         Ok(bytes) => bytes,
-        Err(_) => { return false; },
+        Err(_) => {
+            let _ = f_recovered.close();
+            unsafe { @syscall(87, path.ptr); }
+            return false;
+        },
     };
     let _ = f_recovered.close();
-    // SAFETY: path is a null-terminated string literal for unlink syscall.
+    // SAFETY: path is NUL-terminated for unlink syscall.
     unsafe { @syscall(87, path.ptr); }
 
     // 8 bytes were read by BufReader into its 8-byte buffer, 4 consumed by chunk.
