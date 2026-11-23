@@ -91,6 +91,7 @@ fi
 
 # wanted ID FILE: whether this run covers mutation ID (of FILE).
 wanted() {
+    case "$1" in ''|'#'*) return 1 ;; esac
     if [ -n "${ROW:-}" ]; then
         printf '%s\n' "$ROW_IDS" | grep -qx -- "$1"
         return $?
