@@ -161,7 +161,7 @@ Memory is not checked for leaks. Collections (`Vec`, `String`, `ByteVec`, `HashM
 ### 4.6 Not applicable rather than unchecked
 
 - **Data races:** the core language and runtime are single-threaded, so the property is not applicable rather than checked. Reading and writing a scalar `static mut` needs no `unsafe` because of that; the rule will change when threads arrive. A `static mut` of any other type is read, written or borrowed only inside `unsafe`.
-- The other limits of `v0.1.0-alpha` (the bootstrap dialect, QBE's code-generation limits, the Linux x86-64 target, what separate compilation does not check) are in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
+- The other limits of `v0.2.0` (the bootstrap dialect, QBE's code-generation limits, the Linux x86-64 target, what separate compilation does not check) are in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
 
 ### 4.7 The FFI boundary
 

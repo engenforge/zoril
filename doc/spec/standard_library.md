@@ -1,6 +1,6 @@
 # Zoril Standard Library Specification
 
-This document specifies the standard library as of `v0.1.0-alpha`.
+This document specifies the standard library as of `v0.2.0`.
 
 Zoril aims to provide a modern, efficient, and secure foundation for systems programming by bypassing the legacy C standard library (`libc`) and interfacing directly with the kernel.
 

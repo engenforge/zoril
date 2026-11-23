@@ -1,12 +1,12 @@
 # Zoril Stability Statement and What Zoril Checks
 
-This document outlines the stability commitments, versioning policies, and public safety claims for Zoril `v0.1.0-alpha`.
+This document outlines the stability commitments, versioning policies, and public safety claims for Zoril `v0.2.0`.
 
 ---
 
-## 1. Stability Policy for `v0.1.0-alpha`
+## 1. Stability Policy for `v0.2.0`
 
-Zoril is currently in early alpha (`v0.1.0-alpha`). Although we try to avoid changes that would break user code, **no stability promises are made regarding surface syntax, standard library APIs, intermediate representations, or binary ABIs**:
+Zoril is currently in early alpha (`v0.2.0`). Although we try to avoid changes that would break user code, **no stability promises are made regarding surface syntax, standard library APIs, intermediate representations, or binary ABIs**:
 
 - **Surface Syntax:** Keywords, operators, precedence rules, and syntax structures may evolve between minor versions as language ergonomics and features are refined.
 - **Standard Library:** Module organization, function signatures, trait definitions, and types in `stdlib/` are subject to reorganization or breaking adjustments.

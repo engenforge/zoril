@@ -3,7 +3,7 @@
 # Zoril
 
 > [!NOTE]
-> This is an early alpha stage compiler (`v0.1.0-alpha`). Although extensive testing and safety verification have been conducted, bugs likely exist. In addition, there may be breaking changes to the language, standard library, and ABI prior to the `v1.0.0` release. See [Stability Statement](doc/STABILITY.md) and [Known Issues](KNOWN_ISSUES.md).
+> This is an early alpha stage compiler (`v0.2.0`). Although extensive testing and safety verification have been conducted, bugs likely exist. In addition, there may be breaking changes to the language, standard library, and ABI prior to the `v1.0.0` release. See [Stability Statement](doc/STABILITY.md) and [Known Issues](KNOWN_ISSUES.md).
 
 **Zoril** (Zero Overhead Regional Inference Language) is a small, self-hosted systems programming language inspired by Rust that rejects many memory errors at compile time and traps known bounds errors at run time; [What Zoril Checks](doc/SAFETY.md) lists what is checked and what is left to the programmer. This repository holds the self-hosted Zoril compiler (written in Zoril) and its standard library.
 
@@ -15,11 +15,11 @@ See [Tour of Zoril](doc/tour.md) and [Getting Started](doc/getting_started.md).
 
 Systems languages and their toolchains make different, well-reasoned trade-offs. Rust and Zig, built on LLVM, offer broad language features, mature ecosystems, and highly optimized code. Small toolchains such as [cproc](https://sr.ht/~mcf/cproc/) and [Hare](https://harelang.org/), built on [QBE](https://c9x.me/compile/), show how much a compact, understandable compiler can do.
 
-Zoril is an early experiment in a combination that has not been explored much: compile-time ownership tracking and mandatory bounds checking, in a small compiler (~42k lines of Zoril, not counting comment lines). It is an alpha-stage project, not a replacement for any of these languages, and it builds directly on their work: QBE is its backend, cproc is the reference point for its performance measurements and one way to build its bootstrap compiler, and its ownership model and syntax borrow heavily from Rust.
+Zoril is an early experiment in a combination that has not been explored much: compile-time ownership tracking and mandatory bounds checking, in a small compiler (~46k lines of Zoril, not counting comment lines). It is an alpha-stage project, not a replacement for any of these languages, and it builds directly on their work: QBE is its backend, cproc is the reference point for its performance measurements and one way to build its bootstrap compiler, and its ownership model and syntax borrow heavily from Rust.
 
 ### Key Highlights
 
-- **Small toolchain:** `zoril`, `zilc` and the `qbe` backend are about **1.5 MB** of stripped binaries, built from ~42k lines of Zoril and ~15k lines of C (QBE). See [Zero Overhead](doc/zero_overhead.md).
+- **Small toolchain:** `zoril`, `zilc` and the `qbe` backend are about **1.5 MB** of stripped binaries, built from ~46k lines of Zoril and ~15k lines of C (QBE). See [Zero Overhead](doc/zero_overhead.md).
 - **Memory safety checks in every build:** array and slice bounds are checked at run time (exit 134); ownership, moves, borrows, stack regions and arenas are checked at compile time; no check is compiled out. Each property is backed by executable probes in the [safety matrix](bench/safety_matrix/README.md) (specified in [Safety Model](doc/spec/safety_model.md)), while known holes in checked code and the boundary with `unsafe` are documented in [What Zoril Checks](doc/SAFETY.md).
 - **Fuzzed:** tested with a differential fuzzer against `rustc` across both whole-program and `zbuild` builds (with `--checked` instrumentation, value canaries, and drop accounting); current run budgets and findings live in [bench/fuzz/README.md](bench/fuzz/README.md).
 - **No lifetime annotations:** ownership without lifetime parameters in signatures, using arenas and analysis of function bodies. See [Why Zoril](doc/vision/why_zoril.md).

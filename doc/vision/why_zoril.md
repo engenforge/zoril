@@ -1,6 +1,6 @@
 # Why Zoril
 
-**Reviewed for `v0.1.0-alpha`.** Normative references: [`doc/spec/safety_model.md`](../spec/safety_model.md), [`doc/spec/unsafe_policy.md`](../spec/unsafe_policy.md), [`doc/language/language_comparison.md`](../language/language_comparison.md).
+**Reviewed for `v0.2.0`.** Normative references: [`doc/spec/safety_model.md`](../spec/safety_model.md), [`doc/spec/unsafe_policy.md`](../spec/unsafe_policy.md), [`doc/language/language_comparison.md`](../language/language_comparison.md).
 
 ---
 

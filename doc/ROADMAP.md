@@ -1,6 +1,6 @@
 # Zoril Roadmap
 
-This document describes where Zoril is expected to go after `v0.1.0-alpha`. It lists intentions, not commitments: there are no dates, and priorities will change with what users run into. Known problems in the current release are in [Known Issues](../KNOWN_ISSUES.md), and the versioning policy is in the [Stability Statement](STABILITY.md).
+This document describes where Zoril is expected to go after `v0.2.0`. It lists intentions, not commitments: there are no dates, and priorities will change with what users run into. Known problems in the current release are in [Known Issues](../KNOWN_ISSUES.md), and the versioning policy is in the [Stability Statement](STABILITY.md).
 
 ## Guiding constraints
 

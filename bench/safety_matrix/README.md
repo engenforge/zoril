@@ -6,7 +6,7 @@ This ledger holds the machine-checked safety verification summaries, open `known
 
 ## 1. Snapshot and Probe Counts
 
-The counts in this ledger and the marker-density rows below are as of **0.1.0-alpha-304-gd94fe3b** (2026-11-21); they are refreshed at milestones (`scripts/check_safety_figures.sh --milestone`).
+The counts in this ledger and the marker-density rows below are as of **0.2.0** (2026-11-23); they are refreshed at milestones (`scripts/check_safety_figures.sh --milestone`).
 
 The repository keeps 539 probes in [`probes/`](probes) for the 79-row safety matrix (making up the 539-probe safety matrix), each recording its expectation in its first lines: **441 `compile_reject`**, **79 `accept`**, **8 `runtime_trap`**, **11 `runtime_fault`**, and **0 `known_gap`**. `scripts/run_safety_matrix.sh` runs all of them and fails when an observation differs from the recorded expectation; `make test` gates it (`safety-matrix`) together with `safety-model` (`scripts/check_safety_model.sh`), which keeps this ledger, [`matrix.md`](matrix.md), and the probes consistent in both directions.
 
@@ -169,13 +169,13 @@ No `known_gap` probes remain open: the provenance rules now run by default besid
 | stdlib `unsafe fn` declarations  | 67     |
 | of those, public                 | 62     |
 | compiler modules                 | 49     |
-| compiler lines                   | 53,411 |
-| compiler `unsafe { }` blocks     | 952    |
+| compiler lines                   | 53,727 |
+| compiler `unsafe { }` blocks     | 958    |
 
 How each figure is counted: every `.zrl` file under the directory, recursively; **lines** are physical lines (`wc -l`); **`unsafe { }` blocks** are occurrences of `unsafe` followed by `{` on the same line; **`unsafe fn` declarations** are lines that start with `unsafe fn` or `pub unsafe fn`.
 
 - **The standard library** holds 188 `unsafe { }` blocks in 23 of its 30 modules. Every one states the invariant it relies on in a `// SAFETY:` comment (`scripts/check_safety_comments.sh`).
-- **The compiler** is 49 modules of Zoril, with 952 `unsafe { }` blocks, because a self-hosted compiler also carries its own allocator and IL machinery.
+- **The compiler** is 49 modules of Zoril, with 958 `unsafe { }` blocks, because a self-hosted compiler also carries its own allocator and IL machinery.
 
 ### Marker-density calibration against Rust
 
@@ -185,11 +185,11 @@ Measured on the Rust source tree (a one-time measurement) and recomputed on Zori
 | ---------------------------------------- | ---------------- | ----------------------- |
 | rustc `compiler/` (663k LOC)             | compiler         | **0.61%**               |
 | Rust `library/core` + `alloc` (109k LOC) | stdlib / runtime | **6.03%**               |
-| Zoril `src/` (46k non-comment LOC)       | compiler         | **4.55%** (952 blocks)  |
+| Zoril `src/` (46k non-comment LOC)       | compiler         | **4.57%** (958 blocks)  |
 | Zoril `stdlib/` (4.9k non-comment LOC)   | stdlib           | **10.92%** (188 blocks) |
 | Zoril example JSON tool (1.9k LOC)       | application      | **0.00%** (0 blocks)    |
 
-Live Zoril line counts: 2,109 of 46,344 lines in `src/`, 532 of 4,872 in `stdlib/`, 0 of 1,992 in the example JSON tool.
+Live Zoril line counts: 2,132 of 46,663 lines in `src/`, 532 of 4,872 in `stdlib/`, 0 of 1,992 in the example JSON tool.
 
 ---
 

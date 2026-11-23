@@ -1,6 +1,6 @@
 # Zoril IL Specification
 
-This document specifies the intermediate language as of `v0.1.0-alpha`.
+This document specifies the intermediate language as of `v0.2.0`.
 
 Zoril IL is a low-level, textual Intermediate Representation (IR) designed for memory safety verification and lowering to the QBE compiler backend. It uses Explicit Static Single Assignment (SSA) form and mandatory region/ownership annotations.
 

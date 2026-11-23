@@ -1,6 +1,6 @@
 # Zoril Surface Language Specification
 
-This document specifies the Zoril surface language (`v0.1.0-alpha`).
+This document specifies the Zoril surface language (`v0.2.0`).
 
 ## 1. Overview
 
