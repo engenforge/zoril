@@ -171,7 +171,7 @@ make fuzz-record-update RUN=release-<name>       # numbers into bench/fuzz/READM
 
 When the compiler changed after the release-bar run and a release cannot wait for a new one, a shorter session on the new code stands beside it: `make fuzz-session SEEDS=1-N RELEASE=1` (which refuses a dirty tree, stale binaries or a missing `rustc`), then `make fuzz-record-update SHORT=1 RUN=<its directory>`. That writes the section "The short session on the launched code" into the record, with its own fingerprint and headline. `check_fuzz_fresh.sh` then compares that entry with the tree, and requires every page that discusses the record to quote its figure; a page may quote the release-bar run as well, saying it was on the previous code, but never alone. The next full release-bar run, recorded without `SHORT`, removes the section.
 
-**6. What it covers and does not.** The generator builds composed programs from 69 feature tags and checks the safe subset against the oracles above. It does not reach the runtime checks whose index is computed at run time, or miscompiles that change a value without a fault; `doc/SAFETY.md` §5.2 says what a clean run supports and what it does not.
+**6. What it covers and does not.** The generator builds composed programs from 104 feature tags and checks the safe subset against the oracles above. It does not reach the runtime checks whose index is computed at run time, or miscompiles that change a value without a fault; `doc/SAFETY.md` §5 and `bench/fuzz/README.md` state what a clean run supports and what it does not.
 
 ---
 

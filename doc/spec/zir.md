@@ -1,4 +1,4 @@
-# Zoril Intermediate Representation (ZIR) Specification v0.1.0
+# Zoril Intermediate Representation (ZIR) Specification v0.2.0
 
 ## 1. Introduction and Motivation
 

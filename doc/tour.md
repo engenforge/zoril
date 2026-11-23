@@ -267,7 +267,7 @@ Rather than relying on a global tracing garbage collector, Zoril structures memo
 
 ### Stack Storage
 
-Local variables live in the stack frame. Zoril's verifier rejects returning pointers or references to local stack slots (`points_to_stack` tracking), so a dangling stack reference is a compile error, except through the open routes in [What Zoril Checks](SAFETY.md#6-known-gaps-in-checked-code) §6 (class E).
+Local variables live in the stack frame. Zoril's verifier rejects returning pointers or references to local stack slots (origin-set provenance and `points_to_stack` tracking), so a dangling stack reference is a compile error ([What Zoril Checks](SAFETY.md) §2.3).
 
 ### Explicit Arenas
 
@@ -292,7 +292,7 @@ while i < 100 {
 }
 ```
 
-When the arena is freed, all memory within it is reclaimed at once, which removes the per-object free overhead and the fragmentation a general heap leaves behind. Every value an arena hands out through checked code is tied to it at compile time: freeing or resetting the arena while a `Vec` built with `new_in(&arena)` — or anything else read out of it — is live is a compile error, and so is moving such a collection out of the block that owns the arena handle, because the handle's implicit `Drop` unmaps the arena at that block's end, except through the open routes in [What Zoril Checks](SAFETY.md#6-known-gaps-in-checked-code) §6 (class A). Only the `unsafe` `_raw` entry points take a raw arena pointer, and those are unchecked by design ([What Zoril Checks](SAFETY.md) §4.1).
+When the arena is freed, all memory within it is reclaimed at once, which removes the per-object free overhead and the fragmentation a general heap leaves behind. Every value an arena hands out through checked code is tied to it at compile time: freeing or resetting the arena while a `Vec` built with `new_in(&arena)` — or anything else read out of it — is live is a compile error, and so is moving such a collection out of the block that owns the arena handle, because the handle's implicit `Drop` unmaps the arena at that block's end ([What Zoril Checks](SAFETY.md) §2.4). Only the `unsafe` `_raw` entry points take a raw arena pointer, and those are unchecked by design ([What Zoril Checks](SAFETY.md) §4.1).
 
 ### Heap Boxing
 

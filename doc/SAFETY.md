@@ -2,13 +2,13 @@
 
 **Zoril is a small, self-hosted systems programming language that rejects many memory errors at compile time and traps known bounds errors at run time. This document lists what is checked and what is left to the programmer.**
 
-Although Zoril was written to reject a large variety of memory safety errors, it is deliberately not described as "memory-safe" since it's still in early development and issues are being identified and resolved. Every memory safety claim below is backed by the verified safety matrix (§5), and the remaining holes that are known are explained in §6. Ordinary programs rarely meet them, and work is ongoing to close them.
+Although Zoril was written to reject a large variety of memory safety errors, it is deliberately not described as "memory-safe" since it's still in early development and issues are being identified and resolved. Every memory safety claim below is backed by the verified safety matrix (§5), and any known gaps in checked code are tracked in §6.
 
 ---
 
 ## 1. In short
 
-Code outside an `unsafe` block is **checked code**: the compiler's goal is that checked code cannot corrupt memory. That is a goal, not a guarantee. The compiler has known memory safety holes (§6) and likely unknown holes as well, so there is still a chance that checked code can make a memory error in rare circumstances. An `unsafe` block allows a short list of operations the compiler cannot verify, and there the programmer is the checker.
+Code outside an `unsafe` block is **checked code**: the compiler's goal is that checked code cannot corrupt memory. That is a goal, not a guarantee. Although no `known_gap` probes are currently open (§6), unknown holes likely exist, so there is still a chance that checked code can make a memory error in rare circumstances. An `unsafe` block allows a short list of operations the compiler cannot verify, and there the programmer is the checker.
 
 Zoril checks in three ways:
 
@@ -49,7 +49,7 @@ Zoril checks in three ways:
 
 2. **At run time (§3).** An index outside an array or slice ends the process with exit status 134 at the access, and nothing after it runs. Some failures that cannot be checked cheaply, such as division by zero, end the process with a fault instead. These traps apply everywhere, `unsafe` blocks included.
 
-3. **Where the checks stop (§4, §6).** An `unsafe` block disables no check: everything above still applies inside it. It adds permission for a fixed list of operations the compiler cannot verify (§4.1): dereferencing raw pointers, calling C, making a system call, and a few others. Those operations are the programmer's responsibility. The standard library needs them for system calls and C interfaces, and Zoril's intent is to keep them contained there, thoroughly reviewed and tested, so that ordinary programs need no `unsafe` at all. The other place the checks stop is the known gaps in checked code (§6), where the compiler accepts something it should reject.
+3. **Where the checks stop (§4, §6).** An `unsafe` block disables no check: everything above still applies inside it. It adds permission for a fixed list of operations the compiler cannot verify (§4.1): dereferencing raw pointers, calling C, making a system call, and a few others. Those operations are the programmer's responsibility. The standard library needs them for system calls and C interfaces, and Zoril's intent is to keep them contained there, thoroughly reviewed and tested, so that ordinary programs need no `unsafe` at all. The other place the checks stop is any known gaps tracked in checked code (§6), where the compiler accepts something it should reject (currently none are open).
 
 The checks run in every build; there is no release mode that turns them off. A statement that is not in §2 or §3 is not checked.
 
@@ -57,7 +57,7 @@ The checks run in every build; there is no release mode that turns them off. A s
 
 ## 2. What the compiler rejects in checked code
 
-Each item holds except through the known gaps in §6. The normative specification is [`doc/spec/safety_model.md`](spec/safety_model.md), and every property's backing probes are tabulated in [`bench/safety_matrix/matrix.md`](../bench/safety_matrix/matrix.md) and [`bench/safety_matrix/README.md`](../bench/safety_matrix/README.md).
+Each item holds subject to any known gaps tracked in §6 (currently none). The normative specification is [`doc/spec/safety_model.md`](spec/safety_model.md), and every property's backing probes are tabulated in [`bench/safety_matrix/matrix.md`](../bench/safety_matrix/matrix.md) and [`bench/safety_matrix/README.md`](../bench/safety_matrix/README.md).
 
 ### 2.1 Ownership, moves and drops
 
