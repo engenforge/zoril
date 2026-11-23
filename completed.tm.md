@@ -1,5 +1,31 @@
 # Completed Archive
 
+- [x] +tests +AI-G @main Isolate hardcoded temp paths in tests/stdlib/ against parallel zbuild-diff collisions id:mnszq
+    > **Created:** 2026-11-23
+    > **Branch:** `main`
+    > **Completed:** 2026-11-23 git:f3c9ec1
+
+    - **Placed:** before id:bmkh4 (parallel test-isolation race that causes intermittent failures in `make test` and `make test-checked`).
+    - **Found by:** Debian 13 (trixie) evaluation on 2026-11-23 (`make test-checked` at `-j 16`): run 1 failed `zbuild-diff` on `tests/stdlib/test_proc_cwd_env.zrl` (exit 12); run 2 passed `zbuild-diff` and failed `tests/stdlib/test_proc_cwd_env.zrl` in `Stdlib` (exit 44).
+    - **Cause:** `scripts/test.sh` dispatches scenarios (including `zbuild-diff`) first into the parallel worker pool, so `zbuild-diff` runs concurrently with the `Stdlib` per-file tests, both with `cwd = repo_root`. Seven runnable tests in `tests/stdlib/` write to hardcoded paths instead of per-PID paths (unlike the other 7 file-writing tests in `tests/`, which already use `getpid` via `@syscall(39)`):
+      - `tests/stdlib/test_proc_cwd_env.zrl` (`/tmp/zoril_proc_cwd_env.out`, `/tmp/zoril_proc_cwd_env_dir`)
+      - `tests/stdlib/test_proc_new_group.zrl` (`/tmp/zoril_proc_group_a.pid`, `/tmp/zoril_proc_group_b.pid`)
+      - `tests/stdlib/test_proc_spawn_inherited_stdio.zrl` (`/tmp/zoril_proc_redirect_a.txt`, `/tmp/zoril_proc_redirect_b.txt`)
+      - `tests/stdlib/test_proc_kill_reaped.zrl` (`/tmp/zoril_proc_kill_reaped.pid`)
+      - `tests/stdlib/test_stdlib_bufio.zrl` (`/tmp/test_zoril_buf_writer_into_inner.tmp`, `/tmp/test_zoril_buf_reader_into_inner.tmp`)
+      - `tests/stdlib/test_stdlib_fd.zrl` (`build/test_fd_from_fd.tmp`, `build/test_fd_redirect.tmp`, `build/test_fd_shared_redirect.tmp`, `build/test_fd_err_to_out.tmp`)
+      - `tests/stdlib/test_stdlib_small_api_fixes.zrl` (`build/test_small_api_open.tmp`, `build/test_sub.tmp` / `build/test_sub.tmp___`)
+    - **Do:** give each of the seven tests above per-PID temp paths using `getpid` (`@syscall(39)`), matching the `format_temp_path` pattern already used in `tests/stdlib/test_stdlib_read_write.zrl`, and clean up all temp files (`unlink`, `@syscall(87)` or `fsys::unlink_path`) and temp directories (`rmdir`, `@syscall(84)`) before returning:
+      - In `test_proc_new_group.zrl` and `test_proc_kill_reaped.zrl`, pass the per-PID path to `sh -c` as `$1` (`cmd.arg("-c"); cmd.arg("sleep 30 & echo $! > \"$1\"; wait"); cmd.arg("_"); cmd.arg(path);`) instead of formatting a shell command string.
+      - In `test_stdlib_small_api_fixes.zrl`, preserve the non-NUL-terminated subslice check by formatting `build/test_sub_<pid>.tmp___\0` and taking `.sub(0, len - 3)`.
+      - Do not print temp paths to stdout (so `zbuild-diff`'s stdout comparison remains deterministic across PIDs).
+    - **Checks:** C1 deterministic parallel stress check: build each of the 7 tests and run two copies concurrently in a loop (e.g., 20 iterations of `bin & bin & wait`) — confirm `test_proc_cwd_env` fails before the fix and all 7 pass 20/20 iterations after. C2 `make test-checked` passes twice in a row with `0 failed` under parallel execution, quoting `Total:`. C3 `make test` passes with `0 failed`, quoting `Total:`. C4 running all 7 tests leaves no leftover `/tmp/zoril_proc_*`, `/tmp/test_zoril_buf_*`, `build/test_fd_*`, `build/test_small_api_*`, or `build/test_sub*` files or directories.
+    - **Completion (2026-11-23):**
+      - C1: baseline `test_proc_cwd_env` failed `18` out of `40` runs (`20x2`); after the fix, all 7 tests (`test_proc_cwd_env`, `test_proc_new_group`, `test_proc_spawn_inherited_stdio`, `test_proc_kill_reaped`, `test_stdlib_bufio`, `test_stdlib_fd`, `test_stdlib_small_api_fixes`) passed with `0 failures out of 40 runs (20x2)` each.
+      - C2: `make test-checked` passed twice in a row: run 1 `Total: 1563 run, 1563 passed, 0 failed, 0 skipped (111.1s)`; run 2 `Total: 1563 run, 1563 passed, 0 failed, 0 skipped (111.1s)`.
+      - C3: `make test` passed: `Total: 4131 run, 4131 passed, 0 failed, 2 skipped (146.7s)`.
+      - C4: `ls -d /tmp/zoril_proc_* /tmp/test_zoril_buf_* build/test_fd_* build/test_small_api_* build/test_sub*` reported `No such file or directory` for all five patterns after both the 20x2 stress loop and `make test`.
+
 - [x] +release +AI-D @main Prepare v0.2.0 release (version bump, changelog, docs, make test and make preflight) id:jtk00
     > **Created:** 2026-11-20
     > **Branch:** `main`
