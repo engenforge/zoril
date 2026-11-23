@@ -6,6 +6,16 @@ Open work, in the order it is done, tracked on the orphan `tasks` branch (SPEC-T
 
 **Header rule (2026-11-17):** the `>` block under a task holds only the fields a tool or the workflow reads: `Created`, `Due`, `Branch`, `Depends`, `Claimed`, `Completed`, `Check-in`, `Context`, first, then a blank line. Every other note (`Found by`, `Placed`, `Routed by`, `Depends note`, `Depends changed (..)`, `Deferred`, `Promoted`, ...) is a bullet below it (`    - **Found by:** ...`). A multi-word `> **Key name:**` line is not a field to `tm`: it continues the field above it, and under `Depends:` every `id:` on it becomes a dependency (SPEC-TASKMARK-06 §4.4.2). `tm validate --strict` checks this.
 
+- [ ] +tests +AI-G @main Isolate temp files in tests/stdlib/test_proc_*.zrl against parallel zbuild-diff collisions id:mnszq
+    > **Created:** 2026-11-23
+    > **Branch:** `main`
+
+    - **Placed:** before id:bmkh4 (parallel test-isolation race that causes intermittent failures in `make test-checked`).
+    - **Found by:** Debian 13 (trixie) evaluation on 2026-11-23 (`make test-checked` at `-j 16`): run 1 failed `zbuild-diff` on `tests/stdlib/test_proc_cwd_env.zrl` (exit 12); run 2 passed `zbuild-diff` and failed `tests/stdlib/test_proc_cwd_env.zrl` in `Stdlib` (exit 44).
+    - **Cause:** `tests/stdlib/test_proc_cwd_env.zrl` writes child stdout to the hardcoded path `/tmp/zoril_proc_cwd_env.out` (and creates `/tmp/zoril_proc_cwd_env_dir`), and `tests/stdlib/test_proc_new_group.zrl`, `tests/stdlib/test_proc_spawn_inherited_stdio.zrl`, and `tests/stdlib/test_proc_kill_reaped.zrl` likewise use hardcoded `/tmp/zoril_proc_*` paths. When `Stdlib` and `zbuild-diff` run concurrently, both copies of a test read and overwrite the same `/tmp` file.
+    - **Do:** give each run of `tests/stdlib/test_proc_cwd_env.zrl`, `tests/stdlib/test_proc_new_group.zrl`, `tests/stdlib/test_proc_spawn_inherited_stdio.zrl`, and `tests/stdlib/test_proc_kill_reaped.zrl` per-process temp paths (for example using `getpid` via `@syscall(39)` in the filename or a per-PID scratch directory under `/tmp`) and unlink/rmdir its temp artifacts before returning.
+    - **Checks:** C1 `make test-checked` passes twice in a row with `0 failed` under parallel execution, quoting `Total:`. C2 `make test` passes with `0 failed`, quoting `Total:`. C3 running `tests/stdlib/test_proc_*.zrl` leaves no leftover `/tmp/zoril_proc_*` files.
+
 - [ ] +release +AI-D @main Cut v0.2.0 release: build/verify dist tarballs, final release commit, and tag id:bmkh4
     > **Created:** 2026-11-23
     > **Branch:** `main`
